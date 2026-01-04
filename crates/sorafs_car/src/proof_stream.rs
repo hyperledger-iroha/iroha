@@ -317,10 +317,7 @@ impl ProofStreamItem {
     pub fn to_json(&self) -> Value {
         let mut map = Map::new();
         if let Some(digest) = &self.manifest_digest_hex {
-            map.insert(
-                "manifest_digest_hex".into(),
-                Value::from(digest.clone()),
-            );
+            map.insert("manifest_digest_hex".into(), Value::from(digest.clone()));
         }
         if let Some(provider) = &self.provider_id_hex {
             map.insert("provider_id_hex".into(), Value::from(provider.clone()));

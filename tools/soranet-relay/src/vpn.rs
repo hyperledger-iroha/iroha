@@ -278,6 +278,7 @@ impl VpnOverlay {
             },
             payload: Vec::new(),
         };
+        self.validate_flags(&cell)?;
         let padded = cell.into_padded_frame()?;
         Ok(PaddedCell {
             frame: padded,
@@ -331,7 +332,8 @@ impl VpnOverlay {
                 allowed: VpnCellFlagsV1::ALLOWED_MASK,
             }));
         }
-        if cell.header.class != VpnCellClassV1::Cover && cell.header.flags.is_cover() {
+        let is_cover_class = cell.header.class == VpnCellClassV1::Cover;
+        if cell.header.flags.is_cover() != is_cover_class {
             return Err(VpnFrameBuildError::Cell(VpnCellError::FlagClassMismatch {
                 class: cell.header.class,
                 flags: cell.header.flags,
@@ -347,7 +349,8 @@ impl VpnOverlay {
                 actual: cell.header.padding_budget_ms,
             });
         }
-        if cell.header.class != VpnCellClassV1::Cover && cell.header.flags.is_cover() {
+        let is_cover_class = cell.header.class == VpnCellClassV1::Cover;
+        if cell.header.flags.is_cover() != is_cover_class {
             return Err(VpnCellError::FlagClassMismatch {
                 class: cell.header.class,
                 flags: cell.header.flags,
@@ -557,49 +560,85 @@ impl VpnSession {
     pub fn record_ingress(&self, bytes: u64, is_cover: bool) {
         self.metrics.record_vpn_ingress(bytes, is_cover);
         self.state.ingress_bytes.fetch_add(bytes, Ordering::Relaxed);
+        if is_cover {
+            self.state.cover_bytes.fetch_add(bytes, Ordering::Relaxed);
+        }
     }
 
     pub fn record_egress(&self, bytes: u64, is_cover: bool) {
         self.metrics.record_vpn_egress(bytes, is_cover);
         self.state.egress_bytes.fetch_add(bytes, Ordering::Relaxed);
+        if is_cover {
+            self.state.cover_bytes.fetch_add(bytes, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn record_classified_ingress(&self, class: VpnCellClassV1, payload_len: u64) {
+        match class {
+            VpnCellClassV1::Data => {
+                self.metrics.record_vpn_frame_ingress(false);
+                self.record_ingress(payload_len, false);
+            }
+            VpnCellClassV1::Cover => {
+                self.metrics.record_vpn_frame_ingress(true);
+                self.record_ingress(payload_len, true);
+            }
+            VpnCellClassV1::KeepAlive | VpnCellClassV1::Control => {
+                self.metrics.record_vpn_control_ingress(payload_len);
+            }
+        }
+    }
+
+    pub(crate) fn record_classified_egress(&self, class: VpnCellClassV1, payload_len: u64) {
+        match class {
+            VpnCellClassV1::Data => {
+                self.metrics.record_vpn_frame_egress(false);
+                self.record_egress(payload_len, false);
+            }
+            VpnCellClassV1::Cover => {
+                self.metrics.record_vpn_frame_egress(true);
+                self.record_egress(payload_len, true);
+            }
+            VpnCellClassV1::KeepAlive | VpnCellClassV1::Control => {
+                self.metrics.record_vpn_control_egress(payload_len);
+            }
+        }
     }
 
     /// Parse and account for an ingress VPN frame. Returns the parsed cell on success.
+    ///
+    /// Control/keepalive cells are tracked via control metrics and excluded from receipts.
     pub fn record_frame_ingress(
         &self,
         overlay: &VpnOverlay,
         frame: &[u8],
     ) -> Result<VpnCellV1, VpnCellError> {
         let cell = overlay.parse_frame(frame)?;
-        let is_cover = cell.header.class == VpnCellClassV1::Cover;
-        self.metrics.record_vpn_frame_ingress(is_cover);
-        let payload_len = cell.payload.len() as u64;
-        self.record_ingress(payload_len, is_cover);
-        if is_cover {
-            self.state
-                .cover_bytes
-                .fetch_add(payload_len, Ordering::Relaxed);
-        }
+        self.record_parsed_ingress(&cell);
         Ok(cell)
     }
 
     /// Parse and account for an egress VPN frame. Returns the parsed cell on success.
+    ///
+    /// Control/keepalive cells are tracked via control metrics and excluded from receipts.
     pub fn record_frame_egress(
         &self,
         overlay: &VpnOverlay,
         frame: &[u8],
     ) -> Result<VpnCellV1, VpnCellError> {
         let cell = overlay.parse_frame(frame)?;
-        let is_cover = cell.header.class == VpnCellClassV1::Cover;
-        self.metrics.record_vpn_frame_egress(is_cover);
-        let payload_len = cell.payload.len() as u64;
-        self.record_egress(payload_len, is_cover);
-        if is_cover {
-            self.state
-                .cover_bytes
-                .fetch_add(payload_len, Ordering::Relaxed);
-        }
+        self.record_parsed_egress(&cell);
         Ok(cell)
+    }
+
+    /// Account for a parsed ingress cell without re-validating the frame.
+    pub(crate) fn record_parsed_ingress(&self, cell: &VpnCellV1) {
+        self.record_classified_ingress(cell.header.class, cell.payload.len() as u64);
+    }
+
+    /// Account for a parsed egress cell without re-validating the frame.
+    pub(crate) fn record_parsed_egress(&self, cell: &VpnCellV1) {
+        self.record_classified_egress(cell.header.class, cell.payload.len() as u64);
     }
 
     /// Finalize the session into a telemetry/billing receipt.
@@ -668,6 +707,10 @@ impl VpnSessionHandle {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use crate::metrics::Metrics;
+
     use super::*;
 
     #[test]
@@ -702,5 +745,20 @@ mod tests {
         );
         assert!(plan_full.iter().all(|entry| entry.is_cover));
         assert!(plan_capped.iter().any(|entry| !entry.is_cover));
+    }
+
+    #[test]
+    fn session_records_cover_bytes_from_manual_counts() {
+        let metrics = Arc::new(Metrics::new());
+        metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
+        let session = VpnSession::from_parts(Arc::clone(&metrics));
+
+        session.record_ingress(5, true);
+        session.record_egress(7, true);
+
+        let receipt = session.finish_receipt([0xAA; 16], VpnExitClassV1::Standard, [0xBB; 32]);
+        assert_eq!(5, receipt.ingress_bytes);
+        assert_eq!(7, receipt.egress_bytes);
+        assert_eq!(12, receipt.cover_bytes);
     }
 }

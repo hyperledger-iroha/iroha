@@ -5265,8 +5265,6 @@ class ToriiClient:
         )
         connected_peers_value = value.get("connected_peers")
         if connected_peers_value is None:
-            connected_peers_value = value.get("connectedPeers")
-        if connected_peers_value is None:
             peers_list: Optional[List[str]] = None
         else:
             if not isinstance(connected_peers_value, list):
@@ -5289,27 +5287,27 @@ class ToriiClient:
     def _parse_telemetry_peer_config(value: Any, *, context: str) -> PeerTelemetryConfig:
         if not isinstance(value, Mapping):
             raise RuntimeError(f"{context} must be a JSON object")
-        public_key = value.get("public_key") or value.get("publicKey")
+        public_key = value.get("public_key")
         if not isinstance(public_key, str) or not public_key:
             raise RuntimeError(f"{context} missing `public_key`")
         queue_capacity = ToriiClient._coerce_optional_unsigned(
-            value.get("queue_capacity", value.get("queueCapacity")),
+            value.get("queue_capacity"),
             context=f"{context}.queue_capacity",
         )
         block_size = ToriiClient._coerce_optional_unsigned(
-            value.get("network_block_gossip_size", value.get("networkBlockGossipSize")),
+            value.get("network_block_gossip_size"),
             context=f"{context}.network_block_gossip_size",
         )
         tx_size = ToriiClient._coerce_optional_unsigned(
-            value.get("network_tx_gossip_size", value.get("networkTxGossipSize")),
+            value.get("network_tx_gossip_size"),
             context=f"{context}.network_tx_gossip_size",
         )
         block_period = ToriiClient._parse_optional_duration_ms(
-            value.get("network_block_gossip_period", value.get("networkBlockGossipPeriod")),
+            value.get("network_block_gossip_period"),
             context=f"{context}.network_block_gossip_period",
         )
         tx_period = ToriiClient._parse_optional_duration_ms(
-            value.get("network_tx_gossip_period", value.get("networkTxGossipPeriod")),
+            value.get("network_tx_gossip_period"),
             context=f"{context}.network_tx_gossip_period",
         )
         return PeerTelemetryConfig(
@@ -5804,25 +5802,14 @@ class ToriiClient:
         record = ToriiClient._ensure_mapping(value, context)
         name = ToriiClient._require_string(record.get("name"), f"{context}.name")
         description = ToriiClient._require_string(record.get("description"), f"{context}.description")
-        abi_version_value = (
-            record.get("abi_version")
-            or record.get("abiVersion")
-            or record.get("target_version")
-            or record.get("targetVersion")
-            or record.get("version")
-        )
-        abi_hash_value = (
-            record.get("abi_hash")
-            or record.get("abiHash")
-            or record.get("abi_hash_hex")
-            or record.get("abiHashHex")
-        )
+        abi_version_value = record.get("abi_version")
+        abi_hash_value = record.get("abi_hash")
         if abi_version_value is None:
             raise RuntimeError(f"{context}.abi_version is required")
         if abi_hash_value is None:
             raise RuntimeError(f"{context}.abi_hash is required")
-        start_value = record.get("start_height") or record.get("startHeight")
-        end_value = record.get("end_height") or record.get("endHeight")
+        start_value = record.get("start_height")
+        end_value = record.get("end_height")
         if start_value is None or end_value is None:
             raise RuntimeError(f"{context}.start_height and {context}.end_height are required")
         start_height = ToriiClient._coerce_unsigned(start_value, f"{context}.start_height")

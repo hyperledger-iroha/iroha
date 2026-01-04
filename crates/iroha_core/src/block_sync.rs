@@ -1485,11 +1485,8 @@ pub mod message {
                     let Some(topology) = topology else {
                         return Some((block, qc));
                     };
-                    let mode_tag = mode_tag_for_block_sync(
-                        state_view,
-                        block_height,
-                        fallback_consensus_mode,
-                    );
+                    let mode_tag =
+                        mode_tag_for_block_sync(state_view, block_height, fallback_consensus_mode);
                     let context =
                         BlockSyncValidationContext::new(&block, &topology, state_view, mode_tag);
                     let sanitized_qc = sanitize_block_sync_qc(&block, qc, &context);
@@ -2471,8 +2468,7 @@ pub mod message {
                     break;
                 }
             }
-            let (seed, view, rotated) =
-                chosen.expect("seed should yield distinct NPoS rotation");
+            let (seed, view, rotated) = chosen.expect("seed should yield distinct NPoS rotation");
 
             let state = State::new_for_testing(
                 World::new(),
@@ -2490,9 +2486,7 @@ pub mod message {
             let mut block: SignedBlock =
                 ValidBlock::new_dummy_and_modify_header(kp_a.private_key(), |header| {
                     header.set_height(height_nz);
-                    header.set_view_change_index(
-                        u32::try_from(view).expect("view fits u32"),
-                    );
+                    header.set_view_change_index(u32::try_from(view).expect("view fits u32"));
                 })
                 .into();
             let block_hash = block.hash();

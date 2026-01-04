@@ -74,7 +74,7 @@ translator: manual
 
 ## אירועי שחזור ואזהרה
 
-- Core יוצר סיידקאר לכל בלוק (`pipeline/block_<height>.json`) עם קבוצות קריאה/כתיבה ו-DAG fingerprint.
+- Core שומר סיידקארים ב-`pipeline/sidecars.norito` עם אינדקס `pipeline/sidecars.index`, וכל רשומה כוללת קבוצות קריאה/כתיבה ו-DAG fingerprint.
 - באתחול נבדקות 16 הגבהים האחרונים; אי התאמה → אזהרה ו-`PipelineEventBox::Warning` עם `dag_fingerprint_mismatch`.
 - ניתן למשוך סיידקאר דרך `GET /v1/pipeline/recovery/:height`.
 

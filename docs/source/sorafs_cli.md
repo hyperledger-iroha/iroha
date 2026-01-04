@@ -148,7 +148,7 @@ Key behaviours:
 
 ## Keyless Signing Workflow
 
-`manifest sign` can mint Sigstore-compatible signatures from multiple token
+`manifest sign` can mint Sigstore-verifiable signatures from multiple token
 sources. Provide a credential inline, via an explicit environment variable, or
 from a file when running locally. Inside GitHub Actions, pass
 `--identity-token-provider=github-actions` **and**
@@ -274,7 +274,9 @@ cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
 `proof stream` replays each proof item as NDJSON (unless suppressed with
 `--emit-events=false`) and emits an aggregate summary that tracks success,
 failure, latency, and—when `--por-root-hex` is provided—local verification
-results. The summary JSON mirrors the Torii Prometheus metrics that the gateway
+results. Requests address manifests by `manifest_digest_hex` (BLAKE3-256 of the
+canonical manifest) so proof streams remain deterministic across gateways. The
+summary JSON mirrors the Torii Prometheus metrics that the gateway
 exports (`torii_sorafs_proof_stream_events_total`,
 `torii_sorafs_proof_stream_latency_ms`, and
 `torii_sorafs_proof_stream_inflight`) and feeds the example Grafana dashboard in

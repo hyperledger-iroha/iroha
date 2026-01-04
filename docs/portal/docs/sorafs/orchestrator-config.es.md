@@ -116,7 +116,7 @@ configuracion para que los operadores reciban anulaciones deterministas. El
 orquestador aplica compliance _despues_ de los hints de write-mode: incluso si
 un SDK solicita `upload-pq-only`, las exclusiones por jurisdiccion o manifiesto
 siguen forzando transporte direct-only y fallan rapido cuando no existen
-proveedores compatibles.
+proveedores aptos.
 
 Los catalogos canonicos de opt-out viven en
 `governance/compliance/soranet_opt_outs.json`; el Consejo de Gobernanza publica
@@ -378,7 +378,7 @@ certificado existente y la clave de cache de guard, v2 agrega:
   el header `x-sorafs-cache-tag` al emitir solicitudes HTTP o TCP para que las
   selecciones de guard en cache permanezcan cifradas en reposo.
 
-Estos campos son compatibles hacia atras; los clientes antiguos pueden ignorar
+Estos campos preservan el formato previo; los clientes antiguos pueden ignorar
 las nuevas claves y continuar usando el subconjunto v1.
 
 ## 2. Semantica de fallos

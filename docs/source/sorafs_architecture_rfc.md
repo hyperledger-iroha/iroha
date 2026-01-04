@@ -141,7 +141,7 @@ into manifests that the CLI emits.
 Supporting structures:
 
 - `ChunkingProfileV1` re-states the mask, polynomial, and min/avg/max sizes so
-  validators can detect incompatible chunkers.
+  validators can detect unsupported chunkers.
 - `PinPolicy` includes `min_replicas`, `storage_class` (`Hot`, `Warm`, `Cold`),
   and `retention_epoch`.
 - `GovernanceProofs` is a Norito enum that references on-chain pin registry

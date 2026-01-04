@@ -30,8 +30,5 @@ fn address_vectors_write_custom_path() {
     cmd.assert().success();
 
     let raw = fs::read_to_string(&output_path).expect("vector output");
-    assert!(
-        raw.contains("\"format_version\""),
-        "expected legacy ADDR-2 format"
-    );
+    assert!(raw.contains("\"format_version\""), "expected ADDR-2 format");
 }

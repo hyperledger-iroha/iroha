@@ -228,7 +228,7 @@ sorafs_cli manifest verify-signature \
 - [Publishing & Monitoring](./publishing-monitoring.md) میں بیان کردہ مانیٹرنگ
   شواہد حاصل کریں تاکہ DOCS-3c کا observability گیٹ اشاعت کے مراحل کے ساتھ
   پورا ہو۔ ہیلپر اب متعدد `bindings` entries (سائٹ، OpenAPI، پورٹل SBOM، OpenAPI
-  SBOM) قبول کرتا ہے اور اختیاری `expectHost` گارڈ کے ذریعے ہدف host پر
+  SBOM) قبول کرتا ہے اور اختیاری `hostname` گارڈ کے ذریعے ہدف host پر
   `Sora-Name`/`Sora-Proof`/`Sora-Content-CID` نافذ کرتا ہے۔ نیچے والی invocation
   ایک JSON سمری اور evidence bundle (`portal.json`, `tryit.json`, `binding.json`,
   اور `checksums.sha256`) دونوں ریلیز ڈائریکٹری میں لکھتی ہے:
@@ -499,9 +499,9 @@ xtask helper اب canonical راستہ ہے۔ ریلیز اسکرپٹ verificati
 cargo xtask soradns-verify-binding \
   --binding artifacts/sorafs/portal.gateway.binding.json \
   --alias docs.sora.link \
-  --content-cid "$(jq -r '.contentCid' artifacts/sorafs/portal.gateway.binding.json)" \
   --hostname docs.sora.link \
-  --proof-status ok
+  --proof-status ok \
+  --manifest-json artifacts/sorafs/portal.manifest.json
 ```
 
 یہ کمانڈ stapled `Sora-Proof` payload کو ڈی کوڈ کرتی ہے، `Sora-Route-Binding`
@@ -537,7 +537,7 @@ npm run monitor:publishing -- \
   `docs/portal/docs/devportal/publishing-monitoring.md` دیکھیں) اور تین checks
   چلاتا ہے: portal path probes + CSP/Permissions-Policy validation، Try it proxy
   probes (اختیاری طور پر `/metrics` endpoint ہٹ کر)، اور gateway binding verifier
-  (`scripts/verify-sorafs-binding.mjs`) جو اب alias/manifest checks کے ساتھ
+  (`cargo xtask soradns-verify-binding`) جو اب alias/manifest checks کے ساتھ
   Sora-Content-CID کی موجودگی + متوقع ویلیو نافذ کرتا ہے۔
 - اگر کوئی بھی probe ناکام ہو تو کمانڈ non-zero سے نکلتی ہے تاکہ CI، cron jobs،
   یا runbook operators aliases پروموٹ کرنے سے پہلے ریلیز روک سکیں۔
@@ -713,11 +713,10 @@ cutover کا اعلان کرنے سے پہلے ثابت کریں کہ نیا ali
    `docs/source/sorafs_alias_policy.md` کے مطابق decode کرتا ہے اور اگر manifest digest,
    TTLs، یا GAR bindings میں drift ہو تو ناکام ہو جاتا ہے۔
 
-   ہلکی پھلکی spot checks کے لئے (مثلاً جب صرف alias/manifest جوڑی بدلی ہو)،
-   `node scripts/verify-sorafs-binding.mjs --alias "<alias>" --manifest "<digest>" --url "<gateway-url>"`
-   چلائیں۔ یہ ہیلپر gateway endpoint fetch کرتا ہے، stapled `Sora-Proof` ہیڈر decode
-   کرتا ہے، اور `--json-out` کے ذریعے اختیاری JSON evidence لکھتا ہے، جو ریلیز ٹکٹوں
-   کے لئے مفید ہے جہاں مکمل probe drill کے بجائے صرف binding confirmation درکار ہو۔
+   For lightweight spot checks (for example, when only the binding bundle
+   changed), run `cargo xtask soradns-verify-binding --binding <portal.gateway.binding.json> --alias "<alias>" --hostname "<gateway-host>" --proof-status ok --manifest-json <portal.manifest.json>`.
+   The helper validates the captured binding bundle and is handy for release
+   tickets that only need binding confirmation instead of a full probe drill.
 
 2. **drill evidence جمع کریں۔** آپریٹر drills یا PagerDuty dry runs کے لئے probe کو
    `scripts/telemetry/run_sorafs_gateway_probe.sh --scenario devportal-rollout -- …`

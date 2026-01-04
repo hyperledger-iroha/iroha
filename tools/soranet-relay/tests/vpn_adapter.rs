@@ -162,6 +162,83 @@ fn adapter_parses_and_accounts_frames() {
     assert_eq!(0, snapshot.vpn_cover_bytes);
 }
 
+#[tokio::test]
+async fn adapter_tracks_control_frames_separately() {
+    let metrics = Arc::new(Metrics::new());
+    metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
+    let overlay = VpnOverlay::from_config(Default::default());
+    let adapter = overlay.start_adapter(Arc::clone(&metrics));
+    let padding_budget_ms = overlay.config().padding_budget_ms;
+
+    let ingress_cell = VpnCellV1 {
+        header: VpnCellHeaderV1 {
+            version: 1,
+            class: VpnCellClassV1::Control,
+            flags: VpnCellFlagsV1::new(false, false, false, false),
+            circuit_id: [0x10; 16],
+            flow_label: VpnFlowLabelV1::from_u32(8).expect("flow"),
+            sequence: 1,
+            ack: 0,
+            padding_budget_ms,
+            payload_len: 0,
+        },
+        payload: vec![0xAA; 12],
+    };
+    let ingress_frame = overlay
+        .pad_cell(ingress_cell)
+        .expect("control ingress frame");
+    let (mut writer, mut reader) = duplex(VPN_CELL_LEN * 2);
+    write_frame(&mut writer, &ingress_frame)
+        .await
+        .expect("write control ingress frame");
+    let parsed = adapter
+        .read_ingress_frame(&mut reader)
+        .await
+        .expect("ingress parsed");
+    assert_eq!(VpnCellClassV1::Control, parsed.header.class);
+
+    let egress_cell = VpnCellV1 {
+        header: VpnCellHeaderV1 {
+            version: 1,
+            class: VpnCellClassV1::Control,
+            flags: VpnCellFlagsV1::new(false, false, false, false),
+            circuit_id: [0x20; 16],
+            flow_label: VpnFlowLabelV1::from_u32(9).expect("flow"),
+            sequence: 2,
+            ack: 0,
+            padding_budget_ms,
+            payload_len: 0,
+        },
+        payload: vec![0xBB; 5],
+    };
+    let _ = adapter
+        .encode_egress_cell(egress_cell)
+        .expect("control egress frame");
+
+    let receipt = adapter.finish_receipt([0xAA; 16], VpnExitClassV1::Standard, [0xBB; 32]);
+    assert_eq!(0, receipt.ingress_bytes);
+    assert_eq!(0, receipt.egress_bytes);
+    assert_eq!(0, receipt.cover_bytes);
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(0, snapshot.vpn_frames);
+    assert_eq!(0, snapshot.vpn_ingress_frames);
+    assert_eq!(0, snapshot.vpn_egress_frames);
+    assert_eq!(0, snapshot.vpn_bytes);
+    assert_eq!(0, snapshot.vpn_ingress_bytes);
+    assert_eq!(0, snapshot.vpn_egress_bytes);
+    assert_eq!(0, snapshot.vpn_data_frames);
+    assert_eq!(0, snapshot.vpn_data_bytes);
+    assert_eq!(0, snapshot.vpn_cover_frames);
+    assert_eq!(0, snapshot.vpn_cover_bytes);
+    assert_eq!(2, snapshot.vpn_control_frames);
+    assert_eq!(1, snapshot.vpn_control_ingress_frames);
+    assert_eq!(1, snapshot.vpn_control_egress_frames);
+    assert_eq!(17, snapshot.vpn_control_bytes);
+    assert_eq!(12, snapshot.vpn_control_ingress_bytes);
+    assert_eq!(5, snapshot.vpn_control_egress_bytes);
+}
+
 #[test]
 fn adapter_counts_frame_only_hooks() {
     let metrics = Arc::new(Metrics::new());
@@ -514,7 +591,7 @@ async fn adapter_sends_data_frames_with_accounting() {
         payloads: &[vec![1u8; 4], vec![2u8; 6]],
     };
 
-    let (mut writer, mut reader) = duplex(VPN_CELL_LEN * 4);
+    let (mut writer, mut reader) = duplex(VPN_CELL_LEN * 16);
     adapter
         .send_data_frames(&mut writer, batch)
         .await
@@ -583,7 +660,7 @@ async fn adapter_paces_data_frames_and_cover() {
     }
     let schedule = schedule_frames(&overlay, data_cells, cover_meta, [0x11; 32]).expect("schedule");
 
-    let (mut writer, mut reader) = duplex(VPN_CELL_LEN * 4);
+    let (mut writer, mut reader) = duplex(VPN_CELL_LEN * 16);
     send_scheduled_frames_with_adapter(
         &schedule,
         &mut writer,
@@ -991,6 +1068,70 @@ async fn bridge_forwards_vpn_to_tun() {
     assert_eq!(1, snapshot.vpn_ingress_frames);
     assert_eq!(1, snapshot.vpn_data_ingress_frames);
     assert_eq!(payload.len() as u64, snapshot.vpn_data_ingress_bytes);
+}
+
+#[tokio::test]
+async fn bridge_drops_cover_frames_on_tun_forward() {
+    let metrics = Arc::new(Metrics::new());
+    metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
+    let overlay = VpnOverlay::from_config(VpnConfig {
+        enabled: true,
+        ..Default::default()
+    });
+    let bridge = overlay.start_bridge(
+        Arc::clone(&metrics),
+        [0x77; 16],
+        VpnFlowLabelV1::from_u32(9).unwrap(),
+    );
+
+    let payload = vec![0xAD; 7];
+    let padded = overlay
+        .pad_cell(VpnCellV1 {
+            header: VpnCellHeaderV1 {
+                version: 1,
+                class: VpnCellClassV1::Cover,
+                flags: VpnCellFlagsV1::new(true, false, false, false),
+                circuit_id: [0x77; 16],
+                flow_label: VpnFlowLabelV1::from_u32(9).unwrap(),
+                sequence: 0,
+                ack: 0,
+                padding_budget_ms: overlay.config().padding_budget_ms,
+                payload_len: 0,
+            },
+            payload: payload.clone(),
+        })
+        .expect("padded cover");
+
+    let (mut vpn_writer, mut vpn_reader) = duplex(VPN_CELL_LEN * 2);
+    vpn_writer
+        .write_all(padded.frame.as_ref())
+        .await
+        .expect("write cover frame");
+    drop(vpn_writer);
+
+    let (mut tun_writer, mut tun_reader) = duplex(2048);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        bridge.forward_vpn_to_tun(&mut vpn_reader, &mut tun_writer),
+    )
+    .await
+    .expect("vpn->tun forward timed out")
+    .expect("forward");
+    drop(tun_writer);
+
+    let mut received = Vec::new();
+    tun_reader
+        .read_to_end(&mut received)
+        .await
+        .expect("read tun");
+    assert!(received.is_empty(), "cover payload should be dropped");
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(1, snapshot.vpn_ingress_frames);
+    assert_eq!(1, snapshot.vpn_cover_ingress_frames);
+    assert_eq!(0, snapshot.vpn_data_ingress_frames);
+    assert_eq!(payload.len() as u64, snapshot.vpn_cover_ingress_bytes);
+    assert_eq!(0, snapshot.vpn_data_ingress_bytes);
 }
 
 #[tokio::test]

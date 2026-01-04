@@ -595,6 +595,20 @@ fn compile_and_run_add() {
 }
 
 #[test]
+fn state_allocations_do_not_clobber_params() {
+    let src = r#"
+        state Map<int,int> m;
+        fn id(x: int) -> int { return x; }
+    "#;
+    let code = Compiler::new().compile_source(src).expect("compile failed");
+    let mut vm = ivm::IVM::new(u64::MAX);
+    vm.set_register(10, 42);
+    vm.load_program(&code).unwrap();
+    vm.run().expect("execution failed");
+    assert_eq!(vm.register(10), 42);
+}
+
+#[test]
 fn compile_builtin_create_nfts_and_depth_and_set_detail() {
     let src = "fn main() { create_nfts_for_all_users(); set_execution_depth(111); set_account_detail(authority(), name(\"cursor\"), json(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")); }";
     let code = Compiler::new().compile_source(src).expect("compile failed");
@@ -1559,7 +1573,7 @@ fn compile_emits_manifest_hashes() {
     assert_eq!(manifest.code_hash, Some(expected_code_hash));
     let policy = match meta.abi_version {
         1 => SyscallPolicy::AbiV1,
-        v => SyscallPolicy::Experimental(v),
+        _ => unreachable!("compiler emits ABI v1 only"),
     };
     let expected_abi = iroha_crypto::Hash::prehashed(compute_abi_hash(policy));
     assert_eq!(manifest.abi_hash, Some(expected_abi));

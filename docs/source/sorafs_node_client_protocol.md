@@ -599,7 +599,7 @@ geographies when the path policy allows it.
 
 Providers implicitly advertise the active chunker profile via the registry
 metadata embedded in manifests and via dedicated HTTP headers during data
-transfer. Negotiation is HTTP-content-negotation compatible:
+transfer. Negotiation follows HTTP content negotiation:
 
 1. **Request.** Clients send an `Accept-Chunker` header listing supported
    `(namespace, name, semver)` tuples in descending preference order. Each list

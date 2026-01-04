@@ -66,7 +66,7 @@ public final class HttpSafetyDetectService implements SafetyDetectService {
       final SafetyDetectRequest request, final String accessToken) {
     final Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("app_id", request.appId());
-    payload.put("nonce", encodeNonce(request.attestationNonceHex()));
+    payload.put("nonce", encodeNonce(request.nonceHex()));
     payload.put("package_name", request.packageName());
     payload.put("sign_cert_sha256", request.signingDigestSha256());
     payload.put("certificate_id_hex", request.certificateIdHex());

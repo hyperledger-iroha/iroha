@@ -1916,7 +1916,12 @@ pub fn nexus_staking_snapshot() -> NexusStakingSnapshot {
     NexusStakingSnapshot { lanes }
 }
 
-#[cfg(test)]
+/// Shared lock for tests that mutate global Nexus fee state.
+pub fn nexus_fee_test_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 /// Clear Nexus economics snapshots (test-only helper).
 pub fn reset_nexus_economics_for_tests() {
     {
@@ -6293,6 +6298,9 @@ mod tests {
 
     #[test]
     fn nexus_fee_snapshot_tracks_events() {
+        let _guard = super::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
         super::reset_nexus_economics_for_tests();
         super::record_nexus_fee_event(super::NexusFeeEvent::Charged {
             payer_kind: super::NexusFeePayer::Payer,
@@ -6313,6 +6321,9 @@ mod tests {
 
     #[test]
     fn nexus_staking_snapshot_collects_lane_totals() {
+        let _guard = super::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
         super::reset_nexus_economics_for_tests();
         let lane = LaneId::new(11);
         let bonded = Numeric::new(500, 0);

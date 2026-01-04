@@ -48,29 +48,19 @@ async fn ws_proof_json_integration() {
             Err(e) => panic!("ws connect failed: {e}"),
         };
 
-    // Send EventSubscriptionRequest (Any)
-    let sub = iroha_data_model::events::stream::EventSubscriptionRequest(vec![
-        iroha_data_model::events::EventFilterBox::Data(
+    // Send EventSubscriptionRequest (Any + proof backend filter)
+    let sub = iroha_data_model::events::stream::EventSubscriptionRequest {
+        filters: vec![iroha_data_model::events::EventFilterBox::Data(
             iroha_data_model::prelude::DataEventFilter::Any,
-        ),
-    ]);
+        )],
+        proof_backend: Some(vec!["halo2/ipa".into()]),
+        proof_call_hash: None,
+        proof_envelope_hash: None,
+    };
     let sub_bytes = <_ as norito::codec::Encode>::encode(&sub);
     ws_stream
         .send(tokio_tungstenite::tungstenite::Message::Binary(
             sub_bytes.into(),
-        ))
-        .await
-        .unwrap();
-
-    // Send EventSubscriptionProofFilter: backend halo2/ipa
-    let proof_filter = iroha_data_model::events::stream::EventSubscriptionProofFilter {
-        proof_backend: Some(vec!["halo2/ipa".into()]),
-        proof_call_hash: None,
-    };
-    let pf_bytes = <_ as norito::codec::Encode>::encode(&proof_filter);
-    ws_stream
-        .send(tokio_tungstenite::tungstenite::Message::Binary(
-            pf_bytes.into(),
         ))
         .await
         .unwrap();

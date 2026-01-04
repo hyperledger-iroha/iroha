@@ -62,8 +62,8 @@ con destinos alternativos.
 - Artefactos: `artifacts/xcframework_smoke_result.json`,
   `artifacts/xcframework_smoke_report.txt`
 - Validación: `scripts/check_swift_dashboard_data.py` se ejecuta sobre el feed de
-  telemetría generado antes de subirlo/anotarlo para garantizar que el esquema es
-  compatible.
+  telemetría generado antes de subirlo/anotarlo para garantizar que el esquema se
+  mantiene estable.
 - El pipeline anota el build con el resumen renderizado del dashboard y falla el step si
   cualquier lane informa de un fallo o incidente.
 - `scripts/ci/run_xcframework_smoke.sh` registra claves de metadata de Buildkite de la
@@ -119,4 +119,3 @@ destino.
 
 Actualiza este documento siempre que cambie la matriz y refleja los nuevos destinos en
 `status.md` y `roadmap.md` en el mismo cambio.
-

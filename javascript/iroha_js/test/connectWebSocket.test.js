@@ -58,7 +58,7 @@ test("buildConnectWebSocketUrl normalizes schemes and appends query", () => {
 test("buildConnectWebSocketUrl rejects token query parameters", () => {
   assert.throws(
     () =>
-      buildConnectWebSocketUrl("https://torii.example/v1/connect/ws?token=legacy", {
+      buildConnectWebSocketUrl("https://torii.example/v1/connect/ws?token=example", {
         sid: SID_HEX,
         role: "wallet",
         token: TOKEN,

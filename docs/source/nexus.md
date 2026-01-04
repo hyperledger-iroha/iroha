@@ -359,7 +359,7 @@ Configuration and Determinism
 - **TODO:** Per-lane scheduler/DA/RBC rebalance, validator-set propagation, and storage teardown/cleanup are pending; keep lifecycle requests infrequent until those hooks land.
 
 Migration Path (Iroha 2 → Iroha 3)
-1) Introduce data‑space‑qualified IDs and nexus block/global state composition in data model; add feature flags to keep Iroha 2 compatible modes during transition.
+1) Introduce data‑space‑qualified IDs and nexus block/global state composition in data model; add feature flags to keep Iroha 2 legacy modes during transition.
 2) Implement Kura/WSV erasure‑coding backends behind feature flags, preserving current backends as defaults during early phases.
 3) Add IVM syscalls and pointer types for AMX (atomic multi‑DS) operations; extend tests and docs; keep ABI v1.
 4) Deliver minimal nexus chain with a single public DS and 1s blocks; then add first private‑DS pilot exporting proofs/commitments only.

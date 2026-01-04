@@ -1300,13 +1300,17 @@ mod tests {
     use super::*;
     use crate::test_utils::TestDataDirGuard;
 
+    const TEST_SCAN_BUDGET_MARGIN_BYTES: u64 = 1024;
+
     fn init_test_cfg() {
+        let fixture_len = fixture_attachment_bytes().len() as u64;
+        let max_scan_bytes = fixture_len.saturating_add(TEST_SCAN_BUDGET_MARGIN_BYTES);
         let _ = super::configure(
             true,
             1,
             7 * 24 * 60 * 60,
             2,
-            1024,
+            max_scan_bytes,
             5_000,
             iroha_config::parameters::defaults::torii::zk_prover_keys_dir(),
             iroha_config::parameters::defaults::torii::zk_prover_allowed_backends(),
@@ -1369,8 +1373,12 @@ mod tests {
     fn scan_respects_byte_budget() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
-        // Create two attachments totalling more than the configured byte budget (1 KiB)
-        for (idx, size) in [700usize, 600usize].into_iter().enumerate() {
+        let budget = super::cfg_max_scan_bytes().max(2);
+        let budget = usize::try_from(budget).unwrap_or(usize::MAX);
+        let first_size = budget.saturating_sub(1).max(1);
+        let sizes = [first_size, 2usize];
+        // Create two attachments totalling more than the configured byte budget.
+        for (idx, size) in sizes.into_iter().enumerate() {
             let id = format!("{:064x}", idx + 1);
             let meta = super::super::zk_attachments::AttachmentMeta {
                 id: id.clone(),

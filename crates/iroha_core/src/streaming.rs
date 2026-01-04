@@ -2736,13 +2736,6 @@ where
             Err(StreamingProcessError::MissingFeedbackParity { .. }) => {
                 self.streaming
                     .apply_manifest_transport_capabilities(peer.id(), &mut manifest)?;
-                hint.stream_id = manifest.stream_id;
-                hint.parity_chunks = 0;
-                if hint.report_interval_ms == 0 {
-                    if let Some(resolution) = self.streaming.transport_capabilities(peer.id()) {
-                        hint.report_interval_ms = resolution.fec_feedback_interval_ms;
-                    }
-                }
                 self.send_manifest(peer, manifest);
                 Ok(())
             }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a combined Android run_tests + fixture-parity report."""
+"""Generate a combined Android test + fixture-parity report."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from typing import Dict, Iterable, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REPORT = REPO_ROOT / "artifacts" / "android" / "test_report.json"
-DEFAULT_TEST_SUMMARY = REPO_ROOT / "artifacts" / "android" / "run_tests_summary.json"
+DEFAULT_TEST_SUMMARY = REPO_ROOT / "artifacts" / "android" / "test_summary.json"
 DEFAULT_FIXTURE_SUMMARY = REPO_ROOT / "artifacts" / "android" / "fixture_parity_summary.json"
 
 
@@ -88,9 +88,9 @@ def run_android_tests(
 ) -> Dict[str, object]:
     env = os.environ.copy()
     env["ANDROID_TEST_SUMMARY_OUT"] = str(summary_path)
-    cmd = [str(root / "java" / "iroha_android" / "run_tests.sh")]
+    cmd = [str(root / "ci" / "run_android_tests.sh")]
     if tests:
-        cmd.extend(["--tests", tests])
+        env["ANDROID_HARNESS_MAINS"] = tests
 
     start = time.time()
     result = subprocess.run(cmd, cwd=root, env=env)
@@ -177,17 +177,17 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--run-tests",
         action="store_true",
-        help="Execute java/iroha_android/run_tests.sh instead of reading --summary",
+        help="Execute ci/run_android_tests.sh instead of reading --summary",
     )
     parser.add_argument(
         "--tests",
         metavar="LIST",
-        help="Comma-separated test mains to pass to run_tests.sh when --run-tests is set",
+        help="Comma-separated test mains to pass via ANDROID_HARNESS_MAINS when --run-tests is set",
     )
     parser.add_argument(
         "--summary",
         type=Path,
-        help="Existing run_tests summary JSON to embed (required when --run-tests is not set)",
+        help="Existing test summary JSON to embed (required when --run-tests is not set)",
     )
     parser.add_argument(
         "--fixtures-summary",
@@ -218,7 +218,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         "--test-summary-out",
         type=Path,
         default=DEFAULT_TEST_SUMMARY,
-        help="Path to write the run_tests summary when --run-tests is enabled",
+        help="Path to write the test summary when --run-tests is enabled",
     )
     parser.add_argument(
         "--fixture-summary-out",

@@ -56,31 +56,6 @@ fn decode_stream_matches_expected_words_and_lengths() {
     }
 }
 
-#[test]
-fn decode_artifact_consistent_across_minor_versions() {
-    let code = build_wide_code();
-    let h1 = ProgramMetadata {
-        version_minor: 0,
-        ..ProgramMetadata::default()
-    };
-    let h2 = ProgramMetadata {
-        version_minor: 7,
-        ..ProgramMetadata::default()
-    };
-
-    let mut a1 = h1.encode();
-    a1.extend_from_slice(&code);
-    let mut a2 = h2.encode();
-    a2.extend_from_slice(&code);
-
-    let (_m1, d1) = IvmCache::decode_artifact(&a1).expect("artifact decode ok");
-    let (_m2, d2) = IvmCache::decode_artifact(&a2).expect("artifact decode ok");
-    assert_eq!(
-        &*d1, &*d2,
-        "decoded ops must match across header minor versions"
-    );
-}
-
 /// Decoding should ignore metadata fields that are orthogonal to the byte stream.
 #[test]
 fn decode_artifact_invariant_across_metadata_fields() {
@@ -105,12 +80,6 @@ fn decode_artifact_invariant_across_metadata_fields() {
 
     let golden = decode(&base);
 
-    for vmin in [0u8, 1, 7, 42] {
-        let mut m = base.clone();
-        m.version_minor = vmin;
-        assert_eq!(&*golden, &*decode(&m), "minor {vmin}");
-    }
-
     for mode in 0u8..=0x07 {
         let mut m = base.clone();
         m.mode = mode;
@@ -129,9 +98,7 @@ fn decode_artifact_invariant_across_metadata_fields() {
         assert_eq!(&*golden, &*decode(&m), "cycles {cyc}");
     }
 
-    for abi in [0u8, 1, 2, 10, 255] {
-        let mut m = base.clone();
-        m.abi_version = abi;
-        assert_eq!(&*golden, &*decode(&m), "abi {abi}");
-    }
+    let mut m = base.clone();
+    m.abi_version = 1;
+    assert_eq!(&*golden, &*decode(&m), "abi 1");
 }

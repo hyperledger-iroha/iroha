@@ -18,11 +18,7 @@ import org.hyperledger.iroha.android.tx.offline.OfflineSigningEnvelopeCodec;
 /**
  * File-backed queue that persists transactions as Base64-encoded records separated by newlines.
  *
- * <p>The storage format is intentionally simple to keep the desktop JVM build dependency-free:
- *
- * <pre>{@code
- *   payloadBase64,signatureBase64,publicKeyBase64,schemaBase64\n
- * }</pre>
+ * <p>Each line contains a Base64-encoded {@link OfflineSigningEnvelope}.
  *
  * <p>The queue preserves insertion order and deletes the underlying file when drained.
  */
@@ -32,7 +28,6 @@ public final class FilePendingTransactionQueue implements PendingTransactionQueu
   private static final Base64.Decoder DECODER = Base64.getDecoder();
   private static final OfflineSigningEnvelopeCodec ENVELOPE_CODEC =
       new OfflineSigningEnvelopeCodec();
-  private static final String LEGACY_SEPARATOR = ",";
   private static final String DEFAULT_KEY_ALIAS = "pending.queue";
 
   private final Path queueFile;
@@ -132,19 +127,12 @@ public final class FilePendingTransactionQueue implements PendingTransactionQueu
   }
 
   private SignedTransaction decodeEntry(final String line) throws IOException {
-    if (line.contains(LEGACY_SEPARATOR)) {
-      final String[] segments = line.split(LEGACY_SEPARATOR, 4);
-      if (segments.length != 4) {
-        throw new IOException("Corrupted queue entry: " + line);
-      }
-      final byte[] payload = DECODER.decode(segments[0]);
-      final byte[] signature = DECODER.decode(segments[1]);
-      final byte[] publicKey = DECODER.decode(segments[2]);
-      final byte[] schemaBytes = DECODER.decode(segments[3]);
-      final String schema = new String(schemaBytes, StandardCharsets.UTF_8);
-      return new SignedTransaction(payload, signature, publicKey, schema);
+    final byte[] envelopeBytes;
+    try {
+      envelopeBytes = DECODER.decode(line);
+    } catch (final IllegalArgumentException ex) {
+      throw new IOException("Failed to decode queue entry", ex);
     }
-    final byte[] envelopeBytes = DECODER.decode(line);
     try {
       final OfflineSigningEnvelope envelope = ENVELOPE_CODEC.decode(envelopeBytes);
       return new SignedTransaction(
@@ -155,7 +143,7 @@ public final class FilePendingTransactionQueue implements PendingTransactionQueu
           envelope.keyAlias(),
           envelope.exportedKeyBundle().orElse(null));
     } catch (final NoritoException ex) {
-      throw new IOException("Failed to decode offline signing envelope", ex);
+      throw new IOException("Failed to decode queue entry", ex);
     }
   }
 }

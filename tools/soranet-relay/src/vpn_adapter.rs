@@ -82,8 +82,10 @@ impl VpnAdapter {
 
     /// Pad and account for an egress VPN cell, returning the fixed-length frame.
     pub fn encode_egress_cell(&self, cell: VpnCellV1) -> Result<PaddedCell, VpnFrameBuildError> {
+        let class = cell.header.class;
+        let payload_len = cell.payload.len() as u64;
         let frame = self.overlay.pad_cell(cell)?;
-        self.record_egress_frame_count(u64::from(frame.payload_len), false);
+        self.session.record_classified_egress(class, payload_len);
         Ok(frame)
     }
 
@@ -142,12 +144,7 @@ impl VpnAdapter {
         reader: &mut R,
     ) -> Result<VpnCellV1, VpnFrameIoError> {
         let cell = read_padded_frame(&self.overlay, reader).await?;
-        let is_cover = cell.header.class == VpnCellClassV1::Cover;
-        self.session
-            .metrics()
-            .record_vpn_frame_ingress_count(1, is_cover);
-        self.session
-            .record_ingress(cell.payload.len() as u64, is_cover);
+        self.session.record_parsed_ingress(&cell);
         Ok(cell)
     }
 
@@ -407,17 +404,22 @@ impl VpnBridge {
         Ok(total_outcome)
     }
 
-    /// Parse a single ingress cell from `vpn_reader` and write its payload to the TUN writer.
+    /// Parse a single ingress cell from `vpn_reader` and write data payloads to the TUN writer.
     pub async fn forward_vpn_to_tun<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
         &self,
         vpn_reader: &mut R,
         tun_writer: &mut W,
     ) -> Result<(), VpnFrameIoError> {
         match self.adapter.read_ingress_frame(vpn_reader).await {
-            Ok(cell) => tun_writer
-                .write_all(&cell.payload)
-                .await
-                .map_err(VpnFrameIoError::Io),
+            Ok(cell) => match cell.header.class {
+                VpnCellClassV1::Data => tun_writer
+                    .write_all(&cell.payload)
+                    .await
+                    .map_err(VpnFrameIoError::Io),
+                VpnCellClassV1::Cover | VpnCellClassV1::KeepAlive | VpnCellClassV1::Control => {
+                    Ok(())
+                }
+            },
             Err(VpnFrameIoError::FrameLength { actual: 0, .. }) => Ok(()),
             Err(err) => Err(err),
         }
@@ -427,6 +429,8 @@ impl VpnBridge {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+
+    use iroha_data_model::soranet::vpn::VpnCellHeaderV1;
 
     use super::*;
     use crate::metrics::Metrics;
@@ -444,5 +448,44 @@ mod tests {
         let expected = default_cover_seed(circuit_id, flow_label);
         assert_eq!(expected, bridge.cover_seed);
         assert_ne!([0u8; 32], bridge.cover_seed);
+    }
+
+    #[test]
+    fn adapter_counts_cover_cells_on_encode() {
+        let metrics = Arc::new(Metrics::new());
+        metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
+        let overlay = VpnOverlay::from_config(Default::default());
+        let session = VpnSession::from_parts(Arc::clone(&metrics));
+        let adapter = VpnAdapter::new(session, overlay);
+        let padding_budget_ms = adapter.overlay().config().padding_budget_ms;
+
+        let header = VpnCellHeaderV1 {
+            version: 1,
+            class: VpnCellClassV1::Cover,
+            flags: VpnCellFlagsV1::new(true, false, false, false),
+            circuit_id: [0x33; 16],
+            flow_label: VpnFlowLabelV1::from_u32(1).expect("flow label"),
+            sequence: 1,
+            ack: 0,
+            padding_budget_ms,
+            payload_len: 0,
+        };
+        let cell = VpnCellV1 {
+            header,
+            payload: vec![0xAB; 5],
+        };
+
+        let _ = adapter
+            .encode_egress_cell(cell)
+            .expect("encoded cover cell");
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(1, snapshot.vpn_frames);
+        assert_eq!(1, snapshot.vpn_egress_frames);
+        assert_eq!(1, snapshot.vpn_cover_frames);
+        assert_eq!(5, snapshot.vpn_cover_bytes);
+        assert_eq!(5, snapshot.vpn_cover_egress_bytes);
+        assert_eq!(0, snapshot.vpn_data_bytes);
+        assert_eq!(0, snapshot.vpn_data_egress_bytes);
     }
 }

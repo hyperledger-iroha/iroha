@@ -155,6 +155,7 @@ pub use crate::app_auth::{
 pub mod openapi;
 
 mod content;
+mod proof_filters;
 use crate::api_version::ApiVersion;
 pub mod sorafs;
 use std::{
@@ -622,6 +623,7 @@ struct AppState {
     content_egress_limiter: limits::RateLimiter,
     proof_limits: routing::ProofApiLimits,
     content_config: iroha_config::parameters::actual::Content,
+    ws_message_timeout: Duration,
     require_api_token: bool,
     api_tokens_set: Arc<HashSet<String>>,
     operator_auth: Arc<operator_auth::OperatorAuth>,
@@ -5538,7 +5540,7 @@ async fn handler_events_sse(
 ) -> Result<Response, Error> {
     if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
         return Ok(
-            routing::handle_v1_events_sse(app.events.clone(), AxQuery(params)).into_response(),
+            routing::handle_v1_events_sse(app.events.clone(), AxQuery(params))?.into_response(),
         );
     }
     let token_hdr = headers
@@ -5561,7 +5563,7 @@ async fn handler_events_sse(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    Ok(routing::handle_v1_events_sse(app.events.clone(), AxQuery(params)).into_response())
+    Ok(routing::handle_v1_events_sse(app.events.clone(), AxQuery(params))?.into_response())
 }
 
 #[cfg(feature = "app_api")]
@@ -5660,8 +5662,12 @@ async fn handler_subscription_ws(
         // Subscribe before upgrade to buffer events emitted during the WS handshake.
         let events_rx = app.events.subscribe();
         return Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
-            if let Err(error) =
-                routing::event::handle_events_stream_with_receiver(events_rx, ws).await
+            if let Err(error) = routing::event::handle_events_stream_with_receiver(
+                events_rx,
+                ws,
+                app.ws_message_timeout,
+            )
+            .await
             {
                 iroha_logger::error!(%error, "Failure during event streaming");
             }
@@ -5697,7 +5703,12 @@ async fn handler_subscription_ws(
     // Subscribe before upgrade to buffer events emitted during the WS handshake.
     let events_rx = app.events.subscribe();
     Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
-        if let Err(error) = routing::event::handle_events_stream_with_receiver(events_rx, ws).await
+        if let Err(error) = routing::event::handle_events_stream_with_receiver(
+            events_rx,
+            ws,
+            app.ws_message_timeout,
+        )
+        .await
         {
             iroha_logger::error!(%error, "Failure during event streaming");
         }
@@ -5714,7 +5725,9 @@ async fn handler_blocks_stream_ws(
     if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
         let kura = app.kura.clone();
         return Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
-            if let Err(error) = routing::block::handle_blocks_stream(kura, ws).await {
+            if let Err(error) =
+                routing::block::handle_blocks_stream(kura, ws, app.ws_message_timeout).await
+            {
                 iroha_logger::error!(%error, "Failure during block streaming");
             }
         }))
@@ -5743,7 +5756,9 @@ async fn handler_blocks_stream_ws(
     }
     let kura = app.kura.clone();
     Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
-        if let Err(error) = routing::block::handle_blocks_stream(kura, ws).await {
+        if let Err(error) =
+            routing::block::handle_blocks_stream(kura, ws, app.ws_message_timeout).await
+        {
             iroha_logger::error!(%error, "Failure during block streaming");
         }
     }))
@@ -9404,8 +9419,15 @@ async fn handle_connect_ws_logic(
     let mut sid = [0u8; 32];
     sid.copy_from_slice(&sid_bytes);
     let role = match q.role.as_str() {
-        "app" | "App" => iroha_torii_shared::connect::Role::App,
-        _ => iroha_torii_shared::connect::Role::Wallet,
+        "app" => iroha_torii_shared::connect::Role::App,
+        "wallet" => iroha_torii_shared::connect::Role::Wallet,
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("connect: bad role {other}"),
+            )
+                .into_response();
+        }
     };
     let token = match resolve_connect_ws_token(&headers) {
         Ok(token) => token,
@@ -9570,8 +9592,23 @@ fn parse_connect_ws_query(
             }
         }
     }
+    fn normalize_role(raw: &str) -> Option<String> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "app" => Some("app".to_string()),
+            "wallet" => Some("wallet".to_string()),
+            _ => None,
+        }
+    }
+
     match (sid, role) {
-        (Some(sid), Some(role)) => Ok(routing::ConnectWsQuery { sid, role }),
+        (Some(sid), Some(role_raw)) => {
+            let Some(role) = normalize_role(&role_raw) else {
+                return Err(
+                    (StatusCode::BAD_REQUEST, "connect query has invalid role").into_response()
+                );
+            };
+            Ok(routing::ConnectWsQuery { sid, role })
+        }
         _ => Err((StatusCode::BAD_REQUEST, "connect query missing sid/role").into_response()),
     }
 }
@@ -9622,6 +9659,20 @@ mod connect_token_tests {
         let err = parse_connect_ws_query(Some("sid=abc&role=app&token=deadbeef"))
             .expect_err("token param should be rejected");
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn connect_query_rejects_invalid_role() {
+        let err = parse_connect_ws_query(Some("sid=abc&role=operator"))
+            .expect_err("invalid role should be rejected");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn connect_query_accepts_case_insensitive_role() {
+        let ok = parse_connect_ws_query(Some("sid=abc&role=Wallet"))
+            .expect("case-insensitive role should be accepted");
+        assert_eq!(ok.role, "wallet");
     }
 
     #[test]
@@ -10573,6 +10624,7 @@ pub struct Torii {
     query_service: LiveQueryStoreHandle,
     kura: Arc<Kura>,
     transaction_max_content_len: ConfigBytes<u64>,
+    ws_message_timeout: Duration,
     address: WithOrigin<SocketAddr>,
     state: Arc<CoreState>,
     telemetry: routing::MaybeTelemetry,
@@ -11245,7 +11297,7 @@ impl Torii {
             let group = group;
 
             let group = group
-                // VK registry lifecycle (app API convenience): register, update, deprecate
+                // VK registry lifecycle (app API convenience): register, update
                 .route("/v1/zk/vk/register", post(handler_post_vk_register))
                 .route("/v1/zk/vk/update", post(handler_post_vk_update))
                 .route(
@@ -12404,6 +12456,7 @@ impl Torii {
             content_config: content_snapshot,
             address: config.address,
             transaction_max_content_len: config.max_content_len,
+            ws_message_timeout: config.ws_message_timeout,
             #[cfg(any(feature = "p2p_ws", feature = "connect"))]
             p2p: None,
             query_rate_per_authority_per_sec: config.query_rate_per_authority_per_sec,
@@ -12625,6 +12678,7 @@ impl Torii {
             content_egress_limiter: self.content_egress_limiter.clone(),
             proof_limits: self.proof_limits,
             content_config: self.content_config.clone(),
+            ws_message_timeout: self.ws_message_timeout,
             require_api_token: self.require_api_token,
             api_tokens_set: self.api_tokens_set.clone(),
             operator_auth: self.operator_auth.clone(),
@@ -13811,14 +13865,14 @@ async fn handler_confidential_derive_keyset_route(
 pub enum Error {
     /// Failed to process query
     Query(#[from] iroha_data_model::ValidationFail),
-    /// Validation error for app-facing query parameters.
+    /// Validation error for app-facing query parameters `{code}`: {message}
     AppQueryValidation {
         /// Stable machine-readable code.
         code: &'static str,
         /// Human-readable error message.
         message: String,
     },
-    /// Proof endpoint throttled the request.
+    /// Proof endpoint `{endpoint}` throttled the request; retry after {retry_after_secs}s
     ProofRateLimited {
         /// Logical endpoint label.
         endpoint: &'static str,
@@ -13831,7 +13885,7 @@ pub enum Error {
     AcceptTransaction(#[from] iroha_core::tx::AcceptTransactionFail),
     /// Failed to get or set configuration
     Config(#[source] eyre::Report),
-    /// Failed to serialize response payload
+    /// Failed to serialize response payload for `{context}`: {source}
     SerializationFailure {
         /// Logical context for the serialization failure.
         context: &'static str,
@@ -13839,12 +13893,12 @@ pub enum Error {
         #[source]
         source: norito::json::Error,
     },
-    /// Failed to apply Nexus lane lifecycle plan
+    /// Failed to apply Nexus lane lifecycle plan: {reason}
     LaneLifecycle {
         /// Human-readable reason for the failure.
         reason: String,
     },
-    /// Failed to push into queue
+    /// Failed to push into queue ({source}; backpressure={backpressure:?})
     PushIntoQueue {
         /// Root cause from the core queue implementation.
         #[source]
@@ -14359,6 +14413,7 @@ pub(crate) mod tests_runtime_handlers {
             content_egress_limiter: limits::RateLimiter::new_u64(None, None),
             proof_limits: routing::ProofApiLimits::default(),
             content_config: content_config_snapshot,
+            ws_message_timeout: Duration::from_millis(defaults::torii::WS_MESSAGE_TIMEOUT_MS),
             require_api_token: false,
             api_tokens_set: api_tokens_set.clone(),
             operator_auth,

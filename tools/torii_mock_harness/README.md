@@ -15,7 +15,6 @@ and exposes a CLI for CI pipelines.
 | Path | Purpose |
 |------|---------|
 | `cargo run -p xtask --bin torii-mock-harness` | Rust CLI that orchestrates the Java harness, records metrics, and computes fixture hashes. |
-| `bin/torii-mock-harness` | Compatibility shim that executes the compiled CLI (release/debug) or falls back to `cargo run`. |
 | `fixtures/` | Symlink to the Norito fixture bundle produced by `scripts/android_fixture_regen.sh`. |
 | `config/default.toml` | Sample config mapping scenarios → endpoints, retry knobs, TLS material. |
 
@@ -30,8 +29,6 @@ cargo run -p xtask --bin torii-mock-harness -- \
   --sdk android \
   --scenario submit
 
-# Or invoke the compatibility shim (uses release/debug binary or falls back to cargo run)
-./tools/torii_mock_harness/bin/torii-mock-harness --sdk android --scenario submit
 ```
 
 Flags:

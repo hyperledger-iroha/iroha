@@ -255,7 +255,7 @@ mod tests {
     fn prove_uses_lane_epoch_sequence() {
         let store = store_with_records();
         let request = DaPinIntentQueryRequest {
-            lane_id: Some(2),
+            lane_id: Some(3),
             epoch: Some(1),
             sequence: Some(5),
             ..DaPinIntentQueryRequest::default()

@@ -16,7 +16,7 @@ operators and SDK authors need alongside the configuration touch points.
   `EncodedSegment::verify_manifest` before serving viewers or relays.
 - **Feature bits.** Capability negotiation advertises `streaming.feature_bits`
   (default `0b11` = baseline feedback + privacy route provider) so relays and
-  clients can reject incompatible peers deterministically.
+  clients can reject peers without matching capabilities deterministically.
 
 ## Keys, suites, and cadence
 

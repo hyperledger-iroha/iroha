@@ -160,7 +160,7 @@ PVOs are Norito-encoded envelopes that let clients prove heavy work ahead of tim
 | `proof_digest` | Poseidon digest of the serialized proof payload stored in the off-slot PVO registry. |
 | `max_k` | Upper bound on the AIR domain; hosts reject proofs exceeding the advertised size. |
 | `expiry_slot` | Slot height after which the artefact is invalid; keeps stale proofs out of lanes. |
-| `profile` | Optional hint (e.g., DS profile A/B/C) to help schedulers batch compatible proofs. |
+| `profile` | Optional hint (e.g., DS profile A/B/C) to help schedulers batch proofs that share a profile. |
 
 The Norito schema lives beside the data model definitions in `crates/iroha_data_model/src/nexus` so SDKs can derive it without serde.
 

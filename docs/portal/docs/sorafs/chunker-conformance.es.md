@@ -23,7 +23,7 @@ Esta página refleja `docs/source/sorafs/chunker_conformance.md`. Mantén ambas 
 :::
 
 Esta guía codifica los requisitos que toda implementación debe seguir para mantenerse
-compatible con el perfil determinista de chunker de SoraFS (SF1). También
+alineada con el perfil determinista de chunker de SoraFS (SF1). También
 documenta el flujo de regeneración, la política de firmas y los pasos de verificación para que
 los consumidores de fixtures en los SDKs permanezcan sincronizados.
 

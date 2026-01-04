@@ -14,7 +14,7 @@
   "vectors": [
     {
       "case_id": "sm2-fixture-default-v1",
-      "note": "Legacy deterministic SM2 fixture retained as the default top-level reference for SDKs.",
+      "note": "Deterministic SM2 fixture retained as the default top-level reference for SDKs.",
       "distid": "1234567812345678",
       "seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
       "message_hex": "69726F686120736D2073646B2066697874757265",

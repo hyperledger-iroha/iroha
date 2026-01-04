@@ -21,7 +21,7 @@ public final class ClientConfigNoritoRpcTests {
       return;
     }
     configProducesNoritoRpcClientWithHeadersAndObservers();
-    flowControllerAndFallbackCarryOver();
+    flowControllerCarriesOver();
     executorReuseSharesObservers();
     System.out.println("[IrohaAndroid] Client config Norito RPC tests passed.");
   }
@@ -58,18 +58,12 @@ public final class ClientConfigNoritoRpcTests {
     }
   }
 
-  private static void flowControllerAndFallbackCarryOver() throws Exception {
+  private static void flowControllerCarriesOver() throws Exception {
     final RecordingFlowController flowController = new RecordingFlowController();
-    final AtomicInteger fallbackCount = new AtomicInteger();
     final ClientConfig config =
         ClientConfig.builder()
             .setBaseUri(new URI("http://127.0.0.1:0"))
             .setNoritoRpcFlowController(flowController)
-            .setNoritoRpcFallbackHandler(
-                (context, error) -> {
-                  fallbackCount.incrementAndGet();
-                  return new byte[0];
-                })
             .build();
 
     final var maybeServer = ToriiMockServer.tryCreate();
@@ -79,20 +73,16 @@ public final class ClientConfigNoritoRpcTests {
       return;
     }
     try (ToriiMockServer server = maybeServer.get()) {
-      server.enqueueSubmitResponse(
-          ToriiMockServer.MockResponse.json(503, "{\"status\":\"nope\"}"));
+      server.enqueueSubmitResponse(ToriiMockServer.MockResponse.empty(200));
       final ClientConfig adjusted = config.toBuilder().setBaseUri(server.baseUri()).build();
       final NoritoRpcClient client =
           adjusted.toNoritoRpcClient(new UrlConnectionTransportExecutor());
-      final byte[] response =
-          client.call("/v1/pipeline/transactions", new byte[] {0x01});
-      assert response.length == 0
-          : "Fallback handler returns empty payload by design";
+      final byte[] response = client.call("/v1/pipeline/transactions", new byte[] {0x01});
+      assert response.length == 0 : "Mock server should return empty body";
       assert flowController.acquireCount() == 1
           : "Flow controller should wrap propagated client";
       assert flowController.releaseCount() == 1
-          : "Flow controller should release after fallback";
-      assert fallbackCount.get() == 1 : "Fallback should run after 503s";
+          : "Flow controller should release after call";
     }
   }
 

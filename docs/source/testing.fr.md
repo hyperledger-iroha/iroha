@@ -38,7 +38,7 @@ Ce guide explique comment reproduire des scenarios d integration, quelle infrast
 ### Tests du client Python (`pytests` directory)
 
 1. Installez les dependances Python avec `pip install -r pytests/requirements.txt` dans un environnement virtuel.
-2. Exportez les fixtures compatibles Norito generees ci-dessus via un chemin partage ou une variable d environnement.
+2. Exportez les fixtures au format Norito generees ci-dessus via un chemin partage ou une variable d environnement.
 3. Lancez la suite avec sortie verbeuse: `pytest -vv pytests`.
 4. Pour un debogage cible, lancez `pytest -k "Query" pytests/tests/test_queries.py --log-cli-level=INFO`.
 

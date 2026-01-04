@@ -19,7 +19,6 @@ public final class PendingQueueInspectorTests {
 
   public static void main(final String[] args) throws Exception {
     inspectModernEntries();
-    inspectLegacyEntries();
     System.out.println("[IrohaAndroid] Pending queue inspector tests passed.");
   }
 
@@ -56,30 +55,4 @@ public final class PendingQueueInspectorTests {
     assert summary.hashHex().equals(expectedHash);
   }
 
-  private static void inspectLegacyEntries() throws Exception {
-    final Path queue = Files.createTempFile("pending-queue-legacy-", ".txt");
-    final byte[] payload = new byte[] {0x10};
-    final byte[] signature = new byte[] {0x11};
-    final byte[] publicKey = new byte[] {0x12};
-    final String schema = "legacy.schema.v1";
-
-    final String line =
-        Base64.getEncoder().encodeToString(payload)
-            + ","
-            + Base64.getEncoder().encodeToString(signature)
-            + ","
-            + Base64.getEncoder().encodeToString(publicKey)
-            + ","
-            + Base64.getEncoder().encodeToString(schema.getBytes(StandardCharsets.UTF_8));
-    Files.writeString(queue, line, StandardCharsets.UTF_8);
-
-    final List<EntrySummary> summaries = PendingQueueInspector.inspect(queue);
-    assert summaries.size() == 1 : "Expected one entry";
-    final EntrySummary summary = summaries.get(0);
-    assert summary.index() == 0;
-    assert summary.schemaName().equals(schema);
-    assert summary.keyAlias().equals("pending.queue");
-    assert summary.issuedAtMs().isEmpty();
-    assert !summary.hasExportedKeyBundle();
-  }
 }

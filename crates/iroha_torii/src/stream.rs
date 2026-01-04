@@ -6,11 +6,6 @@ use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
 use futures::{SinkExt, StreamExt};
 use norito::prelude::*;
 
-#[cfg(test)]
-const TIMEOUT: Duration = Duration::from_millis(10_000);
-#[cfg(not(test))]
-const TIMEOUT: Duration = Duration::from_millis(1000);
-
 /// Error type with generic for actual Stream/Sink error type
 #[derive(Debug, displaydoc::Display, thiserror::Error)]
 #[ignore_extra_doc_attributes]
@@ -31,16 +26,25 @@ pub enum Error {
 
 /// Wrapper to send/receive Norito encoded messages
 #[derive(Debug)]
-pub struct WebSocketNorito(pub(crate) WebSocket);
+pub struct WebSocketNorito {
+    ws: WebSocket,
+    timeout: Duration,
+}
 
 impl WebSocketNorito {
+    /// Create a new Norito WebSocket wrapper with a fixed message timeout.
+    #[must_use]
+    pub fn new(ws: WebSocket, timeout: Duration) -> Self {
+        Self { ws, timeout }
+    }
+
     /// Send message encoded in Norito
     pub async fn send<M: NoritoSerialize + Send>(&mut self, message: M) -> Result<(), Error> {
         // Use Norito framing (header + checksum) so clients can validate payloads.
         let buf = norito::to_bytes(&message).map_err(Error::Encode)?;
         tokio::time::timeout(
-            TIMEOUT,
-            self.0.send(Message::Binary(axum::body::Bytes::from(buf))),
+            self.timeout,
+            self.ws.send(Message::Binary(axum::body::Bytes::from(buf))),
         )
         .await
         .map_err(|_err| Error::SendTimeout)?
@@ -50,8 +54,8 @@ impl WebSocketNorito {
     /// Send a JSON string as a Text WebSocket frame (used for convenience event streams).
     pub async fn send_json_text(&mut self, json: &str) -> Result<(), Error> {
         tokio::time::timeout(
-            TIMEOUT,
-            self.0
+            self.timeout,
+            self.ws
                 .send(Message::Text(Utf8Bytes::from(json.to_string()))),
         )
         .await
@@ -63,7 +67,7 @@ impl WebSocketNorito {
     pub async fn recv<M: for<'a> NoritoDeserialize<'a> + Send>(&mut self) -> Result<M, Error> {
         // NOTE: ignore non binary messages
         loop {
-            let message = tokio::time::timeout(TIMEOUT, self.0.next())
+            let message = tokio::time::timeout(self.timeout, self.ws.next())
                 .await
                 .map_err(|_err| Error::ReadTimeout)?
                 // NOTE: `None` is the same as `ConnectionClosed` or `AlreadyClosed`
@@ -91,7 +95,7 @@ impl WebSocketNorito {
         dur: Duration,
     ) -> Result<M, Error> {
         loop {
-            let message = tokio::time::timeout(dur, self.0.next())
+            let message = tokio::time::timeout(dur, self.ws.next())
                 .await
                 .map_err(|_err| Error::ReadTimeout)?
                 .ok_or(Error::Closed)?
@@ -109,7 +113,7 @@ impl WebSocketNorito {
     /// Discard messages and wait for close message
     pub async fn closed(&mut self) -> Result<(), Error> {
         loop {
-            match self.0.next().await {
+            match self.ws.next().await {
                 // NOTE: `None` is the same as `ConnectionClosed` or `AlreadyClosed`
                 None => return Ok(()),
                 Some(Ok(_)) => {}
@@ -126,7 +130,7 @@ impl WebSocketNorito {
     /// Close websocket
     pub async fn close(mut self) -> Result<(), Error> {
         // NOTE: use `SinkExt::close` because it's not trying to write to closed socket
-        match <_ as SinkExt<_>>::close(&mut self.0)
+        match <_ as SinkExt<_>>::close(&mut self.ws)
             .await
             .map_err(extract_ws_closed)
         {

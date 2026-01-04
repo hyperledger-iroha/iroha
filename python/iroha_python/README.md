@@ -99,8 +99,8 @@ from iroha_python import create_torii_client, DataEventFilter
 
 client = create_torii_client("http://127.0.0.1:8080", auth_token="admin-token")
 
-# Stream verifying-key registry updates (skip deprecated events)
-for event in client.stream_verifying_key_events(updated=True, deprecated=False):
+# Stream verifying-key registry updates
+for event in client.stream_verifying_key_events(updated=True):
     print("Verifying key event", event)
 
 # Stream proof verification results for a specific proof id

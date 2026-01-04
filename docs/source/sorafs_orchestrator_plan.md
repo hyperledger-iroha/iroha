@@ -93,7 +93,7 @@ requirements:
 - Possess a `range_capability` descriptor with `max_chunk_span` ≥ the largest chunk
   in the plan.
 - Honour alignment expectations if `requires_alignment` is true.
-- Advertise a `stream_budget` compatible with the plan’s largest chunk.
+- Advertise a `stream_budget` large enough for the plan’s largest chunk.
 - Remain within governance validity windows (`refresh_deadline`, `expires_at`).
 
 Ineligible providers are reported in the scoreboard file with an explicit reason and

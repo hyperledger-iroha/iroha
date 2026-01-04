@@ -7,6 +7,7 @@
 use std::{
     collections::{BTreeMap, btree_map::Entry},
     fs,
+    io::Write,
     num::NonZeroUsize,
     path::{Path, PathBuf},
 };
@@ -116,12 +117,16 @@ pub struct CommitRosterJournal {
 impl CommitRosterJournal {
     /// Filename used to persist commit roster journals next to the block store.
     pub const JOURNAL_FILE: &'static str = "commit-rosters.norito";
-    const JOURNAL_VERSION: u32 = 2;
+    const JOURNAL_VERSION: u32 = 1;
 
     /// Build the canonical journal path under the provided root.
     #[must_use]
     pub fn journal_path(root: &Path) -> PathBuf {
-        root.join(Self::JOURNAL_FILE)
+        if root.as_os_str().is_empty() {
+            PathBuf::new()
+        } else {
+            root.join(Self::JOURNAL_FILE)
+        }
     }
 
     /// Construct a fresh journal with no entries.
@@ -148,27 +153,30 @@ impl CommitRosterJournal {
     ) -> Result<Self, CommitRosterJournalError> {
         let path = path.into();
         let mut journal = Self::new(path.clone(), retention);
-        if path.as_os_str().is_empty() || !path.exists() {
+        let tmp_path = path.with_extension("norito.tmp");
+        if path.as_os_str().is_empty() {
             return Ok(journal);
         }
 
-        let bytes = fs::read(&path).map_err(|source| CommitRosterJournalError::Read {
-            path: path.clone(),
-            source,
-        })?;
-
-        let persisted: PersistedCommitRosters =
-            decode_from_bytes(&bytes).map_err(|source| CommitRosterJournalError::Decode {
-                path: path.clone(),
-                source,
-            })?;
-
-        if persisted.version != 1 && persisted.version != Self::JOURNAL_VERSION {
-            return Err(CommitRosterJournalError::UnsupportedVersion {
-                path,
-                version: persisted.version,
-            });
-        }
+        let (persisted, read_path) = if path.exists() {
+            match Self::load_persisted(&path) {
+                Ok(persisted) => (persisted, path.clone()),
+                Err(err) => {
+                    if tmp_path.exists() {
+                        match Self::load_persisted(&tmp_path) {
+                            Ok(persisted) => (persisted, tmp_path.clone()),
+                            Err(_) => return Err(err),
+                        }
+                    } else {
+                        return Err(err);
+                    }
+                }
+            }
+        } else if tmp_path.exists() {
+            (Self::load_persisted(&tmp_path)?, tmp_path.clone())
+        } else {
+            return Ok(journal);
+        };
 
         for entry in persisted.entries {
             if entry.height != entry.commit_certificate.height
@@ -202,8 +210,72 @@ impl CommitRosterJournal {
             );
         }
 
+        if read_path != path {
+            Self::promote_temp_journal(&read_path, &path);
+        }
+
         journal.enforce_retention();
         Ok(journal)
+    }
+
+    fn load_persisted(path: &Path) -> Result<PersistedCommitRosters, CommitRosterJournalError> {
+        let bytes = fs::read(path).map_err(|source| CommitRosterJournalError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        let persisted: PersistedCommitRosters =
+            decode_from_bytes(&bytes).map_err(|source| CommitRosterJournalError::Decode {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        if persisted.version != Self::JOURNAL_VERSION {
+            return Err(CommitRosterJournalError::UnsupportedVersion {
+                path: path.to_path_buf(),
+                version: persisted.version,
+            });
+        }
+        Ok(persisted)
+    }
+
+    fn promote_temp_journal(from: &Path, to: &Path) {
+        if let Err(err) = fs::rename(from, to) {
+            if to.exists() {
+                if let Err(remove_err) = fs::remove_file(to) {
+                    warn!(
+                        ?remove_err,
+                        path = %to.display(),
+                        "failed to remove commit roster journal before promotion"
+                    );
+                    return;
+                }
+                if let Err(err) = fs::rename(from, to) {
+                    warn!(
+                        ?err,
+                        from = %from.display(),
+                        to = %to.display(),
+                        "failed to promote commit roster journal temp file after removal"
+                    );
+                    return;
+                }
+            } else {
+                warn!(
+                    ?err,
+                    from = %from.display(),
+                    to = %to.display(),
+                    "failed to promote commit roster journal temp file"
+                );
+                return;
+            }
+        }
+        if let Some(parent) = to.parent() {
+            if let Err(err) = sync_dir(parent) {
+                warn!(
+                    ?err,
+                    path = %parent.display(),
+                    "failed to sync commit roster journal parent after temp promotion"
+                );
+            }
+        }
     }
 
     /// Upsert a commit roster entry, replacing older views for the same block hash/height.
@@ -272,10 +344,36 @@ impl CommitRosterJournal {
                 });
             }
         }
-        fs::write(&self.path, bytes).map_err(|source| CommitRosterJournalError::Write {
+        let tmp_path = self.path.with_extension("norito.tmp");
+        {
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp_path)
+                .map_err(|source| CommitRosterJournalError::Write {
+                    path: tmp_path.clone(),
+                    source,
+                })?;
+            file.write_all(&bytes)
+                .and_then(|_| file.flush())
+                .and_then(|_| file.sync_data())
+                .map_err(|source| CommitRosterJournalError::Write {
+                    path: tmp_path.clone(),
+                    source,
+                })?;
+        }
+        fs::rename(&tmp_path, &self.path).map_err(|source| CommitRosterJournalError::Write {
             path: self.path.clone(),
             source,
-        })
+        })?;
+        if let Some(parent) = self.path.parent() {
+            sync_dir(parent).map_err(|source| CommitRosterJournalError::Write {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        Ok(())
     }
 
     /// Retrieve the snapshot for `height`/`block_hash` if present.
@@ -305,9 +403,14 @@ impl CommitRosterJournal {
     }
 }
 
+fn sync_dir(path: &Path) -> std::io::Result<()> {
+    let file = fs::File::open(path)?;
+    file.sync_all()
+}
+
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
+    use std::{num::NonZeroU64, path::Path};
 
     use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
@@ -469,11 +572,79 @@ mod tests {
     }
 
     #[test]
+    fn journal_loads_from_temp_when_main_missing() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let tmp_path = path.with_extension("norito.tmp");
+        let (cert, checkpoint) = sample_cert(1);
+        let payload = PersistedCommitRosters {
+            version: 1,
+            entries: vec![CommitRosterRecord {
+                height: cert.height,
+                block_hash: cert.block_hash,
+                commit_certificate: cert.clone(),
+                validator_checkpoint: checkpoint.clone(),
+                stake_snapshot: None,
+            }],
+        };
+        let bytes = norito::to_bytes(&payload).expect("encode payload");
+        std::fs::write(&tmp_path, bytes).expect("write temp payload");
+
+        let loaded = CommitRosterJournal::load(path.clone(), retention(4)).expect("load");
+        let snapshots = loaded.snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(
+            snapshots[0],
+            CommitRosterSnapshot {
+                commit_certificate: cert,
+                validator_checkpoint: checkpoint,
+                stake_snapshot: None,
+            }
+        );
+        assert!(path.exists(), "temp journal should be promoted");
+        assert!(
+            !tmp_path.exists(),
+            "temp journal should be removed after promotion"
+        );
+    }
+
+    #[test]
+    fn journal_loads_from_temp_when_main_corrupted() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let tmp_path = path.with_extension("norito.tmp");
+        let (cert, checkpoint) = sample_cert(1);
+        let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
+        journal.upsert(cert.clone(), checkpoint.clone(), None);
+        journal.persist().expect("persist");
+
+        std::fs::rename(&path, &tmp_path).expect("move journal to temp");
+        std::fs::write(&path, b"corrupted").expect("write corrupted journal");
+
+        let loaded = CommitRosterJournal::load(path.clone(), retention(4)).expect("load");
+        let snapshots = loaded.snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(
+            snapshots[0],
+            CommitRosterSnapshot {
+                commit_certificate: cert,
+                validator_checkpoint: checkpoint,
+                stake_snapshot: None,
+            }
+        );
+        assert!(path.exists(), "temp journal should be promoted");
+        assert!(
+            !tmp_path.exists(),
+            "temp journal should be removed after promotion"
+        );
+    }
+
+    #[test]
     fn journal_rejects_unsupported_version() {
         let dir = tempdir().expect("tempdir");
         let path = CommitRosterJournal::journal_path(dir.path());
         let payload = PersistedCommitRosters {
-            version: 99,
+            version: 2,
             entries: Vec::new(),
         };
         let bytes = norito::to_bytes(&payload).expect("encode payload");
@@ -528,5 +699,24 @@ mod tests {
             .map(|snapshot| snapshot.commit_certificate.height)
             .collect();
         assert_eq!(reloaded_heights, vec![2, 3]);
+    }
+
+    #[test]
+    fn journal_persist_removes_temp_file() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let (cert, checkpoint) = sample_cert(1);
+        let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
+        journal.upsert(cert, checkpoint, None);
+        journal.persist().expect("persist");
+
+        let tmp_path = path.with_extension("norito.tmp");
+        assert!(!tmp_path.exists(), "temp journal file should be removed");
+    }
+
+    #[test]
+    fn journal_path_empty_root_is_empty() {
+        let path = CommitRosterJournal::journal_path(Path::new(""));
+        assert!(path.as_os_str().is_empty());
     }
 }

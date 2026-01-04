@@ -331,7 +331,7 @@ de courbe cohérents entre SDKs et workflows opérateur.
 - Le parse des alias `address@domain` dans Torii et les SDKs renvoie
   désormais les mêmes codes `ERR_*` lorsque les entrées IH58/compressées
   échouent avant le fallback vers l’alias (par exemple checksum invalide,
-  digest de domaine incompatible), ce qui permet aux clients de relayer des
+  digest de domaine invalide), ce qui permet aux clients de relayer des
   raisons structurées plutôt que d’inférer à partir de messages libres.
 
 #### 2.5 Vecteurs binaires normatifs

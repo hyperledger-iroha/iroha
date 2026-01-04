@@ -31,7 +31,7 @@ The cadence label (`twice-weekly-tue-fri-0900utc`) and rotation owner metadata r
 ## 3. JDK 21 LTS Posture (Quarterly Review)
 
 - The workspace stays on **JDK 21 LTS** for CI and developer laptops per the policy documented in `docs/source/android_fixture_changelog.md`.
-- Q1 2026 CPU review: staged Azul JDK 21.0.4 in CI under `ANDROID_JDK_NEXT=1`; `java/iroha_android/run_tests.sh` and `scripts/android_fixture_regen.sh` dry-runs completed without deterministic drift, but promotion is deferred until the exporter regression above is cleared so governance can review one change at a time.
+- Q1 2026 CPU review: staged Azul JDK 21.0.4 in CI under `ANDROID_JDK_NEXT=1`; `ci/run_android_tests.sh` and `scripts/android_fixture_regen.sh` dry-runs completed without deterministic drift, but promotion is deferred until the exporter regression above is cleared so governance can review one change at a time.
 - Next review checkpoint: April 2026 CPU drop; revisit once Wed 2026-04-08 sync occurs.
 
 ## 4. Actions for Governance

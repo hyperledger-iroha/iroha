@@ -181,7 +181,9 @@ value; deterministic replay must reproduce the same reduction.
   without its sealing metadata. The merge-ledger log is pruned in lock-step
   with the validated block height during startup recovery, and cached in memory
   with a bounded window (`kura.merge_ledger_cache_capacity`, default 256) to
-  avoid unbounded growth on long-running nodes.
+  avoid unbounded growth on long-running nodes. Recovery truncates partial or
+  oversized merge-ledger tail entries, and append rejects entries above the
+  maximum payload size guard to cap allocations.
 - `crates/iroha_core/src/block.rs`: block validation rejects empty payloads
   (`BlockValidationError::EmptyBlock`), ensuring the non-empty policy is
   enforced before signatures are requested and carried into the merge ledger.
@@ -195,4 +197,3 @@ value; deterministic replay must reproduce the same reduction.
 - Cross-component tests: golden replay coverage for the merge reduction is
   tracked with the integration-test backlog to ensure future changes to
   `reduce_merge_hint_roots` keep the recorded roots stable.
-

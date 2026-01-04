@@ -22,7 +22,7 @@ dans `examples/android/retail-wallet` montre maintenant le pattern UX requis:
   (par defaut) et la forme compressee Sora-only (`snx1...`). IH58 est toujours
   sure a partager en externe et alimente le payload du QR. La variante compressee
   doit inclure un avertissement inline parce qu'elle ne fonctionne que dans des
-  apps compatibles Sora. L'exemple Android branche les deux boutons Material et
+  apps prises en charge par Sora. L'exemple Android branche les deux boutons Material et
   leurs tooltips dans
   `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, et la
   demo iOS SwiftUI reflete le meme UX via `AddressPreviewCard` dans

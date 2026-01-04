@@ -32,8 +32,8 @@ final class OfflineRevocationJournalTests: XCTestCase {
         let verdictHex = String(repeating: "b", count: 64)
         let hashLiteral = try SocialKeyedHash(pepperId: "pepper", digest: verdictHex).digest
         let record: [String: Any] = [
-            "verdict_id": hashLiteral,
-            "issuer": "bob@wonderland",
+            "verdict_id_hex": hashLiteral,
+            "issuer_id": "bob@wonderland",
             "revoked_at_ms": NSNumber(value: 999),
             "reason": "compromised",
             "metadata": ["ticket": "T-1"]
@@ -56,8 +56,8 @@ final class OfflineRevocationJournalTests: XCTestCase {
     private func makeRevocationList(verdictHex: String) throws -> ToriiOfflineRevocationList {
         let hashLiteral = try SocialKeyedHash(pepperId: "pepper", digest: verdictHex).digest
         let record: [String: Any] = [
-            "verdict_id": hashLiteral,
-            "issuer": "alice@wonderland",
+            "verdict_id_hex": hashLiteral,
+            "issuer_id": "alice@wonderland",
             "revoked_at_ms": NSNumber(value: 777),
             "reason": "compromised",
             "note": "lost device",

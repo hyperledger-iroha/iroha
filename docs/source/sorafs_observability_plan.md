@@ -184,7 +184,7 @@ Example lifecycle payload (redacted fields follow standard `iroha_logger` rules)
   `telemetry::sorafs.fetch.*` events provide lightweight JSON payloads for log/metric backends that
   prefer structured events over scrapes.
 - Collectors: run OTEL collectors alongside Prometheus/Loki/Tempo. Operators can forward to Tempo
-  (preferred) or Jaeger-compatible backends.
+  (preferred) or Jaeger API backends.
 - For high-cardinality operations, attach sampling rules (10% for success, 100% for failures).
 
 ## TLS Telemetry Coordination (SF-5b)

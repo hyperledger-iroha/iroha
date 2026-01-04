@@ -14,7 +14,7 @@ Norito Streaming definit le format on-wire, les frames de controle et le codec d
 
 - **Manifests et frames.** `ManifestV1` et `PrivacyRoute*` decrivent la chronologie des segments, les descripteurs de chunks et les indices de route. Les frames de controle (`KeyUpdate`, `ContentKeyUpdate` et le feedback de cadence) vivent a cote du manifest afin que les viewers puissent valider les commitments avant de decoder.
 - **Codec de base.** `BaselineEncoder`/`BaselineDecoder` imposent des ids de chunk monotones, l'arithmetique des timestamps et la verification des commitments. Les hotes doivent appeler `EncodedSegment::verify_manifest` avant de servir des viewers ou des relays.
-- **Bits de feature.** La negociation de capacites annonce `streaming.feature_bits` (par defaut `0b11` = feedback baseline + privacy route provider) afin que relays et clients rejettent les peers incompatibles de facon deterministe.
+- **Bits de feature.** La negociation de capacites annonce `streaming.feature_bits` (par defaut `0b11` = feedback baseline + privacy route provider) afin que relays et clients rejettent les peers sans capacites correspondantes de facon deterministe.
 
 ## Cles, suites et cadence
 

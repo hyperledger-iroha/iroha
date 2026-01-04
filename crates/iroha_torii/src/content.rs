@@ -107,7 +107,7 @@ pub async fn handle_get_content(
             return Err(ContentError::RateLimited);
         }
 
-        let (bundle, entry, range_state) = {
+        let (bundle, entry, range_spec) = {
             let state = app.state.view();
             let current_height = state.height() as u64;
 
@@ -119,11 +119,9 @@ pub async fn handle_get_content(
                 return Err(ContentError::NotFound);
             };
 
-            if let Some(expiry) = bundle.expires_at_height {
-                if current_height > expiry {
-                    outcome_hint = Some("not_found");
-                    return Err(ContentError::NotFound);
-                }
+            if is_bundle_expired(current_height, bundle.expires_at_height) {
+                outcome_hint = Some("not_found");
+                return Err(ContentError::NotFound);
             }
 
             let Some(entry) = bundle.files.iter().find(|f| f.path == path).cloned() else {
@@ -153,28 +151,14 @@ pub async fn handle_get_content(
                 ));
             }
 
-            let assembled = match assemble_file(&state, &bundle, &entry) {
-                Ok(file) => file,
-                Err(err) => {
-                    error!(
-                        ?err,
-                        bundle = %bundle_id,
-                        path,
-                        "failed to assemble content file"
-                    );
-                    outcome_hint = Some(err.outcome());
-                    return Err(ContentError::Internal(err.message().to_string()));
-                }
-            };
+            let range_spec = apply_range(entry.length, headers.get(header::RANGE))?;
 
-            let range_state = apply_range(&assembled.body, headers.get(header::RANGE))?;
-
-            (bundle, entry, range_state)
+            (bundle, entry, range_spec)
         };
         if !limits::allow_cost_conditionally(
             &app.content_egress_limiter,
             &key,
-            range_state.content_length,
+            range_spec.content_length,
             true,
         )
         .await
@@ -183,11 +167,29 @@ pub async fn handle_get_content(
             return Err(ContentError::RateLimited);
         }
 
-        let receipt_header = encode_receipt_header(&bundle, &entry, &range_state).ok();
-        let status = range_state.status;
-        let content_length = range_state.content_length;
-        let content_range_header = range_state.content_range.clone();
-        let body = range_state.body;
+        let body = if range_spec.content_length == 0 {
+            Vec::new()
+        } else {
+            let state = app.state.view();
+            match assemble_file_range(&state, &bundle, &entry, &range_spec) {
+                Ok(body) => body,
+                Err(err) => {
+                    error!(
+                        ?err,
+                        bundle = %bundle_id,
+                        path,
+                        "failed to assemble content file range"
+                    );
+                    outcome_hint = Some(err.outcome());
+                    return Err(ContentError::Internal(err.message().to_string()));
+                }
+            }
+        };
+
+        let receipt_header = encode_receipt_header(&bundle, &entry, &range_spec).ok();
+        let status = range_spec.status;
+        let content_length = range_spec.content_length;
+        let content_range_header = range_spec.content_range.clone();
 
         bytes_served = content_length;
         let etag = entry.file_hash.encode_hex::<String>();
@@ -234,7 +236,7 @@ pub async fn handle_get_content(
         info!(
             bundle = %bundle_id,
             path,
-            status = ?range_state.status,
+            status = ?range_spec.status,
             cache = ?bundle.manifest.cache,
             auth = ?bundle.manifest.auth,
             "served content bundle file"
@@ -273,6 +275,10 @@ fn parse_bundle_id(bundle_hex: &str) -> Result<Hash, ContentError> {
     let mut bundle_arr = [0u8; Hash::LENGTH];
     bundle_arr.copy_from_slice(&bundle_bytes);
     Ok(Hash::prehashed(bundle_arr))
+}
+
+fn is_bundle_expired(current_height: u64, expires_at_height: Option<u64>) -> bool {
+    matches!(expires_at_height, Some(expiry) if current_height >= expiry)
 }
 
 fn content_rate_key(
@@ -378,54 +384,71 @@ fn leading_zero_bits(bytes: &[u8]) -> u32 {
     total
 }
 
-fn assemble_file(
+fn assemble_file_range(
     state: &impl StateReadOnlyWithTransactions,
     bundle: &ContentBundleRecord,
     entry: &iroha_data_model::content::ContentFileEntry,
-) -> Result<AssembledFile, AssembleError> {
+    range: &RangeSpec,
+) -> Result<Vec<u8>, AssembleError> {
     let chunk_size = u64::from(bundle.chunk_size);
-    let start = entry.offset;
-    let end = entry
+    let start = entry
         .offset
-        .checked_add(entry.length)
+        .checked_add(range.start)
         .ok_or(AssembleError::Overflow)?;
-    let start_chunk = start / chunk_size;
-    let end_chunk = end.saturating_sub(1) / chunk_size;
-
-    let mut out = Vec::with_capacity(entry.length as usize);
-    for idx in start_chunk..=end_chunk {
-        let hash = *bundle
-            .chunk_hashes
-            .get(idx as usize)
-            .ok_or(AssembleError::MissingChunk)?;
-        let chunk = mv::storage::StorageReadOnly::get(state.world().content_chunks(), &hash)
-            .ok_or(AssembleError::MissingChunk)?;
-        let chunk_start = idx.checked_mul(chunk_size).ok_or(AssembleError::Overflow)?;
-        let slice_start = start.saturating_sub(chunk_start) as usize;
-        let slice_end = (end.min(chunk_start + chunk.data.len() as u64) - chunk_start) as usize;
-        if slice_start > slice_end || slice_end > chunk.data.len() {
-            return Err(AssembleError::SliceBounds);
-        }
-        out.extend_from_slice(&chunk.data[slice_start..slice_end]);
-    }
-    Ok(AssembledFile {
-        body: out,
-        chunk_indices: (start_chunk..=end_chunk).map(|idx| idx as u32).collect(),
+    let end_inclusive = entry
+        .offset
+        .checked_add(range.end)
+        .ok_or(AssembleError::Overflow)?;
+    let end = end_inclusive
+        .checked_add(1)
+        .ok_or(AssembleError::Overflow)?;
+    assemble_range_from_chunks(chunk_size, &bundle.chunk_hashes, start, end, |hash| {
+        mv::storage::StorageReadOnly::get(state.world().content_chunks(), hash)
+            .map(|chunk| chunk.data.as_slice())
     })
 }
 
-struct RangeState {
-    body: Vec<u8>,
+fn assemble_range_from_chunks<'a, F>(
+    chunk_size: u64,
+    chunk_hashes: &[[u8; 32]],
+    start: u64,
+    end: u64,
+    mut chunk_lookup: F,
+) -> Result<Vec<u8>, AssembleError>
+where
+    F: FnMut(&[u8; 32]) -> Option<&'a [u8]>,
+{
+    if start >= end {
+        return Err(AssembleError::SliceBounds);
+    }
+    let start_chunk = start / chunk_size;
+    let end_chunk = end.saturating_sub(1) / chunk_size;
+    let expected_len = end.checked_sub(start).ok_or(AssembleError::Overflow)? as usize;
+
+    let mut out = Vec::with_capacity(expected_len);
+    for idx in start_chunk..=end_chunk {
+        let hash = *chunk_hashes
+            .get(idx as usize)
+            .ok_or(AssembleError::MissingChunk)?;
+        let chunk = chunk_lookup(&hash).ok_or(AssembleError::MissingChunk)?;
+        let chunk_start = idx.checked_mul(chunk_size).ok_or(AssembleError::Overflow)?;
+        let slice_start = start.saturating_sub(chunk_start) as usize;
+        let slice_end = (end.min(chunk_start + chunk.len() as u64) - chunk_start) as usize;
+        if slice_start > slice_end || slice_end > chunk.len() {
+            return Err(AssembleError::SliceBounds);
+        }
+        out.extend_from_slice(&chunk[slice_start..slice_end]);
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Clone)]
+struct RangeSpec {
     status: StatusCode,
     content_length: u64,
     content_range: Option<String>,
     start: u64,
     end: u64,
-}
-
-struct AssembledFile {
-    body: Vec<u8>,
-    chunk_indices: Vec<u32>,
 }
 
 #[derive(Debug)]
@@ -453,16 +476,14 @@ impl AssembleError {
 }
 
 fn apply_range(
-    body: &[u8],
+    total_len: u64,
     range_header: Option<&HeaderValue>,
-) -> Result<RangeState, ContentError> {
-    let total_len = body.len() as u64;
+) -> Result<RangeSpec, ContentError> {
     if total_len == 0 {
         if range_header.is_some() {
             return Err(ContentError::RangeNotSatisfiable { total_len: 0 });
         }
-        return Ok(RangeState {
-            body: body.to_vec(),
+        return Ok(RangeSpec {
             status: StatusCode::OK,
             content_length: 0,
             content_range: None,
@@ -471,8 +492,7 @@ fn apply_range(
         });
     }
     let Some(raw) = range_header else {
-        return Ok(RangeState {
-            body: body.to_vec(),
+        return Ok(RangeSpec {
             status: StatusCode::OK,
             content_length: total_len,
             content_range: None,
@@ -532,11 +552,13 @@ fn apply_range(
         return Err(ContentError::RangeNotSatisfiable { total_len });
     }
 
-    let slice = &body[start as usize..=end as usize];
-    Ok(RangeState {
-        body: slice.to_vec(),
+    let content_length = end
+        .checked_sub(start)
+        .and_then(|len| len.checked_add(1))
+        .ok_or(ContentError::RangeNotSatisfiable { total_len })?;
+    Ok(RangeSpec {
         status: StatusCode::PARTIAL_CONTENT,
-        content_length: slice.len() as u64,
+        content_length,
         content_range: Some(format!("bytes {start}-{end}/{total_len}")),
         start,
         end,
@@ -546,18 +568,22 @@ fn apply_range(
 fn encode_receipt_header(
     bundle: &ContentBundleRecord,
     entry: &iroha_data_model::content::ContentFileEntry,
-    range_state: &RangeState,
+    range_state: &RangeSpec,
 ) -> Result<HeaderValue, ContentError> {
-    let served_range = ContentRange {
-        start: range_state.start,
-        end: range_state.end,
+    let served_range = if range_state.content_length == 0 {
+        None
+    } else {
+        Some(ContentRange {
+            start: range_state.start,
+            end: range_state.end,
+        })
     };
     let receipt = ContentDaReceipt {
         bundle_id: bundle.bundle_id,
         path: entry.path.clone(),
         file_hash: entry.file_hash,
         served_bytes: range_state.content_length,
-        range: Some(served_range),
+        range: served_range,
         chunk_root: BlobDigest::new(bundle.chunk_root),
         stripe_layout: bundle.stripe_layout,
         pdp_commitment: bundle.pdp_commitment.clone(),
@@ -607,6 +633,7 @@ fn mime_for_path(
 mod tests {
     use std::collections::BTreeMap;
 
+    use super::*;
     use base64::Engine;
     use iroha_config::parameters::actual::ContentPow;
     use iroha_data_model::{
@@ -617,7 +644,6 @@ mod tests {
         },
         nexus::{DataSpaceId, LaneId},
     };
-    use super::*;
 
     fn sample_manifest() -> ContentBundleManifest {
         ContentBundleManifest {
@@ -638,30 +664,42 @@ mod tests {
     }
 
     #[test]
+    fn bundle_expiry_is_exclusive() {
+        assert!(!is_bundle_expired(4, Some(5)));
+        assert!(is_bundle_expired(5, Some(5)));
+        assert!(is_bundle_expired(6, Some(5)));
+        assert!(!is_bundle_expired(0, None));
+    }
+
+    #[test]
     fn range_parsing_handles_full_and_partial() {
-        let body = b"hello world".to_vec();
-        let full = apply_range(&body, None).expect("full range");
+        let total_len = 11;
+        let full = apply_range(total_len, None).expect("full range");
         assert_eq!(full.status, StatusCode::OK);
-        assert_eq!(full.content_length, body.len() as u64);
-        assert_eq!(full.body, body);
+        assert_eq!(full.content_length, total_len);
+        assert_eq!(full.start, 0);
+        assert_eq!(full.end, 10);
 
         let partial =
-            apply_range(&full.body, Some(&HeaderValue::from_static("bytes=0-3"))).expect("range");
+            apply_range(total_len, Some(&HeaderValue::from_static("bytes=0-3"))).expect("range");
         assert_eq!(partial.status, StatusCode::PARTIAL_CONTENT);
         assert_eq!(partial.content_range.as_deref(), Some("bytes 0-3/11"));
-        assert_eq!(partial.body, b"hell");
+        assert_eq!(partial.content_length, 4);
+        assert_eq!(partial.start, 0);
+        assert_eq!(partial.end, 3);
 
         let overshoot =
-            apply_range(&full.body, Some(&HeaderValue::from_static("bytes=0-99"))).expect("range");
+            apply_range(total_len, Some(&HeaderValue::from_static("bytes=0-99"))).expect("range");
         assert_eq!(overshoot.status, StatusCode::PARTIAL_CONTENT);
         assert_eq!(overshoot.content_range.as_deref(), Some("bytes 0-10/11"));
-        assert_eq!(overshoot.body, b"hello world");
+        assert_eq!(overshoot.content_length, 11);
+        assert_eq!(overshoot.start, 0);
+        assert_eq!(overshoot.end, 10);
     }
 
     #[test]
     fn range_header_on_empty_body_is_unsatisfiable() {
-        let body = Vec::new();
-        let err = apply_range(&body, Some(&HeaderValue::from_static("bytes=0-0")))
+        let err = apply_range(0, Some(&HeaderValue::from_static("bytes=0-0")))
             .expect_err("range should be unsatisfiable");
         assert!(matches!(
             err,
@@ -678,6 +716,22 @@ mod tests {
             .get(header::CONTENT_RANGE)
             .and_then(|value| value.to_str().ok());
         assert_eq!(header_value, Some("bytes */12"));
+    }
+
+    #[test]
+    fn assemble_range_from_chunks_slices_across_boundaries() {
+        let chunk_hashes = [[0x01; 32], [0x02; 32], [0x03; 32]];
+        let mut chunks: BTreeMap<[u8; 32], Vec<u8>> = BTreeMap::new();
+        chunks.insert([0x01; 32], b"abcd".to_vec());
+        chunks.insert([0x02; 32], b"efgh".to_vec());
+        chunks.insert([0x03; 32], b"ijkl".to_vec());
+
+        let body = assemble_range_from_chunks(4, &chunk_hashes, 2, 10, |hash| {
+            chunks.get(hash).map(|chunk| chunk.as_slice())
+        })
+        .expect("assemble range");
+
+        assert_eq!(body, b"cdefghij");
     }
 
     #[test]
@@ -742,8 +796,7 @@ mod tests {
             created_height: 1,
             expires_at_height: None,
         };
-        let range_state = RangeState {
-            body: Vec::new(),
+        let range_state = RangeSpec {
             status: StatusCode::OK,
             content_length: 4,
             content_range: None,

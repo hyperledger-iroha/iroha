@@ -2889,15 +2889,12 @@ impl NetworkBuilder {
         sumeragi_parameters.push(SumeragiParameter::DaEnabled(da_enabled));
 
         let consensus_mode = resolve_consensus_mode_from_config(&merged_sumeragi);
-        let enable_bls = true;
-        let auto_populate_trusted_peer_pops = auto_populate_trusted_peer_pops && enable_bls;
 
         let peers: Vec<_> = (0..n_peers)
             .map(|i| {
                 let seed = seed.as_ref().map(|x| format!("{x}-peer-{i}"));
                 NetworkPeerBuilder::new()
                     .with_seed(seed.as_ref().map(|x| x.as_bytes()))
-                    .with_bls(enable_bls)
                     .build(&env)
             })
             .collect();
@@ -2905,13 +2902,11 @@ impl NetworkBuilder {
         let peer_ids: UniqueVec<PeerId> = peers.iter().map(NetworkPeer::id).collect();
         let collected_entries: Vec<GenesisTopologyEntry> =
             peers.iter().filter_map(NetworkPeer::genesis_pop).collect();
-        if enable_bls {
-            assert_eq!(
-                collected_entries.len(),
-                peers.len(),
-                "every network peer must provide a BLS PoP"
-            );
-        }
+        assert_eq!(
+            collected_entries.len(),
+            peers.len(),
+            "every network peer must provide a BLS PoP"
+        );
 
         let topology_entries: Vec<GenesisTopologyEntry> = collected_entries.clone();
 
@@ -3226,7 +3221,7 @@ impl NetworkBuilder {
 
     /// Same as [`Self::build`], but also creates a [`Runtime`].
     ///
-    /// This method exists for convenience and to preserve compatibility with non-async tests.
+    /// This method exists for convenience in non-async tests.
     pub fn build_blocking(self) -> (Network, Runtime) {
         let rt = runtime::Builder::new_multi_thread()
             .thread_stack_size(32 * 1024 * 1024)
@@ -4567,7 +4562,6 @@ impl PartialEq for NetworkPeer {
 pub struct NetworkPeerBuilder {
     mnemonic: String,
     seed: Option<Vec<u8>>,
-    enable_bls: bool,
 }
 
 impl NetworkPeerBuilder {
@@ -4582,7 +4576,6 @@ impl NetworkPeerBuilder {
                 .collect::<Vec<_>>()
                 .join("_"),
             seed: None,
-            enable_bls: true,
         }
     }
 
@@ -4591,42 +4584,25 @@ impl NetworkPeerBuilder {
         self
     }
 
-    pub fn with_bls(mut self, enable: bool) -> Self {
-        // BLS is always enabled; keep setter for API compatibility.
-        self.enable_bls = enable;
-        self
-    }
-
     pub fn build(self, env: &Environment) -> NetworkPeer {
-        let NetworkPeerBuilder {
-            mnemonic,
-            seed,
-            enable_bls,
-        } = self;
-        let _ = enable_bls;
+        let NetworkPeerBuilder { mnemonic, seed } = self;
 
         let streaming_key_pair = seed
             .as_ref()
             .map(|seed_bytes| KeyPair::from_seed(seed_bytes.clone(), Algorithm::Ed25519))
             .unwrap_or_else(KeyPair::random);
 
-        let (key_pair, bls_key_pair, bls_pop) = if enable_bls {
-            let bls_key = if let Some(mut seed_bytes) = seed.clone() {
-                seed_bytes.extend_from_slice(b":bls");
-                KeyPair::from_seed(seed_bytes, Algorithm::BlsNormal)
-            } else {
-                KeyPair::random_with_algorithm(Algorithm::BlsNormal)
-            };
-            let pop = iroha_crypto::bls_normal_pop_prove(bls_key.private_key())
-                .expect("BLS PoP generation");
-            (bls_key.clone(), Some(bls_key), Some(pop))
+        let bls_key = if let Some(mut seed_bytes) = seed.clone() {
+            seed_bytes.extend_from_slice(b":bls");
+            KeyPair::from_seed(seed_bytes, Algorithm::BlsNormal)
         } else {
-            let key_pair = seed
-                .as_ref()
-                .map(|seed_bytes| KeyPair::from_seed(seed_bytes.clone(), Algorithm::Ed25519))
-                .unwrap_or_else(KeyPair::random);
-            (key_pair, None, None)
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
         };
+        let pop =
+            iroha_crypto::bls_normal_pop_prove(bls_key.private_key()).expect("BLS PoP generation");
+        let key_pair = bls_key.clone();
+        let bls_key_pair = Some(bls_key);
+        let bls_pop = Some(pop);
         let port_p2p = AllocatedPort::new();
         let port_api = AllocatedPort::new();
 
@@ -7132,9 +7108,9 @@ exit 0
     }
 
     #[test]
-    fn peer_id_uses_bls_when_enabled() {
+    fn peer_id_uses_bls() {
         let env = Environment::new();
-        let peer = NetworkPeerBuilder::new().with_bls(true).build(&env);
+        let peer = NetworkPeerBuilder::new().build(&env);
         assert_eq!(peer.id().public_key().algorithm(), Algorithm::BlsNormal);
         assert_eq!(
             peer.streaming_public_key().algorithm(),
@@ -7148,20 +7124,9 @@ exit 0
     }
 
     #[test]
-    fn peer_id_uses_ed25519_when_bls_disabled() {
-        let env = Environment::new();
-        let peer = NetworkPeerBuilder::new().with_bls(false).build(&env);
-        assert_eq!(peer.id().public_key().algorithm(), Algorithm::Ed25519);
-        assert!(
-            peer.bls_public_key().is_none(),
-            "disabling BLS should skip auxiliary key material"
-        );
-    }
-
-    #[test]
     fn base_config_sets_streaming_identity_keys() {
         let env = Environment::new();
-        let peer = NetworkPeerBuilder::new().with_bls(true).build(&env);
+        let peer = NetworkPeerBuilder::new().build(&env);
         let path = peer.dir.join("config.base.toml");
         let contents = std::fs::read_to_string(&path).expect("read base config");
         let table: toml::Table = toml::from_str(&contents).expect("parse base config");

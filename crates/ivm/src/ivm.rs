@@ -1522,11 +1522,15 @@ impl IVM {
             }
             SimpleInstruction::AddImm { rd, rs, imm } => {
                 let a = self.registers.get(rs as usize);
+                let tag = self.zk_unary_tag(rs as usize);
+                self.zk_apply_tag(rd as usize, tag);
                 self.registers
                     .set(rd as usize, a.wrapping_add(imm as i64 as u64));
             }
             SimpleInstruction::SubImm { rd, rs, imm } => {
                 let a = self.registers.get(rs as usize);
+                let tag = self.zk_unary_tag(rs as usize);
+                self.zk_apply_tag(rd as usize, tag);
                 self.registers
                     .set(rd as usize, a.wrapping_sub(imm as i64 as u64));
             }
@@ -1544,16 +1548,22 @@ impl IVM {
                 self.registers.set(rd as usize, a ^ b);
             }
             SimpleInstruction::Sll { rd, rs, rt } => {
+                let tag = self.zk_match_tags(rs as usize, rt as usize)?;
+                self.zk_apply_tag(rd as usize, tag);
                 let a = self.registers.get(rs as usize);
                 let b = self.registers.get(rt as usize) & 0x3F;
                 self.registers.set(rd as usize, a << b);
             }
             SimpleInstruction::Srl { rd, rs, rt } => {
+                let tag = self.zk_match_tags(rs as usize, rt as usize)?;
+                self.zk_apply_tag(rd as usize, tag);
                 let a = self.registers.get(rs as usize);
                 let b = self.registers.get(rt as usize) & 0x3F;
                 self.registers.set(rd as usize, a >> b);
             }
             SimpleInstruction::Sra { rd, rs, rt } => {
+                let tag = self.zk_match_tags(rs as usize, rt as usize)?;
+                self.zk_apply_tag(rd as usize, tag);
                 let a = self.registers.get(rs as usize) as i64;
                 let b = (self.registers.get(rt as usize) & 0x3F) as u32;
                 self.registers.set(rd as usize, (a >> b) as u64);
@@ -2779,6 +2789,9 @@ impl IVM {
                 instruction::wide::system::GETGAS => {
                     let rd = instruction::wide::rd(instr);
                     self.registers.set(rd, self.gas_remaining);
+                    if self.zk_mode {
+                        self.registers.set_tag(rd, false);
+                    }
                     self.pc = self.pc.wrapping_add(length as u64);
                     self.cycles += 1;
                     continue;
@@ -3768,6 +3781,9 @@ impl IVM {
                 }
                 instruction::wide::control::JR => {
                     let rs = instruction::wide::rd(instr);
+                    if self.zk_mode && self.registers.tag(rs) {
+                        return Err(VMError::PrivacyViolation);
+                    }
                     self.pc = self.registers.get(rs);
                     self.cycles += 1;
                     continue;
@@ -3775,10 +3791,16 @@ impl IVM {
                 instruction::wide::control::JALR => {
                     let rd = instruction::wide::rd(instr);
                     let rs = instruction::wide::rs1(instr);
+                    if self.zk_mode && self.registers.tag(rs) {
+                        return Err(VMError::PrivacyViolation);
+                    }
                     let imm = i64::from(instruction::wide::imm8(instr));
                     let target = ((self.registers.get(rs) as i64) + imm) as u64 & !1;
                     let return_pc = self.pc.wrapping_add(length as u64);
                     self.registers.set(rd, return_pc);
+                    if self.zk_mode {
+                        self.registers.set_tag(rd, false);
+                    }
                     self.pc = target;
                     self.cycles += 1;
                     continue;
@@ -3788,6 +3810,9 @@ impl IVM {
                     let imm = instruction::wide::imm16(instr) as i64;
                     let return_pc = self.pc.wrapping_add(length as u64);
                     self.registers.set(rd, return_pc);
+                    if self.zk_mode {
+                        self.registers.set_tag(rd, false);
+                    }
                     self.pc = ((self.pc as i64) + (imm * 4)) as u64;
                     self.cycles += 1;
                     continue;
@@ -3803,6 +3828,9 @@ impl IVM {
                     let imm = instruction::wide::imm16(instr) as i64;
                     let return_pc = self.pc.wrapping_add(length as u64);
                     self.registers.set(rd, return_pc);
+                    if self.zk_mode {
+                        self.registers.set_tag(rd, false);
+                    }
                     self.pc = ((self.pc as i64) + (imm * 4)) as u64;
                     self.cycles += 1;
                     continue;
@@ -4107,6 +4135,20 @@ impl IVM {
                     if rd + 1 >= 256 || rs_state + 1 >= 256 || rs_key + 1 >= 256 {
                         return Err(VMError::RegisterOutOfBounds);
                     }
+                    if self.zk_mode {
+                        let state_tag_lo = self.registers.tag(rs_state);
+                        let state_tag_hi = self.registers.tag(rs_state + 1);
+                        let key_tag_lo = self.registers.tag(rs_key);
+                        let key_tag_hi = self.registers.tag(rs_key + 1);
+                        if state_tag_lo != state_tag_hi
+                            || key_tag_lo != key_tag_hi
+                            || state_tag_lo != key_tag_lo
+                        {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        self.registers.set_tag(rd, state_tag_lo);
+                        self.registers.set_tag(rd + 1, state_tag_lo);
+                    }
                     let mut state = [0u8; 16];
                     let s_lo = self.registers.get(rs_state).to_le_bytes();
                     let s_hi = self.registers.get(rs_state + 1).to_le_bytes();
@@ -4135,6 +4177,20 @@ impl IVM {
                     let rs_key = instruction::wide::rs2(instr);
                     if rd + 1 >= 256 || rs_state + 1 >= 256 || rs_key + 1 >= 256 {
                         return Err(VMError::RegisterOutOfBounds);
+                    }
+                    if self.zk_mode {
+                        let state_tag_lo = self.registers.tag(rs_state);
+                        let state_tag_hi = self.registers.tag(rs_state + 1);
+                        let key_tag_lo = self.registers.tag(rs_key);
+                        let key_tag_hi = self.registers.tag(rs_key + 1);
+                        if state_tag_lo != state_tag_hi
+                            || key_tag_lo != key_tag_hi
+                            || state_tag_lo != key_tag_lo
+                        {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        self.registers.set_tag(rd, state_tag_lo);
+                        self.registers.set_tag(rd + 1, state_tag_lo);
                     }
                     let mut state = [0u8; 16];
                     let s_lo = self.registers.get(rs_state).to_le_bytes();
@@ -4177,6 +4233,10 @@ impl IVM {
                     let hi = u64::from_le_bytes(out[8..16].try_into().unwrap());
                     self.registers.set(rd, lo);
                     self.registers.set(rd + 1, hi);
+                    if self.zk_mode {
+                        self.registers.set_tag(rd, false);
+                        self.registers.set_tag(rd + 1, false);
+                    }
                     self.pc = self.pc.wrapping_add(length as u64);
                     self.cycles += 1;
                     continue;
@@ -4214,6 +4274,9 @@ impl IVM {
                     }
                     let res = crate::poseidon::poseidon2(a, b);
                     self.registers.set(rd, res);
+                    if self.zk_mode {
+                        self.registers.set_tag(rd, false);
+                    }
                     self.pc = self.pc.wrapping_add(length as u64);
                     self.cycles += 1;
                     continue;
@@ -4249,6 +4312,9 @@ impl IVM {
                     }
                     let res = crate::poseidon::poseidon6(vals);
                     self.registers.set(rd, res);
+                    if self.zk_mode {
+                        self.registers.set_tag(rd, false);
+                    }
                     self.pc = self.pc.wrapping_add(length as u64);
                     self.cycles += 1;
                     continue;
@@ -4422,6 +4488,10 @@ impl IVM {
                     };
                     self.registers.set(rd, if ok { 1 } else { 0 });
                     self.registers.set(rs2, fail_index);
+                    if self.zk_mode {
+                        self.registers.set_tag(rd, false);
+                        self.registers.set_tag(rs2, false);
+                    }
                     self.pc = self.pc.wrapping_add(length as u64);
                     self.cycles += 1;
                     continue;
@@ -4469,6 +4539,9 @@ impl IVM {
                         false
                     };
                     self.registers.set(rd, if ok { 1 } else { 0 });
+                    if self.zk_mode {
+                        self.registers.set_tag(rd, false);
+                    }
                     self.pc = self.pc.wrapping_add(length as u64);
                     self.cycles += 1;
                     continue;
@@ -4516,6 +4589,9 @@ impl IVM {
                         false
                     };
                     self.registers.set(rd, if ok { 1 } else { 0 });
+                    if self.zk_mode {
+                        self.registers.set_tag(rd, false);
+                    }
                     self.pc = self.pc.wrapping_add(length as u64);
                     self.cycles += 1;
                     continue;
@@ -4563,6 +4639,9 @@ impl IVM {
                         false
                     };
                     self.registers.set(rd, if ok { 1 } else { 0 });
+                    if self.zk_mode {
+                        self.registers.set_tag(rd, false);
+                    }
                     self.pc = self.pc.wrapping_add(length as u64);
                     self.cycles += 1;
                     continue;
@@ -5261,18 +5340,20 @@ fn compute_instruction(
         }
         AddImm { rd, rs, imm } => {
             let val = regs[rs as usize].wrapping_add(imm as i64 as u64);
+            let tag = if zk { tags[rs as usize] } else { false };
             res.push(ResultUpdate::Reg {
                 index: rd,
                 value: val,
-                tag: false,
+                tag,
             });
         }
         SubImm { rd, rs, imm } => {
             let val = regs[rs as usize].wrapping_sub(imm as i64 as u64);
+            let tag = if zk { tags[rs as usize] } else { false };
             res.push(ResultUpdate::Reg {
                 index: rd,
                 value: val,
-                tag: false,
+                tag,
             });
         }
         Xor { rd, rs, rt } => {
@@ -5290,28 +5371,40 @@ fn compute_instruction(
         Sll { rd, rs, rt } => {
             let sh = regs[rt as usize] & 0x3F;
             let val = regs[rs as usize] << sh;
+            if zk && tags[rs as usize] != tags[rt as usize] {
+                return Err(VMError::PrivacyViolation);
+            }
+            let tag = if zk { tags[rs as usize] } else { false };
             res.push(ResultUpdate::Reg {
                 index: rd,
                 value: val,
-                tag: false,
+                tag,
             });
         }
         Srl { rd, rs, rt } => {
             let sh = regs[rt as usize] & 0x3F;
             let val = regs[rs as usize] >> sh;
+            if zk && tags[rs as usize] != tags[rt as usize] {
+                return Err(VMError::PrivacyViolation);
+            }
+            let tag = if zk { tags[rs as usize] } else { false };
             res.push(ResultUpdate::Reg {
                 index: rd,
                 value: val,
-                tag: false,
+                tag,
             });
         }
         Sra { rd, rs, rt } => {
             let sh = (regs[rt as usize] & 0x3F) as u32;
             let val = ((regs[rs as usize] as i64) >> sh) as u64;
+            if zk && tags[rs as usize] != tags[rt as usize] {
+                return Err(VMError::PrivacyViolation);
+            }
+            let tag = if zk { tags[rs as usize] } else { false };
             res.push(ResultUpdate::Reg {
                 index: rd,
                 value: val,
-                tag: false,
+                tag,
             });
         }
         Load {
@@ -5632,18 +5725,11 @@ impl IVM {
         let batches = schedule_batches(&metas);
 
         for batch in batches {
-            let total_cost: u64 = batch.iter().map(|&i| cost_of(&block[i], vls[i])).sum();
-            if self.gas_remaining < total_cost {
-                return Err(VMError::OutOfGas);
-            }
-            self.gas_remaining -= total_cost;
-
             let regs_snapshot = self.registers.snapshot();
             let tags_snapshot = self.registers.snapshot_tags();
             let vector_enabled = self.vector_enabled;
 
             let results_lock = Mutex::new(Vec::new());
-            let err_lock = Mutex::new(None);
 
             rayon::scope(|s| {
                 for &idx in &batch {
@@ -5654,35 +5740,30 @@ impl IVM {
                     let zk = self.zk_mode;
                     let vl = vls[idx];
                     let results = &results_lock;
-                    let err = &err_lock;
                     s.spawn(move |_| {
-                        match compute_instruction(instr, regs, tags, mem, zk, vl, vector_enabled) {
-                            Ok(upd) => {
-                                results
-                                    .lock()
-                                    .expect("results mutex poisoned")
-                                    .push((idx, upd));
-                            }
-                            Err(e) => {
-                                let mut guard = err.lock().expect("error mutex poisoned");
-                                if guard.is_none() {
-                                    *guard = Some((idx, e));
-                                }
-                            }
-                        }
+                        let result =
+                            compute_instruction(instr, regs, tags, mem, zk, vl, vector_enabled);
+                        results
+                            .lock()
+                            .expect("results mutex poisoned")
+                            .push((idx, result));
                     });
                 }
             });
 
             let mut results = results_lock.into_inner().expect("results mutex poisoned");
-            let err = err_lock.into_inner().expect("error mutex poisoned");
-
-            if let Some((_i, e)) = err {
-                return Err(e);
-            }
 
             results.sort_by_key(|(i, _)| *i);
-            for (_, updates) in results {
+            for (idx, result) in results {
+                let cost = cost_of(&block[idx], vls[idx]);
+                if self.gas_remaining < cost {
+                    return Err(VMError::OutOfGas);
+                }
+                self.gas_remaining -= cost;
+                let updates = match result {
+                    Ok(updates) => updates,
+                    Err(e) => return Err(e),
+                };
                 for upd in updates {
                     match upd {
                         ResultUpdate::Reg { index, value, tag } => {

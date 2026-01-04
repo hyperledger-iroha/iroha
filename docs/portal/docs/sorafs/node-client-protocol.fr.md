@@ -52,7 +52,7 @@ enveloppes d'admission comparent les corps d'advert et de proposition
 
 ### Extensions de fetch par plages
 
-Les fournisseurs compatibles range incluent les métadonnées suivantes :
+Les fournisseurs avec capacité range incluent les métadonnées suivantes :
 
 | Champ | Objectif |
 |-------|----------|

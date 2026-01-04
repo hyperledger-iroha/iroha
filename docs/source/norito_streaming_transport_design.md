@@ -29,7 +29,7 @@ D3–D7.
 
 - Provide post-quantum forward secrecy without sacrificing deterministic
   behaviour across nodes.
-- Keep the on-wire format compatible with the existing
+- Keep the on-wire format identical to the current
   `StreamingSession::snapshot_state` payload.
 - Avoid suite negotiation in the critical path; all peers must converge on the
   same cipher suite list.

@@ -197,22 +197,13 @@ impl Actor {
                     );
                 }
             }
-            let sidecar = if selection.stake_snapshot.is_some() {
-                crate::kura::RosterSidecar::new_v2(
-                    block_height,
-                    block_hash,
-                    Some(cert.clone()),
-                    Some(checkpoint.clone()),
-                    selection.stake_snapshot.clone(),
-                )
-            } else {
-                crate::kura::RosterSidecar::new_v1(
-                    block_height,
-                    block_hash,
-                    Some(cert.clone()),
-                    Some(checkpoint.clone()),
-                )
-            };
+            let sidecar = crate::kura::RosterSidecar::new_v1(
+                block_height,
+                block_hash,
+                Some(cert.clone()),
+                Some(checkpoint.clone()),
+                selection.stake_snapshot.clone(),
+            );
             self.kura.write_roster_metadata(&sidecar);
         }
         let had_incoming_qc = incoming_qc.is_some();

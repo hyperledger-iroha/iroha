@@ -56,10 +56,14 @@ pub(crate) struct GuardCapabilityComponents {
 }
 
 impl GuardCapabilityComponents {
-    pub(crate) fn from_descriptor(descriptor: &RelayDescriptor, policy: AnonymityPolicy) -> Self {
+    pub(crate) fn from_descriptor(
+        descriptor: &RelayDescriptor,
+        policy: AnonymityPolicy,
+        pq_capable: bool,
+    ) -> Self {
         Self::from_inputs(
-            guard_pq_rank(policy, descriptor),
-            descriptor.is_pq_capable(),
+            guard_pq_rank(policy, pq_capable),
+            pq_capable,
             descriptor.guard_weight,
             descriptor.bandwidth_bytes_per_sec,
             descriptor.reputation_weight,
@@ -412,9 +416,19 @@ impl RelayDescriptor {
     }
 
     /// Returns true when the descriptor advertises PQ-capable handshakes.
+    ///
+    /// This method does not validate certificate lifetimes; use
+    /// [`RelayDescriptor::is_pq_capable_at`] when time bounds matter.
     #[must_use]
     pub fn is_pq_capable(&self) -> bool {
         self.pq_kem_public().is_some()
+    }
+
+    /// Returns true when the descriptor advertises PQ-capable handshakes and any
+    /// embedded certificate is valid at `now_unix`.
+    #[must_use]
+    pub fn is_pq_capable_at(&self, now_unix: u64) -> bool {
+        self.pq_kem_public_at(now_unix).is_some()
     }
 
     /// Iterate over endpoints that advertise the provided tag.
@@ -431,6 +445,19 @@ impl RelayDescriptor {
             && !bundle.certificate.pq_kem_public.is_empty()
         {
             return Some(bundle.certificate.pq_kem_public.as_slice());
+        }
+        self.pq_kem_public.as_deref()
+    }
+
+    fn pq_kem_public_at(&self, now_unix: u64) -> Option<&[u8]> {
+        if let Some(bundle) = self.certificate.as_ref() {
+            if !is_certificate_valid_at(bundle, now_unix) {
+                return None;
+            }
+            if !bundle.certificate.pq_kem_public.is_empty() {
+                return Some(bundle.certificate.pq_kem_public.as_slice());
+            }
+            return None;
         }
         self.pq_kem_public.as_deref()
     }
@@ -768,12 +795,6 @@ impl RelayDirectory {
                 });
             }
 
-            let pq_kem_public = if bundle.certificate.pq_kem_public.is_empty() {
-                None
-            } else {
-                Some(bundle.certificate.pq_kem_public.clone())
-            };
-
             entries.push(RelayDescriptor {
                 relay_id: bundle.certificate.relay_id,
                 guard_weight: bundle.certificate.guard_weight,
@@ -785,7 +806,7 @@ impl RelayDirectory {
                     exit: bundle.certificate.roles.exit,
                 },
                 endpoints,
-                pq_kem_public,
+                pq_kem_public: None,
                 certificate: Some(bundle),
                 path_metadata: PathMetadata::default(),
             });
@@ -1192,12 +1213,16 @@ impl Default for GuardRetention {
     }
 }
 
-fn guard_capability_score(descriptor: &RelayDescriptor, policy: AnonymityPolicy) -> u128 {
-    GuardCapabilityComponents::from_descriptor(descriptor, policy).score()
+fn guard_capability_score(
+    descriptor: &RelayDescriptor,
+    policy: AnonymityPolicy,
+    pq_capable: bool,
+) -> u128 {
+    GuardCapabilityComponents::from_descriptor(descriptor, policy, pq_capable).score()
 }
 
-fn guard_pq_rank(policy: AnonymityPolicy, descriptor: &RelayDescriptor) -> u8 {
-    if !descriptor.is_pq_capable() {
+fn guard_pq_rank(policy: AnonymityPolicy, pq_capable: bool) -> u8 {
+    if !pq_capable {
         return 0;
     }
     match policy {
@@ -1258,7 +1283,9 @@ impl GuardSelector {
         let pq_available = directory
             .entries()
             .iter()
-            .filter(|descriptor| descriptor.is_entry_guard() && descriptor.is_pq_capable())
+            .filter(|descriptor| {
+                descriptor.is_entry_guard() && descriptor.is_pq_capable_at(now_unix)
+            })
             .count();
         let max_classical = allowed_classical(policy, max_count, pq_available);
         let mut selected_classical = 0usize;
@@ -1290,13 +1317,6 @@ impl GuardSelector {
                 if !descriptor.is_entry_guard() {
                     continue;
                 }
-                let is_pq = descriptor.is_pq_capable();
-                if !is_pq && selected_classical >= max_classical {
-                    continue;
-                }
-                if policy == AnonymityPolicy::StrictPq && !is_pq {
-                    continue;
-                }
                 let endpoint = match descriptor.primary_endpoint() {
                     Some(endpoint) => endpoint.clone(),
                     None => continue,
@@ -1304,22 +1324,34 @@ impl GuardSelector {
                 if selected_ids.contains(&record.relay_id) {
                     continue;
                 }
-                selected_ids.push(record.relay_id);
                 let certificate = descriptor
                     .certificate()
                     .cloned()
-                    .or_else(|| record.certificate().cloned())
-                    .and_then(|bundle| enforce_certificate_validity(bundle, now_unix));
-                let descriptor_pq = if certificate.is_some() {
-                    descriptor.pq_kem_public()
+                    .or_else(|| record.certificate().cloned());
+                let certificate_candidate = certificate.is_some();
+                let certificate =
+                    certificate.and_then(|bundle| enforce_certificate_validity(bundle, now_unix));
+                let pq_allowed = !certificate_candidate || certificate.is_some();
+                let descriptor_pq = if pq_allowed {
+                    descriptor.pq_kem_public_at(now_unix)
                 } else {
-                    descriptor.pq_kem_public.as_deref()
+                    None
                 };
-                let pq_kem_public = preferred_pq_kem_public(
-                    certificate.as_ref(),
-                    descriptor_pq,
-                    record.pq_kem_public.as_deref(),
-                );
+                let record_pq = if pq_allowed {
+                    record.pq_kem_public.as_deref()
+                } else {
+                    None
+                };
+                let pq_kem_public =
+                    preferred_pq_kem_public(certificate.as_ref(), descriptor_pq, record_pq);
+                let is_pq = pq_kem_public.is_some();
+                if !is_pq && selected_classical >= max_classical {
+                    continue;
+                }
+                if policy == AnonymityPolicy::StrictPq && !is_pq {
+                    continue;
+                }
+                selected_ids.push(record.relay_id);
                 let path_metadata = reconcile_path_metadata(descriptor, Some(record));
                 selected.push(GuardRecord {
                     relay_id: record.relay_id,
@@ -1350,12 +1382,13 @@ impl GuardSelector {
             .filter(|descriptor| descriptor.is_entry_guard())
             .filter(|descriptor| descriptor.primary_endpoint().is_some())
             .map(|descriptor| {
+                let pq_capable = descriptor.is_pq_capable_at(now_unix);
                 (
                     PathSortKey {
                         validator_lane: descriptor.path_metadata.validator_lane,
                         rtt_ms: descriptor.path_metadata.avg_rtt_ms,
                     },
-                    guard_capability_score(descriptor, policy),
+                    guard_capability_score(descriptor, policy, pq_capable),
                     descriptor,
                 )
             })
@@ -1379,26 +1412,26 @@ impl GuardSelector {
             if selected_ids.contains(&descriptor.relay_id) {
                 continue;
             }
-            let is_pq = descriptor.is_pq_capable();
-            if !is_pq && selected_classical >= max_classical {
-                continue;
-            }
-            if policy == AnonymityPolicy::StrictPq && !is_pq {
-                continue;
-            }
             if let Some(endpoint) = descriptor.primary_endpoint() {
-                selected_ids.push(descriptor.relay_id);
-                let certificate = descriptor
-                    .certificate()
-                    .cloned()
-                    .and_then(|bundle| enforce_certificate_validity(bundle, now_unix));
-                let descriptor_pq = if certificate.is_some() {
-                    descriptor.pq_kem_public()
+                let certificate = descriptor.certificate().cloned();
+                let certificate_candidate = certificate.is_some();
+                let certificate =
+                    certificate.and_then(|bundle| enforce_certificate_validity(bundle, now_unix));
+                let pq_allowed = !certificate_candidate || certificate.is_some();
+                let descriptor_pq = if pq_allowed {
+                    descriptor.pq_kem_public_at(now_unix)
                 } else {
-                    descriptor.pq_kem_public.as_deref()
+                    None
                 };
                 let pq_kem_public =
                     preferred_pq_kem_public(certificate.as_ref(), descriptor_pq, None);
+                let is_pq = pq_kem_public.is_some();
+                if !is_pq && selected_classical >= max_classical {
+                    continue;
+                }
+                if policy == AnonymityPolicy::StrictPq && !is_pq {
+                    continue;
+                }
                 let path_metadata = reconcile_path_metadata(descriptor, None);
 
                 let asn_collision = path_metadata
@@ -1416,6 +1449,7 @@ impl GuardSelector {
                         idx,
                         &used_asn,
                         &used_regions,
+                        now_unix,
                         policy,
                         max_classical,
                         selected_classical,
@@ -1426,6 +1460,7 @@ impl GuardSelector {
                     continue;
                 }
 
+                selected_ids.push(descriptor.relay_id);
                 selected.push(GuardRecord {
                     relay_id: descriptor.relay_id,
                     pinned_at_unix: now_unix,
@@ -1473,18 +1508,26 @@ fn preferred_pq_kem_public(
     record_pq.map(|value| value.to_vec())
 }
 
+fn is_certificate_valid_at(bundle: &RelayCertificateBundleV2, now_unix: u64) -> bool {
+    let now_i64 = i64::try_from(now_unix).unwrap_or(i64::MAX);
+    if bundle.certificate.valid_after > now_i64 {
+        return false;
+    }
+    if bundle.certificate.valid_until > 0 && bundle.certificate.valid_until <= now_i64 {
+        return false;
+    }
+    true
+}
+
 fn enforce_certificate_validity(
     bundle: RelayCertificateBundleV2,
     now_unix: u64,
 ) -> Option<RelayCertificateBundleV2> {
-    let now_i64 = i64::try_from(now_unix).unwrap_or(i64::MAX);
-    if bundle.certificate.valid_after > now_i64 {
-        return None;
+    if is_certificate_valid_at(&bundle, now_unix) {
+        Some(bundle)
+    } else {
+        None
     }
-    if bundle.certificate.valid_until > 0 && bundle.certificate.valid_until <= now_i64 {
-        return None;
-    }
-    Some(bundle)
 }
 
 fn emit_guard_selection_telemetry(guards: &[GuardRecord]) {
@@ -1620,6 +1663,7 @@ fn has_diverse_future(
     start_index: usize,
     used_asn: &HashSet<u32>,
     used_regions: &HashSet<String>,
+    now_unix: u64,
     policy: AnonymityPolicy,
     max_classical: usize,
     selected_classical: usize,
@@ -1635,7 +1679,7 @@ fn has_diverse_future(
         if !descriptor.is_entry_guard() || descriptor.primary_endpoint().is_none() {
             continue;
         }
-        let is_pq = descriptor.is_pq_capable();
+        let is_pq = descriptor.is_pq_capable_at(now_unix);
         if matches!(policy, AnonymityPolicy::StrictPq) && !is_pq {
             continue;
         }
@@ -2282,6 +2326,7 @@ impl CircuitManager {
         let middle_descriptor = select_relay(
             directory,
             |descriptor| descriptor.roles.middle && descriptor.relay_id != guard.relay_id,
+            now_unix,
             policy,
             &avoid_asn,
         )
@@ -2298,6 +2343,7 @@ impl CircuitManager {
                     && descriptor.relay_id != guard.relay_id
                     && descriptor.relay_id != middle_descriptor.relay_id
             },
+            now_unix,
             policy,
             &avoid_asn,
         )
@@ -2310,8 +2356,9 @@ impl CircuitManager {
             endpoint,
             pq_capable: guard.pq_kem_public.is_some(),
         };
-        let middle = descriptor_to_circuit_relay(middle_descriptor, None);
-        let exit = descriptor_to_circuit_relay(exit_descriptor, Some(EndpointTag::NoritoStream));
+        let middle = descriptor_to_circuit_relay(middle_descriptor, None, now_unix);
+        let exit =
+            descriptor_to_circuit_relay(exit_descriptor, Some(EndpointTag::NoritoStream), now_unix);
         let masque_bypass = self.config.validator_masque_bypass()
             && guard.path_metadata.validator_lane
             && guard.path_metadata.masque_bypass_allowed
@@ -2360,6 +2407,7 @@ impl CircuitManager {
 fn descriptor_to_circuit_relay(
     descriptor: &RelayDescriptor,
     preferred_tag: Option<EndpointTag>,
+    now_unix: u64,
 ) -> CircuitRelay {
     CircuitRelay {
         relay_id: descriptor.relay_id,
@@ -2367,13 +2415,14 @@ fn descriptor_to_circuit_relay(
             .preferred_endpoint(preferred_tag)
             .cloned()
             .expect("descriptor should expose primary endpoint"),
-        pq_capable: descriptor.is_pq_capable(),
+        pq_capable: descriptor.is_pq_capable_at(now_unix),
     }
 }
 
 fn select_relay<'a>(
     directory: &'a RelayDirectory,
     predicate: impl Fn(&'a RelayDescriptor) -> bool,
+    now_unix: u64,
     policy: AnonymityPolicy,
     avoid_asn: &HashSet<u32>,
 ) -> Option<&'a RelayDescriptor> {
@@ -2385,7 +2434,7 @@ fn select_relay<'a>(
         .collect();
 
     if matches!(policy, AnonymityPolicy::StrictPq) {
-        candidates.retain(|descriptor| descriptor.is_pq_capable());
+        candidates.retain(|descriptor| descriptor.is_pq_capable_at(now_unix));
     }
 
     if candidates.is_empty() {
@@ -2407,7 +2456,11 @@ fn select_relay<'a>(
                     right.path_metadata.avg_rtt_ms,
                 )
             })
-            .then_with(|| right.is_pq_capable().cmp(&left.is_pq_capable()))
+            .then_with(|| {
+                right
+                    .is_pq_capable_at(now_unix)
+                    .cmp(&left.is_pq_capable_at(now_unix))
+            })
             .then_with(|| right.guard_weight.cmp(&left.guard_weight))
             .then_with(|| left.relay_id.cmp(&right.relay_id))
     });
@@ -2759,6 +2812,44 @@ mod tests {
         }]);
         let selector = GuardSelector::new(NonZeroUsize::new(1).expect("non-zero"));
         let guards = selector.select(&directory, None, 100, AnonymityPolicy::GuardPq);
+        assert_eq!(guards.guards().len(), 1);
+        let guard = &guards.guards()[0];
+        assert!(guard.certificate().is_none());
+        assert!(guard.pq_kem_public.is_none());
+    }
+
+    #[test]
+    fn guard_selector_ignores_stale_record_pq_keys() {
+        let (_, mut bundle) =
+            build_directory_snapshot(CertificateValidationPhase::Phase3RequireDual, [0xAA; 32]);
+        bundle.certificate.valid_after = 0;
+        bundle.certificate.valid_until = 40;
+        let relay_id = bundle.certificate.relay_id;
+        let directory = RelayDirectory::new(vec![RelayDescriptor {
+            relay_id,
+            guard_weight: bundle.certificate.guard_weight,
+            bandwidth_bytes_per_sec: bundle.certificate.bandwidth_bytes_per_sec,
+            reputation_weight: bundle.certificate.reputation_weight,
+            roles: RelayRoles::new(true, false, false),
+            endpoints: vec![Endpoint::new("soranet://expired-cert", 0)],
+            pq_kem_public: None,
+            certificate: Some(bundle),
+            path_metadata: PathMetadata::default(),
+        }]);
+        let existing = GuardSet::new(vec![GuardRecord {
+            relay_id,
+            pinned_at_unix: 10,
+            endpoint: Endpoint::new("soranet://expired-cert", 0),
+            guard_weight: 100,
+            bandwidth_bytes_per_sec: 0,
+            reputation_weight: 0,
+            pq_kem_public: Some(vec![0xAB; 4]),
+            certificate: None,
+            path_metadata: PathMetadata::default(),
+        }]);
+
+        let selector = GuardSelector::new(NonZeroUsize::new(1).expect("non-zero"));
+        let guards = selector.select(&directory, Some(&existing), 100, AnonymityPolicy::GuardPq);
         assert_eq!(guards.guards().len(), 1);
         let guard = &guards.guards()[0];
         assert!(guard.certificate().is_none());
@@ -3932,10 +4023,10 @@ mod tests {
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
-        let relay = descriptor_to_circuit_relay(&descriptor, Some(EndpointTag::NoritoStream));
+        let relay = descriptor_to_circuit_relay(&descriptor, Some(EndpointTag::NoritoStream), 0);
         assert_eq!(relay.endpoint.url, "soranet://exit-norito");
 
-        let fallback = descriptor_to_circuit_relay(&descriptor, None);
+        let fallback = descriptor_to_circuit_relay(&descriptor, None, 0);
         assert_eq!(fallback.endpoint.url, "soranet://exit-default");
     }
 

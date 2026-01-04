@@ -40,7 +40,7 @@ cargo xtask address-vectors --verify
 
 - `--out <path>` — ad-hoc bundles بنانے پر اختیاری override (ڈیفالٹ `fixtures/account/address_vectors.json`).
 - `--stdout` — JSON کو stdout پر output کرتا ہے بجائے ڈسک پر لکھنے کے.
-- `--verify` — موجودہ فائل کو تازہ بنائے گئے مواد سے compare کرتا ہے (drift پر فوری fail؛ `--stdout` کے ساتھ incompatible).
+- `--verify` — موجودہ فائل کو تازہ بنائے گئے مواد سے compare کرتا ہے (drift پر فوری fail؛ `--stdout` کے ساتھ combine نہیں ہو سکتا).
 
 ### 3. آرٹیفیکٹ میٹرکس
 

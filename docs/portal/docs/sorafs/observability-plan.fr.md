@@ -132,7 +132,7 @@ Paquets d'alertes :
   - L'orchestrateur utilise `tracing` + `opentelemetry` pour exporter des spans de tentatives de fetch.
   - Les nœuds SoraFS embarqués exportent des spans pour les défis PoR et les opérations de stockage. Tous les composants partagent un trace ID commun propagé via `x-sorafs-trace`.
 - `SorafsFetchOtel` relie les métriques orchestrateur à des histogrammes OTLP tandis que les événements `telemetry::sorafs.fetch.*` fournissent des payloads JSON légers pour des backends centrés logs.
-- Collectors : exécutez des collectors OTEL à côté de Prometheus/Loki/Tempo (Tempo préféré). Les exporteurs compatibles Jaeger restent optionnels.
+- Collectors : exécutez des collectors OTEL à côté de Prometheus/Loki/Tempo (Tempo préféré). Les exporteurs API Jaeger restent optionnels.
 - Les opérations à haute cardinalité doivent être échantillonnées (10% pour les chemins de succès, 100% pour les échecs).
 
 ## Coordination de la télémétrie TLS (SF-5b)

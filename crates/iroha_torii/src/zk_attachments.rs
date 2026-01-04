@@ -407,7 +407,7 @@ fn normalize_mime(raw: &str) -> Option<String> {
         return None;
     }
     let mut normalized = mime.to_ascii_lowercase();
-    if normalized == TEXT_JSON_MIME_TYPE {
+    if normalized == TEXT_JSON_MIME_TYPE || normalized.ends_with("+json") {
         normalized = JSON_MIME_TYPE.to_string();
     }
     Some(normalized)
@@ -1754,6 +1754,15 @@ mod tests {
         let err = sanitize_attachment_sync(Some(super::JSON_MIME_TYPE), body, &cfg)
             .expect_err("mismatch rejected");
         assert_eq!(err.reason, SanitizeRejectReason::Type);
+    }
+
+    #[test]
+    fn sanitizer_accepts_plus_json_declared_type() {
+        let cfg = test_sanitizer_config(1024, 1);
+        let body = br#"{"hello":"world"}"#;
+        let outcome = sanitize_attachment_sync(Some("application/ld+json"), body, &cfg)
+            .expect("plus-json should be accepted");
+        assert_eq!(outcome.summary.sniffed_type, super::JSON_MIME_TYPE);
     }
 
     #[test]

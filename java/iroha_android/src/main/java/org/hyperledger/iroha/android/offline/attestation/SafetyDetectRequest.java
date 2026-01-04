@@ -48,11 +48,6 @@ public final class SafetyDetectRequest {
     return nonceHex;
   }
 
-  /** Backwards-compatible alias for {@link #nonceHex()}. */
-  public String attestationNonceHex() {
-    return nonceHex();
-  }
-
   public String packageName() {
     return packageName;
   }

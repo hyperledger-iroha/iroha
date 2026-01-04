@@ -46,8 +46,6 @@ base64.workspace = true
 
 [features]
 default = ["bls"]
-# The former build-time parallelism is removed; keep feature placeholder for compatibility.
-parallel = []
 bls = ["iroha_crypto/bls"]
 ml-dsa = ["iroha_crypto/ml-dsa"]
 gost = ["iroha_crypto/gost"]

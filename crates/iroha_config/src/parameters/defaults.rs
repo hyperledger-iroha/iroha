@@ -1235,6 +1235,8 @@ pub mod torii {
     }
     /// Capacity of the broadcast channel used for Torii events/SSE/webhooks.
     pub const EVENTS_BUFFER_CAPACITY: usize = 10_000;
+    /// WebSocket message timeout for Torii event/block streams (milliseconds).
+    pub const WS_MESSAGE_TIMEOUT_MS: u64 = 10_000;
     /// Default page size for app-facing list/query endpoints.
     pub const APP_API_DEFAULT_LIST_LIMIT: u32 = 100;
     /// Maximum page size accepted by app-facing list/query endpoints.

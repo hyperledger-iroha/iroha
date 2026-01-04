@@ -612,75 +612,25 @@ pub fn enqueue_event_for_matching_webhooks(
         }
         if let Some(ref expr) = w.filter {
             let (proof_backend, proof_call_hash, proof_envelope_hash) = parse_proof_filters(expr);
-            let has_proof_filters = proof_backend.is_some()
-                || proof_call_hash.is_some()
-                || proof_envelope_hash.is_some();
+            let has_proof_filters = crate::proof_filters::has_any_proof_filters(
+                &proof_backend,
+                &proof_call_hash,
+                &proof_envelope_hash,
+            );
             let only_proof_filters = has_proof_filters && expr_contains_only_proof_filters(expr);
             if !event_matches_filter(event, expr) && !only_proof_filters {
                 continue;
             }
-            if has_proof_filters {
-                let mut drop_event = false;
-                if let iroha_data_model::events::EventBox::Data(ev) = event {
-                    if let DataEvent::Proof(pe) = ev.as_ref() {
-                        match pe {
-                            iroha_data_model::events::data::proof::ProofEvent::Verified(v) => {
-                                if let Some(ref bs) = proof_backend {
-                                    let backend = v.id.backend.clone();
-                                    if !bs.contains(&backend) {
-                                        drop_event = true;
-                                    }
-                                }
-                                if let Some(ref hs) = proof_call_hash {
-                                    if !v.call_hash.as_ref().is_some_and(|hash| hs.contains(hash)) {
-                                        drop_event = true;
-                                    }
-                                }
-                                if let Some(ref es) = proof_envelope_hash {
-                                    if !v
-                                        .envelope_hash
-                                        .as_ref()
-                                        .is_some_and(|hash| es.contains(hash))
-                                    {
-                                        drop_event = true;
-                                    }
-                                }
-                            }
-                            iroha_data_model::events::data::proof::ProofEvent::Rejected(r) => {
-                                if let Some(ref bs) = proof_backend {
-                                    let backend = r.id.backend.clone();
-                                    if !bs.contains(&backend) {
-                                        drop_event = true;
-                                    }
-                                }
-                                if let Some(ref hs) = proof_call_hash {
-                                    if !r.call_hash.as_ref().is_some_and(|hash| hs.contains(hash)) {
-                                        drop_event = true;
-                                    }
-                                }
-                                if let Some(ref es) = proof_envelope_hash {
-                                    if !r
-                                        .envelope_hash
-                                        .as_ref()
-                                        .is_some_and(|hash| es.contains(hash))
-                                    {
-                                        drop_event = true;
-                                    }
-                                }
-                            }
-                            iroha_data_model::events::data::proof::ProofEvent::Pruned(p) => {
-                                if let Some(ref bs) = proof_backend {
-                                    if !bs.contains(&p.backend) {
-                                        drop_event = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if drop_event {
-                    continue;
-                }
+            if has_proof_filters
+                && !crate::proof_filters::event_matches_proof_filters(
+                    event,
+                    &proof_backend,
+                    &proof_call_hash,
+                    &proof_envelope_hash,
+                    only_proof_filters,
+                )
+            {
+                continue;
             }
         }
         let pd = PendingDelivery {

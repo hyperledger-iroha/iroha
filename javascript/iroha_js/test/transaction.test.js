@@ -126,6 +126,45 @@ test("submitSignedTransaction times out when no terminal status", async () => {
   });
 });
 
+test("submitSignedTransaction ignores state-only terminal fields", async () => {
+  const txBytes = Buffer.from([0x44]);
+  const signedBytes = Buffer.from([0x55]);
+  const binding = {
+    hashSignedTransaction: () => Buffer.alloc(32, 0x33),
+    signTransaction: () => signedBytes,
+  };
+  const submissionResponse = createResponse({
+    status: 202,
+    jsonData: { status: "Accepted" },
+    headers: { "content-type": "application/json" },
+  });
+  const statusResponse = createResponse({
+    status: 200,
+    jsonData: { state: "Committed" },
+    headers: { "content-type": "application/json" },
+  });
+  const fetchImpl = async (url) => {
+    if (url.endsWith("/v1/pipeline/transactions")) {
+      return submissionResponse;
+    }
+    return statusResponse;
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+
+  await withNativeBinding(binding, async () => {
+    await assert.rejects(
+      () =>
+        submitSignedTransaction(client, txBytes, {
+          waitForCommit: true,
+          timeoutMs: 5,
+          pollIntervalMs: 0,
+          privateKey: Buffer.alloc(32, 0x03),
+        }),
+      /timed out/i,
+    );
+  });
+});
+
 test("resignSignedTransaction delegates to native binding", () => {
   const input = Buffer.from([0xde]);
   const key = Buffer.alloc(32, 0x11);

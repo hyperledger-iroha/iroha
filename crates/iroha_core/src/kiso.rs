@@ -728,6 +728,9 @@ mod tests {
                     iroha_config::parameters::defaults::torii::EVENTS_BUFFER_CAPACITY,
                 )
                 .expect("non-zero events buffer capacity"),
+                ws_message_timeout: Duration::from_millis(
+                    iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
+                ),
                 attachments_ttl_secs: 3600,
                 attachments_max_bytes: 4 * 1024 * 1024,
                 attachments_per_tenant_max_count:

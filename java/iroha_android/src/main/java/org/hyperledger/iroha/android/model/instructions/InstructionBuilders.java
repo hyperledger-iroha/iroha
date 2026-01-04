@@ -12,7 +12,6 @@ import org.hyperledger.iroha.android.model.instructions.CancelRuntimeUpgradeInst
 import org.hyperledger.iroha.android.model.instructions.CastPlainBallotInstruction;
 import org.hyperledger.iroha.android.model.instructions.CastZkBallotInstruction;
 import org.hyperledger.iroha.android.model.instructions.CreateKaigiInstruction;
-import org.hyperledger.iroha.android.model.instructions.DeprecateVerifyingKeyInstruction;
 import org.hyperledger.iroha.android.model.instructions.EnactReferendumInstruction;
 import org.hyperledger.iroha.android.model.instructions.EndKaigiInstruction;
 import org.hyperledger.iroha.android.model.instructions.ExpireSpaceDirectoryManifestInstruction;
@@ -295,11 +294,6 @@ public final class InstructionBuilders {
             .setName(name)
             .setRecord(record)
             .build());
-  }
-
-  public static InstructionBox deprecateVerifyingKey(final String backend, final String name) {
-    return InstructionBox.of(
-        DeprecateVerifyingKeyInstruction.builder().setBackend(backend).setName(name).build());
   }
 
   public static InstructionBox executeTrigger(final String triggerId) {

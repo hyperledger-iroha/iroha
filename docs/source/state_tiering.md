@@ -18,11 +18,14 @@ fast transaction validation.
   spills entries beyond the configured hot capacity to the on-disk cold tier.
   Cold payloads are written using Norito encoding alongside a snapshot manifest
   (`manifest.json`) that records key hashes, value fingerprints, and relative
-  spill paths.
+  spill paths. The manifest is written atomically (temp file + fsync) before the
+  snapshot directory is promoted.
 - Runtime configuration lives under `iroha_config.parameters.tiered_state`
   (`enabled`, `hot_retained_keys`, `cold_store_root`, `max_snapshots`). The node
   applies these knobs at startup via `State::set_tiered_backend`, and the default
   build keeps the feature disabled until operators opt in.
+- Changing `cold_store_root` resets the in-memory tiering metadata and snapshot
+  counter so new roots start with a clean hot/cold ordering.
 - `StateBlock::commit` records a fresh snapshot under the configured cold root
   (pruning older directories according to `max_snapshots`) while holding the
   world-state write lock, guaranteeing deterministic manifests across peers.
@@ -41,7 +44,7 @@ fast transaction validation.
 - `snapshot.signing_private_key` can override the key used to sign snapshots if you want to separate signing from the node identity key.
 - Operational flow:
   1. Ensure the node identity key is available when `snapshot.mode = "read_write"`.
-  2. On creation, the node writes `snapshot.data`, `snapshot.sha256`, and `snapshot.sig` atomically (temp files renamed in place).
+  2. On creation, the node writes `snapshot.data`, `snapshot.sha256`, `snapshot.sig`, and `snapshot.merkle.json` atomically (temp files renamed in place) and fsyncs the snapshot directory.
   3. On startup, restore loads `snapshot.data`, verifies the Merkle metadata (`snapshot.merkle.json`), recomputes the digest, verifies the signature, confirms the snapshot `chain_id` matches the configured chain, then checks block hashes against Kura.
   4. If any check fails, the node falls back to building state from genesis.
 

@@ -14,7 +14,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 :::
 
 Ce guide codifie les exigences que chaque implémentation doit suivre pour rester
-compatible avec le profil chunker déterministe de SoraFS (SF1). Il documente aussi
+alignée sur le profil chunker déterministe de SoraFS (SF1). Il documente aussi
 le workflow de régénération, la politique de signatures et les étapes de vérification pour que
 les consommateurs de fixtures dans les SDKs restent synchronisés.
 

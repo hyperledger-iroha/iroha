@@ -2,9 +2,7 @@ package org.hyperledger.iroha.android.client.queue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
-import java.util.Base64;
 import java.util.List;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 
@@ -17,7 +15,6 @@ public final class FilePendingTransactionQueueTests {
   public static void main(final String[] args) throws Exception {
     shouldPersistAndDrainInOrder();
     shouldComputeSizeWithoutDrain();
-    shouldDecodeLegacyEntries();
     shouldPersistExportedKeyBundle();
     System.out.println("[IrohaAndroid] Pending transaction queue tests passed.");
   }
@@ -48,27 +45,6 @@ public final class FilePendingTransactionQueueTests {
     assert queue.size() == 2 : "Size should reflect queued entries";
     queue.drain();
     assert queue.size() == 0 : "Size should be zero after draining";
-  }
-
-  private static void shouldDecodeLegacyEntries() throws Exception {
-    final SignedTransaction tx = randomTransaction();
-    final Path tempDir = Files.createTempDirectory("iroha-queue-legacy-");
-    final Path queueFile = tempDir.resolve("pending.queue");
-    final String legacyLine = legacyEncode(tx);
-    Files.writeString(queueFile, legacyLine + System.lineSeparator(), StandardCharsets.UTF_8);
-
-    final FilePendingTransactionQueue queue = new FilePendingTransactionQueue(queueFile);
-    final List<SignedTransaction> drained = queue.drain();
-    assert drained.size() == 1 : "Legacy entry should decode to single transaction";
-    final SignedTransaction decoded = drained.get(0);
-    assert java.util.Arrays.equals(tx.encodedPayload(), decoded.encodedPayload())
-        : "Payload must match";
-    assert java.util.Arrays.equals(tx.signature(), decoded.signature())
-        : "Signature must match";
-    assert java.util.Arrays.equals(tx.publicKey(), decoded.publicKey())
-        : "Public key must match";
-    assert tx.schemaName().equals(decoded.schemaName()) : "Schema must match";
-    assert decoded.keyAlias().isEmpty() : "Legacy entries must not set key alias";
   }
 
   private static void shouldPersistExportedKeyBundle() throws Exception {
@@ -117,15 +93,6 @@ public final class FilePendingTransactionQueueTests {
         && expected.schemaName().equals(actual.schemaName())
         && expected.keyAlias().equals(actual.keyAlias())
         && expected.exportedKeyBundle().equals(actual.exportedKeyBundle());
-  }
-
-  private static String legacyEncode(final SignedTransaction transaction) {
-    final Base64.Encoder encoder = Base64.getEncoder();
-    final String payload = encoder.encodeToString(transaction.encodedPayload());
-    final String signature = encoder.encodeToString(transaction.signature());
-    final String publicKey = encoder.encodeToString(transaction.publicKey());
-    final String schema = encoder.encodeToString(transaction.schemaName().getBytes(StandardCharsets.UTF_8));
-    return String.join(",", payload, signature, publicKey, schema);
   }
 
   private static int aliasCounter = 0;

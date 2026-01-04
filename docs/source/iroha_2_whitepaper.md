@@ -95,7 +95,7 @@ The `iroha_crypto` crate powers key management, hashing, and signature verificat
 - **Norito streaming (`iroha_core::streaming`, `norito::streaming`)** provides deterministic, encrypted media
   and data channels with session snapshots, HPKE key rotation, and telemetry hooks. Kaigi conferencing and
   confidential evidence transfers use this lane.
-- **Connect bridge (`connect_norito_bridge`)** exposes a C-compatible surface that powers platform SDKs
+- **Connect bridge (`connect_norito_bridge`)** exposes a C ABI surface that powers platform SDKs
   (Swift, Kotlin/Android) while reusing the Rust clients under the hood.
 - **ISO 20022 bridge (`iroha_torii::iso20022_bridge`)** converts regulated payment messages into Norito
   transactions, enabling interoperability with financial workflows without bypassing consensus or validation.
@@ -113,7 +113,7 @@ The `iroha_data_model` crate defines all ledger objects, instructions, queries, 
 - **Events** stream via Torii and mirror committed state transitions, including confidential flows and
   governance actions.
 - **Transactions, blocks, and manifests** are Norito-encoded (`SignedTransaction`, `SignedBlockWire`) with
-  explicit version headers, ensuring forwards-compatible decoding.
+  explicit version headers, ensuring forward-extendable decoding.
 - **Customisation** happens through the executor data model: operators may register custom instructions,
   permissions, and parameters while preserving determinism.
 - **Repositories (`RepoInstruction`)** allow bundling deterministic upgrade plans (executors, manifests, and
@@ -165,7 +165,7 @@ Smart contracts run on the Iroha Virtual Machine (IVM):
 - **Kura block store** writes each finalised block as a `SignedBlockWire` payload with a Norito header, keeping
   canonical headers, transactions, QCs, and witness data together.
 - **World State View** keeps the authoritative state in memory for fast queries. Deterministic snapshots and
-  pipeline sidecars (`pipeline/block_<height>.json`) support recovery and audits.
+  pipeline sidecars (`pipeline/sidecars.norito` + `pipeline/sidecars.index`) support recovery and audits.
 - **State tiering** allows hot/cold partitioning for large deployments while preserving deterministic
   validation.
 - **Sync and replay** load committed blocks back into state using the same validation rules. Deterministic

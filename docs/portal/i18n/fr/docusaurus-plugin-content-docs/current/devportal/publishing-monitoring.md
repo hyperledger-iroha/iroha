@@ -19,7 +19,7 @@ puissent appliquer les memes checks que Ops utilise pour faire respecter le SLO.
    `npm run build`, `scripts/preview_wave_preflight.sh`, et les etapes d'envoi Sigstore + manifest.
    Le script de preflight emet `preflight-summary.json` pour que chaque preview embarque
    les metadonnees build/link/probe.
-2. **Pin et verification** - `sorafs_cli manifest submit`, `verify-sorafs-binding.mjs`,
+2. **Pin et verification** - `sorafs_cli manifest submit`, `cargo xtask soradns-verify-binding`,
    et le plan de bascule DNS fournissent des artefacts deterministes pour la governance.
 3. **Archiver les preuves** - stocker le resume CAR, bundle Sigstore, preuve d'alias,
    sortie de probe et snapshots du dashboard `docs_portal.json` sous
@@ -30,7 +30,7 @@ puissent appliquer les memes checks que Ops utilise pour faire respecter le SLO.
 ### 1. Moniteurs de publication (`scripts/monitor-publishing.mjs`)
 
 La nouvelle commande `npm run monitor:publishing` regroupe le probe portail, le probe proxy Try it
-et le verificateur de bindings en un seul check compatible CI. Fournir une config JSON
+et le verificateur de bindings en un seul check pret pour la CI. Fournir une config JSON
 (stockee dans les secrets CI ou `configs/docs_monitor.json`) et executer:
 
 ```bash
@@ -43,7 +43,7 @@ npm run monitor:publishing -- \
 
 Ajouter `--prom-out ../../artifacts/docs_monitor/monitor.prom` (et optionnellement
 `--prom-job docs-preview`) pour emettre des metriques en format texte Prometheus
-compatibles Pushgateway ou scrapes directs en staging/production. Les metriques
+au format Pushgateway ou pour des scrapes directs en staging/production. Les metriques
 reproduisent le resume JSON afin que les dashboards SLO et les regles d'alerte
 puissent suivre la sante du portail, Try it, bindings et DNS sans parser le bundle de preuves.
 
@@ -73,32 +73,30 @@ Exemple de config avec les knobs requis et plusieurs bindings:
   "bindings": [
     {
       "label": "portal",
-      "url": "https://docs-preview.sora.link/.well-known/sorafs/manifest",
+      "bindingPath": "../../artifacts/sorafs/portal.gateway.binding.json",
       "alias": "docs-preview.sora.link",
-      "contentCid": "bafybeiaff84aef0aaaf6a7c246c8ca1889e62d69c8d9b20d94933cb7b09902f3",
-      "manifest": "8b8f3d2a4a7e92abdb17e5fafd4f9d67c6c7a8547ff985bb0d71f87209c1444d",
-      "status": "ok",
-      "expectHost": "docs-preview.sora.link"
+      "hostname": "docs-preview.sora.link",
+      "proofStatus": "ok",
+      "manifestJson": "../../artifacts/sorafs/portal.manifest.json"
     },
     {
       "label": "openapi",
-      "url": "https://docs-preview.sora.link/.well-known/sorafs/openapi",
+      "bindingPath": "../../artifacts/sorafs/openapi.gateway.binding.json",
       "alias": "docs-preview.sora.link",
-      "contentCid": "bafybeidevopenapi",
-      "manifest": "dad4b9fd48e35297c7fd71cd15b52c4ff0bb62dd8a1da4c5c2c1536ae2732b55",
-      "status": "ok",
-      "expectHost": "docs-preview.sora.link"
+      "hostname": "docs-preview.sora.link",
+      "proofStatus": "ok",
+      "manifestJson": "../../artifacts/sorafs/openapi.manifest.json"
     },
     {
       "label": "portal-sbom",
-      "url": "https://docs-preview.sora.link/.well-known/sorafs/portal-sbom",
+      "bindingPath": "../../artifacts/sorafs/portal-sbom.gateway.binding.json",
       "alias": "docs-preview.sora.link",
-      "contentCid": "bafybeiportalssbom",
-      "manifest": "e2b2790f9f4c1ecbc8f1bdb9f8ba3fd65fd687e9e5e4de3c3d67c3d3192b79c8",
-      "status": "ok",
-      "expectHost": "docs-preview.sora.link"
+      "hostname": "docs-preview.sora.link",
+      "proofStatus": "ok",
+      "manifestJson": "../../artifacts/sorafs/portal-sbom.manifest.json"
     }
   ],
+
   "dns": [
     {
       "label": "docs-preview CNAME",
@@ -126,13 +124,13 @@ puissent comparer les resultats sans relancer les probes.
 > `allowInsecureHttp: true` est defini dans la config. Garder les probes production/staging
 > en HTTPS; l'option existe uniquement pour les previews locales.
 
-Chaque entree de binding applique `Sora-Name`, `Sora-Proof` et `Sora-Content-CID`
-(headers et payload) ainsi que le guard `expectHost`, afin que la promotion DNS
-(`docs.sora` vs. `docs-preview.sora.link`) ne derive pas de l'alias enregistre
-dans le pin registry. Les checks echouent rapidement si un gateway cesse de stapler
-les headers `Sora-Content-CID`/`Sora-Proof`, si un base64 invalide apparait dans
-la preuve, ou si le manifest/CID annonce diverge des payloads pinnes
-(site, OpenAPI et SBOM).
+Each binding entry runs `cargo xtask soradns-verify-binding` against the captured
+`portal.gateway.binding.json` bundle (and optional `manifestJson`) so alias,
+proof status, and content CID stay aligned with the published evidence. The
+optional `hostname` guard confirms the alias-derived canonical host matches the
+gateway host you intend to promote, preventing DNS cutovers that drift from the
+recorded binding.
+
 
 Le bloc optionnel `dns` branche le rollout SoraDNS de DOCS-7 dans le meme monitor.
 Chaque entree resolve une paire hostname/record-type (par exemple le CNAME
@@ -184,7 +182,7 @@ divergent.
   `tryit_proxy_requests_total{status="error"}`.
 - **Gateway SLO** - `DocsPortal/GatewayRefusals` assure que les bindings d'alias
   continuent d'annoncer le digest du manifest pinne; les escalades pointent vers
-  la transcription CLI `verify-sorafs-binding.mjs` capturee lors de la publication.
+  la transcription CLI `cargo xtask soradns-verify-binding` capturee lors de la publication.
 
 ### 3. Piste de preuves
 
@@ -194,7 +192,7 @@ Chaque run de monitoring doit ajouter:
   `checksums.sha256`).
 - Screenshots Grafana pour le board `docs_portal` durant la fenetre de release.
 - Transcripts de changement/rollback du proxy Try it (logs `npm run manage:tryit-proxy`).
-- Sortie de verification d'alias de `scripts/verify-sorafs-binding.mjs`.
+- Sortie de verification d'alias de `cargo xtask soradns-verify-binding`.
 
 Stocker ces elements sous `artifacts/sorafs/<tag>/monitoring/` et les lier dans
 l'issue de release pour que la piste d'audit survive apres expiration des logs CI.

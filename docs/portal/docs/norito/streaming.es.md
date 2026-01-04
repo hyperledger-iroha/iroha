@@ -17,7 +17,7 @@ Norito Streaming define el formato en la red, los frames de control y el codec d
 
 - **Manifests y frames.** `ManifestV1` y `PrivacyRoute*` describen la linea de tiempo de segmentos, los descriptores de chunks y las pistas de ruta. Los frames de control (`KeyUpdate`, `ContentKeyUpdate` y el feedback de cadencia) viven junto al manifest para que los viewers puedan validar commitments antes de decodificar.
 - **Codec base.** `BaselineEncoder`/`BaselineDecoder` fuerzan ids de chunk monotonos, aritmetica de timestamps y verificacion de commitments. Los hosts deben llamar a `EncodedSegment::verify_manifest` antes de servir a viewers o relays.
-- **Bits de feature.** La negociacion de capacidades anuncia `streaming.feature_bits` (por defecto `0b11` = baseline feedback + proveedor de rutas de privacidad) para que relays y clientes rechacen peers incompatibles de forma determinista.
+- **Bits de feature.** La negociacion de capacidades anuncia `streaming.feature_bits` (por defecto `0b11` = baseline feedback + proveedor de rutas de privacidad) para que relays y clientes rechacen peers sin capacidades coincidentes de forma determinista.
 
 ## Claves, suites y cadencia
 

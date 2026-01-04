@@ -81,7 +81,7 @@ Notes
   Le CLI affiche les informations typées de la session, produit un instantané d’état
   Connect et émet le frame `ConnectControlOpen` encodé en Norito. Passez `--send-open` pour
   renvoyer le payload vers Torii, `--frame-output-format binary` pour écrire les octets
-  bruts, `--frame-json-output` pour obtenir un blob JSON compatible base64 et
+  bruts, `--frame-json-output` pour obtenir un blob JSON encodé en base64 et
   `--status-json-output` lorsque vous avez besoin d’un snapshot typé pour l’automatisation.
   Vous pouvez aussi charger les métadonnées de l’application depuis un fichier JSON via
   `--app-metadata-file metadata.json` contenant les champs `name`, `url` et `icon_hash`
@@ -91,4 +91,3 @@ Notes
   Pour les exécutions purement télémétriques, vous pouvez sauter complètement la création
   de session avec `--status-only` et, si besoin, générer du JSON via
   `--status-json-output status.json`.
-

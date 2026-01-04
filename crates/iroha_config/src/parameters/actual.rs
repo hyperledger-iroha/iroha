@@ -3875,6 +3875,8 @@ pub struct Torii {
     pub api_high_load_subscription_threshold: Option<usize>,
     /// Capacity of the broadcast channel used for events/SSE/webhooks.
     pub events_buffer_capacity: NonZeroUsize,
+    /// WebSocket message timeout for Torii event/block streams.
+    pub ws_message_timeout: Duration,
     /// ZK attachments TTL (seconds) for app-facing attachments store.
     pub attachments_ttl_secs: u64,
     /// ZK attachments maximum allowed size per item (bytes).

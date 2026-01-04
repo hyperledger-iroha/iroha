@@ -1,9 +1,0 @@
-extends = "minimal_with_trusted_peers.toml"
-
-[streaming.codec]
-cabac_mode = "disabled"
-trellis_blocks = []
-rans_tables_path = "codec/rans/tables/rans_seed0.toml"
-entropy_mode = "rans"
-bundle_width = 1
-bundle_accel = "none"

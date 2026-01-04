@@ -24,8 +24,8 @@ For long execution traces the memory overhead of recording the full register set
 at every cycle can be significant. `DeltaTraceLog` stores only the registers
 that changed between cycles and reconstructs the full trace on demand. The VM's
 `run` method automatically switches to this compact format whenever
-zero-knowledge padding is enabled. This avoids redundant data while keeping
-compatibility with the existing APIs.
+zero-knowledge padding is enabled. This avoids redundant data while keeping the
+current APIs stable.
 
 ## Incremental Merkle Proofs
 

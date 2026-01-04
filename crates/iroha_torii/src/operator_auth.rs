@@ -1844,7 +1844,7 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let config = base_operator_auth_config(
             OperatorTokenFallback::Always,
-            OperatorTokenSource::OperatorToken,
+            OperatorTokenSource::OperatorTokens,
             Vec::new(),
             OperatorAuthLockout {
                 failures: None,

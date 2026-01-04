@@ -22,7 +22,7 @@ description: Exigences et workflows pour préserver le profil chunker SF1 déter
 :::
 
 Ce guide codifie les exigences que chaque implémentation doit suivre pour rester
-compatible avec le profil chunker déterministe de SoraFS (SF1). Il documente aussi
+alignée avec le profil chunker déterministe de SoraFS (SF1). Il documente aussi
 le workflow de régénération, la politique de signatures et les étapes de vérification pour que
 les consommateurs de fixtures dans les SDKs restent synchronisés.
 

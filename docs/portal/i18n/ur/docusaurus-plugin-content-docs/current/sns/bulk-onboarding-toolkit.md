@@ -208,7 +208,7 @@ Script:
    CLI path, timestamp) تاکہ portal automation bundle کو artefact storage پر
    upload کر سکے۔
 4. `metrics.prom` بناتا ہے (`--metrics` کے ذریعے override)، جس میں Prometheus-
-   compatible counters ہوتے ہیں: total requests, suffix distribution, asset totals,
+   format counters ہوتے ہیں: total requests, suffix distribution, asset totals,
    اور submission outcomes۔ summary JSON اس file کی طرف link کرتا ہے۔
 
 Workflows صرف release directory کو ایک artefact کے طور پر archive کرتے ہیں، جس میں

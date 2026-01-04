@@ -36,7 +36,7 @@ Opciones:
 
 - `--out <path>` - anulacion opcional al producir bundles ad hoc (por defecto `fixtures/account/address_vectors.json`).
 - `--stdout` - emite JSON a stdout en lugar de escribir a disco.
-- `--verify` - compara el archivo actual con el contenido recien generado (falla rapido ante drift; incompatible con `--stdout`).
+- `--verify` - compara el archivo actual con el contenido recien generado (falla rapido ante drift; no se puede combinar con `--stdout`).
 
 ### 3. Matriz de artefactos
 

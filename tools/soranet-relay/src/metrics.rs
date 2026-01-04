@@ -117,6 +117,9 @@ pub struct Metrics {
     vpn_cover_bytes: AtomicU64,
     vpn_cover_ingress_bytes: AtomicU64,
     vpn_cover_egress_bytes: AtomicU64,
+    vpn_control_bytes: AtomicU64,
+    vpn_control_ingress_bytes: AtomicU64,
+    vpn_control_egress_bytes: AtomicU64,
     vpn_frames: AtomicU64,
     vpn_ingress_frames: AtomicU64,
     vpn_egress_frames: AtomicU64,
@@ -126,6 +129,9 @@ pub struct Metrics {
     vpn_cover_frames: AtomicU64,
     vpn_cover_ingress_frames: AtomicU64,
     vpn_cover_egress_frames: AtomicU64,
+    vpn_control_frames: AtomicU64,
+    vpn_control_ingress_frames: AtomicU64,
+    vpn_control_egress_frames: AtomicU64,
     vpn_session_receipts: AtomicU64,
     vpn_receipt_ingress_bytes: AtomicU64,
     vpn_receipt_egress_bytes: AtomicU64,
@@ -188,6 +194,9 @@ impl Default for Metrics {
             vpn_cover_bytes: AtomicU64::new(0),
             vpn_cover_ingress_bytes: AtomicU64::new(0),
             vpn_cover_egress_bytes: AtomicU64::new(0),
+            vpn_control_bytes: AtomicU64::new(0),
+            vpn_control_ingress_bytes: AtomicU64::new(0),
+            vpn_control_egress_bytes: AtomicU64::new(0),
             vpn_frames: AtomicU64::new(0),
             vpn_ingress_frames: AtomicU64::new(0),
             vpn_egress_frames: AtomicU64::new(0),
@@ -197,6 +206,9 @@ impl Default for Metrics {
             vpn_cover_frames: AtomicU64::new(0),
             vpn_cover_ingress_frames: AtomicU64::new(0),
             vpn_cover_egress_frames: AtomicU64::new(0),
+            vpn_control_frames: AtomicU64::new(0),
+            vpn_control_ingress_frames: AtomicU64::new(0),
+            vpn_control_egress_frames: AtomicU64::new(0),
             vpn_session_receipts: AtomicU64::new(0),
             vpn_receipt_ingress_bytes: AtomicU64::new(0),
             vpn_receipt_egress_bytes: AtomicU64::new(0),
@@ -518,6 +530,30 @@ impl Metrics {
         }
     }
 
+    pub fn record_vpn_control_ingress(&self, bytes: u64) {
+        if bytes == 0 {
+            return;
+        }
+        self.vpn_control_bytes.fetch_add(bytes, Ordering::Relaxed);
+        self.vpn_control_ingress_bytes
+            .fetch_add(bytes, Ordering::Relaxed);
+        self.vpn_control_frames.fetch_add(1, Ordering::Relaxed);
+        self.vpn_control_ingress_frames
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_vpn_control_egress(&self, bytes: u64) {
+        if bytes == 0 {
+            return;
+        }
+        self.vpn_control_bytes.fetch_add(bytes, Ordering::Relaxed);
+        self.vpn_control_egress_bytes
+            .fetch_add(bytes, Ordering::Relaxed);
+        self.vpn_control_frames.fetch_add(1, Ordering::Relaxed);
+        self.vpn_control_egress_frames
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn record_vpn_receipt(&self, receipt: &VpnSessionReceiptV1) {
         self.vpn_session_receipts.fetch_add(1, Ordering::Relaxed);
         self.vpn_receipt_ingress_bytes
@@ -627,6 +663,9 @@ impl Metrics {
             vpn_cover_bytes: self.vpn_cover_bytes.load(Ordering::Relaxed),
             vpn_cover_ingress_bytes: self.vpn_cover_ingress_bytes.load(Ordering::Relaxed),
             vpn_cover_egress_bytes: self.vpn_cover_egress_bytes.load(Ordering::Relaxed),
+            vpn_control_bytes: self.vpn_control_bytes.load(Ordering::Relaxed),
+            vpn_control_ingress_bytes: self.vpn_control_ingress_bytes.load(Ordering::Relaxed),
+            vpn_control_egress_bytes: self.vpn_control_egress_bytes.load(Ordering::Relaxed),
             vpn_frames: self.vpn_frames.load(Ordering::Relaxed),
             vpn_ingress_frames: self.vpn_ingress_frames.load(Ordering::Relaxed),
             vpn_egress_frames: self.vpn_egress_frames.load(Ordering::Relaxed),
@@ -636,6 +675,9 @@ impl Metrics {
             vpn_cover_frames: self.vpn_cover_frames.load(Ordering::Relaxed),
             vpn_cover_ingress_frames: self.vpn_cover_ingress_frames.load(Ordering::Relaxed),
             vpn_cover_egress_frames: self.vpn_cover_egress_frames.load(Ordering::Relaxed),
+            vpn_control_frames: self.vpn_control_frames.load(Ordering::Relaxed),
+            vpn_control_ingress_frames: self.vpn_control_ingress_frames.load(Ordering::Relaxed),
+            vpn_control_egress_frames: self.vpn_control_egress_frames.load(Ordering::Relaxed),
             vpn_session_receipts: self.vpn_session_receipts.load(Ordering::Relaxed),
             vpn_receipt_ingress_bytes: self.vpn_receipt_ingress_bytes.load(Ordering::Relaxed),
             vpn_receipt_egress_bytes: self.vpn_receipt_egress_bytes.load(Ordering::Relaxed),
@@ -961,6 +1003,36 @@ impl Metrics {
             );
 
             help_and_type!(
+                "# HELP soranet_vpn_control_bytes_total VPN control-plane bytes observed by the relay.",
+                "# TYPE soranet_vpn_control_bytes_total counter"
+            );
+            metric_line!(
+                "soranet_vpn_control_bytes_total{{{labels}}} {value}",
+                labels = vpn_labels,
+                value = snapshot.vpn_control_bytes
+            );
+
+            help_and_type!(
+                "# HELP soranet_vpn_control_ingress_bytes_total VPN control-plane ingress bytes observed by the relay.",
+                "# TYPE soranet_vpn_control_ingress_bytes_total counter"
+            );
+            metric_line!(
+                "soranet_vpn_control_ingress_bytes_total{{{labels}}} {value}",
+                labels = vpn_labels,
+                value = snapshot.vpn_control_ingress_bytes
+            );
+
+            help_and_type!(
+                "# HELP soranet_vpn_control_egress_bytes_total VPN control-plane egress bytes observed by the relay.",
+                "# TYPE soranet_vpn_control_egress_bytes_total counter"
+            );
+            metric_line!(
+                "soranet_vpn_control_egress_bytes_total{{{labels}}} {value}",
+                labels = vpn_labels,
+                value = snapshot.vpn_control_egress_bytes
+            );
+
+            help_and_type!(
                 "# HELP soranet_vpn_frames_total VPN frames observed by the relay.",
                 "# TYPE soranet_vpn_frames_total counter"
             );
@@ -1048,6 +1120,36 @@ impl Metrics {
                 "soranet_vpn_cover_egress_frames_total{{{labels}}} {value}",
                 labels = vpn_labels,
                 value = snapshot.vpn_cover_egress_frames
+            );
+
+            help_and_type!(
+                "# HELP soranet_vpn_control_frames_total VPN control-plane frames observed by the relay.",
+                "# TYPE soranet_vpn_control_frames_total counter"
+            );
+            metric_line!(
+                "soranet_vpn_control_frames_total{{{labels}}} {value}",
+                labels = vpn_labels,
+                value = snapshot.vpn_control_frames
+            );
+
+            help_and_type!(
+                "# HELP soranet_vpn_control_ingress_frames_total VPN control-plane ingress frames observed by the relay.",
+                "# TYPE soranet_vpn_control_ingress_frames_total counter"
+            );
+            metric_line!(
+                "soranet_vpn_control_ingress_frames_total{{{labels}}} {value}",
+                labels = vpn_labels,
+                value = snapshot.vpn_control_ingress_frames
+            );
+
+            help_and_type!(
+                "# HELP soranet_vpn_control_egress_frames_total VPN control-plane egress frames observed by the relay.",
+                "# TYPE soranet_vpn_control_egress_frames_total counter"
+            );
+            metric_line!(
+                "soranet_vpn_control_egress_frames_total{{{labels}}} {value}",
+                labels = vpn_labels,
+                value = snapshot.vpn_control_egress_frames
             );
 
             help_and_type!(
@@ -1499,6 +1601,12 @@ pub struct MetricsSnapshot {
     pub vpn_cover_ingress_bytes: u64,
     /// Aggregate VPN cover egress bytes.
     pub vpn_cover_egress_bytes: u64,
+    /// Aggregate VPN control-plane bytes.
+    pub vpn_control_bytes: u64,
+    /// Aggregate VPN control-plane ingress bytes.
+    pub vpn_control_ingress_bytes: u64,
+    /// Aggregate VPN control-plane egress bytes.
+    pub vpn_control_egress_bytes: u64,
     /// Total VPN frames observed.
     pub vpn_frames: u64,
     /// Ingress VPN frames observed.
@@ -1517,6 +1625,12 @@ pub struct MetricsSnapshot {
     pub vpn_cover_ingress_frames: u64,
     /// Egress VPN cover frames observed.
     pub vpn_cover_egress_frames: u64,
+    /// Total VPN control-plane frames observed.
+    pub vpn_control_frames: u64,
+    /// Ingress VPN control-plane frames observed.
+    pub vpn_control_ingress_frames: u64,
+    /// Egress VPN control-plane frames observed.
+    pub vpn_control_egress_frames: u64,
     /// VPN session receipts emitted.
     pub vpn_session_receipts: u64,
     /// Total ingress bytes accounted in receipts.
@@ -1587,6 +1701,21 @@ mod tests {
     }
 
     #[test]
+    fn vpn_control_metrics_track_ingress_and_egress() {
+        let metrics = Metrics::new();
+        metrics.record_vpn_control_ingress(10);
+        metrics.record_vpn_control_egress(20);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(30, snapshot.vpn_control_bytes);
+        assert_eq!(10, snapshot.vpn_control_ingress_bytes);
+        assert_eq!(20, snapshot.vpn_control_egress_bytes);
+        assert_eq!(2, snapshot.vpn_control_frames);
+        assert_eq!(1, snapshot.vpn_control_ingress_frames);
+        assert_eq!(1, snapshot.vpn_control_egress_frames);
+    }
+
+    #[test]
     fn render_prometheus_output() {
         let metrics = Metrics::new();
         metrics.record_success();
@@ -1623,6 +1752,12 @@ mod tests {
         metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
         metrics.record_vpn_session();
         metrics.record_vpn_bytes(1_500);
+        metrics.record_vpn_ingress(300, false);
+        metrics.record_vpn_ingress(50, true);
+        metrics.record_vpn_egress(200, false);
+        metrics.record_vpn_egress(20, true);
+        metrics.record_vpn_frame_ingress_count(2, false);
+        metrics.record_vpn_frame_egress_count(3, true);
         metrics.record_vpn_receipt(&iroha_data_model::soranet::vpn::VpnSessionReceiptV1 {
             session_id: [0xAA; 16],
             ingress_bytes: 10,
@@ -1738,11 +1873,13 @@ mod tests {
         assert!(rendered.contains("soranet_vpn_bytes_total"));
         assert!(rendered.contains("soranet_vpn_data_bytes_total"));
         assert!(rendered.contains("soranet_vpn_cover_bytes_total"));
+        assert!(rendered.contains("soranet_vpn_control_bytes_total"));
         assert!(rendered.contains("soranet_vpn_frames_total"));
         assert!(rendered.contains("soranet_vpn_ingress_frames_total"));
         assert!(rendered.contains("soranet_vpn_egress_frames_total"));
         assert!(rendered.contains("soranet_vpn_data_frames_total"));
         assert!(rendered.contains("soranet_vpn_cover_frames_total"));
+        assert!(rendered.contains("soranet_vpn_control_frames_total"));
         assert!(rendered.contains("soranet_vpn_session_receipts_total"));
         assert!(rendered.contains("soranet_vpn_receipt_ingress_bytes_total"));
         assert!(rendered.contains("soranet_vpn_receipt_uptime_seconds_total"));

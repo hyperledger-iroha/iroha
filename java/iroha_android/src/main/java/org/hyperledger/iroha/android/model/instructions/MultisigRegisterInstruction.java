@@ -161,7 +161,7 @@ public final class MultisigRegisterInstruction implements InstructionTemplate {
                 + "' to match signatories, found "
                 + controllerDomain);
       }
-      // TODO: reject deterministic derived controller ids once the legacy seed helper is exposed.
+      // TODO: reject deterministic derived controller ids once the seed helper is exposed.
       return new MultisigRegisterInstruction(this, argumentOrder);
     }
 

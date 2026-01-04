@@ -211,7 +211,7 @@ Le script:
    timestamp) afin que l'automatisation du portail puisse uploader le bundle vers
    le stockage d'artefacts.
 4. Produit `metrics.prom` (override via `--metrics`) contenant des compteurs
-   compatibles Prometheus pour le total de requetes, la distribution des suffixes,
+   au format Prometheus pour le total de requetes, la distribution des suffixes,
    les totaux d'asset et les resultats de soumission. Le JSON resume pointe vers
    ce fichier.
 

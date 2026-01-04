@@ -4263,6 +4263,13 @@ impl StateTelemetry {
         }
     }
 
+    /// Reset total fee units for the current (latest) block.
+    pub fn reset_block_fee_units(&self) {
+        if self.is_enabled() {
+            self.metrics.block_fee_total_units.set(0);
+        }
+    }
+
     /// Record proof-health alert telemetry for a provider.
     #[cfg(feature = "telemetry")]
     /// Record a `SoraFS` proof-health alert snapshot in the cached status state.
@@ -10011,6 +10018,17 @@ mod tests {
         assert_eq!(metrics.confidential_gas_tx_used.get(), 42);
         assert_eq!(metrics.confidential_gas_block_used.get(), 84);
         assert_eq!(metrics.confidential_gas_total.get(), 42);
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn block_fee_units_reset_clears_gauge() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics.clone(), true);
+        telemetry.add_block_fee_units(42);
+        assert_eq!(metrics.block_fee_total_units.get(), 42);
+        telemetry.reset_block_fee_units();
+        assert_eq!(metrics.block_fee_total_units.get(), 0);
     }
 
     #[test]

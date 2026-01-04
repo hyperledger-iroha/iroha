@@ -108,5 +108,5 @@ deterministas por firmas duplicadas/fuera de rango/insuficientes.
   rechaza con `CommitCertificateHashMismatch`; los clientes deben hacer la misma comprobacion de
   tupla antes de verificar firmas y descartar payloads no coincidentes.
 - Trabajo futuro puede agregar MMR/authority-set commitment chains para reducir el tamano de las
-  pruebas en historiales muy largos. El formato sigue siendo compatible hacia atras al envolver
+  pruebas en historiales muy largos. El formato sigue preservando el formato previo al envolver
   el commit certificate dentro de envelopes de commitment mas ricos.

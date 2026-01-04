@@ -4079,22 +4079,13 @@ impl Actor {
             consensus_mode,
         ) {
             super::status::record_commit_certificate(cert.clone());
-            let sidecar = if stake_snapshot.is_some() {
-                crate::kura::RosterSidecar::new_v2(
-                    block.header().height().get(),
-                    block.hash(),
-                    Some(cert),
-                    None,
-                    stake_snapshot,
-                )
-            } else {
-                crate::kura::RosterSidecar::new_v1(
-                    block.header().height().get(),
-                    block.hash(),
-                    Some(cert),
-                    None,
-                )
-            };
+            let sidecar = crate::kura::RosterSidecar::new_v1(
+                block.header().height().get(),
+                block.hash(),
+                Some(cert),
+                None,
+                stake_snapshot,
+            );
             self.kura.write_roster_metadata(&sidecar);
         }
     }

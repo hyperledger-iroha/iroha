@@ -17,7 +17,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 1. **Build וחתימה** - עקבו אחרי [מדריך הפריסה](./deploy-guide.md) כדי להריץ
    `npm run build`, `scripts/preview_wave_preflight.sh`, ואת שלבי ההגשה של Sigstore + manifest.
    סקריפט ה-preflight מפיק `preflight-summary.json` כדי שכל preview יישא מטאדטה של build/link/probe.
-2. **Pin ואימות** - `sorafs_cli manifest submit`, `verify-sorafs-binding.mjs`,
+2. **Pin ואימות** - `sorafs_cli manifest submit`, `cargo xtask soradns-verify-binding`,
    ותוכנית ה-DNS cutover מספקים artefacts דטרמיניסטיים ל-governance.
 3. **ארכוב ראיות** - שמרו את סיכום ה-CAR, bundle Sigstore, הוכחת alias,
    פלט probe ו-snapshots של הדשבורד `docs_portal.json` תחת `artifacts/sorafs/<tag>/`.
@@ -69,32 +69,30 @@ npm run monitor:publishing -- \
   "bindings": [
     {
       "label": "portal",
-      "url": "https://docs-preview.sora.link/.well-known/sorafs/manifest",
+      "bindingPath": "../../artifacts/sorafs/portal.gateway.binding.json",
       "alias": "docs-preview.sora.link",
-      "contentCid": "bafybeiaff84aef0aaaf6a7c246c8ca1889e62d69c8d9b20d94933cb7b09902f3",
-      "manifest": "8b8f3d2a4a7e92abdb17e5fafd4f9d67c6c7a8547ff985bb0d71f87209c1444d",
-      "status": "ok",
-      "expectHost": "docs-preview.sora.link"
+      "hostname": "docs-preview.sora.link",
+      "proofStatus": "ok",
+      "manifestJson": "../../artifacts/sorafs/portal.manifest.json"
     },
     {
       "label": "openapi",
-      "url": "https://docs-preview.sora.link/.well-known/sorafs/openapi",
+      "bindingPath": "../../artifacts/sorafs/openapi.gateway.binding.json",
       "alias": "docs-preview.sora.link",
-      "contentCid": "bafybeidevopenapi",
-      "manifest": "dad4b9fd48e35297c7fd71cd15b52c4ff0bb62dd8a1da4c5c2c1536ae2732b55",
-      "status": "ok",
-      "expectHost": "docs-preview.sora.link"
+      "hostname": "docs-preview.sora.link",
+      "proofStatus": "ok",
+      "manifestJson": "../../artifacts/sorafs/openapi.manifest.json"
     },
     {
       "label": "portal-sbom",
-      "url": "https://docs-preview.sora.link/.well-known/sorafs/portal-sbom",
+      "bindingPath": "../../artifacts/sorafs/portal-sbom.gateway.binding.json",
       "alias": "docs-preview.sora.link",
-      "contentCid": "bafybeiportalssbom",
-      "manifest": "e2b2790f9f4c1ecbc8f1bdb9f8ba3fd65fd687e9e5e4de3c3d67c3d3192b79c8",
-      "status": "ok",
-      "expectHost": "docs-preview.sora.link"
+      "hostname": "docs-preview.sora.link",
+      "proofStatus": "ok",
+      "manifestJson": "../../artifacts/sorafs/portal-sbom.manifest.json"
     }
   ],
+
   "dns": [
     {
       "label": "docs-preview CNAME",
@@ -122,13 +120,13 @@ npm run monitor:publishing -- \
 > `allowInsecureHttp: true` ב-config. שמרו על probes של production/staging ב-HTTPS;
 > האפשרות קיימת רק ל-previews מקומיים.
 
-כל רשומת binding מאכפת `Sora-Name`, `Sora-Proof` ו-`Sora-Content-CID`
-(headers ו-payload) יחד עם guard `expectHost`, כדי שקידום DNS
-(`docs.sora` מול `docs-preview.sora.link`) לא יסטה מה-alias שנרשם
-ב-pin registry. הבדיקות נכשלות מהר אם gateway מפסיק stapling של
-`Sora-Content-CID`/`Sora-Proof`, אם base64 לא תקין נכנס ל-proof,
-או אם ה-manifest/CID המוצהר סוטה מה-payloads המוצמדים
-(site, OpenAPI ו-SBOM).
+Each binding entry runs `cargo xtask soradns-verify-binding` against the captured
+`portal.gateway.binding.json` bundle (and optional `manifestJson`) so alias,
+proof status, and content CID stay aligned with the published evidence. The
+optional `hostname` guard confirms the alias-derived canonical host matches the
+gateway host you intend to promote, preventing DNS cutovers that drift from the
+recorded binding.
+
 
 הבלוק האופציונלי `dns` מחבר את rollout של SoraDNS מ-DOCS-7 לאותו monitor.
 כל entry פותר זוג hostname/record-type (לדוגמה ה-CNAME
@@ -177,7 +175,7 @@ npm run check:openapi-versions
   `tryit_proxy_requests_total{status="error"}`.
 - **Gateway SLO** - `DocsPortal/GatewayRefusals` מבטיח שה-bindings של alias
   ימשיכו לפרסם את digest של המניפסט המוצמד; ההסלמות מפנות ל-transcript של CLI
-  `verify-sorafs-binding.mjs` שנלכד בזמן הפרסום.
+  `cargo xtask soradns-verify-binding` שנלכד בזמן הפרסום.
 
 ### 3. נתיב ראיות
 
@@ -186,7 +184,7 @@ npm run check:openapi-versions
 - חבילת ראיות `monitor-publishing` (`summary.json`, קבצים לפי סעיף, ו-`checksums.sha256`).
 - screenshots מ-Grafana עבור הלוח `docs_portal` במהלך חלון ה-release.
 - transcripts של שינוי/rollback של proxy Try it (לוגים של `npm run manage:tryit-proxy`).
-- פלט אימות alias מ-`scripts/verify-sorafs-binding.mjs`.
+- פלט אימות alias מ-`cargo xtask soradns-verify-binding`.
 
 שמרו אותם תחת `artifacts/sorafs/<tag>/monitoring/` וקשרו אותם ב-issue של ה-release
 כדי שמסלול הביקורת ישרוד גם אחרי שתוקף לוגי ה-CI יפוג.

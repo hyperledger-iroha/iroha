@@ -170,7 +170,7 @@ Before distributing a manifest or cutting a release:
    `scripts/telemetry/run_schema_diff.sh --android-config configs/android_telemetry.json --rust-config configs/rust_telemetry.json`
    and check the `policy_violations` array documented in
    `docs/source/sdk/android/telemetry_schema_diff.md`.
-2. **Unit coverage:** Execute `java/iroha_android/run_tests.sh` so the
+2. **Unit coverage:** Execute `ci/run_android_tests.sh` so the
    configuration-centric test suites (`ClientConfigNoritoRpcTests`,
    `ClientConfigKeystoreTelemetryTests`, `HttpClientTransportHarnessTests`)
    confirm the manifest-derived config produces the expected observers,

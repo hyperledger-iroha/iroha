@@ -264,7 +264,7 @@ Additional caps (value length, error-rate thresholds) are carried in
 - The CLI bundler `iroha soracles bundle --events <feed_events.json> --output <dir> [--observations <dir>] [--reports <dir>] [--responses <dir>] [--disputes <dir>] [--telemetry <path>]`
   copies provided evidence into `artifacts/<HASH>.*`, deduplicates by
   Blake2b-256 hash, and emits `bundle.json` listing feed events, bundled paths,
-  and any missing evidence hashes per slot (compatible with
+  and any missing evidence hashes per slot (aligned with
   `fixtures/oracle/feed_event_price_xor_usd.json` and other feed/event exports).
 - Evidence retention + GC: `bundle.json` records `generated_at_unix` for each
   bundle, and the `iroha soracles evidence-gc` helper prunes bundles older than

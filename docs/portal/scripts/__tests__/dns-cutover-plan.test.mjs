@@ -19,6 +19,14 @@ const sampleReport = {
     path: '/tmp/gateway.route_plan.json',
     headers_path: '/tmp/gateway.route.headers.txt',
     rollback_headers_path: '/tmp/gateway.route.rollback.headers.txt',
+    alias: 'docs.sora',
+    hostname: 'docs.sora.link',
+    content_cid: 'bafgatewaycid',
+    route_binding:
+      'host=docs.sora.link;cid=bafgatewaycid;generated_at=2026-03-01T00:00:00Z',
+    headers_template:
+      'Sora-Route-Binding: host=docs.sora.link;cid=bafgatewaycid;generated_at=2026-03-01T00:00:00Z',
+    generated_at: '2026-03-01T00:00:00Z',
   },
   manifest: {
     path: '/tmp/portal.manifest.to',
@@ -107,7 +115,7 @@ test('createDescriptor captures alias and release metadata', () => {
   assert.ok(descriptor.route_promotion);
   assert.equal(descriptor.route_promotion.host, 'docs.sora.link');
   assert.equal(descriptor.route_promotion.content_cid, 'bafgatewaycid');
-  assert.ok(descriptor.route_promotion.commands[0].includes('verify-sorafs-binding'));
+  assert.ok(descriptor.route_promotion.commands[0].includes('soradns-verify-binding'));
   assert.ok(descriptor.route_plan);
   assert.equal(descriptor.route_plan.path, '/tmp/gateway.route_plan.json');
   assert.equal(

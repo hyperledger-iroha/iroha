@@ -10,7 +10,6 @@ import java.util.Locale;
 public enum VerifyingKeyStatus {
   PROPOSED("Proposed"),
   ACTIVE("Active"),
-  DEPRECATED("Deprecated"),
   WITHDRAWN("Withdrawn");
 
   private final String wireName;
@@ -38,4 +37,3 @@ public enum VerifyingKeyStatus {
     throw new IllegalArgumentException("unsupported verifying key status: " + value);
   }
 }
-
