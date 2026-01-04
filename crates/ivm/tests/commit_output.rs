@@ -1,3 +1,4 @@
+//! OUTPUT region and COMMIT_OUTPUT syscall coverage.
 use std::{
     any::Any,
     sync::{Arc, Mutex},
@@ -56,4 +57,41 @@ fn test_commit_output_syscall() {
     assert_eq!(out.len(), Memory::OUTPUT_SIZE as usize);
     let val = u32::from_le_bytes([out[0], out[1], out[2], out[3]]);
     assert_eq!(val, 0xdeadbeef);
+}
+
+#[test]
+fn load_program_clears_output_region() {
+    let mut vm = IVM::new(u64::MAX);
+    let prog = assemble(&HALT);
+    vm.load_program(&prog).expect("load program");
+    vm.store_u32(Memory::OUTPUT_START, 0xDEAD_BEEF)
+        .expect("write output");
+
+    vm.load_program(&prog).expect("reload program");
+
+    let mut bytes = [0u8; 4];
+    vm.memory
+        .load_bytes(Memory::OUTPUT_START, &mut bytes)
+        .expect("read output");
+    assert_eq!(bytes, [0u8; 4]);
+    vm.store_u32(Memory::OUTPUT_START, 0x1234_5678)
+        .expect("output cursor reset");
+}
+
+#[test]
+fn load_code_clears_output_region() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_code(&HALT).expect("load code");
+    vm.store_u32(Memory::OUTPUT_START, 0xCAFE_BABE)
+        .expect("write output");
+
+    vm.load_code(&HALT).expect("reload code");
+
+    let mut bytes = [0u8; 4];
+    vm.memory
+        .load_bytes(Memory::OUTPUT_START, &mut bytes)
+        .expect("read output");
+    assert_eq!(bytes, [0u8; 4]);
+    vm.store_u32(Memory::OUTPUT_START, 0x0BAD_F00D)
+        .expect("output cursor reset");
 }

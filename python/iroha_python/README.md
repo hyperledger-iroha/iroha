@@ -1259,14 +1259,6 @@ no environment variables need to be exported.
 - Ship optional Norito RPC helpers (`iroha_python.norito_rpc`) so callers can
   invoke Norito-encoded RPC endpoints without vendor-specific transports.
 
-## Migrating from compatibility helpers
-
-Projects that currently depend on `norito_py` or `iroha_torii_client` can
-upgrade incrementally. The SDK provides shims under `iroha_python._compat`
-that emit deprecation warnings while returning the new `ToriiClient` wrapper,
-and the `norito` codec continues to be re-exported for parity. See
-[`MIGRATION.md`](MIGRATION.md) for a step-by-step guide and compatibility matrix.
-
 ## Next steps
 
 - Expand the transaction builder with ergonomic instruction builders and account

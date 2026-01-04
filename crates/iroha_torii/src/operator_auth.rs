@@ -1239,7 +1239,13 @@ fn origin_allowed(origin: &str, allowed: &[Url]) -> bool {
     let Ok(parsed) = Url::parse(origin) else {
         return false;
     };
-    allowed.contains(&parsed)
+    let parsed_origin = parsed.origin();
+    if matches!(parsed_origin, url::Origin::Opaque(_)) {
+        return false;
+    }
+    allowed
+        .iter()
+        .any(|candidate| candidate.origin() == parsed_origin)
 }
 
 fn load_credentials(path: &Path) -> Result<Vec<StoredCredential>, String> {
@@ -1821,6 +1827,14 @@ mod tests {
             HeaderValue::from_static("127.0.0.1"),
         );
         headers
+    }
+
+    #[test]
+    fn origin_allows_default_port_and_trailing_slash() {
+        let allowed = vec![Url::parse("https://example.com").expect("origin")];
+        assert!(origin_allowed("https://example.com/", &allowed));
+        assert!(origin_allowed("https://example.com:443", &allowed));
+        assert!(!origin_allowed("https://example.com:444", &allowed));
     }
 
     #[test]

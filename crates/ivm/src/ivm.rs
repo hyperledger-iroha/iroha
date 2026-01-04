@@ -1965,8 +1965,9 @@ impl IVM {
         if code.len() > Memory::HEAP_START as usize {
             return Err(VMError::MemoryOutOfBounds);
         }
-        // Preserve existing memory (INPUT/OUTPUT/STACK) and overlay the new code region.
+        // Preserve INPUT/STACK contents but reset OUTPUT for a clean run.
         self.memory.load_code(code);
+        self.memory.clear_output();
         self.pc = 0;
         self.predecoded = None;
         self.predecoded_index.clear();
@@ -1999,11 +2000,12 @@ impl IVM {
         } else {
             std::cmp::min(meta.vector_length as usize, LOGICAL_VECTOR_MAX)
         };
-        // Overlay code region while preserving INPUT/OUTPUT/STACK contents that may
-        // have been preloaded by the host/tests.
+        // Overlay code region while preserving INPUT/STACK contents that may
+        // have been preloaded by the host/tests. OUTPUT is cleared per load.
         self.predecoded = None;
         self.predecoded_index.clear();
         self.memory.load_code(code_region);
+        self.memory.clear_output();
         self.registers.set(31, self.memory.stack_top());
         let mut hasher = Sha256::new();
         hasher.update(code_region);

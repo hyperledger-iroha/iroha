@@ -26,6 +26,9 @@ fast transaction validation.
 - `StateBlock::commit` records a fresh snapshot under the configured cold root
   (pruning older directories according to `max_snapshots`) while holding the
   world-state write lock, guaranteeing deterministic manifests across peers.
+- Snapshot directories use a zero-padded 20-digit index (e.g., `00000000000000000001`);
+  pruning only targets those canonical snapshot directories so auxiliary folders
+  such as `lanes/` and `retired/` remain intact.
 
 ## Snapshot authenticity & recovery
 
