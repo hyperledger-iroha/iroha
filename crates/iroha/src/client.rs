@@ -4294,6 +4294,42 @@ enum TxConfirmationStatus {
     Expired,
 }
 
+#[derive(Debug)]
+struct TxConfirmationFinalError {
+    report: eyre::Report,
+}
+
+impl TxConfirmationFinalError {
+    fn new(report: eyre::Report) -> Self {
+        Self { report }
+    }
+}
+
+impl fmt::Display for TxConfirmationFinalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.report)
+    }
+}
+
+impl std::error::Error for TxConfirmationFinalError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.report.as_ref())
+    }
+}
+
+fn tx_confirmation_final_report(report: eyre::Report) -> eyre::Report {
+    TxConfirmationFinalError::new(report).into()
+}
+
+fn is_final_tx_confirmation_error(err: &eyre::Report) -> bool {
+    err.chain()
+        .any(|cause| cause.downcast_ref::<TxConfirmationFinalError>().is_some())
+}
+
+fn should_fallback_after_confirmation_error(err: &eyre::Report) -> bool {
+    !is_final_tx_confirmation_error(err)
+}
+
 /// Iroha client
 #[derive(Clone, Display)]
 #[display("{}@{torii_url}", key_pair.public_key())]
@@ -4834,9 +4870,13 @@ impl Client {
                             iterator.close().await;
                         }
                         match result {
-                            Ok(inner) => match inner.wrap_err_with(timeout_err) {
+                            Ok(inner) => match inner {
                                 Ok(ok) => Ok(ok),
                                 Err(err) => {
+                                    if !should_fallback_after_confirmation_error(&err) {
+                                        return Err(err);
+                                    }
+                                    let err = err.wrap_err(timeout_err());
                                     warn!(
                                         %hash,
                                         ?err,
@@ -7937,7 +7977,9 @@ where
                                 let elapsed = first.elapsed();
                                 if elapsed > max_queued_duration {
                                     warn!(%hash, ?elapsed, "transaction remained queued");
-                                    return Err(eyre!("transaction queued for too long"));
+                                    return Err(tx_confirmation_final_report(eyre!(
+                                        "transaction queued for too long"
+                                    )));
                                 }
                             } else {
                                 queued_at = Some(Instant::now());
@@ -7949,10 +7991,24 @@ where
                                 block_height = Some(height);
                             }
                         }
-                        TxConfirmationStatus::Committed | TxConfirmationStatus::Applied => return Ok(hash),
-                        TxConfirmationStatus::Rejected(Some(reason)) => return Err(tx_rejection_to_report(&reason)),
-                        TxConfirmationStatus::Rejected(None) => return Err(eyre!("Transaction rejected")),
-                        TxConfirmationStatus::Expired => return Err(eyre!("Transaction expired")),
+                        TxConfirmationStatus::Committed | TxConfirmationStatus::Applied => {
+                            return Ok(hash)
+                        }
+                        TxConfirmationStatus::Rejected(Some(reason)) => {
+                            return Err(tx_confirmation_final_report(tx_rejection_to_report(
+                                &reason,
+                            )));
+                        }
+                        TxConfirmationStatus::Rejected(None) => {
+                            return Err(tx_confirmation_final_report(eyre!(
+                                "Transaction rejected"
+                            )));
+                        }
+                        TxConfirmationStatus::Expired => {
+                            return Err(tx_confirmation_final_report(eyre!(
+                                "Transaction expired"
+                            )));
+                        }
                     },
                     Ok(None) => {}
                     Err(err) => {
@@ -7971,7 +8027,9 @@ where
                                             let elapsed = first.elapsed();
                                             if elapsed > max_queued_duration {
                                                 warn!(%hash, ?elapsed, "transaction remained queued");
-                                                return Err(eyre!("transaction queued for too long"));
+                                                return Err(tx_confirmation_final_report(eyre!(
+                                                    "transaction queued for too long"
+                                                )));
                                             }
                                             // Duplicate queued notifications are possible; keep waiting.
                                         } else {
@@ -7989,11 +8047,15 @@ where
                                     }
                                     TransactionStatus::Rejected(reason) => {
                                         warn!(%hash, ?reason, "transaction rejected during confirmation stream");
-                                        return Err(tx_rejection_to_report(reason));
+                                        return Err(tx_confirmation_final_report(
+                                            tx_rejection_to_report(reason),
+                                        ));
                                     }
                                     TransactionStatus::Expired => {
                                         warn!(%hash, "transaction expired during confirmation stream");
-                                        return Err(eyre!("Transaction expired"));
+                                        return Err(tx_confirmation_final_report(eyre!(
+                                            "Transaction expired"
+                                        )));
                                     }
                                 }
                             }
@@ -8410,6 +8472,26 @@ mod tx_hash_tests {
     }
 
     #[test]
+    fn tx_confirmation_error_wraps_timeout_report() {
+        let err = eyre!("confirmation stream failed");
+        let wrapped =
+            err.wrap_err(super::Client::tx_confirmation_timeout_report(Duration::from_secs(1)));
+        let messages: Vec<String> = wrapped.chain().map(|cause| cause.to_string()).collect();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("confirmation stream failed")),
+            "missing inner confirmation error: {messages:?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("transaction.status_timeout_ms")),
+            "missing timeout context: {messages:?}"
+        );
+    }
+
+    #[test]
     fn committed_transaction_matches_signed_hash_for_external_entrypoint() {
         use iroha_primitives::const_vec::ConstVec;
 
@@ -8480,6 +8562,7 @@ mod tx_hash_tests {
 mod tx_confirmation_stream_tests {
     use std::time::Duration;
 
+    use eyre::eyre;
     use futures_util::stream;
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -8679,6 +8762,20 @@ mod tx_confirmation_stream_tests {
 
         let tiny = super::Client::tx_confirmation_connect_timeout(Duration::from_millis(100));
         assert_eq!(tiny, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn final_confirmation_errors_skip_fallback() {
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::InternalError(
+            "rejected".to_string(),
+        ));
+        let final_err = super::tx_confirmation_final_report(super::tx_rejection_to_report(
+            &rejection,
+        ));
+        assert!(!super::should_fallback_after_confirmation_error(&final_err));
+
+        let transient = eyre!("transient");
+        assert!(super::should_fallback_after_confirmation_error(&transient));
     }
 }
 

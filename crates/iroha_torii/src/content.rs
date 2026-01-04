@@ -617,8 +617,6 @@ mod tests {
         },
         nexus::{DataSpaceId, LaneId},
     };
-    use norito::codec::Decode;
-
     use super::*;
 
     fn sample_manifest() -> ContentBundleManifest {
@@ -757,7 +755,7 @@ mod tests {
             .decode(header.as_bytes())
             .unwrap();
         let receipt: ContentDaReceipt =
-            Decode::decode(&mut decoded.as_slice()).expect("decode receipt");
+            norito::decode_from_bytes(&decoded).expect("decode receipt");
         assert_eq!(receipt.served_bytes, 4);
         assert_eq!(receipt.range.unwrap().end, 3);
         assert_eq!(receipt.chunk_root.as_bytes(), &bundle.chunk_root);

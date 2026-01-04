@@ -41,7 +41,6 @@ public final class NoritoRpcClient {
 
   static final String DEFAULT_ACCEPT = "application/x-norito";
   private static final String DEFAULT_CONTENT_TYPE = "application/x-norito";
-  private static final int FALLBACK_STATUS_CODE = 299;
   private static final String RPC_CALL_SIGNAL = "android.norito_rpc.call";
   private static final String REDACTION_FAILURE_SIGNAL = "android.telemetry.redaction.failure";
 
@@ -55,7 +54,6 @@ public final class NoritoRpcClient {
   private final HttpTransportExecutor transportExecutor;
   private final List<ClientObserver> observers;
   private final NoritoRpcFlowController flowController;
-  private final NoritoRpcFallbackHandler fallbackHandler;
   private final AtomicBoolean deviceProfileEmitted = new AtomicBoolean(false);
 
   private NoritoRpcClient(final Builder builder) {
@@ -90,7 +88,6 @@ public final class NoritoRpcClient {
         builder.flowController != null
             ? builder.flowController
             : NoritoRpcFlowController.unlimited();
-    this.fallbackHandler = builder.fallbackHandler;
   }
 
   /** Creates a new builder for {@link NoritoRpcClient}. */
