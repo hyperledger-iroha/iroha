@@ -97,8 +97,8 @@ pub struct Kura {
     active_blocks_dir: Mutex<PathBuf>,
     /// Active merge-ledger file path for the primary lane.
     active_merge_path: Mutex<PathBuf>,
-    /// At most N last blocks will be stored in memory.
-    /// Older blocks will be dropped from memory and loaded from the disk if they are needed.
+    /// Number of most recent non-genesis blocks stored in memory.
+    /// The genesis block is always retained for metrics and replay.
     blocks_in_memory: NonZeroUsize,
     /// Number of recent commit-roster snapshots retained for block sync.
     block_sync_roster_retention: NonZeroUsize,
@@ -1455,16 +1455,18 @@ impl Kura {
     }
 
     // Drop old block to prevent unbounded memory usage.
-    // It will be loaded from the disk if needed later.
+    // Keep the genesis block plus the most recent `blocks_in_memory` blocks.
     fn drop_old_block(
         block_data: &mut BlockData,
         written_block_count: usize,
         blocks_in_memory: usize,
     ) {
-        // Keep last N blocks and genesis block.
-        // (genesis block is used in metrics to get genesis timestamp)
+        // (Genesis block is used in metrics to get genesis timestamp.)
         if written_block_count > blocks_in_memory {
-            block_data[written_block_count - blocks_in_memory].1 = None;
+            let drop_idx = written_block_count - blocks_in_memory;
+            if drop_idx > 0 && drop_idx < block_data.len() {
+                block_data[drop_idx].1 = None;
+            }
         }
     }
 
@@ -4792,6 +4794,33 @@ mod tests {
         let first = kura.get_block(height).expect("block available");
         let second = kura.get_block(height).expect("cached block");
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn drop_old_block_keeps_genesis_and_recent_blocks() {
+        let mut generator = DummyBlocks::new();
+        let mut block_data: BlockData = (0..4)
+            .map(|_| {
+                let block = generator.next();
+                (block.hash(), Some(block))
+            })
+            .collect();
+
+        Kura::drop_old_block(&mut block_data, 2, 2);
+        assert_eq!(
+            block_data.iter().filter(|(_, block)| block.is_some()).count(),
+            4,
+            "no blocks should be dropped while within retention"
+        );
+
+        Kura::drop_old_block(&mut block_data, 3, 2);
+        assert!(block_data[0].1.is_some(), "genesis block stays cached");
+        assert!(
+            block_data[1].1.is_none(),
+            "oldest non-genesis block should be dropped"
+        );
+        assert!(block_data[2].1.is_some(), "recent block should stay cached");
+        assert!(block_data[3].1.is_some(), "latest block should stay cached");
     }
 
     #[test]

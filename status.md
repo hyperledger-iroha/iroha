@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Resolved merge conflict markers in `status.md`.
+- Tests: not run (merge resolution only).
 - Standardized IVM header major to v1 across parser/admission paths, compiler outputs, fixtures, and shipped `.to` artifacts; refreshed header/docs references to drop v2.
 - Tests: not run (not requested).
 - Hardened IVM DIV_CEIL/GCD against i64::MIN overflow for deterministic behavior and added regression coverage for the edge cases.
@@ -36,6 +38,14 @@
 - Added multisig-derived telemetry counters to metrics registry/struct so derived-account tracking compiles cleanly.
 - Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core derived_multisig_helpers_match_expected_values -- --nocapture` (timed out after 300s during compile).
 - Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Block sync now skips already-seen block prefixes when responding to `GetBlocksAfter`, reducing repeated `BlockSyncUpdate` storms that can stall consensus; added unit coverage.
+- Tests: `cargo test -p iroha_core block_sync::message::selection_tests -- --nocapture` (passed).
+- Aligned the network relay subscriber queue capacity with `network.p2p_queue_cap_high` and raised the test-network `sumeragi.msg_channel_cap_blocks` to 2048 to reduce consensus stalls from inbound drops.
+- Tests: not run (not requested).
+- Test-network clients now ignore host environment overrides (e.g., `TORII_URL`) so peer-scoped Torii URLs are deterministic; added unit coverage.
+- Tests: not run (not requested).
+- Switched event notification and SSE smoke integration tests to use at least four peers to avoid single-peer consensus deadlocks and SSE timeouts.
+- Tests: not run (not requested).
 - Parallelized RBC delivery checks in the seven-peer consistency integration test, dropped the full-telemetry override, extended the submitter client transaction timeout/TTL for slow networks, and made the mint submission blocking to ensure commit before convergence checks.
 - Tests: `cargo test -p integration_tests seven_peer_cross_peer_consistency_basic --test mod -- --nocapture` (failed: rustup toolchain update conflict while installing components).
 - Raised the workspace Rust baseline to 1.92 (toolchain + MSRV), updated SoraFS CI templates, added the Rust 1.92 lint gate script + rollout notes, and switched operator-auth rate conversion to `NonZero::div_ceil` with unit coverage.

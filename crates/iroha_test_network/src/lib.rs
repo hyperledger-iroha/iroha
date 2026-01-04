@@ -3155,7 +3155,7 @@ impl NetworkBuilder {
                 i64::try_from(peers.len()).unwrap_or(i64::MAX),
             );
         // Allow larger block sync bursts during tests without dropping updates.
-        base_layer = base_layer.write(["sumeragi", "msg_channel_cap_blocks"], 512i64);
+        base_layer = base_layer.write(["sumeragi", "msg_channel_cap_blocks"], 2048i64);
         if da_enabled {
             base_layer = base_layer
                 .write(["sumeragi", "da_enabled"], true)
@@ -4235,6 +4235,8 @@ impl NetworkPeer {
         let status_timeout = client_status_timeout_env();
         let ttl = client_ttl_env(status_timeout);
         let config = ConfigReader::new()
+            // Ignore host env overrides so tests always target the peer's Torii URL.
+            .with_env(MockEnv::default())
             .with_toml_source(TomlSource::inline(
                 Table::new()
                     .write("chain", config::chain_id().to_string())
@@ -5663,6 +5665,12 @@ mod tests {
     }
 
     impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = env::var_os(key);
+            set_env_var(key, OsString::from(value));
+            Self { key, original }
+        }
+
         fn cleared(key: &'static str) -> Self {
             let original = env::var_os(key);
             remove_env_var(key);
@@ -5809,6 +5817,17 @@ mod tests {
 
     fn disable_sumeragi_env_overrides() -> EnvVarGuard {
         EnvVarGuard::cleared(DA_ENABLED_ENV)
+    }
+
+    #[test]
+    fn client_for_ignores_env_torii_url() {
+        let _guard = lock_env_guard(&CONFIG_ENV_GUARD);
+        let _torii_env = EnvVarGuard::set("TORII_URL", "http://127.0.0.1:9999");
+        let env = Environment::new();
+        let peer = NetworkPeer::builder().build(&env);
+        let client = peer.client();
+        let expected = format!("http://127.0.0.1:{}/", peer.api_address().port());
+        assert_eq!(client.torii_url.as_str(), expected);
     }
 
     #[test]
