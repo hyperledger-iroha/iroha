@@ -125,7 +125,7 @@ LaneConfigEntry {
 
 ## קונפיגורציה וטיפוסי Norito
 
-- `LaneCatalog`, `LaneMetadata` ו-`DataSpaceCatalog` נמצאים ב-`iroha_data_model::nexus` ומספקים מבנים תואמי Norito עבור מניפסטים ו-SDKs.
+- `LaneCatalog`, `LaneConfig` ו-`DataSpaceCatalog` נמצאים ב-`iroha_data_model::nexus` ומספקים מבנים תואמי Norito עבור מניפסטים ו-SDKs.
 - `LaneConfig` נמצא ב-`iroha_config::parameters::actual::Nexus` ומופק אוטומטית מהקטלוג; אינו דורש קידוד Norito כי הוא helper פנימי בזמן ריצה.
 - הקונפיגורציה הפונה למשתמש (`iroha_config::parameters::user::Nexus`) ממשיכה לקבל תיאורי lane ו-dataspace דקלרטיביים; הפרסינג כעת נגזר את הגאומטריה ודוחה כינויים לא תקינים או מזהי lane כפולים.
 - `DataSpaceMetadata.fault_tolerance` שולט על גודל ועדות lane-relay; החברות בוועדה נדגמת דטרמיניסטית בכל epoch ממאגר מאמתים של dataspace באמצעות זרע epoch של VRF הקשור ל-`(dataspace_id, lane_id)`.

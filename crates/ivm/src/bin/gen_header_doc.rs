@@ -14,7 +14,7 @@ fn render_header_policy_markdown() -> String {
     let vec = ivm::ivm_mode::VECTOR;
     let htm = ivm::ivm_mode::HTM;
     let known_bits = zk | vec | htm;
-    let accepted_major = 2u8;
+    let accepted_major = 1u8;
     let vector_len_max = 64u8;
 
     let mut md = String::new();

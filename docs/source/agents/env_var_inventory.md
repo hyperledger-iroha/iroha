@@ -330,7 +330,7 @@ Total references: **505** · Unique variables: **137**
 - test: xtask/tests/streaming_bundle_check.rs:9 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: xtask/tests/streaming_entropy_bench.rs:8 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 
-## CARGO_PKG_VERSION (prod: 12, test: 2, tool: 1)
+## CARGO_PKG_VERSION (prod: 11, test: 1, tool: 1)
 
 - prod: crates/iroha/src/client.rs:478 — `map.insert("version".into(), JsonValue::from(env!("CARGO_PKG_VERSION")));`
 - prod: crates/iroha_cli/src/commands/sorafs.rs:1767 — `metadata.insert("version".into(), Value::from(env!("CARGO_PKG_VERSION")));`
@@ -340,8 +340,6 @@ Total references: **505** · Unique variables: **137**
 - prod: crates/iroha_core/src/sumeragi/rbc_store.rs:40 — `version: env!("CARGO_PKG_VERSION").to_owned(),`
 - prod: crates/iroha_js_host/src/lib.rs:2998 — `metadata.insert("version".into(), Value::from(env!("CARGO_PKG_VERSION")));`
 - prod: crates/iroha_telemetry/src/ws.rs:243 — `env!("CARGO_PKG_VERSION")`
-- prod: crates/iroha_torii/src/routing.rs:32514 — `version: env!("CARGO_PKG_VERSION").to_string(),`
-- test: crates/iroha_torii/tests/server_version_endpoint.rs:64 — `assert_eq!(version.version, env!("CARGO_PKG_VERSION"));`
 - prod: crates/irohad/src/main.rs:502 — `version = env!("CARGO_PKG_VERSION"),`
 - prod: crates/irohad/src/main.rs:3986 — `version = env!("CARGO_PKG_VERSION"),`
 - prod: crates/sorafs_car/src/bin/sorafs_fetch.rs:1111 — `Value::from(env!("CARGO_PKG_VERSION")),`

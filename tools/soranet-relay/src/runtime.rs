@@ -1579,17 +1579,7 @@ impl RelayRuntime {
                 metrics.record_success();
                 context.dos.record_success(&attempt, elapsed);
                 metrics.record_handshake_mode(session.handshake_suite);
-                if !matches!(session.handshake_suite, HandshakeSuite::Nk2Hybrid) {
-                    match session.handshake_suite {
-                        HandshakeSuite::Nk1NoiseXx => {
-                            metrics.record_downgrade("handshake_suite_nk1");
-                        }
-                        HandshakeSuite::Nk2Hybrid => {}
-                        HandshakeSuite::Nk3PqForwardSecure => {
-                            metrics.record_downgrade("handshake_suite_nk3");
-                        }
-                    }
-                }
+                record_handshake_suite_downgrade(metrics.as_ref(), session.handshake_suite);
                 let handshake_millis = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
                 let sig_labels: Vec<String> = negotiated
                     .signatures
@@ -3690,6 +3680,12 @@ fn downgrade_detail_from_warnings(warnings: &[CapabilityWarning]) -> Option<Stri
     Some(normalize_downgrade_reason(slug_source))
 }
 
+fn record_handshake_suite_downgrade(metrics: &Metrics, suite: HandshakeSuite) {
+    if matches!(suite, HandshakeSuite::Nk3PqForwardSecure) {
+        metrics.record_downgrade("handshake_suite_nk3");
+    }
+}
+
 fn pow_failure_reason(error: &pow::Error) -> SoranetPowFailureReasonV1 {
     match error {
         pow::Error::UnsupportedVersion(_) => SoranetPowFailureReasonV1::UnsupportedVersion,
@@ -3844,6 +3840,22 @@ mod tests {
             slug.as_deref(),
             Some("constant_rate_capability_missing_on_hop"),
             "constant-rate warnings should produce deterministic slug"
+        );
+    }
+
+    #[test]
+    fn handshake_suite_downgrade_records_only_nk3() {
+        let metrics = Metrics::new();
+        record_handshake_suite_downgrade(&metrics, HandshakeSuite::Nk2Hybrid);
+        record_handshake_suite_downgrade(&metrics, HandshakeSuite::Nk3PqForwardSecure);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(
+            snapshot
+                .downgrade_counts
+                .get("handshake_suite_nk3")
+                .copied(),
+            Some(1)
         );
     }
 
@@ -4283,7 +4295,6 @@ mod tests {
                 handshake_suites: vec![
                     HandshakeSuite::Nk3PqForwardSecure,
                     HandshakeSuite::Nk2Hybrid,
-                    HandshakeSuite::Nk1NoiseXx,
                 ],
                 published_at: 1,
                 valid_after: 1,

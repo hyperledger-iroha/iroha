@@ -4956,7 +4956,7 @@ mod stake_snapshot_tests {
         consensus::ConsensusKeyStatus,
         domain::DomainId,
         metadata::Metadata,
-        nexus::{LaneCatalog, LaneMetadata, LaneVisibility},
+        nexus::{LaneCatalog, LaneConfig, LaneVisibility},
     };
     use iroha_primitives::unique_vec::UniqueVec;
 
@@ -5308,12 +5308,12 @@ mod stake_snapshot_tests {
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane count"),
             vec![
-                LaneMetadata::default(),
-                LaneMetadata {
+                LaneConfig::default(),
+                LaneConfig {
                     id: LaneId::new(1),
                     alias: "restricted".to_string(),
                     visibility: LaneVisibility::Restricted,
-                    ..LaneMetadata::default()
+                    ..LaneConfig::default()
                 },
             ],
         )
@@ -5394,7 +5394,7 @@ mod stake_snapshot_tests {
 
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(1).expect("nonzero lane count"),
-            vec![LaneMetadata::default()],
+            vec![LaneConfig::default()],
         )
         .expect("lane catalog");
         {
@@ -10789,11 +10789,6 @@ impl State {
         snapshot
     }
 
-    /// Backwards-compatible alias used by tests.
-    pub fn refresh_axt_policies_from_space_directory(&self) -> Option<AxtPolicySnapshot> {
-        self.refresh_axt_policies_from_directory()
-    }
-
     /// Remove a dataspace AXT policy entry.
     pub fn remove_axt_policy(&mut self, dsid: &DataSpaceId) {
         let mut block = self.world.axt_policies.block();
@@ -14550,30 +14545,15 @@ impl<'state> StateBlock<'state> {
                     Ok(k) => k,
                     Err(_) => return true,
                 };
-                let key_t = match "__registered_at_ms".parse::<Name>() {
-                    Ok(k) => k,
-                    Err(_) => return true,
-                };
-
-                // Skip triggers registered in the current block (by height). Use the timestamp
-                // guard only when height metadata is missing (e.g., legacy triggers).
+                // Skip triggers registered in the current block (by height).
                 let registered_height = action
                     .metadata()
                     .get(&key_h)
                     .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                if registered_height == Some(current_block_height) {
-                    return false;
+                match registered_height {
+                    Some(height) => height != current_block_height,
+                    None => false,
                 }
-                if registered_height.is_none() {
-                    let registered_time = action
-                        .metadata()
-                        .get(&key_t)
-                        .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                    if registered_time == Some(current_block_time_ms) {
-                        return false;
-                    }
-                }
-                true
             })
             .collect();
         let matched_count = matched.len();
@@ -15359,13 +15339,11 @@ mod replay_validation_tests {
         let topology_entries = vec![
             GenesisTopologyEntry::new(
                 PeerId::new(peer_a.public_key().clone()),
-                iroha_crypto::bls_normal_pop_prove(peer_a.private_key())
-                    .expect("generate pop a"),
+                iroha_crypto::bls_normal_pop_prove(peer_a.private_key()).expect("generate pop a"),
             ),
             GenesisTopologyEntry::new(
                 PeerId::new(peer_b.public_key().clone()),
-                iroha_crypto::bls_normal_pop_prove(peer_b.private_key())
-                    .expect("generate pop b"),
+                iroha_crypto::bls_normal_pop_prove(peer_b.private_key()).expect("generate pop b"),
             ),
         ];
 
@@ -15477,13 +15455,11 @@ mod replay_validation_tests {
         let topology_entries = vec![
             GenesisTopologyEntry::new(
                 roster[0].clone(),
-                iroha_crypto::bls_normal_pop_prove(peer_b.private_key())
-                    .expect("generate pop b"),
+                iroha_crypto::bls_normal_pop_prove(peer_b.private_key()).expect("generate pop b"),
             ),
             GenesisTopologyEntry::new(
                 roster[1].clone(),
-                iroha_crypto::bls_normal_pop_prove(peer_a.private_key())
-                    .expect("generate pop a"),
+                iroha_crypto::bls_normal_pop_prove(peer_a.private_key()).expect("generate pop a"),
             ),
         ];
 
@@ -15922,7 +15898,7 @@ mod permission_cache_tests {
                 let chunk_count = data.len() / 8;
 
                 let meta = ProgramMetadata {
-                    version_major: 2,
+                    version_major: 1,
                     version_minor: 0,
                     mode: 0,
                     vector_length: 0,
@@ -16712,12 +16688,12 @@ impl StateTransaction<'_, '_> {
         uaid: UniversalAccountId,
     ) -> Option<AxtPolicySnapshot> {
         self.world.rebuild_space_directory_bindings(uaid);
-        self.refresh_axt_policies_from_space_directory()
+        self.refresh_axt_policies_from_directory()
     }
 
     /// Refresh AXT policy cache from Space Directory manifests using the current lane catalog.
     #[inline]
-    pub fn refresh_axt_policies_from_space_directory(&mut self) -> Option<AxtPolicySnapshot> {
+    pub fn refresh_axt_policies_from_directory(&mut self) -> Option<AxtPolicySnapshot> {
         self.world.rebuild_axt_policies_from_space_directory(
             &self.nexus.lane_config,
             self.axt_current_slot(),
@@ -18763,9 +18739,9 @@ mod tests {
             AxtHandleFragment, AxtHandleReplayKey, AxtPolicyEntry, AxtPolicySnapshot,
             AxtProofFragment, AxtRejectReason, AxtTouchFragment, AxtTouchSpec, DataSpaceCatalog,
             DataSpaceId, DataSpaceMetadata, GroupBinding, HandleBudget, HandleSubject, LaneCatalog,
-            LaneConfig as LaneMetadata, LaneId, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
-            LaneRelayError, LaneStorageProfile, LaneVisibility, ManifestVersion, ProofBlob,
-            RemoteSpendIntent, SpendOp, TouchManifest,
+            LaneConfig, LaneId, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope, LaneRelayError,
+            LaneStorageProfile, LaneVisibility, ManifestVersion, ProofBlob, RemoteSpendIntent,
+            SpendOp, TouchManifest,
         },
         peer::PeerId,
         prelude::*,
@@ -19022,17 +18998,17 @@ mod tests {
         let lane_count = nonzero!(1_u32);
         let initial_catalog = LaneCatalog::new(
             lane_count,
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 alias: "Alpha Lane".to_string(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("initial catalog");
         let updated_catalog = LaneCatalog::new(
             lane_count,
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 alias: "Payments Lane".to_string(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("updated catalog");
@@ -19059,9 +19035,9 @@ mod tests {
 
         let initial_catalog = LaneCatalog::new(
             lane_count,
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 alias: "Alpha Lane".to_string(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("initial catalog");
@@ -19091,9 +19067,9 @@ mod tests {
 
         let updated_catalog = LaneCatalog::new(
             lane_count,
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 alias: "Payments Lane".to_string(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("updated catalog");
@@ -19128,10 +19104,10 @@ mod tests {
         state.nexus.write().enabled = true;
 
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
-            additions: vec![LaneMetadata {
+            additions: vec![LaneConfig {
                 id: LaneId::new(1),
                 alias: "beta".to_string(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
             retire: Vec::new(),
         };
@@ -19166,10 +19142,10 @@ mod tests {
         let state = Arc::new(state);
 
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
-            additions: vec![LaneMetadata {
+            additions: vec![LaneConfig {
                 id: LaneId::new(1),
                 alias: "beta".to_string(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
             retire: Vec::new(),
         };
@@ -19211,11 +19187,11 @@ mod tests {
         state.nexus.write().enabled = true;
 
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
-            additions: vec![LaneMetadata {
+            additions: vec![LaneConfig {
                 id: LaneId::new(1),
                 alias: "beta".to_string(),
                 dataspace_id: DataSpaceId::new(42),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
             retire: Vec::new(),
         };
@@ -19243,10 +19219,10 @@ mod tests {
             TieredStateBackend::new(true, 0, Some(cold_root.clone()), 1);
 
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
-            additions: vec![LaneMetadata {
+            additions: vec![LaneConfig {
                 id: LaneId::new(1),
                 alias: "beta".to_string(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
             retire: Vec::new(),
         };
@@ -19263,13 +19239,13 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let lane = LaneMetadata {
+        let lane = LaneConfig {
             id: LaneId::new(1),
             alias: "beta".to_string(),
             dataspace_id: DataSpaceId::new(7),
-            ..LaneMetadata::default()
+            ..LaneConfig::default()
         };
-        let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneMetadata::default(), lane])
+        let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), lane])
             .expect("lane catalog");
 
         let nexus = iroha_config::parameters::actual::Nexus {
@@ -19308,11 +19284,11 @@ mod tests {
             lane_catalog: LaneCatalog::new(
                 nonzero!(2_u32),
                 vec![
-                    LaneMetadata::default(),
-                    LaneMetadata {
+                    LaneConfig::default(),
+                    LaneConfig {
                         id: LaneId::new(1),
                         alias: "beta".to_string(),
-                        ..LaneMetadata::default()
+                        ..LaneConfig::default()
                     },
                 ],
             )
@@ -19338,10 +19314,10 @@ mod tests {
         let signers = [&validator_keypair];
 
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
-            additions: vec![LaneMetadata {
+            additions: vec![LaneConfig {
                 id: LaneId::new(1),
                 alias: "beta".to_string(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
             retire: Vec::new(),
         };
@@ -19467,7 +19443,7 @@ mod tests {
         let state = State::new_for_testing(World::default(), kura, query_handle);
 
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
-            additions: vec![LaneMetadata::default()],
+            additions: vec![LaneConfig::default()],
             retire: Vec::new(),
         };
         let err = state
@@ -20543,12 +20519,12 @@ mod tests {
         let lane_catalog = LaneCatalog::new(
             nonzero!(2_u32),
             vec![
-                LaneMetadata::default(),
-                LaneMetadata {
+                LaneConfig::default(),
+                LaneConfig {
                     id: LaneId::new(1),
                     alias: "beta".to_string(),
                     dataspace_id: DataSpaceId::GLOBAL,
-                    ..LaneMetadata::default()
+                    ..LaneConfig::default()
                 },
             ],
         )
@@ -20615,7 +20591,7 @@ mod tests {
         let lane_count = nonzero!(1_u32);
 
         let catalog =
-            LaneCatalog::new(lane_count, vec![LaneMetadata::default()]).expect("lane catalog");
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
         let lane = lane_config.primary().lane_id;
         let kura_cfg = KuraConfig {
@@ -20862,11 +20838,11 @@ mod tests {
     #[test]
     fn missing_shard_cursor_blocks_touched_lane_when_da_bundle_present() {
         let lane_count = nonzero!(2_u32);
-        let lane0 = LaneMetadata::default();
-        let lane1 = LaneMetadata {
+        let lane0 = LaneConfig::default();
+        let lane1 = LaneConfig {
             id: LaneId::new(1),
             alias: "lane1".to_string(),
-            ..LaneMetadata::default()
+            ..LaneConfig::default()
         };
         let catalog =
             LaneCatalog::new(lane_count, vec![lane0, lane1.clone()]).expect("lane catalog");
@@ -21065,8 +21041,8 @@ mod tests {
         let catalog = LaneCatalog::new(
             lane_count,
             vec![
-                LaneMetadata::default(),
-                LaneMetadata {
+                LaneConfig::default(),
+                LaneConfig {
                     id: LaneId::new(1),
                     alias: "lane1".to_string(),
                     metadata: {
@@ -21074,7 +21050,7 @@ mod tests {
                         map.insert("da_shard_id".to_string(), "5".to_string());
                         map
                     },
-                    ..LaneMetadata::default()
+                    ..LaneConfig::default()
                 },
             ],
         )
@@ -21198,7 +21174,7 @@ mod tests {
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
 
         let initial_catalog =
-            LaneCatalog::new(nonzero!(1_u32), vec![LaneMetadata::default()]).expect("catalog");
+            LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("catalog");
         let initial_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
         state
             .set_nexus(iroha_config::parameters::actual::Nexus {
@@ -21233,13 +21209,13 @@ mod tests {
 
         let reshard_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 metadata: {
                     let mut map = BTreeMap::new();
                     map.insert("da_shard_id".to_string(), "5".to_string());
                     map
                 },
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("reshard catalog");
@@ -21287,7 +21263,7 @@ mod tests {
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
 
         let catalog =
-            LaneCatalog::new(nonzero!(1_u32), vec![LaneMetadata::default()]).expect("catalog");
+            LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
         state
             .set_nexus(iroha_config::parameters::actual::Nexus {
@@ -21384,12 +21360,12 @@ mod tests {
         let catalog = LaneCatalog::new(
             nonzero!(2_u32),
             vec![
-                LaneMetadata::default(),
-                LaneMetadata {
+                LaneConfig::default(),
+                LaneConfig {
                     id: LaneId::new(1),
                     alias: "lane1".to_string(),
                     metadata: lane_one_meta,
-                    ..LaneMetadata::default()
+                    ..LaneConfig::default()
                 },
             ],
         )
@@ -21487,7 +21463,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let store_root = temp_dir.path().join("kura");
         let catalog =
-            LaneCatalog::new(nonzero!(1_u32), vec![LaneMetadata::default()]).expect("catalog");
+            LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
@@ -21592,11 +21568,11 @@ mod tests {
         sumeragi.da_enabled = true;
         state.set_sumeragi_parameters(&sumeragi);
 
-        let lane0 = LaneMetadata::default();
-        let lane1 = LaneMetadata {
+        let lane0 = LaneConfig::default();
+        let lane1 = LaneConfig {
             id: LaneId::new(1),
             alias: "secondary".to_owned(),
-            ..LaneMetadata::default()
+            ..LaneConfig::default()
         };
         let catalog = LaneCatalog::new(nonzero!(2_u32), vec![lane0, lane1]).expect("catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
@@ -21699,7 +21675,7 @@ mod tests {
         let store_root = temp_dir.path().join("kura");
         let lane_count = nonzero!(1_u32);
         let catalog =
-            LaneCatalog::new(lane_count, vec![LaneMetadata::default()]).expect("lane catalog");
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
@@ -21770,7 +21746,7 @@ mod tests {
         let store_root = temp_dir.path().join("kura");
         let lane_count = nonzero!(1_u32);
         let catalog =
-            LaneCatalog::new(lane_count, vec![LaneMetadata::default()]).expect("lane catalog");
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
@@ -21856,7 +21832,7 @@ mod tests {
         let store_root = temp_dir.path().join("kura");
         let lane_count = nonzero!(1_u32);
         let catalog =
-            LaneCatalog::new(lane_count, vec![LaneMetadata::default()]).expect("lane catalog");
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
@@ -22120,9 +22096,9 @@ mod tests {
         metadata.insert("da_shard_id".to_string(), "1".to_string());
         let initial_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 metadata: metadata.clone(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("lane catalog");
@@ -22178,9 +22154,9 @@ mod tests {
         updated_metadata.insert("da_shard_id".to_string(), "3".to_string());
         let updated_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 metadata: updated_metadata,
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("updated catalog");
@@ -22219,7 +22195,7 @@ mod tests {
 
         let lane_count = nonzero!(1_u32);
         let catalog =
-            LaneCatalog::new(lane_count, vec![LaneMetadata::default()]).expect("lane catalog");
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
         state
             .set_nexus(iroha_config::parameters::actual::Nexus {
@@ -22341,7 +22317,7 @@ mod tests {
 
         let lane_count = nonzero!(1_u32);
         let catalog =
-            LaneCatalog::new(lane_count, vec![LaneMetadata::default()]).expect("lane catalog");
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
         state
             .set_nexus(iroha_config::parameters::actual::Nexus {
@@ -22405,7 +22381,7 @@ mod tests {
 
         let lane_count = nonzero!(1_u32);
         let catalog =
-            LaneCatalog::new(lane_count, vec![LaneMetadata::default()]).expect("lane catalog");
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
         state
             .set_nexus(iroha_config::parameters::actual::Nexus {
@@ -22485,7 +22461,7 @@ mod tests {
 
         let lane_count = nonzero!(1_u32);
         let catalog =
-            LaneCatalog::new(lane_count, vec![LaneMetadata::default()]).expect("lane catalog");
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
         state
             .set_nexus(iroha_config::parameters::actual::Nexus {
@@ -22567,7 +22543,7 @@ mod tests {
 
         let lane_count = nonzero!(1_u32);
         let catalog =
-            LaneCatalog::new(lane_count, vec![LaneMetadata::default()]).expect("lane catalog");
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
         state
             .set_nexus(iroha_config::parameters::actual::Nexus {
@@ -22624,12 +22600,12 @@ mod tests {
         metadata.insert("confidential_key_version".to_string(), "7".to_string());
         let catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(0),
                 alias: "confidential-lane".to_string(),
                 storage: LaneStorageProfile::SplitReplica,
                 metadata,
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("catalog");
@@ -22691,7 +22667,7 @@ mod tests {
         let lane_count = nonzero!(1_u32);
 
         let catalog =
-            LaneCatalog::new(lane_count, vec![LaneMetadata::default()]).expect("lane catalog");
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
@@ -22800,7 +22776,7 @@ mod tests {
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
         let lane_count = nonzero!(1_u32);
         let catalog =
-            LaneCatalog::new(lane_count, vec![LaneMetadata::default()]).expect("lane catalog");
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
         state
             .set_nexus(iroha_config::parameters::actual::Nexus {
@@ -22869,7 +22845,7 @@ mod tests {
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
         let lane_count = nonzero!(1_u32);
         let catalog =
-            LaneCatalog::new(lane_count, vec![LaneMetadata::default()]).expect("lane catalog");
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
         state
             .set_nexus(iroha_config::parameters::actual::Nexus {
@@ -23079,7 +23055,7 @@ mod tests {
         let lane = LaneId::new(0);
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: lane,
                 dataspace_id: dsid,
                 alias: "primary".to_owned(),
@@ -23142,7 +23118,7 @@ mod tests {
         let manifest_root = [0x44; 32];
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: lane,
                 dataspace_id: dsid,
                 alias: "primary".to_owned(),
@@ -23377,7 +23353,7 @@ mod tests {
         let manifest_root = [0x55; 32];
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: lane,
                 dataspace_id: dsid,
                 alias: "primary".to_owned(),
@@ -23768,7 +23744,7 @@ mod tests {
         let lane_id = LaneId::new(8);
         let lane_catalog = LaneCatalog::new(
             nonzero!(9_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: lane_id,
                 dataspace_id: dataspace,
                 alias: "lane8".into(),
@@ -23842,7 +23818,7 @@ mod tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let snapshot = stx
-            .refresh_axt_policies_from_space_directory()
+            .refresh_axt_policies_from_directory()
             .expect("snapshot exists");
         let entry = snapshot
             .entries
@@ -24189,7 +24165,7 @@ mod tests {
         let manifest_root = [0x77; 32];
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: lane,
                 dataspace_id: dsid,
                 alias: "primary".to_owned(),
@@ -24471,7 +24447,7 @@ mod tests {
         let lane_id = LaneId::new(9);
         let lane_catalog = LaneCatalog::new(
             nonzero!(10_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: lane_id,
                 dataspace_id: dataspace,
                 alias: "lane9".into(),
@@ -24574,7 +24550,7 @@ mod tests {
         let lane_id = LaneId::new(4);
         let lane_catalog = LaneCatalog::new(
             nonzero!(5_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: lane_id,
                 dataspace_id: dataspace,
                 alias: "lane4".into(),
@@ -24626,7 +24602,7 @@ mod tests {
         }
 
         let snapshot_v1 = state
-            .refresh_axt_policies_from_space_directory()
+            .refresh_axt_policies_from_directory()
             .expect("policy snapshot");
         let first_entry = snapshot_v1
             .entries
@@ -24667,7 +24643,7 @@ mod tests {
         }
 
         let snapshot_v2 = state
-            .refresh_axt_policies_from_space_directory()
+            .refresh_axt_policies_from_directory()
             .expect("policy snapshot");
         let rotated_entry = snapshot_v2
             .entries
@@ -24696,7 +24672,7 @@ mod tests {
         let lane_id = LaneId::new(5);
         let lane_catalog = LaneCatalog::new(
             nonzero!(6_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: lane_id,
                 dataspace_id: dataspace,
                 alias: "lane5".into(),
@@ -24760,7 +24736,7 @@ mod tests {
         let mut stx = block.transaction();
 
         stx.world.rebuild_space_directory_bindings(uaid);
-        let snapshot = stx.refresh_axt_policies_from_space_directory();
+        let snapshot = stx.refresh_axt_policies_from_directory();
 
         assert!(
             stx.world.uaid_dataspaces().get(&uaid).is_none(),
@@ -24783,7 +24759,7 @@ mod tests {
         let lane_id = LaneId::new(7);
         let lane_catalog = LaneCatalog::new(
             nonzero!(8_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: lane_id,
                 dataspace_id: dataspace,
                 alias: "lane7".into(),
@@ -25641,7 +25617,7 @@ mod tests {
         let chunk_count = data.len() / 8;
 
         let meta = ProgramMetadata {
-            version_major: 2,
+            version_major: 1,
             version_minor: 0,
             mode: 0,
             vector_length: 0,
@@ -26015,7 +25991,7 @@ mod tests {
     fn assemble_ivm_header(code: &[u8]) -> Vec<u8> {
         let mut blob = Vec::with_capacity(16 + code.len());
         blob.extend_from_slice(b"IVM\0");
-        blob.push(2); // version major
+        blob.push(1); // version major
         blob.push(0); // version minor
         blob.push(0); // mode flags
         blob.push(0); // vector length

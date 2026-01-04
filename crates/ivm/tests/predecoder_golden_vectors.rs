@@ -57,7 +57,7 @@ fn decode_stream_matches_expected_words_and_lengths() {
 }
 
 #[test]
-fn decode_artifact_consistent_across_header_versions() {
+fn decode_artifact_consistent_across_minor_versions() {
     let code = build_wide_code();
     let h1 = ProgramMetadata {
         version_minor: 0,
@@ -88,7 +88,7 @@ fn decode_artifact_invariant_across_metadata_fields() {
 
     // Baseline header
     let base = ProgramMetadata {
-        version_major: 2,
+        version_major: 1,
         version_minor: 0,
         mode: 0,
         vector_length: 0,
@@ -111,11 +111,6 @@ fn decode_artifact_invariant_across_metadata_fields() {
         assert_eq!(&*golden, &*decode(&m), "minor {vmin}");
     }
 
-    for vmaj in [1u8, 2] {
-        let mut m = base.clone();
-        m.version_major = vmaj;
-        assert_eq!(&*golden, &*decode(&m), "major {vmaj}");
-    }
 
     for mode in 0u8..=0x07 {
         let mut m = base.clone();

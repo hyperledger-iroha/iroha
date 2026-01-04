@@ -67,7 +67,7 @@ use iroha_data_model::{
     block::{BlockHeader, consensus::EvidenceRecord},
     consensus::{ConsensusKeyRecord, ExecutionQcRecord, ValidatorSetCheckpoint},
     nexus::{
-        DataSpaceCatalog, DataSpaceId, LaneId, LaneLifecyclePlan, LaneMetadata, LaneRelayEnvelope,
+        DataSpaceCatalog, DataSpaceId, LaneConfig, LaneId, LaneLifecyclePlan, LaneRelayEnvelope,
         PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneStakeShare,
         PublicLaneUnbonding, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
         UniversalAccountId,
@@ -274,7 +274,6 @@ use iroha_primitives::json::Json as IrohaJson;
 use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyShareError};
-use iroha_torii_shared::Version;
 pub use local_selector_tracker::{LocalSelectorCollision, LocalSelectorTracker};
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -5304,26 +5303,6 @@ pub async fn handle_queries_with_opts(
     Ok(crate::utils::respond_with_format(resp, format))
 }
 
-/// Backward-compatible wrapper for existing call sites: no per-request overrides.
-#[iroha_futures::telemetry_future]
-pub async fn handle_queries(
-    live_query_store: LiveQueryStoreHandle,
-    state: Arc<CoreState>,
-    query: SignedQuery,
-    tel: MaybeTelemetry,
-    format: crate::utils::ResponseFormat,
-) -> Result<Response> {
-    handle_queries_with_opts(
-        live_query_store,
-        state,
-        query,
-        tel,
-        crate::NoritoQuery(QueryOptions::default()),
-        format,
-    )
-    .await
-}
-
 /// Simple liveness probe. Returns a constant string when Torii is up.
 pub async fn handle_health() -> &'static str {
     "Healthy"
@@ -5630,7 +5609,6 @@ pub async fn handle_get_contract_code(
     // For now, omit other manifest fields to keep response stable for tests
     let mut top = norito::json::Map::new();
     top.insert("manifest".into(), norito::json::Value::Object(manifest_obj));
-    top.insert("code_bytes".into(), norito::json::Value::Null);
     let body = norito::json::to_json_pretty(&top).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
@@ -6795,11 +6773,6 @@ pub struct RegisterContractCodeDto {
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Contract manifest to register on-chain
     pub manifest: iroha_data_model::smart_contract::manifest::ContractManifest,
-    /// Optional code bytes (kept for compatibility; ignored by on-chain path)
-    #[norito(with = "base64_bytes")]
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub code_bytes: Option<Vec<u8>>,
 }
 
 #[allow(dead_code)]
@@ -7006,7 +6979,7 @@ fn prepare_contract_call(
         ))
     })?;
     let meta = parsed.metadata;
-    if meta.version_major != 2 {
+    if meta.version_major != 1 {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             QueryExecutionFail::Conversion(format!(
                 "unsupported program version {}.{}",
@@ -9596,7 +9569,7 @@ mod deploy_tests {
         let mut code = Vec::new();
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let meta = ivm::ProgramMetadata {
-            version_major: 2,
+            version_major: 1,
             version_minor: 0,
             mode: 0,
             vector_length: 0,
@@ -18385,11 +18358,12 @@ mod query_endpoint_tests {
         let signed = payload.sign(&alice_keypair);
 
         // Execute via handler
-        let response = handle_queries(
+        let response = handle_queries_with_opts(
             LiveQueryStore::start_test(),
             state.clone(),
             signed,
             MaybeTelemetry::for_tests(),
+            crate::NoritoQuery(QueryOptions::default()),
             crate::utils::ResponseFormat::Norito,
         )
         .await
@@ -18459,11 +18433,12 @@ mod query_endpoint_tests {
         let payload = QueryRequest::Start(iter).with_authority(alice_id.clone());
         let signed = payload.sign(&alice_keypair);
 
-        let err = handle_queries(
+        let err = handle_queries_with_opts(
             LiveQueryStore::start_test(),
             state.clone(),
             signed,
             MaybeTelemetry::for_tests(),
+            crate::NoritoQuery(QueryOptions::default()),
             crate::utils::ResponseFormat::Norito,
         )
         .await
@@ -18501,11 +18476,12 @@ mod query_endpoint_tests {
         .with_authority(authority);
         let signed = payload.sign(&signer_key);
 
-        let err = handle_queries(
+        let err = handle_queries_with_opts(
             LiveQueryStore::start_test(),
             state,
             signed,
             MaybeTelemetry::for_tests(),
+            crate::NoritoQuery(QueryOptions::default()),
             crate::utils::ResponseFormat::Norito,
         )
         .await
@@ -35673,7 +35649,7 @@ pub async fn handle_post_configuration(
 pub struct LaneLifecyclePlanDto {
     /// Lane metadata to add or replace.
     #[norito(default)]
-    pub additions: Vec<LaneMetadata>,
+    pub additions: Vec<LaneConfig>,
     /// Lane identifiers to retire.
     #[norito(default)]
     pub retire: Vec<LaneId>,
@@ -36887,22 +36863,6 @@ pub mod profiling {
                 Err(Error::Pprof(eyre::eyre!("profiling already running")))
             }
         }
-    }
-}
-
-/// Return simple server version string in a JSON body.
-pub fn handle_server_version(
-    format: crate::utils::ResponseFormat,
-) -> axum::http::Response<axum::body::Body> {
-    let version = Version {
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        git_sha: option_env!("VERGEN_GIT_SHA")
-            .unwrap_or("unknown")
-            .to_string(),
-    };
-    match format {
-        crate::utils::ResponseFormat::Norito => NoritoBody(version).into_response(),
-        crate::utils::ResponseFormat::Json => JsonBody(version).into_response(),
     }
 }
 

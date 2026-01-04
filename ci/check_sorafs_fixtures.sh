@@ -37,13 +37,12 @@ fi
 # Run parity tests to ensure all generated bindings remain aligned.
 cargo test -p sorafs_chunker --test vectors --quiet
 
-# Verify canonical + legacy handles are published everywhere.
+# Verify canonical handles are published everywhere.
 python3 <<'PY'
 import json
 from pathlib import Path
 
 CANONICAL = "sorafs.sf1@1.0.0"
-LEGACY = "sorafs-sf1"
 
 def expect_aliases(path: Path) -> None:
     data = json.loads(path.read_text())
@@ -52,8 +51,6 @@ def expect_aliases(path: Path) -> None:
         raise SystemExit(f"{path} missing profile_aliases")
     if CANONICAL not in aliases:
         raise SystemExit(f"{path} missing canonical handle {CANONICAL}")
-    if LEGACY not in aliases:
-        raise SystemExit(f"{path} missing legacy handle {LEGACY}")
 
 fixtures_dir = Path("fixtures/sorafs_chunker")
 expect_aliases(fixtures_dir / "sf1_profile_v1.json")

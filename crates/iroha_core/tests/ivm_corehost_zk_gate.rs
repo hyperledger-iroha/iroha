@@ -102,7 +102,7 @@ fn unshield_without_verify_is_rejected() {
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut prog = Vec::new();
     prog.extend_from_slice(b"IVM\0");
-    prog.extend_from_slice(&[2, 0, 0, 4]);
+    prog.extend_from_slice(&[1, 0, 0, 4]);
     prog.extend_from_slice(&0u64.to_le_bytes());
     prog.push(0);
     prog.push(0);
@@ -188,7 +188,7 @@ fn zktransfer_without_verify_is_rejected() {
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut prog = Vec::new();
     prog.extend_from_slice(b"IVM\0");
-    prog.extend_from_slice(&[2, 0, 0, 4]);
+    prog.extend_from_slice(&[1, 0, 0, 4]);
     prog.extend_from_slice(&0u64.to_le_bytes());
     prog.push(0);
     prog.push(0);
@@ -268,7 +268,7 @@ fn submit_ballot_without_verify_is_rejected() {
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut prog = Vec::new();
     prog.extend_from_slice(b"IVM\0");
-    prog.extend_from_slice(&[2, 0, 0, 4]);
+    prog.extend_from_slice(&[1, 0, 0, 4]);
     prog.extend_from_slice(&0u64.to_le_bytes());
     prog.push(0);
     prog.push(0);
@@ -352,7 +352,7 @@ fn finalize_election_without_verify_is_rejected() {
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let mut prog = Vec::new();
     prog.extend_from_slice(b"IVM\0");
-    prog.extend_from_slice(&[2, 0, 0, 4]);
+    prog.extend_from_slice(&[1, 0, 0, 4]);
     prog.extend_from_slice(&0u64.to_le_bytes());
     prog.push(0);
     prog.push(0);

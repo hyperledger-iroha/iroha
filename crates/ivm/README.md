@@ -110,7 +110,7 @@ High-level smart contract language targeting IVM bytecode:
 - **Bulk Memory Helpers:** `load_bytes` and `store_bytes` efficiently copy contiguous regions, speeding up cryptographic hashing and serialization.
 - **Quantum-Resistant Signatures:** Optional verification of ML‑DSA (Crystals Dilithium) signatures via the `ml-dsa` feature.
 - **SIMD Poseidon Hashing:** Automatically uses vector instructions for the `POSEIDON2` and `POSEIDON6` opcodes when supported by the host CPU.
-- **SIMD Field Arithmetic:** BN254 helpers are implemented on CPU with runtime SIMD detection plumbed through vector utilities. For benchmarking or deterministic testing, thread `AccelerationPolicy::with_forced_simd(Some(SimdChoice::{Scalar|Sse2|Avx2|Avx512|Neon}))` through `IvmConfig`, or call `ivm::set_forced_simd` in tests; unsupported requests automatically fall back to the scalar implementation to preserve safety. The legacy `IVM_FORCE_SIMD` environment variable has been removed—use the APIs above instead. Future work: add architecture-specific intrinsics where beneficial.
+- **SIMD Field Arithmetic:** BN254 helpers are implemented on CPU with runtime SIMD detection plumbed through vector utilities. For benchmarking or deterministic testing, thread `AccelerationPolicy::with_forced_simd(Some(SimdChoice::{Scalar|Sse2|Avx2|Avx512|Neon}))` through `IvmConfig`, or call `ivm::set_forced_simd` in tests; unsupported requests automatically fall back to the scalar implementation to preserve safety. Future work: add architecture-specific intrinsics where beneficial.
 - **Apple Metal Acceleration:** On macOS the VM accelerates vector lanes (`vadd32`/`vadd64`/`vand`/`vxor`/`vor`), SHA‑256 compression and tree reductions, Keccak‑f1600, AES rounds/batches and ed25519 batch verification (when the `ed25519` feature is enabled) via Metal when a compatible device is present. Acceleration is gated by `AccelerationPolicy::with_metal(true)`, honours developer toggles like `IVM_DISABLE_METAL`/`IVM_FORCE_METAL_ENUM`, and falls back to CPU/SIMD with identical semantics when Metal is unavailable or disabled.
 - **Optional backends remain deterministic:** Metal/CUDA are best-effort accelerators; when features are disabled or hardware is unavailable, helpers fall back to scalar/SIMD paths so results stay identical across hosts.
 - **CUDA Acceleration:** The `cuda` feature enables CUDA bindings. Kernel coverage is partial; build scripts invoke `nvcc` (overridable via `IVM_CUDA_NVCC`/`NVCC`) to compile the kernels in `cuda/` to PTX and fall back to lightweight stubs when CUDA isn’t available so CPU paths stay usable. Use `IVM_DISABLE_CUDA=1` to force CPU-only execution, `IVM_MAX_GPUS` to cap device count, and `IVM_CUDA_GENCODE` / `IVM_CUDA_NVCC_EXTRA` to tune compilation flags.
@@ -118,7 +118,7 @@ High-level smart contract language targeting IVM bytecode:
 - **Startup Jingle:** When built with the optional `beep` feature,
   `irohad` calls `IVM::beep_music()` and plays a short tune when the
   configuration enables it. Disable via `ivm.banner.beep = false` in your node
-  config; the legacy `IROHA_BEEP` environment override was removed.
+  config.
 - **Adaptive Branch Prediction:** A built‑in two‑bit predictor tracks recent branch outcomes so tight loops execute faster. Accuracy can be queried via `IVM::branch_prediction_accuracy()` for diagnostics.
 - **Merkle‑Backed Memory:** Memory writes are batched until `commit()` recomputes a Merkle root over the entire image. The root calculation now hashes chunks in parallel with Rayon for faster commits. Authentication paths can be requested for proofs.
 - **Dynamic Heap Growth:** The heap may be extended at runtime using the `SYSCALL_GROW_HEAP` syscall when allocations exceed the initial 64 KB.
@@ -194,8 +194,7 @@ You can also override CPU SIMD detection via configuration: set
 `AccelerationPolicy::with_forced_simd(Some(SimdChoice::Scalar|Sse2|Avx2|Avx512|Neon))`
 when building an `IvmConfig`, or call `ivm::set_forced_simd` in tests/benches.
 The runtime validates that the requested backend is actually available; if not,
-the scalar path is used to avoid undefined behaviour. The legacy
-`IVM_FORCE_SIMD` environment variable is no longer supported; use `set_forced_simd` for tests/benchmarks.
+the scalar path is used to avoid undefined behaviour.
 
 ```bash
 cargo build --features cuda

@@ -11,10 +11,10 @@ fn run_prog(src: &str) {
 }
 
 #[test]
-fn roundtrip_create_nft() {
+fn roundtrip_nft_mint_asset() {
     let src = r#"
         fn main() {
-          create_nft(
+          nft_mint_asset(
             nft_id("rose:uuid:0123$wonderland"),
             account_id("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland")
           );
@@ -24,10 +24,10 @@ fn roundtrip_create_nft() {
 }
 
 #[test]
-fn roundtrip_set_nft_data() {
+fn roundtrip_nft_set_metadata() {
     let src = r#"
         fn main() {
-          set_nft_data(nft_id("rose:uuid:ffff$wonderland"), json("{\"meta\":1}"));
+          nft_set_metadata(nft_id("rose:uuid:ffff$wonderland"), json("{\"meta\":1}"));
         }
     "#;
     run_prog(src);
@@ -49,10 +49,10 @@ fn roundtrip_transfer_asset() {
 }
 
 #[test]
-fn roundtrip_burn_nft() {
+fn roundtrip_nft_burn_asset() {
     let src = r#"
         fn main() {
-          burn_nft(nft_id("rose:uuid:bead$wonderland"));
+          nft_burn_asset(nft_id("rose:uuid:bead$wonderland"));
         }
     "#;
     run_prog(src);

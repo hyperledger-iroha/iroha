@@ -77,7 +77,7 @@ pub struct Metrics {
     throttled_emergency: AtomicU64,
     active_remote_cooldowns: AtomicU64,
     active_descriptor_cooldowns: AtomicU64,
-    handshake_mode_counts: [AtomicU64; 3],
+    handshake_mode_counts: [AtomicU64; 2],
     handshake_bytes: AtomicU64,
     puzzle_solve_count: AtomicU64,
     puzzle_solve_micros: AtomicU64,
@@ -379,9 +379,8 @@ impl Metrics {
 
     pub fn record_handshake_mode(&self, suite: HandshakeSuite) {
         let idx = match suite {
-            HandshakeSuite::Nk1NoiseXx => 0,
-            HandshakeSuite::Nk2Hybrid => 1,
-            HandshakeSuite::Nk3PqForwardSecure => 2,
+            HandshakeSuite::Nk2Hybrid => 0,
+            HandshakeSuite::Nk3PqForwardSecure => 1,
         };
         self.handshake_mode_counts[idx].fetch_add(1, Ordering::Relaxed);
     }
@@ -548,7 +547,6 @@ impl Metrics {
             handshake_mode_counts: [
                 self.handshake_mode_counts[0].load(Ordering::Relaxed),
                 self.handshake_mode_counts[1].load(Ordering::Relaxed),
-                self.handshake_mode_counts[2].load(Ordering::Relaxed),
             ],
             handshake_bytes: self.handshake_bytes.load(Ordering::Relaxed),
             puzzle_solve_count: self.puzzle_solve_count.load(Ordering::Relaxed),
@@ -1244,7 +1242,7 @@ impl Metrics {
             value = proxy_queue_depth
         );
 
-        const HANDSHAKE_LABELS: [&str; 3] = ["nk1", "nk2", "nk3"];
+        const HANDSHAKE_LABELS: [&str; 2] = ["nk2", "nk3"];
         help_and_type!(
             "# HELP sn16_handshake_mode_total Count of negotiated SoraNet handshake suites.",
             "# TYPE sn16_handshake_mode_total counter"
@@ -1422,7 +1420,7 @@ pub struct MetricsSnapshot {
     /// Active cooldowns keyed by descriptor.
     pub active_descriptor_cooldowns: u64,
     /// Handshake mode counts (entry/middle/exit).
-    pub handshake_mode_counts: [u64; 3],
+    pub handshake_mode_counts: [u64; 2],
     /// Bytes consumed during handshakes.
     pub handshake_bytes: u64,
     /// Completed puzzle solves.
@@ -1543,7 +1541,7 @@ mod tests {
         );
         assert_eq!(
             normalize_downgrade_reason(
-                "Client preferred NK3 but negotiated NK1 due to relay requirement"
+                "Client preferred NK3 but negotiated NK2 due to relay requirement"
             ),
             "suite_preference_mismatch"
         );
@@ -1575,6 +1573,17 @@ mod tests {
             normalize_downgrade_reason("Unexpected reason: Foo Bar"),
             "unexpected_reason_foo_bar"
         );
+    }
+
+    #[test]
+    fn record_handshake_mode_maps_to_expected_slots() {
+        let metrics = Metrics::new();
+        metrics.record_handshake_mode(HandshakeSuite::Nk2Hybrid);
+        metrics.record_handshake_mode(HandshakeSuite::Nk3PqForwardSecure);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.handshake_mode_counts[0], 1);
+        assert_eq!(snapshot.handshake_mode_counts[1], 1);
     }
 
     #[test]

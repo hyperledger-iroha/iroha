@@ -20,7 +20,7 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
     };
     use iroha_core::{
         block::ValidBlock, executor::Executor, kura::Kura, query::store::LiveQueryStore,
-        smartcontracts::Execute, state::State,
+        smartcontracts::Execute, state::State, zk::zk1_test_helpers as zk1,
     };
     use iroha_data_model::{
         confidential::ConfidentialStatus,
@@ -109,12 +109,15 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
     let mut sblock = state.block(block.as_ref().header());
     let mut stx = sblock.transaction();
 
-    // Register inline VK record
+    // Register inline VK record (ZK1 IPAK + H2VK)
     let backend = "halo2/pasta/tiny-add-v1";
     let k: u32 = 5;
-    let mut vk_bytes = Vec::new();
-    vk_bytes.extend_from_slice(b"H2IP1");
-    vk_bytes.extend_from_slice(&k.to_le_bytes());
+    let params: Params<Curve> = Params::<Curve>::new(k);
+    let vk_h2 = keygen_vk(&params, &TinyAdd::default()).expect("vk");
+    let pk = keygen_pk(&params, vk_h2.clone(), &TinyAdd::default()).expect("pk");
+    let mut vk_bytes = zk1::wrap_start();
+    zk1::wrap_append_ipa_k(&mut vk_bytes, k);
+    zk1::wrap_append_vk_pasta(&mut vk_bytes, &vk_h2);
     let vk_box = VerifyingKeyBox::new(backend.into(), vk_bytes);
     let vk_id = VerifyingKeyId::new(backend, "ballot_v1");
     let commitment = iroha_core::zk::hash_vk(&vk_box);
@@ -173,10 +176,7 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
         },
     );
 
-    // Build valid proof envelope H2PF1
-    let params: Params<Curve> = Params::<Curve>::new(k);
-    let vk_h2 = keygen_vk(&params, &TinyAdd::default()).expect("vk");
-    let pk = keygen_pk(&params, vk_h2, &TinyAdd::default()).expect("pk");
+    // Build valid proof envelope (ZK1)
     let mut transcript = Blake2bWrite::<_, Curve, _>::init(vec![]);
     halo2_proofs::plonk::create_proof::<_, _, _, _>(
         &params,
@@ -188,10 +188,8 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
     )
     .expect("create proof");
     let proof_raw = transcript.finalize();
-    let mut proof_container = Vec::new();
-    proof_container.extend_from_slice(b"H2PF1");
-    proof_container.extend_from_slice(&(proof_raw.len() as u32).to_le_bytes());
-    proof_container.extend_from_slice(&proof_raw);
+    let mut proof_container = zk1::wrap_start();
+    zk1::wrap_append_proof(&mut proof_container, &proof_raw);
     let proof_b64 = base64::engine::general_purpose::STANDARD.encode(&proof_container);
 
     // Cast ballot with public inputs including owner/amount/duration

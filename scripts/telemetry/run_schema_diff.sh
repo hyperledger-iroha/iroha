@@ -17,8 +17,8 @@ Usage:
 Options:
   --android-config PATH   Path to the Android telemetry config JSON to diff.
   --rust-config PATH      Path to the Rust telemetry config JSON to diff.
-  --android-commit SHA    Android git commit to diff (legacy mode).
-  --rust-commit SHA       Rust git commit to diff (legacy mode).
+  --android-commit SHA    Android git commit to diff (commit mode).
+  --rust-commit SHA       Rust git commit to diff (commit mode).
   --out PATH              Explicit output path. Defaults to docs/.../android_vs_rust-<date>.json.
   --policy-out PATH       Optional policy summary output (trimmed JSON for governance bundles).
   --markdown-out PATH     Optional Markdown summary output for readiness packets.

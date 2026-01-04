@@ -182,7 +182,7 @@ antes de enviar mudancas para garantir que a sintaxe passe `promtool check rules
 | `profile_id = sorafs.sf1@1.0.0`, `chunk_range_fetch` presente, aliases canonicos, `signature_strict=true` | OK | OK | OK | OK |
 | Ausencia de `chunk_range_fetch` capability | WARN (ingest + telemetry) | WARN | REJECT (`reason="missing_capability"`) | REJECT |
 | TLVs de capability desconhecida sem `allow_unknown_capabilities=true` | OK | WARN (`reason="unknown_capability"`) | REJECT | REJECT |
-| Handle legacy apenas (`profile_id = sorafs-sf1`) | WARN | REJECT | REJECT | REJECT |
+| Handle legacy apenas (`profile_id = sorafs.sf1@1.0.0`) | WARN | REJECT | REJECT | REJECT |
 | `refresh_deadline` expirado | REJECT | REJECT | REJECT | REJECT |
 | `signature_strict=false` (diagnostic fixtures) | OK (development apenas) | WARN | WARN | REJECT |
 

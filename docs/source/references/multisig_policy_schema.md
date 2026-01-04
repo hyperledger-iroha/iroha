@@ -67,15 +67,11 @@ early feedback before Torii admission rejects the payload.
 
 `MultisigRegister` now requires callers to supply the controller account id
 explicitly. The controller must live in the signatory domain and use a
-non-derivable public key; nodes reject legacy deterministic ids derived from the
-policy hash.
+randomly generated public key; deterministic controller ids are not supported.
 
 - Tooling should mint a fresh keypair, use the public key as the controller id,
   and discard the private key. Controllers never sign transactions directly.
-- Newly registered controllers persist `multisig/spec` metadata and stamp
-  `multisig/derived_key = false`. Legacy controllers that match the deterministic
-  pattern (or carry `multisig/derived_key = true`) are quarantined by admission
-  and cannot sign transactions.
+- Newly registered controllers persist `multisig/spec` metadata.
 - JSON decoding errors when the `account` field is omitted, so clients must send
   the controller id explicitly instead of relying on deterministic derivation.
 

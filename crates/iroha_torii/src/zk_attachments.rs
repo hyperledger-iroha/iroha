@@ -1043,7 +1043,7 @@ pub async fn handle_post_attachment(
 
 /// GET /v1/zk/attachments — list stored attachments metadata.
 pub async fn handle_list_attachments() -> impl IntoResponse {
-    // Back-compat: no filters, full metadata list
+    // Unfiltered list for the default endpoint.
     handle_list_attachments_filtered(NoritoQuery(AttachmentListQuery::default())).await
 }
 

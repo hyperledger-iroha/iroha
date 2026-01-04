@@ -123,7 +123,7 @@ LaneConfigEntry {
 
 ## 設定と Norito 型
 
-- `LaneCatalog`、`LaneMetadata`、`DataSpaceCatalog` は `iroha_data_model::nexus` にあり、マニフェストと SDK 向けに Norito 互換構造を提供する。
+- `LaneCatalog`、`LaneConfig`、`DataSpaceCatalog` は `iroha_data_model::nexus` にあり、マニフェストと SDK 向けに Norito 互換構造を提供する。
 - `LaneConfig` は `iroha_config::parameters::actual::Nexus` にあり、カタログから自動的に導出される。内部ランタイムヘルパーであるため Norito エンコードは不要。
 - ユーザー向け設定（`iroha_config::parameters::user::Nexus`）は宣言的なレーン/データスペース記述子を引き続き受け付け、解析時にジオメトリを導出して無効なエイリアスや重複レーン ID を拒否する。
 - `DataSpaceMetadata.fault_tolerance` はレーン relay 委員会のサイズを制御する。委員会メンバーは `(dataspace_id, lane_id)` を結合した VRF エポックシードにより、dataspace バリデータプールからエポックごとに決定論的にサンプリングされる。

@@ -170,7 +170,7 @@ groups:
 | `profile_id = sorafs.sf1@1.0.0`, `chunk_range_fetch` קיים, aliases קנוניים, `signature_strict=true` | ✅ | ✅ | ✅ | ✅ |
 | חסר capability `chunk_range_fetch` | ⚠️ Warn (ingest + telemetry) | ⚠️ Warn | ❌ Reject (`reason="missing_capability"`) | ❌ Reject |
 | TLVs של capability לא מוכרת ללא `allow_unknown_capabilities=true` | ✅ | ⚠️ Warn (`reason="unknown_capability"`) | ❌ Reject | ❌ Reject |
-| Handle legacy בלבד (`profile_id = sorafs-sf1`) | ⚠️ Warn | ❌ Reject | ❌ Reject | ❌ Reject |
+| Handle legacy בלבד (`profile_id = sorafs.sf1@1.0.0`) | ⚠️ Warn | ❌ Reject | ❌ Reject | ❌ Reject |
 | `refresh_deadline` פג תוקף | ❌ Reject | ❌ Reject | ❌ Reject | ❌ Reject |
 | `signature_strict=false` (fixtures דיאגנוסטיים) | ✅ (פיתוח בלבד) | ⚠️ Warn | ⚠️ Warn | ❌ Reject |
 

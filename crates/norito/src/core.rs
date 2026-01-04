@@ -168,8 +168,7 @@ pub mod header_flags {
     /// Sequence length itself is encoded as compact varint instead of fixed u64.
     ///
     /// This applies to the outer length header used by sequences and maps when
-    /// present. Old payloads used fixed 8-byte little-endian length; decoders
-    /// select behavior based on this flag for backward compatibility.
+    /// present. Decoders select behavior based on this flag.
     pub const COMPACT_SEQ_LEN: u8 = 0x10;
     /// Packed-struct omits per-field sizes for self-delimiting/fixed-size fields
     /// and prefixes a compact bitset indicating which fields carry an explicit size.
@@ -584,7 +583,7 @@ pub fn payload_root_span() -> Option<(usize, usize)> {
     DECODE_ROOT_SPAN.with(|slot| *slot.borrow())
 }
 
-// Compat length-compatibility toggle (per-thread)
+// Per-thread payload context (base pointer, length, and optional schema hash).
 fn set_payload_ctx_state(
     bytes: &[u8],
     schema: Option<[u8; 16]>,
@@ -1262,8 +1261,8 @@ pub fn use_field_bitset() -> bool {
 ///
 /// Supports both fixed-offset (`PACKED_SEQ`) and varint-length (`VARINT_OFFSETS`)
 /// encodings emitted by derive-generated serializers. Returns the computed
-/// offsets, number of header bytes consumed, packed data length and any optional
-/// tail length appended for compatibility.
+/// offsets, number of header bytes consumed, packed data length, and any optional
+/// tail length appended when varint tails are enabled.
 pub fn decode_packed_offsets_slice(
     slice: &[u8],
     count: usize,
@@ -1523,8 +1522,6 @@ pub unsafe fn read_seq_len_ptr(ptr: *const u8) -> Result<(usize, usize), Error> 
     Ok((len, used))
 }
 
-/// Backward-compatible shim for pointer-based sequence length headers.
-///
 /// Pointer-based helper for reading a length header within the current payload context.
 ///
 /// # Safety
@@ -5507,15 +5504,7 @@ pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(bytes: &'a [u8]) -> Result<&'a A
         ));
     }
     if header.schema != T::schema_hash() {
-        // Compatibility: allow InstructionBox archives that previously used
-        // the type-name schema hash of `iroha_data_model::isi::InstructionBox`
-        // while still encoding the payload as a `(String, Vec<u8>)` tuple.
-        let tname = std::any::type_name::<T>();
-        let compat = tname == "iroha_data_model::isi::InstructionBox"
-            && header.schema == schema_hash_for_name("iroha_data_model::isi::InstructionBox");
-        if !compat {
-            return Err(Error::SchemaMismatch);
-        }
+        return Err(Error::SchemaMismatch);
     }
     let pos = cursor.position() as usize;
     let slice = &bytes[pos..];

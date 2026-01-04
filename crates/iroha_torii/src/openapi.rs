@@ -2200,16 +2200,6 @@ fn system_paths() -> Map {
         )),
     );
     paths.insert(
-        "/server_version".to_owned(),
-        Value::Object(json_get_operation(
-            "System",
-            "Fetch Torii server version info.",
-            "Return the Torii server version and git sha.",
-            "#/components/schemas/ServerVersion",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
         "/peers".to_owned(),
         Value::Object(json_get_operation(
             "System",
@@ -6885,18 +6875,6 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "ServerVersion".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["version", "git_sha"],
-            "additionalProperties": false,
-            "properties": {
-                "version": { "type": "string", "description": "Torii binary version string." },
-                "git_sha": { "type": "string", "description": "Git commit SHA." }
-            }
-        }),
-    );
-    schemas.insert(
         "PeerIdList".to_owned(),
         norito::json!({
             "type": "array",
@@ -9663,7 +9641,7 @@ mod tests {
             PathCase {
                 label: "system",
                 builder: system_paths,
-                expected: "/server_version",
+                expected: "/status",
             },
             PathCase {
                 label: "operator_auth",
@@ -9825,7 +9803,6 @@ mod tests {
             "JsonValue",
             "JsonList",
             "ApiVersionInfo",
-            "ServerVersion",
             "PeerIdList",
             "PushRegisterDeviceRequest",
         ] {

@@ -240,8 +240,8 @@ where
 
 /// Lightweight predicate container.
 ///
-/// Serialized with a stable wire wrapper so predicate payloads remain backward
-/// compatible while still carrying runtime filter data.
+/// Serialized with a stable wire wrapper so predicate payloads remain consistent
+/// while still carrying runtime filter data.
 #[derive(Debug)]
 pub struct CompoundPredicate<T> {
     payload: Option<Arc<dyn Any + Send + Sync + 'static>>,

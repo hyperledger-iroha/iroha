@@ -1255,8 +1255,8 @@ ffi::ffi_item! {
     /// Its serialized form (via serde `Serialize`/`Deserialize`, plus [`Display`] and [`FromStr`]) is
     /// represented as a [multihash](https://www.multiformats.io/multihash/) string.
     /// [`FromStr`] also accepts an algorithm-prefixed form like
-    /// `"ed25519:<multihash-hex>"` for clarity in JSON. [`Display`] remains
-    /// the bare multihash hex for backward compatibility.
+    /// `"ed25519:<multihash-hex>"` for clarity in JSON. [`Display`] returns
+    /// the bare multihash hex.
     /// For example:
     ///
     /// ```
@@ -1978,8 +1978,8 @@ impl norito::json::JsonSerialize for PrivateKey {
 /// Use when you need to format/serialize private key (e.g in kagami)
 ///
 /// [`FromStr`] accepts both a bare multihash hex string and an algorithm-prefixed
-/// variant such as `"ml-dsa:<multihash-hex>"`. The default [`Display`] formatting remains
-/// the bare multihash hex to preserve backward compatibility.
+/// variant such as `"ml-dsa:<multihash-hex>"`. The default [`Display`] formatting returns
+/// the bare multihash hex.
 #[derive(Clone, Eq, PartialEq)]
 pub struct ExposedPrivateKey(pub PrivateKey);
 

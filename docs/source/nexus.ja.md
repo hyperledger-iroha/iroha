@@ -54,7 +54,7 @@ Data Spaces モデル
 - Governance: DS メンバーシップとバリデータローテーションはマニフェストの governance セクションで定義（on-chain 提案、multisig、または nexus トランザクションと attestations でアンカーされる外部ガバナンス）。
 
 Dataspace-aware gossip
-- トランザクション gossip バッチは lane catalog 由来の plane tag（public vs restricted）を持つ。restricted バッチは `transaction_gossip_restricted_target_cap` を尊重して現在の commit topology に unicast、public バッチは `transaction_gossip_public_target_cap` を使用（broadcast は `null`）。ターゲット選定は `transaction_gossip_public_target_reshuffle_ms` と `transaction_gossip_restricted_target_reshuffle_ms`（既定: `transaction_gossip_period_ms`）に従い再シャッフルされる。commit topology が空のとき、`transaction_gossip_restricted_public_payload`（既定 `refuse`）で public overlay へ転送するか拒否するかを選べる。テレメトリは fallback 試行、forward/drop カウント、設定ポリシー、および dataspace ごとのターゲット選定を公開する。
+- トランザクション gossip バッチは lane catalog 由来の plane tag（public vs restricted）を持つ。restricted バッチは `transaction_gossip_restricted_target_cap` を尊重して現在の commit topology のオンライン・ピアに unicast、public バッチは `transaction_gossip_public_target_cap` を使用（broadcast は `null`）。ターゲット選定は `transaction_gossip_public_target_reshuffle_ms` と `transaction_gossip_restricted_target_reshuffle_ms`（既定: `transaction_gossip_period_ms`）に従い再シャッフルされる。commit topology にオンライン・ピアがいないとき、`transaction_gossip_restricted_public_payload`（既定 `refuse`）で public overlay へ転送するか拒否するかを選べる。テレメトリは fallback 試行、forward/drop カウント、設定ポリシー、および dataspace ごとのターゲット選定を公開する。
 - `transaction_gossip_drop_unknown_dataspace` が有効なら未知 dataspace は再キュー、無効なら漏洩回避のため restricted targeting にフォールバック。
 - 受信側検証で、lane/dataspace がローカル catalog と一致しないバッチ、または plane tag が可視性に合わないバッチは破棄される。
 
@@ -329,7 +329,7 @@ Configuration and Determinism
 
 ### Runtime Lane Lifecycle Control
 
-- **Admin endpoint:** `POST /v1/nexus/lifecycle`（Torii）が `additions`（`LaneMetadata` 完全オブジェクト）と `retire`（lane ids）を受け取り、再起動なしで lane を追加/削除。`nexus.enabled=true` で gated し、同じ Nexus configuration/state view を使用。
+- **Admin endpoint:** `POST /v1/nexus/lifecycle`（Torii）が `additions`（`LaneConfig` 完全オブジェクト）と `retire`（lane ids）を受け取り、再起動なしで lane を追加/削除。`nexus.enabled=true` で gated し、同じ Nexus configuration/state view を使用。
 - **Behaviour:** 成功時に WSV/Kura metadata を更新し、queue routing/limits/manifests を再構築し、`{ ok: true, lane_count: <u32> }` を返す。検証失敗（未知の retire ids、重複 alias/id、Nexus 無効）時は `400 Bad Request` と `lane_lifecycle_error` を返す。
 - **Safety:** shared state view lock を使い読み手との競合を回避。外部で lifecycle 更新のシリアライズは必要。
 - **TODO:** per-lane scheduler/DA/RBC rebalance、validator-set 伝播、ストレージ teardown/cleanup は未対応。頻繁な lifecycle リクエストは避ける。

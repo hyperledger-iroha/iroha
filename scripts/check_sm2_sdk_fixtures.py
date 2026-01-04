@@ -19,7 +19,7 @@ from typing import Dict, Iterable, Tuple
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FIXTURE_PATH = REPO_ROOT / "fixtures" / "sm" / "sm2_fixture.json"
 
-# Expected values for the legacy top-level fields.
+# Expected values for the top-level fields.
 _EXPECTED_TOP_LEVEL: Dict[str, str] = {
     "distid": "1234567812345678",
     "seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
@@ -173,4 +173,3 @@ def main(argv: Iterable[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry
     sys.exit(main())
-

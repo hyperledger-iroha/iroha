@@ -469,7 +469,7 @@
       "tests": [
         {
           "tcId": 50,
-          "comment": "Legacy deterministic SM2 fixture retained as the default top-level reference for SDKs.",
+          "comment": "Deterministic SM2 fixture retained as the default top-level reference for SDKs.",
           "flags": [],
           "msg": "69726F686120736D2073646B2066697874757265",
           "result": "valid",

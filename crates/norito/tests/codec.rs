@@ -25,17 +25,16 @@ fn codec_roundtrip() {
 #[test]
 fn decode_all_roundtrip() {
     let original = Sample(7);
-    let bytes = original.encode();
-    // Use bare decode helper to validate full consumption
-    let decoded = norito::decode_bare_from_bytes::<Sample>(&bytes).expect("decode_all");
+    let bytes = norito::to_bytes(&original).expect("encode header");
+    let decoded = norito::decode_from_bytes::<Sample>(&bytes).expect("decode");
     assert_eq!(original, decoded);
 }
 
 #[test]
 fn decode_all_rejects_trailing_bytes() {
-    let mut bytes = Sample(7).encode();
+    let mut bytes = norito::to_bytes(&Sample(7)).expect("encode header");
     bytes.extend_from_slice(&[1, 2, 3]);
-    assert!(norito::decode_bare_from_bytes::<Sample>(&bytes).is_err());
+    assert!(norito::decode_from_bytes::<Sample>(&bytes).is_err());
 }
 
 #[test]
@@ -418,8 +417,8 @@ fn large_tuple_roundtrip() {
 #[test]
 fn decode_helper_roundtrip() {
     let original = Sample(123);
-    let bytes = original.encode();
-    let decoded = norito::decode_bare_from_bytes::<Sample>(&bytes).expect("decode");
+    let bytes = norito::to_bytes(&original).expect("encode header");
+    let decoded = norito::decode_from_bytes::<Sample>(&bytes).expect("decode");
     assert_eq!(original, decoded);
 }
 

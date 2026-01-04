@@ -40,7 +40,7 @@ by `sorafs_manifest::chunker_registry::ensure_charter_compliance()`:
 
 - Profile IDs are positive integers that increase monotonically without gaps.
 - The canonical handle (`namespace.name@semver`) must appear in the alias list
-  and **must** be the first entry. Legacy aliases (e.g., `sorafs-sf1`) follow.
+  and **must** be the first entry.
 - No alias may collide with another canonical handle or appear more than once.
 - Aliases must be non-empty and trimmed of whitespace.
 
@@ -66,7 +66,7 @@ canonical metadata needed in governance discussions.
 | `name` | Human-readable label. | `sf1` |
 | `semver` | Semantic version string for the parameter set. | `1.0.0` |
 | `profile_id` | Monotonic numeric identifier assigned once the profile lands. Reserve the next id but do not reuse existing numbers. | `1` |
-| `profile_aliases` | Optional additional handles (legacy names, shorthand) exposed to clients during negotiation. Always include the canonical handle as the first entry. | `["sorafs-sf1"]` |
+| `profile_aliases` | Optional additional handles exposed to clients during negotiation. Always include the canonical handle as the first entry. | `["sorafs.sf1@1.0.0"]` |
 | `profile.min_size` | Minimum chunk length in bytes. | `65536` |
 | `profile.target_size` | Target chunk length in bytes. | `262144` |
 | `profile.max_size` | Maximum chunk length in bytes. | `524288` |

@@ -93,7 +93,7 @@ fn main() -> Result<()> {
 
     // Assemble final program: IVM header + code (little-endian) + data
     let meta = ProgramMetadata {
-        version_major: 2,
+        version_major: 1,
         version_minor: 0,
         mode: 0,
         vector_length: 0,

@@ -1514,12 +1514,12 @@ impl StateBlock<'_> {
         let meta = summary.metadata.clone();
         let offset = summary.code_offset;
 
-        // Version gate: accept known major versions only (2.x for now).
-        if meta.version_major != 2 {
+        // Version gate: accept known major versions only (1.x for now).
+        if meta.version_major != 1 {
             return Err(TransactionRejectionReason::Validation(
                 ValidationFail::IvmAdmission(
-                    iroha_data_model::validation_fail::IvmAdmissionError::UnsupportedVersion(
-                        iroha_data_model::validation_fail::UnsupportedVersionInfo {
+                    iroha_data_model::executor::IvmAdmissionError::UnsupportedVersion(
+                        iroha_data_model::executor::UnsupportedVersionInfo {
                             major: meta.version_major,
                             minor: meta.version_minor,
                         },
@@ -1533,18 +1533,18 @@ impl StateBlock<'_> {
         if meta.mode & !known != 0 {
             return Err(TransactionRejectionReason::Validation(
                 ValidationFail::IvmAdmission(
-                    iroha_data_model::validation_fail::IvmAdmissionError::UnsupportedFeatureBits(
+                    iroha_data_model::executor::IvmAdmissionError::UnsupportedFeatureBits(
                         meta.mode & !known,
                     ),
                 ),
             ));
         }
 
-        // ABI compatibility: reject ABI version 0; gate >1 by runtime governance activation
+        // ABI validation: reject ABI version 0; gate >1 by runtime governance activation
         if meta.abi_version == 0 {
             return Err(TransactionRejectionReason::Validation(
                 ValidationFail::IvmAdmission(
-                    iroha_data_model::validation_fail::IvmAdmissionError::UnsupportedAbiVersion(0),
+                    iroha_data_model::executor::IvmAdmissionError::UnsupportedAbiVersion(0),
                 ),
             ));
         }
@@ -1565,7 +1565,7 @@ impl StateBlock<'_> {
             if !active.contains(&u16::from(meta.abi_version)) {
                 return Err(TransactionRejectionReason::Validation(
                     ValidationFail::IvmAdmission(
-                        iroha_data_model::validation_fail::IvmAdmissionError::AbiVersionNotActive(
+                        iroha_data_model::executor::IvmAdmissionError::AbiVersionNotActive(
                             meta.abi_version,
                         ),
                     ),
@@ -1573,7 +1573,7 @@ impl StateBlock<'_> {
             }
             let rec = matching_upgrade.ok_or(TransactionRejectionReason::Validation(
                 ValidationFail::IvmAdmission(
-                    iroha_data_model::validation_fail::IvmAdmissionError::AbiVersionNotActive(
+                    iroha_data_model::executor::IvmAdmissionError::AbiVersionNotActive(
                         meta.abi_version,
                     ),
                 ),
@@ -1582,8 +1582,8 @@ impl StateBlock<'_> {
             if expected != summary.abi_hash {
                 return Err(TransactionRejectionReason::Validation(
                     ValidationFail::IvmAdmission(
-                        iroha_data_model::validation_fail::IvmAdmissionError::ManifestAbiHashMismatch(
-                            iroha_data_model::validation_fail::ManifestAbiHashMismatchInfo {
+                        iroha_data_model::executor::IvmAdmissionError::ManifestAbiHashMismatch(
+                            iroha_data_model::executor::ManifestAbiHashMismatchInfo {
                                 expected,
                                 actual: summary.abi_hash,
                             },
@@ -1597,8 +1597,8 @@ impl StateBlock<'_> {
         if meta.vector_length != 0 && meta.vector_length > 64 {
             return Err(TransactionRejectionReason::Validation(
                 ValidationFail::IvmAdmission(
-                    iroha_data_model::validation_fail::IvmAdmissionError::VectorLengthTooLarge(
-                        iroha_data_model::validation_fail::VectorLengthTooLargeInfo {
+                    iroha_data_model::executor::IvmAdmissionError::VectorLengthTooLarge(
+                        iroha_data_model::executor::VectorLengthTooLargeInfo {
                             vector_length: meta.vector_length,
                             max_allowed: 64,
                         },
@@ -1611,7 +1611,7 @@ impl StateBlock<'_> {
         if meta.max_cycles == 0 {
             return Err(TransactionRejectionReason::Validation(
                 ValidationFail::IvmAdmission(
-                    iroha_data_model::validation_fail::IvmAdmissionError::MissingMaxCycles,
+                    iroha_data_model::executor::IvmAdmissionError::MissingMaxCycles,
                 ),
             ));
         }
@@ -1624,8 +1624,8 @@ impl StateBlock<'_> {
         if meta.max_cycles > fuel_limit {
             return Err(TransactionRejectionReason::Validation(
                 ValidationFail::IvmAdmission(
-                    iroha_data_model::validation_fail::IvmAdmissionError::MaxCyclesExceedsFuel(
-                        iroha_data_model::validation_fail::MaxCyclesExceedsFuelInfo {
+                    iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsFuel(
+                        iroha_data_model::executor::MaxCyclesExceedsFuelInfo {
                             max_cycles: meta.max_cycles,
                             fuel_limit,
                         },
@@ -1646,8 +1646,8 @@ impl StateBlock<'_> {
         if upper_bound != 0 && meta.max_cycles > upper_bound {
             return Err(TransactionRejectionReason::Validation(
                 ValidationFail::IvmAdmission(
-                    iroha_data_model::validation_fail::IvmAdmissionError::MaxCyclesExceedsUpperBound(
-                        iroha_data_model::validation_fail::MaxCyclesExceedsUpperBoundInfo {
+                    iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsUpperBound(
+                        iroha_data_model::executor::MaxCyclesExceedsUpperBoundInfo {
                             max_cycles: meta.max_cycles,
                             upper_bound,
                         },
@@ -1663,10 +1663,10 @@ impl StateBlock<'_> {
             Some(
                 ivm::ivm_cache::global_get_with_meta(code, &meta).map_err(|err| {
                     TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                    iroha_data_model::validation_fail::IvmAdmissionError::BytecodeDecodingFailed(
-                        err.to_string(),
-                    ),
-                ))
+                        iroha_data_model::executor::IvmAdmissionError::BytecodeDecodingFailed(
+                            err.to_string(),
+                        ),
+                    ))
                 })?,
             )
         };
@@ -1679,8 +1679,8 @@ impl StateBlock<'_> {
                 if decoded_instr > inst_cap {
                     return Err(TransactionRejectionReason::Validation(
                         ValidationFail::IvmAdmission(
-                            iroha_data_model::validation_fail::IvmAdmissionError::DecodedInstructionCountExceeded(
-                                iroha_data_model::validation_fail::DecodedInstructionLimitInfo {
+                            iroha_data_model::executor::IvmAdmissionError::DecodedInstructionCountExceeded(
+                                iroha_data_model::executor::DecodedInstructionLimitInfo {
                                     decoded_instructions: decoded_instr,
                                     limit: inst_cap,
                                 },
@@ -1698,8 +1698,8 @@ impl StateBlock<'_> {
                 if decoded_bytes > bytes_cap {
                     return Err(TransactionRejectionReason::Validation(
                         ValidationFail::IvmAdmission(
-                            iroha_data_model::validation_fail::IvmAdmissionError::DecodedCodeSizeExceeded(
-                                iroha_data_model::validation_fail::DecodedCodeSizeLimitInfo {
+                            iroha_data_model::executor::IvmAdmissionError::DecodedCodeSizeExceeded(
+                                iroha_data_model::executor::DecodedCodeSizeLimitInfo {
                                     decoded_bytes,
                                     limit: bytes_cap,
                                 },
@@ -1745,8 +1745,8 @@ impl StateBlock<'_> {
                 {
                     return Err(TransactionRejectionReason::Validation(
                         ValidationFail::IvmAdmission(
-                            iroha_data_model::validation_fail::IvmAdmissionError::ManifestCodeHashMismatch(
-                                iroha_data_model::validation_fail::ManifestCodeHashMismatchInfo {
+                            iroha_data_model::executor::IvmAdmissionError::ManifestCodeHashMismatch(
+                                iroha_data_model::executor::ManifestCodeHashMismatchInfo {
                                     expected: mh,
                                     actual: code_hash,
                                 },
@@ -1759,8 +1759,8 @@ impl StateBlock<'_> {
                 {
                     return Err(TransactionRejectionReason::Validation(
                         ValidationFail::IvmAdmission(
-                            iroha_data_model::validation_fail::IvmAdmissionError::ManifestAbiHashMismatch(
-                                iroha_data_model::validation_fail::ManifestAbiHashMismatchInfo {
+                            iroha_data_model::executor::IvmAdmissionError::ManifestAbiHashMismatch(
+                                iroha_data_model::executor::ManifestAbiHashMismatchInfo {
                                     expected: ah,
                                     actual: abi_hash,
                                 },
@@ -2678,7 +2678,7 @@ pub mod tests {
         str::FromStr,
     };
 
-    use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::{Account, AccountId, MultisigMember, MultisigPolicy},
         block::{BlockHeader, SignedBlock},
@@ -2980,9 +2980,8 @@ pub mod tests {
                 .expect("nonzero multisig ttl"),
         };
 
-        let seed = HashOf::<(DomainId, MultisigSpec)>::new(&(domain_id.clone(), spec.clone()));
-        let derived = KeyPair::from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519);
-        let multisig_id = AccountId::new(domain_id.clone(), derived.public_key().clone());
+        let multisig_key = KeyPair::random();
+        let multisig_id = AccountId::new(domain_id.clone(), multisig_key.public_key().clone());
 
         let mut multisig_metadata = Metadata::default();
         multisig_metadata.insert(
@@ -3008,7 +3007,7 @@ pub mod tests {
                 Level::INFO,
                 "direct multisig signer bypass".into(),
             )])
-            .sign(derived.private_key());
+            .sign(multisig_key.private_key());
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
@@ -3741,13 +3740,13 @@ pub mod tests {
     const IVM_METADATA_HEADER_LEN: usize = 17;
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 
-    /// Build a minimal valid IVM program: header (2.0, vector=4, `max_cycles=0`, abi=1) + HALT.
+    /// Build a minimal valid IVM program: header (1.0, vector=4, `max_cycles=0`, abi=1) + HALT.
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         let mut code = Vec::new();
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut program = Vec::new();
         program.extend_from_slice(b"IVM\0");
-        program.extend_from_slice(&[2, 0, 0, 4]);
+        program.extend_from_slice(&[1, 0, 0, 4]);
         program.extend_from_slice(&1_000u64.to_le_bytes());
         program.push(abi_version);
         program.extend_from_slice(&code);
@@ -3776,7 +3775,7 @@ pub mod tests {
         }
         let mut program = Vec::new();
         program.extend_from_slice(b"IVM\0");
-        program.extend_from_slice(&[2, 0, 0, 4]);
+        program.extend_from_slice(&[1, 0, 0, 4]);
         program.extend_from_slice(&max_cycles.to_le_bytes());
         program.push(abi_version);
         program.extend_from_slice(&code);
@@ -3835,7 +3834,7 @@ pub mod tests {
 
         let mut program = Vec::new();
         program.extend_from_slice(b"IVM\0");
-        program.extend_from_slice(&[2, 0, 0, 4]);
+        program.extend_from_slice(&[1, 0, 0, 4]);
         program.extend_from_slice(&1_000u64.to_le_bytes());
         program.push(abi_version);
         program.extend_from_slice(&code);
@@ -3926,7 +3925,7 @@ pub mod tests {
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                iroha_data_model::validation_fail::IvmAdmissionError::AbiVersionNotActive(..),
+                iroha_data_model::executor::IvmAdmissionError::AbiVersionNotActive(..),
             ))) => {}
             other => panic!("Expected AbiVersionNotActive structured error, got {other:?}"),
         }
@@ -3966,7 +3965,7 @@ pub mod tests {
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                iroha_data_model::validation_fail::IvmAdmissionError::UnsupportedAbiVersion(0),
+                iroha_data_model::executor::IvmAdmissionError::UnsupportedAbiVersion(0),
             ))) => {}
             other => panic!("Expected UnsupportedAbiVersion(0) error, got {other:?}"),
         }
@@ -4049,7 +4048,7 @@ pub mod tests {
         let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                iroha_data_model::validation_fail::IvmAdmissionError::ManifestAbiHashMismatch(info),
+                iroha_data_model::executor::IvmAdmissionError::ManifestAbiHashMismatch(info),
             ))) => {
                 assert_eq!(info.expected, iroha_crypto::Hash::prehashed(wrong_abi));
                 assert_eq!(info.actual, iroha_crypto::Hash::prehashed(abi_hash));
@@ -4176,7 +4175,7 @@ pub mod tests {
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                iroha_data_model::validation_fail::IvmAdmissionError::ManifestAbiHashMismatch(..),
+                iroha_data_model::executor::IvmAdmissionError::ManifestAbiHashMismatch(..),
             ))) => {}
             other => panic!(
                 "Expected ManifestAbiHashMismatch structured error for mismatched manifest, got {other:?}"
@@ -4240,7 +4239,7 @@ pub mod tests {
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                iroha_data_model::validation_fail::IvmAdmissionError::ManifestCodeHashMismatch(..),
+                iroha_data_model::executor::IvmAdmissionError::ManifestCodeHashMismatch(..),
             ))) => {}
             other => panic!(
                 "Expected ManifestCodeHashMismatch structured error for mismatched manifest, got {other:?}"
@@ -4325,7 +4324,7 @@ pub mod tests {
         let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                iroha_data_model::validation_fail::IvmAdmissionError::ManifestAbiHashMismatch(info),
+                iroha_data_model::executor::IvmAdmissionError::ManifestAbiHashMismatch(info),
             ))) => {
                 assert_eq!(info.expected, iroha_crypto::Hash::prehashed(wrong_abi));
                 assert_eq!(info.actual, iroha_crypto::Hash::prehashed(abi_hash));
@@ -4370,9 +4369,7 @@ pub mod tests {
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                iroha_data_model::validation_fail::IvmAdmissionError::MaxCyclesExceedsUpperBound(
-                    ..,
-                ),
+                iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsUpperBound(..),
             ))) => {}
             other => panic!("Expected MaxCyclesExceedsUpperBound structured error, got {other:?}"),
         }
@@ -4410,7 +4407,7 @@ pub mod tests {
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                iroha_data_model::validation_fail::IvmAdmissionError::MissingMaxCycles,
+                iroha_data_model::executor::IvmAdmissionError::MissingMaxCycles,
             ))) => {}
             other => panic!("Expected MissingMaxCycles error, got {other:?}"),
         }
@@ -4454,7 +4451,7 @@ pub mod tests {
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                iroha_data_model::validation_fail::IvmAdmissionError::MaxCyclesExceedsFuel(info),
+                iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsFuel(info),
             ))) => {
                 assert_eq!(info.fuel_limit, fuel_limit);
                 assert_eq!(info.max_cycles, fuel_limit + 1);
@@ -4501,7 +4498,9 @@ pub mod tests {
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                iroha_data_model::validation_fail::IvmAdmissionError::DecodedInstructionCountExceeded(info),
+                iroha_data_model::executor::IvmAdmissionError::DecodedInstructionCountExceeded(
+                    info,
+                ),
             ))) => {
                 assert_eq!(info.limit, 2);
                 assert_eq!(info.decoded_instructions, 4);
@@ -4547,7 +4546,7 @@ pub mod tests {
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                iroha_data_model::validation_fail::IvmAdmissionError::DecodedCodeSizeExceeded(info),
+                iroha_data_model::executor::IvmAdmissionError::DecodedCodeSizeExceeded(info),
             ))) => {
                 assert_eq!(info.limit, 8);
                 assert_eq!(info.decoded_bytes, 16);

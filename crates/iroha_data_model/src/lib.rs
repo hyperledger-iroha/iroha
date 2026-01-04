@@ -145,7 +145,6 @@ pub mod transactions;
 /// Trigger definitions and scheduling utilities.
 pub mod trigger;
 /// Validation failure diagnostics surfaced to clients.
-pub mod validation_fail;
 /// Permission tokens and helpers related to validators.
 pub mod validator;
 /// Verification helper traits and host bindings.
@@ -337,7 +336,7 @@ pub mod prelude {
             DataSpaceCatalog, DataSpaceCatalogError, DataSpaceId, DataSpaceMetadata,
             DomainCommittee, DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementScope,
             DomainEndorsementSignature, LaneCatalog, LaneCatalogError, LaneConfig, LaneId,
-            LaneIdError, LaneLifecyclePlan, LaneMetadata, LaneRelayEnvelope, LaneStorageProfile,
+            LaneIdError, LaneLifecyclePlan, LaneRelayEnvelope, LaneStorageProfile,
             LaneStorageProfileParseError, LaneVisibility, LaneVisibilityParseError,
         },
         nft::prelude::*,

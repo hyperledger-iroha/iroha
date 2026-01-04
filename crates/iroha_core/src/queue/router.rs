@@ -325,7 +325,7 @@ mod tests {
             smart_contract_code::RegisterSmartContractBytes,
         },
         metadata::Metadata,
-        nexus::LaneMetadata,
+        nexus::LaneConfig,
         prelude::*,
         transaction::TransactionBuilder,
     };
@@ -370,10 +370,10 @@ mod tests {
             std::num::NonZeroU32::new(max_lane + 1).expect("catalog requires nonzero lanes");
         let entries = lanes
             .iter()
-            .map(|lane_id| LaneMetadata {
+            .map(|lane_id| LaneConfig {
                 id: *lane_id,
                 alias: format!("lane-{}", lane_id.as_u32()),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             })
             .collect();
         LaneCatalog::new(lane_count, entries).expect("valid lane catalog")

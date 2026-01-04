@@ -1,22 +1,21 @@
 {
   "chunk_digest_sha3_256": "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482",
   "manifest": "manifest_blake3.json",
-  "manifest_blake3": "101ec2aa55346e0ec57b2da6c7b9a9adde85ef13cbbf56c349bceafad7917c21",
+  "manifest_blake3": "c8c45c025ecee39b5ac5bf3db3dc1e2f97a7eaf7ea0aac72056eedd85439d4e4",
   "profile": "sorafs.sf1@1.0.0",
   "profile_aliases": [
-    "sorafs.sf1@1.0.0",
-    "sorafs-sf1"
+    "sorafs.sf1@1.0.0"
   ],
   "signatures": [
     {
       "algorithm": "ed25519",
-      "signature": "1fee2f32c9d17a0bbcddbc1ed3401a29827243314cd1e1d22cceafc5c72e0756658eead516e598b75643e5c04932c01cd6d904e7f8ac395a0ab6c61525bfec0c",
+      "signature": "750aaf1524d066cbd1e1f5a4c15777d2fbbeb1cc7a0f975de0684f4c65068ab5013f9a4ae080462bae1881ded71f182369956e2f320048bd789e7648e16d9000",
       "signer": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
       "signer_multihash": "ed012003A107BFF3CE10BE1D70DD18E74BC09967E4D6309BA50D5F1DDC8664125531B8"
     },
     {
       "algorithm": "ed25519",
-      "signature": "ca1ca2a75fdc7ae3cfa7ca61bb40ec8143710f0876cb9076730ad2333b24897491a43362f59c3c3d515b16d8ca4b4203b34d473b49a8d33be44447a4d409790d",
+      "signature": "4ba19a3ea5bba9d6768b7590187822171508d558f48af7e6a399eac28e44720227db607679a9eb21c0f7d74013b39dbd11f4817978e5e00af4c43dc8d7eb1f01",
       "signer": "29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7",
       "signer_multihash": "ed012029ACBAE141BCCAF0B22E1A94D34D0BC7361E526D0BFE12C89794BC9322966DD7"
     }

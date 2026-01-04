@@ -456,7 +456,7 @@ mod tests {
             types::{BlobDigest, StorageTicketId},
         },
         nexus::{
-            DataSpaceId, LaneCatalog, LaneId, LaneMetadata, LaneStorageProfile, LaneVisibility,
+            DataSpaceId, LaneCatalog, LaneId, LaneConfig, LaneStorageProfile, LaneVisibility,
             ShardId,
         },
         sorafs::pin_registry::ManifestDigest,
@@ -490,12 +490,12 @@ mod tests {
         let lane_count = nonzero!(lane_id.saturating_add(1));
         let catalog = LaneCatalog::new(
             lane_count,
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(lane_id),
                 dataspace_id: DataSpaceId::GLOBAL,
                 alias: format!("lane{lane_id}"),
                 metadata,
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("lane catalog");
@@ -568,7 +568,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(0),
                 dataspace_id: DataSpaceId::GLOBAL,
                 alias: "lane".to_string(),
@@ -654,12 +654,12 @@ mod tests {
         let catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("lane count"),
             vec![
-                LaneMetadata {
+                LaneConfig {
                     id: LaneId::new(0),
                     alias: "lane0".into(),
-                    ..LaneMetadata::default()
+                    ..LaneConfig::default()
                 },
-                LaneMetadata {
+                LaneConfig {
                     id: LaneId::new(1),
                     alias: "lane1".into(),
                     metadata: {
@@ -667,7 +667,7 @@ mod tests {
                         map.insert("da_shard_id".to_string(), "5".to_string());
                         map
                     },
-                    ..LaneMetadata::default()
+                    ..LaneConfig::default()
                 },
             ],
         )
@@ -695,11 +695,11 @@ mod tests {
         let path = DaShardCursorJournal::journal_path(dir.path());
         let catalog = LaneCatalog::new(
             NonZeroU32::new(1).expect("lane count"),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(0),
                 dataspace_id: DataSpaceId::GLOBAL,
                 alias: "lane0".into(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("catalog");

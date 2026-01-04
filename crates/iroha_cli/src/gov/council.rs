@@ -94,7 +94,7 @@ impl Run for PersistCouncilArgs {
             .and_then(|v| v.as_array())
             .map_or(0, Vec::len);
         let summary = Some(format!(
-            "council-persist: epoch={epoch} members={members} alternates={alternates} verified={verified}"
+            "council persist: epoch={epoch} members={members} alternates={alternates} verified={verified}"
         ));
         print_with_summary(context, summary, &value, self.summary_only, self.no_summary)
     }
@@ -402,7 +402,7 @@ impl Run for DeriveAndPersistArgs {
         let derive = self.derive_once(&client, &candidates)?;
         let persisted = self.persist_once(&client, &candidates, derive.epoch)?;
         let summary = Some(format!(
-            "council-derive-and-persist: epoch={} members={} alternates={} verified={}",
+            "council derive-and-persist: epoch={} members={} alternates={} verified={}",
             derive.epoch, derive.members, derive.alternates, derive.verified
         ));
         let combined = json_object(vec![
@@ -534,7 +534,7 @@ impl DeriveAndPersistArgs {
             .and_then(|v| v.as_array())
             .map_or(0, Vec::len);
         context.println(format!(
-            "council-verify: event={event_ok} current_epoch={curr_epoch} members={curr_members} alternates={curr_alternates}"
+            "council verify: event={event_ok} current_epoch={curr_epoch} members={curr_members} alternates={curr_alternates}"
         ))?;
         if !event_ok || curr_epoch != epoch {
             return Err(eyre!(
@@ -669,7 +669,7 @@ impl Run for ReplaceCouncilArgs {
             .and_then(norito::json::Value::as_bool)
             .unwrap_or(false);
         let summary = Some(format!(
-            "council-replace: epoch={epoch} members={members} alternates={alternates} replaced={replaced}"
+            "council replace: epoch={epoch} members={members} alternates={alternates} replaced={replaced}"
         ));
         print_with_summary(context, summary, &value, self.summary_only, self.no_summary)
     }
@@ -876,7 +876,7 @@ impl DeriveVrfArgs {
             });
         let alternates_joined = alternates.join(", ");
         Some(format!(
-            "council-derive-vrf: epoch={epoch} verified={verified} members=[{members_joined}] alternates=[{alternates_joined}]"
+            "council derive-vrf: epoch={epoch} verified={verified} members=[{members_joined}] alternates=[{alternates_joined}]"
         ))
     }
 }

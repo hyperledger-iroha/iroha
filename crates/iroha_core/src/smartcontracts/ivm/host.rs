@@ -360,7 +360,7 @@ impl CoreHost {
         host.set_axt_timing(view.nexus.axt);
         host.hydrate_axt_replay_ledger(&view);
         host.set_durable_state_snapshot_from_world(view.world());
-        host = host.with_axt_policy_from_snapshot(&snapshot);
+        host = host.with_axt_policy_snapshot(&snapshot);
         host.set_amx_limits(Self::amx_limits_from_config(&view.pipeline));
         host
     }
@@ -576,7 +576,7 @@ impl CoreHost {
 
     /// Override the default AXT policy using a Space Directory snapshot.
     #[must_use]
-    pub fn with_axt_policy_from_snapshot(mut self, snapshot: &AxtPolicySnapshot) -> Self {
+    pub fn with_axt_policy_snapshot(mut self, snapshot: &AxtPolicySnapshot) -> Self {
         self.axt_policy = Arc::new(ivm::axt::SnapshotAxtPolicy::new_with_timing(
             snapshot,
             self.axt_timing.slot_length_ms,
@@ -3488,7 +3488,7 @@ mod pointer_abi_tests {
     fn strict_policy_accepts_domain_in_abi_v1() {
         // Prepare VM with ABI v1 (baseline)
         let meta = ivm::ProgramMetadata {
-            version_major: 2,
+            version_major: 1,
             version_minor: 0,
             mode: 0,
             vector_length: 0,
@@ -3594,7 +3594,7 @@ mod pointer_abi_tests {
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
         let authority: AccountId = "alice@wonderland".parse().unwrap();
-        let mut host = CoreHost::new(authority).with_axt_policy_from_snapshot(&snapshot);
+        let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
 
@@ -3665,7 +3665,7 @@ mod pointer_abi_tests {
         let mut current_slot = 9;
         let snapshot = make_policy_snapshot(dsid, manifest_root, current_slot);
         let authority: AccountId = "alice@wonderland".parse().unwrap();
-        let mut host = CoreHost::new(authority).with_axt_policy_from_snapshot(&snapshot);
+        let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
 
@@ -3740,7 +3740,7 @@ mod pointer_abi_tests {
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
         let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
         let mut host = CoreHost::new(authority)
-            .with_axt_policy_from_snapshot(&snapshot)
+            .with_axt_policy_snapshot(&snapshot)
             .with_axt_timing(iroha_config::parameters::actual::NexusAxt::default());
         host.set_telemetry(telemetry.clone());
         let mut vm = IVM::new(10_000);
@@ -3825,7 +3825,7 @@ mod pointer_abi_tests {
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
         let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
         let mut host = CoreHost::new(authority.clone())
-            .with_axt_policy_from_snapshot(&snapshot)
+            .with_axt_policy_snapshot(&snapshot)
             .with_axt_timing(iroha_config::parameters::actual::NexusAxt::default());
         host.set_telemetry(telemetry.clone());
         let mut vm = IVM::new(10_000);
@@ -3928,7 +3928,7 @@ mod pointer_abi_tests {
         snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
         let authority: AccountId = "alice@wonderland".parse().unwrap();
         let mut host = CoreHost::new(authority.clone())
-            .with_axt_policy_from_snapshot(&snapshot)
+            .with_axt_policy_snapshot(&snapshot)
             .with_axt_timing(iroha_config::parameters::actual::NexusAxt::default());
 
         let manifest = TouchManifest {
@@ -4044,7 +4044,7 @@ mod pointer_abi_tests {
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, 12);
         let authority: AccountId = "alice@wonderland".parse().unwrap();
-        let mut host = CoreHost::new(authority).with_axt_policy_from_snapshot(&snapshot);
+        let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
 
@@ -4098,7 +4098,7 @@ mod pointer_abi_tests {
         let manifest_root = [0x44; 32];
         let snapshot = make_policy_snapshot(dsid, manifest_root, 20);
         let authority: AccountId = "alice@wonderland".parse().unwrap();
-        let mut host = CoreHost::new(authority).with_axt_policy_from_snapshot(&snapshot);
+        let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
         let digest: [u8; 32] = Hash::new(manifest_root).into();
 
         host.cache_proof_entry(
@@ -4129,7 +4129,7 @@ mod pointer_abi_tests {
         let manifest_root = [0x77; 32];
         let snapshot = make_policy_snapshot(dsid, manifest_root, 15);
         let authority: AccountId = "alice@wonderland".parse().unwrap();
-        let mut host = CoreHost::new(authority).with_axt_policy_from_snapshot(&snapshot);
+        let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
         let descriptor = axt::AxtDescriptor {
             dsids: vec![dsid],
             touches: Vec::new(),
@@ -4162,7 +4162,7 @@ mod pointer_abi_tests {
         let manifest_root = [0x55; 32];
         let snapshot = make_policy_snapshot(dsid, manifest_root, 30);
         let authority: AccountId = "alice@wonderland".parse().unwrap();
-        let mut host = CoreHost::new(authority).with_axt_policy_from_snapshot(&snapshot);
+        let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
         let digest: [u8; 32] = Hash::new(manifest_root).into();
 
         host.cache_proof_entry(
@@ -4202,7 +4202,7 @@ mod pointer_abi_tests {
         };
         let authority: AccountId = "alice@wonderland".parse().unwrap();
         let mut host = CoreHost::new(authority)
-            .with_axt_policy_from_snapshot(&snapshot)
+            .with_axt_policy_snapshot(&snapshot)
             .with_axt_timing(timing);
         let digest: [u8; 32] = Hash::new(manifest_root).into();
 
@@ -4677,7 +4677,7 @@ mod pointer_abi_tests {
 fn build_program(code: &[u8], vector_length: u8) -> Vec<u8> {
     let mut program = Vec::with_capacity(17 + code.len());
     program.extend_from_slice(b"IVM\0");
-    program.push(2); // version_major
+    program.push(1); // version_major
     program.push(0); // version_minor
     program.push(0); // mode
     program.push(vector_length);
@@ -5465,7 +5465,7 @@ mod tests {
     // NOTE: Additional CoreHost tests for NFT syscalls can be added once the VM instruction
     // builder helpers stabilize across metadata header formats.
     #[test]
-    fn sentinel_create_nft_enqueues_register() {
+    fn sentinel_nft_mint_enqueues_register() {
         let authority: AccountId =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
                 .parse()

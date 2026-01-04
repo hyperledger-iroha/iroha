@@ -484,6 +484,27 @@ mod tests {
         (guard.limit, guard.in_use)
     }
 
+    fn skip_if_sandboxed(test_name: &str) -> bool {
+        match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
+            Ok(listener) => {
+                drop(listener);
+                false
+            }
+            Err(err) => {
+                if is_sandbox_message(&err.to_string())
+                    || err.kind() == std::io::ErrorKind::PermissionDenied
+                {
+                    eprintln!(
+                        "sandboxed network restriction detected while running {test_name}; skipping"
+                    );
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
     #[test]
     fn detects_sandbox_messages() {
         assert!(is_sandbox_message("operation not permitted"));
@@ -517,6 +538,9 @@ mod tests {
 
     #[test]
     fn serialized_network_holds_serial_guard() {
+        if skip_if_sandboxed("serialized_network_holds_serial_guard") {
+            return;
+        }
         let _env_guard = lock_env_guard();
         let _override_guard = set_test_overrides(Some(true), None);
         let guard = serial_guard();
@@ -547,6 +571,9 @@ mod tests {
 
     #[test]
     fn serialized_network_shutdown_blocking_releases_guard() {
+        if skip_if_sandboxed("serialized_network_shutdown_blocking_releases_guard") {
+            return;
+        }
         let _env_guard = lock_env_guard();
         let _override_guard = set_test_overrides(Some(true), None);
         let guard = serial_guard();
@@ -605,6 +632,9 @@ mod tests {
 
     #[test]
     fn build_network_or_skip_returns_network() {
+        if skip_if_sandboxed("build_network_or_skip_returns_network") {
+            return;
+        }
         let result = build_network_or_skip(
             NetworkBuilder::new(),
             "build_network_or_skip_returns_network",
@@ -614,6 +644,9 @@ mod tests {
 
     #[test]
     fn build_network_blocking_or_skip_returns_network() {
+        if skip_if_sandboxed("build_network_blocking_or_skip_returns_network") {
+            return;
+        }
         let result = build_network_blocking_or_skip(
             NetworkBuilder::new(),
             "build_network_blocking_or_skip_returns_network",

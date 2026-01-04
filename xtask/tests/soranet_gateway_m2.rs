@@ -271,7 +271,6 @@ fn write_sample_srcv2(path: &Path) {
         handshake_suites: vec![
             HandshakeSuite::Nk3PqForwardSecure,
             HandshakeSuite::Nk2Hybrid,
-            HandshakeSuite::Nk1NoiseXx,
         ],
         published_at: 1_734_000_000,
         valid_after: 1_734_000_000,

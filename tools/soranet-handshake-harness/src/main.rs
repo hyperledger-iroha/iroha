@@ -2,11 +2,12 @@ use std::{env, fs, path::PathBuf};
 
 use clap::{Parser, Subcommand};
 use soranet_handshake_harness::{
-    CapabilitySummary, HandshakeSuite, HarnessError, HexInput, SaltAnnouncementParams,
-    SimulationParams, TelemetryReport, TranscriptInputs, decode_hex, decode_salt_hex,
-    diff_capabilities, format_capabilities, generate_capability_fixtures as harness_generate,
-    parse_capabilities, salt_announcement_json, simulate_handshake, simulation_report_json,
-    soranet_telemetry_json, verify_fixtures as harness_verify, verify_salt_vector,
+    CapabilitySummary, CapabilityTlv, HandshakeSuite, HarnessError, HexInput,
+    SaltAnnouncementParams, SimulationParams, TelemetryReport, TranscriptInputs, decode_hex,
+    decode_salt_hex, diff_capabilities, format_capabilities,
+    generate_capability_fixtures as harness_generate, parse_capabilities, salt_announcement_json,
+    simulate_handshake, simulation_report_json, soranet_telemetry_json,
+    verify_fixtures as harness_verify, verify_salt_vector,
 };
 use soranet_pq::{
     MlKemSuite, SuiteParseError, validate_mlkem_ciphertext, validate_mlkem_public_key,
@@ -215,7 +216,7 @@ fn main() -> Result<(), HarnessError> {
             );
             println!("Relay capabilities:\n{}", format_capabilities(&relay_caps));
 
-            let handshake_suite = HandshakeSuite::Nk1NoiseXx;
+            let handshake_suite = negotiate_handshake_suite(&client_caps, &relay_caps)?;
             let transcript = TranscriptInputs {
                 descriptor_commit: &desc_commit,
                 client_nonce: &client_nonce,
@@ -235,11 +236,6 @@ fn main() -> Result<(), HarnessError> {
                     .map(|suite| suite.to_string())
                     .unwrap_or_else(|| format!("unknown({kem_id})"))
             );
-            if matches!(handshake_suite, HandshakeSuite::Nk1NoiseXx) {
-                println!(
-                    "note: transcript assumes nk1.noise_xx; nk2/nk3 coverage remains a work in progress"
-                );
-            }
 
             let warnings = diff_capabilities(&client_caps, &relay_caps);
             if warnings.is_empty() {
@@ -430,11 +426,6 @@ fn main() -> Result<(), HarnessError> {
                     .map(|suite| suite.to_string())
                     .unwrap_or_else(|| format!("unknown({kem_id})"))
             );
-            if matches!(result.handshake_suite, HandshakeSuite::Nk1NoiseXx) {
-                println!(
-                    "note: negotiated nk1.noise_xx fallback; nk2/nk3 harness flows remain experimental"
-                );
-            }
             let filtered_warnings: Vec<_> = result
                 .warnings
                 .iter()
@@ -546,6 +537,71 @@ fn parse_capability_filters(
         out.insert(ty);
     }
     Ok(Some(out))
+}
+
+const CAPABILITY_SUITE_LIST: u16 = 0x0104;
+
+fn suite_list_from_caps(
+    caps: &[CapabilityTlv],
+) -> Result<Option<Vec<HandshakeSuite>>, HarnessError> {
+    let cap = caps.iter().find(|cap| cap.ty == CAPABILITY_SUITE_LIST);
+    let Some(cap) = cap else {
+        return Ok(None);
+    };
+    if cap.value.is_empty() {
+        return Err(HarnessError::Validation(
+            "suite_list capability must contain at least one identifier".into(),
+        ));
+    }
+    let mut suites = Vec::with_capacity(cap.value.len());
+    for &raw in &cap.value {
+        let suite = HandshakeSuite::try_from(raw)?;
+        if !suites.contains(&suite) {
+            suites.push(suite);
+        }
+    }
+    Ok(Some(suites))
+}
+
+fn describe_suites(suites: &[HandshakeSuite]) -> String {
+    suites
+        .iter()
+        .map(|suite| suite.label())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn negotiate_handshake_suite(
+    client_caps: &[CapabilityTlv],
+    relay_caps: &[CapabilityTlv],
+) -> Result<HandshakeSuite, HarnessError> {
+    let client_list = suite_list_from_caps(client_caps)?;
+    let relay_list = suite_list_from_caps(relay_caps)?;
+    match (client_list, relay_list) {
+        (Some(client), Some(relay)) => {
+            for suite in &client {
+                if relay.contains(suite) {
+                    return Ok(*suite);
+                }
+            }
+            Err(HarnessError::Validation(format!(
+                "no overlapping handshake suite between client ({}) and relay ({})",
+                describe_suites(&client),
+                describe_suites(&relay)
+            )))
+        }
+        (Some(client), None) => Err(HarnessError::Validation(format!(
+            "relay omitted suite_list capability; client advertised {}",
+            describe_suites(&client)
+        ))),
+        (None, Some(relay)) => Err(HarnessError::Validation(format!(
+            "client omitted suite_list capability; relay advertised {}",
+            describe_suites(&relay)
+        ))),
+        (None, None) => Err(HarnessError::Validation(
+            "suite_list capability is required for handshake negotiation".into(),
+        )),
+    }
 }
 
 fn resolve_kem_id(base: u8, suite_label: Option<&str>) -> Result<u8, HarnessError> {
@@ -714,5 +770,51 @@ mod tests {
     fn resolve_kem_suite_rejects_mismatch() {
         let err = resolve_kem_suite(Some(0), Some("mlkem768")).unwrap_err();
         assert!(matches!(err, HarnessError::Validation(message) if message.contains("maps to id")));
+    }
+
+    #[test]
+    fn suite_list_from_caps_dedupes_entries() {
+        let caps = vec![CapabilityTlv {
+            ty: CAPABILITY_SUITE_LIST,
+            value: vec![
+                u8::from(HandshakeSuite::Nk2Hybrid),
+                u8::from(HandshakeSuite::Nk2Hybrid),
+                u8::from(HandshakeSuite::Nk3PqForwardSecure),
+            ],
+            required: false,
+        }];
+        let suites = suite_list_from_caps(&caps)
+            .expect("suite list")
+            .expect("suite list present");
+        assert_eq!(
+            suites,
+            vec![
+                HandshakeSuite::Nk2Hybrid,
+                HandshakeSuite::Nk3PqForwardSecure
+            ]
+        );
+    }
+
+    #[test]
+    fn negotiate_handshake_suite_prefers_client_order() {
+        let client_caps = vec![CapabilityTlv {
+            ty: CAPABILITY_SUITE_LIST,
+            value: vec![
+                u8::from(HandshakeSuite::Nk3PqForwardSecure),
+                u8::from(HandshakeSuite::Nk2Hybrid),
+            ],
+            required: true,
+        }];
+        let relay_caps = vec![CapabilityTlv {
+            ty: CAPABILITY_SUITE_LIST,
+            value: vec![
+                u8::from(HandshakeSuite::Nk2Hybrid),
+                u8::from(HandshakeSuite::Nk3PqForwardSecure),
+            ],
+            required: true,
+        }];
+        let selected =
+            negotiate_handshake_suite(&client_caps, &relay_caps).expect("suite negotiated");
+        assert_eq!(selected, HandshakeSuite::Nk3PqForwardSecure);
     }
 }

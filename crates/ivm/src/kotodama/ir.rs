@@ -1825,7 +1825,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.current_instr(Instr::Poseidon2 { dest: t, a, b });
                     t
                 }
-                "nft_mint_asset" | "create_nft" => {
+                "nft_mint_asset" => {
                     let nft = lower_expr(ctx, &args[0], vars);
                     let owner = lower_expr(ctx, &args[1], vars);
                     ctx.current_instr(Instr::CreateNft { nft, owner });
@@ -1833,7 +1833,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                     t
                 }
-                "nft_set_metadata" | "set_nft_data" => {
+                "nft_set_metadata" => {
                     let nft = lower_expr(ctx, &args[0], vars);
                     let json = lower_expr(ctx, &args[1], vars);
                     ctx.current_instr(Instr::SetNftData { nft, json });
@@ -1841,14 +1841,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                     t
                 }
-                "nft_burn_asset" | "burn_nft" => {
+                "nft_burn_asset" => {
                     let nft = lower_expr(ctx, &args[0], vars);
                     ctx.current_instr(Instr::BurnNft { nft });
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                     t
                 }
-                "nft_transfer_asset" | "transfer_nft" => {
+                "nft_transfer_asset" => {
                     let from = lower_expr(ctx, &args[0], vars);
                     let nft = lower_expr(ctx, &args[1], vars);
                     let to = lower_expr(ctx, &args[2], vars);

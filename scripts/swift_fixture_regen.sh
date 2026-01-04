@@ -128,18 +128,6 @@ def parse_bool(value: str) -> bool:
     return value.lower() in {"1", "true", "yes", "on", "event"} if value else False
 
 
-def scheduled_slot(now: datetime) -> datetime:
-    """Deprecated shim retained for legacy state files."""
-    now_utc = now.astimezone(timezone.utc)
-    iso_year, iso_week, _ = now_utc.isocalendar()
-    # Monday 00:00 UTC of the ISO week.
-    monday = datetime.strptime(f"{iso_year} {iso_week} 1", "%G %V %u").replace(tzinfo=timezone.utc)
-    slot = monday + timedelta(days=2, hours=17)  # Wednesday 17:00 UTC
-    while slot > now_utc:
-        slot -= timedelta(days=7)
-    return slot
-
-
 def rolling_slot(now: datetime, *, interval_hours: float) -> datetime:
     """Return the most recent rolling interval slot."""
     anchor = datetime(2026, 1, 1, tzinfo=timezone.utc)

@@ -111,7 +111,7 @@ LaneConfigEntry {
 
 ## Configuration & Norito types
 
-- `LaneCatalog`, `LaneMetadata`, `DataSpaceCatalog` は `iroha_data_model::nexus` にあり、manifests と SDKs 向けの Norito 互換構造を提供する。
+- `LaneCatalog`, `LaneConfig`, `DataSpaceCatalog` は `iroha_data_model::nexus` にあり、manifests と SDKs 向けの Norito 互換構造を提供する。
 - `LaneConfig` は `iroha_config::parameters::actual::Nexus` にあり、catalog から自動導出される。内部 runtime helper なので Norito encoding は不要。
 - ユーザー向け設定 (`iroha_config::parameters::user::Nexus`) は宣言的な lane/dataspace descriptors を引き続き受け付ける。パース時にジオメトリを導出し、無効な aliases や重複 lane IDs を拒否する。
 

@@ -19,7 +19,7 @@ fn zk_finalize_verifies_with_inline_vk_tiny_add() {
     };
     use iroha_core::{
         block::ValidBlock, kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute,
-        state::State,
+        state::State, zk::zk1_test_helpers as zk1,
     };
     use iroha_data_model::{
         isi::zk::{CreateElection, FinalizeElection},
@@ -102,7 +102,7 @@ fn zk_finalize_verifies_with_inline_vk_tiny_add() {
     );
     create.execute(&ALICE_ID, &mut stx).expect("create ok");
 
-    // Build a valid H2PF1 proof and H2IP1 VK inline
+    // Build a valid ZK1 proof and inline VK
     let k: u32 = 5;
     let params: Params<Curve> = Params::<Curve>::new(k);
     let vk_h2 = keygen_vk(&params, &TinyAdd::default()).expect("vk");
@@ -118,16 +118,14 @@ fn zk_finalize_verifies_with_inline_vk_tiny_add() {
     )
     .expect("create proof");
     let proof_raw = transcript.finalize();
-    let mut proof_container = Vec::new();
-    proof_container.extend_from_slice(b"H2PF1");
-    proof_container.extend_from_slice(&(proof_raw.len() as u32).to_le_bytes());
-    proof_container.extend_from_slice(&proof_raw);
+    let mut proof_container = zk1::wrap_start();
+    zk1::wrap_append_proof(&mut proof_container, &proof_raw);
     let backend = "halo2/pasta/tiny-add-v1";
     let prf_box = ProofBox::new(backend.into(), proof_container);
 
-    let mut vk_bytes = Vec::new();
-    vk_bytes.extend_from_slice(b"H2IP1");
-    vk_bytes.extend_from_slice(&k.to_le_bytes());
+    let mut vk_bytes = zk1::wrap_start();
+    zk1::wrap_append_ipa_k(&mut vk_bytes, k);
+    zk1::wrap_append_vk_pasta(&mut vk_bytes, &vk_h2);
     let vk_box = VerifyingKeyBox::new(backend.into(), vk_bytes);
 
     // Finalize with tally [0] and inline VK

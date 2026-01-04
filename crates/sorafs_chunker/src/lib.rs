@@ -341,7 +341,7 @@ pub mod fixtures {
     impl FixtureProfile {
         /// Canonical SF1 profile used by SoraFS.
         pub const SF1_V1: Self = Self {
-            profile_id: "sorafs-sf1",
+            profile_id: "sorafs.sf1@1.0.0",
             input_seed_hex: "0x0000000000DEC0DED",
             input_length: 1 << 20,
             prng: PrngSpec {

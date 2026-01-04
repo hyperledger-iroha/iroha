@@ -122,51 +122,6 @@ fn parse_hash_payload<const N: usize>(payload: &[u8]) -> Result<[u8; N], norito:
     Err(norito::core::Error::LengthMismatch)
 }
 
-fn decode_compat_hash_slice<const N: usize>(bytes: &[u8]) -> Option<[u8; N]> {
-    if bytes.len() == N {
-        let mut array = [0u8; N];
-        array.copy_from_slice(bytes);
-        return Some(array);
-    }
-    if bytes.len() >= 8 {
-        let mut len_bytes = [0u8; 8];
-        len_bytes.copy_from_slice(&bytes[..8]);
-        let declared = match usize::try_from(u64::from_le_bytes(len_bytes)) {
-            Ok(value) => value,
-            Err(_) => return None,
-        };
-        let offsets_len = (N + 1) * 8;
-        if declared == N && bytes.len() >= 8 + offsets_len + N {
-            let offsets_start = 8;
-            let offsets = &bytes[offsets_start..offsets_start + offsets_len];
-            let mut last = 0usize;
-            for (idx, chunk) in offsets.chunks_exact(8).enumerate() {
-                let mut chunk_bytes = [0u8; 8];
-                chunk_bytes.copy_from_slice(chunk);
-                let off = match usize::try_from(u64::from_le_bytes(chunk_bytes)) {
-                    Ok(value) => value,
-                    Err(_) => return None,
-                };
-                if idx == 0 {
-                    if off != 0 {
-                        return None;
-                    }
-                } else if off < last {
-                    return None;
-                }
-                last = off;
-            }
-            if last == N {
-                let data_start = offsets_start + offsets_len;
-                let mut array = [0u8; N];
-                array.copy_from_slice(&bytes[data_start..data_start + N]);
-                return Some(array);
-            }
-        }
-    }
-    None
-}
-
 macro_rules! define_hash32_newtype {
     ($name:ident, $doc:literal) => {
         #[doc = $doc]
@@ -296,9 +251,6 @@ macro_rules! define_hash32_newtype {
                                 vec.iter().take(32).collect::<Vec<_>>()
                             );
                         }
-                        if let Some(array) = decode_compat_hash_slice::<32>(&vec) {
-                            return Ok(Self(array));
-                        }
                         if vec.len() != 32 {
                             return Err(norito::core::Error::LengthMismatch);
                         }
@@ -331,13 +283,10 @@ macro_rules! define_hash32_newtype {
                     Err(norito::core::Error::LengthMismatch) => {
                         if norito::debug_trace_enabled() {
                             eprintln!(
-                                "decode_from_slice compat fallback vec_len={} prefix={:?}",
+                                "decode_from_slice fallback vec_len={} prefix={:?}",
                                 vec.len(),
                                 vec.iter().take(32).collect::<Vec<_>>()
                             );
-                        }
-                        if let Some(array) = decode_compat_hash_slice::<32>(&vec) {
-                            return Ok((Self(array), used));
                         }
                         if vec.len() != 32 {
                             return Err(norito::core::Error::LengthMismatch);
@@ -463,9 +412,9 @@ pub struct DeployContractProposal {
     pub namespace: String,
     /// Logical contract identifier within the namespace.
     pub contract_id: String,
-    /// Blake2b-32 hash of the compiled `.to` bytecode (field name retained for backward compatibility).
+    /// Blake2b-32 hash of the compiled `.to` bytecode.
     pub code_hash_hex: ContractCodeHash,
-    /// Blake2b-32 hash of the ABI surface expected by hosts (field name retained for backward compatibility).
+    /// Blake2b-32 hash of the ABI surface expected by hosts.
     pub abi_hash_hex: ContractAbiHash,
     /// ABI version string (e.g., `1`).
     pub abi_version: AbiVersion,
@@ -551,9 +500,6 @@ impl<'de> norito::core::NoritoDeserialize<'de> for ProposalId {
                         vec.len(),
                         vec.iter().take(32).collect::<Vec<_>>()
                     );
-                }
-                if let Some(array) = decode_compat_hash_slice::<32>(&vec) {
-                    return Ok(Self(array));
                 }
                 if vec.len() != 32 {
                     return Err(norito::core::Error::LengthMismatch);
@@ -954,6 +900,7 @@ impl ProposalKind {
 mod tests {
     use hex_literal::hex;
     use iroha_crypto::KeyPair;
+    use norito::core::{DecodeFromSlice, NoritoSerialize};
 
     use super::*;
     use crate::{AccountId, DomainId};
@@ -985,6 +932,21 @@ mod tests {
         let raw = "aa".repeat(ContractCodeHash::LENGTH);
         let parsed = ContractCodeHash::from_hex_str(&raw).expect("parse contract hash");
         assert_eq!(parsed.to_hex(), raw);
+    }
+
+    #[test]
+    fn hash_decode_rejects_non_canonical_vec_layout() {
+        let mut non_canonical = Vec::new();
+        non_canonical.extend_from_slice(&32u64.to_le_bytes());
+        for idx in 0..=32u64 {
+            non_canonical.extend_from_slice(&idx.to_le_bytes());
+        }
+        non_canonical.extend_from_slice(&[0x11u8; 32]);
+
+        let mut encoded = Vec::new();
+        NoritoSerialize::serialize(&non_canonical, &mut encoded).expect("encode vec");
+        let result = <ContractCodeHash as DecodeFromSlice>::decode_from_slice(&encoded);
+        assert!(result.is_err());
     }
 
     #[test]

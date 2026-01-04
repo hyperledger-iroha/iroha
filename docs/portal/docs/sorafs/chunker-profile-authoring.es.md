@@ -53,7 +53,7 @@ por `sorafs_manifest::chunker_registry::ensure_charter_compliance()`:
 
 - Los IDs de perfil son enteros positivos que aumentan de forma monótona sin huecos.
 - El handle canónico (`namespace.name@semver`) debe aparecer en la lista de alias
-  y **debe** ser la primera entrada. Siguen los alias heredados (p. ej., `sorafs-sf1`).
+  y **debe** ser la primera entrada. Siguen los alias heredados (p. ej., `sorafs.sf1@1.0.0`).
 - Ningún alias puede colisionar con otro handle canónico ni aparecer más de una vez.
 - Los alias deben ser no vacíos y recortados de espacios en blanco.
 
@@ -79,7 +79,7 @@ metadatos canónicos necesarios en las discusiones de gobernanza.
 | `name` | Etiqueta legible para humanos. | `sf1` |
 | `semver` | Cadena de versión semántica para el conjunto de parámetros. | `1.0.0` |
 | `profile_id` | Identificador numérico monótono asignado una vez que el perfil entra. Reserva el siguiente id pero no reutilices números existentes. | `1` |
-| `profile_aliases` | Handles adicionales opcionales (nombres heredados, abreviaturas) expuestos a clientes durante la negociación. Incluye siempre el handle canónico como la primera entrada. | `["sorafs-sf1"]` |
+| `profile_aliases` | Handles adicionales opcionales (nombres heredados, abreviaturas) expuestos a clientes durante la negociación. Incluye siempre el handle canónico como la primera entrada. | `["sorafs.sf1@1.0.0"]` |
 | `profile.min_size` | Longitud mínima de chunk en bytes. | `65536` |
 | `profile.target_size` | Longitud objetivo de chunk en bytes. | `262144` |
 | `profile.max_size` | Longitud máxima de chunk en bytes. | `524288` |

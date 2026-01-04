@@ -11,7 +11,7 @@ Iroha’s governance tally flow relies on a Halo2/IPA circuit that verifies a bi
 - **Circuit identifier**: `halo2/pasta/vote-bool-commit-merkle8-v1`
 - **Implementation**: `VoteBoolCommitMerkle::<8>` in `iroha_core::zk::depth`
 - **Domain size**: `k = 6`
-- **Backend**: Transparent Halo2/IPA over Pasta (`H2IP1` + `H2PF1` envelopes)
+- **Backend**: Transparent Halo2/IPA over Pasta (ZK1 envelope: `IPAK` + `H2VK` for VKs, `PROF` + `I10P` for proofs)
 - **Witness shape**:
   - ballot bit `v ∈ {0,1}`
   - randomness scalar `ρ`

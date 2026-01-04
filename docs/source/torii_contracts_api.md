@@ -54,7 +54,7 @@ This document describes the app-facing HTTP endpoints for publishing and fetchin
 - GET `/v1/contracts/code/{code_hash}`
   - Fetches the on-chain `ContractManifest` by its content-addressed `code_hash`.
   - Path param: `code_hash` — 32‑byte hex string.
-  - Response body: `ContractCodeRecordDto` (JSON) with `manifest` populated and `code_bytes` omitted or `null`.
+  - Response body: `ContractCodeRecordDto` (JSON) with `manifest` populated.
 
 - POST `/v1/contracts/deploy`
   - Accepts base64 `.to` bytecode with authority and private key; computes `code_hash` (program body) and `abi_hash` (from header `abi_version`).
@@ -97,16 +97,13 @@ Represents a request to register a contract manifest by wrapping the instruction
     "abi_hash":  "89ab…7654",                // 32-byte hex (optional)
     "compiler_fingerprint": "rustc-1.79 llvm-16", // optional
     "features_bitmap": 0                       // optional u64
-  },
-  // Optional and ignored by the on-chain path; present for forward compatibility
-  "code_bytes": "…base64…"                    // optional, string
+  }
 }
 ```
 
 Notes:
 - If `manifest.code_hash` is provided, the node stores the manifest keyed by `code_hash`.
 - If present, `manifest.abi_hash` is validated against the node’s ABI policy.
-- `code_bytes` are stored on-chain via `RegisterSmartContractBytes` (deploy path) or by submitting the instruction directly.
 
 ### DeployContractDto
 
@@ -150,8 +147,7 @@ Notes:
     "abi_hash":  "89ab…7654",
     "compiler_fingerprint": "rustc-1.79 llvm-16",
     "features_bitmap": 0
-  },
-  "code_bytes": null // always null/omitted in this on-chain path
+  }
 }
 ```
 

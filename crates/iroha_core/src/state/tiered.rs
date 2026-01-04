@@ -807,6 +807,14 @@ impl TieredStateBackend {
         if self.max_snapshots == 0 {
             return Ok(());
         }
+        fn parse_snapshot_dir_name(name: &std::ffi::OsStr) -> Option<u64> {
+            let name = name.to_str()?;
+            if name.len() != 20 || !name.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            name.parse::<u64>().ok()
+        }
+
         let mut entries = fs::read_dir(root)
             .wrap_err_with(|| {
                 format!(
@@ -815,11 +823,18 @@ impl TieredStateBackend {
                 )
             })?
             .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_ok_and(|ft| ft.is_dir()))
+            .filter_map(|entry| {
+                entry
+                    .file_type()
+                    .ok()
+                    .filter(|ft| ft.is_dir())
+                    .and_then(|_| parse_snapshot_dir_name(&entry.file_name()))
+                    .map(|idx| (idx, entry))
+            })
             .collect::<Vec<_>>();
-        entries.sort_by_key(std::fs::DirEntry::file_name);
+        entries.sort_by_key(|(idx, _)| *idx);
         while entries.len() > self.max_snapshots {
-            if let Some(entry) = entries.first() {
+            if let Some((_, entry)) = entries.first() {
                 fs::remove_dir_all(entry.path()).with_context(|| {
                     format!(
                         "failed to prune tiered snapshot directory {path}",
@@ -1417,7 +1432,7 @@ mod tests {
     use iroha_data_model::{
         block::BlockHeader,
         consensus::ExecutionQcRecord,
-        nexus::{LaneCatalog, LaneConfig as LaneMetadata, LaneId},
+        nexus::{LaneCatalog, LaneConfig, LaneId},
     };
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
@@ -1559,25 +1574,56 @@ mod tests {
     }
 
     #[test]
+    fn prune_old_snapshots_ignores_lane_and_retired_dirs() {
+        let temp = tempdir().expect("tmpdir");
+        let backend = TieredStateBackend::new(true, 0, Some(temp.path().to_path_buf()), 1);
+
+        let snapshot1 = temp.path().join(format!("{:020}", 1_u64));
+        let snapshot2 = temp.path().join(format!("{:020}", 2_u64));
+        fs::create_dir_all(&snapshot1).expect("snapshot1");
+        fs::create_dir_all(&snapshot2).expect("snapshot2");
+
+        let lanes_root = temp.path().join("lanes");
+        let retired_root = temp.path().join("retired");
+        fs::create_dir_all(&lanes_root).expect("lanes dir");
+        fs::create_dir_all(&retired_root).expect("retired dir");
+        let lanes_marker = lanes_root.join("marker.txt");
+        let retired_marker = retired_root.join("marker.txt");
+        fs::write(&lanes_marker, b"lanes").expect("lanes marker");
+        fs::write(&retired_marker, b"retired").expect("retired marker");
+
+        backend
+            .prune_old_snapshots(temp.path())
+            .expect("prune snapshots");
+
+        assert!(!snapshot1.exists(), "oldest snapshot should be pruned");
+        assert!(snapshot2.exists(), "latest snapshot should remain");
+        assert!(lanes_root.exists(), "lanes directory should remain");
+        assert!(retired_root.exists(), "retired directory should remain");
+        assert!(lanes_marker.exists(), "lanes contents should remain");
+        assert!(retired_marker.exists(), "retired contents should remain");
+    }
+
+    #[test]
     fn reconcile_lane_geometry_manages_lane_directories() {
         let temp = tempdir().expect("tmpdir");
         let mut backend = TieredStateBackend::new(true, 1, Some(temp.path().to_path_buf()), 4);
 
         let lane_count = NonZeroU32::new(4).expect("lane count");
-        let lane0 = LaneMetadata::default();
-        let lane1 = LaneMetadata {
+        let lane0 = LaneConfig::default();
+        let lane1 = LaneConfig {
             id: LaneId::from(1),
             alias: "beta".to_string(),
-            ..LaneMetadata::default()
+            ..LaneConfig::default()
         };
         let initial_catalog =
             LaneCatalog::new(lane_count, vec![lane0.clone(), lane1.clone()]).expect("catalog");
         let initial_cfg = RuntimeLaneConfig::from_catalog(&initial_catalog);
 
-        let lane2 = LaneMetadata {
+        let lane2 = LaneConfig {
             id: LaneId::from(2),
             alias: "gamma".to_string(),
-            ..LaneMetadata::default()
+            ..LaneConfig::default()
         };
         let extended_catalog = LaneCatalog::new(
             lane_count,
@@ -1624,9 +1670,9 @@ mod tests {
 
         let initial_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 alias: "Alpha Lane".to_string(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("initial catalog");
@@ -1651,9 +1697,9 @@ mod tests {
 
         let updated_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 alias: "Payments Lane".to_string(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("updated catalog");

@@ -27,7 +27,7 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneId, LaneMetadata,
+        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
         LaneVisibility,
     },
     prelude::*,
@@ -220,7 +220,7 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         "scheduler.starvation_bound_slots".to_string(),
         "4".to_string(),
     );
-    let lane0 = LaneMetadata {
+    let lane0 = LaneConfig {
         id: LaneId::new(0),
         dataspace_id: DataSpaceId::GLOBAL,
         alias: "public".to_string(),
@@ -230,7 +230,7 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         governance: None,
         settlement: Some("xor".to_string()),
         metadata: lane0_metadata,
-        ..LaneMetadata::default()
+        ..LaneConfig::default()
     };
 
     let mut lane1_metadata = BTreeMap::new();
@@ -239,7 +239,7 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         "scheduler.starvation_bound_slots".to_string(),
         "6".to_string(),
     );
-    let lane1 = LaneMetadata {
+    let lane1 = LaneConfig {
         id: LaneId::new(1),
         dataspace_id: DataSpaceId::new(1),
         alias: "private".to_string(),
@@ -249,7 +249,7 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         governance: None,
         settlement: Some("xor".to_string()),
         metadata: lane1_metadata,
-        ..LaneMetadata::default()
+        ..LaneConfig::default()
     };
 
     let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![lane0, lane1]).expect("catalog");
@@ -451,7 +451,7 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         "scheduler.starvation_bound_slots".to_string(),
         "5".to_string(),
     );
-    let lane0 = LaneMetadata {
+    let lane0 = LaneConfig {
         id: LaneId::new(0),
         dataspace_id: DataSpaceId::GLOBAL,
         alias: "rule-lane".to_string(),
@@ -461,7 +461,7 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         governance: None,
         settlement: Some("xor".to_string()),
         metadata: lane0_metadata,
-        ..LaneMetadata::default()
+        ..LaneConfig::default()
     };
 
     let mut lane1_metadata = BTreeMap::new();
@@ -470,7 +470,7 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         "scheduler.starvation_bound_slots".to_string(),
         "4".to_string(),
     );
-    let lane1 = LaneMetadata {
+    let lane1 = LaneConfig {
         id: LaneId::new(1),
         dataspace_id: DataSpaceId::new(1),
         alias: "default-lane".to_string(),
@@ -480,7 +480,7 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         governance: None,
         settlement: Some("xor".to_string()),
         metadata: lane1_metadata,
-        ..LaneMetadata::default()
+        ..LaneConfig::default()
     };
 
     let lane_catalog = LaneCatalog::new(nonzero!(2_u32), vec![lane0, lane1]).expect("catalog");

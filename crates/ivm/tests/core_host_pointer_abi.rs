@@ -3,7 +3,7 @@ use ivm::{CoreHost, IVM, Memory, PointerType, encoding, instruction::wide, sysca
 
 fn assemble(code: &[u8]) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
-        version_major: 2,
+        version_major: 1,
         version_minor: 0,
         mode: 0,
         vector_length: 0,
@@ -98,7 +98,7 @@ fn nft_mint_asset_validates_tlvs() {
     vm.set_register(11, Memory::INPUT_START + nft.len() as u64 + 8);
     let prog = encode_prog_syscall(syscalls::SYSCALL_NFT_MINT_ASSET);
     vm.load_program(&prog).unwrap();
-    vm.run().expect("create_nft tlvs should validate");
+    vm.run().expect("nft_mint_asset tlvs should validate");
 }
 
 #[test]
@@ -169,7 +169,7 @@ fn nft_set_metadata_validates_tlvs() {
     vm.set_register(11, Memory::INPUT_START + nft.len() as u64 + 8);
     let prog = encode_prog_syscall(syscalls::SYSCALL_NFT_SET_METADATA);
     vm.load_program(&prog).unwrap();
-    vm.run().expect("set_nft_data tlvs should validate");
+    vm.run().expect("nft_set_metadata tlvs should validate");
 }
 
 #[test]
@@ -200,7 +200,7 @@ fn nft_burn_asset_validates_tlv() {
     vm.set_register(10, Memory::INPUT_START);
     let prog = encode_prog_syscall(syscalls::SYSCALL_NFT_BURN_ASSET);
     vm.load_program(&prog).unwrap();
-    vm.run().expect("burn_nft tlv should validate");
+    vm.run().expect("nft_burn_asset tlv should validate");
 }
 
 #[test]
@@ -218,7 +218,7 @@ fn nft_burn_asset_rejects_wrong_type() {
 }
 
 #[test]
-fn burn_nft_rejects_name_type() {
+fn nft_burn_asset_rejects_name_type() {
     // Pass &Name where &NftId is required
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
@@ -232,7 +232,7 @@ fn burn_nft_rejects_name_type() {
 }
 
 #[test]
-fn burn_nft_rejects_blob_type() {
+fn nft_burn_asset_rejects_blob_type() {
     // Pass &Blob where &NftId is required
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());

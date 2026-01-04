@@ -337,7 +337,7 @@ def json_summary(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Correlate pacemaker backpressure deferrals with DA availability warning (and legacy RBC retry/abort) logs."
+        description="Correlate pacemaker backpressure deferrals with DA availability warning and RBC retry/abort logs."
     )
     parser.add_argument("logs", nargs="*", help="Path(s) to log files to analyse.")
     parser.add_argument("--window-before", type=float, default=30.0, help="Seconds before a pacemaker deferral to consider DA/RBC events (default: 30).")

@@ -16,7 +16,7 @@ export interface ChunkerFixture {
 
 export const sf1ProfileV1: ChunkerFixture = {
     profile: "sorafs.sf1@1.0.0",
-    profileAliases: ["sorafs.sf1@1.0.0", "sorafs-sf1"] as const,
+    profileAliases: ["sorafs.sf1@1.0.0"] as const,
     inputSeed: "0x0000000000DEC0DED",
     inputLength: 1048576,
     prngMultiplier: "2862933555777941757",

@@ -244,6 +244,7 @@ fn hash_internal(left: &Hash, right: &Hash) -> Hash {
 mod tests {
     use std::num::NonZeroU64;
 
+    use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
     use iroha_crypto::HashOf;
     use iroha_data_model::{
         block::BlockHeader,
@@ -251,7 +252,7 @@ mod tests {
             commitment::{DaCommitmentRecord, DaProofScheme, RetentionClass},
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::{LaneCatalog, LaneConfig as LaneMetadata, LaneId},
+        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
     };
 
     use super::*;
@@ -274,15 +275,15 @@ mod tests {
         )
     }
 
-    fn lane_config() -> LaneConfig {
-        let meta = LaneMetadata {
+    fn lane_config() -> ConfigLaneConfig {
+        let meta = ModelLaneConfig {
             id: LaneId::new(1),
             alias: "lane-1".to_string(),
-            ..LaneMetadata::default()
+            ..ModelLaneConfig::default()
         };
         let catalog =
             LaneCatalog::new(std::num::NonZeroU32::new(2).unwrap(), vec![meta]).expect("catalog");
-        LaneConfig::from_catalog(&catalog)
+        ConfigLaneConfig::from_catalog(&catalog)
     }
 
     fn header_with_hash(height: u64, da_hash: HashOf<DaCommitmentBundle>) -> BlockHeader {

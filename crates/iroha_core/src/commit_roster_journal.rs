@@ -28,7 +28,7 @@ use crate::sumeragi::stake_snapshot::CommitStakeSnapshot;
 /// Persisted commit-roster journal payload.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct PersistedCommitRosters {
-    /// Journal version for forward compatibility.
+    /// Journal version for format control.
     version: u32,
     /// Stored commit roster entries.
     entries: Vec<CommitRosterRecord>,

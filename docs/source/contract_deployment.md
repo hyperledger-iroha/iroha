@@ -35,7 +35,7 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
 
 ## Admission pipeline
 
-- The validator parses the IVM header, enforces `version_major == 2`, and checks
+- The validator parses the IVM header, enforces `version_major == 1`, and checks
   `abi_version == 1`. Unknown versions reject immediately; there is no runtime
   toggle.
 - When a manifest is already present for `code_hash`, validation ensures the
@@ -66,7 +66,7 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
 - `POST /v1/contracts/instance/activate`
   - Accepts `ActivateInstanceDto` (authority, private key, namespace, contract_id, `code_hash`) and submits only the activation instruction.
 - `GET /v1/contracts/code/{code_hash}`
-  - Returns `{ manifest: { code_hash, abi_hash }, code_bytes: null }`.
+  - Returns `{ manifest: { code_hash, abi_hash } }`.
     Additional manifest fields are preserved internally but omitted here for a
     stable API.
 - `GET /v1/contracts/code-bytes/{code_hash}`

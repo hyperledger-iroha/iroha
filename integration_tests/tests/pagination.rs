@@ -83,7 +83,7 @@ fn fetch_size_should_work() -> Result<()> {
     register_assets(&client)?;
 
     let with_filter: QueryWithFilter<AssetDefinition> =
-        QueryWithFilter::new_compat((), CompoundPredicate::PASS, SelectorTuple::default());
+        QueryWithFilter::new_with_query((), CompoundPredicate::PASS, SelectorTuple::default());
     let qbox: QueryBox<QueryOutputBatchBox> = with_filter.into();
     let query = QueryWithParams::new(
         &qbox,

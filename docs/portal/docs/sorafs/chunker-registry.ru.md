@@ -39,7 +39,7 @@ fixtures в staging и production.
 
 | Namespace | Имя | SemVer | ID профиля | Мин (байты) | Цель (байты) | Макс (байты) | Маска разрыва | Multihash | Алиасы | Примечания |
 |-----------|-----|--------|------------|-------------|--------------|--------------|---------------|-----------|--------|------------|
-| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs-sf1"]` | Канонический профиль, используемый в fixtures SF-1 |
+| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` | Канонический профиль, используемый в fixtures SF-1 |
 
 Реестр живет в коде как `sorafs_manifest::chunker_registry` (регулируется [`chunker_registry_charter.md`](./chunker-registry-charter.md)). Каждая запись
 выражается как `ChunkerProfileDescriptor` со следующими полями:
@@ -86,8 +86,6 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 
 ### Матрица совместимости и план rollout
 
-> Машиночитаемая матрица: `docs/source/sorafs/compatibility_matrix.json`  
-> Перегенерировать через `cargo xtask sorafs-compat` (используйте `--out -` для stdout).
 
 Таблица ниже отражает текущий статус поддержки `sorafs.sf1@1.0.0` в ключевых компонентах.
 "Bridge" относится к совместимому каналу CARv1 + SHA-256, который требует явной
@@ -228,7 +226,7 @@ Manifests всегда объявляют CARv2/BLAKE3 commitment. Legacy кан
 
 ### Соответствие
 
-* Профиль `sorafs-sf1` соответствует публичным fixtures в
+* Профиль `sorafs.sf1@1.0.0` соответствует публичным fixtures в
   `fixtures/sorafs_chunker` и corpora, зарегистрированным в
   `fuzz/sorafs_chunker`. End-to-end паритет проверяется в Rust, Go и Node
   через предоставленные тесты.
