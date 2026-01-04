@@ -1139,7 +1139,7 @@ def test_list_sumeragi_evidence_parses_records() -> None:
                         "recorded_height": 13,
                         "recorded_view": 14,
                         "recorded_ms": 15,
-                        "detail": "legacy entry",
+                        "detail": "unknown entry",
                     },
                 ],
             }
@@ -1161,7 +1161,7 @@ def test_list_sumeragi_evidence_parses_records() -> None:
     assert invalid_proposal.reason == "payload mismatch"
     fallback = page.items[2]
     assert fallback.kind == "UnknownEvidence"
-    assert fallback.detail == "legacy entry"
+    assert fallback.detail == "unknown entry"
     call = session.calls[0]
     assert call["url"].endswith("/v1/sumeragi/evidence")
     assert call["params"] == {"limit": 5, "offset": 1, "kind": "DoublePrevote"}

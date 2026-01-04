@@ -696,6 +696,18 @@ impl Memory {
         &self.data[start..end]
     }
 
+    /// Clear the OUTPUT region and reset the append-only cursor.
+    pub(crate) fn clear_output(&mut self) {
+        let start = Memory::OUTPUT_START as usize;
+        let end = start + Memory::OUTPUT_SIZE as usize;
+        if self.output_cursor == 0 && self.data[start..end].iter().all(|b| *b == 0) {
+            return;
+        }
+        self.data[start..end].fill(0);
+        self.output_cursor = 0;
+        self.update_merkle(start, end - start);
+    }
+
     /// Clear recorded access information.
     pub fn clear_tracking(&self) {
         self.read_log.lock().clear();

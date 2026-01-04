@@ -2143,14 +2143,44 @@ pub fn set_app_query_limits(limits: AppQueryLimits) {
 
 /// Fetch the currently active app query limits.
 pub fn app_query_limits() -> AppQueryLimits {
-    *APP_QUERY_LIMITS
-        .read()
-        .expect("app query limits lock poisoned")
+    read_app_query_limits(&APP_QUERY_LIMITS)
+}
+
+fn read_app_query_limits(lock: &RwLock<AppQueryLimits>) -> AppQueryLimits {
+    match lock.read() {
+        Ok(guard) => *guard,
+        Err(poisoned) => {
+            iroha_logger::warn!("app query limits lock poisoned; using last known values");
+            *poisoned.into_inner()
+        }
+    }
 }
 
 #[cfg(test)]
 pub fn reset_app_query_limits_for_tests() {
     set_app_query_limits(AppQueryLimits::default());
+}
+
+#[cfg(test)]
+mod app_query_limits_tests {
+    use std::panic::{self, AssertUnwindSafe};
+    use std::sync::RwLock;
+
+    use super::{AppQueryLimits, read_app_query_limits};
+
+    #[test]
+    fn read_app_query_limits_recovers_from_poison() {
+        let lock = RwLock::new(AppQueryLimits::default());
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+            let _guard = lock.write().expect("lock");
+            panic!("poison");
+        }));
+        let recovered = read_app_query_limits(&lock);
+        assert_eq!(
+            recovered.max_fetch_size,
+            AppQueryLimits::default().max_fetch_size
+        );
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

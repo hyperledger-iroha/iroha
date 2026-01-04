@@ -1,6 +1,10 @@
 # Status
 
 ## Latest Updates
+- Fixed tiered WSV snapshot pruning to only remove canonical snapshot directories (preserving lanes/retired folders), documented snapshot directory naming, and added regression coverage; clarified Kura in-memory retention for genesis + last N blocks with a drop-old-block test.
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused assignments/imports in several crates).
+- Removed Python SDK compatibility shims and migration docs; `iroha_python` now exposes only the first-release surface.
+- Tests: not run (not requested).
 - Resolved merge conflict markers in `status.md`.
 - Tests: not run (merge resolution only).
 - Standardized IVM header major to v1 across parser/admission paths, compiler outputs, fixtures, and shipped `.to` artifacts; refreshed header/docs references to drop v2.

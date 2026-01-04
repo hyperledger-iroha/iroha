@@ -88,7 +88,6 @@ pub async fn handle_get_content(
             &headers,
             Some(remote.ip()),
             bundle_hex.as_str(),
-            &query,
             app.require_api_token,
         );
         if !limits::allow_conditionally(&app.rate_limiter, &key, true).await {
@@ -272,12 +271,8 @@ fn content_rate_key(
     headers: &HeaderMap,
     remote: Option<std::net::IpAddr>,
     hint: &str,
-    query: &ContentQuery,
     require_api_token: bool,
 ) -> String {
-    if let Some(uaid) = query.uaid.as_deref() {
-        return uaid.to_string();
-    }
     limits::key_from_headers(headers, remote, Some(hint), require_api_token)
 }
 
@@ -487,7 +482,7 @@ fn apply_range(
         return Err(ContentError::BadRequest("malformed range spec".to_string()));
     };
 
-    let (start, end) = if start_str.is_empty() {
+    let (start, mut end) = if start_str.is_empty() {
         let suffix: u64 = end_str
             .parse()
             .map_err(|_| ContentError::BadRequest("invalid range suffix".to_string()))?;
@@ -512,7 +507,17 @@ fn apply_range(
         (start, end)
     };
 
-    if start > end || end >= total_len {
+    if start >= total_len {
+        return Err(ContentError::RangeNotSatisfiable);
+    }
+
+    if end >= total_len {
+        end = total_len
+            .checked_sub(1)
+            .ok_or(ContentError::RangeNotSatisfiable)?;
+    }
+
+    if start > end {
         return Err(ContentError::RangeNotSatisfiable);
     }
 
@@ -634,6 +639,12 @@ mod tests {
         assert_eq!(partial.status, StatusCode::PARTIAL_CONTENT);
         assert_eq!(partial.content_range.as_deref(), Some("bytes 0-3/11"));
         assert_eq!(partial.body, b"hell");
+
+        let overshoot =
+            apply_range(&full.body, Some(&HeaderValue::from_static("bytes=0-99"))).expect("range");
+        assert_eq!(overshoot.status, StatusCode::PARTIAL_CONTENT);
+        assert_eq!(overshoot.content_range.as_deref(), Some("bytes 0-10/11"));
+        assert_eq!(overshoot.body, b"hello world");
     }
 
     #[test]
@@ -718,27 +729,16 @@ mod tests {
     }
 
     #[test]
-    fn rate_key_prefers_uaid() {
-        let headers = HeaderMap::new();
-        let query = ContentQuery {
-            uaid: Some("uaid:abcd".to_string()),
-            account: None,
-        };
-        let key = content_rate_key(
-            &headers,
-            Some("127.0.0.1".parse().unwrap()),
-            "bundle",
-            &query,
-            false,
-        );
-        assert_eq!(key, "uaid:abcd");
+    fn rate_key_uses_headers_and_remote() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-token", HeaderValue::from_static("token-1"));
+        let key = content_rate_key(&headers, None, "bundle", true);
+        assert_eq!(key, "token-1");
 
-        let query = ContentQuery::default();
         let key = content_rate_key(
-            &headers,
+            &HeaderMap::new(),
             Some("127.0.0.1".parse().unwrap()),
             "bundle",
-            &query,
             false,
         );
         assert_eq!(key, "127.0.0.1");

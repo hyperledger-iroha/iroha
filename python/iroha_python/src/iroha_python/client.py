@@ -10060,34 +10060,6 @@ class ConnectAdmissionManifest:
             return GovernanceLocksResult(found=False, referendum_id=referendum_id, locks={})
         return GovernanceLocksResult.from_payload(payload)
 
-    def get_governance_lock_stats(
-        self,
-        *,
-        height: Optional[int] = None,
-        referendum_id: Optional[str] = None,
-    ) -> Optional[Any]:
-        """Deprecated alias for :meth:`get_governance_unlock_stats`.
-
-        The Torii API exposes `/v1/gov/unlocks/stats`; the historical
-        `/v1/gov/locks/stats` route never shipped. Callers should migrate to
-        :meth:`get_governance_unlock_stats` (or the typed variant).
-        """
-
-        import warnings
-
-        warnings.warn(
-            "get_governance_lock_stats is deprecated; use get_governance_unlock_stats instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        # The unlock stats endpoint ignores query parameters; we silently drop
-        # the optional height/referendum hints to match Torii's behaviour.
-        return self.request_json(
-            "GET",
-            "/v1/gov/unlocks/stats",
-            expected_status=(200,),
-        )
-
     def get_governance_unlock_stats(self) -> Optional[Any]:
         """GET `/v1/gov/unlocks/stats`."""
 
@@ -10104,18 +10076,6 @@ class ConnectAdmissionManifest:
         if payload is None:
             raise RuntimeError("governance unlock stats endpoint returned no payload")
         return GovernanceUnlockStats.from_payload(payload)
-
-    def get_governance_lock_stats_typed(self) -> GovernanceUnlockStats:
-        """Deprecated alias for :meth:`get_governance_unlock_stats_typed`."""
-
-        import warnings
-
-        warnings.warn(
-            "get_governance_lock_stats_typed is deprecated; use get_governance_unlock_stats_typed",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.get_governance_unlock_stats_typed()
 
     def stream_events(
         self,

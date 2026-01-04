@@ -702,24 +702,6 @@ class ConnectStatusPolicy:
     heartbeat_min_interval_ms: Optional[int]
     extra: Dict[str, Any]
 
-    @property
-    def ping_interval_ms(self) -> Optional[int]:
-        """Legacy alias for heartbeat interval."""
-
-        return self.heartbeat_interval_ms
-
-    @property
-    def ping_miss_tolerance(self) -> Optional[int]:
-        """Legacy alias for heartbeat miss tolerance."""
-
-        return self.heartbeat_miss_tolerance
-
-    @property
-    def ping_min_interval_ms(self) -> Optional[int]:
-        """Legacy alias for heartbeat minimum interval."""
-
-        return self.heartbeat_min_interval_ms
-
 
 @dataclass(frozen=True)
 class ConnectStatusSnapshot:
@@ -794,18 +776,6 @@ class ConnectAppPolicyControls:
     heartbeat_miss_tolerance: Optional[int]
     heartbeat_min_interval_ms: Optional[int]
     extra: Dict[str, Any]
-
-    @property
-    def ping_interval_ms(self) -> Optional[int]:
-        return self.heartbeat_interval_ms
-
-    @property
-    def ping_miss_tolerance(self) -> Optional[int]:
-        return self.heartbeat_miss_tolerance
-
-    @property
-    def ping_min_interval_ms(self) -> Optional[int]:
-        return self.heartbeat_min_interval_ms
 
 
 @dataclass(frozen=True)
@@ -4402,12 +4372,6 @@ class ToriiClient:
     def _parse_connect_status_policy(payload: Mapping[str, Any], *, context: str) -> ConnectStatusPolicy:
         record = ToriiClient._ensure_mapping(payload, context)
 
-        def _pick(*names: str) -> Any:
-            for name in names:
-                if name in record and record[name] is not None:
-                    return record[name]
-            return None
-
         return ConnectStatusPolicy(
             relay_enabled=ToriiClient._optional_bool(record.get("relay_enabled"), f"{context}.relay_enabled"),
             ws_max_sessions=ToriiClient._coerce_optional_unsigned(
@@ -4435,15 +4399,15 @@ class ToriiClient:
                 context=f"{context}.session_buffer_max_bytes",
             ),
             heartbeat_interval_ms=ToriiClient._coerce_optional_unsigned(
-                _pick("heartbeat_interval_ms", "ping_interval_ms"),
+                record.get("heartbeat_interval_ms"),
                 context=f"{context}.heartbeat_interval_ms",
             ),
             heartbeat_miss_tolerance=ToriiClient._coerce_optional_unsigned(
-                _pick("heartbeat_miss_tolerance", "ping_miss_tolerance"),
+                record.get("heartbeat_miss_tolerance"),
                 context=f"{context}.heartbeat_miss_tolerance",
             ),
             heartbeat_min_interval_ms=ToriiClient._coerce_optional_unsigned(
-                _pick("heartbeat_min_interval_ms", "ping_min_interval_ms"),
+                record.get("heartbeat_min_interval_ms"),
                 context=f"{context}.heartbeat_min_interval_ms",
             ),
             extra={
@@ -4458,9 +4422,6 @@ class ToriiClient:
                     "session_ttl_ms",
                     "frame_max_bytes",
                     "session_buffer_max_bytes",
-                    "ping_interval_ms",
-                    "ping_miss_tolerance",
-                    "ping_min_interval_ms",
                     "heartbeat_interval_ms",
                     "heartbeat_miss_tolerance",
                     "heartbeat_min_interval_ms",
@@ -4602,12 +4563,6 @@ class ToriiClient:
         else:
             source = record
 
-        def _pick(*names: str) -> Any:
-            for name in names:
-                if name in source and source[name] is not None:
-                    return source[name]
-            return None
-
         return ConnectAppPolicyControls(
             relay_enabled=ToriiClient._optional_bool(
                 source.get("relay_enabled"),
@@ -4638,15 +4593,15 @@ class ToriiClient:
                 context=f"{context}.session_buffer_max_bytes",
             ),
             heartbeat_interval_ms=ToriiClient._coerce_optional_unsigned(
-                _pick("heartbeat_interval_ms", "ping_interval_ms"),
+                source.get("heartbeat_interval_ms"),
                 context=f"{context}.heartbeat_interval_ms",
             ),
             heartbeat_miss_tolerance=ToriiClient._coerce_optional_unsigned(
-                _pick("heartbeat_miss_tolerance", "ping_miss_tolerance"),
+                source.get("heartbeat_miss_tolerance"),
                 context=f"{context}.heartbeat_miss_tolerance",
             ),
             heartbeat_min_interval_ms=ToriiClient._coerce_optional_unsigned(
-                _pick("heartbeat_min_interval_ms", "ping_min_interval_ms"),
+                source.get("heartbeat_min_interval_ms"),
                 context=f"{context}.heartbeat_min_interval_ms",
             ),
             extra={
@@ -4661,9 +4616,6 @@ class ToriiClient:
                     "session_ttl_ms",
                     "frame_max_bytes",
                     "session_buffer_max_bytes",
-                    "ping_interval_ms",
-                    "ping_miss_tolerance",
-                    "ping_min_interval_ms",
                     "heartbeat_interval_ms",
                     "heartbeat_miss_tolerance",
                     "heartbeat_min_interval_ms",
