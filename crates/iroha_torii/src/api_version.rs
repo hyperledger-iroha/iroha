@@ -18,9 +18,9 @@ use crate::Error;
 /// Semantic API version (major/minor).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ApiVersion {
-    /// Major component of the version (backwards-incompatible changes).
+    /// Major component of the version (breaking changes).
     pub major: u16,
-    /// Minor component of the version (backwards-compatible additions).
+    /// Minor component of the version (additive changes).
     pub minor: u16,
 }
 

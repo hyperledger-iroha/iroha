@@ -17,7 +17,7 @@ use iroha_data_model::{
     block::consensus::LaneBlockCommitment,
     consensus::ExecutionQcRecord,
     nexus::{
-        DataSpaceId, LaneCatalog, LaneId, LaneMetadata, LanePrivacyProof, LaneRelayEnvelope,
+        DataSpaceId, LaneCatalog, LaneConfig, LaneId, LanePrivacyProof, LaneRelayEnvelope,
         LaneRelayError, LaneStorageProfile, compute_settlement_hash,
     },
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
@@ -557,12 +557,12 @@ fn build_registry(
     let lane_count = NonZeroU32::new(lane_id.as_u32() + 1).expect("lane count must be nonzero");
     let lane_catalog = LaneCatalog::new(
         lane_count,
-        vec![LaneMetadata {
+        vec![LaneConfig {
             id: lane_id,
             alias: alias.to_string(),
             governance: Some("council".to_string()),
             storage,
-            ..LaneMetadata::default()
+            ..LaneConfig::default()
         }],
     )?;
 

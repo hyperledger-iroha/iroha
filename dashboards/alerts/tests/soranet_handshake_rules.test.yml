@@ -6,7 +6,7 @@ tests:
     input_series:
       - series: 'sn16_handshake_mode_total{mode="entry",handshake="nk2"}'
         values: '0 2 4 6 8 10 12 14'
-      - series: 'sn16_handshake_mode_total{mode="entry",handshake="nk1"}'
+      - series: 'sn16_handshake_mode_total{mode="entry",handshake="nk3"}'
         values: '0 0 0 0 0 1 2 3'
     alert_rule_test:
       - alertname: SoranetSn16MixedMode

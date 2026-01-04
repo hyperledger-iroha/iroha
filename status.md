@@ -1,6 +1,43 @@
 # Status
 
 ## Latest Updates
+- Resolved merge conflict markers in `status.md`.
+- Tests: not run (merge resolution only).
+- Standardized IVM header major to v1 across parser/admission paths, compiler outputs, fixtures, and shipped `.to` artifacts; refreshed header/docs references to drop v2.
+- Tests: not run (not requested).
+- Hardened IVM DIV_CEIL/GCD against i64::MIN overflow for deterministic behavior and added regression coverage for the edge cases.
+- Tests: `cargo test --workspace` (timed out after 10m during compile; warnings about unused imports/assignments in several crates).
+- Removed the stale `client_static_public` field from NK3 handshake requirement construction after the struct slimming.
+- Switched client/server version fetch to Torii `/api_version` (plain string), updated CLI output and the `get_server_version` integration test, and fixed the OpenAPI path-group test case for the system routes.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Tests: not run (per request; full workspace tests skipped).
+- IVM metadata parsing now rejects non-v1 headers; predecoder fixtures trimmed to v1/ABI-1-only variants.
+- Tests: not run (not requested).
+- Removed legacy IVM header/padding parsing, required registration-height metadata for time triggers, and cleaned Torii contract + IVM alignment docs to drop legacy `code_bytes`/deprecated-alias notes.
+- Tests: not run (not requested).
+- Removed obsolete multisig derived-key helper test references so the multisig module compiles cleanly after the legacy cleanup.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Tests: `cargo test --workspace` (failed: `crates/iroha_torii/src/da.rs` duplicate `LaneConfig` import and config/model `LaneConfig` mismatches, plus `crates/iroha_torii/src/da/commitments.rs` missing `LaneConfig::from_catalog` and type mismatches in DA proof verification).
+- Localnet: bumped Kagami defaults to a 1s pipeline, restored DA quorum/availability timeouts to on-chain defaults for stability, and kept commit inflight scaling tied to pipeline size.
+- SoraNet relay: removed legacy NK1 references, kept downgrade tagging for NK3 handshakes, and added unit coverage for handshake-suite metrics/downgrades.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Tests: `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (passed; warnings about unused imports/assignments in unrelated crates).
+- Tests: `cargo test --workspace` (failed: pre-existing compile errors in `crates/iroha_core/src/smartcontracts/isi/multisig.rs` missing `DomainId`/`Algorithm` imports and unresolved `derived_key_flag`/`derived_multisig_account_id`).
+- Removed legacy derived-multisig references (derived-key checks/metrics/tests), simplified multisig direct-sign guarding, and updated multisig docs/roadmap accordingly.
+- Resolved DA lane-config test mismatches by splitting runtime vs model LaneConfig in DA modules, Kura tests, and scheduler telemetry, and renamed the StateTransaction AXT refresh helper to the directory-based API.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core multisig_account_direct_signing_rejected_in_validation -- --nocapture` (passed).
+- Deferred RBC init/chunk/READY background sends until after proposal/hint/BlockCreated posting by splitting RBC plan install vs broadcast, and added unit coverage for background ordering.
+- Tests: `CARGO_TARGET_DIR=target/codex-iroha-core-tests cargo test -p iroha_core assemble_proposal_schedules_rbc_after_proposal_messages -- --nocapture` (failed: pre-existing compile errors in `crates/iroha_core/src/da/shard_cursor.rs` duplicate `LaneConfig` import, `crates/iroha_core/src/gossiper.rs` private `WithOrigin`, multiple `crates/iroha_core/src/kura.rs` `LaneConfig` type mismatches, and `crates/iroha_core/src/state.rs` missing `refresh_axt_policies_from_space_directory`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Filtered restricted gossip targets to online commit-topology peers, made inbound gossip drop invalid entries without discarding valid batches, added gossiper coverage, and updated Nexus docs across locales.
+- Tests: `CARGO_TARGET_DIR=target-codex-gossip cargo test -p iroha_core restricted_plan_filters_commit_topology_to_online_peers -- --nocapture` (failed: pre-existing compile errors in `crates/iroha_core/src/da/shard_cursor.rs` duplicate `LaneConfig` import and config/data-model `LaneConfig` mismatches, `crates/iroha_core/src/da/proofs.rs`/`da/receipts.rs` `LaneConfig` mismatches, `crates/iroha_core/src/kura.rs` `LaneConfig` mismatches, and `crates/iroha_core/src/state.rs` missing `refresh_axt_policies_from_space_directory`).
+- Tests: `CARGO_TARGET_DIR=target-codex-gossip cargo test -p iroha_core restricted_plan_filters_commit_topology_to_online_peers -- --nocapture` (timed out after 300s during compile).
+- Tests: `CARGO_TARGET_DIR=target-codex-gossip cargo test -p iroha_core restricted_plan_filters_commit_topology_to_online_peers -- --nocapture` (passed).
+- Tests: `CARGO_TARGET_DIR=target-codex-gossip cargo test -p iroha_core gossip_accepts_valid_entries_with_invalid_routes_present -- --nocapture` (failed: compile errors in `crates/iroha_core/src/smartcontracts/isi/multisig.rs` missing `DomainId`/`Algorithm` imports and unresolved `derived_key_flag`/`derived_multisig_account_id`).
+- Added multisig-derived telemetry counters to metrics registry/struct so derived-account tracking compiles cleanly.
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core derived_multisig_helpers_match_expected_values -- --nocapture` (timed out after 300s during compile).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
 - Block sync now skips already-seen block prefixes when responding to `GetBlocksAfter`, reducing repeated `BlockSyncUpdate` storms that can stall consensus; added unit coverage.
 - Tests: `cargo test -p iroha_core block_sync::message::selection_tests -- --nocapture` (passed).
 - Switched event notification and SSE smoke integration tests to use at least four peers to avoid single-peer consensus deadlocks and SSE timeouts.

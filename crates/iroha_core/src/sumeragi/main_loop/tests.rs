@@ -18175,6 +18175,79 @@ async fn assemble_proposal_skips_view_overflow() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_schedules_rbc_after_proposal_messages() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.rbc_chunk_max_bytes = 1024;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let height = 1u64;
+    let view = 0u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let local_idx = actor
+        .local_validator_index(&actor.state.view())
+        .expect("local validator index");
+
+    let _ = harness.background_rx.try_iter().count();
+    actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            /*leader_index*/ 0,
+            /*local_validator_index*/ local_idx,
+            Instant::now(),
+        )
+        .expect("proposal assembly should succeed");
+
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let mut proposal_indexes = Vec::new();
+    let mut rbc_indexes = Vec::new();
+    for (idx, post) in posts.iter().enumerate() {
+        let msg = match post {
+            BackgroundPost::Post { msg, .. } => msg,
+            _ => continue,
+        };
+        match msg {
+            BlockMessage::ProposalHint(_)
+            | BlockMessage::Proposal(_)
+            | BlockMessage::BlockCreated(_) => proposal_indexes.push(idx),
+            BlockMessage::RbcInit(_) | BlockMessage::RbcChunk(_) | BlockMessage::RbcReady(_) => {
+                rbc_indexes.push(idx)
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        !proposal_indexes.is_empty(),
+        "proposal messages should be enqueued"
+    );
+    assert!(!rbc_indexes.is_empty(), "RBC messages should be enqueued");
+    let last_proposal = *proposal_indexes.iter().max().expect("proposal index");
+    let first_rbc = *rbc_indexes.iter().min().expect("RBC index");
+    assert!(
+        first_rbc > last_proposal,
+        "RBC messages should be enqueued after proposal messages"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn refresh_npos_seed_updates_collector_params_from_world() {
     use iroha_data_model::parameter::system::SumeragiNposParameters;
 

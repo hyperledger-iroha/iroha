@@ -51,7 +51,7 @@ description: צ'קליסט להצעת פרופילי chunker חדשים ו-fixtu
 
 - מזהי פרופיל הם מספרים שלמים חיוביים שעולים בצורה מונוטונית ללא חורים.
 - ה-handle הקנוני (`namespace.name@semver`) חייב להופיע ברשימת ה-aliases
-  וחייב להיות הערך הראשון. אחריו מופיעים aliases legacy (למשל `sorafs-sf1`).
+  וחייב להיות הערך הראשון. אחריו מופיעים aliases legacy (למשל `sorafs.sf1@1.0.0`).
 - אף alias לא יכול להתנגש עם handle קנוני אחר או להופיע יותר מפעם אחת.
 - aliases חייבים להיות לא ריקים ומקוצצים מרווחים.
 
@@ -77,7 +77,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 | `name` | תווית קריאה לבני אדם. | `sf1` |
 | `semver` | מחרוזת גרסה סמנטית לסט הפרמטרים. | `1.0.0` |
 | `profile_id` | מזהה מספרי מונוטוני שמוקצה כאשר הפרופיל נכנס. שמרו את ה-id הבא אך אל תשתמשו מחדש במספרים קיימים. | `1` |
-| `profile_aliases` | Handles נוספים אופציונליים (שמות legacy, קיצורים) הנחשפים ללקוחות בזמן משא ומתן. תמיד לכלול את ה-handle הקנוני כערך הראשון. | `["sorafs-sf1"]` |
+| `profile_aliases` | Handles נוספים אופציונליים (שמות legacy, קיצורים) הנחשפים ללקוחות בזמן משא ומתן. תמיד לכלול את ה-handle הקנוני כערך הראשון. | `["sorafs.sf1@1.0.0"]` |
 | `profile.min_size` | אורך chunk מינימלי ב-bytes. | `65536` |
 | `profile.target_size` | אורך chunk יעד ב-bytes. | `262144` |
 | `profile.max_size` | אורך chunk מקסימלי ב-bytes. | `524288` |

@@ -594,7 +594,7 @@ impl DaShardCursorJournal {
 mod tests {
     use std::{collections::BTreeMap, num::NonZeroU32, path::PathBuf};
 
-    use iroha_config::parameters::actual::LaneConfig;
+    use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
         da::{
@@ -605,8 +605,8 @@ mod tests {
             types::{BlobDigest, StorageTicketId},
         },
         nexus::{
-            DataSpaceId, LaneCatalog, LaneId, LaneMetadata, LaneStorageProfile, LaneVisibility,
-            ShardId,
+            DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneStorageProfile,
+            LaneVisibility, ShardId,
         },
         sorafs::pin_registry::ManifestDigest,
     };
@@ -634,23 +634,23 @@ mod tests {
         )
     }
 
-    fn lane_config_with_mapping(lane_id: u32, shard_id: u32) -> LaneConfig {
+    fn lane_config_with_mapping(lane_id: u32, shard_id: u32) -> ConfigLaneConfig {
         let mut metadata = BTreeMap::new();
         metadata.insert("da_shard_id".to_string(), shard_id.to_string());
         let lane_count = NonZeroU32::new(lane_id.saturating_add(1)).expect("lane count");
         let catalog = LaneCatalog::new(
             lane_count,
-            vec![LaneMetadata {
+            vec![ModelLaneConfig {
                 id: LaneId::new(lane_id),
                 dataspace_id: DataSpaceId::GLOBAL,
                 alias: format!("lane{lane_id}"),
                 metadata,
-                ..LaneMetadata::default()
+                ..ModelLaneConfig::default()
             }],
         )
         .expect("lane catalog");
 
-        LaneConfig::from_catalog(&catalog)
+        ConfigLaneConfig::from_catalog(&catalog)
     }
 
     #[test]
@@ -721,7 +721,7 @@ mod tests {
     #[test]
     fn record_bundle_syncs_mapping() {
         let bundle = DaCommitmentBundle::new(vec![sample_record(1, 7, 9)]);
-        let mut index = DaShardCursorIndex::new(&LaneConfig::default());
+        let mut index = DaShardCursorIndex::new(&ConfigLaneConfig::default());
         let config = lane_config_with_mapping(1, 10);
 
         index
@@ -736,7 +736,7 @@ mod tests {
 
     #[test]
     fn bundle_rejects_unknown_lane() {
-        let config = LaneConfig::default();
+        let config = ConfigLaneConfig::default();
         let bundle = DaCommitmentBundle::new(vec![sample_record(5, 1, 1)]);
         let mut index = DaShardCursorIndex::default();
 
@@ -786,7 +786,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let catalog = LaneCatalog::new(
             NonZeroU32::new(1).expect("lane count"),
-            vec![LaneMetadata {
+            vec![ModelLaneConfig {
                 id: LaneId::new(0),
                 dataspace_id: DataSpaceId::GLOBAL,
                 alias: "lane".to_string(),
@@ -801,7 +801,7 @@ mod tests {
             }],
         )
         .expect("catalog");
-        let lane_config = LaneConfig::from_catalog(&catalog);
+        let lane_config = ConfigLaneConfig::from_catalog(&catalog);
         let path = DaShardCursorJournal::journal_path(dir.path());
 
         {
@@ -872,12 +872,12 @@ mod tests {
         let catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("lane count"),
             vec![
-                LaneMetadata {
+                ModelLaneConfig {
                     id: LaneId::new(0),
                     alias: "lane0".into(),
-                    ..LaneMetadata::default()
+                    ..ModelLaneConfig::default()
                 },
-                LaneMetadata {
+                ModelLaneConfig {
                     id: LaneId::new(1),
                     alias: "lane1".into(),
                     metadata: {
@@ -885,12 +885,12 @@ mod tests {
                         map.insert("da_shard_id".to_string(), "5".to_string());
                         map
                     },
-                    ..LaneMetadata::default()
+                    ..ModelLaneConfig::default()
                 },
             ],
         )
         .expect("catalog");
-        let config = LaneConfig::from_catalog(&catalog);
+        let config = ConfigLaneConfig::from_catalog(&catalog);
         let mut journal = DaShardCursorJournal::new(&config, PathBuf::from("unused"));
 
         let bundle = DaCommitmentBundle::new(vec![sample_record(0, 0, 1), sample_record(1, 2, 3)]);
@@ -913,15 +913,15 @@ mod tests {
         let path = DaShardCursorJournal::journal_path(dir.path());
         let catalog = LaneCatalog::new(
             NonZeroU32::new(1).expect("lane count"),
-            vec![LaneMetadata {
+            vec![ModelLaneConfig {
                 id: LaneId::new(0),
                 dataspace_id: DataSpaceId::GLOBAL,
                 alias: "lane0".into(),
-                ..LaneMetadata::default()
+                ..ModelLaneConfig::default()
             }],
         )
         .expect("catalog");
-        let config = LaneConfig::from_catalog(&catalog);
+        let config = ConfigLaneConfig::from_catalog(&catalog);
         let payload = PersistedShardCursors {
             version: DaShardCursorJournal::JOURNAL_VERSION + 1,
             entries: Vec::new(),

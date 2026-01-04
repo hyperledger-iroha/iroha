@@ -8,7 +8,7 @@ Usage: scripts/address_local_toolkit.sh --input PATH [options]
 Automates the Local → Global address migration workflow described in
 docs/source/sns/local_to_global_toolkit.md. The script wraps the iroha CLI to
 emit a JSON audit report and (optionally) a converted address list that replaces
-legacy Local-domain selectors with canonical IH58 or compressed strings.
+Local-domain selectors with canonical IH58 or compressed strings.
 
 Required arguments:
   --input PATH          Newline-separated addresses (IH58/compressed/canonical hex).

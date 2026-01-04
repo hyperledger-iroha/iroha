@@ -117,7 +117,7 @@ impl IpaGroup for Group {
     }
 }
 
-/// Type alias retaining the original `Params` name for backwards compatibility.
+/// Type alias for the Pallas parameter set.
 pub type Params = crate::params::Params<PallasBackend>;
 /// Polynomial alias for the Pallas backend.
 pub type Polynomial = crate::poly::Polynomial<PallasBackend>;

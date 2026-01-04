@@ -45,7 +45,7 @@ Antes de redigir uma proposta, confirme que ela atende a carta do registro aplic
 
 - IDs de perfil sao inteiros positivos que aumentam de forma monotona sem lacunas.
 - O handle canonico (`namespace.name@semver`) deve aparecer na lista de alias e
-  **deve** ser a primeira entrada. Aliases legados (ex., `sorafs-sf1`) vem depois.
+  **deve** ser a primeira entrada. Aliases legados (ex., `sorafs.sf1@1.0.0`) vem depois.
 - Nenhum alias pode colidir com outro handle canonico ou aparecer mais de uma vez.
 - Aliases devem ser nao vazios e aparados de espacos em branco.
 
@@ -71,7 +71,7 @@ metadados canonicos necessarios nas discussoes de governanca.
 | `name` | Rotulo legivel para humanos. | `sf1` |
 | `semver` | Cadeia de versao semantica para o conjunto de parametros. | `1.0.0` |
 | `profile_id` | Identificador numerico monotono atribuido quando o perfil entra. Reserve o proximo id mas nao reutilize numeros existentes. | `1` |
-| `profile_aliases` | Handles adicionais opcionais (nomes legados, abreviacoes) expostos a clientes durante a negociacao. Inclua sempre o handle canonico como primeira entrada. | `["sorafs-sf1"]` |
+| `profile_aliases` | Handles adicionais opcionais (nomes legados, abreviacoes) expostos a clientes durante a negociacao. Inclua sempre o handle canonico como primeira entrada. | `["sorafs.sf1@1.0.0"]` |
 | `profile.min_size` | Comprimento minimo do chunk em bytes. | `65536` |
 | `profile.target_size` | Comprimento alvo do chunk em bytes. | `262144` |
 | `profile.max_size` | Comprimento maximo do chunk em bytes. | `524288` |

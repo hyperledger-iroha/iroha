@@ -48,9 +48,6 @@ pub struct DisableConsensusKey {
     pub id: crate::consensus::ConsensusKeyId,
 }
 
-/// Backwards-compatible alias for `DisableConsensusKey`.
-pub type DeprecateConsensusKey = DisableConsensusKey;
-
 impl crate::seal::Instruction for RegisterConsensusKey {}
 impl crate::seal::Instruction for RotateConsensusKey {}
 impl crate::seal::Instruction for DisableConsensusKey {}

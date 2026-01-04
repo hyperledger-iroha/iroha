@@ -13,8 +13,7 @@
       "gear_seed": "sorafs-v1-gear"
     },
     "profile_aliases": [
-      "sorafs.sf1@1.0.0",
-      "sorafs-sf1"
+      "sorafs.sf1@1.0.0"
     ],
     "chunk_multihash": {
       "code": 31,

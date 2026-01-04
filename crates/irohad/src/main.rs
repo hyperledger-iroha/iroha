@@ -2825,7 +2825,7 @@ mod build_line_tests {
     use super::{resolve_build_line_from_env, *};
     use iroha_config_base::toml::TomlSource;
     use iroha_crypto::Hash;
-    use iroha_data_model::nexus::{DataSpaceId, LaneCatalog, LaneId, LaneMetadata};
+    use iroha_data_model::nexus::{DataSpaceId, LaneCatalog, LaneId, LaneConfig};
     use std::{io::Write, num::NonZeroU32, path::Path};
     use tempfile::NamedTempFile;
     use toml::Table;
@@ -3012,13 +3012,13 @@ description = "lane overrides should be rejected when nexus is disabled"
         let catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("non-zero"),
             vec![
-                LaneMetadata::default(),
-                LaneMetadata {
+                LaneConfig::default(),
+                LaneConfig {
                     id: LaneId::new(1),
                     dataspace_id: DataSpaceId::GLOBAL,
                     alias: "governance".to_string(),
                     description: Some("governance lane".to_string()),
-                    ..LaneMetadata::default()
+                    ..LaneConfig::default()
                 },
             ],
         )
@@ -5551,18 +5551,18 @@ mod tests {
 
     #[test]
     fn config_router_enabled_when_lane_catalog_expands() {
-        use iroha_data_model::nexus::{LaneCatalog, LaneMetadata};
+        use iroha_data_model::nexus::{LaneCatalog, LaneConfig};
         use std::num::NonZeroU32;
 
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane count"),
             vec![
-                LaneMetadata::default(),
-                LaneMetadata {
+                LaneConfig::default(),
+                LaneConfig {
                     id: LaneId::new(1),
                     alias: "lane-1".to_owned(),
                     description: None,
-                    ..LaneMetadata::default()
+                    ..LaneConfig::default()
                 },
             ],
         )

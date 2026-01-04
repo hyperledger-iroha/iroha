@@ -137,9 +137,7 @@ async fn trigger_completion_failure_reports_error() -> Result<()> {
                 );
             }
             _ => {
-                return Err(eyre::eyre!(
-                    "unexpected instruction error: {instr_err:?}"
-                ));
+                return Err(eyre::eyre!("unexpected instruction error: {instr_err:?}"));
             }
         }
     } else if let Some(ValidationFail::NotPermitted(msg)) = err

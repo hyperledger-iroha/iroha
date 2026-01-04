@@ -2169,11 +2169,12 @@ async fn handler_proofs_query(
     ensure_proof_api_version(&app, negotiated, "v1/proofs/query")?;
     if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
         let signed = crate::routing::signed_find_proof_by_id(&dto)?;
-        return routing::handle_queries(
+        return routing::handle_queries_with_opts(
             app.query_service.clone(),
             app.state.clone(),
             signed,
             tel,
+            crate::NoritoQuery(QueryOptions::default()),
             format,
         )
         .await;
@@ -2183,11 +2184,12 @@ async fn handler_proofs_query(
     check_access_enforced(&app, &headers, None, "v1/proofs/query", enforce).await?;
 
     let signed = crate::routing::signed_find_proof_by_id(&dto)?;
-    routing::handle_queries(
+    routing::handle_queries_with_opts(
         app.query_service.clone(),
         app.state.clone(),
         signed,
         tel,
+        crate::NoritoQuery(QueryOptions::default()),
         format,
     )
     .await
@@ -9157,25 +9159,6 @@ async fn handler_axt_proof_cache_status(
     ))
 }
 
-async fn handler_server_version(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    accept: Option<crate::utils::extractors::ExtractAccept>,
-) -> Result<Response, Error> {
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return Ok(routing::handle_server_version(format));
-    }
-
-    let enforce = app.fee_policy.is_enabled() || app.queue.tx_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "server_version", enforce).await?;
-
-    Ok(routing::handle_server_version(format))
-}
-
 async fn handler_pipeline_recovery(
     State(app): State<SharedAppState>,
     AxPath(height): AxPath<u64>,
@@ -9352,11 +9335,12 @@ async fn handler_signed_query(
     };
 
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
-        return routing::handle_queries(
+        return routing::handle_queries_with_opts(
             app.query_service.clone(),
             app.state.clone(),
             query_request,
             tel.clone(),
+            crate::NoritoQuery(QueryOptions::default()),
             format,
         )
         .await;
@@ -9384,11 +9368,12 @@ async fn handler_signed_query(
         )));
     }
 
-    routing::handle_queries(
+    routing::handle_queries_with_opts(
         app.query_service.clone(),
         app.state.clone(),
         query_request,
         tel,
+        crate::NoritoQuery(QueryOptions::default()),
         format,
     )
     .await
@@ -11320,12 +11305,11 @@ impl Torii {
         });
     }
 
-    /// Server version, policy, and pipeline recovery routes
-    fn add_server_policy_and_pipeline_routes(&self, builder: &mut RouterBuilder) {
+    /// Policy and pipeline recovery routes
+    fn add_policy_and_pipeline_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
         builder.apply(|router| {
             router
-                .route(uri::SERVER_VERSION, get(handler_server_version))
                 .route(
                     "/v1/pipeline/recovery/{height}",
                     get(handler_pipeline_recovery),
@@ -12823,7 +12807,7 @@ impl Torii {
         // Streams and P2P websocket fallback
         self.add_network_stream_routes(&mut builder);
         // Policy and pipeline helpers
-        self.add_server_policy_and_pipeline_routes(&mut builder);
+        self.add_policy_and_pipeline_routes(&mut builder);
         #[cfg(feature = "app_api")]
         self.add_sorafs_routes(&mut builder);
         #[cfg(feature = "app_api")]
@@ -15619,13 +15603,11 @@ pub(crate) mod tests_runtime_handlers {
             authority: creds.account.clone(),
             private_key: clone_private_key(&creds.private_key),
             manifest: empty_manifest(),
-            code_bytes: None,
         };
         let dto2 = RegisterContractCodeDto {
             authority: creds.account.clone(),
             private_key: clone_private_key(&creds.private_key),
             manifest: empty_manifest(),
-            code_bytes: None,
         };
 
         let first = super::handler_post_contract_code(
@@ -16252,7 +16234,7 @@ pub(crate) mod tests_runtime_handlers {
             let mut code = Vec::new();
             code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
             let meta = ivm::ProgramMetadata {
-                version_major: 2,
+                version_major: 1,
                 version_minor: 0,
                 mode: 0,
                 vector_length: 0,

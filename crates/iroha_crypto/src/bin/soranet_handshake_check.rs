@@ -33,7 +33,6 @@ struct HandshakeScenario {
 impl HandshakeScenario {
     fn new(preferred: HandshakeSuite) -> Self {
         let (client_caps, relay_caps) = match preferred {
-            HandshakeSuite::Nk1NoiseXx => load_nk1_caps(),
             HandshakeSuite::Nk2Hybrid => load_nk2_caps(),
             HandshakeSuite::Nk3PqForwardSecure => load_nk3_caps(),
         };
@@ -154,23 +153,6 @@ fn percentile(samples: &mut [u128], percentile: f64) -> u128 {
 
 fn decode_hex_vec(label: &str, hex_str: &str) -> Vec<u8> {
     hex::decode(hex_str).unwrap_or_else(|err| panic!("{label} hex decode failed: {err}"))
-}
-
-fn load_nk1_caps() -> (Vec<u8>, Vec<u8>) {
-    let raw = include_str!(
-        "../../../../tests/interop/soranet/capabilities/snnet-cap-001-success.norito.json"
-    );
-    let value: Value = norito::json::from_str(raw).expect("parse nk1 capability fixture");
-    let client_hex = value["client_vector_hex"]
-        .as_str()
-        .expect("nk1 client vector hex");
-    let relay_hex = value["relay_vector_hex"]
-        .as_str()
-        .expect("nk1 relay vector hex");
-    (
-        decode_hex_vec("nk1 client", client_hex),
-        decode_hex_vec("nk1 relay", relay_hex),
-    )
 }
 
 fn load_nk2_caps() -> (Vec<u8>, Vec<u8>) {

@@ -30,7 +30,7 @@ translator: manual
 
 ## קבלת טרנזקציות
 
-- נבדק שה-header של IVM עומד ב-`version_major == 2` ו-`abi_version == 1`.
+- נבדק שה-header של IVM עומד ב-`version_major == 1` ו-`abi_version == 1`.
 - אם מניפסט כבר קיים, חייב להיות התאמה בין hashים מאוחסנים למחשוב מחדש.
 - ניימספייס מוגן מחייב מטא-דאטה `gov_namespace` ו-`gov_contract_id`; בהיעדר הצעת Deploy תואמת → `NotPermitted`.
 
@@ -40,7 +40,7 @@ translator: manual
 - **POST `/v1/contracts/code`** — גוף: `RegisterContractCodeDto` (`authority`, `private_key`, `manifest`). שולח רק את המניפסט.
 - **POST `/v1/contracts/instance`** — גוף: `DeployAndActivateInstanceDto` (`authority`, `private_key`, `namespace`, `contract_id`, `code_b64`, מניפסט אופציונלי). מבצע פריסה והפעלה אטומית. תשובה: `{ ok, namespace, contract_id, code_hash_hex, abi_hash_hex }`.
 - **POST `/v1/contracts/instance/activate`** — גוף: `ActivateInstanceDto` (`authority`, `private_key`, `namespace`, `contract_id`, `code_hash`). מפעיל חוזה קיים. תשובה: `{ ok: true }`.
-- **GET `/v1/contracts/code/{code_hash}`** — מחזיר `{ manifest: { code_hash, abi_hash }, code_bytes: null }`.
+- **GET `/v1/contracts/code/{code_hash}`** — מחזיר `{ manifest: { code_hash, abi_hash } }`.
 - **GET `/v1/contracts/code-bytes/{code_hash}`** — מחזיר `{ code_b64 }` עם ה-bytecode.
 
 כל נקודות הקצה של מחזור החיים חולקות rate limiter משותף (`torii.deploy_rate_per_origin_per_sec`, `torii.deploy_burst_per_origin`). ברירת המחדל: 4 בקשות לשנייה ו-burst של 8 לכל מקור (`X-API-Token`, כתובת IP, ושם נקודת הקצה). חריגה → HTTP 429 והגדלת `torii_contract_throttled_total{endpoint="code|deploy|instance|activate"}`; שגיאת מעבד → `torii_contract_errors_total{endpoint=…}`.

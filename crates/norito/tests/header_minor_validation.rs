@@ -1,4 +1,4 @@
-//! Validate header minor-version compatibility handling.
+//! Validate header minor-version handling.
 
 use crc64fast::Digest;
 use norito::{

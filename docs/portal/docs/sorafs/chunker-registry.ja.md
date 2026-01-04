@@ -39,7 +39,7 @@ fixtures を staging と production に昇格させます。
 
 | Namespace | 名前 | SemVer | プロファイル ID | 最小 (bytes) | ターゲット (bytes) | 最大 (bytes) | ブレークマスク | Multihash | エイリアス | 備考 |
 |-----------|------|--------|-----------------|--------------|--------------------|--------------|----------------|-----------|-----------|------|
-| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs-sf1"]` | SF-1 fixtures で使う正規プロファイル |
+| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` | SF-1 fixtures で使う正規プロファイル |
 
 レジストリはコード上で `sorafs_manifest::chunker_registry` として存在します（[`chunker_registry_charter.md`](./chunker-registry-charter.md) が統治）。各エントリは次の内容を持つ `ChunkerProfileDescriptor` として表現されます:
 
@@ -85,8 +85,6 @@ JSON を書き出す CLI フラグ (`--json-out`, `--por-json-out`, `--por-proof
 
 ### 互換性マトリクスとロールアウト計画
 
-> 機械可読マトリクス: `docs/source/sorafs/compatibility_matrix.json`  
-> `cargo xtask sorafs-compat` で再生成（stdout は `--out -`）。
 
 以下の表は、`sorafs.sf1@1.0.0` の現在の対応状況を主要コンポーネント別にまとめたものです。
 "Bridge" は CARv1 + SHA-256 の互換レーンを指し、明示的なクライアント交渉
@@ -224,7 +222,7 @@ manifest は常に CARv2/BLAKE3 のコミットメントを広告します。
 
 ### 準拠性
 
-* `sorafs-sf1` プロファイルは `fixtures/sorafs_chunker` の公開 fixtures と
+* `sorafs.sf1@1.0.0` プロファイルは `fixtures/sorafs_chunker` の公開 fixtures と
   `fuzz/sorafs_chunker` に登録された corpora に対応します。エンドツーエンドの
   パリティは Rust、Go、Node のテストで検証されています。
 * `chunker_registry::lookup_by_profile` は、descriptor のパラメータが

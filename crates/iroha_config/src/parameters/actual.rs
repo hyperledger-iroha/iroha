@@ -57,8 +57,9 @@ use iroha_data_model::{
     jurisdiction::JdgSignatureScheme,
     name::Name,
     nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneId, LaneMetadata,
-        LaneStorageProfile, LaneVisibility, ShardId, UniversalAccountId,
+        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
+        LaneConfig as LaneConfigMetadata, LaneId, LaneStorageProfile, LaneVisibility, ShardId,
+        UniversalAccountId,
     },
     oracle::KeyedHash,
     peer::{Peer, PeerId},
@@ -223,7 +224,7 @@ impl Root {
 pub(crate) fn sora_lane_catalog() -> LaneCatalog {
     let lane_count = NonZeroU32::new(3).expect("three lanes are non-zero");
     let lanes = vec![
-        LaneMetadata {
+        LaneConfigMetadata {
             id: LaneId::new(0),
             dataspace_id: DataSpaceId::GLOBAL,
             alias: "core".to_string(),
@@ -236,7 +237,7 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
             proof_scheme: DaProofScheme::default(),
             metadata: BTreeMap::new(),
         },
-        LaneMetadata {
+        LaneConfigMetadata {
             id: LaneId::new(1),
             dataspace_id: DataSpaceId::GLOBAL,
             alias: "governance".to_string(),
@@ -249,7 +250,7 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
             proof_scheme: DaProofScheme::default(),
             metadata: BTreeMap::new(),
         },
-        LaneMetadata {
+        LaneConfigMetadata {
             id: LaneId::new(2),
             dataspace_id: DataSpaceId::GLOBAL,
             alias: "zk".to_string(),
@@ -326,7 +327,7 @@ mod sora_profile_tests {
     use std::num::NonZeroU32;
 
     use iroha_config_base::toml::TomlSource;
-    use iroha_data_model::nexus::{LaneCatalog, LaneMetadata};
+    use iroha_data_model::nexus::{LaneCatalog, LaneConfig as LaneConfigMetadata};
     use toml::Table;
 
     use super::*;
@@ -378,9 +379,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         root.nexus.enabled = false;
         root.nexus.lane_catalog = LaneCatalog::new(
             NonZeroU32::new(1).expect("nonzero lane count"),
-            vec![LaneMetadata {
+            vec![LaneConfigMetadata {
                 alias: "custom".to_string(),
-                ..LaneMetadata::default()
+                ..LaneConfigMetadata::default()
             }],
         )
         .expect("lane catalog");
@@ -398,17 +399,17 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let custom_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("non-zero lane count"),
             vec![
-                LaneMetadata {
+                LaneConfigMetadata {
                     id: LaneId::new(0),
                     alias: "alpha".to_string(),
                     description: None,
-                    ..LaneMetadata::default()
+                    ..LaneConfigMetadata::default()
                 },
-                LaneMetadata {
+                LaneConfigMetadata {
                     id: LaneId::new(1),
                     alias: "beta".to_string(),
                     description: None,
-                    ..LaneMetadata::default()
+                    ..LaneConfigMetadata::default()
                 },
             ],
         )
@@ -2236,7 +2237,7 @@ impl LaneConfigEntry {
     const CONFIDENTIAL_KEY_VERSION_KEY: &'static str = "confidential_key_version";
     const CONFIDENTIAL_ACCESS_KEY: &'static str = "confidential_access";
 
-    fn from_metadata(meta: &LaneMetadata) -> Self {
+    fn from_metadata(meta: &LaneConfigMetadata) -> Self {
         let slug = Self::slugify(&meta.alias, meta.id);
         let lane_numeric = meta.id.as_u32();
         let key_prefix = lane_numeric.to_be_bytes();
@@ -6010,7 +6011,9 @@ impl NtsEnforcementMode {
 mod tests {
     use std::{collections::BTreeMap, num::NonZeroU32};
 
-    use iroha_data_model::nexus::{LaneCatalog, LaneId, LaneMetadata, LaneVisibility};
+    use iroha_data_model::nexus::{
+        LaneCatalog, LaneConfig as LaneConfigMetadata, LaneId, LaneVisibility,
+    };
     use iroha_primitives::{addr::socket_addr, unique_vec};
 
     use super::*;
@@ -6086,11 +6089,11 @@ mod tests {
         metadata.insert("da_shard_id".to_string(), "9".to_string());
         let catalog = LaneCatalog::new(
             NonZeroU32::new(6).expect("lane count"),
-            vec![LaneMetadata {
+            vec![LaneConfigMetadata {
                 id: LaneId::new(5),
                 alias: "lane5".into(),
                 metadata,
-                ..LaneMetadata::default()
+                ..LaneConfigMetadata::default()
             }],
         )
         .expect("lane catalog");
@@ -6108,16 +6111,16 @@ mod tests {
         let catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("lane count"),
             vec![
-                LaneMetadata {
+                LaneConfigMetadata {
                     id: LaneId::new(0),
                     alias: "lane1".into(),
                     metadata,
-                    ..LaneMetadata::default()
+                    ..LaneConfigMetadata::default()
                 },
-                LaneMetadata {
+                LaneConfigMetadata {
                     id: LaneId::new(1),
                     alias: "lane2".into(),
-                    ..LaneMetadata::default()
+                    ..LaneConfigMetadata::default()
                 },
             ],
         )
@@ -6132,10 +6135,10 @@ mod tests {
     fn shard_defaults_to_lane_id_when_metadata_missing() {
         let catalog = LaneCatalog::new(
             NonZeroU32::new(4).expect("lane count"),
-            vec![LaneMetadata {
+            vec![LaneConfigMetadata {
                 id: LaneId::new(3),
                 alias: "lane3".into(),
-                ..LaneMetadata::default()
+                ..LaneConfigMetadata::default()
             }],
         )
         .expect("lane catalog");
@@ -6392,13 +6395,13 @@ mod tests {
         let catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane count"),
             vec![
-                LaneMetadata::default(),
-                LaneMetadata {
+                LaneConfigMetadata::default(),
+                LaneConfigMetadata {
                     id: LaneId::new(1),
                     alias: "Public Lane ①".to_string(),
                     lane_type: Some("default_public".to_string()),
                     governance: Some("parliament".to_string()),
-                    ..LaneMetadata::default()
+                    ..LaneConfigMetadata::default()
                 },
             ],
         )

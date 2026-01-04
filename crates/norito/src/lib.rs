@@ -7548,7 +7548,7 @@ pub mod json {
     }
 
     /// Typed, tape-first decode (prototype): parse using the structural tape directly.
-    /// Error used by FastFromJson derives (kept as norito::Error for compatibility).
+    /// Error type used by FastFromJson derives.
     pub type FastPathError = super::Error;
     pub trait FastFromJson<'a>: Sized {
         fn parse<'b>(w: &mut TapeWalker<'a>, arena: &'b mut Arena) -> Result<Self, FastPathError>;
@@ -8602,73 +8602,6 @@ pub mod prelude {
 pub fn decode_from_bytes<T: for<'de> NoritoDeserialize<'de>>(bytes: &[u8]) -> Result<T, Error> {
     use std::io::Cursor;
     deserialize_stream(Cursor::new(bytes))
-}
-
-/// Decode a value from a bare, headerless Norito payload and ensure no trailing bytes remain.
-///
-/// This helper is internal-only for in-process codec usage (hashing, benches, or
-/// other non-wire contexts). On-wire payloads must be framed and decoded via
-/// [`decode_from_bytes`].
-pub fn decode_bare_from_bytes<T>(bytes: &[u8]) -> Result<T, Error>
-where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + crate::codec::Decode,
-{
-    // Decode using the bare codec path (headerless payload)
-    let mut cur = std::io::Cursor::new(bytes);
-    let value = <T as crate::codec::Decode>::decode(&mut cur)?;
-    let consumed = cur.position() as usize;
-    if consumed != bytes.len() {
-        return Err(Error::LengthMismatch);
-    }
-
-    let flags = core::default_encode_flags();
-
-    // Validate there are no trailing bytes by comparing lengths.
-    // Prefer exact length when cheaply available; otherwise re-encode into a small buffer.
-    // Re-encode under the same layout flags as the decoder selected.
-    let used = if let Some(ex) = value.encoded_len_exact() {
-        if ex == bytes.len() {
-            ex
-        } else {
-            // Fall back to re-encoding when exact lengths drift (e.g., derive bug or layout tweak).
-            let encode_guard = core::EncodeContextGuard::enter();
-            let mut tmp = Vec::with_capacity(bytes.len());
-            {
-                let _fg = core::DecodeFlagsGuard::enter(flags);
-                value.serialize(&mut tmp)?;
-            }
-            drop(encode_guard);
-            tmp.len()
-        }
-    } else if let Some(hint) = value.encoded_len_hint() {
-        let encode_guard = core::EncodeContextGuard::enter();
-        let mut tmp = Vec::with_capacity(hint);
-        {
-            let _fg = core::DecodeFlagsGuard::enter(flags);
-            value.serialize(&mut tmp)?;
-        }
-        drop(encode_guard);
-        tmp.len()
-    } else {
-        let encode_guard = core::EncodeContextGuard::enter();
-        let mut tmp = Vec::new();
-        {
-            let _fg = core::DecodeFlagsGuard::enter(flags);
-            value.serialize(&mut tmp)?;
-        }
-        drop(encode_guard);
-        tmp.len()
-    };
-    if used != bytes.len() {
-        let remaining = bytes.len().saturating_sub(used);
-        return Err(Error::length_mismatch_detail(
-            "verifying decode_from_bytes consumption",
-            used,
-            bytes.len(),
-            remaining,
-        ));
-    }
-    Ok(value)
 }
 
 /// Convenience helper identical to `decode_from_bytes`.

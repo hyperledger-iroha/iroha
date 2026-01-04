@@ -737,7 +737,7 @@ pub mod network {
     /// Default stagger between parallel dial attempts for multiple addresses (Happy Eyeballs)
     pub const HAPPY_EYEBALLS_STAGGER: Duration = Duration::from_millis(100);
 
-    // P2P bounded queue capacities (always enforced; historical feature flag retained for compatibility)
+    // P2P bounded queue capacities (always enforced)
     // Defaults tuned for ~20,000 TPS environments: prioritize headroom for gossip/low-priority
     // traffic while keeping consensus/control queues responsive.
     /// Capacity for priority queues fed by high-importance messages.
@@ -1598,8 +1598,6 @@ pub mod nexus {
         pub const CLOCK_SKEW_MS_DEFAULT: u64 = 0;
         /// Upper bound on tolerated clock skew to prevent unbounded expiry extensions.
         pub const CLOCK_SKEW_MS_MAX: u64 = 60_000;
-        /// Backward-compat alias for the maximum clock skew constant.
-        pub const MAX_CLOCK_SKEW_MS: u64 = CLOCK_SKEW_MS_MAX;
         /// Default number of slots to retain cached proofs (accepted or rejected).
         pub const PROOF_CACHE_TTL_SLOTS: u64 = 1;
         /// Maximum allowed proof cache TTL (slots) to bound replay surface.

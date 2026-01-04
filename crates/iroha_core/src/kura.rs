@@ -97,8 +97,8 @@ pub struct Kura {
     active_blocks_dir: Mutex<PathBuf>,
     /// Active merge-ledger file path for the primary lane.
     active_merge_path: Mutex<PathBuf>,
-    /// At most N last blocks will be stored in memory.
-    /// Older blocks will be dropped from memory and loaded from the disk if they are needed.
+    /// Number of most recent non-genesis blocks stored in memory.
+    /// The genesis block is always retained for metrics and replay.
     blocks_in_memory: NonZeroUsize,
     /// Number of recent commit-roster snapshots retained for block sync.
     block_sync_roster_retention: NonZeroUsize,
@@ -1455,16 +1455,18 @@ impl Kura {
     }
 
     // Drop old block to prevent unbounded memory usage.
-    // It will be loaded from the disk if needed later.
+    // Keep the genesis block plus the most recent `blocks_in_memory` blocks.
     fn drop_old_block(
         block_data: &mut BlockData,
         written_block_count: usize,
         blocks_in_memory: usize,
     ) {
-        // Keep last N blocks and genesis block.
-        // (genesis block is used in metrics to get genesis timestamp)
+        // (Genesis block is used in metrics to get genesis timestamp.)
         if written_block_count > blocks_in_memory {
-            block_data[written_block_count - blocks_in_memory].1 = None;
+            let drop_idx = written_block_count - blocks_in_memory;
+            if drop_idx > 0 && drop_idx < block_data.len() {
+                block_data[drop_idx].1 = None;
+            }
         }
     }
 
@@ -3725,7 +3727,7 @@ mod tests {
         domain::{Domain, DomainId},
         isi::{Log, Upgrade},
         merge::MergeQuorumCertificate,
-        nexus::{LaneCatalog, LaneConfig as LaneMetadata, LaneId},
+        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
         peer::PeerId,
         prelude::{Executor, IvmBytecode},
         transaction::TransactionBuilder,
@@ -3754,11 +3756,11 @@ mod tests {
         let store_root = temp_dir.path().join("kura");
         let lane_count = NonZeroU32::new(4).expect("non-zero lane count");
 
-        let lane0 = LaneMetadata::default();
-        let lane1 = LaneMetadata {
+        let lane0 = ModelLaneConfig::default();
+        let lane1 = ModelLaneConfig {
             id: LaneId::from(1),
             alias: "beta".to_string(),
-            ..LaneMetadata::default()
+            ..ModelLaneConfig::default()
         };
         let initial_catalog =
             LaneCatalog::new(lane_count, vec![lane0.clone(), lane1.clone()]).expect("catalog");
@@ -3791,10 +3793,10 @@ mod tests {
             "expected lane 1 blocks directory to be provisioned"
         );
 
-        let lane2 = LaneMetadata {
+        let lane2 = ModelLaneConfig {
             id: LaneId::from(2),
             alias: "gamma".to_string(),
-            ..LaneMetadata::default()
+            ..ModelLaneConfig::default()
         };
         let extended_catalog = LaneCatalog::new(
             lane_count,
@@ -3865,11 +3867,11 @@ mod tests {
         let _restore_dir = WorkingDirGuard(original_dir);
 
         let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
-        let lane0 = LaneMetadata::default();
-        let lane1 = LaneMetadata {
+        let lane0 = ModelLaneConfig::default();
+        let lane1 = ModelLaneConfig {
             id: LaneId::from(1),
             alias: "beta".to_string(),
-            ..LaneMetadata::default()
+            ..ModelLaneConfig::default()
         };
         let catalog = LaneCatalog::new(lane_count, vec![lane0, lane1]).expect("catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
@@ -3895,7 +3897,7 @@ mod tests {
         let store_root = temp_dir.path().join("kura");
 
         let initial_catalog =
-            LaneCatalog::new(nonzero!(1_u32), vec![LaneMetadata::default()]).expect("catalog");
+            LaneCatalog::new(nonzero!(1_u32), vec![ModelLaneConfig::default()]).expect("catalog");
         let initial_lane_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
 
         let kura_cfg = KuraConfig {
@@ -3919,11 +3921,11 @@ mod tests {
         let extended_catalog = LaneCatalog::new(
             nonzero!(2_u32),
             vec![
-                LaneMetadata::default(),
-                LaneMetadata {
+                ModelLaneConfig::default(),
+                ModelLaneConfig {
                     id: LaneId::from(1),
                     alias: "conflict".to_string(),
-                    ..LaneMetadata::default()
+                    ..ModelLaneConfig::default()
                 },
             ],
         )
@@ -3955,9 +3957,9 @@ mod tests {
 
         let initial_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![ModelLaneConfig {
                 alias: "Alpha Lane".to_string(),
-                ..LaneMetadata::default()
+                ..ModelLaneConfig::default()
             }],
         )
         .expect("initial catalog");
@@ -3990,9 +3992,9 @@ mod tests {
 
         let updated_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![ModelLaneConfig {
                 alias: "Payments Lane".to_string(),
-                ..LaneMetadata::default()
+                ..ModelLaneConfig::default()
             }],
         )
         .expect("updated catalog");
@@ -4181,7 +4183,7 @@ mod tests {
     }
 
     fn primary_blocks_dir(dir: &TempDir) -> PathBuf {
-        let lane_cfg = LaneConfig::default();
+        let lane_cfg = RuntimeLaneConfig::default();
         let blocks_dir = lane_cfg.primary().blocks_dir(dir.path());
         std::fs::create_dir_all(&blocks_dir).unwrap();
         blocks_dir
@@ -4296,7 +4298,7 @@ mod tests {
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
         };
 
-        let (kura, _) = Kura::new(&config, &LaneConfig::default()).expect("init kura");
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init kura");
         let block1: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
         let block2: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
         let entry1 = sample_merge_entry(1);
@@ -4309,7 +4311,8 @@ mod tests {
 
         drop(kura);
 
-        let (kura_reloaded, _) = Kura::new(&config, &LaneConfig::default()).expect("reopen kura");
+        let (kura_reloaded, _) =
+            Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen kura");
         let snapshot = kura_reloaded.merge_ledger_snapshot();
         // Without persisting paired blocks, the merge log is trimmed on restart to
         // preserve consistency with the block store.
@@ -4691,7 +4694,7 @@ mod tests {
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
             },
-            &LaneConfig::default(),
+            &RuntimeLaneConfig::default(),
         )
         .unwrap();
     }
@@ -4733,7 +4736,7 @@ mod tests {
                     roster_sidecar_retention:
                         iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
                 },
-                &LaneConfig::default(),
+                &RuntimeLaneConfig::default(),
             )
             .unwrap();
 
@@ -4778,7 +4781,7 @@ mod tests {
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
             },
-            &LaneConfig::default(),
+            &RuntimeLaneConfig::default(),
         )
         .unwrap();
 
@@ -4791,6 +4794,33 @@ mod tests {
         let first = kura.get_block(height).expect("block available");
         let second = kura.get_block(height).expect("cached block");
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn drop_old_block_keeps_genesis_and_recent_blocks() {
+        let mut generator = DummyBlocks::new();
+        let mut block_data: BlockData = (0..4)
+            .map(|_| {
+                let block = generator.next();
+                (block.hash(), Some(block))
+            })
+            .collect();
+
+        Kura::drop_old_block(&mut block_data, 2, 2);
+        assert_eq!(
+            block_data.iter().filter(|(_, block)| block.is_some()).count(),
+            4,
+            "no blocks should be dropped while within retention"
+        );
+
+        Kura::drop_old_block(&mut block_data, 3, 2);
+        assert!(block_data[0].1.is_some(), "genesis block stays cached");
+        assert!(
+            block_data[1].1.is_none(),
+            "oldest non-genesis block should be dropped"
+        );
+        assert!(block_data[2].1.is_some(), "recent block should stay cached");
+        assert!(block_data[3].1.is_some(), "latest block should stay cached");
     }
 
     #[test]
@@ -4816,7 +4846,7 @@ mod tests {
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
             },
-            &LaneConfig::default(),
+            &RuntimeLaneConfig::default(),
         )
         .unwrap();
 
@@ -4864,7 +4894,7 @@ mod tests {
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
             },
-            &LaneConfig::default(),
+            &RuntimeLaneConfig::default(),
         )
         .unwrap();
 
@@ -4946,7 +4976,7 @@ mod tests {
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
             },
-            &LaneConfig::default(),
+            &RuntimeLaneConfig::default(),
         )
         .unwrap();
         assert_eq!(block_count.0, 0);
@@ -5165,7 +5195,7 @@ mod tests {
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
             },
-            &LaneConfig::default(),
+            &RuntimeLaneConfig::default(),
         )
         .unwrap();
 
@@ -5208,7 +5238,7 @@ mod tests {
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
             },
-            &LaneConfig::default(),
+            &RuntimeLaneConfig::default(),
         )
         .unwrap();
 
@@ -5336,7 +5366,7 @@ mod tests {
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
             },
-            &LaneConfig::default(),
+            &RuntimeLaneConfig::default(),
         )
         .unwrap();
 
@@ -5396,7 +5426,7 @@ mod tests {
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
             },
-            &LaneConfig::default(),
+            &RuntimeLaneConfig::default(),
         )
         .unwrap();
 
@@ -5620,7 +5650,7 @@ mod tests {
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
             },
-            &LaneConfig::default(),
+            &RuntimeLaneConfig::default(),
         )
         .unwrap();
 
@@ -5709,7 +5739,7 @@ mod tests {
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
             },
-            &LaneConfig::default(),
+            &RuntimeLaneConfig::default(),
         )
         .expect("re-init kura");
 
@@ -5749,7 +5779,7 @@ mod tests {
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
             },
-            &LaneConfig::default(),
+            &RuntimeLaneConfig::default(),
         )
         .expect("re-init kura");
 

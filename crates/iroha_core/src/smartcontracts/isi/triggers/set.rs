@@ -643,20 +643,17 @@ impl<'set> SetBlock<'set> {
         &self,
         event: TimeEvent,
         current_block_height: u64,
-        current_block_time_ms: u64,
+        _current_block_time_ms: u64,
     ) -> impl Iterator<Item = (TriggerId, LoadedAction<TimeEventFilter>)> + '_ {
         let key_height = "__registered_block_height".parse::<Name>().ok();
-        let key_time = "__registered_at_ms".parse::<Name>().ok();
         self.time_triggers.iter().flat_map(move |(id, action)| {
             let height_key = key_height.clone();
-            let time_key = key_time.clone();
             let mut count = action.filter.count_matches(&event);
             if let Repeats::Exactly(repeats) = action.repeats {
                 count = min(repeats, count);
             }
             // Skip firing triggers that were registered in the same block that is being applied now.
-            // We rely on `__registered_block_height` metadata set during registration and
-            // the current block height carried in the time event interval boundaries.
+            // Require `__registered_block_height` metadata set during registration.
             (0..count)
                 .map(move |_| (id.clone(), action.clone()))
                 .filter(move |(_, act)| {
@@ -664,19 +661,10 @@ impl<'set> SetBlock<'set> {
                         .as_ref()
                         .and_then(|key| act.metadata().get(key))
                         .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                    if registered_height == Some(current_block_height) {
-                        return false;
+                    match registered_height {
+                        Some(height) => height != current_block_height,
+                        None => false,
                     }
-                    if registered_height.is_none() {
-                        let registered_time = time_key
-                            .as_ref()
-                            .and_then(|key| act.metadata().get(key))
-                            .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                        if registered_time == Some(current_block_time_ms) {
-                            return false;
-                        }
-                    }
-                    true
                 })
         })
     }
@@ -1225,6 +1213,47 @@ mod tests {
         assert_eq!(
             matches_later, 1,
             "trigger should appear for subsequent blocks"
+        );
+    }
+
+    #[test]
+    fn match_time_event_requires_registration_metadata() {
+        crate::test_alias::ensure();
+        let set = Set::default();
+        {
+            let mut block = set.block();
+            {
+                let mut tx = block.transaction();
+                let trigger_id: TriggerId = "time_trigger_missing_meta".parse().expect("valid id");
+                let authority: AccountId =
+                    "alice@wonderland".parse().expect("authority must parse");
+                let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
+                let executable = Executable::Instructions(ConstVec::from(vec![instruction]));
+                let action = SpecializedAction::new(
+                    executable,
+                    Repeats::Exactly(1),
+                    authority,
+                    TimeEventFilter(ExecutionTime::PreCommit),
+                );
+                let trigger = SpecializedTrigger::new(trigger_id, action);
+                tx.add_time_trigger(trigger)
+                    .expect("time trigger should be added");
+                tx.apply();
+            }
+            block.commit();
+        }
+
+        let block_view = set.block();
+        let interval =
+            TimeInterval::new_since_to(Duration::from_millis(0), Duration::from_millis(1_234));
+        let time_event = TimeEvent { interval };
+
+        assert!(
+            block_view
+                .match_time_event(time_event, 99, 1_234)
+                .next()
+                .is_none(),
+            "trigger missing registration metadata must be skipped"
         );
     }
 }

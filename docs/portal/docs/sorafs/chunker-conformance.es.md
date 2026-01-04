@@ -29,7 +29,7 @@ los consumidores de fixtures en los SDKs permanezcan sincronizados.
 
 ## Perfil canónico
 
-- Handle del perfil: `sorafs.sf1@1.0.0` (alias heredado `sorafs-sf1`)
+- Handle del perfil: `sorafs.sf1@1.0.0` (alias heredado `sorafs.sf1@1.0.0`)
 - Seed de entrada (hex): `0000000000dec0ded`
 - Tamaño objetivo: 262144 bytes (256 KiB)
 - Tamaño mínimo: 65536 bytes (64 KiB)
@@ -49,7 +49,7 @@ fixtures y emite los siguientes archivos bajo `fixtures/sorafs_chunker/`:
 - `sf1_profile_v1.{json,rs,ts,go}` — límites de chunk canónicos para consumidores
   Rust, TypeScript y Go. Cada archivo anuncia el handle canónico como la primera
   entrada en `profile_aliases`, seguido por cualquier alias heredado (p. ej.,
-  `sorafs.sf1@1.0.0`, luego `sorafs-sf1`). El orden se impone por
+  `sorafs.sf1@1.0.0`, luego `sorafs.sf1@1.0.0`). El orden se impone por
   `ensure_charter_compliance` y NO DEBE alterarse.
 - `manifest_blake3.json` — manifest verificado con BLAKE3 que cubre cada archivo de fixtures.
 - `manifest_signatures.json` — firmas del consejo (Ed25519) sobre el digest del manifest.

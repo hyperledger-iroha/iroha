@@ -46,7 +46,7 @@ translator: manual
 - CoreHost は STATE_{GET,SET,DEL} を WSV に裏付けられた永続スマートコントラクト状態へ接続します。dev/test ホストはオーバーレイやローカル永続化を使ってもよいが、観測可能な挙動は同一でなければなりません。
 
 ## バリデーション
-- ノードアドミッションは `version_major = 2` のヘッダーのみを受け入れます。その他のメジャー値は拒否されます。
+- ノードアドミッションは `version_major = 1` のヘッダーのみを受け入れます。その他のメジャー値は拒否されます。
 - `mode` には既知のビット（`ZK`, `VECTOR`, `HTM`）のみを設定できます。未知のビットは拒否されます。
 - `vector_length` は助言的な値であり、`VECTOR` ビットが未設定でも非ゼロになり得ます。アドミッションでは上限のみを検証します。
 - サポートされる `abi_version` は初回リリース時点では `1` のみであり、他の値はアドミッションで拒否されます。
@@ -57,7 +57,7 @@ translator: manual
 <!-- BEGIN GENERATED HEADER POLICY -->
 | フィールド | ポリシー |
 |---|---|
-| version_major | 2 |
+| version_major | 1 |
 | version_minor | 任意 |
 | mode (known bits) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
 | abi_version | 1 |

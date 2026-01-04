@@ -159,7 +159,7 @@ use iroha_data_model::{
     jurisdiction::JdgSignatureScheme,
     name::Name,
     nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneId, LaneMetadata,
+        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
         LaneStorageProfile, LaneVisibility, UniversalAccountId,
     },
     peer::{Peer, PeerId},
@@ -10070,11 +10070,11 @@ impl Nexus {
         let mut lane_errors = false;
 
         if descriptors.is_empty() {
-            lane_entries.push(LaneMetadata {
+            lane_entries.push(LaneConfig {
                 id: LaneId::SINGLE,
                 alias: defaults::nexus::DEFAULT_LANE_ALIAS.to_string(),
                 description: None,
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             });
         } else {
             for (idx, descriptor) in descriptors.into_iter().enumerate() {
@@ -10112,11 +10112,11 @@ impl Nexus {
                 };
 
                 let description = Self::normalize_opt(descriptor.description);
-                let mut lane_metadata = LaneMetadata {
+                let mut lane_metadata = LaneConfig {
                     id,
                     alias,
                     description,
-                    ..LaneMetadata::default()
+                    ..LaneConfig::default()
                 };
                 if let Some(dataspace_alias) = Self::normalize_opt(descriptor.dataspace) {
                     if let Some(entry) = dataspace_catalog.by_alias(&dataspace_alias) {

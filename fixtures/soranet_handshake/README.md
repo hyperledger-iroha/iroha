@@ -7,6 +7,6 @@ Artifacts:
 - `capabilities/` — capability negotiation vectors and transcript hashes.
 - `salt/` — sample `SaltAnnouncementV1` payload (`epoch-000042.norito.json`).
 - `telemetry/` — DowngradeAlarmReportV1 and SoraNetTelemetryV1 samples carrying deterministic Dilithium3 + Ed25519 signatures.
-- `interop/` — NK1/NK2/NK3 handshake vectors (Rust/Go/C++) containing transcripts, session keys, and deterministic ML-KEM material for cross-language harnesses.
+- `interop/` — NK2/NK3 handshake vectors (Rust/Go/C++) containing transcripts, session keys, and deterministic ML-KEM material for cross-language harnesses.
 The harness integration tests (`cargo test -p soranet-handshake-harness`) call
 `verify_fixtures` to ensure the signed bundles remain in sync with the generator.

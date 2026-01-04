@@ -150,83 +150,18 @@ fn order_parse_error(parser: &norito::json::Parser<'_>, start: usize) -> norito:
     }
 }
 
-/// Wrapper to deserialize `FilterExpr`, tolerating `not` with single-element array args.
-///
-/// NOTE: Kept for JSON-compatibility deserialization only. Programmatic APIs should
-/// use `FilterExpr` directly. See `QueryEnvelope.filter` for how this is used.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FilterExprCompat(pub FilterExpr);
-
-impl JsonSerialize for FilterExprCompat {
-    fn json_serialize(&self, out: &mut String) {
-        self.0.json_serialize(out);
-    }
-}
-
-impl JsonDeserialize for FilterExprCompat {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        parse_filter_expr(parser).map(FilterExprCompat)
-    }
-}
-
 fn parse_filter_expr(
     parser: &mut norito::json::Parser<'_>,
 ) -> Result<FilterExpr, norito::json::Error> {
-    let mut val = Value::json_deserialize(parser)?;
-    normalize_filter_expr_compat(&mut val);
+    let val = Value::json_deserialize(parser)?;
     filter_expr_from_value(val)
 }
 
 fn parse_filter_expr_option(
     parser: &mut norito::json::Parser<'_>,
 ) -> Result<Option<FilterExpr>, norito::json::Error> {
-    let mut opt_val = Option::<Value>::json_deserialize(parser)?;
-    if let Some(ref mut val) = opt_val {
-        normalize_filter_expr_compat(val);
-    }
+    let opt_val = Option::<Value>::json_deserialize(parser)?;
     opt_val.map(filter_expr_from_value).transpose()
-}
-
-fn normalize_filter_expr_compat(val: &mut Value) {
-    fn rec(v: &mut Value) {
-        if let Some(obj) = v.as_object_mut() {
-            // Capture op first to avoid borrow conflicts
-            let op_owned = obj
-                .get("op")
-                .and_then(norito::json::Value::as_str)
-                .map(ToString::to_string)
-                .unwrap_or_default();
-            if let Some(args) = obj.get_mut("args") {
-                if op_owned.as_str() == "not" {
-                    if let Value::Array(arr) = args {
-                        if arr.len() == 1 {
-                            let mut inner = arr[0].clone();
-                            rec(&mut inner);
-                            *args = inner;
-                        }
-                    }
-                } else if op_owned.as_str() == "exists" || op_owned.as_str() == "is_null" {
-                    // Accept unary operators with single-element array and unwrap to the bare value
-                    if let Value::Array(arr) = args {
-                        if arr.len() == 1 {
-                            *args = arr[0].clone();
-                        }
-                    }
-                } else if op_owned.as_str() == "and" || op_owned.as_str() == "or" {
-                    if let Value::Array(arr) = args {
-                        for elem in arr.iter_mut() {
-                            rec(elem);
-                        }
-                    }
-                } else if matches!(args, Value::Object(_)) {
-                    rec(args);
-                }
-            }
-        }
-    }
-    rec(val);
 }
 
 fn filter_expr_from_value(val: Value) -> Result<FilterExpr, norito::json::Error> {
@@ -261,14 +196,13 @@ fn filter_expr_from_value(val: Value) -> Result<FilterExpr, norito::json::Error>
                     }
                     _ => Err(filter_expr_error("or expects array args")),
                 },
-                "not" => {
-                    let inner_value = match args {
-                        Value::Array(mut values) if values.len() == 1 => values.remove(0),
-                        other => other,
-                    };
-                    let inner = filter_expr_from_value(inner_value)?;
-                    Ok(FilterExpr::Not(Box::new(inner)))
-                }
+                "not" => match args {
+                    Value::Array(mut values) if values.len() == 1 => {
+                        let inner = filter_expr_from_value(values.remove(0))?;
+                        Ok(FilterExpr::Not(Box::new(inner)))
+                    }
+                    _ => Err(filter_expr_error("not expects array args")),
+                },
                 "eq" => {
                     let (field, value) = parse_binop_args(args)?;
                     Ok(FilterExpr::Eq(field, value))
@@ -319,10 +253,6 @@ fn filter_expr_from_value(val: Value) -> Result<FilterExpr, norito::json::Error>
 fn parse_field_arg(arg: Value) -> Result<FieldPath, norito::json::Error> {
     match arg {
         Value::String(s) => Ok(FieldPath(s)),
-        Value::Array(mut values) if values.len() == 1 => match values.remove(0) {
-            Value::String(s) => Ok(FieldPath(s)),
-            _ => Err(filter_expr_error("filter field must be string")),
-        },
         _ => Err(filter_expr_error("filter field must be string")),
     }
 }
@@ -844,27 +774,5 @@ impl<'de> norito::core::NoritoDeserialize<'de> for FilterExpr {
     fn deserialize(archived: &'de norito::core::Archived<FilterExpr>) -> Self {
         Self::try_deserialize(archived)
             .expect("FilterExpr should deserialize from canonical JSON form")
-    }
-}
-
-impl norito::core::NoritoSerialize for FilterExprCompat {
-    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
-        <FilterExpr as norito::core::NoritoSerialize>::serialize(&self.0, writer)
-    }
-}
-
-impl<'de> norito::core::NoritoDeserialize<'de> for FilterExprCompat {
-    fn try_deserialize(
-        archived: &'de norito::core::Archived<FilterExprCompat>,
-    ) -> Result<Self, norito::core::Error> {
-        let archived_inner: &norito::core::Archived<FilterExpr> = archived.cast();
-        let inner =
-            <FilterExpr as norito::core::NoritoDeserialize>::try_deserialize(archived_inner)?;
-        Ok(FilterExprCompat(inner))
-    }
-
-    fn deserialize(archived: &'de norito::core::Archived<FilterExprCompat>) -> Self {
-        Self::try_deserialize(archived)
-            .expect("FilterExprCompat should deserialize from canonical JSON form")
     }
 }

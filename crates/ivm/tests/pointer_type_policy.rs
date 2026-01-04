@@ -19,7 +19,7 @@ fn abi_v1_policy_allows_full_pointer_surface() {
 }
 
 #[test]
-fn experimental_policy_mirrors_abi_v1_surface() {
+fn experimental_policy_rejects_pointer_types() {
     use PointerType::*;
     for ty in [
         AccountId,
@@ -32,9 +32,9 @@ fn experimental_policy_mirrors_abi_v1_surface() {
         DomainId,
         NoritoBytes,
     ] {
-        assert!(ivm::is_type_allowed_for_policy(
-            SyscallPolicy::Experimental(1),
-            ty
-        ))
+        assert!(
+            !ivm::is_type_allowed_for_policy(SyscallPolicy::Experimental(1), ty),
+            "experimental policy must reject {ty:?}"
+        )
     }
 }

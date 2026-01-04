@@ -21,7 +21,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use eyre::{ContextCompat, WrapErr, eyre};
 use flate2::read::{DeflateDecoder, GzDecoder};
-use iroha_config::parameters::actual::{DaTaikaiAnchor, LaneConfig};
+use iroha_config::parameters::actual::{DaTaikaiAnchor, LaneConfig as ConfigLaneConfig};
 use iroha_core::da::{LaneEpoch, ReplayCache, ReplayFingerprint, ReplayInsertOutcome, ReplayKey};
 use iroha_crypto::{
     Hash, KeyPair, PublicKey, Signature,
@@ -1756,7 +1756,7 @@ fn validate_request(
 }
 
 fn lane_proof_scheme(
-    lane_config: &LaneConfig,
+    lane_config: &ConfigLaneConfig,
     lane_id: LaneId,
 ) -> Result<DaProofScheme, (StatusCode, String)> {
     let Some(entry) = lane_config.entry(lane_id) else {
@@ -5192,7 +5192,9 @@ mod tests {
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use flate2::{Compression as FlateCompression, write::GzEncoder};
-    use iroha_config::parameters::actual::{DaTaikaiAnchor, LaneConfig, TelemetryProfile};
+    use iroha_config::parameters::actual::{
+        DaTaikaiAnchor, LaneConfig as ConfigLaneConfig, TelemetryProfile,
+    };
     use iroha_core::{da::LaneEpoch, telemetry::Telemetry};
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, SignatureOf};
     use iroha_data_model::{
@@ -5203,7 +5205,7 @@ mod tests {
             ingest::DaStripeLayout,
             types::{BlobDigest, DaRentQuote, StorageTicketId},
         },
-        nexus::{DataSpaceId, LaneCatalog, LaneId, LaneMetadata},
+        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
         sorafs::{
             capacity::ProviderId,
             pin_registry::{ManifestAliasBinding, ManifestDigest},
@@ -5833,13 +5835,13 @@ mod tests {
         }
     }
 
-    fn lane_config_with_scheme(lane_id: LaneId, scheme: DaProofScheme) -> LaneConfig {
-        let metadata = LaneMetadata {
+    fn lane_config_with_scheme(lane_id: LaneId, scheme: DaProofScheme) -> ConfigLaneConfig {
+        let metadata = ModelLaneConfig {
             id: lane_id,
             dataspace_id: DataSpaceId::new(u64::from(lane_id.as_u32())),
             alias: format!("lane-{}", lane_id.as_u32()),
             proof_scheme: scheme,
-            ..LaneMetadata::default()
+            ..ModelLaneConfig::default()
         };
 
         let catalog = LaneCatalog::new(
@@ -5847,7 +5849,7 @@ mod tests {
             vec![metadata],
         )
         .expect("lane catalog");
-        LaneConfig::from_catalog(&catalog)
+        ConfigLaneConfig::from_catalog(&catalog)
     }
 
     #[test]

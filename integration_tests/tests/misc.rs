@@ -103,8 +103,10 @@ async fn get_server_version() -> eyre::Result<()> {
     let client = network.client();
     let response =
         tokio::task::spawn_blocking(move || client.get_server_version().unwrap()).await?;
-    assert!(response.version.starts_with("2.0.0"));
-    assert!(!response.git_sha.is_empty());
+    let version: u64 = response
+        .parse()
+        .expect("server API version should be a positive integer");
+    assert!(version >= 1);
     Ok(())
 }
 

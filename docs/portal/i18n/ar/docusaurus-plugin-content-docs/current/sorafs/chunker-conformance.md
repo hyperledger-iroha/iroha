@@ -19,7 +19,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## الملف المعتمد
 
-- مقبض الملف: `sorafs.sf1@1.0.0` (البديل القديم `sorafs-sf1`)
+- مقبض الملف: `sorafs.sf1@1.0.0` (البديل القديم `sorafs.sf1@1.0.0`)
 - بذرة الإدخال (hex): `0000000000dec0ded`
 - الحجم المستهدف: 262144 bytes (256 KiB)
 - الحجم الأدنى: 65536 bytes (64 KiB)
@@ -38,7 +38,7 @@ fixtures ويصدر الملفات التالية ضمن `fixtures/sorafs_chunke
 
 - `sf1_profile_v1.{json,rs,ts,go}` — حدود chunk المعتمدة لمستهلكي Rust و TypeScript و Go.
   يعلن كل ملف المقبض المعتمد كأول إدخال في `profile_aliases`، يتبعه أي بدائل قديمة (مثل
-  `sorafs.sf1@1.0.0` ثم `sorafs-sf1`). يتم فرض الترتيب بواسطة
+  `sorafs.sf1@1.0.0` ثم `sorafs.sf1@1.0.0`). يتم فرض الترتيب بواسطة
   `ensure_charter_compliance` ولا يجب تغييره.
 - `manifest_blake3.json` — manifest تم التحقق منه عبر BLAKE3 ويغطي كل ملفات fixtures.
 - `manifest_signatures.json` — توقيعات المجلس (Ed25519) على digest الخاص بالـ manifest.

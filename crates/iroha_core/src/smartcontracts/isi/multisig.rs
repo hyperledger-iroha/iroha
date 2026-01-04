@@ -768,16 +768,13 @@ mod tests {
     use std::{
         collections::BTreeMap,
         num::{NonZeroU16, NonZeroU64},
-        str::FromStr,
     };
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::KeyPair;
     use iroha_data_model::{
         ChainId,
         account::AccountId,
         block::BlockHeader,
-        domain::DomainId,
-        name::Name,
         prelude::{Domain, InstructionBox, Register},
     };
     use iroha_executor_data_model::isi::multisig::{
@@ -792,16 +789,6 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-
-    fn derived_key_flag() -> Name {
-        Name::from_str("multisig/derived_key").expect("static key")
-    }
-
-    fn derived_multisig_account_id(domain_id: &DomainId, spec: &MultisigSpec) -> AccountId {
-        let seed = HashOf::<(DomainId, MultisigSpec)>::new(&(domain_id.clone(), spec.clone()));
-        let derived = KeyPair::from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519);
-        AccountId::new(domain_id.clone(), derived.public_key().clone())
-    }
 
     fn register_multisig_account(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -834,29 +821,6 @@ mod tests {
         Grant::account_role(role_id.clone(), account_id.clone())
             .execute(owner_id, state_transaction)
             .expect("grant multisig role");
-    }
-
-    #[test]
-    fn derived_multisig_helpers_match_expected_values() {
-        let domain_id: DomainId = "derived".parse().expect("valid domain");
-        let signer = KeyPair::random();
-        let signer_id = AccountId::new(domain_id.clone(), signer.public_key().clone());
-        let spec = MultisigSpec {
-            signatories: BTreeMap::from([(signer_id, 1)]),
-            quorum: NonZeroU16::new(1).expect("nonzero quorum"),
-            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("nonzero ttl"),
-        };
-
-        assert_eq!(
-            derived_key_flag(),
-            Name::from_str("multisig/derived_key").expect("static key")
-        );
-
-        let derived_id = derived_multisig_account_id(&domain_id, &spec);
-        let seed = HashOf::<(DomainId, MultisigSpec)>::new(&(domain_id.clone(), spec.clone()));
-        let derived = KeyPair::from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519);
-        let expected_id = AccountId::new(domain_id, derived.public_key().clone());
-        assert_eq!(derived_id, expected_id);
     }
 
     #[test]

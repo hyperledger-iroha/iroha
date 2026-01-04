@@ -39,7 +39,7 @@ Durable state helpers and ABI surface
 - CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may use overlays or local persistence but must preserve the same observable behavior.
 
 Validation
-- Node admission accepts only `version_major = 2` headers; other majors are rejected.
+- Node admission accepts only `version_major = 1` headers; other majors are rejected.
 - `mode` must only contain known bits: `ZK`, `VECTOR`, `HTM` (unknown bits are rejected).
 - `vector_length` is advisory and may be non‑zero even if the `VECTOR` bit is not set; admission enforces an upper bound only.
 - Supported `abi_version` values: first release accepts only `1` (V1); other values are rejected at admission.
@@ -50,7 +50,7 @@ The following policy summary is generated from the implementation and should not
 <!-- BEGIN GENERATED HEADER POLICY -->
 | Field | Policy |
 |---|---|
-| version_major | 2 |
+| version_major | 1 |
 | version_minor | any |
 | mode (known bits) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
 | abi_version | 1 |

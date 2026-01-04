@@ -151,7 +151,7 @@ fn regenerate_executor_to() -> Result<()> {
 
     // 4) Assemble final program
     let meta = ivm::ProgramMetadata {
-        version_major: 2,
+        version_major: 1,
         version_minor: 0,
         mode: 0,
         vector_length: 0,

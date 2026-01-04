@@ -8415,7 +8415,7 @@ mod tests {
         isi::Log,
         nexus::{
             AssetPermissionManifest, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot,
-            DataSpaceId, DataSpaceMetadata, LaneId, LaneMetadata, ManifestVersion,
+            DataSpaceId, DataSpaceMetadata, LaneConfig, LaneId, ManifestVersion,
             UniversalAccountId,
         },
         oracle::KeyedHash,
@@ -9499,11 +9499,11 @@ mod tests {
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(0),
                 alias: "gov".to_string(),
                 governance: Some("parliament".to_string()),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("lane catalog");
@@ -9575,11 +9575,11 @@ mod tests {
         let dataspace_id = DataSpaceId::new(7);
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: lane_id,
                 dataspace_id,
                 alias: "alpha".to_string(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("lane catalog");
@@ -9645,10 +9645,10 @@ mod tests {
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(7),
                 alias: "exec".to_string(),
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("lane catalog");
@@ -12343,13 +12343,13 @@ mod tests {
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
-            vec![LaneMetadata {
+            vec![LaneConfig {
                 id: LaneId::new(0),
                 dataspace_id: DataSpaceId::new(5),
                 alias: "exec".to_string(),
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::FullReplica,
-                ..LaneMetadata::default()
+                ..LaneConfig::default()
             }],
         )
         .expect("lane catalog");

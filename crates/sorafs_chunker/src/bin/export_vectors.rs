@@ -37,7 +37,6 @@ Options:
 ";
 
 const CANONICAL_PROFILE_HANDLE: &str = "sorafs.sf1@1.0.0";
-const LEGACY_PROFILE_HANDLE: &str = "sorafs-sf1";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = match parse_cli() {
@@ -207,11 +206,7 @@ fn write_json(dir: &Path, vectors: &FixtureVectors) -> Result<(), Box<dyn std::e
     );
 
     let mut root = Map::new();
-    let mut profile_aliases = Vec::new();
-    profile_aliases.push(Value::from(CANONICAL_PROFILE_HANDLE));
-    if vectors.profile_id != CANONICAL_PROFILE_HANDLE {
-        profile_aliases.push(Value::from(vectors.profile_id));
-    }
+    let profile_aliases = vec![Value::from(CANONICAL_PROFILE_HANDLE)];
     root.insert("profile".to_owned(), Value::from(CANONICAL_PROFILE_HANDLE));
     root.insert("profile_aliases".to_owned(), Value::Array(profile_aliases));
     root.insert("input_seed".to_owned(), Value::from(vectors.input_seed_hex));
@@ -250,8 +245,7 @@ fn write_rust(dir: &Path, vectors: &FixtureVectors) -> Result<(), std::io::Error
     )?;
     writeln!(
         file,
-        "pub const PROFILE_ALIASES: &[&str] = &[\"{}\", \"{}\"];",
-        CANONICAL_PROFILE_HANDLE, vectors.profile_id
+        "pub const PROFILE_ALIASES: &[&str] = &[\"{CANONICAL_PROFILE_HANDLE}\"];"
     )?;
     writeln!(
         file,
@@ -308,8 +302,7 @@ fn write_typescript(dir: &Path, vectors: &FixtureVectors) -> Result<(), std::io:
     writeln!(file, "    profile: \"{CANONICAL_PROFILE_HANDLE}\",")?;
     writeln!(
         file,
-        "    profileAliases: [\"{}\", \"{}\"] as const,",
-        CANONICAL_PROFILE_HANDLE, vectors.profile_id
+        "    profileAliases: [\"{CANONICAL_PROFILE_HANDLE}\"] as const,"
     )?;
     writeln!(file, "    inputSeed: \"{}\",", vectors.input_seed_hex)?;
     writeln!(file, "    inputLength: {},", vectors.input_length)?;
@@ -347,8 +340,7 @@ fn write_go(dir: &Path, vectors: &FixtureVectors) -> Result<(), std::io::Error> 
     writeln!(file, "    Profile: \"{CANONICAL_PROFILE_HANDLE}\",")?;
     writeln!(
         file,
-        "    ProfileAliases: []string{{\"{}\", \"{}\"}},",
-        CANONICAL_PROFILE_HANDLE, vectors.profile_id
+        "    ProfileAliases: []string{{\"{CANONICAL_PROFILE_HANDLE}\"}},"
     )?;
     writeln!(file, "    InputSeed: \"{}\",", vectors.input_seed_hex)?;
     writeln!(file, "    InputLength: {},", vectors.input_length)?;
@@ -393,11 +385,7 @@ fn write_manifest(
         entries.push(Value::Object(entry));
     }
     let mut root = Map::new();
-    let mut profile_aliases = Vec::new();
-    profile_aliases.push(Value::from(CANONICAL_PROFILE_HANDLE));
-    if vectors.profile_id != CANONICAL_PROFILE_HANDLE {
-        profile_aliases.push(Value::from(vectors.profile_id));
-    }
+    let profile_aliases = vec![Value::from(CANONICAL_PROFILE_HANDLE)];
     root.insert("profile".to_owned(), Value::from(CANONICAL_PROFILE_HANDLE));
     root.insert("profile_aliases".to_owned(), Value::Array(profile_aliases));
     root.insert(
@@ -535,11 +523,7 @@ fn write_manifest_signatures(
 
     verify_signatures(&signatures, &manifest_digest)?;
 
-    let mut profile_aliases = Vec::new();
-    profile_aliases.push(Value::from(CANONICAL_PROFILE_HANDLE));
-    if vectors.profile_id != CANONICAL_PROFILE_HANDLE {
-        profile_aliases.push(Value::from(vectors.profile_id));
-    }
+    let profile_aliases = vec![Value::from(CANONICAL_PROFILE_HANDLE)];
     root.insert("profile".to_owned(), Value::from(CANONICAL_PROFILE_HANDLE));
     root.insert("profile_aliases".to_owned(), Value::Array(profile_aliases));
     root.insert("manifest".to_owned(), Value::from("manifest_blake3.json"));
@@ -590,15 +574,12 @@ fn load_existing_manifest_signatures(
         .get("profile")
         .and_then(Value::as_str)
         .ok_or_else(|| "manifest signatures missing profile field".to_owned())?;
-    let mut profile_ok = profile == CANONICAL_PROFILE_HANDLE
-        || profile == LEGACY_PROFILE_HANDLE
-        || profile == vectors.profile_id;
+    let mut profile_ok = profile == CANONICAL_PROFILE_HANDLE;
     if !profile_ok && let Some(aliases) = root.get("profile_aliases").and_then(Value::as_array) {
-        profile_ok = aliases.iter().filter_map(Value::as_str).any(|alias| {
-            alias == CANONICAL_PROFILE_HANDLE
-                || alias == LEGACY_PROFILE_HANDLE
-                || alias == vectors.profile_id
-        });
+        profile_ok = aliases
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|alias| alias == CANONICAL_PROFILE_HANDLE);
     }
     if !profile_ok {
         return Err(
@@ -765,11 +746,7 @@ fn write_fuzz_corpora(
     }
 
     let mut root = Map::new();
-    let mut profile_aliases = Vec::new();
-    profile_aliases.push(Value::from(CANONICAL_PROFILE_HANDLE));
-    if vectors.profile_id != CANONICAL_PROFILE_HANDLE {
-        profile_aliases.push(Value::from(vectors.profile_id));
-    }
+    let profile_aliases = vec![Value::from(CANONICAL_PROFILE_HANDLE)];
     root.insert("profile".to_owned(), Value::from(CANONICAL_PROFILE_HANDLE));
     root.insert("profile_aliases".to_owned(), Value::Array(profile_aliases));
     root.insert(

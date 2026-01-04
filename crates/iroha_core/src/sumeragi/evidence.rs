@@ -27,8 +27,7 @@ use crate::state::{State, WorldReadOnly};
 /// Minimum expected length for BLS signatures attached to consensus votes.
 ///
 /// Consensus validators authenticate votes with BLS-normal signatures (96 bytes). Treating this
-/// as a lower bound preserves forward compatibility while catching truncated payloads emitted by
-/// buggy or malicious peers.
+/// as a lower bound catches truncated payloads emitted by buggy or malicious peers.
 const MIN_BLS_SIGNATURE_LEN: usize = 96;
 
 /// Context required to cryptographically validate consensus evidence.

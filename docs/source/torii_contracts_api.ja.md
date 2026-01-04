@@ -65,7 +65,7 @@ translator: manual
 - **GET `/v1/contracts/code/{code_hash}`**
   - コンテントアドレス化された `code_hash` によりオンチェーンの `ContractManifest` を取得します。
   - パスパラメータ: 32 バイト hex 文字列。
-  - レスポンスボディ: `ContractCodeRecordDto`（JSON）。`code_bytes` は省略または `null` になります。
+  - レスポンスボディ: `ContractCodeRecordDto`（JSON）。`manifest` のみを返します。
 
 - **POST `/v1/contracts/deploy`**
   - Base64 の `.to` バイトコード、権限アカウント、秘密鍵を受け取り、`code_hash`（プログラム本体）と `abi_hash`（ヘッダー `abi_version` 由来）を算出します。
@@ -108,14 +108,12 @@ translator: manual
     "abi_hash": "89ab…7654",
     "compiler_fingerprint": "rustc-1.79 llvm-16",
     "features_bitmap": 0
-  },
-  "code_bytes": "…base64…" // 任意。オンチェーンでは無視されます。
+  }
 }
 ```
 
 - `manifest.code_hash` を指定すると、ノードは `code_hash` キーでマニフェストを保存します。
 - `manifest.abi_hash` がある場合、ノードの ABI ポリシーと照合されます。
-- `code_bytes` は `RegisterSmartContractBytes`（デプロイ経路）または直接命令を送ることで保存できます。
 
 ### DeployContractDto
 
@@ -158,8 +156,7 @@ translator: manual
     "abi_hash": "89ab…7654",
     "compiler_fingerprint": "rustc-1.79 llvm-16",
     "features_bitmap": 0
-  },
-  "code_bytes": null
+  }
 }
 ```
 

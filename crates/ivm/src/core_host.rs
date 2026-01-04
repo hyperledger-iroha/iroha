@@ -192,11 +192,6 @@ impl CoreHost {
         self
     }
 
-    /// Backwards-compatible alias for policy snapshots.
-    pub fn with_axt_policy_from_snapshot(self, snapshot: &AxtPolicySnapshot) -> Self {
-        self.with_axt_policy_snapshot(snapshot)
-    }
-
     pub fn axt_cached_proof_status(&self, dsid: DataSpaceId) -> Option<(bool, Option<[u8; 32]>)> {
         self.axt_proof_cache
             .get(&dsid)
@@ -1725,7 +1720,7 @@ mod tests {
         }
         let mut program = Vec::with_capacity(16 + code.len());
         program.extend_from_slice(b"IVM\0");
-        program.push(2); // version major
+        program.push(1); // version major
         program.push(0); // version minor
         program.push(0); // mode flags
         program.push(0); // vector length (unused when mode == 0)

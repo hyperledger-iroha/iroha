@@ -43,9 +43,8 @@ struct FuzzInput {
 fn build_suite_order(bytes: &[u8]) -> Vec<HandshakeSuite> {
     let mut suites = Vec::new();
     for &raw in bytes {
-        let candidate = match raw % 3 {
-            0 => HandshakeSuite::Nk1NoiseXx,
-            1 => HandshakeSuite::Nk2Hybrid,
+        let candidate = match raw % 2 {
+            0 => HandshakeSuite::Nk2Hybrid,
             _ => HandshakeSuite::Nk3PqForwardSecure,
         };
         if !suites.contains(&candidate) {
@@ -53,7 +52,6 @@ fn build_suite_order(bytes: &[u8]) -> Vec<HandshakeSuite> {
         }
     }
     if suites.is_empty() {
-        suites.push(HandshakeSuite::Nk1NoiseXx);
         suites.push(HandshakeSuite::Nk2Hybrid);
         suites.push(HandshakeSuite::Nk3PqForwardSecure);
     }

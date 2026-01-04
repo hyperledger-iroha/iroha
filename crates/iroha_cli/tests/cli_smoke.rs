@@ -1424,7 +1424,7 @@ fn gov_council_vrf_commands_against_mock() {
     let derive_out = String::from_utf8_lossy(&derive.stdout);
     assert_eq!(
         derive_out.trim_end(),
-        "council-derive-vrf: epoch=42 verified=1 members=[guardian-0@wonderland]"
+        "council derive-vrf: epoch=42 verified=1 members=[guardian-0@wonderland]"
     );
 
     let persist = command()
@@ -1454,7 +1454,7 @@ fn gov_council_vrf_commands_against_mock() {
     let persist_out = String::from_utf8_lossy(&persist.stdout);
     assert_eq!(
         persist_out.trim_end(),
-        "council-persist: epoch=42 members=1 verified=1"
+        "council persist: epoch=42 members=1 verified=1"
     );
 
     let combined = command()

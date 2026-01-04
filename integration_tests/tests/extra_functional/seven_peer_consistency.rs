@@ -169,8 +169,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
                     }
                 }
                 Err(QueryError::Validation(ValidationFail::QueryFailed(
-                    QueryExecutionFail::Find(FindError::Asset(_))
-                    | QueryExecutionFail::NotFound,
+                    QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
                 ))) => {
                     pending.push(format!("{}: asset not found", peer.id()));
                 }

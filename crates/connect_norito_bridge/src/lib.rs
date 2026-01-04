@@ -2351,11 +2351,7 @@ fn encode_envelope_framed(env: &proto::EnvelopeV1) -> Result<Vec<u8>, norito::co
 }
 
 fn decode_signed_transaction(bytes: &[u8]) -> Result<SignedTransaction, norito::core::Error> {
-    if bytes.starts_with(&norito::core::MAGIC) {
-        norito::decode_from_bytes::<SignedTransaction>(bytes)
-    } else {
-        norito::decode_bare_from_bytes::<SignedTransaction>(bytes)
-    }
+    norito::decode_from_bytes::<SignedTransaction>(bytes)
 }
 
 fn encode_asset_transaction<F>(

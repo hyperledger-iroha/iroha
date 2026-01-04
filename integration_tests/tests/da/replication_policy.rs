@@ -76,7 +76,7 @@ async fn da_replication_policy_is_enforced() -> Result<()> {
         cold_retention_secs: 120,
         required_replicas: 1,
         storage_class: StorageClass::Cold,
-        governance_tag: GovernanceTag::new("da.intent.legacy"),
+        governance_tag: GovernanceTag::new("da.intent.client"),
     };
     let http = Client::new();
     let enforced_policy = retention_from_numbers(&override_policy);
@@ -632,17 +632,17 @@ fn policy_override_matches_expected_defaults() {
 fn manifest_encoding_is_stable_after_enforcement() {
     let policy = DaReplicationPolicy::default();
     let default_policy = RetentionPolicy::default();
-    let legacy_policy = RetentionPolicy {
+    let caller_policy = RetentionPolicy {
         hot_retention_secs: 1,
         cold_retention_secs: 2,
         required_replicas: 1,
         storage_class: StorageClass::Cold,
-        governance_tag: GovernanceTag::new("da.intent.legacy"),
+        governance_tag: GovernanceTag::new("da.intent.client"),
     };
     let manifest_a =
         manifest_bytes_after_enforcement(&policy, BlobClass::TaikaiSegment, &default_policy);
     let manifest_b =
-        manifest_bytes_after_enforcement(&policy, BlobClass::TaikaiSegment, &legacy_policy);
+        manifest_bytes_after_enforcement(&policy, BlobClass::TaikaiSegment, &caller_policy);
     assert_eq!(
         manifest_a, manifest_b,
         "manifest encoding must remain stable once the policy override is applied"

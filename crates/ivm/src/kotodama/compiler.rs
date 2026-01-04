@@ -3866,7 +3866,7 @@ impl Compiler {
 
         // Construct header using contract meta (if present) with compiler options as fallback
         let meta = ProgramMetadata {
-            version_major: 2,
+            version_major: 1,
             version_minor: 0,
             mode,
             vector_length: meta_decl

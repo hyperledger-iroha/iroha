@@ -1,6 +1,7 @@
 //! Kagami localnet bootstrap coverage for permissioned Sumeragi.
 
 use std::{
+    any::Any,
     fs,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -21,8 +22,10 @@ use tempfile::TempDir;
 use tokio::time::sleep;
 
 const LOCALNET_PEERS: u16 = 4;
-const READY_TIMEOUT: Duration = Duration::from_secs(60);
+const READY_TIMEOUT: Duration = Duration::from_secs(180);
 const READY_POLL: Duration = Duration::from_millis(200);
+const LOCALNET_BLOCK_TIME_MS: u64 = 2_000;
+const LOCALNET_COMMIT_TIME_MS: u64 = 2_000;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
@@ -32,8 +35,8 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
     let temp_dir = localnet_tempdir()?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
-        let api_ports = AllocatedPortBlock::new(LOCALNET_PEERS);
-        let p2p_ports = AllocatedPortBlock::new(LOCALNET_PEERS);
+        let api_ports = alloc_port_block(LOCALNET_PEERS)?;
+        let p2p_ports = alloc_port_block(LOCALNET_PEERS)?;
         let base_api_port = api_ports.base();
         let base_p2p_port = p2p_ports.base();
         generate_localnet(&out_dir, base_api_port, base_p2p_port)?;
@@ -79,6 +82,21 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
         return Err(err);
     }
     Ok(())
+}
+
+fn alloc_port_block(count: u16) -> Result<AllocatedPortBlock> {
+    std::panic::catch_unwind(|| AllocatedPortBlock::new(count))
+        .map_err(|panic| eyre!(panic_message(panic)))
+}
+
+fn panic_message(panic: Box<dyn Any + Send>) -> String {
+    if let Some(message) = panic.as_ref().downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = panic.as_ref().downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "port allocation panicked".to_string()
+    }
 }
 
 struct KagamiLocalnet {
@@ -163,6 +181,8 @@ fn generate_localnet(out_dir: &Path, base_api_port: u16, base_p2p_port: u16) -> 
     let peers = LOCALNET_PEERS.to_string();
     let api_port = base_api_port.to_string();
     let p2p_port = base_p2p_port.to_string();
+    let block_time = LOCALNET_BLOCK_TIME_MS.to_string();
+    let commit_time = LOCALNET_COMMIT_TIME_MS.to_string();
     let out_dir = out_dir.to_string_lossy().to_string();
     let output = Command::new(kagami_bin)
         .arg("localnet")
@@ -178,6 +198,10 @@ fn generate_localnet(out_dir: &Path, base_api_port: u16, base_p2p_port: u16) -> 
         .arg(api_port)
         .arg("--base-p2p-port")
         .arg(p2p_port)
+        .arg("--block-time-ms")
+        .arg(block_time)
+        .arg("--commit-time-ms")
+        .arg(commit_time)
         .arg("--out-dir")
         .arg(out_dir)
         .output()
@@ -271,12 +295,13 @@ fn try_candidates(candidates: &[PathBuf]) -> Option<PathBuf> {
 
 fn load_localnet_client(out_dir: &Path) -> Result<Client> {
     let client_path = out_dir.join("client.toml");
-    let config = Config::load(LoadPath::Explicit(client_path.clone())).map_err(|err| {
+    let mut config = Config::load(LoadPath::Explicit(client_path.clone())).map_err(|err| {
         eyre!(
             "load localnet client config {}: {err:?}",
             client_path.display()
         )
     })?;
+    config.transaction_status_timeout = READY_TIMEOUT;
     Ok(Client::new(config))
 }
 

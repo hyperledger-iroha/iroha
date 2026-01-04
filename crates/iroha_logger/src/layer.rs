@@ -79,11 +79,6 @@ impl<E: EventInspectorTrait> Subscriber for EventSubscriber<E> {
         self.inner_subscriber().clone_span(id)
     }
 
-    #[allow(deprecated)]
-    fn drop_span(&self, id: Id) {
-        self.inner_subscriber().drop_span(id)
-    }
-
     fn try_close(&self, id: Id) -> bool {
         self.inner_subscriber().try_close(id)
     }

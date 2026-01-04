@@ -147,7 +147,7 @@ fn host_with_policy(
     current_slot: u64,
 ) -> CoreHost {
     let snapshot = make_policy_snapshot(dsid, manifest_root, target_lane, 1, 1, current_slot);
-    CoreHost::new(authority).with_axt_policy_from_snapshot(&snapshot)
+    CoreHost::new(authority).with_axt_policy_snapshot(&snapshot)
 }
 
 #[test]
@@ -313,7 +313,7 @@ fn axt_policy_reject_exposes_context() {
             write: vec!["ledger".into()],
         }],
     };
-    let mut host = CoreHost::new(authority.clone()).with_axt_policy_from_snapshot(&snapshot);
+    let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
 
     // Begin envelope and record a touch for the dataspace.
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
@@ -411,7 +411,7 @@ fn axt_handle_allows_configured_clock_skew_window() {
     let snapshot = make_policy_snapshot(dsid, manifest_root, LaneId::new(0), 1, 1, 11);
     let mut host = CoreHost::new(authority.clone())
         .with_axt_timing(timing)
-        .with_axt_policy_from_snapshot(&snapshot);
+        .with_axt_policy_snapshot(&snapshot);
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -512,7 +512,7 @@ fn axt_handle_rejects_clock_skew_above_config() {
     let snapshot = make_policy_snapshot(dsid, manifest_root, LaneId::new(0), 1, 1, 2);
     let mut host = CoreHost::new(authority.clone())
         .with_axt_timing(timing)
-        .with_axt_policy_from_snapshot(&snapshot);
+        .with_axt_policy_snapshot(&snapshot);
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -2201,7 +2201,7 @@ fn core_host_requires_proof_for_all_dataspaces() {
     };
 
     let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::new(authority.clone()).with_axt_policy_from_snapshot(&snapshot);
+    let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     assert_eq!(
@@ -2319,7 +2319,7 @@ fn core_host_requires_proof_for_all_dataspaces() {
 
     // Omit proof for ds_b to confirm rejection
     let mut vm_fail = IVM::new(1_000_000);
-    let mut host_fail = CoreHost::new(authority).with_axt_policy_from_snapshot(&snapshot);
+    let mut host_fail = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
     let desc_ptr_fail = store_tlv_codec(&mut vm_fail, PointerType::AxtDescriptor, &descriptor);
     vm_fail.set_register(10, desc_ptr_fail);
     assert_eq!(
@@ -2607,7 +2607,7 @@ fn use_handle_with_snapshot(
     mut handle: AssetHandle,
 ) -> Result<u64, VMError> {
     let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::new(authority.clone()).with_axt_policy_from_snapshot(snapshot);
+    let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(snapshot);
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -3099,7 +3099,7 @@ fn core_host_binds_proof_to_manifest_root() {
     };
 
     let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::new(authority.clone()).with_axt_policy_from_snapshot(&snapshot);
+    let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -3297,7 +3297,7 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
         version: AxtPolicySnapshot::compute_version(&entries_v1),
         entries: entries_v1,
     };
-    let mut host = CoreHost::new(authority.clone()).with_axt_policy_from_snapshot(&snapshot_v1);
+    let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot_v1);
 
     let mut vm = IVM::new(1_000_000);
     let descriptor = axt::AxtDescriptor {
@@ -3406,7 +3406,7 @@ fn core_host_records_multi_dataspace_envelope() {
         version: AxtPolicySnapshot::compute_version(&entries),
         entries,
     };
-    let mut host = CoreHost::new(authority.clone()).with_axt_policy_from_snapshot(&snapshot);
+    let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
     let mut vm = IVM::new(1_000_000);
 
     let descriptor = axt::AxtDescriptor {
@@ -3583,10 +3583,9 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         AssetHandle as ModelAssetHandle, AxtEnvelopeRecord as ModelAxtEnvelopeRecord,
         AxtHandleFragment as ModelAxtHandleFragment, AxtProofFragment as ModelAxtProofFragment,
         AxtTouchFragment as ModelAxtTouchFragment, GroupBinding as ModelGroupBinding,
-        HandleBudget as ModelHandleBudget, HandleSubject as ModelHandleSubject,
-        LaneConfig as LaneMetadata, ProofBlob as ModelProofBlob,
-        RemoteSpendIntent as ModelRemoteSpendIntent, SpendOp as ModelSpendOp,
-        TouchManifest as ModelTouchManifest,
+        HandleBudget as ModelHandleBudget, HandleSubject as ModelHandleSubject, LaneConfig,
+        ProofBlob as ModelProofBlob, RemoteSpendIntent as ModelRemoteSpendIntent,
+        SpendOp as ModelSpendOp, TouchManifest as ModelTouchManifest,
     };
 
     let authority: AccountId =
@@ -3596,7 +3595,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
     let dsid = DataSpaceId::new(44);
 
     let world = World::new();
-    let lane_meta = LaneMetadata {
+    let lane_meta = LaneConfig {
         id: LaneId::new(0),
         dataspace_id: dsid,
         alias: "primary".to_owned(),

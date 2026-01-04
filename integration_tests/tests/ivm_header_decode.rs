@@ -58,7 +58,7 @@ fn decode_hello_header() {
     }
     let h = read_header(&path).expect("failed to read header");
     // Basic sanity checks
-    assert!(h.version_major >= 1, "unexpected version: {h:?}");
+    assert_eq!(h.version_major, 1, "unexpected version: {h:?}");
     // Mode bits are implementation-defined and fit in one byte by design.
     // vector_length 0 means unset; otherwise, any value is accepted here.
     // max_cycles may be 0 for non-ZK; otherwise, enforce a modest upper bound for the test.

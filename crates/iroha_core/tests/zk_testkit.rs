@@ -90,10 +90,10 @@ mod halo2_bundle {
         pub vk_id: VerifyingKeyId,
         /// Registry record carrying the verifying key bytes.
         pub vk_record: VerifyingKeyRecord,
-        /// Base64-encoded proof (H2PF1 envelope) suitable for `CastZkBallot`.
+        /// Base64-encoded proof (ZK1 envelope) suitable for `CastZkBallot`.
         #[allow(dead_code)]
         pub proof_b64: String,
-        /// Raw proof envelope bytes (H2PF1) for tally attachments.
+        /// Raw proof envelope bytes (ZK1) for tally attachments.
         #[allow(dead_code)]
         pub proof_bytes: Vec<u8>,
     }
@@ -130,14 +130,12 @@ mod halo2_bundle {
         .expect("create proof");
         let proof_raw = transcript.finalize();
 
-        // Wrap proof in the H2PF1 container expected by the current verifier dispatch.
-        let mut proof_bytes = Vec::new();
-        proof_bytes.extend_from_slice(b"H2PF1");
-        proof_bytes.extend_from_slice(&(proof_raw.len() as u32).to_le_bytes());
-        proof_bytes.extend_from_slice(&proof_raw);
+        // Wrap proof in the ZK1 envelope expected by the verifier.
+        let mut proof_bytes = zk1::wrap_start();
+        zk1::wrap_append_proof(&mut proof_bytes, &proof_raw);
         let proof_b64 = base64::engine::general_purpose::STANDARD.encode(&proof_bytes);
 
-        // Construct verifying key bytes (H2IP1 envelope with k) and registry record.
+        // Construct verifying key bytes (ZK1 envelope with IPAK + H2VK) and registry record.
         let vk_bytes_raw = vk_h2.to_bytes(SerdeFormat::Processed);
         let mut vk_bytes = Vec::new();
         vk_bytes.extend_from_slice(b"ZK1\0");

@@ -25,13 +25,13 @@ fn default_max_cycles() -> u64 {
 }
 
 fn build_minimal_program(tag: u8) -> Vec<u8> {
-    // Program metadata header: MAGIC("IVM\0"), version(2,0), mode(0),
+    // Program metadata header: MAGIC("IVM\0"), version(1,0), mode(0),
     // vector_length(tag+1), max_cycles(default_max_cycles LE), abi_version(1)
     const PAD_LEN: usize = 64;
     let pad_len_u32 = u32::try_from(PAD_LEN).expect("padding length fits in u32");
     let mut v = Vec::with_capacity(17 + 16 + PAD_LEN + 4);
     v.extend_from_slice(b"IVM\0"); // magic
-    v.push(2); // version_major
+    v.push(1); // version_major
     v.push(0); // version_minor
     v.push(0); // mode
     v.push(tag.saturating_add(1)); // vector_length as discriminator, never 0
@@ -69,10 +69,10 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
 
-    // Program metadata header: MAGIC("IVM\0"), version(2,0), mode(0), vector_length(4), max_cycles(default_max_cycles), abi_version(1)
+    // Program metadata header: MAGIC("IVM\0"), version(1,0), mode(0), vector_length(4), max_cycles(default_max_cycles), abi_version(1)
     let mut program = Vec::new();
     program.extend_from_slice(b"IVM\0");
-    program.extend_from_slice(&[2, 0, 0, 4]);
+    program.extend_from_slice(&[1, 0, 0, 4]);
     program.extend_from_slice(&default_max_cycles().to_le_bytes());
     program.push(1); // abi_version
     program.extend_from_slice(&code);
@@ -97,7 +97,7 @@ fn build_program_create_nft_for_authority() -> Vec<u8> {
 
     let mut program = Vec::new();
     program.extend_from_slice(b"IVM\0");
-    program.extend_from_slice(&[2, 0, 0, 4]);
+    program.extend_from_slice(&[1, 0, 0, 4]);
     program.extend_from_slice(&default_max_cycles().to_le_bytes());
     program.push(1);
     program.extend_from_slice(&code);
@@ -124,7 +124,7 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
 
     let mut program = Vec::new();
     program.extend_from_slice(b"IVM\0");
-    program.extend_from_slice(&[2, 0, 0, 4]);
+    program.extend_from_slice(&[1, 0, 0, 4]);
     program.extend_from_slice(&default_max_cycles().to_le_bytes());
     program.push(1); // abi_version
     program.extend_from_slice(&code);
@@ -254,7 +254,7 @@ fn main() {
 
                     let mut program = Vec::new();
                     program.extend_from_slice(b"IVM\0");
-                    program.extend_from_slice(&[2, 0, 0, 4]);
+                    program.extend_from_slice(&[1, 0, 0, 4]);
                     program.extend_from_slice(&default_max_cycles().to_le_bytes());
                     program.push(1);
                     program.extend_from_slice(&code);

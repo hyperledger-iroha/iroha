@@ -769,7 +769,7 @@ impl Actor {
         }
     }
 
-    pub(super) fn apply_rbc_session_plan(&mut self, plan: RbcSessionPlan) -> Result<()> {
+    pub(super) fn install_rbc_session_plan(&mut self, plan: &RbcSessionPlan) -> Result<()> {
         let key = plan.key;
         if self
             .subsystems
@@ -789,8 +789,16 @@ impl Actor {
         self.persist_rbc_session(key, &plan.session);
 
         let roster = self.rbc_roster_for_session(key);
-        self.record_rbc_session_roster(key, roster.clone());
-        let topology_peers = roster;
+        self.record_rbc_session_roster(key, roster);
+        Ok(())
+    }
+
+    pub(super) fn broadcast_rbc_session_plan(&mut self, plan: RbcSessionPlan) -> Result<()> {
+        let key = plan.key;
+        let topology_peers = self.rbc_session_roster(key);
+        if topology_peers.is_empty() {
+            return Ok(());
+        }
         let local_peer_id = self.common_config.peer.id().clone();
         for peer in &topology_peers {
             if peer == &local_peer_id {
@@ -807,6 +815,7 @@ impl Actor {
         self.maybe_emit_rbc_ready(key)?;
         Ok(())
     }
+
 
     pub(super) fn build_rbc_session_from_payload(
         payload_bytes: &[u8],

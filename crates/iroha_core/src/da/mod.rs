@@ -588,20 +588,21 @@ pub fn proof_policy_bundle_hash(lane_config: &LaneConfig) -> HashOf<DaProofPolic
 mod tests {
     use std::num::NonZeroU32;
 
-    use iroha_config::parameters::actual::LaneConfig as DerivedLaneConfig;
     use iroha_crypto::{Hash, Signature};
     use iroha_data_model::{
         da::{
             commitment::RetentionClass,
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::{DataSpaceId, LaneCatalog, LaneMetadata},
+        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig},
     };
     use norito::to_bytes;
 
     use super::*;
 
-    fn lane_config_with(lanes: Vec<LaneMetadata>) -> LaneConfig {
+    fn lane_config_with(
+        lanes: Vec<ModelLaneConfig>,
+    ) -> iroha_config::parameters::actual::LaneConfig {
         let max_lane = lanes
             .iter()
             .map(|lane| lane.id.as_u32())
@@ -610,7 +611,7 @@ mod tests {
         let lane_count =
             NonZeroU32::new(max_lane.saturating_add(1)).expect("lane count is non-zero");
         let catalog = LaneCatalog::new(lane_count, lanes).expect("lane catalog");
-        DerivedLaneConfig::from_catalog(&catalog)
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog)
     }
 
     fn merkle_record(lane: u32) -> DaCommitmentRecord {
@@ -649,20 +650,20 @@ mod tests {
 
     #[test]
     fn proof_policies_reflect_lane_config() {
-        let lane_a = LaneMetadata {
+        let lane_a = ModelLaneConfig {
             id: LaneId::new(1),
             alias: "merkle-lane".to_string(),
             dataspace_id: DataSpaceId::new(7),
             proof_scheme: DaProofScheme::MerkleSha256,
-            ..LaneMetadata::default()
+            ..ModelLaneConfig::default()
         };
 
-        let lane_b = LaneMetadata {
+        let lane_b = ModelLaneConfig {
             id: LaneId::new(2),
             alias: "kzg-lane".to_string(),
             dataspace_id: DataSpaceId::new(9),
             proof_scheme: DaProofScheme::KzgBls12_381,
-            ..LaneMetadata::default()
+            ..ModelLaneConfig::default()
         };
 
         let lane_config = lane_config_with(vec![lane_a.clone(), lane_b.clone()]);
@@ -682,7 +683,7 @@ mod tests {
 
     #[test]
     fn proof_policy_bundle_hash_matches_precomputed() {
-        let config = lane_config_with(vec![LaneMetadata::default()]);
+        let config = lane_config_with(vec![ModelLaneConfig::default()]);
         let bundle = proof_policy_bundle(&config);
         let hash = proof_policy_bundle_hash(&config);
 
@@ -696,14 +697,14 @@ mod tests {
 
     #[test]
     fn allows_merkle_lane_without_kzg_commitment() {
-        let lane_config = lane_config_with(vec![LaneMetadata::default()]);
+        let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
         let record = merkle_record(0);
         assert!(enforce_lane_proof_policy(&record, &lane_config).is_ok());
     }
 
     #[test]
     fn rejects_unknown_lane() {
-        let lane_config = lane_config_with(vec![LaneMetadata::default()]);
+        let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
         let record = merkle_record(2);
         let err = enforce_lane_proof_policy(&record, &lane_config).expect_err("should fail");
         assert!(matches!(err, DaProofPolicyError::UnknownLane { .. }));
@@ -711,7 +712,7 @@ mod tests {
 
     #[test]
     fn rejects_scheme_mismatch() {
-        let lane_config = lane_config_with(vec![LaneMetadata::default()]);
+        let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
         let record = kzg_record(0, Some(KzgCommitment::new([1; 48])));
         let err = enforce_lane_proof_policy(&record, &lane_config).expect_err("should fail");
         assert!(matches!(err, DaProofPolicyError::SchemeMismatch { .. }));
@@ -719,10 +720,10 @@ mod tests {
 
     #[test]
     fn rejects_kzg_lane_without_commitment() {
-        let lanes = vec![LaneMetadata {
+        let lanes = vec![ModelLaneConfig {
             id: LaneId::SINGLE,
             proof_scheme: DaProofScheme::KzgBls12_381,
-            ..LaneMetadata::default()
+            ..ModelLaneConfig::default()
         }];
         let lane_config = lane_config_with(lanes);
         let record = kzg_record(0, None);
@@ -735,10 +736,10 @@ mod tests {
 
     #[test]
     fn rejects_zero_kzg_commitment() {
-        let lanes = vec![LaneMetadata {
+        let lanes = vec![ModelLaneConfig {
             id: LaneId::SINGLE,
             proof_scheme: DaProofScheme::KzgBls12_381,
-            ..LaneMetadata::default()
+            ..ModelLaneConfig::default()
         }];
         let lane_config = lane_config_with(lanes);
         let record = kzg_record(0, Some(KzgCommitment::zero()));
@@ -748,7 +749,7 @@ mod tests {
 
     #[test]
     fn rejects_kzg_commitment_on_merkle_lane() {
-        let lane_config = lane_config_with(vec![LaneMetadata::default()]);
+        let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
         let record = DaCommitmentRecord {
             kzg_commitment: Some(KzgCommitment::new([9; 48])),
             ..merkle_record(0)
@@ -762,7 +763,7 @@ mod tests {
 
     #[test]
     fn rejects_zero_chunk_root() {
-        let lane_config = lane_config_with(vec![LaneMetadata::default()]);
+        let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
         let record = DaCommitmentRecord {
             chunk_root: Hash::prehashed([0u8; 32]),
             ..merkle_record(0)
@@ -773,7 +774,7 @@ mod tests {
 
     #[test]
     fn validate_commitment_bundle_rejects_duplicate_key() {
-        let lane_config = lane_config_with(vec![LaneMetadata::default()]);
+        let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
         let record = merkle_record(0);
         let duplicate = DaCommitmentRecord {
             acknowledgement_sig: Signature::from_bytes(&[0x99; 64]),
@@ -791,7 +792,7 @@ mod tests {
 
     #[test]
     fn validate_commitment_bundle_rejects_duplicate_manifest() {
-        let lane_config = lane_config_with(vec![LaneMetadata::default()]);
+        let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
         let first = merkle_record(0);
         let mut second = merkle_record(0);
         second.sequence = 9;
@@ -808,7 +809,7 @@ mod tests {
 
     #[test]
     fn validate_commitment_bundle_rejects_zero_manifest_hash() {
-        let lane_config = lane_config_with(vec![LaneMetadata::default()]);
+        let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
         let mut record = merkle_record(0);
         record.manifest_hash = iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0; 32]);
         let bundle = DaCommitmentBundle::new(vec![record]);
@@ -824,16 +825,16 @@ mod tests {
     #[test]
     fn proof_policy_bundle_exposes_hash() {
         let lanes = vec![
-            LaneMetadata {
+            ModelLaneConfig {
                 id: LaneId::new(1),
                 alias: "lane-a".to_string(),
-                ..LaneMetadata::default()
+                ..ModelLaneConfig::default()
             },
-            LaneMetadata {
+            ModelLaneConfig {
                 id: LaneId::new(2),
                 alias: "lane-b".to_string(),
                 proof_scheme: DaProofScheme::KzgBls12_381,
-                ..LaneMetadata::default()
+                ..ModelLaneConfig::default()
             },
         ];
 

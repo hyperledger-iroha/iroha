@@ -116,9 +116,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
             .metadata()
             .ok()
             .and_then(|meta| meta.modified().ok().map(|modified| (meta, modified)))
-            .is_some_and(|(meta, modified)| {
-                meta.len() > 0 && modified >= snapshot_min_time
-            })
+            .is_some_and(|(meta, modified)| meta.len() > 0 && modified >= snapshot_min_time)
             && digest.exists()
             && sig.exists()
             && merkle.exists();

@@ -3,8 +3,7 @@
   "input_length": 1048576,
   "profile": "sorafs.sf1@1.0.0",
   "profile_aliases": [
-    "sorafs.sf1@1.0.0",
-    "sorafs-sf1"
+    "sorafs.sf1@1.0.0"
   ],
   "scenarios": [
     {

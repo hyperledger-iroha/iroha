@@ -31,7 +31,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 | Namespace | الاسم | SemVer | معرف الملف | الحد الأدنى (بايت) | الهدف (بايت) | الحد الأقصى (بايت) | قناع القطع | Multihash | البدائل | ملاحظات |
 |-----------|-------|--------|------------|--------------------|--------------|--------------------|-----------|-----------|--------|---------|
-| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs-sf1"]` | الملف المعتمد المستخدم في fixtures SF-1 |
+| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` | الملف المعتمد المستخدم في fixtures SF-1 |
 
 يعيش السجل في الشيفرة ضمن `sorafs_manifest::chunker_registry` (ويحكمه [`chunker_registry_charter.md`](./chunker-registry-charter.md)). ويُعبَّر عن كل إدخال كـ `ChunkerProfileDescriptor` يضم:
 
@@ -74,8 +74,6 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 
 ### مصفوفة التوافق وخطة الإطلاق
 
-> مصفوفة قابلة للقراءة آليًا: `docs/source/sorafs/compatibility_matrix.json`  
-> إعادة التوليد عبر `cargo xtask sorafs-compat` (استخدم `--out -` لـ stdout).
 
 يلخص الجدول التالي حالة الدعم الحالية لـ `sorafs.sf1@1.0.0` عبر المكونات الأساسية. يشير "Bridge"
 إلى مسار التوافق CARv1 + SHA-256 الذي يتطلب تفاوضًا صريحًا من العميل (`Accept-Chunker` + `Accept-Digest`).
@@ -208,7 +206,7 @@ Accept-Chunker: sorafs.sf1;version=1.0.0, legacy.fastcdc;version=0.9.0
 
 ### المطابقة
 
-* يطابق ملف `sorafs-sf1` الـ fixtures العامة في
+* يطابق ملف `sorafs.sf1@1.0.0` الـ fixtures العامة في
   `fixtures/sorafs_chunker` والمجموعات المسجلة تحت
   `fuzz/sorafs_chunker`. يتم اختبار التكافؤ الطرفي في Rust وGo وNode عبر الاختبارات المتاحة.
 * تؤكد `chunker_registry::lookup_by_profile` أن معلمات الوصف تطابق `ChunkProfile::DEFAULT` للحماية من الانحرافات العرضية.

@@ -65,42 +65,28 @@ impl ParsedProgramMetadata {
 
 impl ProgramMetadata {
     pub fn parse(bytes: &[u8]) -> Result<ParsedProgramMetadata, VMError> {
-        if bytes.len() < 16 {
+        if bytes.len() < HEADER_SIZE {
             return Err(VMError::InvalidMetadata);
         }
         let magic = &bytes[0..4];
         let version_major = bytes[4];
-        let (abi_version, header_len) = if magic == MAGIC {
-            if bytes.len() < HEADER_SIZE {
-                return Err(VMError::InvalidMetadata);
-            }
-            (bytes[16], HEADER_SIZE)
-        } else {
-            if &magic[0..3] != b"IVM" {
-                return Err(VMError::InvalidMetadata);
-            }
-            if version_major > 9 {
-                return Err(VMError::InvalidMetadata);
-            }
-            let expected_digit = b'0' + version_major;
-            if magic[3] != expected_digit {
-                return Err(VMError::InvalidMetadata);
-            }
-            // Early v2 metadata lacked an explicit ABI version byte; assume v1.
-            (1, 16)
-        };
+        if magic != MAGIC {
+            return Err(VMError::InvalidMetadata);
+        }
+        let abi_version = bytes[16];
+        let header_len = HEADER_SIZE;
         let version_minor = bytes[5];
         let mode = bytes[6];
         let vector_length = bytes[7];
         let max_cycles = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
 
         // Validate header fields according to the current implementation policy.
-        // - Accept version 1.x and 2.x headers (cache tests rely on versioned keys).
+        // - Accept version 1.x headers (first-release layout).
         // - Mode must not contain unknown bits (only ZK, VECTOR, HTM).
         // - `vector_length` is advisory and may be set regardless of the VECTOR bit.
-        // - ABI version is carried as-is (unknown versions are permitted for forward-compat tests).
+        // - ABI version is carried as-is; admission enforces allowed values.
         const KNOWN_MODE_BITS: u8 = mode::ZK | mode::VECTOR | mode::HTM;
-        if version_major != 1 && version_major != 2 {
+        if version_major != 1 {
             return Err(VMError::InvalidMetadata);
         }
         if mode & !KNOWN_MODE_BITS != 0 {
@@ -108,14 +94,41 @@ impl ProgramMetadata {
         }
         // Note: vector_length may be non-zero even if VECTOR flag is off; the
         // host/runtime may clamp or ignore it depending on policy.
-        // ABI version is not validated here to allow forward-compatibility.
+        // ABI version is validated by admission, not by the header parser.
         let mut code_offset = header_len;
-        // Optional literal section begins with `LTLB` magic shortly after the
-        // header. Scan a small window after the header for the marker to remain
-        // compatible with layouts that insert additional zero padding.
-        if bytes.len() >= header_len + 4 {
+        // Optional literal section begins with `LTLB` magic immediately after the header.
+        if bytes.len() >= header_len + 4
+            && bytes[header_len..header_len + 4] == LITERAL_SECTION_MAGIC
+        {
+            let start = header_len;
+            if bytes.len() < start + 16 {
+                return Err(VMError::InvalidMetadata);
+            }
+            let count_bytes: [u8; 4] = bytes[start + 4..start + 8]
+                .try_into()
+                .expect("slice length");
+            let post_bytes: [u8; 4] = bytes[start + 8..start + 12]
+                .try_into()
+                .expect("slice length");
+            let data_bytes: [u8; 4] = bytes[start + 12..start + 16]
+                .try_into()
+                .expect("slice length");
+            let lit_count = u32::from_le_bytes(count_bytes) as usize;
+            let post_pad = u32::from_le_bytes(post_bytes) as usize;
+            let data_len = u32::from_le_bytes(data_bytes) as usize;
+            let lit_len = lit_count
+                .checked_mul(8)
+                .and_then(|n| n.checked_add(16))
+                .and_then(|n| n.checked_add(post_pad))
+                .and_then(|n| n.checked_add(data_len))
+                .ok_or(VMError::InvalidMetadata)?;
+            code_offset = start.checked_add(lit_len).ok_or(VMError::InvalidMetadata)?;
+            if code_offset > bytes.len() {
+                return Err(VMError::InvalidMetadata);
+            }
+        } else if bytes.len() >= header_len + 4 {
+            // Reject layouts that insert zero padding before the literal table marker.
             let max_scan = header_len + 32;
-            let mut literal_start: Option<usize> = None;
             let limit = bytes.len().saturating_sub(4);
             let end = max_scan.min(limit);
             let mut idx = header_len;
@@ -123,40 +136,13 @@ impl ProgramMetadata {
                 if bytes[idx..idx + 4] == LITERAL_SECTION_MAGIC {
                     let pad = &bytes[header_len..idx];
                     if pad.iter().all(|b| *b == 0) {
-                        literal_start = Some(idx);
+                        return Err(VMError::InvalidMetadata);
                     }
                     break;
                 } else if bytes[idx] != 0 {
                     break;
                 }
                 idx += 1;
-            }
-            if let Some(start) = literal_start {
-                if bytes.len() < start + 16 {
-                    return Err(VMError::InvalidMetadata);
-                }
-                let count_bytes: [u8; 4] = bytes[start + 4..start + 8]
-                    .try_into()
-                    .expect("slice length");
-                let post_bytes: [u8; 4] = bytes[start + 8..start + 12]
-                    .try_into()
-                    .expect("slice length");
-                let data_bytes: [u8; 4] = bytes[start + 12..start + 16]
-                    .try_into()
-                    .expect("slice length");
-                let lit_count = u32::from_le_bytes(count_bytes) as usize;
-                let post_pad = u32::from_le_bytes(post_bytes) as usize;
-                let data_len = u32::from_le_bytes(data_bytes) as usize;
-                let lit_len = lit_count
-                    .checked_mul(8)
-                    .and_then(|n| n.checked_add(16))
-                    .and_then(|n| n.checked_add(post_pad))
-                    .and_then(|n| n.checked_add(data_len))
-                    .ok_or(VMError::InvalidMetadata)?;
-                code_offset = start.checked_add(lit_len).ok_or(VMError::InvalidMetadata)?;
-                if code_offset > bytes.len() {
-                    return Err(VMError::InvalidMetadata);
-                }
             }
         }
         Ok(ParsedProgramMetadata {
@@ -202,7 +188,7 @@ impl ProgramMetadata {
 impl Default for ProgramMetadata {
     fn default() -> Self {
         Self {
-            version_major: 2,
+            version_major: 1,
             version_minor: 0,
             mode: 0,
             vector_length: 0,

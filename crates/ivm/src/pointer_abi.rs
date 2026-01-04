@@ -221,7 +221,7 @@ impl crate::memory::Memory {
 /// Return the set of pointer types allowed for a given syscall ABI policy.
 ///
 /// Policy notes:
-/// - First release: Experimental(1) and Experimental(2) mirror v1; other versions are unsupported.
+/// - Experimental policies are empty until a versioned surface is defined.
 fn allowed_types_for_policy(policy: SyscallPolicy) -> &'static HashSet<PointerType> {
     static ABI_V1: OnceLock<HashSet<PointerType>> = OnceLock::new();
     let v1 = ABI_V1.get_or_init(|| {
@@ -243,7 +243,6 @@ fn allowed_types_for_policy(policy: SyscallPolicy) -> &'static HashSet<PointerTy
     });
     match policy {
         SyscallPolicy::AbiV1 => v1,
-        SyscallPolicy::Experimental(1 | 2) => v1,
         SyscallPolicy::Experimental(_) => {
             static EMPTY: OnceLock<HashSet<PointerType>> = OnceLock::new();
             EMPTY.get_or_init(HashSet::new)
@@ -319,7 +318,7 @@ pub fn render_pointer_types_markdown_table() -> String {
     all.sort_by_key(|(id, _)| *id);
 
     let mut out = String::new();
-    out.push_str("| ID | Name | ABI v1/Experimental |\n");
+    out.push_str("| ID | Name | ABI v1 |\n");
     out.push_str("|---|---|---|\n");
     for (id, ty) in all {
         let v1 = if is_type_allowed_for_policy(SyscallPolicy::AbiV1, ty) {

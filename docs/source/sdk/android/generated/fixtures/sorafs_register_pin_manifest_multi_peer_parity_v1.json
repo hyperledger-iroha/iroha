@@ -21,8 +21,7 @@
       "semver": "1.0.0",
       "handle": "sorafs.sf1@1.0.0",
       "aliases": [
-        "sorafs.sf1@1.0.0",
-        "sorafs-sf1"
+        "sorafs.sf1@1.0.0"
       ],
       "multihash_code": 31
     },

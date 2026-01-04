@@ -37,10 +37,9 @@ possess the manifest (including hashes) and only need Torii to queue it.【crate
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `authority` | `AccountId` | IH58 `address@domain` string produced by `AccountId::to_string()` (no aliases). Legacy `0x…@domain` inputs continue to parse but responses now emit IH58 by default.【crates/iroha_data_model/src/account.rs:528】 |
+| `authority` | `AccountId` | IH58 `address@domain` string produced by `AccountId::to_string()` (no aliases).【crates/iroha_data_model/src/account.rs:528】 |
 | `private_key` | `ExposedPrivateKey` | Bare multihash hex as emitted by `ExposedPrivateKey::to_string()`; no `ed25519:` prefix is included.【crates/iroha_crypto/src/lib.rs:1994】 |
 | `manifest` | `ContractManifest` | Optional fields; if `code_hash`/`abi_hash` are present they must match node-side validation.【crates/iroha_data_model/src/smart_contract.rs:87】 |
-| `code_bytes` | optional base64 bytes | Retained for legacy compatibility; ignored by this handler.【crates/iroha_torii/src/routing.rs:4838】 |
 
 Sample JSON request:
 
