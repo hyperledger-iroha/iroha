@@ -462,7 +462,6 @@ pub struct AdoptionCheckOptions {
     pub min_eligible_providers: usize,
     pub require_positive_weight: bool,
     pub allow_single_source_fallback: bool,
-    pub require_metadata: bool,
     pub require_telemetry_source: bool,
     pub allow_implicit_metadata: bool,
     pub require_direct_only: bool,
@@ -3305,7 +3304,6 @@ pub fn fetch_fixture(options: FetchFixtureOptions) -> Result<(), Box<dyn Error>>
     };
 
     let vectors = FixtureProfile::SF1_V1.generate_vectors();
-    let legacy_alias = vectors.profile_id;
     let expected_chunk_digest = vectors.sha3_digest_hex();
 
     let signatures_bytes = signatures_source.fetch_bytes(&client).map_err(|err| {
@@ -3318,7 +3316,7 @@ pub fn fetch_fixture(options: FetchFixtureOptions) -> Result<(), Box<dyn Error>>
         .map_err(|err| format!("failed to parse manifest signatures JSON: {err}"))?;
 
     ensure_profile_matches(&signatures_value, &profile_handle)?;
-    ensure_aliases(&signatures_value, &profile_handle, legacy_alias)?;
+    ensure_aliases(&signatures_value, &profile_handle)?;
 
     let chunk_digest_from_signatures =
         extract_string(&signatures_value, "chunk_digest_sha3_256")?.to_ascii_lowercase();
@@ -3360,7 +3358,7 @@ pub fn fetch_fixture(options: FetchFixtureOptions) -> Result<(), Box<dyn Error>>
     let manifest_value: Value = json::from_slice(&manifest_bytes)
         .map_err(|err| format!("failed to parse manifest JSON: {err}"))?;
     ensure_profile_matches(&manifest_value, &profile_handle)?;
-    ensure_aliases(&manifest_value, &profile_handle, legacy_alias)?;
+    ensure_aliases(&manifest_value, &profile_handle)?;
     let manifest_chunk_digest =
         extract_string(&manifest_value, "chunk_digest_sha3_256")?.to_ascii_lowercase();
     if manifest_chunk_digest != expected_chunk_digest {
@@ -4539,7 +4537,7 @@ fn ensure_profile_matches(root: &Value, expected: &str) -> Result<(), Box<dyn Er
     Ok(())
 }
 
-fn ensure_aliases(root: &Value, canonical: &str, legacy: &str) -> Result<(), Box<dyn Error>> {
+fn ensure_aliases(root: &Value, canonical: &str) -> Result<(), Box<dyn Error>> {
     let aliases = root
         .get("profile_aliases")
         .and_then(Value::as_array)
@@ -4552,9 +4550,6 @@ fn ensure_aliases(root: &Value, canonical: &str, legacy: &str) -> Result<(), Box
     }
     if !seen.contains(canonical) {
         return Err(format!("profile_aliases missing canonical handle {canonical}").into());
-    }
-    if !seen.contains(legacy) {
-        return Err(format!("profile_aliases missing legacy handle {legacy}").into());
     }
     Ok(())
 }
@@ -4629,296 +4624,6 @@ fn extract_string<'a>(root: &'a Value, key: &str) -> Result<&'a str, Box<dyn Err
 fn decode_hex(input: &str) -> Result<Vec<u8>, Box<dyn Error>> {
     hex::decode(input.trim())
         .map_err(|err| format!("failed to decode hex value {input}: {err}").into())
-}
-
-#[derive(Debug, Clone, Copy)]
-enum SupportStatus {
-    Supported,
-    Legacy,
-    Transitional,
-    Planned,
-}
-
-impl SupportStatus {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Supported => "supported",
-            Self::Legacy => "legacy",
-            Self::Transitional => "transitional",
-            Self::Planned => "planned",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ComponentStatus {
-    component: &'static str,
-    category: &'static str,
-    status: SupportStatus,
-    since: Option<&'static str>,
-    notes: Option<&'static str>,
-}
-
-impl ComponentStatus {
-    fn to_value(self) -> Value {
-        let mut map = Map::new();
-        map.insert("name".to_string(), Value::from(self.component));
-        map.insert("category".to_string(), Value::from(self.category));
-        map.insert("status".to_string(), Value::from(self.status.as_str()));
-        match self.since {
-            Some(value) => map.insert("since".to_string(), Value::from(value)),
-            None => map.insert("since".to_string(), Value::Null),
-        };
-        match self.notes {
-            Some(value) => map.insert("notes".to_string(), Value::from(value)),
-            None => map.insert("notes".to_string(), Value::Null),
-        };
-        Value::Object(map)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct TelemetryEntry {
-    name: &'static str,
-    status: SupportStatus,
-    notes: &'static str,
-}
-
-impl TelemetryEntry {
-    fn to_value(self) -> Value {
-        let mut map = Map::new();
-        map.insert("name".to_string(), Value::from(self.name));
-        map.insert("status".to_string(), Value::from(self.status.as_str()));
-        map.insert("notes".to_string(), Value::from(self.notes));
-        Value::Object(map)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct LegacyFormatEntry {
-    format: &'static str,
-    digest: &'static str,
-    status: SupportStatus,
-    notes: &'static str,
-}
-
-impl LegacyFormatEntry {
-    fn to_value(self) -> Value {
-        let mut map = Map::new();
-        map.insert("format".to_string(), Value::from(self.format));
-        map.insert("digest".to_string(), Value::from(self.digest));
-        map.insert("status".to_string(), Value::from(self.status.as_str()));
-        map.insert("notes".to_string(), Value::from(self.notes));
-        Value::Object(map)
-    }
-}
-
-const SF1_COMPONENTS: &[ComponentStatus] = &[
-    ComponentStatus {
-        component: "sorafs_manifest_chunk_store",
-        category: "cli",
-        status: SupportStatus::Supported,
-        since: Some("0.1.0"),
-        notes: Some(
-            "Streams PoR/manifest reports, enforces registry charter, and exposes profile promotion helpers.",
-        ),
-    },
-    ComponentStatus {
-        component: "sorafs_manifest_stub",
-        category: "cli",
-        status: SupportStatus::Legacy,
-        since: Some("0.1.0"),
-        notes: Some(
-            "Legacy manifest builder; use `iroha sorafs toolkit pack` for CAR/manifest packaging and keep `--plan` for deterministic revalidation.",
-        ),
-    },
-    ComponentStatus {
-        component: "sorafs_provider_advert_stub",
-        category: "cli",
-        status: SupportStatus::Legacy,
-        since: Some("0.1.0"),
-        notes: Some(
-            "Legacy offline helper; provider adverts should be produced by the publishing pipeline and validated via `/v1/sorafs/providers`.",
-        ),
-    },
-    ComponentStatus {
-        component: "sorafs_fetch",
-        category: "cli",
-        status: SupportStatus::Supported,
-        since: Some("0.1.0"),
-        notes: Some(
-            "Multi-source orchestrator understands range capability hints and validates chunk digests.",
-        ),
-    },
-    ComponentStatus {
-        component: "sdk_fixtures_rust_go_ts",
-        category: "sdk",
-        status: SupportStatus::Supported,
-        since: Some("0.1.0"),
-        notes: Some(
-            "Cross-language fixtures list canonical handles first and include council signatures.",
-        ),
-    },
-    ComponentStatus {
-        component: "torii_gateway_profile_negotiation",
-        category: "gateway",
-        status: SupportStatus::Supported,
-        since: None,
-        notes: Some(
-            "Implements Accept-Chunker grammar and emits Content-Chunker headers with registry handles.",
-        ),
-    },
-    ComponentStatus {
-        component: "carv1_bridge_sha2_256",
-        category: "compatibility",
-        status: SupportStatus::Transitional,
-        since: None,
-        notes: Some("Legacy bridge for clients requesting SHA-256; responses mark legacy=true."),
-    },
-];
-
-const SF1_TELEMETRY: &[TelemetryEntry] = &[
-    TelemetryEntry {
-        name: "chunk_fetch_reports",
-        status: SupportStatus::Supported,
-        notes: "Iroha CLI `sorafs toolkit pack` surfaces chunk digests, CAR metadata, and PoR roots for dashboards.",
-    },
-    TelemetryEntry {
-        name: "provider_advert_coverage",
-        status: SupportStatus::Supported,
-        notes: "JSON reports expose capabilities and alias compliance for discovery telemetry.",
-    },
-    TelemetryEntry {
-        name: "gateway_downgrade_monitoring",
-        status: SupportStatus::Planned,
-        notes: "Planned aggregated dashboards for Content-Chunker vs Content-Digest pairings.",
-    },
-];
-
-const SF1_LEGACY_FORMATS: &[LegacyFormatEntry] = &[LegacyFormatEntry {
-    format: "carv1",
-    digest: "sha2-256",
-    status: SupportStatus::Transitional,
-    notes: "Bridge lane remains available during sf1 adoption; slated for removal once successor profile ships.",
-}];
-
-pub fn write_compatibility_matrix(target: JsonTarget) -> Result<(), Box<dyn Error>> {
-    let mut root = Map::new();
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    root.insert(
-        "generated_at_epoch_secs".to_string(),
-        Value::from(timestamp),
-    );
-
-    let profiles = build_profile_entries(chunker_registry::registry());
-    root.insert("profiles".to_string(), Value::Array(profiles));
-    root.insert(
-        "legacy_formats".to_string(),
-        Value::Array(
-            SF1_LEGACY_FORMATS
-                .iter()
-                .map(|entry| entry.to_value())
-                .collect(),
-        ),
-    );
-
-    let json_text = json::to_string_pretty(&Value::Object(root))?;
-    match target {
-        JsonTarget::Stdout => {
-            println!("{json_text}");
-        }
-        JsonTarget::File(path) => {
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(path, json_text)?;
-        }
-    }
-
-    Ok(())
-}
-
-fn build_profile_entries(descriptors: &[ChunkerProfileDescriptor]) -> Vec<Value> {
-    descriptors
-        .iter()
-        .map(|descriptor| {
-            let mut map = Map::new();
-            let canonical_handle = format!(
-                "{}.{}@{}",
-                descriptor.namespace, descriptor.name, descriptor.semver
-            );
-            map.insert("id".to_string(), Value::from(descriptor.id.0 as u64));
-            map.insert(
-                "canonical_handle".to_string(),
-                Value::from(canonical_handle.clone()),
-            );
-            map.insert("namespace".to_string(), Value::from(descriptor.namespace));
-            map.insert("name".to_string(), Value::from(descriptor.name));
-            map.insert("semver".to_string(), Value::from(descriptor.semver));
-            map.insert(
-                "multihash_code".to_string(),
-                Value::from(descriptor.multihash_code),
-            );
-            map.insert(
-                "break_mask_hex".to_string(),
-                Value::from(format!("0x{:08x}", descriptor.profile.break_mask)),
-            );
-            let mut profile = Map::new();
-            profile.insert(
-                "min_size".to_string(),
-                Value::from(descriptor.profile.min_size as u64),
-            );
-            profile.insert(
-                "target_size".to_string(),
-                Value::from(descriptor.profile.target_size as u64),
-            );
-            profile.insert(
-                "max_size".to_string(),
-                Value::from(descriptor.profile.max_size as u64),
-            );
-            profile.insert(
-                "break_mask".to_string(),
-                Value::from(descriptor.profile.break_mask),
-            );
-            map.insert("profile".to_string(), Value::Object(profile));
-            let alias_values = descriptor
-                .aliases
-                .iter()
-                .map(|alias| Value::from(*alias))
-                .collect::<Vec<_>>();
-            map.insert("aliases".to_string(), Value::Array(alias_values));
-
-            let components = components_for_handle(&canonical_handle)
-                .iter()
-                .copied()
-                .map(ComponentStatus::to_value)
-                .collect::<Vec<_>>();
-            map.insert("components".to_string(), Value::Array(components));
-
-            let telemetry = telemetry_for_handle(&canonical_handle)
-                .iter()
-                .copied()
-                .map(TelemetryEntry::to_value)
-                .collect::<Vec<_>>();
-            map.insert("telemetry".to_string(), Value::Array(telemetry));
-
-            Value::Object(map)
-        })
-        .collect()
-}
-
-fn components_for_handle(handle: &str) -> &'static [ComponentStatus] {
-    match handle {
-        "sorafs.sf1@1.0.0" => SF1_COMPONENTS,
-        _ => &[],
-    }
-}
-
-fn telemetry_for_handle(handle: &str) -> &'static [TelemetryEntry] {
-    match handle {
-        "sorafs.sf1@1.0.0" => SF1_TELEMETRY,
-        _ => &[],
-    }
 }
 
 pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>> {
@@ -6165,9 +5870,6 @@ pub fn run_adoption_check(
         .into());
     };
 
-    // Metadata is now mandatory; keep the flag for CLI compatibility.
-    let _legacy_require_metadata = options.require_metadata;
-
     let mut evaluated = 0usize;
     let mut single_source_override_used = false;
     let mut implicit_metadata_override_used = false;
@@ -6310,7 +6012,6 @@ pub fn run_adoption_check(
         let mut eligible = 0usize;
         let mut zero_weight: Vec<String> = Vec::new();
         let mut weight_sum = 0.0;
-        let mut legacy_ineligible: Vec<String> = Vec::new();
         let mut scoreboard_providers: HashSet<String> = HashSet::new();
         for (index, entry) in entries.iter().enumerate() {
             let provider = entry
@@ -6334,11 +6035,6 @@ pub fn run_adoption_check(
                     zero_weight.push(provider.to_string());
                 }
                 continue;
-            }
-            if let Some(reason) = scoreboard_entry_reason(entry)
-                && reason.to_ascii_lowercase().contains("legacy")
-            {
-                legacy_ineligible.push(format!("{provider}: {reason}"));
             }
         }
         if eligible < options.min_eligible_providers {
@@ -6367,14 +6063,6 @@ pub fn run_adoption_check(
                 "scoreboard `{}` normalised weights sum to {:.6}; expected 1.0 (±{WEIGHT_SUM_TOLERANCE})",
                 path.display(),
                 weight_sum
-            )
-            .into());
-        }
-        if !legacy_ineligible.is_empty() {
-            return Err(format!(
-                "scoreboard `{}` marks providers as legacy-only: {}",
-                path.display(),
-                legacy_ineligible.join(", ")
             )
             .into());
         }
@@ -8481,7 +8169,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -8528,7 +8215,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -8562,7 +8248,6 @@ mod tests {
             min_eligible_providers: 1,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -8611,7 +8296,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -8661,7 +8345,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -8713,7 +8396,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -8780,7 +8462,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -8854,7 +8535,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -8922,7 +8602,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -8956,7 +8635,6 @@ mod tests {
             min_eligible_providers: 1,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9007,7 +8685,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9053,7 +8730,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9101,7 +8777,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9152,7 +8827,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9203,7 +8877,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9267,7 +8940,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9317,7 +8989,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9371,7 +9042,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9432,7 +9102,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9488,7 +9157,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9540,7 +9208,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9607,7 +9274,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9676,7 +9342,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9743,7 +9408,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9789,7 +9453,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9844,7 +9507,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9913,7 +9575,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: true,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -9964,7 +9625,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -10030,7 +9690,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: true,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -10081,7 +9740,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: true,
@@ -10148,7 +9806,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: true,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: true,
@@ -10223,7 +9880,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -10300,7 +9956,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: true,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -10345,7 +10000,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: true,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -10385,7 +10039,6 @@ mod tests {
             min_eligible_providers: 1,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -10433,7 +10086,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -10500,7 +10152,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: true,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -10556,7 +10207,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -10611,7 +10261,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: true,
             require_telemetry_source: false,
             allow_implicit_metadata: true,
             require_direct_only: false,
@@ -10665,7 +10314,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: true,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -10722,7 +10370,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: true,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -10772,7 +10419,6 @@ mod tests {
             min_eligible_providers: 1,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: true,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -10831,7 +10477,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -10892,7 +10537,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -10952,7 +10596,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -11012,7 +10655,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             require_telemetry_region: false,
             allow_implicit_metadata: false,
@@ -11067,7 +10709,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             require_telemetry_region: false,
             allow_implicit_metadata: false,
@@ -11122,7 +10763,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             require_telemetry_region: true,
             allow_implicit_metadata: false,
@@ -11164,7 +10804,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -11214,7 +10853,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: false,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -11252,7 +10890,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -11261,50 +10898,6 @@ mod tests {
         assert!(
             result.is_err(),
             "weights that do not sum to unity should fail adoption check"
-        );
-    }
-
-    #[test]
-    fn adoption_check_rejects_legacy_only_providers() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("legacy_only.json");
-        let summary_path = temp.path().join("legacy_summary.json");
-        let scoreboard = norito::json!({
-            "entries": [
-                {
-                    "provider_id": "alpha",
-                    "normalised_weight": 1.0,
-                    "raw_score": 1.2,
-                    "eligibility": "eligible"
-                },
-                {
-                    "provider_id": "beta",
-                    "normalised_weight": 0.0,
-                    "raw_score": 0.5,
-                    "eligibility": {
-                        "status": "ineligible",
-                        "reason": "provider registered as legacy-only"
-                    }
-                }
-            ]
-        });
-        fs::write(&path, to_string_pretty(&scoreboard).expect("render")).expect("write");
-        write_summary_with_providers(&summary_path, &[("alpha", 3), ("beta", 0)]);
-        let result = run_adoption_check(AdoptionCheckOptions {
-            scoreboard_paths: vec![path],
-            summary_paths: vec![summary_path],
-            min_eligible_providers: 1,
-            require_positive_weight: true,
-            allow_single_source_fallback: false,
-            require_metadata: false,
-            require_telemetry_source: false,
-            allow_implicit_metadata: false,
-            require_direct_only: false,
-            require_telemetry_region: false,
-        });
-        assert!(
-            result.is_err(),
-            "legacy-only ineligible providers should fail adoption check"
         );
     }
 
@@ -11341,7 +10934,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -11397,7 +10989,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: true,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -11449,7 +11040,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,
@@ -11517,7 +11107,6 @@ mod tests {
             min_eligible_providers: 2,
             require_positive_weight: true,
             allow_single_source_fallback: false,
-            require_metadata: false,
             require_telemetry_source: false,
             allow_implicit_metadata: false,
             require_direct_only: false,

@@ -10,7 +10,7 @@ fixture consumers across SDKs remain in sync.
 
 ## Canonical Profile
 
-- Profile handle: `sorafs.sf1@1.0.0` (legacy alias `sorafs-sf1`)
+- Profile handle: `sorafs.sf1@1.0.0`
 - Input seed (hex): `0000000000dec0ded`
 - Target size: 262 144 bytes (256 KiB)
 - Minimum size: 65 536 bytes (64 KiB)
@@ -29,8 +29,7 @@ fixtures and emits the following files under `fixtures/sorafs_chunker/`:
 
 - `sf1_profile_v1.{json,rs,ts,go}` — canonical chunk boundaries for Rust,
   TypeScript, and Go consumers. Each file advertises the canonical handle as the
-  first entry in `profile_aliases` followed by any legacy aliases (e.g.,
-  `sorafs.sf1@1.0.0`, then `sorafs-sf1`). The ordering is enforced by
+  first (and only) entry in `profile_aliases`. The ordering is enforced by
   `ensure_charter_compliance` and MUST NOT be altered.
 - `manifest_blake3.json` — BLAKE3-verified manifest covering every fixture file.
 - `manifest_signatures.json` — Council signatures (Ed25519) over the manifest

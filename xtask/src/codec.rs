@@ -520,8 +520,9 @@ fn group_from_value(value: &NoritoValue) -> Result<RansGroupTableV1, Box<dyn Err
     let width_bits = map
         .get("width_bits")
         .and_then(NoritoValue::as_u64)
-        .map(|value| u8::try_from(value).unwrap_or_default())
-        .unwrap_or(0);
+        .ok_or_else(|| "group.width_bits must be a u64".to_string())?;
+    let width_bits =
+        u8::try_from(width_bits).map_err(|_| "group.width_bits must fit into u8".to_string())?;
     let group_size = map
         .get("group_size")
         .and_then(NoritoValue::as_u64)
@@ -558,13 +559,15 @@ fn group_from_value(value: &NoritoValue) -> Result<RansGroupTableV1, Box<dyn Err
     }
     let group_size_u16 =
         u16::try_from(group_size).map_err(|_| "group.group_size must fit into u16".to_string())?;
-    let resolved_width_bits = if width_bits == 0 {
-        width_bits_from_group_size(usize::from(group_size_u16))?
-    } else {
-        width_bits
-    };
+    let expected_width_bits = width_bits_from_group_size(usize::from(group_size_u16))?;
+    if width_bits != expected_width_bits {
+        return Err(format!(
+            "group.width_bits must match group_size (expected {expected_width_bits})"
+        )
+        .into());
+    }
     Ok(RansGroupTableV1 {
-        width_bits: resolved_width_bits,
+        width_bits,
         group_size: group_size_u16,
         precision_bits: u8::try_from(precision_bits)
             .map_err(|_| "group.precision_bits must fit into u8".to_string())?,
@@ -909,6 +912,31 @@ mod tests {
     }
 
     #[test]
+    fn group_from_value_rejects_missing_width_bits() {
+        let mut map = NoritoMap::new();
+        map.insert(
+            "group_size".into(),
+            NoritoValue::Number(NoritoNumber::from(4u64)),
+        );
+        map.insert(
+            "precision_bits".into(),
+            NoritoValue::Number(NoritoNumber::from(u64::from(DEFAULT_PRECISION_BITS))),
+        );
+        let freqs = vec![NoritoValue::Number(NoritoNumber::from(1024u64)); 4];
+        map.insert("frequencies".into(), NoritoValue::Array(freqs));
+        let cumulative = (0..=4)
+            .map(|idx| NoritoValue::Number(NoritoNumber::from((idx * 1024) as u64)))
+            .collect();
+        map.insert("cumulative".into(), NoritoValue::Array(cumulative));
+        let group = NoritoValue::Object(map);
+        let err = group_from_value(&group).expect_err("missing width_bits should fail");
+        assert!(
+            err.to_string().contains("group.width_bits"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn marginal_groups_match_base_distribution() {
         let body = generate_body(7, MAX_BUNDLE_WIDTH).expect("body");
         assert_eq!(
@@ -1025,26 +1053,4 @@ mod tests {
         assert!(verify_artifact(&tampered_path).is_err());
     }
 
-    #[test]
-    fn legacy_group_without_width_bits_is_inferred() {
-        let mut map = NoritoMap::new();
-        map.insert(
-            "group_size".into(),
-            NoritoValue::Number(NoritoNumber::from(4u64)),
-        );
-        map.insert(
-            "precision_bits".into(),
-            NoritoValue::Number(NoritoNumber::from(u64::from(DEFAULT_PRECISION_BITS))),
-        );
-        let freqs = vec![NoritoValue::Number(NoritoNumber::from(1024u64)); 4];
-        map.insert("frequencies".into(), NoritoValue::Array(freqs));
-        let cumulative = (0..=4)
-            .map(|idx| NoritoValue::Number(NoritoNumber::from((idx * 1024) as u64)))
-            .collect();
-        map.insert("cumulative".into(), NoritoValue::Array(cumulative));
-        let legacy_group = NoritoValue::Object(map);
-        let parsed = group_from_value(&legacy_group).expect("parse legacy group");
-        assert_eq!(parsed.width_bits, 2);
-        assert_eq!(parsed.group_size, 4);
-    }
 }

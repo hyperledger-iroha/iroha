@@ -7548,7 +7548,7 @@ pub mod json {
     }
 
     /// Typed, tape-first decode (prototype): parse using the structural tape directly.
-    /// Error used by FastFromJson derives (kept as norito::Error for compatibility).
+    /// Error type used by FastFromJson derives.
     pub type FastPathError = super::Error;
     pub trait FastFromJson<'a>: Sized {
         fn parse<'b>(w: &mut TapeWalker<'a>, arena: &'b mut Arena) -> Result<Self, FastPathError>;

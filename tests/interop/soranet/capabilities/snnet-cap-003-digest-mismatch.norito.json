@@ -1,6 +1,6 @@
 {
   "client_nonce_hex": "abcdef0123456789fedcba98765432100123456789abcdef0011223344556677",
-  "client_vector_hex": "0101000201010102000201010202000200047f100004deadbeef7f110004cafebabe",
+  "client_vector_hex": "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
   "description": "Relay echoes PQ TLVs but mutates the transcript commit digest",
   "descriptor_commit_hex": "ea157a5af59deee040cfc371a724790ed969d32295e05fea6a4ff45394498275",
   "expected_alarm": null,
@@ -9,10 +9,10 @@
   "fixture_signature": null,
   "kem_id": 1,
   "relay_nonce_hex": "00112233445566778899aabbccddeeff112233445566778899aabbccddeeff11",
-  "relay_vector_hex": "01010002010101020002010101030020ea157a5af59deee040cfc371a724790ed969d32295e05fea6a4ff4539449827502010001010202000200047f140004cafed00d",
+  "relay_vector_hex": "01010002010101020002010101030020ea157a5af59deee040cfc371a724790ed969d32295e05fea6a4ff4539449827501040002820302010001010202000200047f140004cafed00d",
   "resume_hash_hex": null,
   "sig_id": 1,
-  "transcript_hash_hex": "bbdf3b540af781fe744895a05900e4c90291375104e9affe5326aeec6ff645dd",
+  "transcript_hash_hex": "a5d11071d76f3f367d1c03dcd9fc95200faf7e4c9d69c06f99a5ac2ed4b0917a",
   "warnings": [
     "relay transcript commit differs"
   ]

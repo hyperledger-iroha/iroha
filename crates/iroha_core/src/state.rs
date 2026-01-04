@@ -14545,30 +14545,15 @@ impl<'state> StateBlock<'state> {
                     Ok(k) => k,
                     Err(_) => return true,
                 };
-                let key_t = match "__registered_at_ms".parse::<Name>() {
-                    Ok(k) => k,
-                    Err(_) => return true,
-                };
-
-                // Skip triggers registered in the current block (by height). Use the timestamp
-                // guard only when height metadata is missing (e.g., legacy triggers).
+                // Skip triggers registered in the current block (by height).
                 let registered_height = action
                     .metadata()
                     .get(&key_h)
                     .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                if registered_height == Some(current_block_height) {
-                    return false;
+                match registered_height {
+                    Some(height) => height != current_block_height,
+                    None => false,
                 }
-                if registered_height.is_none() {
-                    let registered_time = action
-                        .metadata()
-                        .get(&key_t)
-                        .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                    if registered_time == Some(current_block_time_ms) {
-                        return false;
-                    }
-                }
-                true
             })
             .collect();
         let matched_count = matched.len();

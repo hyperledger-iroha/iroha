@@ -500,7 +500,7 @@ but SHOULD maintain the same ordering to simplify transcript analysis. The
 | 0x0101     | `snnet.pqkem`        | `kem_id:u8` `flags:u8`                                                         | `flags & 0x01` marks the KEM as *required* for the advertising side. |
 | 0x0102     | `snnet.pqsig`        | `sig_id:u8` `flags:u8`                                                         | Multiple TLVs allowed when dual-signing. |
 | 0x0103     | `snnet.transcript_commit` | `sha256` digest (32 bytes) of the descriptor-advertised capabilities.       | Binds directory metadata into the session. |
-| 0x0104     | `snnet.suite_list`   | `ordered:u8[]` handshake suite identifiers (first byte MSB marks *required*) | Values: `0x01` = `nk1.noise_xx`, `0x02` = `nk2.hybrid`, `0x03` = `nk3.pq_forward_secure`. Clients list suites in preference order; relays intersect and select the client's highest-ranked common entry. Downgrade alarms fire when the negotiated suite is below either side's preferred value. |
+| 0x0104     | `snnet.suite_list`   | `ordered:u8[]` handshake suite identifiers (first byte MSB marks *required*) | Values: `0x02` = `nk2.hybrid`, `0x03` = `nk3.pq_forward_secure`. Clients list suites in preference order; relays intersect and select the client's highest-ranked common entry. Negotiation aborts when the TLV is missing or no overlap exists. |
 | 0x0201     | `snnet.role`         | `role_bits:u8` (`0x01` guard, `0x02` middle, `0x04` exit)                      | Relays MUST emit exactly one entry; clients omit. |
 | 0x0202     | `snnet.padding`      | `u16` padded cell size (little-endian)                                         | Used to negotiate circuit padding buckets. |
 | 0x7Fxx     | GREASE fillers       | Arbitrary bytes                                                                | Implementations MUST ignore and preserve order. Clients emit ≥2 per handshake. |
@@ -510,8 +510,8 @@ but SHOULD maintain the same ordering to simplify transcript analysis. The
 SNNet-16 adds an explicit suite negotiation surface so the relay and client
 agree on the transport pattern before the Noise/QUIC machinery runs. The
 `snnet.suite_list` TLV encodes the caller’s preference order; the first byte’s
-MSB is recycled as the existing “required” bit so legacy parsers continue to
-strip it automatically. Negotiation proceeds as follows:
+MSB is recycled as the existing “required” bit so parsers strip it
+automatically. Negotiation proceeds as follows:
 
 > **Deployment note:** the staged rollout for these suites is now documented in
 > `docs/source/soranet/pq_rollout_plan.md`. Update `sorafs.gateway.rollout_phase`
@@ -522,30 +522,26 @@ strip it automatically. Negotiation proceeds as follows:
 2. Identify the first suite in the client list that also appears in the relay
    list; that suite is selected.
 3. Emit downgrade telemetry if the chosen suite differs from either party’s
-   first entry, or if one side advertises the TLV but the other omits it.
-4. Abort the handshake when no overlap exists; the transcript hash still
-   incorporates the advertised suite so mismatch manifests as a different key
-   schedule.
+   first entry.
+4. Abort the handshake when the TLV is missing or no overlap exists; the
+   transcript hash still incorporates the advertised suite so mismatch
+   manifests as a different key schedule.
 
 Supported suite identifiers are:
 
 | ID | Label                 | Description |
 |----|----------------------|-------------|
-| 0x01 | `nk1.noise_xx`        | Existing three-message Noise XX flow (classical + PQ key schedule). |
 | 0x02 | `nk2.hybrid`          | Two-message hybrid handshake that carries classical and ML-KEM material in the first flight. |
 | 0x03 | `nk3.pq_forward_secure` | Forward-secure variant with dual ML-KEM commitments and post-handshake rekey. |
 
 `NK2` and `NK3` now ship on the runtime path. When either suite is negotiated
 the relay responds with the new hybrid/PQFS frames and the client derives the
-session key immediately—no `ClientFinish` frame is exchanged. Implementations
-must therefore treat the final frame as optional: NK1 continues to send the
-third message, while NK2/NK3 complete after the relay response. The helper
-APIs (`build_client_hello`, `process_client_hello`, `client_handle_relay_hello`,
-and `relay_finalize_handshake`) abstract this difference by returning an
-optional finish payload and surfacing the derived `SessionSecrets` directly.
-Deterministic unit tests exercise each path and assert that both peers produce
-identical transcript hashes and session keys for NK1, NK2, and NK3
-handshakes.【crates/iroha_crypto/src/soranet/handshake.rs:4769】【crates/iroha_crypto/src/soranet/handshake.rs:5034】
+session key immediately—no `ClientFinish` frame is exchanged. The helper APIs
+(`build_client_hello`, `process_client_hello`, `client_handle_relay_hello`, and
+`relay_finalize_handshake`) still return an optional finish payload, but it is
+always `None` for the current suites. Deterministic unit tests exercise each
+path and assert that both peers produce identical transcript hashes and
+session keys for NK2 and NK3 handshakes.【crates/iroha_crypto/src/soranet/handshake.rs:4720】【crates/iroha_crypto/src/soranet/handshake.rs:5290】
 
 ##### NK2 hybrid (`nk2.hybrid`) state machine
 
@@ -631,7 +627,7 @@ Example client advertisement (hex, ASCII comments):
 ```
 01 01 00 02 01 01  # snnet.pqkem { id=0x01 (ML-KEM-768), required }
 01 02 00 02 01 01  # snnet.pqsig { id=0x01 (Dilithium3), required }
-01 04 00 02 02 01  # snnet.suite_list { preferred=[nk2.hybrid, nk1.noise_xx] }
+01 04 00 02 02 03  # snnet.suite_list { preferred=[nk2.hybrid, nk3.pq_forward_secure] }
 02 02 00 02 04 00  # snnet.padding { 1024-byte cells }
 7F 10 00 04 DE AD BE EF  # GREASE
 7F 11 00 04 CA FE BA BE  # GREASE
@@ -643,7 +639,7 @@ Example relay echo for a PQ-capable guard:
 01 01 00 02 01 01
 01 02 00 02 01 01
 01 03 00 20 <32-byte SHA-256 descriptor commit>
-01 04 00 02 02 01
+01 04 00 02 02 03
 02 01 00 01 01
 02 02 00 02 04 00
 7F 12 00 04 12 34 56 78
@@ -655,20 +651,19 @@ handshake aborts.
 
 ## Handshake suites
 
-The negotiated suite (advertised via the optional `snnet.suite_list` TLV) now
+The negotiated suite (advertised via the required `snnet.suite_list` TLV) now
 controls the shape of the transcript and informs the HKDF domains used by the
 session key schedule:
 
 | Suite | Messages | Purpose |
 |-------|----------|---------|
-| `nk1.noise_xx` | `ClientHello` → `RelayHello` → `ClientFinish` | Legacy three-message Noise XX simulation that exposes the padded handshake used before SNNet-16. |
 | `nk2.hybrid` | `HybridClientInit` → `HybridRelayResponse` | Two-message hybrid handshake that folds the confirmation and classical+PQ material into the relay response while still hashing the descriptor commit and capability vector. |
 | `nk3.pq_forward_secure` | `PqfsClientCommit` → `PqfsRelayResponse` | Forward secure profile that binds two ML-KEM commitments (baseline + FS) and carries a mix commitment alongside the transcript hash. |
 
 All suites continue to hash the same capability bytes and descriptor commit to
 guarantee downgrade detection. The transcript hash feeds the labelled HKDF
-domains (`handshake/nk1/*`, `handshake/nk2/*`, `handshake/nk3/*`) so telemetry
-and session keys diverge across suites even when the same nonces circulate.
+domains (`handshake/nk2/*`, `handshake/nk3/*`) so telemetry and session keys
+diverge across suites even when the same nonces circulate.
 
 `HybridClientInit` and `PqfsClientCommit` now emit deterministic Dilithium +
 Ed25519 witnesses that cover the handshake payload and transcript hash. Relay
@@ -746,7 +741,6 @@ Initial fixtures to ship:
 | `snnet-cap-002-downgrade` | Relay strips `snnet.pqkem`; client aborts and records alarm with `reason="pqkem_missing"`. | `expected_alarm` populated. |
 | `snnet-cap-003-digest-mismatch` | Relay echoes PQ TLVs but modifies `snnet.transcript_commit`. Clients abort due to digest mismatch. | `expected_outcome="digest_mismatch"`. |
 | `snnet-cap-004-grease` | Vector contains two GREASE TLVs; negotiation succeeds and transcript hash matches value in fixture. | Validates GREASE preservation. |
-| `snnet-cap-005-mlkem512` | Legacy NK1 handshake pinned to the ML-KEM-512 profile for interoperability smoke tests. | `expected_outcome="success"`, ensures suite identifier `0` stays wired through the stack. |
 | `snnet-cap-006-constant-rate` | Client requires `snnet.constant_rate` while the relay omits it; handshake aborts with a downgrade warning/telemetry slug for SNNet‑17A2 dogfood. | `expected_outcome="downgrade_abort"`, warning includes `type=0x0203 (snnet.constant_rate)`. |
 
 Example (success case) encoded as Norito JSON:
@@ -755,15 +749,15 @@ Example (success case) encoded as Norito JSON:
 {
   "fixture_id": "snnet-cap-001-success",
   "description": "PQ-capable guard echoes ML-KEM-768 + Dilithium3",
-  "client_vector_hex": "0101000201010102000201010202000200047f100004deadbeef7f110004cafebabe",
-  "relay_vector_hex": "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f02010001010202000200047f12000412345678",
+  "client_vector_hex": "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
+  "relay_vector_hex": "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f12000412345678",
   "descriptor_commit_hex": "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
   "client_nonce_hex": "2c1f64028dbe42410d1921cd9a316bed4f8f5b52ffb62b4dcaf149048393ca8a",
   "relay_nonce_hex": "d5f4f2f9c2b1a39e88bbd3c0a4f9e178d93e7bfacaf0c3e872b712f4a341c9de",
   "resume_hash_hex": null,
   "kem_id": 1,
   "sig_id": 1,
-  "transcript_hash_hex": "abeed760cbc7fbdd49bbe617cfdfe18cd1a867fc21bc8f677abcd1d18e4a48bf",
+  "transcript_hash_hex": "fd92a86d953dfa161d27c79785d495108bfd6991d3ed3baff11752baff4e0bf8",
   "expected_outcome": "success",
   "warnings": [],
   "expected_alarm": null,

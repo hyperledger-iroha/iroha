@@ -293,8 +293,7 @@ All manifests currently point at the `sorafs.sf1@1.0.0` descriptor (numeric
    `(namespace, name, semver)` triple, CDC parameters, multihash code, and
    compatibility window. The proposal bundles regenerated fixtures under
    `fixtures/sorafs_chunker/<namespace>.<name>@<semver>/`, Proof-of-Retrievability
-   corpora, and cross-language diff reports.
-   Aliases used for HTTP negotiation (e.g., the legacy `sorafs-sf1`) MUST be
+   corpora, and cross-language diff reports. If aliases are defined, they MUST be
    listed alongside the canonical handle so provider adverts can propagate them
    via `profile_aliases`.
 2. Tooling WG runs the deterministic fuzz/diff suite and extends

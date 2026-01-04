@@ -1,3 +1,5 @@
+//! Program metadata parsing tests for literal sections.
+
 use ivm::ProgramMetadata;
 
 const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
@@ -66,8 +68,6 @@ fn parse_rejects_short_or_bad_magic() {
 #[test]
 fn parse_skips_literal_section_when_present() {
     let mut bytes = build_header(2, 0, 0, 0, 1);
-    // Pad header to 8-byte alignment (24 bytes total)
-    bytes.extend_from_slice(&[0u8; 7]);
     // Literal table header: magic + count (2 entries)
     bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
     bytes.extend_from_slice(&(2u32).to_le_bytes());
@@ -85,6 +85,19 @@ fn parse_skips_literal_section_when_present() {
 
     let off = parsed.code_offset;
     assert_eq!(meta.version_major, 2);
-    assert_eq!(off, 24 + 16 + 16 + 1);
+    assert_eq!(off, 17 + 16 + 16 + 1);
     assert!(off < bytes.len());
+}
+
+#[test]
+fn parse_rejects_literal_padding() {
+    let mut bytes = build_header(2, 0, 0, 0, 1);
+    bytes.extend_from_slice(&[0u8; 4]);
+    bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
+    bytes.extend_from_slice(&(1u32).to_le_bytes());
+    bytes.extend_from_slice(&(0u32).to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0x1122_3344_5566_7788u64.to_le_bytes());
+    bytes.extend_from_slice(&[0xAA, 0xBB]);
+    assert!(ProgramMetadata::parse(&bytes).is_err());
 }

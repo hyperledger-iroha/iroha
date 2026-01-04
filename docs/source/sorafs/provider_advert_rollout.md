@@ -1,8 +1,8 @@
 ---
-title: "SoraFS Provider Advert Rollout & Compatibility Plan"
+title: "SoraFS Provider Advert Rollout Plan"
 ---
 
-# SoraFS Provider Advert Rollout & Compatibility Plan
+# SoraFS Provider Advert Rollout Plan
 
 This plan coordinates the cut-over from permissive provider advertisements to
 the fully-governed `ProviderAdvertV1` surface required for multi-source chunk
@@ -12,22 +12,23 @@ retrieval. It focuses on three deliverables:
   before each gate flips.
 - **Telemetry coverage.** Dashboards and alerts that Observability and Ops use
   to confirm the network only accepts compliant adverts.
-- **Compatibility timeline.** Explicit dates for rejecting legacy envelopes so
-  SDKs and tooling teams can plan their releases.
-
 The rollout aligns with SF-2b/2c milestones in the [SoraFS migration
 roadmap](migration_roadmap.md) and assumes the admission policy in
 [`provider_admission_policy.md`](provider_admission_policy.md) is already in
 effect.
 
-## Phase Timeline
+## Current Requirements
 
-| Phase | Window (target) | Behaviour | Operator Actions | Observatory Focus |
-|-------|-----------------|-----------|------------------|-------------------|
-| **R0 – Baseline observation** | Through **2025‑03‑31** | Torii accepts both governance-approved adverts and legacy payloads that pre-date `ProviderAdvertV1`. Ingestion logs warning when adverts omit `chunk_range_fetch` or the canonical `profile_aliases`. | - Regenerate adverts via the provider advert publishing pipeline (ProviderAdvertV1 + governance envelope) ensuring `profile_id=sorafs.sf1@1.0.0`, canonical `profile_aliases`, and `signature_strict=true`. <br>- Run the new `sorafs_fetch` tests locally; warnings about unknown capabilities must be triaged. | Publish provisional Grafana panels (see below) and establish alert thresholds but keep them in warning-only mode. |
-| **R1 – Warning gate** | **2025‑04‑01 → 2025‑05‑15** | Torii keeps accepting legacy adverts but increments `torii_sorafs_admission_total{result="warn"}` when the payload lacks `chunk_range_fetch` or carries unknown capabilities without `allow_unknown_capabilities=true`. CLI tooling now fails regeneration unless the canonical handle is present. | - Rotate adverts in staging and production to include `CapabilityType::ChunkRangeFetch` payloads and, when GREASE testing, set `allow_unknown_capabilities=true`. <br>- Annotate operations runbooks with the new telemetry queries. | Promote dashboards to on-call rotation; configure warnings when `warn` events exceed 5% of traffic for 15 minutes. |
-| **R2 – Enforcement** | **2025‑05‑16 → 2025‑06‑30** | Torii rejects adverts missing governance envelopes, the canonical profile handle, or the `chunk_range_fetch` capability. Legacy `namespace-name` only handles are no longer parsed. Unknown capabilities without GREASE opt-in now fail with `reason="unknown_capability"`. | - Confirm production envelopes exist under `torii.sorafs.admission_envelopes_dir` and rotate any remaining legacy adverts. <br>- Verify SDKs only emit canonical handles plus optional aliases for backwards compatibility. | Turn on pager alerts: `torii_sorafs_admission_total{result="reject"}` > 0 for 5 minutes triggers operator action. Track acceptance ratio and admission reason histograms. |
-| **R3 – Legacy shutdown** | **2025‑07‑01 onwards** | Discovery drops support for binary adverts that do not set `signature_strict=true` or that omit `profile_aliases`. Torii discovery cache purges stale entries whose refresh deadline passed without renewal. | - Schedule final decommission window for legacy provider stacks. <br>- Confirm `--allow-unknown` GREASE runs only during controlled drills and are logged. <br>- Update incident playbooks to treat `sorafs_fetch` warning output as a blocker before releases. | Tighten alerts: any `warn` outcome alerts on-call. Add synthetic checks that fetch the discovery JSON and validate provider capability lists. |
+SoraFS accepts only governance-enveloped `ProviderAdvertV1` payloads. The
+following requirements are enforced at admission:
+
+- `profile_id=sorafs.sf1@1.0.0` with canonical `profile_aliases` present.
+- `chunk_range_fetch` capability payloads must be included for multi-source
+  retrieval.
+- `signature_strict=true` with council signatures attached to the advert
+  envelope.
+- `allow_unknown_capabilities` is only permitted during explicit GREASE drills
+  and must be logged.
 
 ## Operator Checklist
 
@@ -49,8 +50,8 @@ effect.
      capabilities. Capture the JSON report and archive it with operations logs.
 4. **Stage renewals.**
    - Submit `ProviderAdmissionRenewalV1` envelopes at least 30 days before
-     gateway enforcement (R2). Renewals must retain the canonical handle and
-     capability set; only stake, endpoints, or metadata should change.
+     expiration. Renewals must retain the canonical handle and capability set;
+     only stake, endpoints, or metadata should change.
 5. **Communicate with dependent teams.**
    - SDK owners must release versions that surface warnings to operators when
      adverts are rejected.
@@ -166,23 +167,13 @@ before pushing changes to ensure the syntax passes `promtool check rules`.
 
 ## Compatibility Matrix
 
-| Advert Characteristics | R0 | R1 | R2 | R3 |
-|------------------------|----|----|----|----|
-| `profile_id = sorafs.sf1@1.0.0`, `chunk_range_fetch` present, canonical aliases, `signature_strict=true` | ✅ | ✅ | ✅ | ✅ |
-| Lacks `chunk_range_fetch` capability | ⚠️ Warn (ingest + telemetry) | ⚠️ Warn | ❌ Reject (`reason="missing_capability"`) | ❌ Reject |
-| Unknown capability TLVs without `allow_unknown_capabilities=true` | ✅ | ⚠️ Warn (`reason="unknown_capability"`) | ❌ Reject | ❌ Reject |
-| Legacy handle only (`profile_id = sorafs-sf1`) | ⚠️ Warn | ❌ Reject | ❌ Reject | ❌ Reject |
-| Expired `refresh_deadline` | ❌ Reject | ❌ Reject | ❌ Reject | ❌ Reject |
-| `signature_strict=false` (diagnostic fixtures) | ✅ (development only) | ⚠️ Warn | ⚠️ Warn | ❌ Reject |
+## Admission Outcomes
 
-All times use UTC. Enforcement dates are mirrored in the migration ledger and
-will not move without a council vote; any change requires updating this file
-and the ledger in the same PR.
-
-> **Implementation note:** R1 introduces the `result="warn"` series to
-> `torii_sorafs_admission_total`. The Torii ingestion patch that adds the new
-> label is tracked alongside the SF-2 telemetry tasks; until that lands, use log
-> sampling to monitor legacy adverts.
+- Missing `chunk_range_fetch` capability → reject with `reason="missing_capability"`.
+- Unknown capability TLVs without `allow_unknown_capabilities=true` → reject with
+  `reason="unknown_capability"`.
+- `signature_strict=false` → reject (reserved for isolated diagnostics).
+- Expired `refresh_deadline` → reject.
 
 ## Communication & Incident Handling
 

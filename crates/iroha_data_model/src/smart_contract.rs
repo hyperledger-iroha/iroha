@@ -67,8 +67,7 @@ pub mod manifest {
     /// Minimal smart contract manifest used for admission-time validation.
     ///
     /// All fields are optional: when present they are verified; when absent they
-    /// are ignored. This allows progressive adoption without breaking older
-    /// clients.
+    /// are ignored.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[norito(reuse_archived)]
     #[cfg_attr(

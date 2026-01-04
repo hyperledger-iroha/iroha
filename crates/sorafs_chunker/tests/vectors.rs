@@ -5,7 +5,6 @@ use norito::json::Value;
 use sorafs_chunker::{chunk_bytes, fixtures::FixtureProfile};
 
 const CANONICAL_PROFILE_HANDLE: &str = "sorafs.sf1@1.0.0";
-const LEGACY_PROFILE_HANDLE: &str = "sorafs-sf1";
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -178,10 +177,6 @@ fn manifest_signature_matches_fixture_manifest() {
         alias_strings.contains(&CANONICAL_PROFILE_HANDLE),
         "profile_aliases must include canonical handle"
     );
-    assert!(
-        alias_strings.contains(&LEGACY_PROFILE_HANDLE),
-        "profile_aliases must include expected handle"
-    );
     assert_eq!(
         signatures
             .get("manifest")
@@ -271,12 +266,10 @@ fn typescript_fixture_matches_vectors() {
         extract_delimited(&content, "profileAliases:", '[', ']').expect("profileAliases present");
     let aliases = parse_string_list(&alias_block);
     assert!(
-        aliases.iter().any(|alias| alias == CANONICAL_PROFILE_HANDLE),
+        aliases
+            .iter()
+            .any(|alias| alias == CANONICAL_PROFILE_HANDLE),
         "TypeScript fixture must expose canonical profile alias"
-    );
-    assert!(
-        aliases.iter().any(|alias| alias == LEGACY_PROFILE_HANDLE),
-        "TypeScript fixture must expose legacy profile alias"
     );
 
     let chunk_lengths_block = extract_delimited(&content, "chunkLengths: [", '[', ']')
@@ -307,12 +300,10 @@ fn go_fixture_matches_vectors() {
         .expect("ProfileAliases slice present");
     let aliases = parse_string_list(&alias_block);
     assert!(
-        aliases.iter().any(|alias| alias == CANONICAL_PROFILE_HANDLE),
+        aliases
+            .iter()
+            .any(|alias| alias == CANONICAL_PROFILE_HANDLE),
         "Go fixture must expose canonical profile alias"
-    );
-    assert!(
-        aliases.iter().any(|alias| alias == LEGACY_PROFILE_HANDLE),
-        "Go fixture must expose legacy profile alias"
     );
 
     let chunk_lengths_block =
@@ -350,10 +341,6 @@ fn json_fixture_in_sync_with_vectors() {
     assert!(
         alias_strings.contains(&CANONICAL_PROFILE_HANDLE),
         "profile_aliases must include canonical handle"
-    );
-    assert!(
-        alias_strings.contains(&LEGACY_PROFILE_HANDLE),
-        "profile_aliases must include expected handle"
     );
     assert_eq!(
         json.get("input_seed")

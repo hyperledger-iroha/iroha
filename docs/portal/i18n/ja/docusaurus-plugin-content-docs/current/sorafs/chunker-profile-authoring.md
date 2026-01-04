@@ -44,7 +44,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 - プロファイル ID は正の整数で、欠番なしに単調増加します。
 - 正規ハンドル (`namespace.name@semver`) は alias リストに含まれ、**必ず** 最初の
-  エントリになります。legacy alias（例: `sorafs-sf1`）はその後に続きます。
+  エントリになります。legacy alias（例: `sorafs.sf1@1.0.0`）はその後に続きます。
 - alias は他の正規ハンドルと衝突せず、重複してはいけません。
 - alias は空であってはならず、前後の空白を取り除く必要があります。
 
@@ -70,7 +70,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 | `name` | 人が読めるラベル。 | `sf1` |
 | `semver` | パラメータセットのセマンティックバージョン文字列。 | `1.0.0` |
 | `profile_id` | プロファイルが登録されたときに一度だけ割り当てる単調増加の数値 ID。次の id を予約するが既存の番号は再利用しない。 | `1` |
-| `profile_aliases` | 交渉時にクライアントへ公開する追加ハンドル（legacy 名、短縮名）。正規ハンドルを必ず最初のエントリとして含める。 | `["sorafs-sf1"]` |
+| `profile_aliases` | 交渉時にクライアントへ公開する追加ハンドル（legacy 名、短縮名）。正規ハンドルを必ず最初のエントリとして含める。 | `["sorafs.sf1@1.0.0"]` |
 | `profile.min_size` | チャンク長の最小値 (bytes)。 | `65536` |
 | `profile.target_size` | チャンク長のターゲット値 (bytes)。 | `262144` |
 | `profile.max_size` | チャンク長の最大値 (bytes)。 | `524288` |

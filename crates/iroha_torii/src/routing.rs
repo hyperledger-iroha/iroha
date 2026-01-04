@@ -274,7 +274,6 @@ use iroha_primitives::json::Json as IrohaJson;
 use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyShareError};
-use iroha_torii_shared::Version;
 pub use local_selector_tracker::{LocalSelectorCollision, LocalSelectorTracker};
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -5610,7 +5609,6 @@ pub async fn handle_get_contract_code(
     // For now, omit other manifest fields to keep response stable for tests
     let mut top = norito::json::Map::new();
     top.insert("manifest".into(), norito::json::Value::Object(manifest_obj));
-    top.insert("code_bytes".into(), norito::json::Value::Null);
     let body = norito::json::to_json_pretty(&top).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
@@ -6775,11 +6773,6 @@ pub struct RegisterContractCodeDto {
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Contract manifest to register on-chain
     pub manifest: iroha_data_model::smart_contract::manifest::ContractManifest,
-    /// Optional code bytes (kept for compatibility; ignored by on-chain path)
-    #[norito(with = "base64_bytes")]
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub code_bytes: Option<Vec<u8>>,
 }
 
 #[allow(dead_code)]
@@ -36870,22 +36863,6 @@ pub mod profiling {
                 Err(Error::Pprof(eyre::eyre!("profiling already running")))
             }
         }
-    }
-}
-
-/// Return simple server version string in a JSON body.
-pub fn handle_server_version(
-    format: crate::utils::ResponseFormat,
-) -> axum::http::Response<axum::body::Body> {
-    let version = Version {
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        git_sha: option_env!("VERGEN_GIT_SHA")
-            .unwrap_or("unknown")
-            .to_string(),
-    };
-    match format {
-        crate::utils::ResponseFormat::Norito => NoritoBody(version).into_response(),
-        crate::utils::ResponseFormat::Json => JsonBody(version).into_response(),
     }
 }
 

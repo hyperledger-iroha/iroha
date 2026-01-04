@@ -38,7 +38,7 @@ Profile authors کو
 
 | Namespace | Name | SemVer | Profile ID | Min (bytes) | Target (bytes) | Max (bytes) | Break mask | Multihash | Aliases | Notes |
 |-----------|------|--------|------------|-------------|----------------|-------------|------------|-----------|---------|-------|
-| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs-sf1"]` | SF-1 fixtures میں استعمال ہونے والا canonical profile |
+| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` | SF-1 fixtures میں استعمال ہونے والا canonical profile |
 
 Registry code میں `sorafs_manifest::chunker_registry` کے طور پر موجود ہے (جسے [`chunker_registry_charter.md`](./chunker-registry-charter.md) govern کرتا ہے)۔ ہر entry ایک `ChunkerProfileDescriptor` کے طور پر ظاہر ہوتی ہے جس میں:
 
@@ -81,8 +81,6 @@ CLI کے وہ تمام flags جو JSON لکھتے ہیں (`--json-out`, `--por-j
 
 ### Compatibility matrix & rollout plan
 
-> Machine-readable matrix: `docs/source/sorafs/compatibility_matrix.json`  
-> Regenerate via `cargo xtask sorafs-compat` (stdout کے لیے `--out -` استعمال کریں)۔
 
 نیچے دی گئی جدول `sorafs.sf1@1.0.0` کے لیے core components میں موجودہ support status دکھاتی ہے۔ "Bridge" سے مراد CARv1 + SHA-256 compatibility lane ہے جس کے لیے explicit client negotiation (`Accept-Chunker` + `Accept-Digest`) درکار ہے۔
 
@@ -194,6 +192,6 @@ Manifests ہمیشہ CARv2/BLAKE3 commitment advertise کرتے ہیں۔ Legacy 
 
 ### Conformance
 
-* `sorafs-sf1` profile public fixtures (`fixtures/sorafs_chunker`) اور `fuzz/sorafs_chunker` کے تحت register corpora سے match کرتا ہے۔ End-to-end parity Rust، Go اور Node میں دیے گئے tests سے exercise کی جاتی ہے۔
+* `sorafs.sf1@1.0.0` profile public fixtures (`fixtures/sorafs_chunker`) اور `fuzz/sorafs_chunker` کے تحت register corpora سے match کرتا ہے۔ End-to-end parity Rust، Go اور Node میں دیے گئے tests سے exercise کی جاتی ہے۔
 * `chunker_registry::lookup_by_profile` assert کرتا ہے کہ descriptor parameters `ChunkProfile::DEFAULT` سے match کریں تاکہ accidental divergence سے بچا جا سکے۔
 * `iroha sorafs toolkit pack` اور `sorafs_manifest_stub` سے بنے manifests میں registry metadata شامل ہوتی ہے۔

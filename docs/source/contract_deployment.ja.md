@@ -43,7 +43,7 @@ translator: manual
 - **POST `/v1/contracts/instance/activate`**  
   リクエスト: `ActivateInstanceDto`（`authority`, `private_key`, `namespace`, `contract_id`, `code_hash`）。既存アーティファクトを指定インスタンスにバインドします。レスポンス: `{ ok: true }`。
 - **GET `/v1/contracts/code/{code_hash}`**  
-  `{ manifest: { code_hash, abi_hash }, code_bytes: null }` を返します。
+  `{ manifest: { code_hash, abi_hash } }` を返します。
 - **GET `/v1/contracts/code-bytes/{code_hash}`**  
   保存済み `.to` バイト列を Base64 で返します（`{ code_b64 }`）。
 

@@ -17,7 +17,7 @@ fn parse_accepts_valid_default_header() {
     assert_eq!(parsed.metadata.version_minor, 0);
     assert_eq!(parsed.metadata.mode, 0);
     assert_eq!(parsed.metadata.vector_length, 0);
-    // Default ABI version is 0 (reserved policy). Parser carries the value as-is.
+    // Default ABI version is 1 for the first release. Parser carries the value as-is.
     assert_eq!(
         parsed.metadata.abi_version,
         ProgramMetadata::default().abi_version

@@ -1,6 +1,16 @@
 # Status
 
 ## Latest Updates
+- Removed legacy IVM header/padding parsing, required registration-height metadata for time triggers, and cleaned Torii contract + IVM alignment docs to drop legacy `code_bytes`/deprecated-alias notes.
+- Tests: not run (not requested).
+- Removed obsolete multisig derived-key helper test references so the multisig module compiles cleanly after the legacy cleanup.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Tests: `cargo test --workspace` (failed: `crates/iroha_torii/src/da.rs` duplicate `LaneConfig` import and config/model `LaneConfig` mismatches, plus `crates/iroha_torii/src/da/commitments.rs` missing `LaneConfig::from_catalog` and type mismatches in DA proof verification).
+- Localnet: bumped Kagami defaults to a 1s pipeline, restored DA quorum/availability timeouts to on-chain defaults for stability, and kept commit inflight scaling tied to pipeline size.
+- SoraNet relay: removed legacy NK1 references, kept downgrade tagging for NK3 handshakes, and added unit coverage for handshake-suite metrics/downgrades.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Tests: `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (passed; warnings about unused imports/assignments in unrelated crates).
+- Tests: `cargo test --workspace` (failed: pre-existing compile errors in `crates/iroha_core/src/smartcontracts/isi/multisig.rs` missing `DomainId`/`Algorithm` imports and unresolved `derived_key_flag`/`derived_multisig_account_id`).
 - Removed legacy derived-multisig references (derived-key checks/metrics/tests), simplified multisig direct-sign guarding, and updated multisig docs/roadmap accordingly.
 - Resolved DA lane-config test mismatches by splitting runtime vs model LaneConfig in DA modules, Kura tests, and scheduler telemetry, and renamed the StateTransaction AXT refresh helper to the directory-based API.
 - Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).

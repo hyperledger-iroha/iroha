@@ -167,7 +167,7 @@ groups:
 | `profile_id = sorafs.sf1@1.0.0`, `chunk_range_fetch` が存在、canonical aliases、`signature_strict=true` | ✅ | ✅ | ✅ | ✅ |
 | `chunk_range_fetch` capability が欠落 | ⚠️ Warn (ingest + telemetry) | ⚠️ Warn | ❌ Reject (`reason="missing_capability"`) | ❌ Reject |
 | `allow_unknown_capabilities=true` なしの未知 capability TLV | ✅ | ⚠️ Warn (`reason="unknown_capability"`) | ❌ Reject | ❌ Reject |
-| legacy handle のみ (`profile_id = sorafs-sf1`) | ⚠️ Warn | ❌ Reject | ❌ Reject | ❌ Reject |
+| legacy handle のみ (`profile_id = sorafs.sf1@1.0.0`) | ⚠️ Warn | ❌ Reject | ❌ Reject | ❌ Reject |
 | `refresh_deadline` の期限切れ | ❌ Reject | ❌ Reject | ❌ Reject | ❌ Reject |
 | `signature_strict=false` (診断用 fixtures) | ✅ (開発のみ) | ⚠️ Warn | ⚠️ Warn | ❌ Reject |
 
