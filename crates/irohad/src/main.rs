@@ -638,16 +638,13 @@ struct NetworkRelay {
     streaming: iroha_core::streaming::StreamingHandle,
     kiso: KisoHandle,
     suppress_pow_broadcast: Arc<AtomicBool>,
-    queue_cap: usize,
 }
 
-fn network_relay_queue_cap(network: &iroha_config::parameters::actual::Network) -> usize {
-    network.p2p_queue_cap_high.get()
-}
+const NETWORK_RELAY_QUEUE_CAP: usize = 1024;
 
 impl NetworkRelay {
     async fn run(mut self) {
-        let (sender, mut receiver) = mpsc::channel(self.queue_cap);
+        let (sender, mut receiver) = mpsc::channel(NETWORK_RELAY_QUEUE_CAP);
         let mut sender = sender;
         loop {
             match self.network.subscribe_to_peers_messages(sender) {
@@ -2046,7 +2043,6 @@ impl Iroha {
         ));
 
         let suppress_pow_broadcast = Arc::new(AtomicBool::new(false));
-        let relay_queue_cap = network_relay_queue_cap(&config.network);
         supervisor.monitor(task::spawn(
             NetworkRelay {
                 sumeragi,
@@ -2057,7 +2053,6 @@ impl Iroha {
                 streaming: streaming.clone(),
                 kiso: kiso.clone(),
                 suppress_pow_broadcast: Arc::clone(&suppress_pow_broadcast),
-                queue_cap: relay_queue_cap,
             }
             .run(),
         ));
@@ -4701,55 +4696,6 @@ mod tests {
             assert!(overrides.dispatch_trace);
             assert!(overrides.debug_enum);
             assert!(!overrides.debug_fused);
-        }
-    }
-
-    mod network_relay_queue {
-        use super::*;
-        use iroha_config::base::toml::TomlSource;
-
-        fn sample_config_with_queue_cap(cap: usize) -> Config {
-            let cap_i64 = i64::try_from(cap).expect("queue cap fits in i64");
-            let table = toml::toml! {
-                chain = "00000000-0000-0000-0000-000000000000"
-                public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B"
-                private_key = "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83"
-
-                trusted_peers = [
-                  "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B@127.0.0.1:1337",
-                  "ed0120CC25624D62896D3A0BFD8940F928DC2ABF27CC57CEFEB442AA96D9081AAE58A1@127.0.0.1:1338",
-                  "ed0120FACA9E8AA83225CB4D16D67F27DD4F93FC30FFA11ADC1F5C88FD5495ECC91020@127.0.0.1:1339",
-                  "ed01208E351A70B6A603ED285D666B8D689B680865913BA03CE29FB7D13A166C4E7F1F@127.0.0.1:1340",
-                ]
-
-                [network]
-                address = "addr:127.0.0.1:1337#8F78"
-                public_address = "addr:127.0.0.1:1337#8F78"
-                p2p_queue_cap_high = cap_i64
-
-                [genesis]
-                public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
-                file = "./genesis.signed.nrt"
-
-                [torii]
-                address = "addr:127.0.0.1:8080#8942"
-
-                [logger]
-                format = "pretty"
-            };
-            ConfigReader::new()
-                .with_toml_source(TomlSource::inline(table))
-                .read_and_complete::<UserConfig>()
-                .expect("sample config should be readable")
-                .parse()
-                .expect("sample config should parse")
-        }
-
-        #[test]
-        fn relay_queue_cap_tracks_network_high_cap() {
-            let cap = 4096usize;
-            let config = sample_config_with_queue_cap(cap);
-            assert_eq!(network_relay_queue_cap(&config.network), cap);
         }
     }
 

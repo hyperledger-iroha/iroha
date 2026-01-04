@@ -3,10 +3,6 @@
 ## Latest Updates
 - Block sync now skips already-seen block prefixes when responding to `GetBlocksAfter`, reducing repeated `BlockSyncUpdate` storms that can stall consensus; added unit coverage.
 - Tests: `cargo test -p iroha_core block_sync::message::selection_tests -- --nocapture` (passed).
-- Aligned the network relay subscriber queue capacity with `network.p2p_queue_cap_high` and raised the test-network `sumeragi.msg_channel_cap_blocks` to 2048 to reduce consensus stalls from inbound drops.
-- Tests: not run (not requested).
-- Test-network clients now ignore host environment overrides (e.g., `TORII_URL`) so peer-scoped Torii URLs are deterministic; added unit coverage.
-- Tests: not run (not requested).
 - Switched event notification and SSE smoke integration tests to use at least four peers to avoid single-peer consensus deadlocks and SSE timeouts.
 - Tests: not run (not requested).
 - Parallelized RBC delivery checks in the seven-peer consistency integration test, dropped the full-telemetry override, extended the submitter client transaction timeout/TTL for slow networks, and made the mint submission blocking to ensure commit before convergence checks.
