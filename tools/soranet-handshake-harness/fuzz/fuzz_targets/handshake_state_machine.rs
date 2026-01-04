@@ -25,7 +25,7 @@ fuzz_target!(|input: HandshakeInput| {
         &key_pair,
         &mut rng,
     ) {
-        // Only NK1 requires a follow-up ClientFinish frame; other suites should safely reject.
+        // ClientFinish frames are no longer used; ensure extra bytes are handled safely.
         let _ = relay_finalize_handshake(relay_state, input.client_finish.as_slice(), &key_pair);
     }
 });

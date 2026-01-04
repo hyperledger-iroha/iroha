@@ -31,7 +31,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 | Namespace | שם | SemVer | מזהה פרופיל | מינימום (bytes) | יעד (bytes) | מקסימום (bytes) | מסכת שבירה | Multihash | Aliases | הערות |
 |-----------|----|--------|-------------|-----------------|------------|-----------------|------------|-----------|--------|-------|
-| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs-sf1"]` | פרופיל קנוני המשמש ב-fixtures של SF-1 |
+| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` | פרופיל קנוני המשמש ב-fixtures של SF-1 |
 
 הרישום חי בקוד בתור `sorafs_manifest::chunker_registry` (מוסדר על ידי [`chunker_registry_charter.md`](./chunker-registry-charter.md)). כל רשומה
 מתוארת כ-`ChunkerProfileDescriptor` עם:
@@ -76,8 +76,6 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 
 ### מטריצת תאימות ותכנית rollout
 
-> מטריצה לקריאה מכנית: `docs/source/sorafs/compatibility_matrix.json`  
-> רג'נרציה דרך `cargo xtask sorafs-compat` (השתמשו ב-`--out -` עבור stdout).
 
 הטבלה למטה מתארת את סטטוס התמיכה הנוכחי עבור `sorafs.sf1@1.0.0` ברכיבים המרכזיים.
 "Bridge" מתייחס למסלול תאימות CARv1 + SHA-256 שדורש משא ומתן מפורש של הלקוח
@@ -213,7 +211,7 @@ Manifests תמיד מפרסמים את ההתחייבות CARv2/BLAKE3. נתיב
 
 ### תאימות
 
-* הפרופיל `sorafs-sf1` ממופה ל-fixtures הציבוריים תחת
+* הפרופיל `sorafs.sf1@1.0.0` ממופה ל-fixtures הציבוריים תחת
   `fixtures/sorafs_chunker` ולקורפוסים הרשומים תחת
   `fuzz/sorafs_chunker`. פריטי parity מקצה-לקצה נבדקים ב-Rust, Go ו-Node באמצעות הבדיקות שסופקו.
 * `chunker_registry::lookup_by_profile` מאשר שפרמטרי ה-descriptor תואמים ל-`ChunkProfile::DEFAULT` כדי למנוע סטיות מקריות.

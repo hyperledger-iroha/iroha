@@ -21,7 +21,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## Канонический профиль
 
-- Handle профиля: `sorafs.sf1@1.0.0` (legacy alias `sorafs-sf1`)
+- Handle профиля: `sorafs.sf1@1.0.0` (legacy alias `sorafs.sf1@1.0.0`)
 - Входной seed (hex): `0000000000dec0ded`
 - Целевой размер: 262144 bytes (256 KiB)
 - Минимальный размер: 65536 bytes (64 KiB)
@@ -41,7 +41,7 @@ fixtures и выпускает следующие файлы в `fixtures/sorafs
 - `sf1_profile_v1.{json,rs,ts,go}` — канонические границы чанков для
   потребителей Rust, TypeScript и Go. Каждый файл объявляет канонический handle как
   первую запись в `profile_aliases`, затем идут legacy alias (например,
-  `sorafs.sf1@1.0.0`, затем `sorafs-sf1`). Порядок фиксируется
+  `sorafs.sf1@1.0.0`, затем `sorafs.sf1@1.0.0`). Порядок фиксируется
   `ensure_charter_compliance` и НЕ ДОЛЖЕН изменяться.
 - `manifest_blake3.json` — BLAKE3-верифицированный manifest, покрывающий каждый файл fixtures.
 - `manifest_signatures.json` — подписи совета (Ed25519) поверх digest манифеста.

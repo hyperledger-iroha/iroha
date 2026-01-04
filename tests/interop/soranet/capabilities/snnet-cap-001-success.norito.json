@@ -1,6 +1,6 @@
 {
   "client_nonce_hex": "2c1f64028dbe42410d1921cd9a316bed4f8f5b52ffb62b4dcaf149048393ca8a",
-  "client_vector_hex": "0101000201010102000201010202000200047f100004deadbeef7f110004cafebabe",
+  "client_vector_hex": "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
   "description": "PQ-capable guard echoes ML-KEM-768 + Dilithium3",
   "descriptor_commit_hex": "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
   "expected_alarm": null,
@@ -9,9 +9,9 @@
   "fixture_signature": null,
   "kem_id": 1,
   "relay_nonce_hex": "d5f4f2f9c2b1a39e88bbd3c0a4f9e178d93e7bfacaf0c3e872b712f4a341c9de",
-  "relay_vector_hex": "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f02010001010202000200047f12000412345678",
+  "relay_vector_hex": "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f12000412345678",
   "resume_hash_hex": null,
   "sig_id": 1,
-  "transcript_hash_hex": "abeed760cbc7fbdd49bbe617cfdfe18cd1a867fc21bc8f677abcd1d18e4a48bf",
+  "transcript_hash_hex": "fd92a86d953dfa161d27c79785d495108bfd6991d3ed3baff11752baff4e0bf8",
   "warnings": []
 }

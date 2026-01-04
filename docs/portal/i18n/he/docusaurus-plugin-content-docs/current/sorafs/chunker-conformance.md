@@ -19,7 +19,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## פרופיל קנוני
 
-- Handle פרופיל: `sorafs.sf1@1.0.0` (alias legacy `sorafs-sf1`)
+- Handle פרופיל: `sorafs.sf1@1.0.0` (alias legacy `sorafs.sf1@1.0.0`)
 - Seed קלט (hex): `0000000000dec0ded`
 - גודל יעד: 262144 bytes (256 KiB)
 - גודל מינימלי: 65536 bytes (64 KiB)
@@ -38,7 +38,7 @@ fixtures ומוציא את הקבצים הבאים תחת `fixtures/sorafs_chunk
 
 - `sf1_profile_v1.{json,rs,ts,go}` — גבולות chunk קנוניים לצרכני Rust,
   TypeScript ו-Go. כל קובץ מצהיר על ה-handle הקנוני כערך הראשון ב-`profile_aliases`,
-  ולאחריו alias ישנים (למשל `sorafs.sf1@1.0.0`, ואז `sorafs-sf1`). הסדר נאכף על ידי
+  ולאחריו alias ישנים (למשל `sorafs.sf1@1.0.0`, ואז `sorafs.sf1@1.0.0`). הסדר נאכף על ידי
   `ensure_charter_compliance` ואסור לשנותו.
 - `manifest_blake3.json` — manifest מאומת BLAKE3 שמכסה כל קובץ fixtures.
 - `manifest_signatures.json` — חתימות המועצה (Ed25519) על digest ה-manifest.

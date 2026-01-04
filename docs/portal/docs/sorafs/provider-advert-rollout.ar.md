@@ -179,7 +179,7 @@ groups:
 | `profile_id = sorafs.sf1@1.0.0`, `chunk_range_fetch` موجود، aliases قياسية، `signature_strict=true` | ✅ | ✅ | ✅ | ✅ |
 | غياب capability `chunk_range_fetch` | ⚠️ Warn (ingest + telemetry) | ⚠️ Warn | ❌ Reject (`reason="missing_capability"`) | ❌ Reject |
 | TLVs لcapability غير معروفة دون `allow_unknown_capabilities=true` | ✅ | ⚠️ Warn (`reason="unknown_capability"`) | ❌ Reject | ❌ Reject |
-| Handle legacy فقط (`profile_id = sorafs-sf1`) | ⚠️ Warn | ❌ Reject | ❌ Reject | ❌ Reject |
+| Handle legacy فقط (`profile_id = sorafs.sf1@1.0.0`) | ⚠️ Warn | ❌ Reject | ❌ Reject | ❌ Reject |
 | `refresh_deadline` منتهي | ❌ Reject | ❌ Reject | ❌ Reject | ❌ Reject |
 | `signature_strict=false` (diagnostic fixtures) | ✅ (للتطوير فقط) | ⚠️ Warn | ⚠️ Warn | ❌ Reject |
 

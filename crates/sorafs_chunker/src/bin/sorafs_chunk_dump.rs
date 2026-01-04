@@ -29,7 +29,7 @@ const USAGE: &str = "\
 usage: sorafs-chunk-dump [OPTIONS] <path|->
 
 Options:
-    --profile <id>        Chunking profile preset (sf1, sorafs-sf1, sorafs.sf1@1.0.0)
+    --profile <id>        Chunking profile preset (sf1, sorafs.sf1@1.0.0)
     --min-size <bytes>    Override minimum chunk size (in bytes)
     --target-size <bytes> Override target chunk size (in bytes)
     --max-size <bytes>    Override maximum chunk size (in bytes)
@@ -177,7 +177,7 @@ where
 
 fn resolve_profile(value: &str) -> Result<ChunkProfile, ParseError> {
     match value {
-        "sf1" | "sorafs-sf1" | "sorafs.sf1@1.0.0" => Ok(ChunkProfile::DEFAULT),
+        "sf1" | "sorafs.sf1@1.0.0" => Ok(ChunkProfile::DEFAULT),
         "sf2" | "sorafs-sf2" | "sorafs.sf2@1.0.0" => Ok(ChunkProfile::SF2),
         other => Err(ParseError::Message(format!("unknown profile `{other}`"))),
     }
@@ -289,7 +289,7 @@ mod tests {
     fn parse_cli_overrides_profile_and_params() {
         let config = parse(&[
             "--profile",
-            "sorafs-sf1",
+            "sorafs.sf1@1.0.0",
             "--min-size",
             "256",
             "--target-size",

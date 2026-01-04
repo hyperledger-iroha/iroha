@@ -145,6 +145,11 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 14. **LEGACY-CLEANUP — Remove compatibility shims and legacy labels** (Core/SDK/Docs, Line: Shared, Owner: Release Eng, Priority: High, Status: 🈺 In Progress, target TBD)
     - [x] Remove SoraFS anon-compatible policy and SoraNet-compatible capability across bindings, stubs, and tests.
     - [x] Drop query-lane and genesis-bootstrap compatibility shims; fail executor validation on undecodable verdicts.
+    - [x] Remove Torii `/server_version` endpoint and legacy contract-registration `code_bytes` compatibility.
+    - [x] Remove Torii filter-expression compatibility types and enforce strict JSON field shapes.
+    - [x] Drop IVM header legacy magic/padding parsing and require registration-height metadata for time triggers.
+    - [x] Remove legacy width inference in rANS table tooling (require explicit `width_bits`).
+    - [x] Clean Torii contract API and IVM alignment docs to remove legacy/deprecated alias notes.
     - [ ] Enforce ABI v1 only (remove Experimental policy paths) and update related tests/docs.
     - [ ] Remove Norito compatibility toggles and legacy length/offset decode paths (update `norito.md`).
     - [ ] Sweep docs/translations for remaining legacy/backward-compat references and clean up tooling flags.

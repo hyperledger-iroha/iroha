@@ -88,14 +88,12 @@ translator: manual
     "abi_hash": "89ab…7654",
     "compiler_fingerprint": "rustc-1.79 llvm-16",
     "features_bitmap": 0
-  },
-  "code_bytes": "…base64…"
+  }
 }
 ```
 
 - `manifest.code_hash` משמש כמפתח האחסון אם סופק.
 - `manifest.abi_hash` נבדק מול מדיניות ה-ABI של הנוד.
-- `code_bytes` נשמרים בשרשרת רק דרך `RegisterSmartContractBytes` או שליחת ההוראה ישירות.
 
 ### DeployContractDto
 
@@ -133,8 +131,7 @@ translator: manual
 
 ```jsonc
 {
-  "manifest": { … },
-  "code_bytes": null
+  "manifest": { … }
 }
 ```
 

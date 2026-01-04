@@ -217,9 +217,6 @@ enum CommandKind {
     KagamiProfiles {
         options: kagami_profiles::KagamiProfileOptions,
     },
-    SorafsCompat {
-        target: JsonTarget,
-    },
     SorafsAdmissionFixtures {
         output: PathBuf,
     },
@@ -1277,7 +1274,6 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         CommandKind::SorafsAdmissionFixtures { output } => {
             sorafs::write_admission_fixtures(&output)?;
         }
-        CommandKind::SorafsCompat { target } => sorafs::write_compatibility_matrix(target)?,
         CommandKind::SorafsGatewayFixtures { output, verify } => {
             if verify {
                 sorafs::verify_gateway_fixtures(&output)?;
@@ -3303,31 +3299,6 @@ where
                 options: soranet_chaos::ChaosReportOptions { log_path, output },
             })
         }
-        "sorafs-compat" => {
-            let mut target: Option<JsonTarget> = None;
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "-o" | "--out" | "--output" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --out".into());
-                        };
-                        if path == "-" {
-                            target = Some(JsonTarget::Stdout);
-                        } else {
-                            target = Some(JsonTarget::File(normalize_path(Path::new(&path))?));
-                        }
-                    }
-                    flag => {
-                        return Err(format!("unknown flag for sorafs-compat: {flag}").into());
-                    }
-                }
-            }
-            let default = JsonTarget::File(normalize_path(&default_compat_matrix_path())?);
-            Ok(CommandKind::SorafsCompat {
-                target: target.unwrap_or(default),
-            })
-        }
         "sorafs-gateway-fixtures" => {
             let mut output: Option<PathBuf> = None;
             let mut verify = false;
@@ -3387,7 +3358,6 @@ where
             let mut require_positive_weight = true;
             let mut allow_single_source = false;
             let mut report: Option<PathBuf> = None;
-            let mut require_metadata = false;
             let mut require_telemetry_source = false;
             let mut require_telemetry_region = false;
             let mut allow_implicit_metadata = false;
@@ -3424,9 +3394,6 @@ where
                     "--allow-single-source" => {
                         allow_single_source = true;
                     }
-                    "--require-metadata" => {
-                        require_metadata = true;
-                    }
                     "--require-telemetry" | "--require-telemetry-source" => {
                         require_telemetry_source = true;
                     }
@@ -3459,7 +3426,6 @@ where
                     min_eligible_providers: min_providers,
                     require_positive_weight,
                     allow_single_source_fallback: allow_single_source,
-                    require_metadata,
                     require_telemetry_source,
                     require_telemetry_region,
                     allow_implicit_metadata,
@@ -11419,14 +11385,6 @@ fn default_sm_wycheproof_path() -> PathBuf {
         .join("wycheproof_sm2.json")
 }
 
-fn default_compat_matrix_path() -> PathBuf {
-    workspace_root()
-        .join("docs")
-        .join("source")
-        .join("sorafs")
-        .join("compatibility_matrix.json")
-}
-
 pub(crate) fn normalize_path(path: &Path) -> Result<PathBuf, Box<dyn Error>> {
     if path.is_absolute() {
         Ok(path.to_path_buf())
@@ -11638,10 +11596,6 @@ fn print_usage() {
     eprintln!(
         "    Summarise a chaos GameDay log (NDJSON) into JSON detection/recovery timings; defaults to stdout."
     );
-    eprintln!("  cargo xtask sorafs-compat [--out <path|->]");
-    eprintln!(
-        "    Emit the SoraFS chunker compatibility matrix as JSON. Defaults to docs/source/sorafs/compatibility_matrix.json"
-    );
     eprintln!(
         "  cargo xtask soranet-pop-bundle --input <path> [--roa <path>] [--output-dir <path>] [--edns-resolver <addr>] [--edns-tool <bin>] [--skip-edns] [--skip-ds] [--image-tag <tag>]"
     );
@@ -11815,7 +11769,7 @@ fn print_usage() {
         "    Validate docs portal gateway binding artefacts before attaching them to DG-3 change tickets. Confirms Sora-Name/Proof headers, route metadata, and proof payloads match the expected alias/content CID."
     );
     eprintln!(
-        "  cargo xtask sorafs-adoption-check [--scoreboard <path>] [--summary <path>] [--min-providers <count>] [--allow-zero-weight] [--allow-single-source] [--allow-implicit-metadata] [--require-direct-only] [--require-metadata] [--require-telemetry] [--require-telemetry-region] [--report <path>]"
+        "  cargo xtask sorafs-adoption-check [--scoreboard <path>] [--summary <path>] [--min-providers <count>] [--allow-zero-weight] [--allow-single-source] [--allow-implicit-metadata] [--require-direct-only] [--require-telemetry] [--require-telemetry-region] [--report <path>]"
     );
     eprintln!(
         "    Validate multi-source adoption evidence by inspecting persisted orchestrator scoreboards and summaries."

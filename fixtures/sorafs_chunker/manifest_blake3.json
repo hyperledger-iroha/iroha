@@ -2,29 +2,28 @@
   "chunk_digest_sha3_256": "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482",
   "files": [
     {
-      "blake3": "23a14fe4bf06a44bc2cc84ad0f287659f62a3ff99e4147e9e7730988d9eb01be",
+      "blake3": "d89a4fdc030b0c7c4911719ea133c780d9f4610b08eef1d6d0e0ca443391718e",
       "file": "sf1_profile_v1.json",
-      "size": 925
+      "size": 907
     },
     {
-      "blake3": "181f0595284dcbb862db997d1c18564832c157f9e1eaf804f0bf88c846f73d65",
+      "blake3": "66b5956826c86589a24b71ca6b400cc1335323c6371f1cec9475f09af8743f61",
       "file": "sf1_profile_v1.rs",
-      "size": 1191
+      "size": 1177
     },
     {
-      "blake3": "2bc35d45a9a1e539c4b0e3571817dc57d5a938e954882537379d7abba7b751a1",
+      "blake3": "9a3bb8e4d96518b3a0a1301046b2d86a793991959ebdd8adda1fb2988e4292dc",
       "file": "sf1_profile_v1.ts",
-      "size": 1515
+      "size": 1501
     },
     {
-      "blake3": "dcca46978768cca5fdbc5174a35036d5e168cc5e584bba33056b76f316590666",
+      "blake3": "0f0348b8751b0f85fe874afda3371af75b78fac5dad65182204dcb3cf3e4c0a1",
       "file": "sf1_profile_v1.go",
-      "size": 1430
+      "size": 1416
     }
   ],
   "profile": "sorafs.sf1@1.0.0",
   "profile_aliases": [
-    "sorafs.sf1@1.0.0",
-    "sorafs-sf1"
+    "sorafs.sf1@1.0.0"
   ]
 }

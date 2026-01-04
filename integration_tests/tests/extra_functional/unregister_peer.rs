@@ -321,7 +321,12 @@ async fn wait_for_peer_count(
     loop {
         let count = spawn_blocking({
             let client = client.clone();
-            move || client.query(FindPeers).execute_all().map(|peers| peers.len())
+            move || {
+                client
+                    .query(FindPeers)
+                    .execute_all()
+                    .map(|peers| peers.len())
+            }
         })
         .await??;
         if count == expected {

@@ -182,16 +182,16 @@ pub const DEFAULT_BIND_HOST: &str = "0.0.0.0";
 /// Default advertised host for generated peers and client config.
 pub const DEFAULT_PUBLIC_HOST: &str = "127.0.0.1";
 /// Default total pipeline time (ms) injected for localnet when not overridden.
-const LOCALNET_PIPELINE_TIME_MS: u64 = 850;
+const LOCALNET_PIPELINE_TIME_MS: u64 = 1_000;
 /// Default redundant send fanout (r) for localnet DA/RBC sessions.
 const LOCALNET_REDUNDANT_SEND_R: u8 = 2;
 /// Default DA commit-quorum timeout multiplier for localnet configs.
-const LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 1;
+const LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 3;
 /// Default DA availability timeout multiplier for localnet configs.
 /// Extra slack keeps advisory availability warnings from firing on fast pipelines.
 const LOCALNET_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: u32 = 2;
 /// Default DA availability timeout floor (ms) for localnet configs.
-const LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: u64 = 0;
+const LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: u64 = 2_000;
 /// Torii pre-auth allowlist to keep localnet CLI traffic from tripping bans.
 const LOCALNET_PREAUTH_ALLOW_CIDRS: [&str; 2] = ["127.0.0.0/8", "::1/128"];
 /// Multiplier applied to block+commit time for localnet commit inflight timeout.
@@ -1425,7 +1425,7 @@ mod tests {
         );
         assert_eq!(
             parsed.sumeragi.da_quorum_timeout_multiplier, LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER,
-            "localnet should tighten DA commit-quorum timeout multiplier"
+            "localnet should set DA commit-quorum timeout multiplier"
         );
         assert_eq!(
             parsed.sumeragi.da_availability_timeout_multiplier,
@@ -1435,7 +1435,7 @@ mod tests {
         assert_eq!(
             parsed.sumeragi.da_availability_timeout_floor,
             Duration::from_millis(LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS),
-            "localnet should adjust DA availability timeout floor"
+            "localnet should set DA availability timeout floor"
         );
         let (block_ms, commit_ms) = resolve_localnet_pipeline_times(None, None);
         let block_ms = block_ms.expect("localnet defaults provide block_time_ms");

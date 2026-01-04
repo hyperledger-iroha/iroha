@@ -49,7 +49,7 @@ Proposal draft کرنے سے پہلے تصدیق کریں کہ یہ registry cha
 `sorafs_manifest::chunker_registry::ensure_charter_compliance()` enforce کرتا ہے:
 
 - Profile IDs مثبت integers ہوتے ہیں جو بغیر gaps کے monotonic طور پر بڑھتے ہیں۔
-- Canonical handle (`namespace.name@semver`) alias list میں ہونا چاہیے اور **لازم** ہے کہ پہلی entry ہو۔ اس کے بعد legacy aliases (مثلاً `sorafs-sf1`) آتے ہیں۔
+- Canonical handle (`namespace.name@semver`) alias list میں ہونا چاہیے اور **لازم** ہے کہ پہلی entry ہو۔ اس کے بعد legacy aliases (مثلاً `sorafs.sf1@1.0.0`) آتے ہیں۔
 - کوئی alias کسی دوسرے canonical handle سے collide نہیں کر سکتا اور ایک سے زیادہ بار ظاہر نہیں ہو سکتا۔
 - Aliases non-empty ہوں اور whitespace سے trim ہوں۔
 
@@ -74,7 +74,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 | `name` | human-readable label۔ | `sf1` |
 | `semver` | parameter set کے لیے semantic version string۔ | `1.0.0` |
 | `profile_id` | Monotonic numeric identifier جو profile کے land ہونے پر assign ہوتا ہے۔ اگلا id reserve کریں مگر موجودہ نمبرز reuse نہ کریں۔ | `1` |
-| `profile_aliases` | اضافی handles (legacy names, shorthand) جو negotiation کے دوران clients کو expose ہوتے ہیں۔ canonical handle کو ہمیشہ پہلی entry کے طور پر شامل کریں۔ | `["sorafs-sf1"]` |
+| `profile_aliases` | اضافی handles (legacy names, shorthand) جو negotiation کے دوران clients کو expose ہوتے ہیں۔ canonical handle کو ہمیشہ پہلی entry کے طور پر شامل کریں۔ | `["sorafs.sf1@1.0.0"]` |
 | `profile.min_size` | chunk length کی minimum حد bytes میں۔ | `65536` |
 | `profile.target_size` | chunk length کی target حد bytes میں۔ | `262144` |
 | `profile.max_size` | chunk length کی maximum حد bytes میں۔ | `524288` |

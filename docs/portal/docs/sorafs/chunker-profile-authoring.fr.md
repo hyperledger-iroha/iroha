@@ -53,7 +53,7 @@ par `sorafs_manifest::chunker_registry::ensure_charter_compliance()` :
 
 - Les ID de profil sont des entiers positifs qui augmentent de façon monotone sans trous.
 - Le handle canonique (`namespace.name@semver`) doit apparaître dans la liste d'alias
-  et **doit** être la première entrée. Les alias legacy (ex., `sorafs-sf1`) suivent.
+  et **doit** être la première entrée. Les alias legacy (ex., `sorafs.sf1@1.0.0`) suivent.
 - Aucun alias ne peut entrer en collision avec un autre handle canonique ni apparaître plus d'une fois.
 - Les alias doivent être non vides et trimés des espaces.
 
@@ -79,7 +79,7 @@ les métadonnées canoniques nécessaires aux discussions de gouvernance.
 | `name` | Libellé lisible. | `sf1` |
 | `semver` | Chaîne de version sémantique pour l'ensemble de paramètres. | `1.0.0` |
 | `profile_id` | Identifiant numérique monotone attribué une fois le profil intégré. Réservez l'id suivant mais ne réutilisez pas les numéros existants. | `1` |
-| `profile_aliases` | Handles supplémentaires optionnels (noms legacy, raccourcis) exposés aux clients lors de la négociation. Inclure toujours le handle canonique en première entrée. | `["sorafs-sf1"]` |
+| `profile_aliases` | Handles supplémentaires optionnels (noms legacy, raccourcis) exposés aux clients lors de la négociation. Inclure toujours le handle canonique en première entrée. | `["sorafs.sf1@1.0.0"]` |
 | `profile.min_size` | Longueur minimale de chunk en bytes. | `65536` |
 | `profile.target_size` | Longueur cible de chunk en bytes. | `262144` |
 | `profile.max_size` | Longueur maximale de chunk en bytes. | `524288` |

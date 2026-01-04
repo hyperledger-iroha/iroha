@@ -28,7 +28,7 @@ Q2 2027 gate has concrete evidence attached.
 
 | Signal | Definition & Labels | Source | Notes |
 |--------|---------------------|--------|-------|
-| `sn16_handshake_mode_total{mode,handshake}` | Counter of negotiated suites per relay mode (`Entry/Middle/Exit`) and handshake profile (`nk1`, `nk2`, `nk3`). | `tools/soranet-relay/src/metrics.rs` | Drives the mixed-mode detector panel in `dashboards/grafana/soranet_sn16_handshake.json`. |
+| `sn16_handshake_mode_total{mode,handshake}` | Counter of negotiated suites per relay mode (`Entry/Middle/Exit`) and handshake profile (`nk2`, `nk3`). | `tools/soranet-relay/src/metrics.rs` | Drives the mixed-mode detector panel in `dashboards/grafana/soranet_sn16_handshake.json`. |
 | `sn16_handshake_bytes_total{mode}` | Total bytes transferred per relay mode during handshakes. | `tools/soranet-relay/src/metrics.rs` | Used to correlate PQ suite adoption with bandwidth impact. |
 | `sn16_handshake_downgrade_total{mode,reason}` | Count of downgrade detections grouped by a canonical slug (see `normalize_downgrade_reason` in `tools/soranet-relay/src/metrics.rs`). | Relay runtime (`runtime.rs` emits structured privacy events; `metrics.rs` exposes counters). | Reasons include `suite_no_overlap`, `relay_suite_list_missing`, `pow_classical_only`, etc. |
 | `sn16_puzzle_verify_seconds_{count,sum}{mode}` | Summary pair representing Argon2 ticket verification cost at each relay mode. | `tools/soranet-relay/src/metrics.rs` | Surfaces ticket solve regressions during PQ ratchets. |
@@ -121,8 +121,8 @@ parsing free-form strings:
 | `kind.handshakeFailure.rtt_ms` | Optional RTT captured for the failed handshake. |
 
 Consumers should treat the presence of `detail` as mandatory for downgrade
-automation; `null` indicates the relay could not determine a slug (legacy
-builds or intentionally scrubbed fields).
+automation; `null` indicates the relay could not determine a slug or the
+field was intentionally scrubbed.
 - The privacy event stream continues to feed Torii via
   `crates/iroha_torii/src/lib.rs::record_soranet_privacy_event`. The
   telemetry pipeline aggregates downgrades (see
@@ -143,7 +143,7 @@ builds or intentionally scrubbed fields).
   - Ensure `crates/iroha_torii/tests/soranet_privacy_endpoints.rs` exercises
     the downgrade reason payload so schema contracts remain stable.
 - **Harness captures.** `tools/soranet-handshake-harness` should emit fixture
-  sets for `nk2↔nk2` success, `nk1` downgrade, and argon2 failure. The JSON
+  sets for `nk2↔nk2` success, `nk2` downgrade, and argon2 failure. The JSON
   bundles under `fixtures/soranet_handshake/` double as documentation for
   the allowed downgrade reasons.
 - **Governance evidence.** Each release that touches telemetry must append a

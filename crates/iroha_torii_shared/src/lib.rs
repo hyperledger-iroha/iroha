@@ -64,8 +64,6 @@ pub mod uri {
     pub const API_VERSIONS: &str = "/v1/api/versions";
     /// URI for getting cpu profile
     pub const PROFILE: &str = "/debug/pprof/profile";
-    /// URI for getting the server version
-    pub const SERVER_VERSION: &str = "/server_version";
     /// Base path for governance API endpoints
     pub const GOV_BASE: &str = "/v1/gov";
     /// Governance: create a proposal to deploy IVM bytecode (.to)
@@ -114,15 +112,6 @@ pub mod uri {
     pub const RUNTIME_UPGRADES_ACTIVATE: &str = "/v1/runtime/upgrades/activate/{id}";
     /// Runtime: cancel a runtime upgrade by id (hex)
     pub const RUNTIME_UPGRADES_CANCEL: &str = "/v1/runtime/upgrades/cancel/{id}";
-}
-
-/// Response body for GET server version request
-#[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
-pub struct Version {
-    /// The version string (e.g., from `CARGO_PKG_VERSION`)
-    pub version: String,
-    /// The git commit SHA
-    pub git_sha: String,
 }
 
 /// Supported Torii API versions and defaults exposed over `/v1/api/versions`.

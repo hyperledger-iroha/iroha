@@ -17,7 +17,7 @@ type ChunkerFixture struct {
 
 var SF1ProfileV1 = ChunkerFixture{
     Profile: "sorafs.sf1@1.0.0",
-    ProfileAliases: []string{"sorafs.sf1@1.0.0", "sorafs-sf1"},
+    ProfileAliases: []string{"sorafs.sf1@1.0.0"},
     InputSeed: "0x0000000000DEC0DED",
     InputLength: 1048576,
     PRNGMultiplier: 2862933555777941757,

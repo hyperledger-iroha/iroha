@@ -31,7 +31,7 @@ los fixtures a staging y producción.
 
 | Namespace | Nombre | SemVer | ID de perfil | Min (bytes) | Target (bytes) | Max (bytes) | Máscara de corte | Multihash | Alias | Notas |
 |-----------|--------|--------|-------------|-------------|----------------|-------------|-----------------|-----------|-------|-------|
-| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs-sf1"]` | Perfil canónico usado en fixtures SF-1 |
+| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` | Perfil canónico usado en fixtures SF-1 |
 
 El registro vive en el código como `sorafs_manifest::chunker_registry` (gobernado por [`chunker_registry_charter.md`](./chunker-registry-charter.md)). Cada entrada
 se expresa como un `ChunkerProfileDescriptor` con:
@@ -79,8 +79,6 @@ comportamiento por defecto de imprimir el reporte principal.
 
 ### Matriz de compatibilidad y plan de rollout
 
-> Matriz legible por máquina: `docs/source/sorafs/compatibility_matrix.json`  
-> Regenerar vía `cargo xtask sorafs-compat` (usa `--out -` para stdout).
 
 La tabla siguiente captura el estado actual de soporte para `sorafs.sf1@1.0.0` en
 componentes principales. "Bridge" se refiere al carril de compatibilidad CARv1 + SHA-256
@@ -219,7 +217,7 @@ adicionales para compatibilidad pero no deben reemplazar el digest canónico.
 
 ### Conformidad
 
-* El perfil `sorafs-sf1` se asigna a los fixtures públicos en
+* El perfil `sorafs.sf1@1.0.0` se asigna a los fixtures públicos en
   `fixtures/sorafs_chunker` y a los corpora registrados en
   `fuzz/sorafs_chunker`. La paridad end-to-end se ejerce en Rust, Go y Node
   mediante las pruebas provistas.
