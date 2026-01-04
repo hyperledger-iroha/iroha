@@ -116,6 +116,43 @@ mod handle_tests {
     }
 }
 
+#[cfg(test)]
+mod seen_blocks_tests {
+    use std::{collections::BTreeSet, num::NonZeroUsize};
+
+    use iroha_crypto::{Hash, HashOf};
+
+    use super::*;
+
+    fn entry(height: usize, byte: u8) -> (NonZeroUsize, HashOf<BlockHeader>) {
+        let height = NonZeroUsize::new(height).expect("height must be non-zero");
+        let hash = HashOf::from_untyped_unchecked(Hash::prehashed([byte; Hash::LENGTH]));
+        (height, hash)
+    }
+
+    #[test]
+    fn prune_seen_blocks_keeps_entries_on_stable_height() {
+        let mut seen = BTreeSet::from([entry(5, 0x11), entry(6, 0x22)]);
+        BlockSynchronizer::prune_seen_blocks(&mut seen, 5, 5);
+        assert_eq!(seen.len(), 2);
+    }
+
+    #[test]
+    fn prune_seen_blocks_clears_on_height_regression() {
+        let mut seen = BTreeSet::from([entry(5, 0x11)]);
+        BlockSynchronizer::prune_seen_blocks(&mut seen, 4, 5);
+        assert!(seen.is_empty());
+    }
+
+    #[test]
+    fn prune_seen_blocks_drops_below_current_height() {
+        let mut seen = BTreeSet::from([entry(3, 0x11), entry(6, 0x22)]);
+        BlockSynchronizer::prune_seen_blocks(&mut seen, 5, 4);
+        let heights: Vec<_> = seen.iter().map(|(height, _)| height.get()).collect();
+        assert_eq!(heights, vec![6]);
+    }
+}
+
 /// Structure responsible for block synchronization between peers.
 pub struct BlockSynchronizer {
     sumeragi: SumeragiHandle,
@@ -167,18 +204,24 @@ impl BlockSynchronizer {
         }
     }
 
+    fn prune_seen_blocks(
+        seen_blocks: &mut BTreeSet<(NonZeroUsize, HashOf<BlockHeader>)>,
+        now_height: usize,
+        previous_height: usize,
+    ) {
+        if now_height < previous_height {
+            // Height regression implies a rollback; drop seen blocks to allow refetch.
+            seen_blocks.clear();
+        }
+        seen_blocks.retain(|(height, _hash)| height.get() >= now_height);
+    }
+
     /// Sends requests for the latest blocks to a subset of online peers
     async fn request_block(&mut self) {
         let now_height = self.state.view().height();
 
-        // This guards against a softfork and adds general redundancy.
-        if now_height == self.latest_height {
-            self.seen_blocks.clear();
-        }
+        Self::prune_seen_blocks(&mut self.seen_blocks, now_height, self.latest_height);
         self.latest_height = now_height;
-
-        self.seen_blocks
-            .retain(|(height, _hash)| height.get() >= now_height);
 
         let peers = self
             .network
