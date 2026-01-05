@@ -67,17 +67,15 @@ impl Actor {
                 pending.height,
                 pending.view,
             );
-            let qc_any = qc_precommit
-                .clone()
-                .or_else(|| {
-                    cached_qc_for(
-                        &self.qc_cache,
-                        crate::sumeragi::consensus::Phase::Prepare,
-                        *hash,
-                        pending.height,
-                        pending.view,
-                    )
-                });
+            let qc_any = qc_precommit.clone().or_else(|| {
+                cached_qc_for(
+                    &self.qc_cache,
+                    crate::sumeragi::consensus::Phase::Prepare,
+                    *hash,
+                    pending.height,
+                    pending.view,
+                )
+            });
             let qc_phase = qc_any.as_ref().map(|qc| qc.phase);
             if prevote_quorum_stale(qc_phase, pending_age, quorum_timeout) {
                 prevote_timeouts.push((key, pending_age, qc_any));
@@ -394,7 +392,8 @@ impl Actor {
         let hint = if drop_pending {
             false
         } else {
-            self.subsystems.propose
+            self.subsystems
+                .propose
                 .proposal_cache
                 .get_hint(height, view)
                 .copied()

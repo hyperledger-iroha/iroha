@@ -861,13 +861,7 @@ fn build_instruction(raw: &RawInstruction) -> Result<InstructionBox> {
             build_verifying_key_instruction(raw, VerifyingKeyAction::Register)
         }
         "UpdateVerifyingKey" => build_verifying_key_instruction(raw, VerifyingKeyAction::Update),
-        "DeprecateVerifyingKey" => {
-            ensure_kind(raw, "Custom")?;
-            let backend = get_arg(raw, "backend")?;
-            let name = get_arg(raw, "name")?;
-            let id = VerifyingKeyId::new(backend.to_string(), name.to_string());
-            Ok(verifying_keys::DeprecateVerifyingKey { id }.into())
-        }
+        "DeprecateVerifyingKey" => build_verifying_key_instruction(raw, VerifyingKeyAction::Update),
         "UnregisterPeer" => {
             ensure_kind(raw, "Unregister")?;
             let peer: PeerId = get_arg(raw, "peer")?.parse().context("invalid peer id")?;
@@ -1311,14 +1305,20 @@ fn build_verifying_key_record(raw: &RawInstruction, backend: &str) -> Result<Ver
         raw.arguments.get("record.activation_height"),
         "record.activation_height",
     )?;
-    record.deprecation_height = parse_opt_u64(
+    let deprecation_height = parse_opt_u64(
         raw.arguments.get("record.deprecation_height"),
         "record.deprecation_height",
     )?;
-    record.withdraw_height = parse_opt_u64(
+    let withdraw_height = parse_opt_u64(
         raw.arguments.get("record.withdraw_height"),
         "record.withdraw_height",
     )?;
+    if deprecation_height.is_some() && withdraw_height.is_some()
+        && deprecation_height != withdraw_height
+    {
+        bail!("record.deprecation_height must match record.withdraw_height when both are set");
+    }
+    record.withdraw_height = withdraw_height.or(deprecation_height);
 
     let status = raw
         .arguments
@@ -1350,7 +1350,7 @@ fn parse_confidential_status(value: &str) -> Result<ConfidentialStatus> {
     match value {
         "Proposed" => Ok(ConfidentialStatus::Proposed),
         "Active" => Ok(ConfidentialStatus::Active),
-        "Deprecated" => Ok(ConfidentialStatus::Deprecated),
+        "Deprecated" => Ok(ConfidentialStatus::Withdrawn),
         "Withdrawn" => Ok(ConfidentialStatus::Withdrawn),
         other => bail!("unsupported record.status value '{other}'"),
     }
@@ -2004,6 +2004,74 @@ mod tests {
         let parsed = parse_asset_id(&canonical).expect("canonical asset id");
         assert_eq!(parsed.account, account);
         assert_eq!(parsed.definition, definition);
+    }
+
+    #[test]
+    fn build_instruction_maps_deprecate_verifying_key_to_update() {
+        let raw = sample_verifying_key_instruction("DeprecateVerifyingKey");
+        let instruction = build_instruction(&raw).expect("build verifying key instruction");
+        assert_eq!(
+            iroha_data_model::isi::Instruction::id(&*instruction),
+            std::any::type_name::<verifying_keys::UpdateVerifyingKey>(),
+        );
+    }
+
+    #[test]
+    fn verifying_key_record_maps_deprecation_to_withdraw() {
+        let mut raw = sample_verifying_key_instruction("RegisterVerifyingKey");
+        raw.arguments
+            .insert("record.deprecation_height".to_string(), "42".to_string());
+        let record = build_verifying_key_record(&raw, "halo2-ipa-pasta")
+            .expect("build verifying key record");
+        assert_eq!(record.withdraw_height, Some(42));
+    }
+
+    #[test]
+    fn verifying_key_record_rejects_mismatched_withdraw_heights() {
+        let mut raw = sample_verifying_key_instruction("RegisterVerifyingKey");
+        raw.arguments
+            .insert("record.deprecation_height".to_string(), "7".to_string());
+        raw.arguments
+            .insert("record.withdraw_height".to_string(), "8".to_string());
+        let err = build_verifying_key_record(&raw, "halo2-ipa-pasta")
+            .expect_err("mismatched heights must error");
+        assert!(
+            err.to_string().contains("record.deprecation_height"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_confidential_status_treats_deprecated_as_withdrawn() {
+        assert_eq!(
+            parse_confidential_status("Deprecated").expect("parse deprecated status"),
+            ConfidentialStatus::Withdrawn
+        );
+    }
+
+    fn sample_verifying_key_instruction(action: &str) -> RawInstruction {
+        let mut args = BTreeMap::new();
+        args.insert("action".to_string(), action.to_string());
+        args.insert("backend".to_string(), "halo2-ipa-pasta".to_string());
+        args.insert("name".to_string(), "example".to_string());
+        args.insert("record.version".to_string(), "1".to_string());
+        args.insert("record.circuit_id".to_string(), "example-circuit".to_string());
+        args.insert("record.backend_tag".to_string(), "halo2-ipa-pasta".to_string());
+        args.insert("record.curve".to_string(), "pasta".to_string());
+        args.insert(
+            "record.public_inputs_schema_hash_hex".to_string(),
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        );
+        args.insert(
+            "record.commitment_hex".to_string(),
+            "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+        );
+        args.insert("record.vk_len".to_string(), "32".to_string());
+        args.insert("record.gas_schedule_id".to_string(), "default".to_string());
+        RawInstruction {
+            kind: "Custom".to_string(),
+            arguments: args,
+        }
     }
 
     fn sample_fixture(encoded: Option<String>) -> RawFixture {

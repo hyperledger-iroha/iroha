@@ -86,6 +86,24 @@ impl EpochManager {
         self.epoch
     }
 
+    /// Set the current epoch index explicitly.
+    pub(crate) fn set_epoch(&mut self, epoch: u64) {
+        self.epoch = epoch;
+    }
+
+    /// Reset epoch state to the supplied index and seed, clearing accumulated VRF inputs.
+    pub(crate) fn reset_epoch_state(&mut self, epoch: u64, seed: [u8; 32]) {
+        self.epoch = epoch;
+        self.seed = seed;
+        self.reveals.clear();
+        self.clear_commits();
+        self.late_reveals.clear();
+        self.validator_roster = None;
+        self.last_penalties = None;
+        self.last_penalties_detailed = None;
+        self.last_epoch_snapshot = None;
+    }
+
     /// Current per-epoch PRF seed `S_e`, fixed at epoch start.
     /// Reveals are mixed into the next epoch seed at rollover.
     pub fn seed(&self) -> [u8; 32] {
@@ -536,6 +554,54 @@ mod tests {
         let s_after = em.seed();
         assert_ne!(s_before, s_after);
         assert_eq!(em.epoch(), 1);
+    }
+
+    #[test]
+    fn set_epoch_overrides_epoch_index() {
+        let chain = ChainId::from("iroha:test:epoch-set");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(10, 3, 6);
+        em.set_epoch(4);
+        assert_eq!(em.epoch(), 4);
+    }
+
+    #[test]
+    fn reset_epoch_state_clears_accumulated_inputs() {
+        let chain = ChainId::from("iroha:test:epoch-reset");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(10, 3, 6);
+        let _ = em.try_note_commit_at_height(
+            2,
+            VrfCommit {
+                epoch: 0,
+                commitment: [1u8; 32],
+                signer: 1,
+            },
+        );
+        let _ = em.try_note_reveal_at_height(
+            5,
+            VrfReveal {
+                epoch: 0,
+                reveal: [2u8; 32],
+                signer: 1,
+            },
+        );
+        em.set_validator_roster_indices(0..3);
+        let snapshot = em.snapshot_current_epoch(3, 5);
+        assert!(
+            !snapshot.commits.is_empty() || !snapshot.reveals.is_empty(),
+            "expected VRF inputs to be recorded"
+        );
+
+        let seed = [0xAB; 32];
+        em.reset_epoch_state(2, seed);
+        let snapshot = em.snapshot_current_epoch(3, 5);
+        assert!(snapshot.commits.is_empty());
+        assert!(snapshot.reveals.is_empty());
+        assert!(snapshot.late_reveals.is_empty());
+        assert_eq!(em.epoch(), 2);
+        assert_eq!(em.seed(), seed);
+        assert_eq!(em.test_current_roster_len(), None);
     }
 
     #[test]

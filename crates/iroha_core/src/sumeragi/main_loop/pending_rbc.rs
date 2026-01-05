@@ -301,6 +301,7 @@ impl Actor {
     }
 
     #[allow(clippy::type_complexity)]
+    #[allow(dead_code)]
     pub(super) fn take_pending_rbc_slot(
         pending: &mut BTreeMap<SessionKey, PendingRbcMessages>,
         key: SessionKey,
