@@ -10,8 +10,8 @@ ABI policy
 - V1 (1): allows the canonical ABI surface listed here and in `abi_syscall_list()`; unknown numbers
   are rejected uniformly across all hosts. The list is kept sorted/deduplicated and the golden test
   fails if ordering or contents drift.
-- Experimental(x): no syscalls are enabled until the versioned surface is defined; unknown numbers
-  are rejected by the central policy.
+- First release: ABI v1 is the only supported policy. `abi_version != 1` is rejected at admission,
+  and runtime upgrades must keep `abi_version = 1` without expanding the syscall or pointer‑ABI surface.
 
 Admission/host guardrails
 - Admission enforces manifest `code_hash`/`abi_hash` equality for both inline metadata manifests and
@@ -194,8 +194,8 @@ ZK Helpers
 - 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&AccountId, r11=&AssetDefinitionId` → `u64=amount` — Gas: G_get_bal
 - 0xFB USE_NULLIFIER — Args: `r10=nullifier:u64` → `u64=0` — Gas: G_use_null
   
-Experimental (not part of ABI hash)
-- 0xFC VERIFY_SIGNATURE — Args: `r10=&Blob(message)`, `r11=&Blob(signature)`, `r12=&Blob(pubkey)`, `r13=scheme:u8` → `r10=0/1` — Gas: G_verify_sig
+Reserved (disabled in ABI v1)
+- 0xFC VERIFY_SIGNATURE — Args: `r10=&Blob(message)`, `r11=&Blob(signature)`, `r12=&Blob(pubkey)`, `r13=scheme:u8` → `r10=0/1` — Gas: G_verify_sig (reserved; rejected by admission under ABI v1)
 
 Hardware / Proofs
 - 0xF4 PROVE_EXECUTION — Args: none → `r10=0/1` *(1 when the captured trace verifies)* — Gas: G_prove
@@ -235,39 +235,16 @@ Notes
 - All calls execute via `CoreHost` and are subject to permission checks and invariants identical to built‑in ISIs.
 - Gas names reference entries in the generated gas table for the active bytecode header version.
 
-## ABI Evolution
+## ABI Stability (ABI v1)
 
-This section summarizes how to safely evolve the IVM ABI (syscall surface and pointer‑ABI) without breaking determinism.
+This first release fixes the syscall surface and pointer‑ABI to v1. Runtime upgrades are supported,
+but they must not change the host ABI.
 
-- Versioning model:
-  - `ProgramMetadata.abi_version` declares which ABI a program targets. The runtime maps it to a `SyscallPolicy`.
-  - Nodes enforce the ABI at admission and during execution. Programs compiled for an unsupported `abi_version` are rejected at admission.
-
-- Adding/removing syscalls:
-  - Update `ivm::syscalls::abi_syscall_list()` with the new numbers (keep the list in ascending order for readability).
-  - The central gate `ivm::syscalls::is_syscall_allowed(policy, number)` applies across all hosts; no duplication is needed.
-  - `abi_syscall_list()` is deduplicated and sorted at build/test time; the golden test fails if ordering or contents change unexpectedly.
-  - Admission performs a static scan of decoded bytecode and rejects programs that reference syscalls outside the active policy, so unknown numbers never reach runtime execution.
-  - Update golden tests:
-    - `crates/ivm/tests/abi_syscall_list_golden.rs` (expected list)
-    - `crates/ivm/tests/abi_hash_versions.rs` (stability and version separation)
-  - Ensure hosts implement (or intentionally reject) handling for the new numbers; unknown numbers must map to `VMError::UnknownSyscall`.
-
-- Pointer‑ABI types:
-  - `ivm::pointer_abi::PointerType` numeric IDs are wire‑stable. Changing existing IDs is a breaking change; add new types with new IDs only.
-  - Update policy allowlist in `ivm::pointer_abi::is_type_allowed_for_policy` for new ABI versions when introducing new types.
-  - Update golden test `crates/ivm/tests/pointer_type_ids_golden.rs` when adding new types/IDs.
-
-- Manifests and ABI hash:
-  - `ivm::syscalls::compute_abi_hash(policy)` produces a stable 32‑byte digest that binds a program to an ABI policy.
-  - When evolving the ABI, manifests must embed the new `abi_hash`. Nodes will reject programs whose runtime policy hash differs from the manifest.
-
-- Migration checklist:
-  1) Add/adjust syscall numbers in `abi_syscall_list()` and host implementations.
-  2) If introducing an ABI version, define its policy mapping (e.g., `SyscallPolicy::V2`) and update the compiler to emit the new `abi_version`.
-  3) Update golden tests (syscall list, ABI hash stability, pointer type IDs if applicable).
-  4) Regenerate/re‑register manifests with the new `abi_hash`.
-  5) Add node/IVM tests for allowed/disallowed syscalls and pointer‑ABI types under the new version.
+- `ProgramMetadata.abi_version` must be `1`; other values are rejected at admission.
+- Runtime upgrade manifests must keep `abi_version = 1` and leave `added_syscalls`/`added_pointer_types` empty.
+- ABI goldens (syscall list, ABI hash, pointer type IDs) are pinned for v1 and must not change.
+- ABI changes are not planned; if ever required, they would be delivered as a new core release with
+  updated policies, tests, and docs.
 
 <!-- BEGIN GENERATED SYSCALLS -->
 | Number | Name | Args | Return | Gas |

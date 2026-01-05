@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/nexus.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5fd6b703829be3f58bc207e2b6e924278c3b7038965909f5b837aa7dd8cd304f
+source_hash: c8da33b0abb8a6d46dbaaed657c8338a9d723a97f6f28ff29a62caf84c0dbfd6
 source_last_modified: "2025-12-27T07:56:34.355655+00:00"
 translation_last_reviewed: 2026-01-01
 ---
@@ -25,7 +25,7 @@ translation_last_reviewed: 2026-01-01
 
 Не-цели (начальная фаза)
 - Определение токеномики или стимулов валидаторов; планирование и стейкинг подключаемые.
-- Введение новой версии ABI; изменения нацелены на ABI v1 с явными расширениями syscalls и pointer-ABI по политике IVM.
+- Введение новой версии ABI или расширение поверхностей syscalls/pointer-ABI; ABI v1 фиксирован и runtime upgrades не меняют ABI хоста.
 
 Терминология
 - Nexus Ledger: Глобальный логический леджер, сформированный композицией блоков Data Space (DS) в единую упорядоченную историю и коммит состояния.
@@ -221,7 +221,7 @@ JS SDK (`javascript/iroha_js/src/toriiClient.js`) уже оборачивает 
   - `use_asset_handle(handle, op, amount)` -> result (операция разрешена только если политика допускает и handle валиден)
 - Asset handles и fees:
   - Операции с активами авторизуются ISI/роль политиками DS; fees оплачиваются газ-токеном DS. Опциональные capability tokens и более богатая политика (multi-approver, rate-limits, geofencing) могут быть добавлены позже без изменения атомарной модели.
-- Детерминизм: все новые syscalls чистые и детерминированные при заданных входах и заявленных AMX read/write sets. Никаких скрытых эффектов времени или окружения.
+- Детерминизм: все syscalls чистые и детерминированные при заданных входах и заявленных AMX read/write sets. Никаких скрытых эффектов времени или окружения.
 
 Постквантовые доказательства валидности (обобщенные ISI)
 - FASTPQ-ISI (PQ, без trusted setup): kernelized hash-based аргумент, обобщающий transfer дизайн на все семейства ISI и нацеленный на субсекундные доказательства для партий масштаба 20k на GPU-классе.
@@ -270,16 +270,10 @@ AIR Primer (для Nexus)
   - Verifier проверяет low-degree через FRI (hash-based, post-quantum) с несколькими Merkle openings; стоимость логарифмическая по шагам.
 - Пример (Transfer): регистры включают pre_balance, amount, post_balance, nonce и селекторы. Constraints обеспечивают неотрицательность/диапазон, conservation и monotonicity nonce, а агрегированный SMT multi-proof связывает pre/post листья с old/new roots.
 
-Эволюция ABI и syscalls (ABI v1)
-- Syscalls для добавления (иллюстративные названия):
-  - `SYS_AMX_BEGIN`, `SYS_AMX_TOUCH`, `SYS_AMX_COMMIT`, `SYS_VERIFY_SPACE_PROOF`, `SYS_USE_ASSET_HANDLE`.
-- Pointer-ABI типы для добавления:
-  - `PointerType::DataSpaceId`, `PointerType::AmxDescriptor`, `PointerType::AssetHandle`, `PointerType::ProofBlob`.
-- Требуемые обновления:
-  - Добавить в `ivm::syscalls::abi_syscall_list()` (сохраняя порядок), gated по политике.
-  - Неизвестные номера должны маппиться в `VMError::UnknownSyscall` в hosts.
-  - Обновить тесты: syscall list golden, ABI hash, pointer type ID goldens и policy tests.
-  - Docs: `crates/ivm/docs/syscalls.md`, `status.md`, `roadmap.md`.
+Стабильность ABI (ABI v1)
+- Поверхность ABI v1 фиксирована; новые syscalls и pointer-ABI типы в этом релизе не добавляются.
+- Runtime upgrades должны сохранять `abi_version = 1` с пустыми `added_syscalls`/`added_pointer_types`.
+- ABI goldens (список syscalls, хеш ABI, ID pointer type) закреплены и не должны меняться.
 
 Модель приватности
 - Private Data Containment: тела транзакций, state diffs и WSV snapshots для частных DS никогда не покидают частный набор валидаторов.
@@ -349,7 +343,7 @@ Cross-Data-Space workflow (пример)
 
 Изменения в компонентах Iroha
 - iroha_data_model: добавить `DataSpaceId`, DS-квалифицированные идентификаторы, AMX дескрипторы (read/write sets), типы proof/DA commitments. Только Norito сериализация.
-- ivm: добавить syscalls и pointer-ABI типы для AMX (`amx_begin`, `amx_commit`, `amx_touch`) и DA proofs; обновить ABI tests/docs по политике v1.
+- ivm: Поверхность ABI v1 фиксирована (без новых syscalls/pointer-ABI типов); AMX/runtime upgrades используют существующие примитивы v1; закрепить ABI goldens.
 - iroha_core: реализовать nexus scheduler, Space Directory, AMX routing/validation, DS artifact verification и policy enforcement для DA sampling и quotas.
 - Space Directory и manifest loaders: протянуть метаданные FMS endpoints (и другие common-good service descriptors) через парсинг DS manifest, чтобы узлы автоматически находили локальные сервисные endpoints при присоединении к DS.
 - kura: blob store с erasure coding, commitments, retrieval APIs с учетом private/public политик.
@@ -371,13 +365,13 @@ Cross-Data-Space workflow (пример)
 Путь миграции (Iroha 2 -> Iroha 3)
 1) Ввести dataspace-qualified IDs и nexus block/global state composition в data model; добавить feature flags для режима совместимости Iroha 2 на время перехода.
 2) Реализовать Kura/WSV erasure-coding backends за feature flags, сохранив текущие backends как дефолт в ранних фазах.
-3) Добавить syscalls и pointer types для AMX (atomic multi-DS) операций; расширить тесты и документы; сохранить ABI v1.
+3) Сохранить поверхность ABI v1 фиксированной; реализовать AMX без новых syscalls/pointer типов и обновить тесты/документы без изменения ABI.
 4) Доставить минимальный nexus chain с одним публичным DS и 1 s блоками; затем добавить первый частный DS pilot, экспортирующий только proofs/commitments.
 5) Расширить до полного AMX (atomic cross-DS) с DS-local FASTPQ-ISI proofs и DA attesters; включить ML-DSA-87 QCs на всех DS.
 
 Стратегия тестирования
 - Unit tests для типов data model, Norito roundtrips, поведения AMX syscalls, encoding/decoding proofs.
-- IVM tests для новых syscalls и ABI goldens.
+- IVM tests для закрепления ABI v1 goldens (список syscalls, хеш ABI, ID pointer type).
 - Интеграционные тесты для atomic cross-DS транзакций (positive/negative), целей DA attester latency (<=300 ms) и performance isolation под нагрузкой.
 - Security tests для DS QC verification (ML-DSA-87), конфликтов/abort semantics, и предотвращения утечек конфиденциальных shards.
 
@@ -401,6 +395,6 @@ Cross-Data-Space workflow (пример)
 
 Приложение: соответствие политикам репозитория
 - Norito используется для всех wire форматов и JSON сериализации через Norito helpers.
-- Только ABI v1; без runtime toggles для ABI политики. Добавления syscalls и pointer-types следуют документированному процессу с golden tests.
+- Только ABI v1; без runtime toggles для ABI политики. Поверхности syscalls и pointer-types фиксированы и закреплены golden tests.
 - Детерминизм сохраняется между hardware; ускорение опционально и gated.
 - Никакого serde в production путях; никакой env-based конфигурации в production.

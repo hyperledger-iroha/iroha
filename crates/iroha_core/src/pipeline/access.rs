@@ -1277,14 +1277,7 @@ mod tests {
         let state = State::new(world, kura, query);
 
         // Minimal program body to compute a code hash
-        let mut prog = Vec::new();
-        prog.extend_from_slice(b"IVM\0");
-        prog.push(2);
-        prog.push(0);
-        prog.push(0);
-        prog.push(0);
-        prog.extend_from_slice(&0u64.to_le_bytes());
-        prog.push(0); // abi_version
+        let mut prog = ivm::ProgramMetadata::default().encode();
         prog.extend_from_slice(&[0x01, 0x00]); // dummy body
         let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
         let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
@@ -1425,14 +1418,7 @@ mod tests {
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
 
-        let mut prog = Vec::new();
-        prog.extend_from_slice(b"IVM\0");
-        prog.push(2);
-        prog.push(0);
-        prog.push(0);
-        prog.push(0);
-        prog.extend_from_slice(&0u64.to_le_bytes());
-        prog.push(0); // abi_version
+        let mut prog = ivm::ProgramMetadata::default().encode();
         prog.extend_from_slice(&[0x01, 0x00]); // dummy body
         let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
         let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);

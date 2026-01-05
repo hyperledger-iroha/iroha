@@ -7802,19 +7802,39 @@ pub(crate) mod valid {
             );
             let state = State::new(world, Arc::clone(&kura), query);
 
-            let prev_hash =
+            let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
 
-            let mut candidate =
-                ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
-                    header.set_height(nonzero!(2_u64));
-                    header.set_prev_block_hash(Some(prev_hash));
-                    header.creation_time_ms = 1;
-                });
-            candidate.sign(&proxy_tail, &topology);
-            let signed: SignedBlock = candidate.into();
-
+            let height = 2_u64;
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
+            let tx_params = state.view().world().parameters().transaction();
+            let heartbeat_signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
+                state.chain_id.clone(),
+                &heartbeat_signer,
+                &tx_params,
+                height,
+                &time_source,
+            );
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(heartbeat));
+            let prev_block = state.view().latest_block().expect("previous block");
+            let mut signed: SignedBlock =
+                BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                    .chain(0, Some(prev_block.as_ref()))
+                    .sign(leader.private_key())
+                    .unpack(|_| {})
+                    .into();
+            let block_hash = signed.hash();
+            let proxy_idx = topology
+                .position(proxy_tail.public_key())
+                .expect("proxy tail in topology");
+            signed
+                .add_signature(BlockSignature::new(
+                    proxy_idx as u64,
+                    SignatureOf::from_hash(proxy_tail.private_key(), block_hash),
+                ))
+                .expect("proxy tail signature");
+            assert_eq!(signed.external_transactions().count(), 1);
             let mut voting_block = None;
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
@@ -7874,19 +7894,38 @@ pub(crate) mod valid {
             );
             let state = State::new(world, Arc::clone(&kura), query);
 
-            let prev_hash =
-                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
-
-            let mut candidate =
-                ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
-                    header.set_height(nonzero!(2_u64));
-                    header.set_prev_block_hash(Some(prev_hash));
-                    header.creation_time_ms = 1;
-                });
-            candidate.sign(&proxy_tail, &topology);
-            let signed: SignedBlock = candidate.into();
-
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+            let height = 2_u64;
+            let tx_params = state.view().world().parameters().transaction();
+            let heartbeat_signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
+                state.chain_id.clone(),
+                &heartbeat_signer,
+                &tx_params,
+                height,
+                &time_source,
+            );
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(heartbeat));
+            let prev_block = state.view().latest_block().expect("previous block");
+            let mut signed: SignedBlock =
+                BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
+                    .chain(0, Some(prev_block.as_ref()))
+                    .sign(leader.private_key())
+                    .unpack(|_| {})
+                    .into();
+            let block_hash = signed.hash();
+            let proxy_idx = topology
+                .position(proxy_tail.public_key())
+                .expect("proxy tail in topology");
+            signed
+                .add_signature(BlockSignature::new(
+                    proxy_idx as u64,
+                    SignatureOf::from_hash(proxy_tail.private_key(), block_hash),
+                ))
+                .expect("proxy tail signature");
+            assert_eq!(signed.external_transactions().count(), 1);
             let mut voting_block = None;
             let result = ValidBlock::validate_keep_voting_block(
                 signed,
@@ -8010,10 +8049,10 @@ pub(crate) mod valid {
         /// Check quorum requirement when proxy tail is missing.
         #[test]
         fn signature_verification_rejects_insufficient_quorum_without_proxy_tail() {
-            let mut key_pairs = core::iter::repeat_with(KeyPair::random)
-                .take(7)
-                .collect::<Vec<_>>();
-            key_pairs[4] = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let key_pairs =
+                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+                    .take(7)
+                    .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
 
             let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());

@@ -11,7 +11,7 @@
                     "max_clock_drift_ms": 1000,
                     "collectors_k": 1,
                     "collectors_redundant_send_r": 1,
-                    "da_enabled": false
+                    "da_enabled": true
                 },
                 "block": {
                     "max_transactions": 512
@@ -211,7 +211,8 @@
             "topology": [],
             "parameters": {
                 "sumeragi": {
-                    "next_mode": "Permissioned"
+                    "next_mode": "Permissioned",
+                    "da_enabled": true
                 },
                 "custom": {
                     "ivm_gas_limit_per_block": {
@@ -240,5 +241,5 @@
     "wire_proto_versions": [
         1
     ],
-    "consensus_fingerprint": "0xe09a96935f2170ca180e335462d5d8e8dd9364e6a299b5e8b5fc4abdb9fc4eeb"
+    "consensus_fingerprint": "0xb2004b1f0a6187d2cb1c96aa64a79f67dc7581577a04290d324c5577b85de739"
 }

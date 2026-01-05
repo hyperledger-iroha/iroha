@@ -6,7 +6,7 @@ direction: ltr
 source: docs/source/nexus.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5fd6b703829be3f58bc207e2b6e924278c3b7038965909f5b837aa7dd8cd304f
+source_hash: c8da33b0abb8a6d46dbaaed657c8338a9d723a97f6f28ff29a62caf84c0dbfd6
 source_last_modified: "2025-12-27T07:56:34.355655+00:00"
 translation_last_reviewed: 2026-01-01
 ---
@@ -27,7 +27,7 @@ translation_last_reviewed: 2026-01-01
 
 非目標（初期フェーズ）
 - トークン経済やバリデータインセンティブの定義（スケジューリングとステーキングはプラガブル）。
-- 新しい ABI 版の導入。変更は ABI v1 に対する syscalls / pointer-ABI 拡張に留める。
+- 新しい ABI 版の導入や syscalls / pointer-ABI の拡張。ABI v1 は固定で runtime upgrades はホスト ABI を変更しない。
 
 用語
 - Nexus Ledger: Data Space (DS) ブロックを単一の順序付き履歴と状態コミットメントに合成したグローバル論理レジャー。
@@ -186,7 +186,7 @@ Smart Contracts and IVM Extensions
   - `use_asset_handle(handle, op, amount)` -> result（ポリシー許可と handle 有効性が条件）
 - Asset Handles and Fees:
   - アセット操作は DS の ISI/role ポリシーに従い、fees は DS の gas token で支払う。capability tokens や richer policy（multi-approver、rate-limits、geofencing）は後から追加可能。
-- Determinism: 新規 syscalls は入力と AMX read/write sets に対して純粋かつ決定論的。時間や環境の隠れ効果はない。
+- Determinism: syscalls は入力と AMX read/write sets に対して純粋かつ決定論的。時間や環境の隠れ効果はない。
 
 Post-Quantum Validity Proofs (Generalized ISIs)
 - FASTPQ-ISI（PQ, trusted setup なし）: transfer 設計を ISI 全般に一般化する hash-based kernelized argument。GPU クラスで 20k スケールをサブ秒で証明することを目標。
@@ -235,16 +235,10 @@ AIR Primer (for Nexus)
   - Verifier は FRI で低次数をチェックし、Merkle 開口を少数で済ませる。
 - Example (Transfer): pre_balance, amount, post_balance, nonce, selectors を含み、非負/範囲、保存則、nonce 単調性を enforced。SMT multi-proof が old/new roots を連結。
 
-ABI and Syscall Evolution (ABI v1)
-- 追加 syscalls（例）:
-  - `SYS_AMX_BEGIN`, `SYS_AMX_TOUCH`, `SYS_AMX_COMMIT`, `SYS_VERIFY_SPACE_PROOF`, `SYS_USE_ASSET_HANDLE`.
-- 追加 pointer-ABI 型:
-  - `PointerType::DataSpaceId`, `PointerType::AmxDescriptor`, `PointerType::AssetHandle`, `PointerType::ProofBlob`.
-- 必須更新:
-  - `ivm::syscalls::abi_syscall_list()` に追加（順序維持）、policy による gate。
-  - 未知番号は `VMError::UnknownSyscall` にマッピング。
-  - テスト更新: syscall list golden、ABI hash、pointer type ID golden、policy tests。
-  - Docs: `crates/ivm/docs/syscalls.md`, `status.md`, `roadmap.md`.
+ABI Stability (ABI v1)
+- ABI v1 のサーフェスは固定で、新規 syscalls / pointer-ABI 型はこのリリースでは追加しない。
+- runtime upgrades は `abi_version = 1` かつ `added_syscalls`/`added_pointer_types` は空であること。
+- ABI goldens（syscall list/ABI hash/pointer type ID）は固定で変更しない。
 
 プライバシーモデル
 - Private Data Containment: private DS の transaction bodies、state diffs、WSV snapshots は DS 外に出ない。
@@ -315,7 +309,7 @@ Cross-Data-Space Workflow (Example)
 
 Changes to Iroha Components
 - iroha_data_model: `DataSpaceId`、DS-qualified IDs、AMX descriptors（read/write sets）、proof/DA commitment types を追加。Norito のみ。
-- ivm: AMX syscalls と pointer-ABI types（`amx_begin`, `amx_commit`, `amx_touch`）および DA proofs を追加。ABI tests/docs を v1 ポリシーに従い更新。
+- ivm: ABI v1 サーフェスは固定（新規 syscalls/pointer-ABI なし）。AMX/runtime upgrades は既存 v1 primitives を使用し、ABI goldens を維持。
 - iroha_core: nexus scheduler、Space Directory、AMX routing/validation、DS artifact verification、DA sampling/quotas の policy enforcement を実装。
 - Space Directory & manifest loaders: DS manifest parsing に FMS endpoint metadata（他の common-good service descriptors も）を通し、参加時にローカル endpoints を自動発見。
 - kura: erasure coding blob store、commitments、private/public ポリシーに従う retrieval APIs。
@@ -337,13 +331,13 @@ Configuration and Determinism
 Migration Path (Iroha 2 -> Iroha 3)
 1) dataspace-qualified IDs と nexus block/global state composition を data model に導入し、Iroha 2 互換用 feature flags を追加。
 2) Kura/WSV erasure coding backends を feature flags の背後に実装し、初期は既存 backends をデフォルトとする。
-3) AMX 用 syscalls と pointer types を追加し、テスト/ドキュメントを更新。ABI v1 を維持。
+3) ABI v1 サーフェスを固定し、AMX は新規 syscalls/pointer types なしで実装。テスト/ドキュメントは ABI を変えず更新。
 4) 単一 public DS と 1 秒ブロックの最小 nexus chain を提供し、その後 private DS pilot を追加。
 5) DS-local FASTPQ-ISI proofs と DA attesters を備えた AMX を完成させ、全 DS で ML-DSA-87 QCs を有効化。
 
 Testing Strategy
 - data model 型、Norito roundtrip、AMX syscalls、proof encode/decode の unit tests。
-- 新 syscalls と ABI goldens の IVM tests。
+- ABI v1 の goldens（syscall list/ABI hash/pointer type ID）を固定する IVM tests。
 - cross-DS 原子トランザクション（正/負）、DA attester latency（<=300 ms）、性能分離の統合テスト。
 - DS QC 検証（ML-DSA-87）、conflict detection/abort semantics、機密 shards 漏洩防止のセキュリティテスト。
 
@@ -367,6 +361,6 @@ Open Questions (Clarification Needed)
 
 Appendix: Repository Policy 準拠
 - Norito を全 wire 形式と JSON シリアライズに使用。
-- ABI v1 のみ。ABI ポリシーの runtime toggle は不可。syscalls と pointer-types は文書化された進化プロセスと golden tests に従う。
+- ABI v1 のみ。ABI ポリシーの runtime toggle は不可。syscalls/pointer-types サーフェスは固定で golden tests により固定。
 - ハードウェア間の決定論性を維持し、加速はオプションで gated。
 - production パスに serde を使用しない。production で環境変数による設定は行わない。

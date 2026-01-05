@@ -157,6 +157,11 @@ impl EpochManager {
         if c.epoch != self.epoch {
             return VrfNoteResult::RejectedEpochMismatch;
         }
+        if let Some(roster) = self.validator_roster.as_ref() {
+            if !roster.contains(&c.signer) {
+                return VrfNoteResult::RejectedUnknownSigner;
+            }
+        }
         if !self.is_in_commit_window(pos) {
             return VrfNoteResult::RejectedOutOfWindow;
         }
@@ -172,6 +177,11 @@ impl EpochManager {
         };
         if r.epoch != self.epoch {
             return VrfNoteResult::RejectedEpochMismatch;
+        }
+        if let Some(roster) = self.validator_roster.as_ref() {
+            if !roster.contains(&r.signer) {
+                return VrfNoteResult::RejectedUnknownSigner;
+            }
         }
         if !self.is_in_reveal_window(pos) {
             let Some(commit) = self.commits().get(&r.signer).copied() else {
@@ -459,6 +469,8 @@ pub enum VrfNoteResult {
     RejectedEpochMismatch,
     /// Rejected because the current height is not within the appropriate window.
     RejectedOutOfWindow,
+    /// Rejected because the signer is not part of the active validator roster.
+    RejectedUnknownSigner,
     /// Rejected because the reveal does not match a prior commitment.
     RejectedInvalidReveal,
 }
@@ -598,6 +610,40 @@ mod tests {
             },
         );
         assert_eq!(rr, VrfNoteResult::RejectedInvalidReveal);
+    }
+
+    #[test]
+    fn vrf_commit_rejects_unknown_signer() {
+        let chain = ChainId::from("iroha:test:epoch_unknown_commit");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(10, 3, 6);
+        em.set_validator_roster_indices([0, 1]);
+        let rc = em.try_note_commit_at_height(
+            2,
+            VrfCommit {
+                epoch: 0,
+                commitment: [3u8; 32],
+                signer: 2,
+            },
+        );
+        assert_eq!(rc, VrfNoteResult::RejectedUnknownSigner);
+    }
+
+    #[test]
+    fn vrf_reveal_rejects_unknown_signer() {
+        let chain = ChainId::from("iroha:test:epoch_unknown_reveal");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(10, 3, 6);
+        em.set_validator_roster_indices([0, 1]);
+        let rr = em.try_note_reveal_at_height(
+            5,
+            VrfReveal {
+                epoch: 0,
+                reveal: [4u8; 32],
+                signer: 2,
+            },
+        );
+        assert_eq!(rr, VrfNoteResult::RejectedUnknownSigner);
     }
 
     #[test]

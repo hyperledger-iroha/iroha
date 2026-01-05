@@ -879,7 +879,7 @@ impl Actor {
             &payload_bytes,
             payload_hash,
             self.config.rbc_chunk_max_bytes,
-            self.current_epoch(),
+            self.epoch_for_height(key.1),
         ) {
             Ok(session) => session,
             Err(err) => {
@@ -1150,6 +1150,18 @@ impl Actor {
         if self.should_drop_stale_rbc_message(init.height, init.view, &init.block_hash, "RbcInit") {
             return Ok(());
         }
+        let expected_epoch = self.epoch_for_height(init.height);
+        if init.epoch != expected_epoch {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                expected = expected_epoch,
+                observed = init.epoch,
+                "dropping RBC INIT with mismatched epoch"
+            );
+            return Ok(());
+        }
         if self.rbc_message_stale(&init.block_hash, init.height) {
             debug!(
                 height = init.height,
@@ -1263,6 +1275,18 @@ impl Actor {
             &chunk.block_hash,
             "RbcChunk",
         ) {
+            return Ok(());
+        }
+        let expected_epoch = self.epoch_for_height(chunk.height);
+        if chunk.epoch != expected_epoch {
+            warn!(
+                height = chunk.height,
+                view = chunk.view,
+                block = %chunk.block_hash,
+                expected = expected_epoch,
+                observed = chunk.epoch,
+                "dropping RBC chunk with mismatched epoch"
+            );
             return Ok(());
         }
         let max_chunk_bytes = self.config.rbc_chunk_max_bytes.max(1);
@@ -1388,6 +1412,19 @@ impl Actor {
         ) {
             return Ok(());
         }
+        let expected_epoch = self.epoch_for_height(ready.height);
+        if ready.epoch != expected_epoch {
+            warn!(
+                height = ready.height,
+                view = ready.view,
+                sender = ready.sender,
+                block = %ready.block_hash,
+                expected = expected_epoch,
+                observed = ready.epoch,
+                "dropping RBC READY with mismatched epoch"
+            );
+            return Ok(());
+        }
         if self.rbc_message_stale(&ready.block_hash, ready.height) {
             debug!(
                 height = ready.height,
@@ -1506,8 +1543,27 @@ impl Actor {
             }
             return Ok(());
         }
+        if let Some(expected) = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .and_then(|session| session.expected_chunk_root)
+        {
+            if expected != ready.chunk_root {
+                warn!(
+                    height = ready.height,
+                    view = ready.view,
+                    sender = ready.sender,
+                    ?expected,
+                    observed = ?ready.chunk_root,
+                    "dropping RBC READY with mismatched chunk root"
+                );
+                return Ok(());
+            }
+        }
         let mut clear_pending = false;
-        let mut chunk_root_mismatch = false;
         let mut conflict_detected = false;
         let ready_count_before;
         let ready_count_after;
@@ -1520,13 +1576,6 @@ impl Actor {
                 .sessions
                 .get_mut(&key)
                 .expect("session presence checked before validation");
-
-            if let Some(expected) = session.expected_chunk_root {
-                if expected != ready.chunk_root {
-                    session.invalid = true;
-                    chunk_root_mismatch = true;
-                }
-            }
             ready_count_before = session.ready_signatures.len();
             let was_valid = !session.is_invalid();
             let recorded_ready = session.record_ready(ready.sender, ready.signature.clone());
@@ -1536,7 +1585,7 @@ impl Actor {
                 .iter()
                 .map(|entry| entry.sender)
                 .collect();
-            if was_valid && session.is_invalid() && !chunk_root_mismatch {
+            if was_valid && session.is_invalid() {
                 conflict_detected = true;
             }
             if session.is_invalid() {
@@ -1546,14 +1595,6 @@ impl Actor {
         };
         if clear_pending {
             self.clear_pending_rbc(&key);
-        }
-        if chunk_root_mismatch {
-            warn!(
-                height = key.1,
-                view = key.2,
-                sender = ready_sender,
-                "RBC READY chunk-root mismatch; marking session invalid"
-            );
         }
         if conflict_detected {
             warn!(
@@ -1627,7 +1668,6 @@ impl Actor {
                 ready_after = ready_count_after,
                 senders = ?ready_senders_after,
                 invalid_session = session_invalid,
-                chunk_root_mismatch,
                 conflict_detected,
                 "ignored duplicate or invalid RBC READY"
             );
@@ -1775,6 +1815,19 @@ impl Actor {
             &deliver.block_hash,
             "RbcDeliver",
         ) {
+            return Ok(());
+        }
+        let expected_epoch = self.epoch_for_height(deliver.height);
+        if deliver.epoch != expected_epoch {
+            warn!(
+                height = deliver.height,
+                view = deliver.view,
+                sender = deliver.sender,
+                block = %deliver.block_hash,
+                expected = expected_epoch,
+                observed = deliver.epoch,
+                "dropping RBC DELIVER with mismatched epoch"
+            );
             return Ok(());
         }
         if self.rbc_message_stale(&deliver.block_hash, deliver.height) {

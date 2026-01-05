@@ -6197,6 +6197,27 @@ pub mod tests {
     }
 
     impl Sandbox {
+        fn trigger_registration_metadata(&self) -> Metadata {
+            let height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+            let registered_ms = self
+                .state
+                .view()
+                .latest_block()
+                .map(|block| block.header().creation_time().as_millis())
+                .and_then(|ms| u64::try_from(ms).ok())
+                .unwrap_or(0);
+            let mut metadata = Metadata::default();
+            let key_height = "__registered_block_height"
+                .parse::<Name>()
+                .expect("registered block height metadata key");
+            let key_time = "__registered_at_ms"
+                .parse::<Name>()
+                .expect("registered timestamp metadata key");
+            metadata.insert(key_height, Json::new(height));
+            metadata.insert(key_time, Json::new(registered_ms));
+            metadata
+        }
+
         /// Add a time trigger that transfers the test asset after a timer fires.
         ///
         /// Enqueues a time-based trigger which moves `quantity` units from `src`
@@ -6242,7 +6263,8 @@ pub mod tests {
                     repeats,
                     GENESIS_ACCOUNT.id.clone(),
                     TimeEventFilter::new(ExecutionTime::PreCommit),
-                ),
+                )
+                .with_metadata(self.trigger_registration_metadata()),
             )
             .try_into()
             .unwrap();
@@ -6335,7 +6357,8 @@ pub mod tests {
                     AssetEventFilter::new()
                         .for_events(AssetEventSet::Added)
                         .for_asset(asset(src)),
-                ),
+                )
+                .with_metadata(self.trigger_registration_metadata()),
             )
             .try_into()
             .unwrap();

@@ -231,7 +231,7 @@ Backpressure & Telemetry
 - See `docs/source/telemetry.md` and the README “Consensus metrics (Sumeragi)” section for metric names and example PromQL.
 
 Consensus Parameter Advert (pinning)
-- At startup and when collector plans refresh, nodes broadcast a compact `ConsensusParams` advert carrying `(collectors_k, redundant_send_r)` plus the current membership snapshot `{ height, view, epoch, view_hash }`.
+- At startup and when collector plans refresh, nodes broadcast a compact `ConsensusParams` advert carrying `(collectors_k, redundant_send_r)` plus the current membership snapshot `{ height, view, epoch, view_hash }`. The epoch is derived from the advertised height (`epoch_for_height`) so replays across an epoch boundary stay deterministic.
 - Receivers verify the advert against their effective parameters and membership view hash. Mismatches increment the Prometheus counter `sumeragi_membership_mismatch_total{peer,height,view}` and mark the offending peer in `sumeragi_membership_mismatch_active{peer}` so operators can wire alerts directly. Any mismatch is logged and flagged locally; consensus semantics are unchanged. Effective values are taken from on‑chain `SumeragiParameters` when present (preferred over local config).
 
 Configuration (example)
@@ -259,6 +259,8 @@ Notes
 - All paths remain deterministic across hardware. BLS aggregation is over the same message and does not introduce non‑determinism; consensus accepts only certificates whose explicit signatures validate against the current topology.
 - RBC READY/DELIVER quorum uses the commit topology’s `min_votes_for_commit()`.
 - RBC sessions snapshot the commit topology at INIT and reuse it for READY/DELIVER validation and rebroadcasts so roster changes do not invalidate in-flight availability evidence.
+- RBC INIT/READY/DELIVER must carry the epoch derived from the advertised height; mismatched epochs are rejected to prevent cross-epoch availability drift.
+- RBC READY must reference the expected chunk root for the session; mismatched roots are rejected so quorum only counts votes for the same payload.
 - Persisted RBC sessions include the roster snapshot so restarts validate READY/DELIVER against the original topology even if the live roster changes.
 - Vote/certificate signature checks use the roster snapshot tied to the block when available, falling back to the live commit topology so roster changes do not invalidate late votes or certificates.
 - When the commit topology changes at block commit, the node clears pending consensus caches (pending blocks, vote logs, RBC sessions, DA bundles) so stale votes from the old roster cannot stall the pipeline.

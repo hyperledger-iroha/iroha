@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/nexus.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5fd6b703829be3f58bc207e2b6e924278c3b7038965909f5b837aa7dd8cd304f
+source_hash: c8da33b0abb8a6d46dbaaed657c8338a9d723a97f6f28ff29a62caf84c0dbfd6
 source_last_modified: "2025-12-27T07:56:34.355655+00:00"
 translation_last_reviewed: 2026-01-01
 ---
@@ -29,7 +29,7 @@ Goals
 
 Non-Goals (Initial Phase)
 - Token economics یا validator incentives کی تعریف؛ scheduling اور staking pluggable ہیں۔
-- نئی ABI version متعارف کرانا نہیں؛ تبدیلیاں ABI v1 میں syscalls اور pointer-ABI کے explicit extensions تک محدود ہیں۔
+- نئی ABI version متعارف کرانا یا syscalls/pointer-ABI surfaces بڑھانا نہیں؛ ABI v1 فکس ہے اور runtime upgrades host ABI نہیں بدلتے۔
 
 Terminology
 - Nexus Ledger: عالمی منطقی لیجر جو Data Space (DS) بلاکس کو ایک ordered history اور state commitment میں compose کرتا ہے۔
@@ -177,10 +177,10 @@ Post-Quantum Validity Proofs (FASTPQ-ISI)
 AIR Primer
 - execution trace matrix، transition/boundary constraints، lookups/permutations، FRI verification، transfer example۔
 
-ABI and Syscall Evolution (ABI v1)
-- syscalls: `SYS_AMX_BEGIN`, `SYS_AMX_TOUCH`, `SYS_AMX_COMMIT`, `SYS_VERIFY_SPACE_PROOF`, `SYS_USE_ASSET_HANDLE`.
-- pointer-ABI types: `DataSpaceId`, `AmxDescriptor`, `AssetHandle`, `ProofBlob`.
-- update syscall list, golden tests, ABI hash, docs.
+ABI Stability (ABI v1)
+- ABI v1 surface fixed ہے؛ نئے syscalls یا pointer-ABI types شامل نہیں ہوتے۔
+- runtime upgrades میں `abi_version = 1` اور `added_syscalls`/`added_pointer_types` خالی رہیں۔
+- ABI goldens (syscall list, ABI hash, pointer type IDs) فکس رہتے ہیں۔
 
 Privacy Model
 - private DS data stays private؛ public exposure limited to commitments/proofs؛ optional ZK proofs؛ ISI policies enforce access control۔
@@ -230,6 +230,6 @@ Open Questions
 - Questions on signatures, gas economics, DA attesters, default params, DS granularity, heavy ISIs, cross-DS conflicts۔
 
 Appendix: Compliance with Repository Policies
-- Norito-only wire/JSON, ABI v1 only, determinism preserved, no serde/env in production paths۔
+- Norito-only wire/JSON, ABI v1 only with fixed syscall/pointer-ABI surface, determinism preserved, no serde/env in production paths۔
 
 </div>

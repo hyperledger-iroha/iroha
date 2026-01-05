@@ -2389,7 +2389,9 @@ mod tests {
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 
-        let world = World::new();
+        let domain: Domain = Domain::new("wonderland".parse().expect("domain id")).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
@@ -2518,7 +2520,9 @@ mod tests {
             .lock()
             .expect("nexus fee test lock");
         crate::sumeragi::status::reset_nexus_economics_for_tests();
-        let world = World::new();
+        let domain: Domain = Domain::new("wonderland".parse().expect("domain id")).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
@@ -2909,7 +2913,9 @@ mod tests {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let world = World::new();
+        let domain: Domain = Domain::new("wonderland".parse().expect("domain id")).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
@@ -2949,7 +2955,9 @@ mod tests {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let world = World::new();
+        let domain: Domain = Domain::new("wonderland".parse().expect("domain id")).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
@@ -2983,7 +2991,9 @@ mod tests {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let world = World::new();
+        let domain: Domain = Domain::new("wonderland".parse().expect("domain id")).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
@@ -3009,14 +3019,17 @@ mod tests {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let world = World::new();
+        let domain: Domain = Domain::new("wonderland".parse().expect("domain id")).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_tx = block.transaction();
-        state_tx.executor_fuel_remaining = Some(10_000);
+        let base_fuel = state_tx.world.parameters.get().executor().fuel.get();
+        state_tx.executor_fuel_remaining = Some(base_fuel);
 
         let instruction: InstructionBox = Log::new(Level::INFO, "executor fuel".to_owned()).into();
         executor
@@ -3024,7 +3037,7 @@ mod tests {
             .expect("execution");
         let remaining = state_tx.executor_fuel_remaining.expect("budget set");
         assert!(
-            remaining < 10_000,
+            remaining < base_fuel,
             "expected executor fuel budget to decrease"
         );
     }

@@ -10,17 +10,25 @@ summary: Procedures for adopting new IVM ABI releases in the Swift SDK, covering
 
 This checklist fulfils the IOS6 roadmap requirement to **coordinate ABI update
 reviews** before the Swift SDK ships against a new IVM ABI version or pointer
-policy. Follow it whenever the Rust/IVM team proposes an ABI change, a new
-`abi_hash` is published, pointer types are added, or new syscalls become
-available. The goal is to keep Swift’s bridge surfaces in lockstep with
+policy. Follow it whenever the Rust/IVM team proposes a core ABI change (not a
+runtime upgrade), a new `abi_hash` is published, pointer types are added, or new
+syscalls become available. The goal is to keep Swift’s bridge surfaces in lockstep with
 `crates/ivm`, Torii, and the other SDKs so parity dashboards remain green.
+
+## Policy note (first release)
+
+ABI v1 is fixed and no v2 is planned. Runtime upgrades must keep
+`abi_version = 1` and cannot add syscalls or pointer‑ABI types, so they do not
+trigger this checklist. Only run this checklist if a future core release
+explicitly introduces an ABI change.
 
 ## 1. Trigger Events
 
-Run this checklist when any of the following land on the roadmap or in PRs:
+Run this checklist only if a core ABI change is explicitly approved (not
+planned for v1). Examples:
 
 - A new `ProgramMetadata.abi_version` or `abi_hash` is proposed in `crates/ivm`
-  or Torii publishes updated `runtime/upgrades` manifests.
+  as part of a core release.
 - Pointer-ABI types or syscall numbers change (see `crates/ivm/src/pointer_abi.rs`
   and `crates/ivm/src/syscalls.rs`).
 - Swift needs to expose ABI capability metadata (e.g., governance manifests,

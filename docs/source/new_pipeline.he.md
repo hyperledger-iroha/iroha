@@ -215,12 +215,12 @@ struct IsoEnvelope {
 - כל אישור/דחייה מתועדים באירועים עם חשבונות, `context_hash`, סיבת פעולה.
 
 שדרוג ריצה
-- `RuntimeUpgradeManifest`: שם, תיאור, abi_version, abi_hash, syscalls/PointerTypes חדשים, start/end height.
+- `RuntimeUpgradeManifest`: שם, תיאור, `abi_version` (v1 קבוע), `abi_hash`, `added_syscalls`/`added_pointer_types` ריקים, start/end height.
 - `RuntimeUpgradePlan`: תיעוד פריסת ארטיפקטים.
 - `RuntimeUpgradeActivate`: ניהול חלון הפעלה. הפעלה אחת בלבד בתוך `[start,end)`.
 - **מסלול החלה דו-שלבי (פריסה → הפעלה):**
   1. **פריסה.** לאחר שהגוב׳ מאשר `RuntimeUpgradePlan`, הארטיפקטים (בינארים, מניפסטים, בדיקות smoke) נשמרים בחנות הארטיפקטים. כל צומת מושך את החבילה, מאמת `code_hash/abi_hash`, מריץ `cargo test -p runtime_upgrade_smoke`/בדיקות sandbox במסלול נפרד, ומשדר `UpgradeReadinessReport` בטלמטריה (commit, גרסה, תוצאת בדיקות, חותמת זמן וגובה יעד).
-  2. **הפעלה.** כש-≥ 2/3 מהצמתים דיווחו מוכנות והגובה הנוכחי נמצא בטווח `[start,end)`, הגוב׳ משדר `RuntimeUpgradeActivate`. ההוראה מאמתת שהארטיפקטים עדיין תואמים את המניפסט, שאין דו״חות כשל פתוחים על הצמתים החותמים, ורק אז מקדמת את ה־ABI החדש ואת סט ה־syscalls/PointerTypes המעודכן לכל העסקאות הבאות.
+  2. **הפעלה.** כש-≥ 2/3 מהצמתים דיווחו מוכנות והגובה הנוכחי נמצא בטווח `[start,end)`, הגוב׳ משדר `RuntimeUpgradeActivate`. ההוראה מאמתת שהארטיפקטים עדיין תואמים את המניפסט, שאין דו״חות כשל פתוחים על הצמתים החותמים, ורק אז מקדמת את ההפעלה כשה־ABI נשאר v1 וסט ה־syscalls/PointerTypes אינו משתנה לכל העסקאות הבאות.
 
 מעבר ל-Parliament
 - Root מכין → בתי פרלמנט (הצעה, ביקורת, אכיפה) בוחנים ומסמנים → `ParliamentEnactment { at_window }`.

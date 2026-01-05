@@ -41,6 +41,11 @@ pub(super) fn compute_roster_indices_from_topology(
     if topology.is_empty() {
         return Vec::new();
     }
+    let fallback = || {
+        (0..topology.len())
+            .filter_map(|idx| u32::try_from(idx).ok())
+            .collect::<Vec<_>>()
+    };
 
     if let Some(provider) = provider {
         let mut positions: BTreeMap<PeerId, u32> = BTreeMap::new();
@@ -65,23 +70,19 @@ pub(super) fn compute_roster_indices_from_topology(
                 missing.push(peer.clone());
             }
         }
-        if !missing.is_empty() {
+        if !missing.is_empty() || indices.len() != topology.len() {
             warn!(
                 missing = ?missing,
-                "epoch roster provider listed peers absent from commit topology; using discovered subset"
+                provider_len = provider.peers().len(),
+                topology_len = topology.len(),
+                indices_len = indices.len(),
+                "epoch roster provider incomplete for commit topology; falling back to full roster"
             );
+            return fallback();
         }
-        if indices.is_empty() {
-            (0..topology.len())
-                .filter_map(|idx| u32::try_from(idx).ok())
-                .collect()
-        } else {
-            indices
-        }
+        indices
     } else {
-        (0..topology.len())
-            .filter_map(|idx| u32::try_from(idx).ok())
-            .collect()
+        fallback()
     }
 }
 
@@ -328,5 +329,29 @@ mod tests {
         let canonical = canonicalize_roster(roster);
 
         assert_eq!(canonical, vec![first, second]);
+    }
+
+    #[test]
+    fn roster_indices_fall_back_when_provider_incomplete() {
+        let peer_a = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let peer_b = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let peer_c = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let topology = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
+        let provider = Arc::new(WsvEpochRosterAdapter::from_peer_iter([peer_a, peer_b]));
+
+        let indices = compute_roster_indices_from_topology(&topology, Some(&provider));
+        assert_eq!(indices, vec![0, 1, 2]);
     }
 }

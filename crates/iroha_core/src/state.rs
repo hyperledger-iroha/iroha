@@ -15361,7 +15361,7 @@ mod replay_validation_tests {
             PeerId::new(peer_a.public_key().clone()),
             PeerId::new(peer_b.public_key().clone()),
         ];
-        let topology = crate::sumeragi::network_topology::Topology::new(peers);
+        let topology = crate::sumeragi::network_topology::Topology::new(peers.clone());
 
         let height = 2;
         let view = 0u64;
@@ -15431,7 +15431,13 @@ mod replay_validation_tests {
             )])
             .sign(user_keypair.private_key());
         let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let signer = if leader_index == 0 {
+        let mut base_topology = crate::sumeragi::network_topology::Topology::new(peers.clone());
+        base_topology.block_committed(peers.clone(), genesis_signed.hash());
+        let leader_peer = base_topology
+            .as_ref()
+            .get(leader_index)
+            .expect("leader index within topology");
+        let signer = if leader_peer.public_key() == peer_a.public_key() {
             peer_a.private_key()
         } else {
             peer_b.private_key()

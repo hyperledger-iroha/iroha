@@ -3,14 +3,15 @@
 This document defines the IVM syscall numbers, pointer-ABI calling conventions, reserved number ranges, and the canonical table of contract-facing syscalls used by Kotodama lowering. It complements `ivm.md` (architecture) and `kotodama_grammar.md` (language).
 
 Versioning
-- The set of recognized syscalls depends on the bytecode header `abi_version` field. Unknown numbers for the active `abi_version` deterministically trap with `E_SCALL_UNKNOWN`.
+- The set of recognized syscalls depends on the bytecode header `abi_version` field. The first release accepts only `abi_version = 1`; other values are rejected at admission. Unknown numbers for the active `abi_version` deterministically trap with `E_SCALL_UNKNOWN`.
+- Runtime upgrades keep `abi_version = 1` and do not expand syscall or pointer‑ABI surfaces.
 - Syscall gas costs are part of the versioned gas schedule bound to the bytecode header version. See `ivm.md` (Gas policy).
 
 Numbering ranges
 - `0x00..=0x1F`: VM core/utility (development helpers; not available under `CoreHost`).
-- `0x20..=0x5F`: Iroha core ISI bridge (stable across supported `abi_version`s).
-- `0x60..=0x7F`: extension ISIs gated by protocol features.
-- `0x80..=0xFF`: experimental/vendor space (requires matching `abi_version` and feature bit).
+- `0x20..=0x5F`: Iroha core ISI bridge (stable in ABI v1).
+- `0x60..=0x7F`: extension ISIs gated by protocol features (still part of ABI v1 when enabled).
+- `0x80..=0xFF`: host/crypto helpers and reserved slots; only numbers present in the ABI v1 allowlist are accepted.
 
 Durable helpers (ABI v1)
 - The durable state helper syscalls (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_*, JSON/SCHEMA encode/decode) are part of the V1 ABI and included in `abi_hash` computation.

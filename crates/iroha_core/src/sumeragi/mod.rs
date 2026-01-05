@@ -2545,7 +2545,7 @@ mod tests {
             &background_rx,
         );
 
-        assert_eq!(actor.events, vec!["vote", "rbc", "payload", "block"]);
+        assert_eq!(actor.events, vec!["rbc", "payload", "block", "vote"]);
         assert_eq!(stats.votes_handled, 1);
         assert_eq!(stats.rbc_chunks_handled, 1);
         assert_eq!(stats.block_payloads_handled, 1);
@@ -2675,7 +2675,7 @@ mod tests {
 
         assert_eq!(
             actor.events,
-            vec!["vote", "rbc", "payload", "block", "tick"]
+            vec!["rbc", "payload", "block", "vote", "tick"]
         );
         assert_eq!(actor.tick_calls, 1);
     }
@@ -2832,13 +2832,13 @@ mod tests {
             &background_rx,
         );
 
-        assert_eq!(actor.events, vec!["vote"]);
+        assert_eq!(actor.events, vec!["payload", "vote"]);
         assert_eq!(stats.votes_handled, 1);
-        assert_eq!(stats.block_payloads_handled, 0);
+        assert_eq!(stats.block_payloads_handled, 1);
         assert!(stats.budget_exceeded);
         assert!(matches!(
             block_payload_rx.try_recv(),
-            Ok(BlockMessage::Proposal(_))
+            Err(mpsc::TryRecvError::Empty)
         ));
     }
 

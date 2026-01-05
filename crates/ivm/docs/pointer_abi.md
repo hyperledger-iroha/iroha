@@ -8,7 +8,7 @@ added with new IDs; existing IDs must not change.
 - Unknown/forbidden types under a policy are rejected during TLV validation.
 
 <!-- BEGIN GENERATED POINTER TYPES -->
-| ID | Name | ABI v1/Experimental |
+| ID | Name | ABI v1 |
 |---|---|---|
 | 0x0001 | AccountId | OK |
 | 0x0002 | AssetDefinitionId | OK |
@@ -27,6 +27,7 @@ added with new IDs; existing IDs must not change.
 
 
 Notes
-- Column denotes whether the type is accepted under the ABI v1/experimental policy.
+- Column denotes whether the type is accepted under ABI v1 (the only supported policy in this release).
+- Runtime upgrades must use the existing type set; no new pointer‑ABI types are introduced in v1.
 - TLV structure is enforced regardless of policy; type IDs gate which categories are accepted for host syscalls.
 - `DataSpaceId`, `AxtDescriptor`, `AssetHandle`, and `ProofBlob` underpin the AXT (atomic cross-transaction) flow. Default and WSV hosts fully validate these pointers when servicing AXT syscalls, ensuring descriptor membership, capability binding equality, and proof material are honoured.

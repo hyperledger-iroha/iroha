@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/nexus.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5fd6b703829be3f58bc207e2b6e924278c3b7038965909f5b837aa7dd8cd304f
+source_hash: c8da33b0abb8a6d46dbaaed657c8338a9d723a97f6f28ff29a62caf84c0dbfd6
 source_last_modified: "2025-12-27T07:56:34.355655+00:00"
 translation_last_reviewed: 2026-01-01
 ---
@@ -29,7 +29,7 @@ translation_last_reviewed: 2026-01-01
 
 غير الاهداف (المرحلة الاولية)
 - تعريف اقتصاديات الرموز او حوافز المدققين؛ الجدولة والستيكينغ قابلة للتركيب.
-- تقديم نسخة ABI جديدة؛ التغييرات تستهدف ABI v1 مع امتدادات syscalls وpointer-ABI حسب سياسة IVM.
+- تقديم نسخة ABI جديدة او توسيع اسطح syscalls/pointer-ABI؛ ABI v1 ثابت وترقيات runtime لا تغير ABI المضيف.
 
 المصطلحات
 - Nexus Ledger: الدفتر المنطقي العالمي الناتج من تركيب كتل Data Space (DS) الى تاريخ واحد مرتب والتزام حالة.
@@ -182,7 +182,7 @@ SDK JS (`javascript/iroha_js/src/toriiClient.js`) يغلف هذه الواجها
 - اضافة `dsid` لسياق التنفيذ.
 - `amx_begin`/`amx_commit` و`amx_touch` و`verify_space_proof` و`use_asset_handle`.
 - الرسوم تُدفع بعملة gas الخاصة بالـ DS.
-- syscalls الجديدة حتمية.
+- syscalls حتمية.
 
 Post-Quantum Validity Proofs
 - FASTPQ-ISI بدون trusted setup.
@@ -192,7 +192,8 @@ AIR Primer
 - trace، constraints، الالتزام والتحقق، مثال Transfer.
 
 ABI وsyscalls (ABI v1)
-- اضافة syscalls وpointer-ABI types وتحديث الاختبارات والوثائق.
+- سطح ABI v1 ثابت؛ لا تتم اضافة syscalls او pointer-ABI types جديدة.
+- ترقيات runtime يجب ان تبقي `abi_version = 1` و`added_syscalls`/`added_pointer_types` فارغة، مع تثبيت اختبارات ABI.
 
 نموذج الخصوصية
 - احتواء بيانات DS الخاصة، تعرض البيانات العامة فقط.
@@ -243,6 +244,6 @@ Open Questions
 - اسئلة مفتوحة حول التوقيع والاقتصاد وDA وغيرها.
 
 ملحق: الامتثال لسياسات المستودع
-- Norito لكل wire/JSON، ABI v1 فقط، حتمية، بدون serde او متغيرات بيئية في المسارات الانتاجية.
+- Norito لكل wire/JSON، ABI v1 فقط وسطح syscalls/pointer-ABI ثابت، حتمية، بدون serde او متغيرات بيئية في المسارات الانتاجية.
 
 </div>
