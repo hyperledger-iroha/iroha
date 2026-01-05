@@ -112,8 +112,8 @@ public final class OfflineToriiClient {
   /**
    * Build a FASTPQ witness payload by calling Torii `/v1/offline/transfers/proof`.
    *
-   * <p>The returned JSON string matches the `OfflineProofRequest*` structs and can be forwarded
-   * directly to the prover.
+   * <p>The request must include the transfer payload; the returned JSON string matches the
+   * `OfflineProofRequest*` structs and can be forwarded directly to the prover.
    */
   public CompletableFuture<OfflineProofRequestResult> buildProofRequest(
       final OfflineProofRequestParams params) {

@@ -27,7 +27,7 @@ use iroha_crypto::{
     Signature, derive_keyset_from_slice,
     error::ParseError,
     kex::{KeyExchangeScheme, X25519Sha256},
-    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
+    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
 use iroha_data_model::{
     account::Account,
@@ -157,6 +157,22 @@ fn sm2_distid_arg(distid: Option<&str>) -> String {
     distid
         .map(str::to_owned)
         .unwrap_or_else(Sm2PublicKey::default_distid)
+}
+
+trait IntoSm2Result {
+    fn into_sm2_result(self) -> Result<Sm2PrivateKey, ParseError>;
+}
+
+impl IntoSm2Result for Sm2PrivateKey {
+    fn into_sm2_result(self) -> Result<Sm2PrivateKey, ParseError> {
+        Ok(self)
+    }
+}
+
+impl IntoSm2Result for Result<Sm2PrivateKey, ParseError> {
+    fn into_sm2_result(self) -> Result<Sm2PrivateKey, ParseError> {
+        self
+    }
 }
 
 fn parse_sm2_private_key(distid: Option<&str>, bytes: &[u8]) -> PyResult<Sm2PrivateKey> {
@@ -3507,6 +3523,23 @@ mod tests {
     }
 
     #[test]
+    fn generate_sm2_keypair_roundtrip() {
+        ensure_python();
+        Python::attach(|py| {
+            let (private_py, public_py) =
+                generate_sm2_keypair_py(py, None).expect("generate SM2 keypair");
+            let private_bytes = private_py.bind(py).as_bytes();
+            let public_bytes = public_py.bind(py).as_bytes();
+            assert_eq!(private_bytes.len(), SM2_PRIVATE_KEY_LENGTH);
+            assert_eq!(public_bytes.len(), SM2_PUBLIC_KEY_UNCOMPRESSED_LENGTH);
+            let private =
+                parse_sm2_private_key(None, private_bytes).expect("parse SM2 private key");
+            let derived_public = private.public_key().to_sec1_bytes(false);
+            assert_eq!(derived_public.as_slice(), public_bytes);
+        });
+    }
+
+    #[test]
     fn attachments_json_decodes_versioned_signed_transaction() {
         ensure_python();
         let signing = SigningKey::from_bytes(&[0x11u8; 32]);
@@ -6316,7 +6349,9 @@ fn generate_sm2_keypair_py(
 ) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
     let distid = sm2_distid_arg(distid);
     let mut rng = OsRng06;
-    let private = Sm2PrivateKey::random(distid, &mut rng);
+    let private = Sm2PrivateKey::random(distid, &mut rng)
+        .into_sm2_result()
+        .map_err(|err| PyValueError::new_err(format!("failed to generate SM2 key pair: {err}")))?;
     let public = private.public_key();
     let private_bytes = private.secret_bytes();
     let public_bytes = public.to_sec1_bytes(false);
@@ -6369,8 +6404,12 @@ fn load_sm2_keypair_py(
 #[pyo3(name = "sm2_public_key_multihash", signature = (public_key, distid=None))]
 /// Return the canonical multihash encoding for an SM2 public key.
 fn sm2_public_key_multihash_py(public_key: &[u8], distid: Option<&str>) -> PyResult<String> {
-    let _ = parse_sm2_public_key(distid, public_key)?;
-    PublicKey::from_bytes(Algorithm::Sm2, public_key)
+    let distid = sm2_distid_arg(distid);
+    let _ = parse_sm2_public_key(Some(distid.as_str()), public_key)?;
+    let payload = encode_sm2_public_key_payload(&distid, public_key).map_err(|err| {
+        PyValueError::new_err(format!("failed to encode SM2 public key payload: {err}"))
+    })?;
+    PublicKey::from_bytes(Algorithm::Sm2, &payload)
         .map(|pk| pk.to_string())
         .map_err(|err| PyValueError::new_err(format!("failed to construct SM2 public key: {err}")))
 }
@@ -6453,7 +6492,10 @@ fn sm2_fixture_from_seed_py(
     let secret_hex = hex::encode_upper(private.secret_bytes());
     let public_bytes = public.to_sec1_bytes(false);
     let public_hex = hex::encode_upper(&public_bytes);
-    let public_key = PublicKey::from_bytes(Algorithm::Sm2, &public_bytes).map_err(|err| {
+    let payload = encode_sm2_public_key_payload(distid, &public_bytes).map_err(|err| {
+        PyValueError::new_err(format!("failed to encode SM2 public key payload: {err}"))
+    })?;
+    let public_key = PublicKey::from_bytes(Algorithm::Sm2, &payload).map_err(|err| {
         PyValueError::new_err(format!("failed to construct SM2 public key: {err}"))
     })?;
     let multihash = public_key.to_string();

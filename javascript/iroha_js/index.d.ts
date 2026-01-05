@@ -2361,7 +2361,6 @@ export interface ConnectSessionResponse {
 
 export interface ConnectSidResult {
   sidBytes: Buffer;
-  sidHex: string;
   sidBase64Url: string;
   nonce: Buffer;
 }
@@ -2385,7 +2384,6 @@ export interface ConnectSessionPreview {
   chainId: string;
   node: string | null;
   sidBytes: Buffer;
-  sidHex: string;
   sidBase64Url: string;
   nonce: Buffer;
   appKeyPair: ConnectKeyPair;
@@ -6579,7 +6577,10 @@ export function loadSm2KeyPair(
   distid?: string,
 ): Sm2KeyPair;
 
-export function sm2PublicKeyMultihash(publicKey: ArrayBufferView | ArrayBuffer | Buffer): string;
+export function sm2PublicKeyMultihash(
+  publicKey: ArrayBufferView | ArrayBuffer | Buffer,
+  distid?: string,
+): string;
 
 export function signSm2(
   message: ArrayBufferView | ArrayBuffer | Buffer | string,

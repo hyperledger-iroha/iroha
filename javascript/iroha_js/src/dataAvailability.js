@@ -269,12 +269,12 @@ function resolveSignature(options, payloadBuffer) {
 
 function normalizePrivateKey(options) {
   if (options.privateKeyHex !== undefined && options.privateKeyHex !== null) {
-    return parseHexSeed(options.privateKeyHex, "privateKeyHex");
+    return parseHexPrivateKey(options.privateKeyHex, "privateKeyHex");
   }
   if (options.privateKey !== undefined && options.privateKey !== null) {
     const buffer = toBuffer(options.privateKey, "privateKey");
-    if (buffer.length !== 32) {
-      throw new Error("privateKey must be 32 bytes (Ed25519 seed)");
+    if (buffer.length !== 32 && buffer.length !== 64) {
+      throw new Error("privateKey must be a 32- or 64-byte Ed25519 key");
     }
     return buffer;
   }
@@ -303,6 +303,21 @@ function parseHexSeed(value, name, expectedLength = 32) {
   const buffer = Buffer.from(cleaned, "hex");
   if (buffer.length !== expectedLength) {
     throw new Error(`${name} must be ${expectedLength} bytes`);
+  }
+  return buffer;
+}
+
+function parseHexPrivateKey(value, name) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${name} must be a hex string`);
+  }
+  const cleaned = value.trim().replace(/^0x/i, "");
+  if (cleaned.length !== 64 && cleaned.length !== 128) {
+    throw new Error(`${name} must be 64 or 128 hex characters`);
+  }
+  const buffer = Buffer.from(cleaned, "hex");
+  if (buffer.length !== 32 && buffer.length !== 64) {
+    throw new Error(`${name} must be 32 or 64 bytes`);
   }
   return buffer;
 }

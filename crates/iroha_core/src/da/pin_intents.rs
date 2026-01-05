@@ -57,8 +57,8 @@ pub enum DaPinIntentSpoolError {
 ///
 /// # Errors
 ///
-/// Returns a [`DaPinIntentSpoolError`] if the spool directory cannot be read,
-/// a pin intent fails to decode, or an I/O error occurs while loading files.
+/// Returns a [`DaPinIntentSpoolError`] if the spool directory cannot be read.
+/// Individual pin intent files that fail to read or decode are skipped with a warning.
 pub fn load_pin_intents(
     spool_dir: &Path,
 ) -> Result<Option<Vec<DaPinIntent>>, DaPinIntentSpoolError> {
@@ -89,15 +89,24 @@ pub fn load_pin_intents(
         let bytes = match std::fs::read(&path) {
             Ok(buf) => buf,
             Err(source) => {
-                warn!(?source, path = %path.display(), "failed to read DA pin intent file");
-                return Err(DaPinIntentSpoolError::ReadFile { path, source });
+                warn!(
+                    ?source,
+                    path = %path.display(),
+                    "failed to read DA pin intent file; skipping"
+                );
+                continue;
             }
         };
 
         match decode_from_bytes::<DaPinIntent>(&bytes) {
             Ok(intent) => intents.push(intent),
             Err(source) => {
-                return Err(DaPinIntentSpoolError::Decode { path, source });
+                warn!(
+                    ?source,
+                    path = %path.display(),
+                    "failed to decode DA pin intent file; skipping"
+                );
+                continue;
             }
         }
     }
@@ -369,6 +378,30 @@ mod tests {
         // Sorted by lane then sequence, so intent_b should come first.
         assert_eq!(intents[0].lane_id, LaneId::new(1));
         assert_eq!(intents[0].sequence, 1);
+    }
+
+    #[test]
+    fn load_pin_intents_skips_corrupt_entries() {
+        let dir = tempdir().expect("tempdir");
+        let intent = sample_intent(1, 1);
+        let bytes = to_bytes(&intent).expect("encode intent");
+
+        let valid_path = dir
+            .path()
+            .join("da-pin-intent-00000001-0000000000000001-0000000000000001-ok.norito");
+        let corrupt_path = dir
+            .path()
+            .join("da-pin-intent-00000001-0000000000000001-0000000000000002-bad.norito");
+
+        std::fs::write(valid_path, bytes).expect("write valid");
+        std::fs::write(corrupt_path, b"corrupt").expect("write corrupt");
+
+        let intents = load_pin_intents(dir.path())
+            .expect("load intents")
+            .expect("intents present");
+
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0], intent);
     }
 
     #[test]

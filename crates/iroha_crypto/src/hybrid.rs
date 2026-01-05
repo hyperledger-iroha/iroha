@@ -95,6 +95,9 @@ pub enum HybridError {
         /// Observed byte length.
         found: usize,
     },
+    /// X25519 shared secret resolved to the all-zero value (low-order public key).
+    #[error("x25519 shared secret is all-zero (invalid public key)")]
+    InvalidX25519SharedSecret,
     /// Kyber public key did not match the expected length.
     #[error("invalid kyber public key length (expected {expected}, found {found})")]
     InvalidKyberPublicKeyLength {
@@ -457,8 +460,9 @@ impl fmt::Debug for DerivedSecret {
 ///
 /// # Errors
 ///
-/// Returns [`HybridError`] if encapsulation fails (for example, when Kyber
-/// rejects the peer parameters or HKDF expansion cannot produce the requested
+/// Returns [`HybridError`] if encapsulation fails (for example, when the
+/// X25519 shared secret is all-zero due to a low-order public key, Kyber
+/// rejects the peer parameters, or HKDF expansion cannot produce the requested
 /// output length).
 pub fn encapsulate<R>(
     suite: HybridSuite,
@@ -475,6 +479,9 @@ where
             let ephemeral_secret = StaticSecret::from(*ephemeral_bytes);
             let ephemeral_public = X25519PublicKey::from(&ephemeral_secret);
             let shared_ecdh = ephemeral_secret.diffie_hellman(recipient.x25519());
+            if shared_ecdh.as_bytes().iter().all(|&byte| byte == 0) {
+                return Err(HybridError::InvalidX25519SharedSecret);
+            }
 
             let (kyber_shared, kyber_ciphertext) =
                 encapsulate_mlkem(HYBRID_KEM_SUITE, recipient.kyber_bytes())
@@ -499,7 +506,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`HybridError`] if the ciphertext cannot be parsed, Kyber decapsulation
+/// Returns [`HybridError`] if the ciphertext cannot be parsed, the X25519
+/// shared secret is all-zero due to a low-order public key, Kyber decapsulation
 /// fails, or HKDF expansion cannot produce the requested output length.
 pub fn decapsulate(
     suite: HybridSuite,
@@ -510,6 +518,9 @@ pub fn decapsulate(
         HybridSuite::X25519MlKem768ChaCha20Poly1305 => {
             let ephemeral_public = X25519PublicKey::from(*ciphertext.ephemeral_public());
             let shared_ecdh = recipient.x25519().diffie_hellman(&ephemeral_public);
+            if shared_ecdh.as_bytes().iter().all(|&byte| byte == 0) {
+                return Err(HybridError::InvalidX25519SharedSecret);
+            }
 
             HYBRID_KEM_SUITE
                 .validate_ciphertext(ciphertext.kyber_ciphertext())
@@ -619,5 +630,40 @@ mod tests {
             decoded_secret.public().kyber_bytes(),
             pair.public().kyber_bytes()
         );
+    }
+
+    #[test]
+    fn encapsulate_rejects_low_order_x25519_public_key() {
+        let mut rng = ChaCha20Rng::from_seed([0x77; 32]);
+        let pair = HybridKeyPair::generate(&mut rng);
+        let bad_public = HybridPublicKey::from_bytes([0u8; 32], pair.public().kyber_bytes())
+            .expect("public key parses");
+        let err = encapsulate(
+            HybridSuite::X25519MlKem768ChaCha20Poly1305,
+            &bad_public,
+            &mut rng,
+        )
+        .expect_err("low-order public key must be rejected");
+        assert_eq!(err, HybridError::InvalidX25519SharedSecret);
+    }
+
+    #[test]
+    fn decapsulate_rejects_low_order_ephemeral_public_key() {
+        let mut rng = ChaCha20Rng::from_seed([0x19; 32]);
+        let pair = HybridKeyPair::generate(&mut rng);
+        let (mut ciphertext, _sender) = encapsulate(
+            HybridSuite::X25519MlKem768ChaCha20Poly1305,
+            pair.public(),
+            &mut rng,
+        )
+        .expect("encapsulation succeeds");
+        ciphertext.ephemeral_public = [0u8; 32];
+        let err = decapsulate(
+            HybridSuite::X25519MlKem768ChaCha20Poly1305,
+            &ciphertext,
+            pair.secret(),
+        )
+        .expect_err("low-order public key must be rejected");
+        assert_eq!(err, HybridError::InvalidX25519SharedSecret);
     }
 }

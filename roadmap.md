@@ -4,7 +4,7 @@ This roadmap enumerates the outstanding efforts required to ship the optional
 NPoS Sumeragi mode and keep the broader Nexus transition on track. For every task listed here we are preparing the first public release, so teams can design and implement with a clean slate. Completed
 items continue to live in `status.md`; only tasks that still need engineering
 work appear here.
-Latest sync: crypto Merkle/compact-proof/multihash/PublicKeyCompact hardening is complete; no new open crypto hygiene items (see `status.md`).
+Latest sync: standardize Connect SIDs on base64url-only across Torii/SDKs/CLI and tighten content auth headers; no new open items were added (see `status.md`).
 
 The repository now serves two release lines:
 - **Iroha 2** — the self-hosted deployment track for organisations running
@@ -460,6 +460,11 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Enforce a 4-peer minimum in the integration-test harness and update direct peer-start paths to avoid single-peer stalls.
  - [x] Allow pending-block quorum reschedules to drop/requeue after a retry even with partial precommit votes; add unit test coverage.
  - [x] Re-run the full `cargo test -p integration_tests --test mod` suite to confirm stability.
+
+41. **NEXUS-STORAGE-DA-RETENTION — DA-backed storage eviction under disk caps** (Core/DA/WSV, Line: Iroha 3, Owner: Nexus Core WG, Priority: High, Status: 🈳 Not Started, target TBD)
+ - [ ] Define deterministic eviction order across Kura block bodies, tiered-state cold snapshots, and storage spools once `nexus.storage.max_disk_usage_bytes` is reached (no hardware-dependent heuristics).
+ - [ ] Implement DA-backed rehydration for evicted blocks/WSV cold shards with cache hit/miss + churn telemetry.
+ - [ ] Add 4-peer DA integration tests covering eviction + rehydrate with strict disk caps.
 
 ## Archived
 

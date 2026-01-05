@@ -27,7 +27,8 @@ impl EcdsaSecp256k1Sha256 {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::BadSignature`] if verification fails or the inputs are malformed.
+    /// Returns [`Error::BadSignature`] if verification fails, the signature is non-canonical
+    /// (high-S), or the inputs are malformed.
     pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey) -> Result<(), Error> {
         EcdsaSecp256k1Impl::verify(message, signature, pk)
     }
@@ -36,7 +37,8 @@ impl EcdsaSecp256k1Sha256 {
     ///
     /// # Errors
     ///
-    /// Returns [`ParseError`] when the payload cannot be decoded into a valid key.
+    /// Returns [`ParseError`] when the payload cannot be decoded into a valid key or
+    /// when the encoding is non-canonical (must match the canonical SEC1 encoding).
     pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey, ParseError> {
         EcdsaSecp256k1Impl::parse_public_key(payload)
     }
@@ -162,12 +164,16 @@ mod ecdsa_secp256k1 {
             let signature: k256::ecdsa::Signature = signing_key
                 .sign_prehash(&digest)
                 .expect("sha256 digest length is 32 bytes");
+            let signature = signature.normalize_s().unwrap_or(signature);
             signature.to_bytes().to_vec()
         }
 
         pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey) -> Result<(), Error> {
             let signature = k256::ecdsa::Signature::from_slice(signature)
                 .map_err(|e| Error::Signing(format!("{e:?}")))?;
+            if signature.normalize_s().is_some() {
+                return Err(Error::BadSignature);
+            }
 
             let verifying_key = k256::ecdsa::VerifyingKey::from(pk);
 
@@ -178,7 +184,15 @@ mod ecdsa_secp256k1 {
         }
 
         pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey, ParseError> {
-            PublicKey::from_sec1_bytes(payload).map_err(|err| ParseError(err.to_string()))
+            let key =
+                PublicKey::from_sec1_bytes(payload).map_err(|err| ParseError(err.to_string()))?;
+            let canonical = key.to_sec1_bytes();
+            if canonical.as_ref() != payload {
+                return Err(ParseError(
+                    "non-canonical secp256k1 public key encoding".to_string(),
+                ));
+            }
+            Ok(key)
         }
 
         pub fn parse_private_key(payload: &[u8]) -> Result<PrivateKey, ParseError> {
@@ -197,6 +211,8 @@ impl From<elliptic_curve::Error> for Error {
 #[cfg(test)]
 mod test {
     use amcl::secp256k1::ecp;
+    use k256::ecdsa::signature::hazmat::PrehashVerifier as _;
+    use k256::elliptic_curve::sec1::ToEncodedPoint;
     use openssl::{
         bn::{BigNum, BigNumContext},
         ec::{EcGroup, EcKey, EcPoint},
@@ -228,6 +244,22 @@ mod test {
         let mut uncompressed = [0u8; PUBLIC_UNCOMPRESSED_KEY_SIZE];
         ecp::ECP::frombytes(&pk.to_sec1_bytes()[..]).tobytes(&mut uncompressed, false);
         uncompressed.to_vec()
+    }
+
+    #[test]
+    fn parse_public_key_rejects_non_canonical_encoding() {
+        let pk = public_key();
+        let canonical = pk.to_sec1_bytes();
+        let compressed = pk.to_encoded_point(true);
+        let uncompressed = pk.to_encoded_point(false);
+        let non_canonical = if canonical.as_ref() == compressed.as_bytes() {
+            uncompressed.as_bytes()
+        } else {
+            compressed.as_bytes()
+        };
+
+        let err = EcdsaSecp256k1Sha256::parse_public_key(non_canonical).unwrap_err();
+        assert!(err.0.contains("non-canonical"), "unexpected error: {err:?}");
     }
 
     #[test]
@@ -353,5 +385,36 @@ mod test {
         let (p, s) = EcdsaSecp256k1Sha256::keypair(KeyGenOption::Random);
         let signed = EcdsaSecp256k1Sha256::sign(MESSAGE_1, &s);
         EcdsaSecp256k1Sha256::verify(MESSAGE_1, &signed, &p).unwrap();
+    }
+
+    #[test]
+    fn secp256k1_rejects_high_s_signatures() {
+        let secret = private_key();
+        let (pk, sk) = EcdsaSecp256k1Sha256::keypair(KeyGenOption::FromPrivateKey(secret));
+        let message = b"secp256k1 high-s test";
+        let sig = EcdsaSecp256k1Sha256::sign(message, &sk);
+
+        let signature = k256::ecdsa::Signature::from_slice(&sig).expect("signature parse");
+        assert!(
+            signature.normalize_s().is_none(),
+            "signatures must be low-S"
+        );
+
+        let high_sig = if signature.normalize_s().is_some() {
+            signature
+        } else {
+            let (r, s) = signature.split_scalars();
+            k256::ecdsa::Signature::from_scalars(r, -s).expect("high-s signature")
+        };
+        assert!(high_sig.normalize_s().is_some());
+
+        let digest = sha2::Sha256::digest(message);
+        let verifying_key = k256::ecdsa::VerifyingKey::from(&pk);
+        verifying_key
+            .verify_prehash(&digest, &high_sig)
+            .expect("high-S signature is still valid mathematically");
+
+        let err = EcdsaSecp256k1Sha256::verify(message, high_sig.to_bytes().as_ref(), &pk);
+        assert!(matches!(err, Err(Error::BadSignature)));
     }
 }

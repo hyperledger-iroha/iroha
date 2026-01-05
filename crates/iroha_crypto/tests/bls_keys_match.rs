@@ -1,4 +1,5 @@
 //! Validate that stored BLS keypair fixtures line up with the expected public keys.
+#![cfg(feature = "bls")]
 
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey};
 

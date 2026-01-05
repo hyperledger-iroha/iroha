@@ -16,15 +16,8 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_torii::{OnlinePeersProvider, Torii, test_utils};
-use iroha_torii_shared::{HEADER_API_VERSION, uri};
-use norito::derive::NoritoDeserialize;
+use iroha_torii_shared::{ErrorEnvelope, HEADER_API_VERSION, uri};
 use tower::ServiceExt as _;
-
-#[derive(Debug, NoritoDeserialize)]
-struct ErrorPayload {
-    code: String,
-    message: String,
-}
 
 #[tokio::test]
 async fn default_version_is_advertised() {
@@ -99,7 +92,7 @@ async fn rejecting_unsupported_api_version() {
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = response.into_body().collect().await.unwrap().to_bytes();
-    let payload = norito::core::decode_from_bytes::<ErrorPayload>(&body).unwrap();
+    let payload = norito::core::decode_from_bytes::<ErrorEnvelope>(&body).unwrap();
     assert_eq!(payload.code, "torii_api_version_unsupported");
     assert!(
         !payload.message.is_empty(),
@@ -155,7 +148,7 @@ async fn proof_endpoints_reject_old_api_version() {
 
     assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
     let body = response.into_body().collect().await.unwrap().to_bytes();
-    let payload = norito::core::decode_from_bytes::<ErrorPayload>(&body).unwrap();
+    let payload = norito::core::decode_from_bytes::<ErrorEnvelope>(&body).unwrap();
     assert_eq!(payload.code, "torii_api_version_too_old");
     assert!(
         payload.message.contains("minimum `1.1`"),

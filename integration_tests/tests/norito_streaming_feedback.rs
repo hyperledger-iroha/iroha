@@ -92,9 +92,11 @@ async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
     let publisher_peer = make_peer(&publisher_keys, 24_101);
     let viewer_peer = make_peer(&viewer_keys, 24_102);
 
-    let publisher_handle =
-        StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b11));
-    let viewer_handle = StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b11));
+    let feedback_caps = CapabilityFlags::from_bits(
+        CapabilityFlags::FEATURE_FEEDBACK_HINTS | CapabilityFlags::FEATURE_PRIVACY_PROVIDER,
+    );
+    let publisher_handle = StreamingHandle::new().with_capabilities(feedback_caps);
+    let viewer_handle = StreamingHandle::new().with_capabilities(feedback_caps);
 
     let stream_id = fill_hash(0xA1);
     let first_loss_fp = loss_ratio_to_q16(0.07);
@@ -170,7 +172,7 @@ async fn norito_streaming_feedback_loopback() -> EyreResult<()> {
                     ambisonics: false,
                     max_channels: 2,
                 },
-                feature_bits: CapabilityFlags::from_bits(0b11),
+                feature_bits: feedback_caps,
                 max_datagram_size: negotiated_max_datagram,
                 dplpmtud: true,
             };

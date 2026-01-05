@@ -22,6 +22,20 @@ and supplies the schema hash and checksum needed for deterministic decoding.
 
 Total header size: 40 bytes.
 
+Alignment padding:
+- For uncompressed payloads, encoders must insert zero padding between the
+  header and payload when the archived type's alignment would otherwise be
+  violated.
+- Padding length must be the exact alignment padding required for the type and
+  padding bytes must be zero. Decoders without a concrete type alignment must
+  accept any zero padding up to 64 bytes and treat the remaining bytes as the
+  payload. Extra non-zero bytes are rejected.
+
+Schema enforcement:
+- Typed decoders must reject payloads whose header schema hash does not match
+  the expected type. `ArchiveView::decode` performs this check; use
+  `ArchiveView::decode_unchecked` only for raw inspection tools.
+
 ## Header Flags
 
 These flags are ORed into the final header byte. Unknown bits are rejected.
@@ -58,6 +72,9 @@ encoding:
     data.
   - If not set: `(len + 1)` u64 offsets, monotonic with the first offset 0.
 
+Varint encodings must fit in `u64` and use the shortest (canonical) encoding;
+overflow or overlong encodings are rejected.
+
 ## String Encoding
 
 `String` and `&str` values are encoded as:
@@ -70,11 +87,36 @@ encoding:
 apply nested-length heuristics or reinterpret string payloads based on their
 contents.
 
+## Map Encoding
+
+Maps encode deterministically with the same active layout flags:
+
+- Entry count uses the sequence length rules (`COMPACT_SEQ_LEN`).
+- Compat layout (`PACKED_SEQ` unset): for each entry,
+  `[key_len][key_payload][value_len][value_payload]` with key/value lengths
+  encoded via `COMPACT_LEN`.
+- Packed layout (`PACKED_SEQ` set): key sizes and value sizes precede the data,
+  followed by concatenated key payloads and concatenated value payloads.
+  - If `VARINT_OFFSETS` set: `len` varints for key sizes, then `len` varints for
+    value sizes.
+  - If `VARINT_OFFSETS` unset: `(len + 1)` u64 offsets for keys, then
+    `(len + 1)` u64 offsets for values; offsets are monotonic with the first
+    offset 0.
+- `HashMap` encodes entries in sorted key order for deterministic output;
+  `BTreeMap` uses its natural ordering.
+
+## NCB Columnar (internal)
+
+NCB payloads are exact and canonical:
+- Alignment padding between NCB columns must be zero-filled.
+- Bitset padding bits (flags and presence) must be zero.
+- Trailing bytes after the NCB payload are rejected.
+
 ## AoS Ad-hoc (Adaptive Columnar)
 
 The `norito::aos` helpers used by adaptive columnar encoders follow the same
-length prefix rules, but the choice is compile-time `compact-len` only and does
-not depend on Norito header flags.
+length prefix rules and honor the active `COMPACT_LEN` flag, so embedded AoS
+payloads stay consistent with their parent Norito headers.
 
-TODO: expand with packed-struct layout, map/set encoding, compression
-negotiation, and schema hash details.
+TODO: expand with packed-struct layout, compression negotiation, and schema hash
+details.

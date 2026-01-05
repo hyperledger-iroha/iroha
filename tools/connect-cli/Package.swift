@@ -17,6 +17,11 @@ let package = Package(
                 .product(name: "IrohaSwift", package: "IrohaSwift")
             ],
             path: "Sources"
-        )
+        ),
+        .testTarget(
+            name: "connect-cli-tests",
+            dependencies: ["connect-cli"],
+            path: "Tests"
+        ),
     ]
 )

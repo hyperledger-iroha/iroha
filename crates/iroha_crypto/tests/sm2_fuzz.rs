@@ -1,4 +1,4 @@
-#![doc = "Property-based fuzz tests for SM2 key generation and signatures."]
+//! Property-based fuzz tests for SM2 key generation and signatures.
 #![cfg(all(feature = "sm", feature = "sm_proptest"))]
 
 #[path = "sm2_negative_vector_fixture.rs"]

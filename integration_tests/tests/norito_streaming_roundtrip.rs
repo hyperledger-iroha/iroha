@@ -5,8 +5,8 @@ mod streaming;
 
 use hex::encode as hex_encode;
 use norito::streaming::{
-    CapabilityFlags, FecScheme, Hash, Multiaddr, PrivacyCapabilities, PrivacyRelay, PrivacyRoute,
-    Signature, StreamMetadata,
+    FecScheme, Hash, Multiaddr, PrivacyCapabilities, PrivacyRelay, PrivacyRoute, Signature,
+    StreamMetadata,
     chunk::{self, BaselineDecoder},
     codec::{BaselineEncoderConfig, BaselineManifestParams, EncodedSegment, RawFrame},
 };
@@ -85,7 +85,7 @@ fn segment_manifest_roundtrip() {
                 access_policy_id: Some(sample_hash(17)),
                 tags: vec!["nsc".into(), "baseline".into()],
             },
-            capabilities: CapabilityFlags::from_bits(0b1011),
+            capabilities: streaming::BASE_CAPABILITIES,
             signature: sample_signature(21),
             fec_suite: FecScheme::Rs12_10,
             neural_bundle: None,

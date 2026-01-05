@@ -1,7 +1,7 @@
 {
   "scenario": "heartbeat_loss",
   "torii_build": "mock-2026-05-15",
-  "sid_base64": "Y29ubmVjdC1maXh0dXJlLXNpZCE",
+  "sid_base64url": "Y29ubmVjdC1maXh0dXJlLXNpZCE",
   "description": "Miss two heartbeats mid-session, trigger resume, and confirm queue counters recover with OTLP-friendly samples.",
   "frames": [
     { "direction": "AppToWallet", "sequence": 1, "payload_hex": "00" },

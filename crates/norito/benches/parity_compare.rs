@@ -50,7 +50,6 @@ fn parity_scale_comparison(c: &mut Criterion) {
     let archived = from_compressed_bytes::<BenchmarkData>(&compressed_bytes).expect("zstd decode");
     let compressed_decoded = BenchmarkData::deserialize(&archived);
     assert_eq!(sample, compressed_decoded);
-    std::mem::forget(archived);
     assert!(compressed_bytes.len() <= norito_bytes.len());
 
     // Norito bare (codec) payload for apples-to-apples with SCALE

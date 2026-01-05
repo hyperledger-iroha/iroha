@@ -26,6 +26,71 @@
 - Sumeragi: derive membership adverts and pacemaker precommit deferrals from per-height epochs to avoid cross-epoch mismatches; add regression tests.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
 - Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/assignments in unrelated modules).
+- Torii/Connect/content: enforce base64url-only SIDs across Connect preview/session/WS (server + JS/Python/Swift + connect-cli + fixtures/docs), reserve WS capacity during handshake, and require canonical signed headers for role/sponsor content reads; docs/OpenAPI updated.
+- Tests: not run (not requested).
+- Build fixes: import AudioEncoderSampleCountMismatchInfo in Norito streaming, add DecodeFromSlice/Debug for archive_view DummyPayload, disambiguate Ed25519 test key types, fix missing qc2_hash in tiered snapshot test, and use StateView/Registrable in Torii content auth tests.
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450` and dead_code in `crates/norito/src/core.rs:6792`).
+- Norito/SDKs: accept alignment padding in Python/Java/Swift/JS header parsing, fix JS ConnectJournalRecord major/hash encoding, and add cross-language padding/header tests; update `norito.md` and Python design notes.
+- Tests: not run (not requested).
+- Crypto/JS: standardize Ed25519 seed derivation (SHA-256 for non-32 seeds), accept 64-byte seed+public private keys, and validate ML-DSA public-key parsing; update JS SDK parity/tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options); `cargo test --workspace` (timed out after 120s during compile; warnings about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450` and dead_code in `crates/norito/src/core.rs:6792`).
+- IVM/Kotodama: allow dynamic bounds in `.take`/`.range` when `kotodama_dynamic_bounds` is enabled; add regression tests for non-literal bounds.
+- Tests: `cargo test --workspace` (failed: missing `AudioEncoderSampleCountMismatchInfo` in `crates/norito/src/streaming.rs:4230`; warning about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450`).
+- Kura: avoid pre-shrinking the block index before batch writes by adding a targeted append path for rewrites; add regression coverage for tail rewrites.
+- Tests: not run (not requested).
+- IVM/Kotodama: keep spill stack offsets in i64 to avoid truncation, make regalloc interval ordering deterministic, and clarify map-iteration bounds commentary; add unit coverage for large stack offsets and deterministic allocation ties.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Kura: validate sidecar temp index sanity before promotion to avoid replacing good indexes with partial temp writes; add regression coverage for corrupt temp index handling.
+- Tests: not run (not requested).
+- Kura: make sidecar pruning tolerate misaligned index tails and invalid entries (drop out-of-range payloads) with regression coverage.
+- Tests: not run (not requested).
+- Crypto/IVM: align compact Merkle proof `dirs` semantics with leaf-index bits (0 = left, 1 = right) across iroha_crypto + IVM compact proof generation/verification; add regression coverage for dirs derivation and syscall output.
+- Tests: not run (existing norito compile errors in `crates/norito/src/streaming.rs` still block `cargo test`).
+- Norito: fix JSON unescape to preserve UTF-8 bytes, reject leading-zero numbers in `parse_value`, and add regression coverage.
+- Tests: `cargo test --workspace` (failed: missing `AudioEncoderSampleCountMismatchInfo` in `crates/norito/src/streaming.rs:4230`; warning about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450`).
+- Crypto/SoraFS: switch proof-token Ed25519 verification to strict mode (reject weak keys/non-canonical signatures) and add low-order signature regression coverage.
+- IVM: enforce canonical/low-S secp256k1 verification, align ISO 20022 secp256k1 signing/validation with compressed SEC1 keys, and add high-S rejection coverage.
+- Tests: `cargo test -p iroha_crypto secp256k1` (failed: missing `AudioEncoderSampleCountMismatchInfo` in `crates/norito/src/streaming.rs:4230`; warning about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450`).
+- DA spool readers: skip unreadable/corrupt commitment/pin‑intent/receipt files with warnings for partial‑write tolerance; add regression coverage for corrupt entries.
+- Tests: not run (not requested).
+- Kura/WSV: sync parent directories after lane storage relabel/retire renames to harden crash consistency for lane segment moves.
+- Tests: not run (not requested).
+- Offline proofs: add CLI regression coverage ensuring `offline transfer proof` runs without Torii config and emits a proof request from local bundle input.
+- Crypto: import `ed25519_dalek::Verifier` in the Ed25519 test module to satisfy the trait method in low-order key tests.
+- Snapshot tests: mark `snapshot_write_overwrites_existing_files` async to align with `tokio::test` usage.
+- Tests: not run (per request).
+- DA shard cursors: persist journals via temp file + dir sync, recover from temp when main is missing/corrupt, and add regression coverage for temp promotion/fallback.
+- Tests: not run (not requested).
+- Streaming fixtures: standardize Norito streaming integration-test capability flags (explicit feature bits + bundled entropy), refresh baseline/bundled golden snapshots, and remove unused imports in streaming helpers, `norito` core, and ed25519 signatures.
+- Tests: `cargo test -p integration_tests --test norito_streaming_end_to_end streaming::tests::baseline_snapshot_matches_golden_fixture -- --nocapture`; `cargo test -p integration_tests --test norito_streaming_end_to_end streaming::tests::bundled_snapshot_matches_golden_fixture -- --nocapture`; `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Crypto/BLS: make `Choice` conversions explicit in BLS/VRF helpers, gate the BLS fixture test by feature, and switch SM/ML-DSA/SM2 test crates to inner doc comments; add VRF invalid-length regression tests and include `pairing` in the `bls` feature.
+- Norito: restrict `ArchivedBox` to sized payloads and remove a stray fixed-offset write in `copy_from_payload` that referenced a missing writer.
+- Tests: `cargo test -p iroha_torii --test connect_gating`; `cargo test -p iroha_crypto --features bls vrf_to_g`; `cargo test -p norito copy_from_payload_allows_zero_len`.
+- Crypto: require non-empty, distinct message sets for BLS multi-message aggregate verification and add regression coverage for wrapper + internal verifier paths.
+- Tests: not run (not requested).
+- Kura: allow commit-marker updates to overwrite existing marker files (cross-platform rename), with regression coverage.
+- Tests: not run (not requested).
+- Kura: prune sidecar rename handles existing files (cross-platform replace) when swapping pruned data/index, without dropping recovery temp files.
+- Tests: not run (not requested).
+- Snapshot/WSV: overwrite existing snapshot artifacts atomically across platforms (handle temp rename over existing files) and add regression coverage for repeat writes.
+- Tests: not run (not requested).
+- Commit roster journal: allow temp promotion/overwrite when journal file already exists (cross-platform rename), with regression coverage for overwrite.
+- Tests: not run (not requested).
+- Norito: return owning `ArchivedBox` for compressed decodes, enforce schema checks in core/ArchiveView, implement packed-seq encoding for sequences/maps (fixed/varint offsets), and add regression coverage + doc updates.
+- Tests: not run (not requested).
+- Offline proofs: standardize `/v1/offline/transfers/proof` on transfer payloads only, keep CLI proof generation local (no Torii config), and add missing-transfer rejection coverage alongside SDK/docs updates.
+- Tests: not run (not requested).
+- Crypto: reject identity BLS keys/signatures and enforce canonical compressed encodings across parse/aggregate/VRF paths; add regression coverage for identity rejection.
+- Tests: `cargo test -p iroha_crypto secp256k1` (failed: norito compile errors E0599/E0607 in `crates/norito/src/core.rs:3006`/`crates/norito/src/core.rs:3008`).
+- RBC: prefer temp session snapshots but fall back to main when temps are invalid; add regression coverage for scan/load fallback cases.
+- Tests: not run (not requested).
+- Streaming: fsync + dir sync for streaming snapshot persistence, recover/promote temp snapshots on load, and add regression coverage for temp promotion.
+- Tests: not run (not requested).
+- RBC: recover temp status snapshots and temp session files on load (with fsync + dir sync on writes); add regression coverage for temp promotion in status/store.
+- Tests: not run (not requested).
+- SM2/Bridge: rebuild `NoritoBridge.xcframework` to align SM2 public-key multihash payloads (distid + SEC1) with the canonical fixture so Swift parity tests match.
+- Tests: `swift test --filter Sm2Tests`; `cargo test -p iroha_torii --lib`.
+- Crypto: fix Algorithm discriminant stability (explicit repr u8 values aligned with TryFrom/PublicKeyCompact/SDK docs) and gate `bls_check` behind the `bls` feature; add regression assertion for discriminant values.
 - Sumeragi: hydrate existing RBC sessions on duplicate `BlockCreated` and emit precommit/exec votes with per-height epochs to avoid cross-epoch drops; add regression tests.
 - Irohad: remove the DA/RBC override for Iroha 3 so `sumeragi.da_enabled` is enforced by config validation; update docs and tests.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
@@ -42,6 +107,81 @@
 - Tests: not run (not requested).
 - Genesis: align shipped genesis manifests to wire protocol v1 and refresh consensus_fingerprint values.
 - Tests: not run (not requested).
+- Norito: reject non-zero alignment padding and bitset padding bits in NCB/opt columns, enforce trailing-byte checks in NCB views, and document NCB canonicalization rules.
+- Tests: `cargo test -p norito --test ncb_padding_trailing`.
+- Offline proofs: allow `/v1/offline/transfers/proof` to accept transfer payloads pre-admission, refactor proof-request builders onto `OfflineToOnlineTransfer`, add Torii/Swift updates, and refresh docs/tests.
+- Tests: not run (not requested).
+- Tiered state: sync cold shard parent directories before snapshot promotion to harden crash consistency for nested payloads.
+- Tests: not run (not requested).
+- Kura: keep pruned sidecar temp index on rename failure so recovery can promote it.
+- Tests: not run (not requested).
+- Crypto: reject non-canonical SEC1 encodings for secp256k1 public keys (canonical form only) and add regression coverage.
+- Tests: not run (not requested).
+- Kura: avoid promoting orphaned sidecar temp data without matching temp index; add regression coverage for ignoring orphaned temp data.
+- Tests: not run (not requested).
+- Kura: recover sidecar prune artifacts by promoting temp index/data on read/write; add regression coverage for temp index promotion.
+- Tests: not run (not requested).
+- Snapshot/WSV: ignore invalid UTF-8 in snapshot sidecar files so tmp fallbacks still work; add regression coverage.
+- Kura: prefer temp commit-roster journals when present (crash-consistency), with regression coverage for temp promotion.
+- Tests: `cargo test -p norito --test ncb_id_delta_overflow`.
+- Norito: fallback to non-delta id encoding when forced delta would overflow i64, and add regression coverage for u64 id-delta overflow cases.
+- Tests: not run (not requested).
+- Crypto: make SM2 random key generation validate distid instead of panicking, propagate errors to SDK bindings, and add regression coverage for invalid distids.
+- Tests: not run (not requested).
+- Kura: keep commit-marker writes pending on failure so fsync retries; add regression coverage for temp-marker write failures.
+- Tests: not run (not requested).
+- Crypto: enforce HashOf Norito decoding LSB validation and fixed-size DecodeFromSlice consumption; add regression tests.
+- Tests: not run (not requested).
+- Crypto: reject negative single-byte SM2 DER INTEGER encodings to avoid accepting signed DER; add regression coverage.
+- Tests: not run (not requested).
+- Norito: reject non-canonical varint encodings across core/stream/columnar decoders, enforce zero-filled padding during streaming decode, add regression coverage, and document canonical varints.
+- Tests: not run (not requested).
+- Warnings cleanup: remove unused imports/mut, drop unused sorafs helper, add missing Kura sidecar tests, use TelemetryProfile fields in error display, and tighten tiered-state hot entry assertions.
+- Tests: not run (not requested).
+- Crypto: reject out-of-range Merkle proof leaf indices, enforce compact proof depth <= 32, and reject low-order X25519 shared secrets in hybrid KEM/DEM; add regression tests.
+- Tests: not run (not requested).
+- Tiered state: recover snapshot artifacts (.bak/.staging) on startup and add regression coverage for backup restore + staging cleanup.
+- Tests: not run (not requested).
+- Norito: reject trailing bytes in AoS decoders, enforce exact zero-filled header padding for `from_bytes`/`from_compressed_bytes` (plus padding-byte validation for archive views), and add regression coverage; document the padding rule.
+- Tests: not run (not requested).
+- Torii/Connect: decouple server-event sequencing from peer monotonic enforcement, update session activity on server sends, and standardize WS token delivery (Authorization/Sec-WebSocket-Protocol) across Swift SDK, examples, and docs; add regression coverage.
+- Tests: not run (not requested).
+- Kura: align mis-sized block index tails on init, and recover from corrupted commit markers (temp marker fallback + rewrite); add regression tests.
+- Tests: `cargo test -p iroha_core prune_does_not_advance_commit_marker` (timed out after 120s; waiting on build directory lock).
+- Kura: fix mutable borrow ordering in data-file truncation so mmap invalidation can precede shrinking.
+- Snapshot tests: restore `expected_chain_id` capture and assert chain id after snapshot reads.
+- Tests: `cargo test -p norito` (passed).
+- Tests: `cargo test --workspace` (timed out after 600s while running tests; no errors reported before timeout; warnings about unused imports/assignments in multiple crates).
+- Crypto: validate SM2 default distid updates, include distid in SM2 public key equality, and reject non-canonical DER integer encodings for SM2 signatures; add regression tests.
+- Tests: not run (not requested).
+- Norito: reject overflowing varint length encodings across core/stream/columnar decoders, add overflow regression coverage, and document the varint overflow rule.
+- Tests: `cargo test -p norito` (timed out after 120s; waiting on build directory lock).
+- Kura: prevent `BlockStore::prune` from advancing the durable commit marker; add regression coverage for over-height prune requests.
+- Torii/Connect: prune idle handshake buckets, treat zero per-IP cap/handshake rate as disabled, and add regression coverage; document zero-value semantics.
+- Tests: not run (not requested).
+- Norito: honor active layout flags when encoding headered payloads, loosen header-hint matching for v1 headers, reject trailing bytes in `decode_from_bytes`, and fix NCB negative tests for offsets/enum dict codes.
+- Tests: `cargo test -p norito` (passed).
+- Kura/WSV: add block-store durable-count marker handling and retired-segment budget reclaim; add regression coverage for commit marker pruning and retired purge.
+- Tiered state: reuse cold shard payloads via hard links when supported to cut churn; add Unix-only hard-link reuse coverage; fix Nexus storage budget doc key.
+- Tests: not run (not requested).
+- IVM/Kotodama: ensure `encode_int` literals lower via `EncodeInt`, propagate unary-neg constants for inline amount checks, and validate NFT transfer syscalls in CoreHost/DefaultHost; add IR regression coverage for literal encode_int lowering.
+- Docs: replace stub translations for Kotodama grammar in ar/es/fr/pt/ru/ur with full translated content (including inline builder literal/length rules).
+- Tests: `cargo test -p ivm --test kotodama_invalid_literals --test kotodama_pointer_roundtrips` (passed).
+- Crypto: standardize SM2 multihash payloads to encode `distid_len || distid || SEC1` and propagate the new format across tests, fixtures, SDK bindings, curve registry metadata, and genesis/SM vector docs.
+- Tests: not run (not requested).
+- Torii: enforce app pagination on NFT list/query endpoints (reject `limit=0`, clamp query fetch_size); add regression tests.
+- Crypto: fix Merkle proof test type inference by pinning `HashOf<()>` and derive `Debug` for `PublicKeyCompact`.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; no errors reported at timeout; warnings about unused imports/consts in `norito`, `document-features`, `iroha_crypto`, `iroha_telemetry`).
+- Torii: enforce app pagination on offline list/query endpoints (allowances, transfers, receipts, summaries, revocations) and clamp query fetch_size; add regression tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (failed in `iroha_crypto` tests: E0282 type annotations needed in `crates/iroha_crypto/src/merkle.rs:1489`; E0277 missing `Debug` for `PublicKeyCompact` in `crates/iroha_crypto/src/lib.rs:2659`/`2671`; warnings about unused imports/consts in `norito`/`document-features`).
+- Norito: honor `COMPACT_LEN`/`COMPACT_SEQ_LEN` for core collection serializers (Vec/sets/maps/etc.), tuples/arrays/results/Cow, and BinaryHeap pointer decoding; add `write_seq_len`/`seq_len_prefix_len` helpers, ConstVec compact-seq updates, and compact-length regression tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s; failed in `iroha_crypto` tests: E0282 type annotations needed in `crates/iroha_crypto/src/merkle.rs:1489`; E0277 missing `Debug` for `PublicKeyCompact` in `crates/iroha_crypto/src/lib.rs:2659`/`2671`; warnings about unused imports/consts in `norito`/`document-features`).
+- Torii: enforce app pagination on repo-agreements and asset-definitions list/query endpoints (reject `limit=0`, clamp fetch_size); add regression tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; no errors reported at timeout).
 - Torii: negotiate Kaigi relay endpoint responses so JSON `Accept` headers receive JSON bodies.
 - Tests: not run (not requested).
 - Torii: update evidence decode tests to assert `DoublePrepare` now that `EvidenceKind::DoublePrevote` is removed.
@@ -67,8 +207,9 @@
 - Norito: use `core::decode_from_bytes` in string length-prefix tests to support `&str` decoding without HRTB errors.
 - Kagami: allow test-only env overrides under `unsafe_code` deny by scoping `#[allow(unsafe_code)]` to the `EnvGuard` helpers.
 - Tests: `cargo test --workspace` (timed out after 600s while still running tests; no errors reported at timeout).
-- IVM/Kotodama: word-align JALR targets, enforce literal-only inline ZK builders with hex decoding, accept runtime NFT pointer arguments (mint/transfer) while preserving syscall args, and update opcode docs + ZK sample; add regression coverage for literal enforcement and runtime NFT pointers.
+- IVM/Kotodama: word-align JALR targets, enforce literal-only inline ZK builders with hex decoding, require 32-byte nullifier/inputs and non-negative unshield amounts, accept runtime NFT pointer arguments (mint/transfer) while preserving syscall args, and update opcode docs + ZK sample; add regression coverage for literal enforcement, invalid sizes/amounts, and runtime NFT pointers.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p ivm --test kotodama_invalid_literals --test kotodama_pointer_roundtrips` (timed out after 120s during compile).
 - Tests: `cargo test --workspace` (timed out after 120s during compile; prior attempt failed in `norito` test `string_len_prefix`: `NoritoDeserialize` not general enough for `&str` at `crates/norito/tests/string_len_prefix.rs:46`).
 - Torii: enforce pagination limits on domains list/query and account-permissions list so `limit=0` no longer bypasses caps; added regression tests for invalid pagination.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
@@ -1018,3 +1159,10 @@
 - Translated the Android device lab reservation request template across all locales in `docs/examples`.
 - Translated the Android partner SLA discovery notes template across all locales in `docs/examples`.
 - Normalized block-sync QC signer indices using peer mappings across rotated topologies (including NPoS PRF rotations) and added coverage for NPoS view-rotation QC validation.
+- Switched Ed25519 verification to strict checks (reject low-order keys/signatures), hardened batch verification for low-order points, and added a regression that demonstrates low-order key forgery is now rejected.
+- Enforced low-S canonical secp256k1 signatures (signer normalizes, verifier rejects high-S) and added a regression to prove high-S malleability no longer verifies.
+- Rejected duplicate public keys in BLS same-message aggregate verification (including pre-aggregated checks) with new regressions for both normal and small variants.
+- Hardened Kura block store init by clamping commit markers to data-backed counts, preserving markers during prune, and aligning hash lengths; added tests for data-backed fallback and hash misalignment.
+- Snapshot reader now falls back to temp Merkle metadata when the main metadata is corrupt, with coverage for the new behavior.
+- Kura disk-usage accounting now includes sidecar temp/debug files by summing block-store and pipeline directories, with a regression covering extra files.
+- Synced merge-ledger truncation and tiered snapshot pruning roots to harden crash consistency after pruning.

@@ -28,16 +28,12 @@ fn ed25519_test_key(tag: u8) -> ed25519_dalek::SigningKey {
 #[cfg(feature = "secp256k1")]
 #[test]
 fn syscall_verify_signature_secp256k1_via_tlv() {
-    use k256::ecdsa::{Signature, SigningKey, VerifyingKey, signature::Signer};
-    use rand_core::OsRng;
+    use iroha_crypto::{EcdsaSecp256k1Sha256, KeyGenOption};
 
-    let mut rng = OsRng;
-    let sk = SigningKey::random(&mut rng);
-    let vk: VerifyingKey = sk.verifying_key();
-    let pk_bytes = vk.to_sec1_bytes();
+    let (pk, sk) = EcdsaSecp256k1Sha256::keypair(KeyGenOption::UseSeed(vec![0x11; 32]));
+    let pk_bytes = pk.to_sec1_bytes();
     let msg = b"ivm-secp256k1";
-    let sig: Signature = sk.sign(msg);
-    let sig_bytes = sig.to_bytes();
+    let sig_bytes = EcdsaSecp256k1Sha256::sign(msg, &sk);
 
     let msg_tlv = make_tlv(PointerType::Blob as u16, msg);
     let sig_tlv = make_tlv(PointerType::Blob as u16, &sig_bytes);
@@ -235,15 +231,11 @@ fn opcode_verify_ed25519_batch_via_tlv_reports_failure_index() {
 #[cfg(feature = "secp256k1")]
 #[test]
 fn opcode_verify_secp256k1_via_tlv() {
-    use k256::ecdsa::{Signature, SigningKey, VerifyingKey, signature::Signer};
-    use rand_core::OsRng;
-    let mut rng = OsRng;
-    let sk = SigningKey::random(&mut rng);
-    let vk: VerifyingKey = sk.verifying_key();
-    let pk_bytes = vk.to_sec1_bytes();
+    use iroha_crypto::{EcdsaSecp256k1Sha256, KeyGenOption};
+    let (pk, sk) = EcdsaSecp256k1Sha256::keypair(KeyGenOption::UseSeed(vec![0x22; 32]));
+    let pk_bytes = pk.to_sec1_bytes();
     let msg = b"ivm-op-secp256k1";
-    let sig: Signature = sk.sign(msg);
-    let sig_bytes = sig.to_bytes();
+    let sig_bytes = EcdsaSecp256k1Sha256::sign(msg, &sk);
     let msg_tlv = make_tlv(PointerType::Blob as u16, msg);
     let sig_tlv = make_tlv(PointerType::Blob as u16, &sig_bytes);
     let pk_tlv = make_tlv(PointerType::Blob as u16, &pk_bytes);
@@ -270,6 +262,31 @@ fn opcode_verify_secp256k1_via_tlv() {
     vm.memory.load_code(&code);
     vm.run().unwrap();
     assert_eq!(vm.register(3), 1);
+}
+
+#[cfg(feature = "secp256k1")]
+#[test]
+fn secp256k1_verify_rejects_high_s_signature() {
+    use iroha_crypto::{EcdsaSecp256k1Sha256, KeyGenOption};
+    use ivm::signature::{SignatureScheme, verify_signature};
+    use k256::ecdsa::Signature;
+
+    let (pk, sk) = EcdsaSecp256k1Sha256::keypair(KeyGenOption::UseSeed(vec![0x33; 32]));
+    let msg = b"ivm-high-s";
+    let sig = EcdsaSecp256k1Sha256::sign(msg, &sk);
+    let signature = Signature::from_slice(&sig).expect("signature parse");
+    let high_s = Signature::from_scalars(signature.r(), -signature.s()).expect("high-S signature");
+    let high_s_bytes = high_s.to_vec();
+
+    assert!(
+        !verify_signature(
+            SignatureScheme::Secp256k1,
+            msg,
+            &high_s_bytes,
+            pk.to_sec1_bytes().as_ref()
+        ),
+        "high-S signatures must be rejected"
+    );
 }
 
 #[cfg(feature = "ml-dsa")]

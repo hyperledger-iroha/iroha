@@ -172,7 +172,7 @@ fn analyze_statement_reentrancy(
                 state_before
             }
         }
-        Statement::AssignExpr { target, value } => {
+        Statement::AssignExpr { target, value, .. } => {
             visit_expr_for_host_calls(target, state_before, func_name, findings);
             visit_expr_for_host_calls(value, state_before, func_name, findings);
             if expr_targets_state(target, state_names) {

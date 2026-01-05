@@ -106,7 +106,7 @@ if (!session || !tokens) {
   throw new Error("session was not registered; rerun with register: true");
 }
 
-console.log("share this SID", preview.sidHex);
+console.log("share this SID", preview.sidBase64Url);
 console.log("wallet deeplink", session.wallet_uri);
 console.log("app token for Connect WS", tokens.app);
 ```
@@ -151,7 +151,7 @@ if (!tokens) {
 
 const walletWs = openConnectWebSocket({
   baseUrl: toriiBaseUrl,
-  sid: preview.sidHex,
+  sid: preview.sidBase64Url,
   role: "wallet",
   token: tokens.wallet,
   websocketOptions: {

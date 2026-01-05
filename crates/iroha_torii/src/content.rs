@@ -3,9 +3,10 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
+use crate::{SharedAppState, app_auth::verify_canonical_request, limits};
 use axum::{
     extract::ConnectInfo,
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
     response::{IntoResponse, Response},
 };
 use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
@@ -19,12 +20,8 @@ use iroha_data_model::{
         ContentAuthMode, ContentBundleManifest, ContentBundleRecord, ContentDaReceipt, ContentRange,
     },
     da::types::BlobDigest,
-    nexus::UniversalAccountId,
 };
 use iroha_logger::{error, info};
-use norito::derive::JsonDeserialize;
-
-use crate::{NoritoQuery, SharedAppState, limits};
 
 #[derive(Debug)]
 pub enum ContentError {
@@ -61,24 +58,15 @@ impl IntoResponse for ContentError {
     }
 }
 
-#[derive(Default, JsonDeserialize)]
-pub struct ContentQuery {
-    /// Optional UAID literal (`uaid:<hex>` or raw 64-hex).
-    #[norito(default)]
-    pub uaid: Option<String>,
-    /// Optional account identifier for role-gated bundles.
-    #[norito(default)]
-    pub account: Option<String>,
-}
-
 /// GET /v1/content/{bundle}/{path...}
 #[allow(clippy::too_many_lines)]
 pub async fn handle_get_content(
     axum::extract::State(app): axum::extract::State<SharedAppState>,
     axum::extract::Path((bundle_hex, path)): axum::extract::Path<(String, String)>,
-    NoritoQuery(query): NoritoQuery<ContentQuery>,
     ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
+    method: Method,
+    uri: Uri,
 ) -> Result<Response, ContentError> {
     let start = Instant::now();
     let mut bytes_served = 0u64;
@@ -129,7 +117,7 @@ pub async fn handle_get_content(
                 return Err(ContentError::NotFound);
             };
 
-            if let Err(err) = enforce_auth(&bundle.manifest, &query, &state) {
+            if let Err(err) = enforce_auth(&bundle.manifest, &app.state, &headers, &method, &uri) {
                 outcome_hint = Some("auth_failed");
                 return Err(err);
             }
@@ -326,22 +314,17 @@ fn enforce_pow(
 
 fn enforce_auth(
     manifest: &ContentBundleManifest,
-    query: &ContentQuery,
-    state: &impl StateReadOnlyWithTransactions,
+    state: &std::sync::Arc<iroha_core::state::State>,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
 ) -> Result<(), ContentError> {
     match &manifest.auth {
         ContentAuthMode::Public => Ok(()),
         ContentAuthMode::RoleGate(role) => {
-            let account_raw = query
-                .account
-                .as_deref()
-                .ok_or_else(|| ContentError::Unauthorized("account is required".to_string()))?;
-            let account = AccountId::from_str(account_raw)
-                .map_err(|_| ContentError::BadRequest("invalid account id".to_string()))?;
-            let has_role = state
-                .world()
-                .account_roles_iter(&account)
-                .any(|r| r == role);
+            let account = signed_account(state, headers, method, uri)?;
+            let view = state.view();
+            let has_role = view.world().account_roles_iter(&account).any(|r| r == role);
             if has_role {
                 Ok(())
             } else {
@@ -349,12 +332,18 @@ fn enforce_auth(
             }
         }
         ContentAuthMode::Sponsor(expected) => {
-            let uaid_literal = query
-                .uaid
-                .as_deref()
-                .ok_or_else(|| ContentError::Unauthorized("uaid is required".to_string()))?;
-            let uaid = parse_uaid_literal(uaid_literal)?;
-            if &uaid == expected {
+            let account = signed_account(state, headers, method, uri)?;
+            let view = state.view();
+            let account_entry = view
+                .world()
+                .account(&account)
+                .map_err(|_| ContentError::Forbidden("account not found".to_string()))?;
+            let uaid = account_entry
+                .value()
+                .uaid()
+                .copied()
+                .ok_or_else(|| ContentError::Forbidden("uaid required".to_string()))?;
+            if uaid == *expected {
                 Ok(())
             } else {
                 Err(ContentError::Forbidden("uaid mismatch".to_string()))
@@ -363,12 +352,24 @@ fn enforce_auth(
     }
 }
 
-fn parse_uaid_literal(raw: &str) -> Result<UniversalAccountId, ContentError> {
-    let trimmed = raw.trim();
-    let literal = trimmed.strip_prefix("uaid:").unwrap_or(trimmed);
-    let hash = Hash::from_str(literal)
-        .map_err(|_| ContentError::BadRequest("invalid uaid".to_string()))?;
-    Ok(UniversalAccountId::from_hash(hash))
+fn signed_account(
+    state: &std::sync::Arc<iroha_core::state::State>,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+) -> Result<AccountId, ContentError> {
+    match verify_canonical_request(state, headers, method, uri, &[], None) {
+        Ok(Some(account)) => Ok(account),
+        Ok(None) => Err(ContentError::Unauthorized(
+            "signed account headers are required".to_string(),
+        )),
+        Err(err) => {
+            iroha_logger::warn!(?err, "content auth signature rejected");
+            Err(ContentError::Unauthorized(
+                "invalid request signature".to_string(),
+            ))
+        }
+    }
 }
 
 fn leading_zero_bits(bytes: &[u8]) -> u32 {
@@ -636,13 +637,19 @@ mod tests {
     use super::*;
     use base64::Engine;
     use iroha_config::parameters::actual::ContentPow;
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
+    use iroha_crypto::{KeyPair, Signature};
     use iroha_data_model::{
+        account::Account,
         content::{ContentCachePolicy, ContentDaReceipt, ContentFileEntry},
         da::{
             prelude::{BlobClass, DaStripeLayout},
             types::RetentionPolicy,
         },
+        domain::Domain,
         nexus::{DataSpaceId, LaneId},
+        role::RoleId,
+        Registrable,
     };
 
     fn sample_manifest() -> ContentBundleManifest {
@@ -661,6 +668,43 @@ mod tests {
             stripe_layout: DaStripeLayout::default(),
             mime_overrides: BTreeMap::new(),
         }
+    }
+
+    fn minimal_state_with_account(
+        account_id: &AccountId,
+        uaid: Option<iroha_data_model::nexus::UniversalAccountId>,
+    ) -> std::sync::Arc<iroha_core::state::State> {
+        let domain = Domain::new(account_id.domain().clone()).build(account_id);
+        let account = Account::new(account_id.clone())
+            .with_uaid(uaid)
+            .build(account_id);
+        std::sync::Arc::new(iroha_core::state::State::new_for_testing(
+            World::with([domain], [account], []),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ))
+    }
+
+    fn signed_headers(
+        account: &AccountId,
+        key_pair: &KeyPair,
+        method: &Method,
+        uri: &Uri,
+    ) -> HeaderMap {
+        let message = crate::canonical_request_message(method, uri, &[]);
+        let signature = Signature::new(key_pair.private_key(), &message);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            crate::HEADER_ACCOUNT,
+            account.to_string().parse().expect("account header"),
+        );
+        headers.insert(
+            crate::HEADER_SIGNATURE,
+            crate::signature_header_value(&signature)
+                .parse()
+                .expect("signature header"),
+        );
+        headers
     }
 
     #[test]
@@ -840,6 +884,90 @@ mod tests {
         let bundle = Hash::new(b"bundle");
         let err = enforce_pow(&pow, &headers, &bundle, "index.html").expect_err("pow missing");
         matches!(err, ContentError::Unauthorized(_));
+    }
+
+    #[test]
+    fn role_gate_requires_signed_headers() {
+        let key_pair = KeyPair::random();
+        let account_id = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            key_pair.public_key().clone(),
+        );
+        let state = minimal_state_with_account(&account_id, None);
+        let mut manifest = sample_manifest();
+        manifest.auth =
+            ContentAuthMode::RoleGate(RoleId::new("auditor".parse().expect("role name")));
+        let headers = HeaderMap::new();
+        let method = Method::GET;
+        let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
+
+        let err = enforce_auth(&manifest, &state, &headers, &method, &uri)
+            .expect_err("signature required");
+        assert!(matches!(err, ContentError::Unauthorized(_)));
+    }
+
+    #[test]
+    fn role_gate_rejects_missing_role() {
+        let key_pair = KeyPair::random();
+        let account_id = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            key_pair.public_key().clone(),
+        );
+        let state = minimal_state_with_account(&account_id, None);
+        let mut manifest = sample_manifest();
+        manifest.auth =
+            ContentAuthMode::RoleGate(RoleId::new("auditor".parse().expect("role name")));
+        let method = Method::GET;
+        let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
+        let headers = signed_headers(&account_id, &key_pair, &method, &uri);
+
+        let err =
+            enforce_auth(&manifest, &state, &headers, &method, &uri).expect_err("missing role");
+        assert!(matches!(err, ContentError::Forbidden(_)));
+    }
+
+    #[test]
+    fn sponsor_accepts_matching_uaid() {
+        let key_pair = KeyPair::random();
+        let account_id = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            key_pair.public_key().clone(),
+        );
+        let uaid = iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(b"uaid"));
+        let state = minimal_state_with_account(&account_id, Some(uaid));
+        let mut manifest = sample_manifest();
+        manifest.auth = ContentAuthMode::Sponsor(uaid);
+        let method = Method::GET;
+        let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
+        let headers = signed_headers(&account_id, &key_pair, &method, &uri);
+
+        enforce_auth(&manifest, &state, &headers, &method, &uri).expect("authorized");
+    }
+
+    #[test]
+    fn sponsor_rejects_mismatched_uaid() {
+        let key_pair = KeyPair::random();
+        let account_id = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            key_pair.public_key().clone(),
+        );
+        let state = minimal_state_with_account(
+            &account_id,
+            Some(iroha_data_model::nexus::UniversalAccountId::from_hash(
+                Hash::new(b"uaid"),
+            )),
+        );
+        let mut manifest = sample_manifest();
+        manifest.auth = ContentAuthMode::Sponsor(
+            iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(b"other-uaid")),
+        );
+        let method = Method::GET;
+        let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
+        let headers = signed_headers(&account_id, &key_pair, &method, &uri);
+
+        let err =
+            enforce_auth(&manifest, &state, &headers, &method, &uri).expect_err("uaid mismatch");
+        assert!(matches!(err, ContentError::Forbidden(_)));
     }
 
     #[test]

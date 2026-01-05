@@ -1,5 +1,5 @@
+//! Regression tests for SM3 and SM4 helpers.
 #![cfg(feature = "sm")]
-#![doc = "Regression tests for SM3 and SM4 helpers."]
 
 use hex::decode as hex_decode;
 use iroha_crypto::{Sm3Digest, Sm4Key};

@@ -7821,10 +7821,12 @@ fn distinct_epochs_for_block_votes(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PipelinePhase {
     Propose,
+    #[allow(dead_code)]
     CollectDa,
     CollectPrepare,
     CollectCommit,
     CollectExec,
+    #[allow(dead_code)]
     CollectWitness,
     Commit,
 }

@@ -9,7 +9,7 @@ use core::fmt;
 use iroha_crypto::{
     Algorithm, PublicKey,
     error::{Error as CryptoError, ParseError},
-    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
+    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
 use rand_core_06::OsRng;
 use thiserror::Error;
@@ -17,6 +17,23 @@ use thiserror::Error;
 /// Convenience wrapper around an SM2 key pair.
 pub struct Sm2KeyPair {
     private: Sm2PrivateKey,
+}
+
+// Normalize Sm2PrivateKey::random return type across crypto versions.
+trait IntoSm2Result {
+    fn into_result(self) -> Result<Sm2PrivateKey, ParseError>;
+}
+
+impl IntoSm2Result for Sm2PrivateKey {
+    fn into_result(self) -> Result<Sm2PrivateKey, ParseError> {
+        Ok(self)
+    }
+}
+
+impl IntoSm2Result for Result<Sm2PrivateKey, ParseError> {
+    fn into_result(self) -> Result<Sm2PrivateKey, ParseError> {
+        self
+    }
 }
 
 impl fmt::Debug for Sm2KeyPair {
@@ -37,14 +54,17 @@ impl Sm2KeyPair {
 
     /// Generate a random SM2 key pair with the default distinguishing ID.
     pub fn generate() -> Self {
-        Self::generate_with_distid(Self::DEFAULT_DISTID)
+        Self::generate_with_distid(Self::DEFAULT_DISTID).expect("sm2 default distid must be valid")
     }
 
     /// Generate a random SM2 key pair with a custom distinguishing ID.
-    pub fn generate_with_distid(distid: impl Into<String>) -> Self {
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when the distinguishing identifier is invalid.
+    pub fn generate_with_distid(distid: impl Into<String>) -> Result<Self, ParseError> {
         let mut rng = OsRng;
-        let private = Sm2PrivateKey::random(distid, &mut rng);
-        Self { private }
+        let private = Sm2PrivateKey::random(distid, &mut rng).into_result()?;
+        Ok(Self { private })
     }
 
     /// Deterministically derive a key pair from opaque seed material with the default ID.
@@ -111,7 +131,9 @@ impl Sm2KeyPair {
     /// Panics if the internal key material is somehow inconsistent.
     #[must_use]
     pub fn public_key_multihash(&self) -> String {
-        let payload = self.public_key_sec1_bytes(false);
+        let sec1 = self.public_key_sec1_bytes(false);
+        let payload = encode_sm2_public_key_payload(self.distid(), &sec1)
+            .expect("SM2 payload derived from key material must encode");
         let pk = PublicKey::from_bytes(Algorithm::Sm2, &payload)
             .expect("SM2 SEC1 payload generated from private key must be valid");
         pk.to_string()
@@ -231,7 +253,9 @@ mod tests {
         assert_eq!(keypair.private_key_bytes(), expected_private);
         assert_eq!(keypair.public_key_sec1_bytes(false), expected_public);
         assert_eq!(keypair.public_key_multihash(), fixture.public_key_multihash);
-        let prefixed = PublicKey::from_bytes(Algorithm::Sm2, &expected_public)
+        let payload = encode_sm2_public_key_payload(&fixture.distid, &expected_public)
+            .expect("fixture SM2 payload");
+        let prefixed = PublicKey::from_bytes(Algorithm::Sm2, &payload)
             .expect("fixture public key payload must be valid");
         assert_eq!(prefixed.to_prefixed_string(), fixture.public_key_prefixed);
 

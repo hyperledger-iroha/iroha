@@ -37,7 +37,6 @@ const SAMPLE_ACCOUNT_SIGNATORY =
   "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
 const SAMPLE_ACCOUNT_DOMAIN = "wonderland";
 const SORA_IH58_PREFIX = 0x2f1;
-const SAMPLE_CONNECT_SID_HEX = `0x${"ab".repeat(32)}`;
 const SAMPLE_CONNECT_SID_BASE64 = bufferToBase64Url(Buffer.alloc(32, 0xcd));
 const toriiFixtures = JSON.parse(
   readFileSync(new URL("./fixtures/torii_responses.json", import.meta.url), "utf8"),
@@ -12432,7 +12431,7 @@ test("createConnectSession validates sid and posts JSON", async () => {
     return createResponse({
       status: 200,
       jsonData: {
-        sid: SAMPLE_CONNECT_SID_HEX,
+        sid: SAMPLE_CONNECT_SID_BASE64,
         wallet_uri: "iroha://connect",
         app_uri: "iroha://connect/app",
         token_app: "token-app",
@@ -12443,10 +12442,10 @@ test("createConnectSession validates sid and posts JSON", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const resp = await client.createConnectSession({
-    sid: SAMPLE_CONNECT_SID_HEX,
+    sid: SAMPLE_CONNECT_SID_BASE64,
     node: "torii",
   });
-  assert.equal(resp.sid, SAMPLE_CONNECT_SID_HEX);
+  assert.equal(resp.sid, SAMPLE_CONNECT_SID_BASE64);
   assert.equal(resp.wallet_uri, "iroha://connect");
   assert.equal(resp.app_uri, "iroha://connect/app");
   assert.equal(resp.token_app, "token-app");
@@ -12455,7 +12454,7 @@ test("createConnectSession validates sid and posts JSON", async () => {
   assert.equal(captured.url, `${BASE_URL}/v1/connect/session`);
   assert.equal(captured.init.headers["Content-Type"], "application/json");
   assert.deepEqual(JSON.parse(captured.init.body), {
-    sid: SAMPLE_CONNECT_SID_HEX,
+    sid: SAMPLE_CONNECT_SID_BASE64,
     node: "torii",
   });
 });
@@ -12466,7 +12465,7 @@ test("createConnectSession rejects malformed responses", async () => {
       createResponse({
         status: 200,
         jsonData: {
-          sid: SAMPLE_CONNECT_SID_HEX,
+          sid: SAMPLE_CONNECT_SID_BASE64,
           wallet_uri: "iroha://connect",
           app_uri: "iroha://connect/app",
           token_app: "token-app",
@@ -12475,7 +12474,7 @@ test("createConnectSession rejects malformed responses", async () => {
       }),
   });
   await assert.rejects(
-    () => client.createConnectSession({ sid: SAMPLE_CONNECT_SID_HEX }),
+    () => client.createConnectSession({ sid: SAMPLE_CONNECT_SID_BASE64 }),
     /token_wallet/i,
   );
 });
@@ -12511,7 +12510,19 @@ test("createConnectSession rejects invalid sid values", async () => {
   });
   await assert.rejects(
     () => client.createConnectSession({ sid: "not a valid sid" }),
-    /32-byte base64url or hex string/i,
+    /32-byte base64url string/i,
+  );
+});
+
+test("createConnectSession rejects hex sid", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("should not be called");
+    },
+  });
+  await assert.rejects(
+    () => client.createConnectSession({ sid: `0x${"ab".repeat(32)}` }),
+    /32-byte base64url string/i,
   );
 });
 
@@ -12522,11 +12533,11 @@ test("deleteConnectSession returns flag based on status", async () => {
     return createResponse({ status: 204 });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const ok = await client.deleteConnectSession(SAMPLE_CONNECT_SID_HEX);
+  const ok = await client.deleteConnectSession(SAMPLE_CONNECT_SID_BASE64);
   assert.equal(ok, true);
   assert.equal(
     captured.url,
-    `${BASE_URL}/v1/connect/session/${encodeURIComponent(SAMPLE_CONNECT_SID_HEX)}`,
+    `${BASE_URL}/v1/connect/session/${encodeURIComponent(SAMPLE_CONNECT_SID_BASE64)}`,
   );
   assert.equal(captured.init.method, "DELETE");
 });
@@ -12535,7 +12546,7 @@ test("deleteConnectSession returns false for missing session", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 404 }),
   });
-  const ok = await client.deleteConnectSession(SAMPLE_CONNECT_SID_HEX);
+  const ok = await client.deleteConnectSession(SAMPLE_CONNECT_SID_BASE64);
   assert.equal(ok, false);
 });
 

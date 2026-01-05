@@ -280,7 +280,8 @@ impl DaReceiptCursorIndex {
 ///
 /// # Errors
 ///
-/// Returns a [`DaReceiptSpoolError`] if the directory cannot be read or a receipt fails to decode.
+/// Returns a [`DaReceiptSpoolError`] if the directory cannot be read. Individual
+/// receipt files that fail to read or decode are skipped with a warning.
 pub fn load_receipt_entries(spool_dir: &Path) -> Result<Vec<DaReceiptEntry>, DaReceiptSpoolError> {
     if !spool_dir.exists() {
         return Ok(Vec::new());
@@ -309,14 +310,25 @@ pub fn load_receipt_entries(spool_dir: &Path) -> Result<Vec<DaReceiptEntry>, DaR
         let data = match std::fs::read(&path) {
             Ok(buf) => buf,
             Err(source) => {
-                iroha_logger::warn!(?source, path = %path.display(), "failed to read DA receipt file");
-                return Err(DaReceiptSpoolError::ReadFile { path, source });
+                iroha_logger::warn!(
+                    ?source,
+                    path = %path.display(),
+                    "failed to read DA receipt file; skipping"
+                );
+                continue;
             }
         };
 
         match decode_receipt(&data, &path) {
             Ok(entry) => receipts.push(entry),
-            Err(err) => return Err(err),
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    path = %path.display(),
+                    "failed to decode DA receipt file; skipping"
+                );
+                continue;
+            }
         }
     }
 
@@ -656,6 +668,30 @@ mod tests {
         assert_eq!(entry.sequence, 3);
         assert_eq!(entry.lane_epoch, LaneEpoch::new(LaneId::new(1), 2));
         assert_eq!(entry.receipt, receipt);
+    }
+
+    #[test]
+    fn load_receipt_entries_skips_corrupt_files() {
+        let dir = tempdir().expect("tempdir");
+        let receipt = sample_receipt(1, 2, 3);
+        let stored = StoredDaReceipt {
+            version: 1,
+            sequence: 3,
+            receipt: receipt.clone(),
+        };
+        let bytes = to_bytes(&stored).expect("encode");
+        let ok_path = dir
+            .path()
+            .join("da-receipt-00000001-0000000000000002-0000000000000003-ok.norito");
+        let bad_path = dir
+            .path()
+            .join("da-receipt-00000001-0000000000000002-0000000000000004-bad.norito");
+        std::fs::write(&ok_path, bytes).expect("write ok");
+        std::fs::write(&bad_path, b"corrupt").expect("write corrupt");
+
+        let entries = load_receipt_entries(dir.path()).expect("load entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].receipt, receipt);
     }
 
     #[test]

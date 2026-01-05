@@ -83,6 +83,13 @@ authoritative layout selection; unknown bits are rejected. Bare decoders
 (`codec::Decode`) are internal-only for hashing/bench scenarios and always use
 the fixed v1 default flags (`0x00`) with no heuristics.
 
+Decoding details:
+- `from_compressed_bytes` returns an owning `ArchivedBox<T>` so archived payload
+  bytes remain valid for the lifetime of the wrapper. It enforces the header
+  length during decompression and rejects overlong outputs.
+- `ArchiveView::decode` enforces the header schema hash; use
+  `ArchiveView::decode_unchecked` only for raw inspection tools.
+
 ## Adaptive Acceleration (CPU/GPU) and Layout
 
 Norito auto-detects available hardware and applies heuristics to pick the best

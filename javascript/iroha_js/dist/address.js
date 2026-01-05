@@ -1700,7 +1700,7 @@ function parseWithNativeCodec(input, expectedPrefix, requiredFormat) {
     if (!parsed) {
       return null;
     }
-    const canonical = parsed.canonical_bytes ?? parsed.canonicalBytes;
+    const canonical = parsed.canonical_bytes;
     if (!canonical) {
       throw new AccountAddressError(
         AccountAddressErrorCode.INVALID_LENGTH,
@@ -1708,7 +1708,7 @@ function parseWithNativeCodec(input, expectedPrefix, requiredFormat) {
       );
     }
     const format = normalizeNativeAddressFormat(
-      parsed.detected_format ?? parsed.detectedFormat,
+      parsed.detected_format,
     );
     if (requiredFormat && (!format || format !== requiredFormat)) {
       throw new AccountAddressError(
@@ -1720,7 +1720,7 @@ function parseWithNativeCodec(input, expectedPrefix, requiredFormat) {
     return {
       canonicalBytes: Uint8Array.from(canonical),
       format,
-      networkPrefix: parsed.network_prefix ?? parsed.networkPrefix ?? undefined,
+      networkPrefix: parsed.network_prefix ?? undefined,
     };
   } catch (error) {
     const converted = convertNativeCodecError(error);
@@ -1753,10 +1753,10 @@ function renderWithNativeCodec(canonicalBytes, networkPrefix = DEFAULT_IH58_PREF
       return null;
     }
     return {
-      canonicalHex: rendered.canonical_hex ?? rendered.canonicalHex,
+      canonicalHex: rendered.canonical_hex,
       ih58: rendered.ih58,
       compressed: rendered.compressed,
-      compressedFullWidth: rendered.compressed_fullwidth ?? rendered.compressedFullwidth,
+      compressedFullWidth: rendered.compressed_fullwidth,
     };
   } catch (error) {
     const converted = convertNativeCodecError(error);

@@ -44,10 +44,10 @@ translation_last_reviewed: 2026-01-01
      walletBundle: "dev.sora.example.wallet",
      register: true,
    });
-   console.log("sid", preview.sidHex, "ws url", preview.webSocketUrl);
+   console.log("sid", preview.sidBase64Url, "ws url", preview.webSocketUrl);
    ```
    - `register: false` を指定して QR/deep-link の dry-run を行う。
-   - 返ってきた `sidHex`、deeplink URL、`tokens` の blob を証跡フォルダに保存する。ガバナンスのレビューではこれらの成果物が必要。
+   - 返ってきた `sidBase64Url`、deeplink URL、`tokens` の blob を証跡フォルダに保存する。ガバナンスのレビューではこれらの成果物が必要。
 3. **シークレットを配布する。** deeplink URI をウォレット運用者 (Swift dApp サンプル、Android ウォレット、QA ハーネス) に共有する。トークンをチャットに貼り付けないこと。enablement packet に記載された暗号化済みの保管庫を使う。
 
 ## 3. セッションを駆動する
@@ -56,8 +56,9 @@ translation_last_reviewed: 2026-01-01
    ```swift
    let connectURL = URL(string: preview.webSocketUrl)!
    let client = ConnectClient(url: connectURL)
-   let session = ConnectSession(sid: Data(hex: preview.sidHex), client: client)
-   let recorder = ConnectReplayRecorder(sessionID: Data(hex: preview.sidHex))
+   let sid: Data = /* decode preview.sidBase64Url into raw bytes using your harness helper */
+   let session = ConnectSession(sessionID: sid, client: client)
+   let recorder = ConnectReplayRecorder(sessionID: sid)
    session.addObserver(ConnectEventObserver(queue: .main) { event in
        logger.info("connect event", metadata: ["kind": "\(event.kind)"])
    })
@@ -86,7 +87,7 @@ translation_last_reviewed: 2026-01-01
 
 1. **ステージングされたセッションを削除する。** キュー深度のアラームが意味を持ち続けるよう、プレビューセッションは必ず削除する:
    ```js
-   await client.deleteConnectSession(preview.sidHex);
+   await client.deleteConnectSession(preview.sidBase64Url);
    ```
    Swift のみのテストでは、Rust/CLI helper から同じエンドポイントを呼ぶ。
 2. **ジャーナルを削除する。** 永続化されたキュージャーナル (`ApplicationSupport/ConnectQueue/<sid>.to`、IndexedDB ストアなど) を削除し、次回の実行がクリーンに始まるようにする。replay 問題を調査する必要がある場合は、削除前にファイルのハッシュを記録する。

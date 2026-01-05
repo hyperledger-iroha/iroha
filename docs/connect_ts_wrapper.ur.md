@@ -24,9 +24,17 @@ export async function createSession(node: string): Promise<SessionResp> {
   return res.json();
 }
 
+function base64UrlToken(token: string): string {
+  const raw = typeof btoa === 'function'
+    ? btoa(token)
+    : Buffer.from(token, 'utf8').toString('base64');
+  return raw.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
 export async function joinWs(node: string, sid: string, role: 'app'|'wallet', token: string): Promise<WebSocket> {
-  const wsUrl = `${node.replace('http', 'ws')}/v1/connect/ws?sid=${sid}&role=${role}&token=${token}`;
-  const ws = new WebSocket(wsUrl);
+  const wsUrl = `${node.replace('http', 'ws')}/v1/connect/ws?sid=${sid}&role=${role}`;
+  const protocol = `iroha-connect.token.v1.${base64UrlToken(token)}`;
+  const ws = new WebSocket(wsUrl, protocol);
   await new Promise<void>((resolve, reject) => { ws.onopen = () => resolve(); ws.onerror = (e) => reject(e); });
   return ws;
 }

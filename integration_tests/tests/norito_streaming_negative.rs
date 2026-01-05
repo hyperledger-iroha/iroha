@@ -47,7 +47,7 @@ fn manifest_chunk_root_mismatch_detected() {
             access_policy_id: None,
             tags: vec!["nsc".into(), "negative".into()],
         },
-        capabilities: CapabilityFlags::from_bits(0b0011),
+        capabilities: streaming::BASE_CAPABILITIES,
         signature: [0xAB; 64],
         fec_suite: FecScheme::Rs12_10,
         neural_bundle: None,
@@ -120,7 +120,7 @@ fn bundled_manifest_requires_negotiated_flag() {
 
     let (_publisher_keys, viewer_keys) = streaming::test_keypairs();
     let viewer_peer = streaming::make_peer(&viewer_keys, 27_201);
-    let base_flags = CapabilityFlags::from_bits(0b0111);
+    let base_flags = streaming::BASE_CAPABILITIES;
     let negotiated = base_flags.remove(CapabilityFlags::FEATURE_ENTROPY_BUNDLED);
     let resolution = streaming::seed_viewer_negotiation(
         &handle,
@@ -150,8 +150,7 @@ fn bundled_manifest_checksum_mismatch_detected() {
 
     let (_publisher_keys, viewer_keys) = streaming::test_keypairs();
     let viewer_peer = streaming::make_peer(&viewer_keys, 27_202);
-    let base_flags = CapabilityFlags::from_bits(0b0111);
-    let negotiated = base_flags.insert(CapabilityFlags::FEATURE_ENTROPY_BUNDLED);
+    let negotiated = streaming::BASE_CAPABILITIES;
     let resolution = streaming::seed_viewer_negotiation(
         &handle,
         &viewer_peer,
@@ -195,11 +194,8 @@ fn gpu_bundled_manifest_requires_negotiated_acceleration_flag() {
 
     let (_publisher_keys, viewer_keys) = streaming::test_keypairs();
     let viewer_peer = streaming::make_peer(&viewer_keys, 27_205);
-    let negotiated = CapabilityFlags::from_bits(
-        0b0111
-            | CapabilityFlags::FEATURE_ENTROPY_BUNDLED
-            | CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD,
-    );
+    let negotiated =
+        streaming::BASE_CAPABILITIES.insert(CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD);
     let resolution = streaming::seed_viewer_negotiation(
         &handle,
         &viewer_peer,
@@ -223,7 +219,7 @@ fn bundled_vector_requires_entropy_negotiation() {
     let handle = streaming::bundled_streaming_handle(4);
     let (_publisher_keys, viewer_keys) = streaming::test_keypairs();
     let viewer_peer = streaming::make_peer(&viewer_keys, 27_250);
-    let negotiated = CapabilityFlags::from_bits(0b0111);
+    let negotiated = streaming::BASE_CAPABILITIES.remove(CapabilityFlags::FEATURE_ENTROPY_BUNDLED);
     streaming::seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
 
     let mut manifest = vector.manifest.clone();
@@ -242,8 +238,7 @@ fn bundled_vector_applies_after_entropy_negotiation() {
     let handle = streaming::bundled_streaming_handle(4);
     let (_publisher_keys, viewer_keys) = streaming::test_keypairs();
     let viewer_peer = streaming::make_peer(&viewer_keys, 27_251);
-    let negotiated =
-        CapabilityFlags::from_bits(0b0111).insert(CapabilityFlags::FEATURE_ENTROPY_BUNDLED);
+    let negotiated = streaming::BASE_CAPABILITIES;
     let resolution = streaming::seed_viewer_negotiation(
         &handle,
         &viewer_peer,
@@ -283,9 +278,8 @@ fn cpu_accelerated_bundled_manifest_advertises_acceleration_bit() {
         streaming::bundled_streaming_handle_with_accel(4, actual::BundleAcceleration::CpuSimd);
     let (_publisher_keys, viewer_keys) = streaming::test_keypairs();
     let viewer_peer = streaming::make_peer(&viewer_keys, 27_252);
-    let negotiated = CapabilityFlags::from_bits(0b0111)
-        .insert(CapabilityFlags::FEATURE_ENTROPY_BUNDLED)
-        .insert(CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD);
+    let negotiated =
+        streaming::BASE_CAPABILITIES.insert(CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD);
     let resolution = streaming::seed_viewer_negotiation(
         &handle,
         &viewer_peer,
@@ -328,9 +322,7 @@ fn gpu_accelerated_bundled_manifest_advertises_acceleration_bit() {
     let handle = streaming::bundled_streaming_handle_with_accel(4, actual::BundleAcceleration::Gpu);
     let (_publisher_keys, viewer_keys) = streaming::test_keypairs();
     let viewer_peer = streaming::make_peer(&viewer_keys, 27_253);
-    let negotiated = CapabilityFlags::from_bits(0b0111)
-        .insert(CapabilityFlags::FEATURE_ENTROPY_BUNDLED)
-        .insert(CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU);
+    let negotiated = streaming::BASE_CAPABILITIES.insert(CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU);
     let resolution = streaming::seed_viewer_negotiation(
         &handle,
         &viewer_peer,

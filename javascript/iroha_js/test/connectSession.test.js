@@ -14,10 +14,6 @@ test("generateConnectSid derives deterministic sid", () => {
   const result = generateConnectSid({ chainId, appPublicKey, nonce });
 
   assert.equal(
-    result.sidHex,
-    "0x17da2eb6862403efb661dfe5ec30c60458a517d64524bc3a25be0e573c296429",
-  );
-  assert.equal(
     result.sidBase64Url,
     "F9outoYkA--2Yd_l7DDGBFilF9ZFJLw6Jb4OVzwpZCk",
   );
@@ -39,7 +35,8 @@ test("createConnectSessionPreview builds URIs and reuses supplied keypair", () =
   assert.equal(preview.chainId, chainId);
   assert.equal(preview.node, node);
   assert.equal(preview.sidBytes.length, 32);
-  assert.equal(preview.sidHex.startsWith("0x"), true);
+  assert.match(preview.sidBase64Url, /^[A-Za-z0-9_-]+$/);
+  assert.equal(preview.sidBase64Url.includes("="), false);
   assert.equal(preview.appKeyPair.publicKey.equals(Buffer.from(appKeyPair.publicKey)), true);
   assert.equal(preview.appKeyPair.privateKey.equals(Buffer.from(appKeyPair.privateKey)), true);
   assert.match(preview.walletUri, /^iroha:\/\/connect\?/);

@@ -541,11 +541,18 @@ impl<T> MerkleProof<T> {
     }
     /// Verifies the Merkle proof against the given leaf and root hash.
     /// Returns true if the computed root from the proof matches the given root.
+    /// Rejects proofs where `leaf_index` cannot fit within the implied height.
     pub fn verify(self, leaf: &HashOf<T>, root: &HashOf<MerkleTree<T>>, max_height: usize) -> bool {
         let height = self.audit_path.len();
         // Reject if the proof claims a tree taller than allowed.
         if max_height < height {
             return false;
+        }
+        if height < u32::BITS as usize {
+            let max_leaves = 1usize << height;
+            if self.leaf_index as usize >= max_leaves {
+                return false;
+            }
         }
         let mut index = MerkleTree::<T>::index_in_tree_unchecked(self.leaf_index as usize, height);
         let Some(computed_root) = self.audit_path.into_iter().try_fold(*leaf, |acc, e| {
@@ -608,17 +615,14 @@ impl<T> CompactMerkleProof<T> {
     #[allow(clippy::cast_possible_truncation)]
     pub fn from_full(full: MerkleProof<T>) -> Self {
         let depth = full.audit_path.len().min(32) as u8;
-        // Derive BFS index at leaf level for the given depth, then walk up to
-        // compute direction bits. This matches `MerkleProof::verify` parity.
-        let mut idx =
-            MerkleTree::<T>::index_in_tree_unchecked(full.leaf_index as usize, depth as usize);
-        let mut dirs: u32 = 0;
-        #[allow(clippy::cast_possible_truncation)]
-        for i in 0..(depth as usize) {
-            let bit = (idx % 2) as u32; // 0 => left child; 1 => right child
-            dirs |= bit << i;
-            idx = idx.saturating_sub(1) >> 1;
-        }
+        // Direction bits use leaf-index semantics: bit i = 0 (left), 1 (right).
+        let depth_bits = u32::from(depth);
+        let mask = if depth == 32 {
+            u32::MAX
+        } else {
+            (1u32 << depth_bits) - 1
+        };
+        let dirs = full.leaf_index & mask;
         let siblings = full.audit_path.into_iter().take(depth as usize).collect();
         CompactMerkleProof {
             depth,
@@ -636,8 +640,11 @@ impl<T> CompactMerkleProof<T> {
 
     /// Verify this compact proof using an explicit leaf hash and root hash by
     /// reconstructing the parent hashes guided by the `dirs` bitset. Returns
-    /// `false` if `siblings.len()` does not match `depth`.
+    /// `false` if `depth` exceeds 32 or `siblings.len()` does not match `depth`.
     pub fn verify(self, leaf: &HashOf<T>, root: &HashOf<MerkleTree<T>>) -> bool {
+        if self.depth > u32::BITS as u8 {
+            return false;
+        }
         let depth = self.depth as usize;
         if self.siblings.len() != depth {
             return false;
@@ -651,8 +658,8 @@ impl<T> CompactMerkleProof<T> {
                 None => return false,
             };
             let (l, r) = match dirs & 1 {
-                0 => (sib.as_ref(), Some(&acc)),
-                1 => (Some(&acc), sib.as_ref()),
+                0 => (Some(&acc), sib.as_ref()),
+                1 => (sib.as_ref(), Some(&acc)),
                 _ => unreachable!(),
             };
             dirs >>= 1;
@@ -742,14 +749,17 @@ impl<T> JsonDeserialize for CompactMerkleProof<T> {
 
 impl CompactMerkleProof<[u8; 32]> {
     /// Verify a compact proof where inner nodes are combined using SHA-256 of
-    /// left||right and leaves are SHA-256 digests. Returns `false` if
-    /// `siblings.len()` does not match `depth`.
+    /// left||right and leaves are SHA-256 digests. Returns `false` if `depth`
+    /// exceeds 32 or `siblings.len()` does not match `depth`.
     pub fn verify_sha256(
         self,
         leaf: &HashOf<[u8; 32]>,
         root: &HashOf<MerkleTree<[u8; 32]>>,
     ) -> bool {
         use crate::Hash;
+        if self.depth > u32::BITS as u8 {
+            return false;
+        }
         let mut acc_bytes: [u8; 32] = *leaf.as_ref();
         let mut dirs = self.dirs;
         let depth = self.depth as usize;
@@ -762,15 +772,10 @@ impl CompactMerkleProof<[u8; 32]> {
                 Some(sib) => sib,
                 None => return false,
             };
+            let acc_hash = HashOf::from_untyped_unchecked(Hash::prehashed(acc_bytes));
             let (l_opt, r_opt) = match dirs & 1 {
-                0 => (
-                    sib,
-                    Some(HashOf::from_untyped_unchecked(Hash::prehashed(acc_bytes))),
-                ),
-                1 => (
-                    Some(HashOf::from_untyped_unchecked(Hash::prehashed(acc_bytes))),
-                    sib,
-                ),
+                0 => (Some(acc_hash), sib),
+                1 => (sib, Some(acc_hash)),
                 _ => unreachable!(),
             };
             dirs >>= 1;
@@ -1038,7 +1043,7 @@ impl MerkleTree<[u8; 32]> {
 impl MerkleProof<[u8; 32]> {
     /// Compute the Merkle root implied by this proof and `leaf` using
     /// SHA-256(left || right) semantics. Returns `None` if the proof is
-    /// malformed (e.g., references a right child without a left sibling).
+    /// malformed, exceeds `max_height`, or encodes an out-of-range leaf index.
     pub fn compute_root_sha256(
         &self,
         leaf: &HashOf<[u8; 32]>,
@@ -1047,6 +1052,12 @@ impl MerkleProof<[u8; 32]> {
         let height = self.audit_path.len();
         if max_height < height {
             return None;
+        }
+        if height < u32::BITS as usize {
+            let max_leaves = 1usize << height;
+            if self.leaf_index as usize >= max_leaves {
+                return None;
+            }
         }
         let mut index =
             MerkleTree::<[u8; 32]>::index_in_tree_unchecked(self.leaf_index as usize, height);
@@ -1088,7 +1099,8 @@ impl MerkleProof<[u8; 32]> {
     }
 
     /// Verify a proof where inner nodes are combined using SHA-256 of
-    /// left||right and leaves are SHA-256 digests.
+    /// left||right and leaves are SHA-256 digests. Rejects out-of-range
+    /// leaf indices for the implied height.
     pub fn verify_sha256(
         self,
         leaf: &HashOf<[u8; 32]>,
@@ -1098,6 +1110,12 @@ impl MerkleProof<[u8; 32]> {
         let height = self.audit_path.len();
         if max_height < height {
             return false;
+        }
+        if height < u32::BITS as usize {
+            let max_leaves = 1usize << height;
+            if self.leaf_index as usize >= max_leaves {
+                return false;
+            }
         }
         let mut index =
             MerkleTree::<[u8; 32]>::index_in_tree_unchecked(self.leaf_index as usize, height);
@@ -1441,6 +1459,21 @@ mod tests {
     }
 
     #[test]
+    fn byte_proof_rejects_out_of_range_leaf_index_sha256() {
+        let data: Vec<u8> = (0..90u32).map(|i| (i % 200) as u8).collect();
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
+        let root = tree.root().expect("root");
+        let idx = 1u32;
+        let leaf = tree.leaves().nth(idx as usize).unwrap();
+        let mut proof = tree.get_proof(idx).expect("proof");
+        let height = proof.audit_path.len();
+        let height_u32 = u32::try_from(height).expect("height fits in u32");
+        proof.leaf_index = 1u32 << height_u32;
+        assert!(proof.compute_root_sha256(&leaf, height).is_none());
+        assert!(!proof.verify_sha256(&leaf, &root, height));
+    }
+
+    #[test]
     fn byte_proof_compute_root_sha256_matches_root() {
         let data: Vec<u8> = (0..64u32).map(|i| (i % 251) as u8).collect();
         let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
@@ -1473,6 +1506,42 @@ mod tests {
     }
 
     #[test]
+    fn compact_proof_dirs_match_leaf_index_bits() {
+        let leaves = test_hashes(8);
+        let tree: MerkleTree<_> = leaves.clone().into_iter().collect();
+        let root = tree.root().expect("root");
+
+        for idx in 0..8u32 {
+            let leaf = tree.leaves().nth(idx as usize).unwrap();
+            let full = tree.get_proof(idx).expect("proof");
+            let compact = CompactMerkleProof::from_full(full);
+            let depth = compact.depth() as usize;
+            let mask = (1u64 << depth) - 1;
+            assert_eq!(
+                compact.dirs() as u64,
+                (idx as u64) & mask,
+                "dirs mismatch at idx={idx}"
+            );
+            assert!(compact.clone().verify(&leaf, &root));
+        }
+    }
+
+    #[test]
+    fn compact_proof_sha256_dirs_match_leaf_index_bits() {
+        let data: Vec<u8> = (0..128u32).map(|i| (i % 251) as u8).collect();
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
+        let root = tree.root().expect("root");
+        let idx = 2u32;
+        let leaf = tree.leaves().nth(idx as usize).unwrap();
+        let full = tree.get_proof(idx).expect("proof");
+        let compact = CompactMerkleProof::from_full(full);
+        let depth = compact.depth() as usize;
+        let mask = (1u64 << depth) - 1;
+        assert_eq!(compact.dirs() as u64, (idx as u64) & mask);
+        assert!(compact.verify_sha256(&leaf, &root));
+    }
+
+    #[test]
     fn compact_proof_rejects_sibling_length_mismatch() {
         let leaves = test_hashes(8);
         let tree: MerkleTree<_> = leaves.clone().into_iter().collect();
@@ -1495,6 +1564,21 @@ mod tests {
     }
 
     #[test]
+    fn compact_proof_rejects_depth_over_32() {
+        let leaves = test_hashes(6);
+        let tree: MerkleTree<_> = leaves.clone().into_iter().collect();
+        let root = tree.root().expect("root");
+        let idx = 2u32;
+        let leaf = tree.leaves().nth(idx as usize).unwrap();
+        let mut compact = CompactMerkleProof::from_full(tree.get_proof(idx).expect("proof"));
+        compact.depth = 33;
+        while compact.siblings.len() < 33 {
+            compact.siblings.push(None);
+        }
+        assert!(!compact.verify(&leaf, &root));
+    }
+
+    #[test]
     fn compact_proof_sha256_rejects_sibling_length_mismatch() {
         let data: Vec<u8> = (0..96u32).map(|i| (i % 251) as u8).collect();
         let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
@@ -1503,6 +1587,21 @@ mod tests {
         let leaf = tree.leaves().nth(idx as usize).unwrap();
         let mut compact = CompactMerkleProof::from_full(tree.get_proof(idx).expect("proof"));
         compact.siblings.pop();
+        assert!(!compact.verify_sha256(&leaf, &root));
+    }
+
+    #[test]
+    fn compact_proof_sha256_rejects_depth_over_32() {
+        let data: Vec<u8> = (0..96u32).map(|i| (i % 251) as u8).collect();
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
+        let root = tree.root().expect("root");
+        let idx = 1u32;
+        let leaf = tree.leaves().nth(idx as usize).unwrap();
+        let mut compact = CompactMerkleProof::from_full(tree.get_proof(idx).expect("proof"));
+        compact.depth = 33;
+        while compact.siblings.len() < 33 {
+            compact.siblings.push(None);
+        }
         assert!(!compact.verify_sha256(&leaf, &root));
     }
 
@@ -1540,6 +1639,20 @@ mod tests {
         // Remove the last sibling in the path (toward the root)
         proof.audit_path.pop();
         assert!(!proof.verify(&leaf, &root, 9));
+    }
+
+    #[test]
+    fn proof_rejects_out_of_range_leaf_index() {
+        let leaves = test_hashes(6);
+        let tree: MerkleTree<_> = leaves.clone().into_iter().collect();
+        let root = tree.root().expect("root");
+        let idx = 1u32;
+        let leaf = tree.leaves().nth(idx as usize).unwrap();
+        let mut proof = tree.get_proof(idx).expect("proof");
+        let height = proof.audit_path.len();
+        let height_u32 = u32::try_from(height).expect("height fits in u32");
+        proof.leaf_index = 1u32 << height_u32;
+        assert!(!proof.verify(&leaf, &root, height));
     }
 
     #[test]

@@ -6,13 +6,10 @@
 
 #[cfg(feature = "ed25519")]
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey as Ed25519VerifyingKey};
+#[cfg(feature = "secp256k1")]
+use iroha_crypto::EcdsaSecp256k1Sha256;
 #[cfg(feature = "ed25519")]
 use iroha_crypto::ed25519_verify_batch_deterministic;
-#[cfg(feature = "secp256k1")]
-use k256::ecdsa::{
-    Signature as Secp256k1Signature, VerifyingKey as Secp256k1VerifyingKey,
-    signature::Verifier as _,
-};
 #[cfg(feature = "ml-dsa")]
 use pqcrypto_dilithium::dilithium3 as dilithium;
 #[cfg(feature = "ml-dsa")]
@@ -81,7 +78,9 @@ pub struct Ed25519BatchItem<'a> {
 }
 
 /// Verify `signature` on `message` with `public_key` using the selected
-/// `scheme`. Returns `true` if the signature is valid.
+/// `scheme`. Returns `true` if the signature is valid. For secp256k1, only
+/// canonical compressed SEC1 public keys are accepted and high-S signatures
+/// are rejected.
 pub fn verify_signature(
     scheme: SignatureScheme,
     message: &[u8],
@@ -138,15 +137,11 @@ pub fn verify_signature(
                 if signature.len() != 64 {
                     return false;
                 }
-                let pk = match Secp256k1VerifyingKey::from_sec1_bytes(public_key) {
+                let pk = match EcdsaSecp256k1Sha256::parse_public_key(public_key) {
                     Ok(pk) => pk,
                     Err(_) => return false,
                 };
-                let sig = match Secp256k1Signature::from_slice(signature) {
-                    Ok(s) => s,
-                    Err(_) => return false,
-                };
-                pk.verify(message, &sig).is_ok()
+                EcdsaSecp256k1Sha256::verify(message, signature, &pk).is_ok()
             }
         };
     }

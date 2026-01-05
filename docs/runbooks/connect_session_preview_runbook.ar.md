@@ -48,10 +48,10 @@ translation_last_reviewed: 2026-01-01
      walletBundle: "dev.sora.example.wallet",
      register: true,
    });
-   console.log("sid", preview.sidHex, "ws url", preview.webSocketUrl);
+   console.log("sid", preview.sidBase64Url, "ws url", preview.webSocketUrl);
    ```
    - اضبط `register: false` لاختبارات QR/deep-link بدون تسجيل.
-   - احتفظ بـ `sidHex` المعاد وروابط deeplink وكتلة `tokens` في مجلد الادلة؛ مراجعة الحوكمة تتوقع هذه القطع.
+   - احتفظ بـ `sidBase64Url` المعاد وروابط deeplink وكتلة `tokens` في مجلد الادلة؛ مراجعة الحوكمة تتوقع هذه القطع.
 3. **وزع الاسرار.** شارك URI deeplink مع مشغل المحفظة (عينة dApp Swift، محفظة Android، او harness QA). لا تنسخ التوكنات الخام في الدردشة؛ استخدم الخزنة المشفرة الموثقة في حزمة التمكين.
 
 ## 3. تشغيل الجلسة
@@ -60,8 +60,9 @@ translation_last_reviewed: 2026-01-01
    ```swift
    let connectURL = URL(string: preview.webSocketUrl)!
    let client = ConnectClient(url: connectURL)
-   let session = ConnectSession(sid: Data(hex: preview.sidHex), client: client)
-   let recorder = ConnectReplayRecorder(sessionID: Data(hex: preview.sidHex))
+   let sid: Data = /* decode preview.sidBase64Url into raw bytes using your harness helper */
+   let session = ConnectSession(sessionID: sid, client: client)
+   let recorder = ConnectReplayRecorder(sessionID: sid)
    session.addObserver(ConnectEventObserver(queue: .main) { event in
        logger.info("connect event", metadata: ["kind": "\(event.kind)"])
    })
@@ -90,7 +91,7 @@ translation_last_reviewed: 2026-01-01
 
 1. **احذف الجلسات الممرحلة.** احذف جلسات المعاينة دائما حتى تبقى تنبيهات عمق الطابور ذات معنى:
    ```js
-   await client.deleteConnectSession(preview.sidHex);
+   await client.deleteConnectSession(preview.sidBase64Url);
    ```
    لعمليات اختبار Swift فقط، استدع نفس النهاية عبر مساعد Rust/CLI.
 2. **نظف السجلات.** ازل اي سجلات طابور محفوظة (`ApplicationSupport/ConnectQueue/<sid>.to`، مخازن IndexedDB، وغيرها) ليبدا التشغيل التالي نظيفا. سجل تجزئة الملف قبل الحذف اذا احتجت لتشخيص مشكلة replay.

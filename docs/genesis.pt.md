@@ -82,7 +82,7 @@ O arquivo `client-sm2.toml` passa a conter:
 
 ```toml
 # Account key material
-public_key = "sm2:86264104..."
+public_key = "sm2:8626530010..."
 private_key = "A333F581EC034C1689B750A827E150240565B483DEB28294DDB2089AD925A569"
 # public_key_pem = """\
 -----BEGIN PUBLIC KEY-----

@@ -40,12 +40,12 @@ frames deterministically when debugging or proving coverage gaps.
      walletBundle: "dev.sora.example.wallet",
      register: true,
    });
-   // persist preview.sidHex + preview.webSocketUrl into the artefact folder
+   // persist preview.sidBase64Url + preview.webSocketUrl into the artefact folder
    ```
 2. **Wire queue instrumentation.** Use `ConnectReplayRecorder` to persist frames
    and metrics to the shared diagnostics root while the session runs:
    ```swift
-   let sid: Data = /* decode preview.sidHex into raw bytes using your harness helper */
+   let sid: Data = /* decode preview.sidBase64Url into raw bytes using your harness helper */
    let diagnosticsRoot = ConnectSessionDiagnostics.defaultRootDirectory()
    let recorder = ConnectReplayRecorder(sessionID: sid, diagnosticsRoot: diagnosticsRoot)
 

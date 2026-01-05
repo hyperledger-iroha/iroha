@@ -28,6 +28,21 @@ test("ConnectJournalRecord encode/decode roundtrip", () => {
   assert.equal(decoded.payloadHash.length, 32);
 });
 
+test("ConnectJournalRecord header matches Norito v1 defaults", () => {
+  const record = new ConnectJournalRecord({
+    direction: ConnectDirection.APP_TO_WALLET,
+    sequence: 1n,
+    ciphertext: new Uint8Array([0x01]),
+    receivedAtMs: 0,
+    expiresAtMs: 1,
+  });
+  const encoded = record.encode();
+  assert.equal(encoded[4], 0);
+  assert.equal(encoded[5], 0);
+  const schemaHex = Buffer.from(encoded.subarray(6, 22)).toString("hex");
+  assert.equal(schemaHex, "bcf2f58a15121190bcf2f58a15121190");
+});
+
 test("fromCiphertext applies retention automatically", () => {
   const start = Date.now();
   const record = ConnectJournalRecord.fromCiphertext({
@@ -59,6 +74,26 @@ test("decode rejects tampered payloads", () => {
       error instanceof ConnectJournalError &&
       /checksum mismatch/i.test(error.message),
   );
+});
+
+test("decode accepts header padding", () => {
+  const record = new ConnectJournalRecord({
+    direction: ConnectDirection.WALLET_TO_APP,
+    sequence: 7n,
+    ciphertext: new Uint8Array([0x11, 0x22]),
+    receivedAtMs: 100,
+    expiresAtMs: 200,
+  });
+  const encoded = record.encode();
+  const padding = new Uint8Array(8);
+  const headerLen = 40;
+  const padded = new Uint8Array(encoded.length + padding.length);
+  padded.set(encoded.subarray(0, headerLen), 0);
+  padded.set(padding, headerLen);
+  padded.set(encoded.subarray(headerLen), headerLen + padding.length);
+  const decoded = ConnectJournalRecord.decode(padded);
+  assert.equal(decoded.bytesConsumed, padded.length);
+  assert.equal(decoded.record.sequence, record.sequence);
 });
 
 test("decode rejects schema mismatch", () => {

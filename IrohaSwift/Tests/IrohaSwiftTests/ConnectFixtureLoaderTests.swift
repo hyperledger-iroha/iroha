@@ -21,7 +21,7 @@ final class ConnectFixtureLoaderTests: XCTestCase {
         XCTAssertEqual(bundle.manifest.snapshot.appToWallet.depth, 2)
         XCTAssertEqual(bundle.manifest.snapshot.walletToApp.depth, 1)
 
-        XCTAssertEqual(bundle.session.sidBase64, "Y29ubmVjdC1maXh0dXJlLXNpZCE")
+        XCTAssertEqual(bundle.session.sidBase64Url, "Y29ubmVjdC1maXh0dXJlLXNpZCE")
         XCTAssertEqual(bundle.session.toriiBaseURL, "https://mock.torii.example")
 
         XCTAssertFalse(bundle.metrics.isEmpty)
@@ -45,7 +45,7 @@ final class ConnectFixtureLoaderTests: XCTestCase {
         for scenario in bundle.scenarios {
             XCTAssertFalse(scenario.frames.isEmpty, "scenario \(scenario.scenario) missing frames")
             XCTAssertFalse(scenario.events.isEmpty, "scenario \(scenario.scenario) missing events")
-            XCTAssertEqual(scenario.sidBase64, "Y29ubmVjdC1maXh0dXJlLXNpZCE")
+            XCTAssertEqual(scenario.sidBase64Url, "Y29ubmVjdC1maXh0dXJlLXNpZCE")
         }
 
         if let heartbeat = bundle.scenarios.first(where: { $0.scenario == "heartbeat_loss" }) {

@@ -14,6 +14,12 @@ fn corrupt_first_id_delta(body: &mut [u8]) {
     body[off] = 3; // zigzag(-2)
 }
 
+fn overflow_varint_bytes() -> Vec<u8> {
+    let mut bytes = vec![0x80; 9];
+    bytes.push(0x02);
+    bytes
+}
+
 #[test]
 fn str_bool_invalid_descriptor_and_short() {
     // Too short
@@ -189,6 +195,24 @@ fn str_bool_delta_ids_unterminated_varint() {
     // Corrupt last varint: set its last byte continuation bit and truncate buffer right after it
     body[end2 - 1] |= 0x80;
     body.truncate(end2); // end2 now points past last byte; leave as-is; parser expects one more byte
+    let res = norito::columnar::view_ncb_u64_str_bool(&body);
+    assert!(res.is_err());
+}
+
+#[test]
+fn str_bool_delta_ids_non_canonical_varint() {
+    let rows: Vec<(u64, &str, bool)> = vec![(1, "a", true), (2, "b", false)];
+    let mut body = norito::columnar::encode_ncb_u64_str_bool_delta(&rows);
+    // Locate first delta varint (after header padding + base id).
+    let mut off = 5usize;
+    let mis = off & 7;
+    if mis != 0 {
+        off += 8 - mis;
+    }
+    off += 8;
+    // Replace canonical 0x02 with overlong 0x82 0x00.
+    body.insert(off, 0x82);
+    body[off + 1] = 0x00;
     let res = norito::columnar::view_ncb_u64_str_bool(&body);
     assert!(res.is_err());
 }
@@ -382,12 +406,8 @@ fn enum_invalid_descriptor_and_tag_and_dict_code_oob() {
     // There is exactly one Name row; set its code to an out-of-bounds index (== dict_len)
     if dict_len > 0 {
         body[off_names..off_names + 4].copy_from_slice(&(dict_len as u32).to_le_bytes());
-        let view = view_ncb_u64_enum_bool(&body).expect("view ok");
-        let res = view.payload(0);
-        assert!(res.is_err());
-        if let Err(err) = res {
-            assert!(matches!(err, Error::LengthMismatch));
-        }
+        let res_view = view_ncb_u64_enum_bool(&body);
+        assert!(matches!(res_view, Err(Error::LengthMismatch)));
     }
 }
 
@@ -485,6 +505,20 @@ fn u64_u32_bool_id_delta_underflow() {
 }
 
 #[test]
+fn u64_u32_bool_id_delta_overflow_rejected() {
+    let mut body = Vec::new();
+    body.extend_from_slice(&2u32.to_le_bytes());
+    body.push(0x23);
+    while body.len() & 7 != 0 {
+        body.push(0);
+    }
+    body.extend_from_slice(&1u64.to_le_bytes());
+    body.extend_from_slice(&overflow_varint_bytes());
+    let res = norito::columnar::view_ncb_u64_u32_bool(&body);
+    assert!(matches!(res, Err(Error::LengthMismatch)));
+}
+
+#[test]
 fn str_u32_bool_names_offsets_non_monotonic() {
     // Make offsets non-monotonic so s > e for some row
     let rows: Vec<(u64, &str, u32, bool)> =
@@ -498,8 +532,6 @@ fn str_u32_bool_names_offsets_non_monotonic() {
         off += 8 - mis;
     }
     off += 8 * n;
-    // tags
-    off += n;
     // names offsets (non-dict)
     let mis4 = off & 3;
     if mis4 != 0 {
@@ -544,8 +576,6 @@ fn bytes_u32_bool_offsets_non_monotonic() {
         off += 8 - mis;
     }
     off += 8 * n;
-    // tags
-    off += n;
     // bytes offsets (non-dict)
     let mis4 = off & 3;
     if mis4 != 0 {

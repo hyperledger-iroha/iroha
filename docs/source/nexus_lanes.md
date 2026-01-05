@@ -84,7 +84,7 @@ LaneConfigEntry {
 - Runtime watches lane catalog updates: newly added lanes have their block and merge-ledger directories provisioned automatically under `kura/blocks/` and `kura/merge_ledger/`, while retired lanes are archived under `kura/retired/{blocks,merge_ledger}/lane_{id:03}_*`.
 - Tiered-state snapshots mirror the same lifecycle; each lane writes to `cold_store_root/lanes/lane_{id:03}_{slug}` and retirements migrate the directory tree to `cold_store_root/retired/lanes/`.
 - **Key prefixes** — the 4-byte prefix computed from `LaneId` is always prepended to MV encoded keys. No host-specific hashing is used, so ordering is identical across nodes.
-- **Block log layout** — block data, index, and hashes are nested under `kura/blocks/lane_{id:03}_{slug}/`. Merge-ledger journals reuse the same slug (`kura/merge/lane_{id:03}_{slug}.log`), keeping per-lane recovery flows isolated.
+- **Block log layout** — block data, index, hashes, and the durable count marker (`blocks.count.norito`) are nested under `kura/blocks/lane_{id:03}_{slug}/`. Merge-ledger journals reuse the same slug (`kura/merge/lane_{id:03}_{slug}.log`), keeping per-lane recovery flows isolated.
 - **Retention policy** — public lanes retain full block bodies; commitment-only lanes may compact older bodies after checkpoints because commitments are authoritative. Confidential lanes keep ciphertext journals in dedicated segments to avoid blocking other workloads.
 - **Tooling** — `cargo xtask nexus-lane-maintenance --config <path> [--compact-retired]` inspects `<store>/blocks` and `<store>/merge_ledger` using the derived `LaneConfig`, reports active vs retired segments, and archives retired directories/logs under `<store>/retired/...` to keep evidence deterministic. Maintenance utilities (`kagami`, CLI admin commands) should reuse the slugged namespace when exposing metrics, Prometheus labels, or archiving Kura segments.
 
@@ -92,7 +92,7 @@ LaneConfigEntry {
 
 - `nexus.storage.max_disk_usage_bytes` defines the total on-disk budget that Nexus nodes should consume across Kura, cold WSV snapshots, SoraFS storage, and streaming spools (SoraNet/SoraVPN).
 - `nexus.storage.max_wsv_memory_bytes` caps the hot WSV tier by propagating a serialized-payload byte budget into `tiered_state.hot_retained_bytes`; grace retention may temporarily exceed the budget, but the overflow is observable via telemetry.
-- `nexus.storage.weights` splits the disk budget across components using basis points (must sum to 10,000). The derived caps are applied to `kura.max_disk_usage_bytes`, `tiered_state.max_cold_bytes`, `sorafs.storage.max_capacity_bytes`, and `streaming.soranet.provision_spool_max_bytes`.
+- `nexus.storage.disk_budget_weights` splits the disk budget across components using basis points (must sum to 10,000). The derived caps are applied to `kura.max_disk_usage_bytes`, `tiered_state.max_cold_bytes`, `sorafs.storage.max_capacity_bytes`, and `streaming.soranet.provision_spool_max_bytes`.
 - Kura's storage budget enforcement sums block-store bytes across active + retired lane segments and includes queued blocks not yet persisted to avoid overshoot during write lag.
 - SoraVPN spool budgets are currently folded into the SoraNet provision spool cap until dedicated VPN-local storage is implemented.
 - Per-component limits still apply: when a component has an explicit non-zero cap, the smaller of the explicit cap and the derived Nexus budget is enforced.

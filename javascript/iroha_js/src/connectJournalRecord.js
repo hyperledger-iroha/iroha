@@ -13,10 +13,11 @@ const DIRECTION_TAG = Object.freeze({
 
 const NORITO_HEADER_LEN = 40;
 const NORITO_MAGIC = new Uint8Array([0x4e, 0x52, 0x54, 0x30]); // "NRT0"
-const NORITO_VERSION_MAJOR = 1;
+const NORITO_VERSION_MAJOR = 0;
 const NORITO_VERSION_MINOR = 0;
 const NORITO_COMPRESSION_NONE = 0;
 const NORITO_FLAGS_NONE = 0;
+const MAX_HEADER_PADDING = 64;
 const SCHEMA_NAME = "ConnectJournalRecordV1";
 const SCHEMA_HASH = computeSchemaHash(SCHEMA_NAME);
 const PAYLOAD_FIXED_LEN = 1 + 8 + 8 + 8 + 4 + 32;
@@ -41,8 +42,8 @@ function computeSchemaHash(typeName) {
     hash = (hash * fnvPrime) & 0xffffffffffffffffn;
   }
   const buffer = new Uint8Array(16);
-  writeUint64BE(buffer, 0, hash);
-  writeUint64BE(buffer, 8, hash);
+  writeUint64LE(buffer, 0, hash);
+  writeUint64LE(buffer, 8, hash);
   return buffer;
 }
 
@@ -263,15 +264,12 @@ export class ConnectJournalRecord {
     if (flags !== NORITO_FLAGS_NONE) {
       throw new ConnectJournalError("journal entry contains unsupported flags");
     }
-    const totalLen = NORITO_HEADER_LEN + payloadLen;
-    if (offset + totalLen > buffer.length) {
-      throw new ConnectJournalError("journal entry exceeds provided buffer");
-    }
-    const payload = buffer.subarray(offset + NORITO_HEADER_LEN, offset + NORITO_HEADER_LEN + payloadLen);
-    const actualChecksum = crc64(payload);
-    if (actualChecksum !== checksum) {
-      throw new ConnectJournalError("journal entry checksum mismatch");
-    }
+    const { payload, paddingLen } = findPayloadWithPadding(
+      buffer,
+      offset,
+      payloadLen,
+      checksum,
+    );
     let cursor = 0;
     const directionTag = payload[cursor];
     cursor += 1;
@@ -303,8 +301,41 @@ export class ConnectJournalRecord {
       receivedAtMs,
       expiresAtMs,
     });
-    return { record, bytesConsumed: totalLen };
+    return { record, bytesConsumed: NORITO_HEADER_LEN + paddingLen + payloadLen };
   }
+}
+
+function findPayloadWithPadding(buffer, offset, payloadLen, checksum) {
+  const headerEnd = offset + NORITO_HEADER_LEN;
+  const maxAvailable = buffer.length - headerEnd - payloadLen;
+  if (maxAvailable < 0) {
+    throw new ConnectJournalError("journal entry exceeds provided buffer");
+  }
+  const maxPadding = Math.min(MAX_HEADER_PADDING, maxAvailable);
+  for (let padding = 0; padding <= maxPadding; padding += 1) {
+    if (!paddingIsZero(buffer, headerEnd, padding)) {
+      continue;
+    }
+    const payloadStart = headerEnd + padding;
+    const payloadEnd = payloadStart + payloadLen;
+    if (payloadEnd > buffer.length) {
+      break;
+    }
+    const payload = buffer.subarray(payloadStart, payloadEnd);
+    if (crc64(payload) === checksum) {
+      return { payload, paddingLen: padding };
+    }
+  }
+  throw new ConnectJournalError("journal entry checksum mismatch");
+}
+
+function paddingIsZero(buffer, start, length) {
+  for (let i = 0; i < length; i += 1) {
+    if (buffer[start + i] !== 0) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function matchesMagic(slice) {

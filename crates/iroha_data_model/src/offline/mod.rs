@@ -2092,6 +2092,136 @@ mod model {
         pub platform_snapshot: Option<OfflinePlatformTokenSnapshot>,
     }
 
+    impl OfflineToOnlineTransfer {
+        /// Determine the inferred counter checkpoint for this bundle.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`OfflineProofRequestError::MissingReceipts`] when the
+        /// transfer lacks any receipts or
+        /// [`OfflineProofRequestError::InvalidCounterSequence`] if the receipt
+        /// counter cannot be decremented safely.
+        pub fn counter_checkpoint_hint(&self) -> Result<u64, OfflineProofRequestError> {
+            let first = self
+                .receipts
+                .first()
+                .ok_or(OfflineProofRequestError::MissingReceipts)?;
+            first
+                .platform_proof
+                .counter()
+                .checked_sub(1)
+                .ok_or(OfflineProofRequestError::InvalidCounterSequence)
+        }
+
+        /// Derive the witness request header shared by all FASTPQ proofs.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`OfflineProofRequestError`] if the receipts are inconsistent.
+        pub fn to_proof_request_header(
+            &self,
+        ) -> Result<OfflineProofRequestHeader, OfflineProofRequestError> {
+            let receipts_root = compute_receipts_root(&self.receipts)?;
+            let certificate_id = self
+                .primary_certificate()
+                .map(OfflineWalletCertificate::certificate_id)
+                .ok_or(OfflineProofRequestError::MissingCertificate)?;
+            Ok(OfflineProofRequestHeader {
+                version: OFFLINE_PROOF_REQUEST_VERSION_V1,
+                bundle_id: self.bundle_id,
+                certificate_id,
+                receipts_root,
+            })
+        }
+
+        /// Build the witness payload for the FASTPQ sum circuit.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`OfflineProofRequestError`] if the transfer lacks receipts or a certificate.
+        pub fn to_proof_request_sum(
+            &self,
+        ) -> Result<OfflineProofRequestSum, OfflineProofRequestError> {
+            let header = self.to_proof_request_header()?;
+            let certificate_id = header.certificate_id;
+            let balance_proof = &self.balance_proof;
+            if self.receipts.is_empty() {
+                return Err(OfflineProofRequestError::MissingReceipts);
+            }
+            let receipt_amounts: Vec<_> = self
+                .receipts
+                .iter()
+                .map(|receipt| receipt.amount.clone())
+                .collect();
+            let blinding_seeds = self
+                .receipts
+                .iter()
+                .map(|receipt| {
+                    OfflineProofBlindingSeed::derive(
+                        certificate_id,
+                        receipt.platform_proof.counter(),
+                    )
+                })
+                .collect();
+            Ok(OfflineProofRequestSum {
+                header,
+                initial_commitment: balance_proof.initial_commitment.clone(),
+                resulting_commitment: balance_proof.resulting_commitment.clone(),
+                claimed_delta: balance_proof.claimed_delta.clone(),
+                receipt_amounts,
+                blinding_seeds,
+            })
+        }
+
+        /// Build the witness payload for the FASTPQ counter circuit.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`OfflineProofRequestError`] if the transfer lacks receipts or a certificate.
+        pub fn to_proof_request_counter(
+            &self,
+            counter_checkpoint: u64,
+        ) -> Result<OfflineProofRequestCounter, OfflineProofRequestError> {
+            let header = self.to_proof_request_header()?;
+            if self.receipts.is_empty() {
+                return Err(OfflineProofRequestError::MissingReceipts);
+            }
+            let counters = self
+                .receipts
+                .iter()
+                .map(|receipt| receipt.platform_proof.counter())
+                .collect();
+            Ok(OfflineProofRequestCounter {
+                header,
+                counter_checkpoint,
+                counters,
+            })
+        }
+
+        /// Build the witness payload for the FASTPQ replay circuit.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`OfflineProofRequestError`] if the transfer lacks receipts or a certificate.
+        pub fn to_proof_request_replay(
+            &self,
+            replay_log_head: Hash,
+            replay_log_tail: Hash,
+        ) -> Result<OfflineProofRequestReplay, OfflineProofRequestError> {
+            let header = self.to_proof_request_header()?;
+            if self.receipts.is_empty() {
+                return Err(OfflineProofRequestError::MissingReceipts);
+            }
+            let tx_ids = self.receipts.iter().map(|receipt| receipt.tx_id).collect();
+            Ok(OfflineProofRequestReplay {
+                header,
+                replay_log_head,
+                replay_log_tail,
+                tx_ids,
+            })
+        }
+    }
+
     impl OfflineTransferRecord {
         /// Convenience accessor returning the bundle identifier.
         #[inline]
@@ -2149,16 +2279,7 @@ mod model {
         /// [`OfflineProofRequestError::InvalidCounterSequence`] if the receipt
         /// counter cannot be decremented safely.
         pub fn counter_checkpoint_hint(&self) -> Result<u64, OfflineProofRequestError> {
-            let first = self
-                .transfer
-                .receipts
-                .first()
-                .ok_or(OfflineProofRequestError::MissingReceipts)?;
-            first
-                .platform_proof
-                .counter()
-                .checked_sub(1)
-                .ok_or(OfflineProofRequestError::InvalidCounterSequence)
+            self.transfer.counter_checkpoint_hint()
         }
 
         /// Derive the witness request header shared by all FASTPQ proofs.
@@ -2169,16 +2290,7 @@ mod model {
         pub fn to_proof_request_header(
             &self,
         ) -> Result<OfflineProofRequestHeader, OfflineProofRequestError> {
-            let receipts_root = compute_receipts_root(&self.transfer.receipts)?;
-            let certificate_id = self
-                .certificate_id()
-                .ok_or(OfflineProofRequestError::MissingCertificate)?;
-            Ok(OfflineProofRequestHeader {
-                version: OFFLINE_PROOF_REQUEST_VERSION_V1,
-                bundle_id: self.bundle_id(),
-                certificate_id,
-                receipts_root,
-            })
+            self.transfer.to_proof_request_header()
         }
 
         /// Build the witness payload for the FASTPQ sum circuit.
@@ -2189,37 +2301,7 @@ mod model {
         pub fn to_proof_request_sum(
             &self,
         ) -> Result<OfflineProofRequestSum, OfflineProofRequestError> {
-            let header = self.to_proof_request_header()?;
-            let certificate_id = header.certificate_id;
-            let balance_proof = &self.transfer.balance_proof;
-            if self.transfer.receipts.is_empty() {
-                return Err(OfflineProofRequestError::MissingReceipts);
-            }
-            let receipt_amounts: Vec<_> = self
-                .transfer
-                .receipts
-                .iter()
-                .map(|receipt| receipt.amount.clone())
-                .collect();
-            let blinding_seeds = self
-                .transfer
-                .receipts
-                .iter()
-                .map(|receipt| {
-                    OfflineProofBlindingSeed::derive(
-                        certificate_id,
-                        receipt.platform_proof.counter(),
-                    )
-                })
-                .collect();
-            Ok(OfflineProofRequestSum {
-                header,
-                initial_commitment: balance_proof.initial_commitment.clone(),
-                resulting_commitment: balance_proof.resulting_commitment.clone(),
-                claimed_delta: balance_proof.claimed_delta.clone(),
-                receipt_amounts,
-                blinding_seeds,
-            })
+            self.transfer.to_proof_request_sum()
         }
 
         /// Build the witness payload for the FASTPQ counter circuit.
@@ -2231,21 +2313,7 @@ mod model {
             &self,
             counter_checkpoint: u64,
         ) -> Result<OfflineProofRequestCounter, OfflineProofRequestError> {
-            let header = self.to_proof_request_header()?;
-            if self.transfer.receipts.is_empty() {
-                return Err(OfflineProofRequestError::MissingReceipts);
-            }
-            let counters = self
-                .transfer
-                .receipts
-                .iter()
-                .map(|receipt| receipt.platform_proof.counter())
-                .collect();
-            Ok(OfflineProofRequestCounter {
-                header,
-                counter_checkpoint,
-                counters,
-            })
+            self.transfer.to_proof_request_counter(counter_checkpoint)
         }
 
         /// Build the witness payload for the FASTPQ replay circuit.
@@ -2258,22 +2326,8 @@ mod model {
             replay_log_head: Hash,
             replay_log_tail: Hash,
         ) -> Result<OfflineProofRequestReplay, OfflineProofRequestError> {
-            let header = self.to_proof_request_header()?;
-            if self.transfer.receipts.is_empty() {
-                return Err(OfflineProofRequestError::MissingReceipts);
-            }
-            let tx_ids = self
-                .transfer
-                .receipts
-                .iter()
-                .map(|receipt| receipt.tx_id)
-                .collect();
-            Ok(OfflineProofRequestReplay {
-                header,
-                replay_log_head,
-                replay_log_tail,
-                tx_ids,
-            })
+            self.transfer
+                .to_proof_request_replay(replay_log_head, replay_log_tail)
         }
 
         /// Record a lifecycle transition and timestamp for auditing purposes.
@@ -3167,6 +3221,27 @@ mod tests {
         assert_eq!(counter.counters, vec![50]);
 
         let replay = record
+            .to_proof_request_replay(Hash::new(b"head"), Hash::new(b"tail"))
+            .expect("replay request");
+        assert_eq!(replay.tx_ids.len(), 1);
+    }
+
+    #[test]
+    fn transfer_proof_requests_build_payloads() {
+        let record = sample_transfer_record(50);
+        let transfer = record.transfer.clone();
+        assert_eq!(transfer.counter_checkpoint_hint().unwrap(), 49);
+
+        let sum = transfer.to_proof_request_sum().expect("sum request");
+        assert_eq!(sum.receipt_amounts.len(), 1);
+        assert_eq!(sum.blinding_seeds.len(), 1);
+
+        let counter = transfer
+            .to_proof_request_counter(49)
+            .expect("counter request");
+        assert_eq!(counter.counters, vec![50]);
+
+        let replay = transfer
             .to_proof_request_replay(Hash::new(b"head"), Hash::new(b"tail"))
             .expect("replay request");
         assert_eq!(replay.tx_ids.len(), 1);
