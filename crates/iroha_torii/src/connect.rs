@@ -382,24 +382,16 @@ impl Bus {
         Ok(())
     }
 
-    async fn reserve_ws_slot(
-        &self,
-        ip: IpAddr,
-    ) -> Result<(), (axum::http::StatusCode, String)> {
+    async fn reserve_ws_slot(&self, ip: IpAddr) -> Result<(), (axum::http::StatusCode, String)> {
         if self.policy.ws_max_sessions == 0 {
             return Err((
                 axum::http::StatusCode::TOO_MANY_REQUESTS,
                 "connect: global session cap".into(),
             ));
         }
-        let prev = self
-            .shared
-            .sessions_total
-            .fetch_add(1, Ordering::AcqRel);
+        let prev = self.shared.sessions_total.fetch_add(1, Ordering::AcqRel);
         if prev >= self.policy.ws_max_sessions {
-            self.shared
-                .sessions_total
-                .fetch_sub(1, Ordering::AcqRel);
+            self.shared.sessions_total.fetch_sub(1, Ordering::AcqRel);
             return Err((
                 axum::http::StatusCode::TOO_MANY_REQUESTS,
                 "connect: global session cap".into(),
@@ -409,16 +401,12 @@ impl Bus {
         let mut counts = self.per_ip_counts.lock().await;
         let entry = counts.entry(ip).or_insert(0);
         *entry += 1;
-        if self.policy.ws_per_ip_max_sessions > 0
-            && *entry > self.policy.ws_per_ip_max_sessions
-        {
+        if self.policy.ws_per_ip_max_sessions > 0 && *entry > self.policy.ws_per_ip_max_sessions {
             *entry -= 1;
             if *entry == 0 {
                 counts.remove(&ip);
             }
-            self.shared
-                .sessions_total
-                .fetch_sub(1, Ordering::AcqRel);
+            self.shared.sessions_total.fetch_sub(1, Ordering::AcqRel);
             return Err((
                 axum::http::StatusCode::TOO_MANY_REQUESTS,
                 "connect: per-ip session cap".into(),
@@ -1115,28 +1103,10 @@ pub async fn handle_ws(
 
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) fn decode_sid(s: &str) -> Result<Sid, String> {
-    // Expect base64url (no padding) or hex fallback.
-    if let Ok(v) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s) {
-        if v.len() == 32 {
-            let mut sid = [0u8; 32];
-            sid.copy_from_slice(&v);
-            return Ok(sid);
-        }
-    }
-    let v = {
-        let ss = s.trim_start_matches("0x");
-        if !ss.len().is_multiple_of(2) {
-            return Err("sid must be hex".into());
-        }
-        let mut out = Vec::with_capacity(ss.len() / 2);
-        let mut i = 0;
-        while i < ss.len() {
-            let byte = u8::from_str_radix(&ss[i..i + 2], 16).map_err(|e| e.to_string())?;
-            out.push(byte);
-            i += 2;
-        }
-        out
-    };
+    // Expect base64url (no padding).
+    let v = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s)
+        .map_err(|_| "sid must be base64url".to_string())?;
     if v.len() != 32 {
         return Err("sid must be 32 bytes".into());
     }
@@ -1149,6 +1119,7 @@ pub(crate) fn decode_sid(s: &str) -> Result<Sid, String> {
 mod tests {
     use std::{collections::BTreeMap, num::NonZeroU64};
 
+    use base64::Engine as _;
     use iroha_crypto::Hash;
     use tokio::time::{Duration, timeout};
 
@@ -1275,7 +1246,10 @@ mod tests {
         assert!(bus.pre_ws_handshake(ip).await.is_err());
         // Close one and attempt again
         first.release().await;
-        let mut third = bus.pre_ws_handshake(ip).await.expect("third ok after release");
+        let mut third = bus
+            .pre_ws_handshake(ip)
+            .await
+            .expect("third ok after release");
         second.release().await;
         third.release().await;
     }
@@ -1861,6 +1835,21 @@ mod tests {
         } else {
             panic!("expected server event frame for wallet");
         }
+    }
+
+    #[test]
+    fn decode_sid_accepts_base64url() {
+        let sid = [0x11u8; 32];
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sid);
+        let decoded = decode_sid(&encoded).expect("decode base64url sid");
+        assert_eq!(decoded, sid);
+    }
+
+    #[test]
+    fn decode_sid_rejects_hex() {
+        let sid = [0x22u8; 32];
+        let hex = hex::encode(sid);
+        assert!(decode_sid(&hex).is_err(), "hex should be rejected");
     }
 }
 impl Bus {

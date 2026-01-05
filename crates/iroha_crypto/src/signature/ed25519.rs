@@ -335,7 +335,8 @@ mod test {
     use self::Ed25519Sha512;
     use super::*;
     use crate::{
-        Algorithm, Error, KeyGenOption, PrivateKey, PublicKey, secrecy::Secret, signature::ed25519,
+        Algorithm, Error, KeyGenOption, PrivateKey as CryptoPrivateKey,
+        PublicKey as CryptoPublicKey, secrecy::Secret, signature::ed25519,
     };
     use curve25519_dalek::{
         edwards::EdwardsPoint,
@@ -380,12 +381,12 @@ mod test {
         let (p1, s1) = key_pair_factory();
 
         assert_eq!(
-            PrivateKey(Box::new(Secret::new(crate::PrivateKeyInner::Ed25519(s1)))),
-            PrivateKey::from_hex(Algorithm::Ed25519, PRIVATE_KEY).unwrap()
+            CryptoPrivateKey(Box::new(Secret::new(crate::PrivateKeyInner::Ed25519(s1)))),
+            CryptoPrivateKey::from_hex(Algorithm::Ed25519, PRIVATE_KEY).unwrap()
         );
         assert_eq!(
-            PublicKey::new(crate::PublicKeyFull::Ed25519(p1)),
-            PublicKey::from_hex(Algorithm::Ed25519, PUBLIC_KEY).unwrap()
+            CryptoPublicKey::new(crate::PublicKeyFull::Ed25519(p1)),
+            CryptoPublicKey::from_hex(Algorithm::Ed25519, PUBLIC_KEY).unwrap()
         );
     }
 

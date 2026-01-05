@@ -35,6 +35,9 @@ FIELD_BITSET = 0x20
 # V1 minor version is fixed; layout flags are declared in the header flags byte.
 MINOR_VERSION = 0
 
+# Maximum allowed alignment padding between the header and payload.
+MAX_HEADER_PADDING = 64
+
 COMPRESSION_NONE = 0
 COMPRESSION_ZSTD = 1
 
@@ -129,12 +132,21 @@ class NoritoHeader:
             raise UnsupportedFeatureError(unsupported)
 
         if compression == COMPRESSION_NONE:
-            end = cls._HEADER_LEN + payload_length
-            payload = data[cls._HEADER_LEN : end]
+            min_end = cls._HEADER_LEN + payload_length
+            if len(data) < min_end:
+                raise LengthMismatchError(min_end, len(data))
+            padding_len = len(data) - min_end
+            if padding_len > MAX_HEADER_PADDING:
+                raise LengthMismatchError(min_end + MAX_HEADER_PADDING, len(data))
+            if padding_len:
+                padding = data[cls._HEADER_LEN : cls._HEADER_LEN + padding_len]
+                if any(b != 0 for b in padding):
+                    raise LengthMismatchError(payload_length, payload_length + len(padding))
+            payload_start = cls._HEADER_LEN + padding_len
+            payload_end = payload_start + payload_length
+            payload = data[payload_start:payload_end]
             if len(payload) != payload_length:
                 raise LengthMismatchError(payload_length, len(payload))
-            if len(data) != end:
-                raise LengthMismatchError(payload_length, len(data) - cls._HEADER_LEN)
         else:
             payload = data[cls._HEADER_LEN :]
             if not payload:
@@ -164,6 +176,7 @@ __all__ = [
     "MAGIC",
     "MAJOR_VERSION",
     "MINOR_VERSION",
+    "MAX_HEADER_PADDING",
     "PACKED_SEQ",
     "COMPACT_LEN",
     "PACKED_STRUCT",

@@ -5,6 +5,7 @@ public struct ConnectJournalRecord: Equatable, Sendable {
     static let schemaName = "ConnectJournalRecordV1"
     static let schemaHash = noritoSchemaHash(forTypeName: schemaName)
     static let headerLength = 40
+    static let maxHeaderPadding = 64
 
     public let direction: ConnectDirection
     public let sequence: UInt64
@@ -80,15 +81,10 @@ public struct ConnectJournalRecord: Equatable, Sendable {
         let checksum = try data.readUInt64LE(at: cursor)
         cursor += 8
         cursor += 1 // flags
-        guard payloadLength <= UInt64(data.count - cursor) else {
-            throw ConnectQueueError.corrupted
-        }
-        let payloadStart = cursor
-        let payloadEnd = cursor + Int(payloadLength)
-        let payload = Data(data[payloadStart..<payloadEnd])
-        guard crc64ECMA(payload) == checksum else {
-            throw ConnectQueueError.corrupted
-        }
+        let (payload, padding) = try payloadWithPadding(data: data,
+                                                        offset: offset,
+                                                        payloadLength: payloadLength,
+                                                        checksum: checksum)
 
         var payloadCursor = payload.startIndex
         guard payload.count >= 1 + 8 + 8 + 8 + 4 + 32 else {
@@ -127,7 +123,44 @@ public struct ConnectJournalRecord: Equatable, Sendable {
                                               ciphertext: ciphertext,
                                               receivedAtMs: receivedAt,
                                               expiresAtMs: expiresAt)
-        return (record, headerLength + Int(payloadLength))
+        return (record, headerLength + padding + Int(payloadLength))
+    }
+
+    private static func payloadWithPadding(data: Data,
+                                           offset: Int,
+                                           payloadLength: UInt64,
+                                           checksum: UInt64) throws -> (payload: Data, padding: Int) {
+        guard payloadLength <= UInt64(Int.max) else {
+            throw ConnectQueueError.corrupted
+        }
+        let headerEnd = offset + headerLength
+        let payloadLen = Int(payloadLength)
+        let maxAvailable = data.count - headerEnd - payloadLen
+        guard maxAvailable >= 0 else {
+            throw ConnectQueueError.corrupted
+        }
+        let maxPadding = min(maxHeaderPadding, maxAvailable)
+        if maxPadding < 0 {
+            throw ConnectQueueError.corrupted
+        }
+        for padding in 0...maxPadding {
+            if padding > 0 {
+                let padRange = headerEnd..<(headerEnd + padding)
+                if data[padRange].contains(where: { $0 != 0 }) {
+                    continue
+                }
+            }
+            let payloadStart = headerEnd + padding
+            let payloadEnd = payloadStart + payloadLen
+            if payloadEnd > data.count {
+                break
+            }
+            let payload = Data(data[payloadStart..<payloadEnd])
+            if crc64ECMA(payload) == checksum {
+                return (payload, padding)
+            }
+        }
+        throw ConnectQueueError.corrupted
     }
 }
 
@@ -298,30 +331,21 @@ private final class ConnectJournalFile {
            fileSize.intValue > configuration.maxBytesPerQueue {
             throw ConnectQueueError.overflow(limit: configuration.maxBytesPerQueue)
         }
-        let handle = try FileHandle(forReadingFrom: fileURL)
-        defer { try? handle.close() }
+        let contents = try Data(contentsOf: fileURL)
+        if contents.count > configuration.maxBytesPerQueue {
+            throw ConnectQueueError.overflow(limit: configuration.maxBytesPerQueue)
+        }
         var records: [ConnectJournalRecord] = []
-        var bytesRead = 0
-        while let header = try readExactly(handle: handle, count: ConnectJournalRecord.headerLength) {
+        var offset = 0
+        while offset < contents.count {
             if records.count >= configuration.maxRecordsPerQueue {
                 throw ConnectQueueError.overflow(limit: configuration.maxRecordsPerQueue)
             }
-            bytesRead += header.count
-            let payloadLength = try parsePayloadLength(fromHeader: header)
-            if payloadLength > configuration.maxBytesPerQueue || bytesRead + payloadLength > configuration.maxBytesPerQueue {
-                throw ConnectQueueError.overflow(limit: configuration.maxBytesPerQueue)
-            }
-            guard let payload = try readExactly(handle: handle, count: payloadLength) else {
+            let (record, consumed) = try ConnectJournalRecord.decode(from: contents, offset: offset)
+            guard consumed > 0 else {
                 throw ConnectQueueError.corrupted
             }
-            bytesRead += payload.count
-            var envelope = Data(capacity: header.count + payload.count)
-            envelope.append(header)
-            envelope.append(payload)
-            let (record, consumed) = try ConnectJournalRecord.decode(from: envelope, offset: 0)
-            guard consumed == envelope.count else {
-                throw ConnectQueueError.corrupted
-            }
+            offset += consumed
             records.append(record)
         }
         return records
@@ -362,59 +386,6 @@ private final class ConnectJournalFile {
         records.reduce(0) { $0 + $1.encodedSize }
     }
 
-    private func parsePayloadLength(fromHeader header: Data) throws -> Int {
-        guard header.count == ConnectJournalRecord.headerLength else {
-            throw ConnectQueueError.corrupted
-        }
-        var cursor = 0
-        guard header[cursor..<(cursor + 4)] == NoritoHeader.magic else {
-            throw ConnectQueueError.corrupted
-        }
-        cursor += 4
-        let major = header[cursor]
-        let minor = header[cursor + 1]
-        guard major == NoritoHeader.versionMajor, minor == NoritoHeader.versionMinor else {
-            throw ConnectQueueError.corrupted
-        }
-        cursor += 2
-        let schemaSlice = header[cursor..<(cursor + 16)]
-        guard Array(schemaSlice) == ConnectJournalRecord.schemaHash else {
-            throw ConnectQueueError.corrupted
-        }
-        cursor += 16
-        let compression = header[cursor]
-        cursor += 1
-        guard compression == NoritoCompression.none.rawValue else {
-            throw ConnectQueueError.corrupted
-        }
-        let payloadLength = try header.readUInt64LE(at: cursor)
-        guard payloadLength <= Int.max else {
-            throw ConnectQueueError.corrupted
-        }
-        _ = try header.readUInt64LE(at: cursor + 8) // checksum sanity check bounds
-        _ = header[cursor + 16] // flags
-        return Int(payloadLength)
-    }
-
-    private func readExactly(handle: FileHandle, count: Int) throws -> Data? {
-        if count == 0 {
-            return Data()
-        }
-        var remaining = count
-        var buffer = Data(capacity: count)
-        while remaining > 0 {
-            let chunk = try handle.read(upToCount: remaining)
-            guard let chunk, !chunk.isEmpty else {
-                if buffer.isEmpty {
-                    return nil
-                }
-                throw ConnectQueueError.corrupted
-            }
-            buffer.append(chunk)
-            remaining -= chunk.count
-        }
-        return buffer
-    }
 }
 
 private extension Data {

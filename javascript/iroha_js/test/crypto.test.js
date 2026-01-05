@@ -54,6 +54,16 @@ test("generateKeyPair is deterministic with a seed", () => {
   assert.deepEqual(kp1.publicKey, publicKeyFromPrivate(kp1.privateKey));
 });
 
+test("generateKeyPair hashes non-32 seed material", () => {
+  const seed = Buffer.from("short seed");
+  const kp1 = generateKeyPair({ seed });
+  const kp2 = generateKeyPair({ seed });
+
+  assert.equal(kp1.privateKey.length, 32);
+  assert.deepEqual(kp1.privateKey, kp2.privateKey);
+  assert.deepEqual(kp1.publicKey, kp2.publicKey);
+});
+
 test("signEd25519 and verifyEd25519 round-trip", () => {
   const seed = Buffer.from(Array.from({ length: 32 }, (_, i) => i));
   const { privateKey, publicKey } = generateKeyPair({ seed });
@@ -69,16 +79,21 @@ test("publicKeyFromPrivate round-trips generated keys", () => {
   const { publicKey, privateKey } = generateKeyPair({ seed });
 
   const derivedFromPrivate = publicKeyFromPrivate(privateKey);
+  const derivedFromKeypair = publicKeyFromPrivate(Buffer.concat([privateKey, publicKey]));
 
   assert.deepEqual(derivedFromPrivate, publicKey);
+  assert.deepEqual(derivedFromKeypair, publicKey);
 });
 
 test("invalid key lengths throw helpful errors", () => {
-  assert.throws(() => generateKeyPair({ seed: Buffer.alloc(16) }), /seed must be 32 bytes/);
   assert.throws(
     () => publicKeyFromPrivate(Buffer.alloc(10)),
     /(payload size is incorrect|private key must be 32-byte seed)/,
   );
+  const seed = Buffer.alloc(32, 0x33);
+  const { privateKey } = generateKeyPair({ seed });
+  const mismatched = Buffer.concat([privateKey, Buffer.alloc(32, 0x00)]);
+  assert.throws(() => publicKeyFromPrivate(mismatched), /mismatched public key/);
   assert.throws(() => verifyEd25519(MESSAGE, Buffer.alloc(64), Buffer.alloc(10)), /public key must be 32 bytes/);
 });
 

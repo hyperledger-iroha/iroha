@@ -305,7 +305,7 @@ npm run build:native
 node ./recipes/governance.mjs
 ```
 
-Set `TORII_URL`, `CHAIN_ID`, `AUTHORITY`, and `PRIVATE_KEY_HEX` (32-byte seed)
+Set `TORII_URL`, `CHAIN_ID`, `AUTHORITY`, and `PRIVATE_KEY_HEX` (32- or 64-byte Ed25519 key)
 when submitting to a live node. Ensure the authority holds the necessary
 governance permissions before enabling `GOV_SUBMIT=1`.
 

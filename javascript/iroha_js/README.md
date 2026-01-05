@@ -1453,8 +1453,9 @@ await torii.revokeSpaceDirectoryManifest(
 );
 ```
 
-`privateKey` accepts a raw 32-byte seed, `privateKeyHex` wraps 64-character hex
-strings as `ed25519:<hex>`, and `privateKeyMultihash` allows callers to supply
+`privateKey` accepts a raw 32-byte seed or 64-byte seed+public payload,
+`privateKeyHex` wraps 64- or 128-character hex strings as `ed25519:<hex>`, and
+`privateKeyMultihash` allows callers to supply
 preformatted multihash literals when hardware security modules emit the string
 directly. Both helpers return `null` for HTTP `202 Accepted` responses; Torii
 queues the underlying transaction and emits the corresponding
@@ -2129,7 +2130,7 @@ console.log(preview.walletUri); // iroha://connect?sid=...
 console.log(preview.appUri); // iroha://connect/app?sid=...
 
 const session = await torii.createConnectSession({
-  sid: preview.sidHex,
+  sid: preview.sidBase64Url,
   node: preview.node,
 });
 
@@ -2227,7 +2228,7 @@ import WebSocket from "ws";
 import { ToriiClient } from "@iroha/iroha-js";
 
 const torii = new ToriiClient("https://torii.nexus.example");
-const session = await torii.createConnectSession({ sid: preview.sidHex });
+const session = await torii.createConnectSession({ sid: preview.sidBase64Url });
 
 const socket = torii.openConnectWebSocket({
   sid: session.sid,
@@ -2322,7 +2323,7 @@ import {
   updateConnectQueueSnapshot,
 } from "@iroha/iroha-js";
 
-const sid = preview.sidHex;
+const sid = preview.sidBase64Url;
 const journal = new ConnectQueueJournal(sid, { storage: "memory" });
 await journal.append(
   ConnectDirection.APP_TO_WALLET,

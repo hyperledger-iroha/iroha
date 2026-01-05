@@ -10,7 +10,7 @@ const CONNECT_URI_VERSION = "1";
 /**
  * Generate a Connect session identifier deterministically.
  * @param {{ chainId: string; appPublicKey: BinaryLike; nonce?: BinaryLike | null }} options
- * @returns {{ sidBytes: Buffer; sidHex: string; sidBase64Url: string; nonce: Buffer }}
+ * @returns {{ sidBytes: Buffer; sidBase64Url: string; nonce: Buffer }}
  */
 export function generateConnectSid(options = {}) {
   if (!options || typeof options !== "object") {
@@ -31,7 +31,6 @@ export function generateConnectSid(options = {}) {
   const sidBytes = Buffer.from(digest);
   return {
     sidBytes,
-    sidHex: `0x${sidBytes.toString("hex")}`,
     sidBase64Url: toBase64Url(sidBytes),
     nonce,
   };
@@ -44,7 +43,6 @@ export function generateConnectSid(options = {}) {
  *   chainId: string;
  *   node: string | null;
  *   sidBytes: Buffer;
- *   sidHex: string;
  *   sidBase64Url: string;
  *   nonce: Buffer;
  *   appKeyPair: { publicKey: Buffer; privateKey: Buffer };
@@ -75,7 +73,6 @@ export function createConnectSessionPreview(options = {}) {
     chainId,
     node,
     sidBytes: sidResult.sidBytes,
-    sidHex: sidResult.sidHex,
     sidBase64Url: sidResult.sidBase64Url,
     nonce,
     appKeyPair,

@@ -2916,7 +2916,7 @@ pub struct QueryOptions {
 #[allow(dead_code)]
 /// Request body for creating a Connect session.
 pub struct ConnectSessionRequest {
-    /// Required client-provided session id (base64url or hex, 32 bytes after decode).
+    /// Required client-provided session id (base64url, no padding; 32 bytes after decode).
     ///
     /// Note: The server no longer generates a fallback `sid`. Clients must
     /// compute a session identifier (e.g.,
@@ -2952,72 +2952,28 @@ pub async fn handle_connect_session(
 ) -> Result<JsonBody<ConnectSessionResponse>, crate::Error> {
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
     use rand::{rand_core::TryRngCore as _, rngs::OsRng};
-    // Require client-provided `sid` (base64url or hex)
-    let sid_bytes: [u8; 32] = if let Some(s) = &req.sid {
-        // Accept base64url or hex for sid
-        if let Ok(v) = B64.decode(s) {
-            if v.len() == 32 {
-                let mut out = [0u8; 32];
-                out.copy_from_slice(&v);
-                out
-            } else {
-                return Err(crate::Error::Query(
-                    iroha_data_model::ValidationFail::QueryFailed(
-                        iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                            "malformed request".into(),
-                        ),
-                    ),
-                ));
-            }
-        } else {
-            let v = {
-                let ss = s.trim_start_matches("0x");
-                if ss.len() % 2 != 0 {
-                    return Err(crate::Error::Query(
-                        iroha_data_model::ValidationFail::QueryFailed(
-                            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                                "malformed request".into(),
-                            ),
-                        ),
-                    ));
-                }
-                let mut out = Vec::with_capacity(ss.len() / 2);
-                let mut i = 0;
-                while i < ss.len() {
-                    let byte = u8::from_str_radix(&ss[i..i + 2], 16).map_err(|_| {
-                        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                                "malformed request".into(),
-                            ),
-                        ))
-                    })?;
-                    out.push(byte);
-                    i += 2;
-                }
-                out
-            };
+    // Require client-provided `sid` (base64url, no padding).
+    let malformed = || {
+        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "malformed request".into(),
+            ),
+        ))
+    };
+    let sid_bytes: [u8; 32] = match req.sid.as_deref() {
+        Some(s) => {
+            let v = B64.decode(s).map_err(|_| malformed())?;
             if v.len() != 32 {
-                return Err(crate::Error::Query(
-                    iroha_data_model::ValidationFail::QueryFailed(
-                        iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                            "malformed request".into(),
-                        ),
-                    ),
-                ));
+                return Err(malformed());
             }
             let mut out = [0u8; 32];
             out.copy_from_slice(&v);
             out
         }
-    } else {
-        // Reject missing sid: client must supply one.
-        return Err(crate::Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "malformed request".into(),
-                ),
-            ),
-        ));
+        None => {
+            // Reject missing sid: client must supply one.
+            return Err(malformed());
+        }
     };
     // Generate one-time tokens (32 bytes each)
     let mut t_app = [0u8; 32];
@@ -3058,7 +3014,7 @@ pub async fn handle_connect_session(
 #[derive(Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
 /// Query parameters for WebSocket Connect endpoint
 pub struct ConnectWsQuery {
-    /// Session identifier (base64url)
+    /// Session identifier (base64url, no padding)
     pub sid: String,
     /// Role name: "app" or "wallet"
     pub role: String,
@@ -3102,6 +3058,21 @@ mod connect_session_tests {
         assert!(resp.0.token_app.len() > 0 && resp.0.token_wallet.len() > 0);
         assert!(resp.0.wallet_uri.contains(&sid_str));
         assert!(resp.0.app_uri.contains(&sid_str));
+    }
+
+    #[tokio::test]
+    async fn connect_session_rejects_hex_sid() {
+        let chain_id: std::sync::Arc<iroha_data_model::ChainId> =
+            std::sync::Arc::new("testnet".parse().unwrap());
+        let sid_hex = hex::encode([9u8; 32]);
+        let req = ConnectSessionRequest {
+            sid: Some(sid_hex),
+            node: None,
+        };
+        let err = handle_connect_session(chain_id.clone(), NoritoJson(req))
+            .await
+            .err();
+        assert!(err.is_some(), "expected error when sid is hex");
     }
 }
 

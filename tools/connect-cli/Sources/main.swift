@@ -7,6 +7,28 @@ enum Command: String {
     case inspect
 }
 
+let sidByteCount = 32
+
+func decodeSidBase64Url(_ value: String) -> Data? {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    guard !trimmed.contains("=") else { return nil }
+    var base64 = trimmed.replacingOccurrences(of: "-", with: "+")
+        .replacingOccurrences(of: "_", with: "/")
+    let remainder = base64.count % 4
+    if remainder == 1 {
+        return nil
+    }
+    if remainder == 2 {
+        base64.append("==")
+    } else if remainder == 3 {
+        base64.append("=")
+    }
+    guard let decoded = Data(base64Encoded: base64) else { return nil }
+    guard decoded.count == sidByteCount else { return nil }
+    return decoded
+}
+
 struct CLI {
     let command: Command
     let sessionID: Data
@@ -20,13 +42,13 @@ struct CLI {
             return nil
         }
         args = args.dropFirst()
-        guard let sidHex = args.first else {
+        guard let sidBase64Url = args.first else {
             CLI.usage()
             return nil
         }
         args = args.dropFirst()
-        guard let sid = Data(hexString: sidHex) else {
-            print("invalid sid hex")
+        guard let sid = decodeSidBase64Url(sidBase64Url) else {
+            print("invalid sid base64url")
             return nil
         }
         let root = ConnectSessionDiagnostics.defaultRootDirectory()
@@ -40,9 +62,9 @@ struct CLI {
     static func usage() {
         print("""
         Usage:
-          connect-cli capture <sid_hex>
-          connect-cli replay <sid_hex> [bundle_dir]
-          connect-cli inspect <sid_hex> [bundle_dir]
+          connect-cli capture <sid_base64url>
+          connect-cli replay <sid_base64url> [bundle_dir]
+          connect-cli inspect <sid_base64url> [bundle_dir]
         """)
     }
 }

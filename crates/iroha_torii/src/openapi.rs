@@ -4192,7 +4192,9 @@ fn content_paths() -> Map {
             operation.insert(
                 "description".into(),
                 Value::String(
-                    "Fetch content bundle bytes (path captures the remaining path segments)."
+                    "Fetch content bundle bytes (path captures the remaining path segments). \
+Role- or sponsor-gated bundles require canonical request headers \
+(`X-Iroha-Account`, `X-Iroha-Signature`)."
                         .to_owned(),
                 ),
             );

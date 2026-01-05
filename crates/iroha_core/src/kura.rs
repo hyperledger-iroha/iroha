@@ -1322,8 +1322,7 @@ impl Kura {
                 "kura writer acquired block_store for batch"
             );
             let end_height = start_height + blocks_to_be_written.len();
-            let start_height_u64 =
-                u64::try_from(start_height).expect("start height fits in u64");
+            let start_height_u64 = u64::try_from(start_height).expect("start height fits in u64");
             if let Err(error) =
                 block_store_guard.append_block_batch_at(start_height_u64, &blocks_to_be_written)
             {
@@ -6197,8 +6196,7 @@ mod tests {
         block_store.create_files_if_they_do_not_exist().unwrap();
 
         let leader = KeyPair::random();
-        let block1: Arc<SignedBlock> =
-            Arc::new(ValidBlock::new_dummy(leader.private_key()).into());
+        let block1: Arc<SignedBlock> = Arc::new(ValidBlock::new_dummy(leader.private_key()).into());
         let block2: Arc<SignedBlock> = Arc::new(
             ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
                 header.set_prev_block_hash(Some(block1.hash()));

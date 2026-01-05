@@ -1,7 +1,7 @@
 {
   "scenario": "multi_observer",
   "torii_build": "mock-2026-05-15",
-  "sid_base64": "Y29ubmVjdC1maXh0dXJlLXNpZCE",
+  "sid_base64url": "Y29ubmVjdC1maXh0dXJlLXNpZCE",
   "description": "Two observers pull frames while backpressure pushes queue depth past the warning watermark, then drains cleanly.",
   "frames": [
     { "direction": "AppToWallet", "sequence": 5, "payload_hex": "06" },

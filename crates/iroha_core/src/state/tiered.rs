@@ -2174,6 +2174,9 @@ mod tests {
         let qc1_hash = hex::encode(sha256(&norito::codec::Encode::encode(
             &qc1.subject_block_hash,
         )));
+        let qc2_hash = hex::encode(sha256(&norito::codec::Encode::encode(
+            &qc2.subject_block_hash,
+        )));
         let hot_hash = manifest.hot_entries[0].key_hash_hex.clone();
 
         assert!(

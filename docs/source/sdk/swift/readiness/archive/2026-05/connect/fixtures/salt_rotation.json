@@ -1,7 +1,7 @@
 {
   "scenario": "salt_rotation",
   "torii_build": "mock-2026-05-15",
-  "sid_base64": "Y29ubmVjdC1maXh0dXJlLXNpZCE",
+  "sid_base64url": "Y29ubmVjdC1maXh0dXJlLXNpZCE",
   "description": "Rotate salts while frames are in-flight and verify sequence counters/nonce derivation reset cleanly.",
   "frames": [
     { "direction": "AppToWallet", "sequence": 3, "payload_hex": "03" },

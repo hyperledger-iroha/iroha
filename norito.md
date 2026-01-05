@@ -23,10 +23,13 @@ and supplies the schema hash and checksum needed for deterministic decoding.
 Total header size: 40 bytes.
 
 Alignment padding:
-- For uncompressed payloads, encoders may insert alignment padding between the
-  header and payload to satisfy the archived type's alignment.
+- For uncompressed payloads, encoders must insert zero padding between the
+  header and payload when the archived type's alignment would otherwise be
+  violated.
 - Padding length must be the exact alignment padding required for the type and
-  padding bytes must be zero. Extra bytes are rejected.
+  padding bytes must be zero. Decoders without a concrete type alignment must
+  accept any zero padding up to 64 bytes and treat the remaining bytes as the
+  payload. Extra non-zero bytes are rejected.
 
 Schema enforcement:
 - Typed decoders must reject payloads whose header schema hash does not match

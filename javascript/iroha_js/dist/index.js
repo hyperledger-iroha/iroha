@@ -136,6 +136,11 @@ export {
   writeOfflineEnvelopeFile,
 } from "./offlineEnvelope.js";
 export {
+  OfflineCounterJournal,
+  OfflineCounterJournalError,
+  OfflineCounterPlatform,
+} from "./offlineCounterJournal.js";
+export {
   buildBurnAssetInstruction,
   buildMintAssetInstruction,
   buildMintTriggerRepetitionsInstruction,
@@ -214,11 +219,13 @@ import * as toriiNamespace from "./toriiClient.js";
 import * as noritoNamespace from "./norito.js";
 import * as cryptoNamespace from "./crypto.js";
 import * as offlineNamespace from "./offlineEnvelope.js";
+import * as offlineCounterNamespace from "./offlineCounterJournal.js";
 
 export const Torii = toriiNamespace;
 export const Norito = noritoNamespace;
 export const Crypto = cryptoNamespace;
 export const Offline = offlineNamespace;
+export const OfflineCounters = offlineCounterNamespace;
 export {
   ConnectError,
   ConnectErrorCategory,

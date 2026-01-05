@@ -2911,11 +2911,12 @@ pub mod codec {
     use toml::Value as TomlValue;
 
     use super::{
-        AudioCodecError, AudioCodecLayoutMismatchInfo, AudioFrame, AudioLayout, AudioTrackSummary,
-        BundleAcceleration, Bytes, CapabilityFlags, ChunkDescriptor, EncryptionSuite, EntropyMode,
-        FecScheme, FeedbackHint, Hash, ManifestV1, Multiaddr, NeuralBundle, NoritoJsonValue,
-        PrivacyRoute, ProfileId, RansGroupTableV1, RdoMode, SegmentAudio, SegmentHeader, Signature,
-        SignedRansTablesV1, StorageClass, StreamMetadata, Timestamp,
+        AudioCodecError, AudioCodecLayoutMismatchInfo, AudioEncoderSampleCountMismatchInfo,
+        AudioFrame, AudioLayout, AudioTrackSummary, BundleAcceleration, Bytes, CapabilityFlags,
+        ChunkDescriptor, EncryptionSuite, EntropyMode, FecScheme, FeedbackHint, Hash, ManifestV1,
+        Multiaddr, NeuralBundle, NoritoJsonValue, PrivacyRoute, ProfileId, RansGroupTableV1,
+        RdoMode, SegmentAudio, SegmentHeader, Signature, SignedRansTablesV1, StorageClass,
+        StreamMetadata, Timestamp,
         chunk::{
             AudioSampleCountMismatchInfo, BlockCountMismatchInfo, ChunkError, CodecError,
             FrameLengthMismatch, chunk_commitments, derive_nonce_salt, merkle_root,
