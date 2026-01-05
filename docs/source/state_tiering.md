@@ -21,9 +21,19 @@ fast transaction validation.
   spill paths. The manifest is written atomically (temp file + fsync) before the
   snapshot directory is promoted.
 - Runtime configuration lives under `iroha_config.parameters.tiered_state`
-  (`enabled`, `hot_retained_keys`, `cold_store_root`, `max_snapshots`). The node
-  applies these knobs at startup via `State::set_tiered_backend`, and the default
-  build keeps the feature disabled until operators opt in.
+  (`enabled`, `hot_retained_keys`, `hot_retained_bytes`, `hot_retained_grace_snapshots`,
+  `cold_store_root`, `max_snapshots`, `max_cold_bytes`). The node applies these
+  knobs at startup via `State::set_tiered_backend`, and the default build keeps
+  the feature disabled until operators opt in.
+- `hot_retained_bytes` enforces a hot-tier byte budget derived from the exact
+  serialized payload size (Norito JSON). Grace retention may temporarily exceed
+  this budget; the overflow is reported via telemetry.
+- `hot_retained_grace_snapshots` keeps newly hot entries pinned for a short
+  window to reduce hot/cold churn when rankings fluctuate.
+- Cold payloads reuse the last persisted shard when the value hash is unchanged,
+  avoiding redundant re-encoding work across snapshots.
+- `max_cold_bytes` prunes the oldest snapshot directories once total cold storage
+  exceeds the configured budget (always retaining the newest snapshot).
 - Changing `cold_store_root` resets the in-memory tiering metadata and snapshot
   counter so new roots start with a clean hot/cold ordering.
 - `StateBlock::commit` records a fresh snapshot under the configured cold root

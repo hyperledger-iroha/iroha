@@ -18,6 +18,7 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
             store_dir: iroha_config::base::WithOrigin::inline(
                 temp_dir.path().to_str().unwrap().into(),
             ),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:

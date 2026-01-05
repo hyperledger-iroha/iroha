@@ -3795,7 +3795,7 @@ impl IVM {
                         return Err(VMError::PrivacyViolation);
                     }
                     let imm = i64::from(instruction::wide::imm8(instr));
-                    let target = ((self.registers.get(rs) as i64) + imm) as u64 & !1;
+                    let target = ((self.registers.get(rs) as i64) + imm) as u64 & !3;
                     let return_pc = self.pc.wrapping_add(length as u64);
                     self.registers.set(rd, return_pc);
                     if self.zk_mode {

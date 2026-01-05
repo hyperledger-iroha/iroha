@@ -25,8 +25,9 @@ Key conventions:
 - Structs/enums derive packed layouts when the `packed-struct` feature is
   enabled (default). Implementation lives in `crates/norito_derive/src/derive_struct.rs`
   and the behaviour is documented in `norito.md` (“Packed layouts”).
-- Packed collections use compact length prefixes and optional varint element
-  widths (`packed-seq` + `compact-len` flags).
+- Packed collections can use compact sequence headers (`COMPACT_SEQ_LEN`),
+  varint-coded offsets (`VARINT_OFFSETS`), and per-value length prefixes
+  controlled by `COMPACT_LEN`.
 - JSON helpers (`norito::json`) provide deterministic Norito-backed JSON for
   open APIs. Use `norito::json::{to_json_pretty, from_json}` — never `serde_json`.
 

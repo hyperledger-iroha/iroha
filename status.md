@@ -1,6 +1,101 @@
 # Status
 
 ## Latest Updates
+- Torii: enforce app pagination on accounts list/query endpoints so `limit=0` is rejected; add regression tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (failed in `iroha_crypto` tests: E0282 type annotations needed in `crates/iroha_crypto/src/merkle.rs:1489`; E0277 missing `Debug` for `PublicKeyCompact` in `crates/iroha_crypto/src/lib.rs:2659`/`2671`).
+- Crypto: align SHA-256 Merkle empty-leaf semantics across sequential/parallel builders, enforce CompactMerkleProof depth/sibling length (truncate >32), harden multihash hex formatting via canonical parsing, and validate PublicKeyCompact payloads; add regression tests.
+- Tests: not run (not requested).
+- Tests: `cargo check -p norito` (passed; warning about unused `MAX_VARINT_BYTES` in `crates/norito/src/aos.rs`).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; no errors reported at timeout).
+- Norito: standardize length-prefix scoping across packed-struct/metadata/ConstVec, add explicit varint helpers/tests, and update Norito docs/spec for flag scoping.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: not run (not requested).
+- Kura/WSV: tighten Kura storage budgeting across active/retired lanes, queued blocks, sidecars, merge logs, commit-roster journal, and debug JSONL; add budget regression tests (pending/sidecar/retired lanes) and wire max disk usage defaults in Kura tests; fold SoraVPN budget into SoraNet spool cap.
+- Norito: use `core::decode_from_bytes` in string length-prefix tests to support `&str` decoding without HRTB errors.
+- Kagami: allow test-only env overrides under `unsafe_code` deny by scoping `#[allow(unsafe_code)]` to the `EnvGuard` helpers.
+- Tests: `cargo test --workspace` (timed out after 600s while still running tests; no errors reported at timeout).
+- IVM/Kotodama: word-align JALR targets, enforce literal-only inline ZK builders with hex decoding, accept runtime NFT pointer arguments (mint/transfer) while preserving syscall args, and update opcode docs + ZK sample; add regression coverage for literal enforcement and runtime NFT pointers.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; prior attempt failed in `norito` test `string_len_prefix`: `NoritoDeserialize` not general enough for `&str` at `crates/norito/tests/string_len_prefix.rs:46`).
+- Torii: enforce pagination limits on domains list/query and account-permissions list so `limit=0` no longer bypasses caps; added regression tests for invalid pagination.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (failed in `norito`: missing `core::len_prefix_len` in `crates/norito/src/aos.rs`).
+- Crypto: enforce canonical varuint encodings (including zero), add X25519 shared-secret contributory checks, and make Hash/PublicKey Norito decoding fallible; update Connect SDK bindings/examples and add regression tests.
+- Tests: not run (not requested).
+- Torii: reject invalid Accept q-values during response negotiation and add regression coverage for the invalid q path.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (failed in `iroha_kagami`: E0364 re-export visibility + E0133 unsafe env var calls; warnings about unused imports/assignments across several crates).
+- Kagami/Swarm: enforce Iroha3 NPoS-only consensus with no staged cutovers, propagate BLS PoPs through swarm signing, default localnet consensus by build line, and align Kagami NPoS/swarm docs with `--next-consensus-mode` + activation height usage (plus Iroha3 cutover bans).
+- Tests: `UPDATE_EXPECT=1 cargo test -p iroha_swarm --lib` (passed).
+- Torii: preserve subprotocol during connect WS token auth, accept binary Norito proof events, and align ZK1 attachment handling/error mapping for prover + subrouter endpoints.
+- Core/DA: plumb manifest guard cache outcomes through proposal validation and avoid telemetry-off unused warnings.
+- Tests: `cargo test -p iroha_torii -- --nocapture` (passed with network access for socket binding).
+- Norito: guard opt-column presence-bitset masking and NCB str/optstr offset counts against overflow for 32-bit safety.
+- Tests: not run (not requested).
+- IVM: guard `Memory::load_region` against oversized lengths to avoid unchecked slice panics; add regression coverage.
+- Tests: not run (not requested).
+- Kotodama: avoid overflow panic in static literal negation and add regression coverage for nested `i64::MIN` negation.
+- IVM: guard Merkle syscalls against out-of-bounds memory/register indices and add regression coverage.
+- Tests: not run (not requested).
+- Norito: reject id-delta underflow in NCB views and add regression coverage for delta-coded ids.
+- Tests: not run (not requested).
+- Norito: validate NCB dict codes, harden opt-column length parsing, and guard SIMD bundle length handling; add regression coverage.
+- Tests: not run (not requested).
+- WSV/DA: base tiered hot budget on serialized Norito size, record grace overflow + cold reuse metrics, and harden DA spool/manifest caches (dir stamps, duplicate-aware manifest matching, cache telemetry) to cut churn; update tiered-state docs/config comments and include merge-ledger/sidecar/journal bytes in Kura budget checks.
+- Tests: not run (not requested).
+- Kotodama: accept `i64::MIN` literals by widening numeric tokens and range-checking in the parser; add lexer/parser regressions for min-literal handling and range errors.
+- Tests: not run (not requested).
+- Norito: harden NCB columnar view parsing with checked length multipliers, enum dict code validation, and u32-delta bounds; add regression coverage.
+- Tests: not run (not requested).
+- Genesis: preserve consensus metadata (consensus_mode/handshake fields) when rebuilding manifests via GenesisBuilder/DomainBuilder; add regression coverage.
+- Kagami: enforce NPoS consensus for Iroha3 genesis generation and reject staged cutovers; update CLI help and add validation tests.
+- Docs: update genesis guidance/examples (all translations) to reflect Iroha3 requiring NPoS and updated `kagami genesis generate` usage.
+- Tests: not run (not requested).
+- Norito: make streaming DecodeFromSlice use canonical decoding and enforce monotonic u32 offsets for NCB name/opt-str columns; added regression coverage.
+- Tests: not run (not requested).
+- Torii/Data model: register Space Directory manifest ISIs in the default instruction registry so canonical Norito framing works during Torii publish/revoke admission.
+- Tests: `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture` (passed).
+- Tests: `cargo test -p iroha_torii -- --nocapture` (failed in sandbox: `torii_start_blocks_until_shutdown_signal` could not bind; reran `cargo test -p iroha_torii --test torii_start -- --nocapture` with network access and it passed).
+- Norito: validate packed-seq map offsets (start at 0, monotonic), track streaming payload length consumption, and add StreamMapIter regression coverage; document the offset rule.
+- Tests: not run (not requested).
+- Kotodama/IVM: make syscall/crypto codegen spill-safe (pubkgen/valcom, pointer-ABI syscalls, JSON/Schema/VRF/Axt paths) and add spill-focused Kotodama regression coverage for pubkgen/valcom and JSON encode/decode.
+- Tests: `cargo test -p ivm --test kotodama pubkgen_valcom_spills_are_handled`.
+- Kagami/Genesis: make `--topology` override drop existing topology entries, require canonical topology objects + consensus_mode in embed-pop/validate, and add `clear_topology` helper with regression coverage.
+- Tests: not run (not requested).
+- Torii/Core: register governance ISIs in the core instruction handler list and scope the governance flow test's `StateView` so ballot application no longer deadlocks block-hash writes.
+- Tests: `cargo test -p iroha_torii gov::tests::gov_flow_submits_and_applies -- --nocapture` (passed; command timed out after running filtered binaries).
+- WSV/DA: add `hot_retained_grace_snapshots` (tiered hot retention hysteresis), and cache DA spool/manifest reads to reduce churn; update manifest guard coverage and state-tiering docs.
+- Tests: not run (not requested).
+- Kura/WSV: enforce Kura block-store disk budgets before enqueue, add tiered-state hot/cold byte budgets with cold snapshot pruning, and update tests for the new limits.
+- Streaming/Nexus: enforce SoraNet spool byte caps, wire Nexus storage budgets into the sample config, and document the new `nexus.storage` + tiered-state byte knobs (including JA/HE state-tiering translations).
+- Tests: not run (not requested).
+- Kotodama/IVM: make MapGet/MapLoadPair/Load64Imm codegen spill-safe and add map spill coverage for map get, keys_take2 lowering, and MapLoadPair base spills.
+- Tests: `cargo test -p ivm --test kotodama map_get_handles_spills`; `cargo test -p ivm --test kotodama keys_take2_load64imm_executes`; `cargo test -p ivm --test kotodama map_load_pair_handles_spilled_map_base`.
+- Kagami/Genesis: require consensus_mode in raw genesis JSON, enforce topology entry objects, and tighten embed-pop peer-pop validation (empty/duplicate/unused); add regression coverage.
+- Docs: update genesis format/topology guidance and schema reference across translations.
+- Tests: not run (not requested).
+- Norito: guard AoS row counts and sequence length preallocation, and enforce checked u64→usize length conversions for deterministic decode bounds; added regression coverage.
+- Tests: not run (not requested).
+- Kagami: require explicit consensus_mode in signed manifests (or a CLI override), preserve manifest mode during signing, and canonicalize embed-pop topology peers to public-key strings; added regression coverage.
+- Docs: standardize genesis topology/consensus_mode format and signing requirements across translations.
+- Tests: not run (not requested).
+- Kotodama/IVM: zero-initialize `Map::new()` in-memory map storage to keep map ops deterministic; added regression coverage and updated docs.
+- Tests: not run (not requested).
+- Kotodama: reject reassignment of state maps (state maps are not first-class); added semantic regression coverage and documented the restriction.
+- Tests: not run (not requested).
+- Kotodama: enforce in-memory map key/value types to be word-sized and use pointer-equality for pointer-like map keys; added semantic + IR regression coverage.
+- Kotodama compiler: treat string literals as Blob pointers for pointer-equality lowering; added compilation coverage.
+- Docs: clarify in-memory vs durable map key/value support in Kotodama grammar.
+- Tests: not run (not requested).
+- Kagami: require NPoS parameters when signing NPoS consensus (current or staged), preserve explicit consensus_mode during localnet genesis rebuilds, and add staged-cutover regression coverage.
+- Tests: not run (not requested).
+- Connect/NoritoBridge: allow signed-transaction decode to fall back to headerless Norito payloads when the header is missing (fixes `InvalidMagic` in bridge tests).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p connect_norito_bridge --lib` (passed).
+- Tests: `cargo test --workspace` (failed while compiling `irohad`: `No such file or directory` copying an object into `target/debug/deps` and `dsymutil` warning).
+- Kotodama: validate durable state scalar/struct/tuple types so unsupported fields (e.g., `string`) are rejected; added semantic regression coverage and documented durable state type limits.
+- Tests: not run (not requested).
 - Docs: note Kotodama ternary expressions are supported (remove outdated “not implemented” note).
 - Tests: not run (doc-only update).
 - Kotodama: allow `info(int)` by encoding to NoritoBytes before debug logging; added semantic + IR regression coverage and updated docs.

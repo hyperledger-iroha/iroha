@@ -1216,8 +1216,10 @@ impl<'de> norito::core::NoritoDeserialize<'de> for PublicKeyCompact {
             ));
         }
         let tag = payload[0];
-        let _ = Algorithm::try_from(tag)
+        let algorithm = Algorithm::try_from(tag)
             .map_err(|()| norito::core::Error::invalid_tag("PublicKeyCompact::algorithm", tag))?;
+        PublicKeyFull::from_bytes(algorithm, &payload[1..])
+            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
         Ok(Self {
             algorithm_and_payload: payload,
         })
@@ -1238,8 +1240,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for PublicKeyCompact {
             ));
         }
         let tag = payload[0];
-        let _ = Algorithm::try_from(tag)
+        let algorithm = Algorithm::try_from(tag)
             .map_err(|()| norito::core::Error::invalid_tag("PublicKeyCompact::algorithm", tag))?;
+        PublicKeyFull::from_bytes(algorithm, &payload[1..])
+            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
         Ok((
             Self {
                 algorithm_and_payload: payload,
@@ -1330,6 +1334,7 @@ impl PublicKey {
             .expect("Failed to convert multihash to bytes.");
 
         multihash::multihash_to_hex_string(&bytes)
+            .expect("Failed to convert multihash to hex string.")
     }
 
     #[cfg(not(feature = "ffi_import"))]
@@ -1458,39 +1463,19 @@ impl norito::core::NoritoSerialize for PublicKey {
 #[cfg(not(feature = "ffi_import"))]
 impl<'de> norito::core::NoritoDeserialize<'de> for PublicKey {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let decode_compact = |reason: String| -> Self {
-            let payload = norito::core::payload_slice_from_ptr(ptr).unwrap_or_else(|err| {
-                panic!("PublicKey payload context missing ({reason}): {err}")
-            });
-            #[cfg(debug_assertions)]
-            {
-                let preview_len = core::cmp::min(payload.len(), 64);
-                eprintln!(
-                    "PublicKey::deserialize fallback={reason} payload_len={} preview={:?}",
-                    payload.len(),
-                    &payload[..preview_len]
-                );
-            }
-            let (compact, used) = norito::core::decode_field_canonical::<PublicKeyCompact>(payload)
-                .unwrap_or_else(|err| panic!("PublicKey compact decode failed ({reason}): {err}"));
-            assert!(
-                used <= payload.len(),
-                "PublicKey compact decode over-read {used} bytes of {} ({reason})",
-                payload.len()
-            );
-            Self(compact)
-        };
+        Self::try_deserialize(archived).expect("PublicKey decode")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
         #[allow(unsafe_code)]
         let archived_str =
             unsafe { &*core::ptr::from_ref(archived).cast::<norito::core::Archived<String>>() };
-        match norito::core::NoritoDeserialize::try_deserialize(archived_str) {
-            Ok(normalized) => match normalized.parse::<Self>() {
-                Ok(key) => key,
-                Err(err) => decode_compact(format!("string parse error: {err}")),
-            },
-            Err(err) => decode_compact(format!("string decode error: {err}")),
-        }
+        let normalized = String::try_deserialize(archived_str)?;
+        normalized
+            .parse::<Self>()
+            .map_err(|err: ParseError| norito::core::Error::Message(err.to_string()))
     }
 }
 
@@ -1999,6 +1984,7 @@ impl ExposedPrivateKey {
             .expect("Failed to convert multihash to bytes.");
 
         multihash::multihash_to_hex_string(&bytes)
+            .expect("Failed to convert multihash to hex string.")
     }
 
     #[cfg(not(feature = "ffi_import"))]
@@ -2664,6 +2650,29 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "ffi_import"))]
+    fn public_key_compact_try_deserialize_rejects_invalid_payload() {
+        let compact = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
+        let framed = norito::core::to_bytes(&compact).expect("encode compact");
+        let archived = norito::from_bytes::<PublicKeyCompact>(&framed).expect("archive");
+        let err = <PublicKeyCompact as norito::core::NoritoDeserialize>::try_deserialize(archived)
+            .expect_err("invalid compact payload");
+        assert!(matches!(err, norito::core::Error::Message(_)));
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
+    fn public_key_compact_decode_from_slice_rejects_invalid_payload() {
+        let compact = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
+        let mut payload = Vec::new();
+        <PublicKeyCompact as norito::core::NoritoSerialize>::serialize(&compact, &mut payload)
+            .expect("serialize compact");
+        let err = <PublicKeyCompact as norito::core::DecodeFromSlice>::decode_from_slice(&payload)
+            .expect_err("invalid compact payload");
+        assert!(matches!(err, norito::core::Error::Message(_)));
+    }
+
+    #[test]
     fn public_key_norito_golden_archive() {
         let pk: PublicKey =
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
@@ -2676,6 +2685,19 @@ mod tests {
             actual_hex, expected_hex,
             "public key Norito archive changed"
         );
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
+    fn public_key_try_deserialize_rejects_invalid_payload() {
+        let bogus = String::from("not-a-public-key");
+        let (payload, flags) = norito::codec::encode_with_header_flags(&bogus);
+        let framed = norito::core::frame_bare_with_header_flags::<PublicKey>(&payload, flags)
+            .expect("frame");
+        let archived = norito::from_bytes::<PublicKey>(&framed).expect("archive");
+        let err = <PublicKey as norito::core::NoritoDeserialize>::try_deserialize(archived)
+            .expect_err("invalid key");
+        assert!(matches!(err, norito::core::Error::Message(_)));
     }
 
     #[test]

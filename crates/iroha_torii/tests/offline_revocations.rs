@@ -415,10 +415,7 @@ fn compressed_literal(account_id: &AccountId) -> String {
 fn exists_filter(field: &str) -> Value {
     let mut map = Map::new();
     map.insert("op".into(), Value::from("exists"));
-    map.insert(
-        "args".into(),
-        Value::Array(vec![Value::from(field.to_string())]),
-    );
+    map.insert("args".into(), Value::from(field.to_string()));
     Value::Object(map)
 }
 

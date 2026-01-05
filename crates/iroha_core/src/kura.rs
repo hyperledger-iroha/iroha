@@ -20,7 +20,7 @@ use iroha_config::{
     parameters::{
         actual::{Kura as Config, LaneConfig, LaneConfigEntry},
         defaults::kura::{
-            BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, FSYNC_INTERVAL,
+            BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES,
             MERGE_LEDGER_CACHE_CAPACITY, ROSTER_SIDECAR_RETENTION,
         },
     },
@@ -99,6 +99,8 @@ pub struct Kura {
     active_blocks_dir: Mutex<PathBuf>,
     /// Active merge-ledger file path for the primary lane.
     active_merge_path: Mutex<PathBuf>,
+    /// Maximum on-disk footprint for Kura block storage (0 = unlimited).
+    max_disk_usage_bytes: u64,
     /// Number of most recent non-genesis blocks stored in memory.
     /// The genesis block is always retained for metrics and replay.
     blocks_in_memory: NonZeroUsize,
@@ -302,10 +304,7 @@ impl MergeLedgerLog {
         let encoded = Encode::encode(entry);
         if encoded.len() > MERGE_LEDGER_MAX_ENTRY_BYTES {
             return Err(Error::NoritoFrame(norito::core::Error::Message(
-                format!(
-                    "merge ledger entry exceeds {MERGE_LEDGER_MAX_ENTRY_BYTES} bytes"
-                )
-                .into(),
+                format!("merge ledger entry exceeds {MERGE_LEDGER_MAX_ENTRY_BYTES} bytes").into(),
             )));
         }
         let len: u32 = encoded.len().try_into().map_err(|_| {
@@ -532,6 +531,7 @@ impl Kura {
             store_root,
             active_blocks_dir: Mutex::new(blocks_root.clone()),
             active_merge_path: Mutex::new(merge_log_path.clone()),
+            max_disk_usage_bytes: config.max_disk_usage_bytes.get(),
             blocks_in_memory: config.blocks_in_memory,
             block_sync_roster_retention: roster_retention,
             roster_sidecar_retention,
@@ -561,6 +561,7 @@ impl Kura {
             store_root: PathBuf::new(),
             active_blocks_dir: Mutex::new(PathBuf::new()),
             active_merge_path: Mutex::new(PathBuf::new()),
+            max_disk_usage_bytes: MAX_DISK_USAGE_BYTES.get(),
             blocks_in_memory: BLOCKS_IN_MEMORY,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
@@ -1411,6 +1412,7 @@ impl Kura {
         }
         let block_hash = block.hash();
         let has_merge_entry = merge_entry.is_some();
+        self.check_storage_budget(block, merge_entry)?;
         let mut block_data = self.block_data.lock();
         block_data.push((block_hash, Some(Arc::clone(block))));
         debug!(
@@ -1450,6 +1452,205 @@ impl Kura {
             }
             block_data.pop();
             return Err(Error::BlockWriterUnavailable);
+        }
+
+        Ok(())
+    }
+
+    fn file_len_or_zero(path: &Path) -> Result<u64> {
+        if path.as_os_str().is_empty() {
+            return Ok(0);
+        }
+        match std::fs::metadata(path) {
+            Ok(meta) => Ok(meta.len()),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(0),
+            Err(err) => Err(Error::IO(err, path.to_path_buf())),
+        }
+    }
+
+    fn block_required_bytes(block: &SignedBlock) -> Result<u64> {
+        let wire = block.canonical_wire()?;
+        let (frame, _) = wire.into_parts();
+        let frame_len = u64::try_from(frame.len())?;
+        Ok(frame_len
+            .saturating_add(BlockIndex::SIZE)
+            .saturating_add(SIZE_OF_BLOCK_HASH))
+    }
+
+    fn sidecar_bytes(store_dir: &Path) -> Result<u64> {
+        if store_dir.as_os_str().is_empty() {
+            return Ok(0);
+        }
+        let dir = store_dir.join(PIPELINE_DIR_NAME);
+        let pipeline_data = Self::file_len_or_zero(&dir.join(PIPELINE_SIDECARS_DATA_FILE))?;
+        let pipeline_index = Self::file_len_or_zero(&dir.join(PIPELINE_SIDECARS_INDEX_FILE))?;
+        let roster_data = Self::file_len_or_zero(&dir.join(ROSTER_SIDECARS_DATA_FILE))?;
+        let roster_index = Self::file_len_or_zero(&dir.join(ROSTER_SIDECARS_INDEX_FILE))?;
+        Ok(pipeline_data
+            .saturating_add(pipeline_index)
+            .saturating_add(roster_data)
+            .saturating_add(roster_index))
+    }
+
+    fn block_store_bytes(blocks_dir: &Path) -> Result<u64> {
+        if blocks_dir.as_os_str().is_empty() {
+            return Ok(0);
+        }
+        let data = Self::file_len_or_zero(&blocks_dir.join(DATA_FILE_NAME))?;
+        let index = Self::file_len_or_zero(&blocks_dir.join(INDEX_FILE_NAME))?;
+        let hashes = Self::file_len_or_zero(&blocks_dir.join(HASHES_FILE_NAME))?;
+        let sidecars = Self::sidecar_bytes(blocks_dir)?;
+        Ok(data
+            .saturating_add(index)
+            .saturating_add(hashes)
+            .saturating_add(sidecars))
+    }
+
+    fn blocks_root_bytes(root: &Path) -> Result<u64> {
+        if root.as_os_str().is_empty() {
+            return Ok(0);
+        }
+        let entries = match std::fs::read_dir(root) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(0),
+            Err(err) => return Err(Error::IO(err, root.to_path_buf())),
+        };
+        let mut total = 0u64;
+        for entry in entries {
+            let entry = entry.map_err(|err| Error::IO(err, root.to_path_buf()))?;
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .map_err(|err| Error::IO(err, path.clone()))?;
+            if file_type.is_dir() {
+                total = total.saturating_add(Self::block_store_bytes(&path)?);
+            }
+        }
+        Ok(total)
+    }
+
+    fn merge_root_bytes(root: &Path) -> Result<u64> {
+        if root.as_os_str().is_empty() {
+            return Ok(0);
+        }
+        let entries = match std::fs::read_dir(root) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(0),
+            Err(err) => return Err(Error::IO(err, root.to_path_buf())),
+        };
+        let mut total = 0u64;
+        for entry in entries {
+            let entry = entry.map_err(|err| Error::IO(err, root.to_path_buf()))?;
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .map_err(|err| Error::IO(err, path.clone()))?;
+            if file_type.is_file() {
+                total = total.saturating_add(Self::file_len_or_zero(&path)?);
+            }
+        }
+        Ok(total)
+    }
+
+    fn kura_disk_usage_bytes(&self) -> Result<u64> {
+        if self.store_root.as_os_str().is_empty() {
+            return Ok(0);
+        }
+        let blocks_root = self.store_root.join("blocks");
+        let merge_root = self.store_root.join("merge_ledger");
+        let retired_root = self.store_root.join("retired");
+        let retired_blocks_root = retired_root.join("blocks");
+        let retired_merge_root = retired_root.join("merge_ledger");
+
+        let mut used = 0u64;
+        used = used.saturating_add(Self::blocks_root_bytes(&blocks_root)?);
+        used = used.saturating_add(Self::merge_root_bytes(&merge_root)?);
+        used = used.saturating_add(Self::blocks_root_bytes(&retired_blocks_root)?);
+        used = used.saturating_add(Self::merge_root_bytes(&retired_merge_root)?);
+        used = used.saturating_add(Self::file_len_or_zero(&CommitRosterJournal::journal_path(
+            &self.store_root,
+        ))?);
+        if let Some(path) = self.block_plain_text_path.lock().clone() {
+            used = used.saturating_add(Self::file_len_or_zero(&path)?);
+        }
+        Ok(used)
+    }
+
+    fn pending_block_bytes(&self, persisted_count: usize, unindexed_bytes: u64) -> Result<u64> {
+        let pending_blocks = {
+            let data = self.block_data.lock();
+            let start = persisted_count.min(data.len());
+            let mut blocks = Vec::with_capacity(data.len().saturating_sub(start));
+            for (_, block) in data.iter().skip(start) {
+                let block = block
+                    .as_ref()
+                    .expect("pending block missing from Kura memory queue");
+                blocks.push(Arc::clone(block));
+            }
+            blocks
+        };
+
+        let mut pending_bytes = 0u64;
+        for block in pending_blocks {
+            pending_bytes = pending_bytes.saturating_add(Self::block_required_bytes(&block)?);
+        }
+        Ok(pending_bytes.saturating_sub(unindexed_bytes))
+    }
+
+    fn check_storage_budget(
+        &self,
+        block: &SignedBlock,
+        merge_entry: Option<&MergeLedgerEntry>,
+    ) -> Result<()> {
+        if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() {
+            return Ok(());
+        }
+
+        let block_required = Self::block_required_bytes(block)?;
+        let merge_entry_bytes = match merge_entry {
+            Some(entry) => {
+                let encoded = Encode::encode(entry);
+                let encoded_len = u64::try_from(encoded.len())?;
+                encoded_len.saturating_add(std::mem::size_of::<u32>() as u64)
+            }
+            None => 0,
+        };
+
+        let (persisted_count, unindexed_bytes) = {
+            let mut block_store = self.block_store.lock();
+            let persisted = usize::try_from(block_store.read_index_count()?)?;
+            let persisted_u64 = persisted as u64;
+            let indexed_data_len = if persisted == 0 {
+                0
+            } else {
+                let last = block_store.read_block_index(persisted as u64 - 1)?;
+                last.start.saturating_add(last.length)
+            };
+            let data_file_len = block_store.data_file_len()?;
+            let index_file_len = block_store.index_file_len()?;
+            let hashes_file_len = block_store.hashes_file_len()?;
+            let indexed_index_len = persisted_u64.saturating_mul(BlockIndex::SIZE);
+            let indexed_hash_len = persisted_u64.saturating_mul(SIZE_OF_BLOCK_HASH);
+            let unindexed_bytes = data_file_len
+                .saturating_sub(indexed_data_len)
+                .saturating_add(index_file_len.saturating_sub(indexed_index_len))
+                .saturating_add(hashes_file_len.saturating_sub(indexed_hash_len));
+            (persisted, unindexed_bytes)
+        };
+
+        let used = self.kura_disk_usage_bytes()?;
+        let pending_bytes = self.pending_block_bytes(persisted_count, unindexed_bytes)?;
+        let required = used
+            .saturating_add(pending_bytes)
+            .saturating_add(block_required)
+            .saturating_add(merge_entry_bytes);
+
+        if required > self.max_disk_usage_bytes {
+            return Err(Error::StorageBudgetExceeded {
+                limit: self.max_disk_usage_bytes,
+                used,
+                required,
+            });
         }
 
         Ok(())
@@ -3281,6 +3482,24 @@ impl BlockStore {
         data_file.try_io(|file| file.metadata().map(|meta| meta.len()))
     }
 
+    /// Return the current size of the block index file in bytes.
+    ///
+    /// # Errors
+    /// Propagates I/O errors when the metadata cannot be read.
+    pub fn index_file_len(&mut self) -> Result<u64> {
+        let index_file = self.ensure_index_file()?;
+        index_file.try_io(|file| file.metadata().map(|meta| meta.len()))
+    }
+
+    /// Return the current size of the block hashes file in bytes.
+    ///
+    /// # Errors
+    /// Propagates I/O errors when the metadata cannot be read.
+    pub fn hashes_file_len(&mut self) -> Result<u64> {
+        let hashes_file = self.ensure_hashes_file()?;
+        hashes_file.try_io(|file| file.metadata().map(|meta| meta.len()))
+    }
+
     /// Read block data starting from the
     /// `start_location_in_data_file` in data file in order to fill
     /// `dest_buffer`.
@@ -3567,12 +3786,6 @@ impl BlockStore {
         // Write the index after data + hashes so the index length acts as the commit marker.
         let index_file = self.ensure_index_file()?;
         let new_index_len = (start_height + blocks.len() as u64) * BlockIndex::SIZE;
-        debug!(
-            start_height,
-            new_index_len, "append_block_batch resizing index file"
-        );
-        index_file.try_io(|file| file.set_len(new_index_len))?;
-        debug!(start_height, "append_block_batch resized index file");
         index_file.try_io(|file| {
             file.seek(SeekFrom::Start(start_height * BlockIndex::SIZE))?;
             for (start, len) in offsets.iter().zip(lengths.iter()) {
@@ -3580,6 +3793,7 @@ impl BlockStore {
                 file.write_all(&len.to_le_bytes())?;
             }
             file.flush()?;
+            file.set_len(new_index_len)?;
             Ok(())
         })?;
         debug!(
@@ -3776,6 +3990,15 @@ pub enum Error {
         /// Total number of bytes available in the data file.
         data_len: u64,
     },
+    /// Kura storage budget exceeded: limit {limit} bytes, used {used} bytes, required {required} bytes
+    StorageBudgetExceeded {
+        /// Configured storage cap in bytes.
+        limit: u64,
+        /// Bytes currently occupied by the block store.
+        used: u64,
+        /// Bytes required after accepting the next block.
+        required: u64,
+    },
 }
 
 trait AddErrContextExt<T> {
@@ -3810,7 +4033,10 @@ mod tests {
         kura::{FsyncMode, InitMode},
         parameters::{
             actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
-            defaults::kura::{BLOCKS_IN_MEMORY, FSYNC_INTERVAL, MERGE_LEDGER_CACHE_CAPACITY},
+            defaults::kura::{
+                BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, FSYNC_INTERVAL,
+                MERGE_LEDGER_CACHE_CAPACITY, ROSTER_SIDECAR_RETENTION,
+            },
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf, bls_normal_pop_prove};
@@ -3863,6 +4089,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root.clone()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -3997,6 +4224,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root.clone()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -4065,6 +4293,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root.clone()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -4380,6 +4609,7 @@ mod tests {
         let config = Config {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
@@ -4447,6 +4677,196 @@ mod tests {
     }
 
     #[test]
+    fn store_block_rejects_when_budget_exceeded() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::base::util::Bytes(1),
+            blocks_in_memory: BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) =
+            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+
+        let err = kura
+            .store_block(block)
+            .expect_err("budgeted kura should reject new blocks");
+        assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
+        assert_eq!(kura.blocks_count(), 0);
+    }
+
+    #[test]
+    fn store_block_with_merge_entry_counts_budget() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block_required = {
+            let wire = block.canonical_wire().expect("block wire");
+            let (frame, _) = wire.into_parts();
+            let frame_len = u64::try_from(frame.len()).expect("frame length");
+            frame_len
+                .saturating_add(BlockIndex::SIZE)
+                .saturating_add(SIZE_OF_BLOCK_HASH)
+        };
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::base::util::Bytes(block_required),
+            blocks_in_memory: BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) =
+            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        kura.store_block(block).expect("budgeted store block");
+
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block_required = {
+            let wire = block.canonical_wire().expect("block wire");
+            let (frame, _) = wire.into_parts();
+            let frame_len = u64::try_from(frame.len()).expect("frame length");
+            frame_len
+                .saturating_add(BlockIndex::SIZE)
+                .saturating_add(SIZE_OF_BLOCK_HASH)
+        };
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::base::util::Bytes(block_required),
+            blocks_in_memory: BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) =
+            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        let entry = sample_merge_entry(7);
+        let err = kura
+            .store_block_with_merge_entry(block, &entry)
+            .expect_err("merge entry should exceed budget");
+        assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
+    }
+
+    #[test]
+    fn store_block_rejects_when_pending_blocks_exceed_budget() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let block1: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block2: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let block1_required = Kura::block_required_bytes(&block1).expect("block1 required bytes");
+        let block2_required = Kura::block_required_bytes(&block2).expect("block2 required bytes");
+        let budget_limit = block1_required.max(block2_required);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::base::util::Bytes(budget_limit),
+            blocks_in_memory: BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) =
+            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+
+        kura.store_block(block1).expect("store first block");
+
+        let err = kura
+            .store_block(block2)
+            .expect_err("pending bytes should exceed budget");
+        assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
+    }
+
+    #[test]
+    fn store_block_rejects_when_sidecar_bytes_exceed_budget() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let budget_limit = Kura::block_required_bytes(&block).expect("block bytes");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::base::util::Bytes(budget_limit),
+            blocks_in_memory: BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) =
+            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+
+        let blocks_dir = RuntimeLaneConfig::default()
+            .primary()
+            .blocks_dir(temp_dir.path());
+        let pipeline_dir = blocks_dir.join(PIPELINE_DIR_NAME);
+        std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
+        std::fs::write(pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE), [0u8; 1])
+            .expect("write sidecar data");
+
+        let err = kura
+            .store_block(block)
+            .expect_err("sidecar bytes should exceed budget");
+        assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
+    }
+
+    #[test]
+    fn store_block_rejects_when_other_lane_storage_exceeds_budget() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let store_root = temp_dir.path().to_path_buf();
+        let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
+        let lane0 = ModelLaneConfig::default();
+        let lane1 = ModelLaneConfig {
+            id: LaneId::from(1),
+            alias: "beta".to_string(),
+            ..ModelLaneConfig::default()
+        };
+        let catalog = LaneCatalog::new(lane_count, vec![lane0, lane1]).expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+
+        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let budget_limit = Kura::block_required_bytes(&block).expect("block bytes");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root.clone()),
+            max_disk_usage_bytes: iroha_config::base::util::Bytes(budget_limit),
+            blocks_in_memory: BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("initialize kura");
+
+        let lane1_entry = lane_config.entry(LaneId::from(1)).expect("lane 1 entry");
+        let lane1_blocks = lane1_entry.blocks_dir(&store_root);
+        std::fs::write(lane1_blocks.join(DATA_FILE_NAME), [0u8; 1]).expect("seed lane1 data");
+
+        let err = kura
+            .store_block(block)
+            .expect_err("lane 1 bytes should exceed budget");
+        assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
+    }
+
+    #[test]
     fn store_block_with_merge_entry_propagates_append_error() {
         let kura = Kura::blank_kura_for_testing();
         let failing_dir = tempfile::tempdir().expect("tempdir");
@@ -4482,6 +4902,7 @@ mod tests {
         let config = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
@@ -4571,14 +4992,13 @@ mod tests {
         let encoded1 = Encode::encode(&entry1);
 
         {
-            let mut merge_log =
-                MergeLedgerLog::open_at(&log_path, MERGE_LEDGER_CACHE_CAPACITY)
-                    .expect("open merge log");
+            let mut merge_log = MergeLedgerLog::open_at(&log_path, MERGE_LEDGER_CACHE_CAPACITY)
+                .expect("open merge log");
             merge_log.append(&entry1).expect("append entry1");
         }
 
-        let oversize_len = u32::try_from(MERGE_LEDGER_MAX_ENTRY_BYTES + 1)
-            .expect("max entry size fits in u32");
+        let oversize_len =
+            u32::try_from(MERGE_LEDGER_MAX_ENTRY_BYTES + 1).expect("max entry size fits in u32");
         let mut file = std::fs::OpenOptions::new()
             .append(true)
             .open(&log_path)
@@ -4591,9 +5011,7 @@ mod tests {
         let expected_len = 4 + encoded1.len();
         let merge_log = MergeLedgerLog::open_at(&log_path, MERGE_LEDGER_CACHE_CAPACITY)
             .expect("reopen merge log");
-        let file_len = fs::metadata(&log_path)
-            .expect("merge log metadata")
-            .len();
+        let file_len = fs::metadata(&log_path).expect("merge log metadata").len();
         assert_eq!(file_len, expected_len as u64);
         let snapshot = merge_log.snapshot();
         assert_eq!(snapshot.len(), 1);
@@ -4872,6 +5290,8 @@ mod tests {
                 store_dir: iroha_config::base::WithOrigin::inline(
                     temp_dir.path().to_str().unwrap().into(),
                 ),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -4914,6 +5334,8 @@ mod tests {
                     store_dir: iroha_config::base::WithOrigin::inline(
                         temp_dir.path().to_str().unwrap().into(),
                     ),
+                    max_disk_usage_bytes:
+                        iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                     blocks_in_memory: BLOCKS_IN_MEMORY,
                     debug_output_new_blocks: false,
                     merge_ledger_cache_capacity:
@@ -4959,6 +5381,8 @@ mod tests {
                 store_dir: iroha_config::base::WithOrigin::inline(
                     temp_dir.path().to_str().unwrap().into(),
                 ),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -5055,6 +5479,8 @@ mod tests {
                 store_dir: iroha_config::base::WithOrigin::inline(
                     temp_dir.path().to_str().unwrap().into(),
                 ),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -5103,6 +5529,8 @@ mod tests {
                 store_dir: iroha_config::base::WithOrigin::inline(
                     temp_dir.path().to_str().unwrap().into(),
                 ),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: nonzero!(16_usize),
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -5160,6 +5588,8 @@ mod tests {
                 store_dir: iroha_config::base::WithOrigin::inline(
                     temp_dir.path().to_str().unwrap().into(),
                 ),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: true,
                 merge_ledger_cache_capacity:
@@ -5232,6 +5662,8 @@ mod tests {
                 store_dir: iroha_config::base::WithOrigin::inline(
                     temp_dir.path().to_str().unwrap().into(),
                 ),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -5463,6 +5895,8 @@ mod tests {
             &Config {
                 init_mode: InitMode::Strict,
                 store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -5504,6 +5938,8 @@ mod tests {
             &Config {
                 init_mode: InitMode::Strict,
                 store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -5562,6 +5998,8 @@ mod tests {
             &Config {
                 init_mode: InitMode::Strict,
                 store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -5612,6 +6050,8 @@ mod tests {
             &Config {
                 init_mode: InitMode::Strict,
                 store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -5633,18 +6073,8 @@ mod tests {
             fingerprint: [1u8; 32],
             key_count: 1,
         };
-        let sidecar1 = PipelineRecoverySidecar::new_v1(
-            1,
-            hashes[0],
-            dag,
-            Vec::new(),
-        );
-        let sidecar2 = PipelineRecoverySidecar::new_v1(
-            2,
-            hashes[1],
-            dag,
-            Vec::new(),
-        );
+        let sidecar1 = PipelineRecoverySidecar::new_v1(1, hashes[0], dag, Vec::new());
+        let sidecar2 = PipelineRecoverySidecar::new_v1(2, hashes[1], dag, Vec::new());
 
         kura.write_pipeline_metadata(&sidecar1);
         kura.write_pipeline_metadata(&sidecar2);
@@ -5740,6 +6170,8 @@ mod tests {
             &Config {
                 init_mode: InitMode::Strict,
                 store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -5811,6 +6243,8 @@ mod tests {
             &Config {
                 init_mode: InitMode::Strict,
                 store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -5884,6 +6318,8 @@ mod tests {
             &Config {
                 init_mode: InitMode::Strict,
                 store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -5940,6 +6376,8 @@ mod tests {
             &Config {
                 init_mode: InitMode::Strict,
                 store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -6054,6 +6492,8 @@ mod tests {
             &Config {
                 init_mode: InitMode::Strict,
                 store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -6111,6 +6551,8 @@ mod tests {
             &Config {
                 init_mode: InitMode::Strict,
                 store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -6162,6 +6604,8 @@ mod tests {
             &Config {
                 init_mode: InitMode::Strict,
                 store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -6205,6 +6649,8 @@ mod tests {
             &Config {
                 init_mode: InitMode::Strict,
                 store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -6263,6 +6709,8 @@ mod tests {
             &Config {
                 init_mode: InitMode::Strict,
                 store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -6507,6 +6955,8 @@ mod tests {
             &Config {
                 init_mode: InitMode::Strict,
                 store_dir: iroha_config::base::WithOrigin::inline(store_dir),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -6596,6 +7046,8 @@ mod tests {
             &Config {
                 init_mode: InitMode::Fast,
                 store_dir: iroha_config::base::WithOrigin::inline(temp_dir.path().to_path_buf()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -6636,6 +7088,8 @@ mod tests {
             &Config {
                 init_mode: InitMode::Fast,
                 store_dir: iroha_config::base::WithOrigin::inline(temp_dir.path().to_path_buf()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:

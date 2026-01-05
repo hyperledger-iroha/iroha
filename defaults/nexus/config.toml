@@ -46,10 +46,22 @@ exit_multiaddr = "/dns/torii/udp/9443/quic"
 padding_budget_ms = 25
 access_kind = "authenticated"
 provision_spool_dir = "./storage/streaming/soranet_routes"
+provision_spool_max_bytes = 0
 
 [nexus]
 enabled = true
 lane_count = 3
+
+[nexus.storage]
+max_disk_usage_bytes = 274877906944
+max_wsv_memory_bytes = 8589934592
+
+[nexus.storage.weights]
+kura_bps = 3000
+wsv_bps = 2000
+sorafs_bps = 4000
+soranet_bps = 500
+soravpn_bps = 500
 
 [[nexus.lane_catalog]]
 index = 0

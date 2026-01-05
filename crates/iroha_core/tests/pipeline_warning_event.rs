@@ -20,6 +20,7 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
             store_dir: iroha_config::base::WithOrigin::inline(
                 temp_dir.path().to_str().unwrap().into(),
             ),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             block_sync_roster_retention:
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
@@ -131,6 +132,7 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
             store_dir: iroha_config::base::WithOrigin::inline(
                 temp_dir.path().to_str().unwrap().into(),
             ),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             block_sync_roster_retention:
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,

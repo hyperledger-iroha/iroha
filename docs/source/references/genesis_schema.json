@@ -5,7 +5,7 @@
       { "name": "executor", "type": "Option<String>" },
       { "name": "ivm_dir", "type": "String" },
       { "name": "transactions", "type": "Vec<RawGenesisTx>" },
-      { "name": "consensus_mode", "type": "Option<SumeragiConsensusMode>" },
+      { "name": "consensus_mode", "type": "SumeragiConsensusMode" },
       { "name": "bls_domain", "type": "Option<String>" },
       { "name": "wire_proto_versions", "type": "Vec<u32>" },
       { "name": "consensus_fingerprint", "type": "Option<String>" },

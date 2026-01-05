@@ -409,6 +409,8 @@ mod tests {
             &KuraConfig {
                 init_mode: InitMode::Strict,
                 store_dir: WithOrigin::inline(temp.path().to_owned()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,

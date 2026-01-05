@@ -328,6 +328,10 @@ fn assert_error(err: &AccountAddressError, expected: &ExpectedError, case_id: &s
             matches!(err, AccountAddressError::InvalidHexAddress),
             "{case_id}: expected InvalidHexAddress, got {err}"
         ),
+        "InvalidLength" => assert!(
+            matches!(err, AccountAddressError::InvalidLength),
+            "{case_id}: expected InvalidLength, got {err}"
+        ),
         "UnexpectedTrailingBytes" => assert!(
             matches!(err, AccountAddressError::UnexpectedTrailingBytes),
             "{case_id}: expected UnexpectedTrailingBytes, got {err}"

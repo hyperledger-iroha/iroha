@@ -2660,6 +2660,19 @@ pub struct TieredState {
         default = "defaults::tiered_state::HOT_RETAINED_KEYS"
     )]
     pub hot_retained_keys: usize,
+    /// Hot-tier byte budget based on serialized Norito JSON size (0 = unlimited).
+    /// Grace retention may temporarily exceed this budget.
+    #[config(
+        env = "TIERED_STATE_HOT_RETAINED_BYTES",
+        default = "defaults::tiered_state::HOT_RETAINED_BYTES"
+    )]
+    pub hot_retained_bytes: Bytes<u64>,
+    /// Minimum snapshots to retain newly hot entries before demotion (0 = disabled).
+    #[config(
+        env = "TIERED_STATE_HOT_RETAINED_GRACE_SNAPSHOTS",
+        default = "defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS"
+    )]
+    pub hot_retained_grace_snapshots: u64,
     /// Optional on-disk root for cold tier spill files.
     #[config(env = "TIERED_STATE_COLD_STORE_ROOT")]
     pub cold_store_root: Option<PathBuf>,
@@ -2669,6 +2682,12 @@ pub struct TieredState {
         default = "defaults::tiered_state::MAX_SNAPSHOTS"
     )]
     pub max_snapshots: usize,
+    /// Optional cold-tier byte budget across snapshots (0 = unlimited).
+    #[config(
+        env = "TIERED_STATE_MAX_COLD_BYTES",
+        default = "defaults::tiered_state::MAX_COLD_BYTES"
+    )]
+    pub max_cold_bytes: Bytes<u64>,
 }
 
 impl TieredState {
@@ -2676,8 +2695,11 @@ impl TieredState {
         actual::TieredState {
             enabled: self.enabled,
             hot_retained_keys: self.hot_retained_keys,
+            hot_retained_bytes: self.hot_retained_bytes,
+            hot_retained_grace_snapshots: self.hot_retained_grace_snapshots,
             cold_store_root: self.cold_store_root,
             max_snapshots: self.max_snapshots,
+            max_cold_bytes: self.max_cold_bytes,
         }
     }
 }
@@ -4865,6 +4887,12 @@ pub struct Kura {
         default = "PathBuf::from(defaults::kura::STORE_DIR)"
     )]
     pub store_dir: WithOrigin<PathBuf>,
+    /// Maximum on-disk footprint for Kura (bytes, 0 = unlimited).
+    #[config(
+        env = "KURA_MAX_DISK_USAGE_BYTES",
+        default = "defaults::kura::MAX_DISK_USAGE_BYTES"
+    )]
+    pub max_disk_usage_bytes: Bytes<u64>,
     /// Number of most-recent blocks kept in memory for fast access.
     #[config(
         env = "KURA_BLOCKS_IN_MEMORY",
@@ -4908,6 +4936,7 @@ impl Kura {
         let Self {
             init_mode,
             store_dir,
+            max_disk_usage_bytes,
             blocks_in_memory,
             block_sync_roster_retention,
             roster_sidecar_retention,
@@ -4923,6 +4952,7 @@ impl Kura {
         actual::Kura {
             init_mode,
             store_dir,
+            max_disk_usage_bytes,
             blocks_in_memory,
             block_sync_roster_retention,
             roster_sidecar_retention,
@@ -8455,6 +8485,9 @@ pub struct StreamingSoranet {
     #[config(default = "PathBuf::from(defaults::streaming::soranet::PROVISION_SPOOL_DIR)")]
     /// Directory where privacy-route updates are spooled for SoraNet exits.
     pub provision_spool_dir: WithOrigin<PathBuf>,
+    /// Maximum on-disk footprint for the SoraNet provision spool (0 = unlimited).
+    #[config(default = "defaults::streaming::soranet::PROVISION_SPOOL_MAX_BYTES")]
+    pub provision_spool_max_bytes: WithOrigin<Bytes<u64>>,
 }
 
 impl StreamingSoranet {
@@ -8517,6 +8550,8 @@ impl StreamingSoranet {
             return None;
         }
         config.provision_spool_dir = spool_dir;
+        let (spool_max_bytes, _spool_max_origin) = self.provision_spool_max_bytes.into_tuple();
+        config.provision_spool_max_bytes = spool_max_bytes;
 
         Some(config)
     }
@@ -8718,6 +8753,9 @@ pub struct Nexus {
     /// Enable multilane (Nexus/Iroha3) consensus features.
     #[config(default = "defaults::nexus::ENABLED")]
     pub enabled: bool,
+    /// Storage budget controls for Nexus-enabled nodes.
+    #[config(nested)]
+    pub storage: NexusStorage,
     /// Total number of lanes configured for the runtime.
     #[config(default = "defaults::nexus::LANE_COUNT")]
     pub lane_count: NonZeroU32,
@@ -8769,6 +8807,7 @@ impl Default for Nexus {
     fn default() -> Self {
         Self {
             enabled: defaults::nexus::ENABLED,
+            storage: NexusStorage::default(),
             lane_count: defaults::nexus::LANE_COUNT,
             lane_catalog: Vec::new(),
             dataspace_catalog: Vec::new(),
@@ -8785,6 +8824,101 @@ impl Default for Nexus {
             commit: Commit::default(),
             da: Da::default(),
         }
+    }
+}
+
+/// User-level configuration container for Nexus storage budgets.
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+pub struct NexusStorage {
+    /// Aggregate on-disk storage budget for Nexus-enabled nodes (bytes).
+    #[config(default = "defaults::nexus::storage::MAX_DISK_USAGE_BYTES")]
+    pub max_disk_usage_bytes: Bytes<u64>,
+    /// WSV hot-tier serialized payload budget (bytes).
+    #[config(default = "defaults::nexus::storage::MAX_WSV_MEMORY_BYTES")]
+    pub max_wsv_memory_bytes: Bytes<u64>,
+    /// Budget weights for dividing the disk cap across subsystems.
+    #[config(nested)]
+    pub disk_budget_weights: NexusStorageWeights,
+}
+
+impl Default for NexusStorage {
+    fn default() -> Self {
+        Self {
+            max_disk_usage_bytes: defaults::nexus::storage::MAX_DISK_USAGE_BYTES,
+            max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
+            disk_budget_weights: NexusStorageWeights::default(),
+        }
+    }
+}
+
+impl NexusStorage {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorage> {
+        let weights = self.disk_budget_weights.parse(emitter)?;
+        Some(actual::NexusStorage {
+            max_disk_usage_bytes: self.max_disk_usage_bytes,
+            max_wsv_memory_bytes: self.max_wsv_memory_bytes,
+            disk_budget_weights: weights,
+        })
+    }
+}
+
+/// User-level configuration container for Nexus storage budget weights.
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+pub struct NexusStorageWeights {
+    /// Budget share for Kura block storage (basis points).
+    #[config(default = "defaults::nexus::storage::KURA_BLOCKS_BPS")]
+    pub kura_blocks_bps: u16,
+    /// Budget share for tiered-state cold snapshots (basis points).
+    #[config(default = "defaults::nexus::storage::WSV_SNAPSHOTS_BPS")]
+    pub wsv_snapshots_bps: u16,
+    /// Budget share for SoraFS storage (basis points).
+    #[config(default = "defaults::nexus::storage::SORAFS_BPS")]
+    pub sorafs_bps: u16,
+    /// Budget share for SoraNet route spools (basis points).
+    #[config(default = "defaults::nexus::storage::SORANET_SPOOL_BPS")]
+    pub soranet_spool_bps: u16,
+    /// Budget share reserved for future SoraVPN storage (basis points).
+    #[config(default = "defaults::nexus::storage::SORAVPN_SPOOL_BPS")]
+    pub soravpn_spool_bps: u16,
+}
+
+impl Default for NexusStorageWeights {
+    fn default() -> Self {
+        Self {
+            kura_blocks_bps: defaults::nexus::storage::KURA_BLOCKS_BPS,
+            wsv_snapshots_bps: defaults::nexus::storage::WSV_SNAPSHOTS_BPS,
+            sorafs_bps: defaults::nexus::storage::SORAFS_BPS,
+            soranet_spool_bps: defaults::nexus::storage::SORANET_SPOOL_BPS,
+            soravpn_spool_bps: defaults::nexus::storage::SORAVPN_SPOOL_BPS,
+        }
+    }
+}
+
+impl NexusStorageWeights {
+    fn total_bps(&self) -> u32 {
+        u32::from(self.kura_blocks_bps)
+            + u32::from(self.wsv_snapshots_bps)
+            + u32::from(self.sorafs_bps)
+            + u32::from(self.soranet_spool_bps)
+            + u32::from(self.soravpn_spool_bps)
+    }
+
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorageWeights> {
+        let total = self.total_bps();
+        if total != u32::from(defaults::nexus::storage::BPS_TOTAL) {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.storage.disk_budget_weights must sum to {} bps (got {total})",
+                defaults::nexus::storage::BPS_TOTAL
+            )));
+            return None;
+        }
+        Some(actual::NexusStorageWeights {
+            kura_blocks_bps: self.kura_blocks_bps,
+            wsv_snapshots_bps: self.wsv_snapshots_bps,
+            sorafs_bps: self.sorafs_bps,
+            soranet_spool_bps: self.soranet_spool_bps,
+            soravpn_spool_bps: self.soravpn_spool_bps,
+        })
     }
 }
 
@@ -9975,6 +10109,7 @@ impl Nexus {
     pub fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Nexus> {
         let Nexus {
             enabled,
+            storage,
             lane_count,
             lane_catalog,
             dataspace_catalog,
@@ -10004,6 +10139,7 @@ impl Nexus {
         let fusion = fusion.parse(emitter)?;
         let commit = commit.parse(emitter)?;
         let da = da.parse(emitter)?;
+        let storage = storage.parse(emitter)?;
         let axt_cfg = axt.parse(emitter)?;
         let lane_relay_emergency = lane_relay_emergency.parse(emitter)?;
         let staking = staking.parse(emitter)?;
@@ -10045,6 +10181,7 @@ impl Nexus {
 
         Some(actual::Nexus {
             enabled,
+            storage,
             staking,
             fees,
             endorsement,

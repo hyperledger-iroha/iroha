@@ -9433,9 +9433,14 @@ async fn handle_connect_ws_logic(
         Ok(token) => token,
         Err(response) => return response,
     };
-    if let Err((code, msg)) = bus.authorize_token(sid, role, &token).await {
+    if let Err((code, msg)) = bus.authorize_token(sid, role, &token.token).await {
         return (code, msg).into_response();
     }
+    let ws = if let Some(protocol) = token.protocol {
+        ws.protocols([protocol])
+    } else {
+        ws
+    };
     ws.on_upgrade(move |ws| async move {
         if let Err(e) = connect::handle_ws(bus, q, ws, remote_ip).await {
             iroha_logger::warn!(%e, "connect ws session ended with error");
@@ -9615,10 +9620,22 @@ fn parse_connect_ws_query(
 
 const CONNECT_PROTOCOL_TOKEN_PREFIX: &str = "iroha-connect.token.v1.";
 
+#[derive(Debug)]
+struct ConnectWsToken {
+    token: String,
+    protocol: Option<String>,
+}
+
+#[derive(Debug)]
+struct ProtocolToken {
+    token: String,
+    protocol: String,
+}
+
 #[allow(clippy::result_large_err)]
 fn resolve_connect_ws_token(
     headers: &axum::http::HeaderMap,
-) -> Result<String, axum::response::Response> {
+) -> Result<ConnectWsToken, axum::response::Response> {
     use axum::http::StatusCode;
 
     let auth_token = parse_authorization_token(headers)?;
@@ -9626,19 +9643,29 @@ fn resolve_connect_ws_token(
 
     if let Some(auth) = auth_token {
         if let Some(proto) = protocol_token.as_ref() {
-            if proto != &auth {
+            if proto.token != auth {
                 return Err((
                     StatusCode::BAD_REQUEST,
                     "connect: conflicting tokens in Authorization and Sec-WebSocket-Protocol headers",
                 )
                     .into_response());
             }
+            return Ok(ConnectWsToken {
+                token: auth,
+                protocol: Some(proto.protocol.clone()),
+            });
         }
-        return Ok(auth);
+        return Ok(ConnectWsToken {
+            token: auth,
+            protocol: None,
+        });
     }
 
     if let Some(proto) = protocol_token {
-        return Ok(proto);
+        return Ok(ConnectWsToken {
+            token: proto.token,
+            protocol: Some(proto.protocol),
+        });
     }
 
     Err((
@@ -9687,7 +9714,8 @@ mod connect_token_tests {
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, "Bearer test-token".parse().unwrap());
         let token = resolve_connect_ws_token(&headers).expect("bearer token ok");
-        assert_eq!(token, "test-token");
+        assert_eq!(token.token, "test-token");
+        assert!(token.protocol.is_none());
     }
 }
 
@@ -9737,7 +9765,7 @@ fn parse_authorization_token(
 #[allow(clippy::result_large_err)]
 fn parse_protocol_token(
     headers: &axum::http::HeaderMap,
-) -> Result<Option<String>, axum::response::Response> {
+) -> Result<Option<ProtocolToken>, axum::response::Response> {
     use axum::http::{StatusCode, header};
 
     let mut values_iter = headers.get_all(header::SEC_WEBSOCKET_PROTOCOL).iter();
@@ -9759,7 +9787,10 @@ fn parse_protocol_token(
             let candidate = entry.trim();
             if let Some(encoded) = candidate.strip_prefix(CONNECT_PROTOCOL_TOKEN_PREFIX) {
                 let token = decode_protocol_token(encoded)?;
-                return Ok(Some(token));
+                return Ok(Some(ProtocolToken {
+                    token,
+                    protocol: candidate.to_string(),
+                }));
             }
         }
     }

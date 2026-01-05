@@ -58,13 +58,15 @@ pub struct Args {
     /// If omitted, a sensible default (1,680,000) is applied.
     #[clap(long, value_name = "U64")]
     ivm_gas_limit_per_block: Option<u64>,
-    /// Select the consensus mode snapshot to seed in the genesis parameters.
+    /// Select the consensus mode snapshot to seed in the genesis parameters
+    /// (Iroha3 requires NPoS; Iroha2 defaults to Permissioned).
     #[clap(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
-    /// Optional future consensus mode to stage behind `--mode-activation-height`.
+    /// Optional future consensus mode to stage behind `--mode-activation-height`
+    /// (Iroha2 only; Iroha3 disallows staged cutovers).
     #[clap(long, value_enum, value_name = "MODE")]
     next_consensus_mode: Option<ConsensusModeArg>,
-    /// Optional: set the block height at which `next_mode` should activate (requires `--consensus-mode`).
+    /// Optional: set the block height at which `next_mode` should activate (requires `--next-consensus-mode`).
     #[clap(long, value_name = "HEIGHT")]
     mode_activation_height: Option<u64>,
     /// Override cryptography snapshot fields in the generated manifest.
@@ -415,6 +417,26 @@ fn validate_vrf_seed_usage(
     Ok(())
 }
 
+pub(crate) fn validate_consensus_mode_for_line(
+    build_line: BuildLine,
+    consensus_mode: SumeragiConsensusMode,
+    next_consensus_mode: Option<SumeragiConsensusMode>,
+) -> color_eyre::Result<()> {
+    if build_line.is_iroha3() {
+        if !matches!(consensus_mode, SumeragiConsensusMode::Npos) {
+            return Err(color_eyre::eyre::eyre!(
+                "Iroha3 requires `--consensus-mode npos`"
+            ));
+        }
+        if next_consensus_mode.is_some() {
+            return Err(color_eyre::eyre::eyre!(
+                "Iroha3 does not support staged consensus cutovers; drop `--next-consensus-mode`"
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         let Self {
@@ -445,8 +467,21 @@ impl<T: Write> RunArgs<T> for Args {
             .transpose()
             .wrap_err("invalid --vrf-seed-hex")?;
 
-        let consensus_mode = consensus_mode.map_or(
-            SumeragiConsensusMode::Permissioned,
+        let profile_is_some = profile.is_some();
+        let build_line = if profile_is_some {
+            BuildLine::Iroha3
+        } else {
+            build_line_from_env()
+        };
+
+        let consensus_mode = consensus_mode.map_or_else(
+            || {
+                if build_line.is_iroha3() {
+                    SumeragiConsensusMode::Npos
+                } else {
+                    SumeragiConsensusMode::Permissioned
+                }
+            },
             SumeragiConsensusMode::from,
         );
         let next_consensus_mode = next_consensus_mode.map(SumeragiConsensusMode::from);
@@ -455,7 +490,6 @@ impl<T: Write> RunArgs<T> for Args {
 
         let crypto = crypto.into_manifest_crypto()?;
 
-        let profile_is_some = profile.is_some();
         let resolved = resolve_profile_settings(
             profile,
             chain_id.as_ref(),
@@ -474,11 +508,7 @@ impl<T: Write> RunArgs<T> for Args {
         validate_vrf_seed_usage(resolved_vrf_seed, consensus_mode, next_consensus_mode)?;
 
         let summary_chain = chain.clone();
-        let build_line = if profile_is_some {
-            BuildLine::Iroha3
-        } else {
-            build_line_from_env()
-        };
+        validate_consensus_mode_for_line(build_line, consensus_mode, next_consensus_mode)?;
         let builder = match executor {
             Some(path) => GenesisBuilder::new(chain, path, ivm_dir),
             None => GenesisBuilder::new_without_executor(chain, ivm_dir),
@@ -642,7 +672,7 @@ mod da_tests {
             builder,
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
             None,
-            SumeragiConsensusMode::Permissioned,
+            SumeragiConsensusMode::Npos,
             None,
             None,
             0,
@@ -872,6 +902,17 @@ mod profile_cli_tests {
                 .contains("`--vrf-seed-hex` applies only to NPoS consensus manifests"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn defaults_to_npos_on_iroha3_build_line() {
+        let mut args = base_profile_args(GenesisProfile::Iroha3Dev);
+        args.profile = None;
+        args.consensus_mode = None;
+        args.next_consensus_mode = None;
+
+        let manifest = run_and_parse(args).expect("default should build");
+        assert_eq!(manifest.consensus_mode(), Some(SumeragiConsensusMode::Npos));
     }
 
     #[test]
@@ -1137,6 +1178,42 @@ mod helper_tests {
     fn validate_vrf_seed_usage_allows_npos() {
         assert!(
             validate_vrf_seed_usage(Some([2u8; 32]), SumeragiConsensusMode::Npos, None).is_ok()
+        );
+    }
+
+    #[test]
+    fn validate_consensus_mode_for_line_rejects_permissioned_on_iroha3() {
+        let err = validate_consensus_mode_for_line(
+            BuildLine::Iroha3,
+            SumeragiConsensusMode::Permissioned,
+            None,
+        )
+        .expect_err("iroha3 should require npos");
+        assert!(
+            err.to_string().contains("consensus-mode npos"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_consensus_mode_for_line_rejects_staged_cutover_on_iroha3() {
+        let err = validate_consensus_mode_for_line(
+            BuildLine::Iroha3,
+            SumeragiConsensusMode::Npos,
+            Some(SumeragiConsensusMode::Npos),
+        )
+        .expect_err("iroha3 should reject staged cutover");
+        assert!(
+            err.to_string().contains("staged consensus cutovers"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_consensus_mode_for_line_allows_npos_on_iroha3() {
+        assert!(
+            validate_consensus_mode_for_line(BuildLine::Iroha3, SumeragiConsensusMode::Npos, None)
+                .is_ok()
         );
     }
 }

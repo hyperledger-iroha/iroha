@@ -2153,7 +2153,8 @@ fn configure_soranet_transport(
             ))
     })?;
 
-    let provisioner = FilesystemSoranetProvisioner::new(spool_dir);
+    let provisioner =
+        FilesystemSoranetProvisioner::new(spool_dir, soranet.provision_spool_max_bytes.get());
     streaming.set_soranet_transport(Some(Arc::new(provisioner)));
     Ok(())
 }
@@ -2683,6 +2684,7 @@ pub fn read_config_and_genesis(
     if args.sora {
         config.apply_sora_profile();
     }
+    config.apply_storage_budget();
 
     let sorafs_enabled =
         config.torii.sorafs_storage.enabled || config.torii.sorafs_discovery.discovery_enabled;

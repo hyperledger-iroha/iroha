@@ -476,6 +476,18 @@ mod tests {
     }
 
     #[test]
+    fn decode_hex_or_raw_bytes_accepts_hex_prefix() {
+        let bytes = super::decode_hex_or_raw_bytes("0x0a0b").expect("hex literal");
+        assert_eq!(bytes, vec![0x0a, 0x0b]);
+    }
+
+    #[test]
+    fn decode_hex_or_raw_bytes_preserves_raw_text() {
+        let bytes = super::decode_hex_or_raw_bytes("raw").expect("raw literal");
+        assert_eq!(bytes, b"raw".to_vec());
+    }
+
+    #[test]
     fn unary_neg_emits_neg_opcode() {
         let src = r#"
 seiyaku NegTest {
@@ -805,6 +817,7 @@ impl Compiler {
                     if let ir::Instr::StringConst { dest, value } = instr {
                         string_map.insert((func_idx, *dest), value.clone());
                         string_literal_temps.insert((func_idx, *dest));
+                        dataref_kind_map.insert((func_idx, *dest), DRK::Blob);
                     }
                     if let ir::Instr::PointerFromString { dest, kind, src } = instr
                         && let Some(s) = string_map.get(&(func_idx, *src)).cloned()
@@ -1478,8 +1491,8 @@ impl Compiler {
                         }
                         Instr::Pubkgen { dest, src } => {
                             uses_zk = true;
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
-                            let rs = *alloc.regs.get(src).unwrap() as u8;
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            let rs = src_reg(src, scratch1, &mut code);
                             let word = encoding::wide::encode_rr(
                                 instruction::wide::crypto::PUBKGEN,
                                 rd,
@@ -1487,12 +1500,13 @@ impl Compiler {
                                 0,
                             );
                             push_word(&mut code, word);
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::Valcom { dest, value, blind } => {
                             uses_zk = true;
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
-                            let rs1 = *alloc.regs.get(value).unwrap() as u8;
-                            let rs2 = *alloc.regs.get(blind).unwrap() as u8;
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            let rs1 = src_reg(value, scratch1, &mut code);
+                            let rs2 = src_reg(blind, scratch2, &mut code);
                             let word = encoding::wide::encode_rr(
                                 instruction::wide::crypto::VALCOM,
                                 rd,
@@ -1500,6 +1514,7 @@ impl Compiler {
                                 rs2,
                             );
                             push_word(&mut code, word);
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::MintAsset {
                             account,
@@ -1628,7 +1643,7 @@ impl Compiler {
                                 let key_dom = DataKey(DataKind::Domain, dom_str.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key_dom);
                             } else {
-                                let r_dom = *alloc.regs.get(domain).unwrap() as u8;
+                                let r_dom = src_reg(domain, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r_dom, 0).to_le_bytes());
                             }
                             // Mirror TLV into INPUT to satisfy pointer‑ABI validation in hosts.
@@ -1648,7 +1663,7 @@ impl Compiler {
                                 let key_dom = DataKey(DataKind::Domain, dom_str.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key_dom);
                             } else {
-                                let r_dom = *alloc.regs.get(domain).unwrap() as u8;
+                                let r_dom = src_reg(domain, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r_dom, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -1667,7 +1682,7 @@ impl Compiler {
                                 let key_acc = DataKey(DataKind::Account, acc_str.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key_acc);
                             } else {
-                                let r = *alloc.regs.get(account).unwrap() as u8;
+                                let r = src_reg(account, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -1686,7 +1701,7 @@ impl Compiler {
                                 let key_acc = DataKey(DataKind::Account, acc_str.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key_acc);
                             } else {
-                                let r = *alloc.regs.get(account).unwrap() as u8;
+                                let r = src_reg(account, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -1705,7 +1720,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::AssetDef, ad_str.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(asset).unwrap() as u8;
+                                let r = src_reg(asset, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -1725,7 +1740,7 @@ impl Compiler {
                                 let key_dom = DataKey(DataKind::Domain, dom_str.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key_dom);
                             } else {
-                                let r_dom = *alloc.regs.get(domain).unwrap() as u8;
+                                let r_dom = src_reg(domain, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r_dom, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -1740,7 +1755,7 @@ impl Compiler {
                                 let key_to = DataKey(DataKind::Account, to_str.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 11, key_to);
                             } else {
-                                let r_to = *alloc.regs.get(to).unwrap() as u8;
+                                let r_to = src_reg(to, scratch2, &mut code);
                                 code.extend_from_slice(&encode_addi(11, r_to, 0).to_le_bytes());
                             }
                             // Publish 'to' TLV: x10 <- x11; publish; x11 <- x10
@@ -1763,7 +1778,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::Json, j.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(json).unwrap() as u8;
+                                let r = src_reg(json, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -1782,7 +1797,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::Json, j.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(json).unwrap() as u8;
+                                let r = src_reg(json, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -1801,7 +1816,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::Json, j.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(json).unwrap() as u8;
+                                let r = src_reg(json, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -1820,7 +1835,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::Name, nm.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(name).unwrap() as u8;
+                                let r = src_reg(name, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -1839,11 +1854,11 @@ impl Compiler {
                                 let key = DataKey(DataKind::Name, nm.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(name).unwrap() as u8;
+                                let r = src_reg(name, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             // enabled value to r11
-                            let r_en = *alloc.regs.get(enabled).unwrap() as u8;
+                            let r_en = src_reg(enabled, scratch2, &mut code);
                             code.extend_from_slice(&encode_addi(11, r_en, 0).to_le_bytes());
                             // Mirror name TLV
                             let pub_word = encoding::wide::encode_sys(
@@ -1863,14 +1878,14 @@ impl Compiler {
                                 let key = DataKey(DataKind::Name, nm.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(name).unwrap() as u8;
+                                let r = src_reg(name, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             if let Some(js) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, js.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 11, key);
                             } else {
-                                let r = *alloc.regs.get(json).unwrap() as u8;
+                                let r = src_reg(json, scratch2, &mut code);
                                 code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -1894,7 +1909,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::Name, nm.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(name).unwrap() as u8;
+                                let r = src_reg(name, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -1915,14 +1930,14 @@ impl Compiler {
                                 let key = DataKey(DataKind::Account, a.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(account).unwrap() as u8;
+                                let r = src_reg(account, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             if let Some(nm) = string_map.get(&(func_idx, *name)) {
                                 let key = DataKey(DataKind::Name, nm.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 11, key);
                             } else {
-                                let r = *alloc.regs.get(name).unwrap() as u8;
+                                let r = src_reg(name, scratch2, &mut code);
                                 code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -1952,7 +1967,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::Account, a.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(account).unwrap() as u8;
+                                let r = src_reg(account, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             // token pointer
@@ -1965,7 +1980,7 @@ impl Compiler {
                                 };
                                 emit_literal_stub(&mut code, &mut fixups, 11, dk);
                             } else {
-                                let r = *alloc.regs.get(token).unwrap() as u8;
+                                let r = src_reg(token, scratch2, &mut code);
                                 code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             // Mirror both
@@ -1995,7 +2010,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::NoritoBytes, pstr.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(payload).unwrap() as u8;
+                                let r = src_reg(payload, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             // Mirror into INPUT to satisfy pointer‑ABI validation
@@ -2016,7 +2031,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::NoritoBytes, pstr.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(payload).unwrap() as u8;
+                                let r = src_reg(payload, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             // Mirror into INPUT to satisfy pointer‑ABI validation
@@ -2044,35 +2059,52 @@ impl Compiler {
                                 isi::zk as DMZk,
                                 proof::{ProofAttachment, ProofBox, VerifyingKeyBox},
                             };
-                            // Gather inputs from literals/datarefs
-                            let eid = string_map
-                                .get(&(func_idx, *election_id))
-                                .expect("election_id literal")
-                                .clone();
-                            let backend_str = string_map
-                                .get(&(func_idx, *backend))
-                                .expect("backend literal")
-                                .clone();
-                            let ct_bytes = string_map
-                                .get(&(func_idx, *ciphertext))
-                                .map(|s| s.as_bytes().to_vec())
-                                .unwrap_or_default();
-                            let nf_bytes = string_map
-                                .get(&(func_idx, *nullifier))
-                                .map(|s| s.as_bytes().to_vec())
-                                .unwrap_or_default();
-                            let mut null32 = [0u8; 32];
-                            for (i, b) in nf_bytes.iter().take(32).enumerate() {
-                                null32[i] = *b;
+                            let require_literal =
+                                |label: &str, temp: &ir::Temp| -> Result<String, String> {
+                                    if let Some(value) = string_map.get(&(func_idx, *temp)) {
+                                        return Ok(value.clone());
+                                    }
+                                    let err = format!(
+                                        "build_submit_ballot_inline requires literal {label}"
+                                    );
+                                    Err(i18n::translate(self.lang, Message::SemanticError(&err)))
+                                };
+                            let eid = require_literal("election_id", election_id)?;
+                            let backend_str = require_literal("backend", backend)?;
+                            let ct_literal = require_literal("ciphertext", ciphertext)?;
+                            let ct_bytes = decode_hex_or_raw_bytes(&ct_literal).map_err(|e| {
+                                let err =
+                                    format!("build_submit_ballot_inline ciphertext literal {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?;
+                            let nf_literal = require_literal("nullifier", nullifier)?;
+                            let nf_bytes = decode_hex_or_raw_bytes(&nf_literal).map_err(|e| {
+                                let err =
+                                    format!("build_submit_ballot_inline nullifier literal {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?;
+                            if nf_bytes.len() != 32 {
+                                let err = "build_submit_ballot_inline nullifier must be 32 bytes"
+                                    .to_string();
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::SemanticError(&err),
+                                ));
                             }
-                            let proof_bytes = string_map
-                                .get(&(func_idx, *proof))
-                                .map(|s| s.as_bytes().to_vec())
-                                .unwrap_or_default();
-                            let vk_bytes = string_map
-                                .get(&(func_idx, *vk))
-                                .map(|s| s.as_bytes().to_vec())
-                                .unwrap_or_default();
+                            let mut null32 = [0u8; 32];
+                            null32.copy_from_slice(&nf_bytes);
+                            let proof_literal = require_literal("proof", proof)?;
+                            let proof_bytes =
+                                decode_hex_or_raw_bytes(&proof_literal).map_err(|e| {
+                                    let err =
+                                        format!("build_submit_ballot_inline proof literal {e}");
+                                    i18n::translate(self.lang, Message::SemanticError(&err))
+                                })?;
+                            let vk_literal = require_literal("vk", vk)?;
+                            let vk_bytes = decode_hex_or_raw_bytes(&vk_literal).map_err(|e| {
+                                let err = format!("build_submit_ballot_inline vk literal {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?;
                             let pa = ProofAttachment::new_inline(
                                 backend_str.clone(),
                                 ProofBox::new(backend_str.clone(), proof_bytes),
@@ -2088,8 +2120,9 @@ impl Compiler {
                             // Store as NoritoBytes in data and emit load into dest
                             let hex_payload = hex::encode(bytes);
                             let key = DataKey(DataKind::NoritoBytes, hex_payload);
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
+                            let (rd, spilled, imm) = dst_reg(dest);
                             emit_literal_stub(&mut code, &mut fixups, rd, key);
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::BuildUnshieldInline {
                             dest,
@@ -2106,41 +2139,76 @@ impl Compiler {
                                 prelude::*,
                                 proof::{ProofAttachment, ProofBox, VerifyingKeyBox},
                             };
-                            // Parse typed ids from literals
-                            let asset_id_str = string_map
-                                .get(&(func_idx, *asset))
-                                .expect("asset literal")
-                                .clone();
-                            let to_str = string_map
-                                .get(&(func_idx, *to))
-                                .expect("to literal")
-                                .clone();
-                            let ad: AssetDefinitionId =
-                                asset_id_str.parse().expect("AssetDefinitionId");
-                            let acct: AccountId = to_str.parse().expect("AccountId");
-                            let amt = *int_const_map.get(&(func_idx, *amount)).unwrap_or(&0);
-                            // inputs: take one 32-byte chunk from blob string
-                            let in_bytes = string_map
-                                .get(&(func_idx, *inputs))
-                                .map(|s| s.as_bytes().to_vec())
-                                .unwrap_or_default();
-                            let mut one = [0u8; 32];
-                            for (i, b) in in_bytes.iter().take(32).enumerate() {
-                                one[i] = *b;
+                            let require_literal =
+                                |label: &str, temp: &ir::Temp| -> Result<String, String> {
+                                    if let Some(value) = string_map.get(&(func_idx, *temp)) {
+                                        return Ok(value.clone());
+                                    }
+                                    let err =
+                                        format!("build_unshield_inline requires literal {label}");
+                                    Err(i18n::translate(self.lang, Message::SemanticError(&err)))
+                                };
+                            let require_amount = |temp: &ir::Temp| -> Result<i64, String> {
+                                if let Some(value) = int_const_map.get(&(func_idx, *temp)) {
+                                    return Ok(*value);
+                                }
+                                let err =
+                                    "build_unshield_inline requires literal amount".to_string();
+                                Err(i18n::translate(self.lang, Message::SemanticError(&err)))
+                            };
+                            let asset_id_str = require_literal("asset", asset)?;
+                            let to_str = require_literal("to", to)?;
+                            let amt = require_amount(amount)?;
+                            if amt < 0 {
+                                let err = "build_unshield_inline requires non-negative amount"
+                                    .to_string();
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::SemanticError(&err),
+                                ));
                             }
+                            let ad: AssetDefinitionId = asset_id_str.parse().map_err(|e| {
+                                let err = format!(
+                                    "build_unshield_inline invalid AssetDefinitionId literal `{asset_id_str}`: {e}"
+                                );
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?;
+                            let acct: AccountId = to_str.parse().map_err(|e| {
+                                let err = format!(
+                                    "build_unshield_inline invalid AccountId literal `{to_str}`: {e}"
+                                );
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?;
+                            // inputs: require exactly one 32-byte chunk
+                            let inputs_literal = require_literal("inputs", inputs)?;
+                            let in_bytes =
+                                decode_hex_or_raw_bytes(&inputs_literal).map_err(|e| {
+                                    let err = format!("build_unshield_inline inputs literal {e}");
+                                    i18n::translate(self.lang, Message::SemanticError(&err))
+                                })?;
+                            if in_bytes.len() != 32 {
+                                let err =
+                                    "build_unshield_inline inputs must be 32 bytes".to_string();
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::SemanticError(&err),
+                                ));
+                            }
+                            let mut one = [0u8; 32];
+                            one.copy_from_slice(&in_bytes);
                             let ins = vec![one];
-                            let backend_str = string_map
-                                .get(&(func_idx, *backend))
-                                .expect("backend literal")
-                                .clone();
-                            let proof_bytes = string_map
-                                .get(&(func_idx, *proof))
-                                .map(|s| s.as_bytes().to_vec())
-                                .unwrap_or_default();
-                            let vk_bytes = string_map
-                                .get(&(func_idx, *vk))
-                                .map(|s| s.as_bytes().to_vec())
-                                .unwrap_or_default();
+                            let backend_str = require_literal("backend", backend)?;
+                            let proof_literal = require_literal("proof", proof)?;
+                            let proof_bytes =
+                                decode_hex_or_raw_bytes(&proof_literal).map_err(|e| {
+                                    let err = format!("build_unshield_inline proof literal {e}");
+                                    i18n::translate(self.lang, Message::SemanticError(&err))
+                                })?;
+                            let vk_literal = require_literal("vk", vk)?;
+                            let vk_bytes = decode_hex_or_raw_bytes(&vk_literal).map_err(|e| {
+                                let err = format!("build_unshield_inline vk literal {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?;
                             let pa = ProofAttachment::new_inline(
                                 backend_str.clone(),
                                 ProofBox::new(backend_str.clone(), proof_bytes),
@@ -2157,8 +2225,9 @@ impl Compiler {
                             let bytes = uz.encode_as_instruction_box();
                             let hex_payload = hex::encode(bytes);
                             let key = DataKey(DataKind::NoritoBytes, hex_payload);
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
+                            let (rd, spilled, imm) = dst_reg(dest);
                             emit_literal_stub(&mut code, &mut fixups, rd, key);
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::RegisterAsset {
                             name,
@@ -2174,13 +2243,13 @@ impl Compiler {
                                 let key_name = DataKey(DataKind::Name, name_str.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key_name);
                             } else {
-                                let r_name = *alloc.regs.get(name).unwrap() as u8;
+                                let r_name = src_reg(name, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r_name, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            let r_symbol = *alloc.regs.get(symbol).unwrap() as u8;
-                            let r_qty = *alloc.regs.get(quantity).unwrap() as u8;
-                            let r_mint = *alloc.regs.get(mintable).unwrap() as u8;
+                            let r_symbol = src_reg(symbol, scratch1, &mut code);
+                            let r_qty = src_reg(quantity, scratch2, &mut code);
+                            let r_mint = src_reg(mintable, scratchd, &mut code);
                             code.extend_from_slice(&encode_addi(11, r_symbol, 0).to_le_bytes());
                             code.extend_from_slice(&encode_addi(12, r_qty, 0).to_le_bytes());
                             code.extend_from_slice(&encode_addi(13, r_mint, 0).to_le_bytes());
@@ -2197,11 +2266,10 @@ impl Compiler {
                             account,
                             mintable,
                         } => {
-                            let r_name = *alloc.regs.get(name).unwrap() as u8;
-                            let r_symbol = *alloc.regs.get(symbol).unwrap() as u8;
-                            let r_qty = *alloc.regs.get(quantity).unwrap() as u8;
-                            let r_acc = *alloc.regs.get(account).unwrap() as u8;
-                            let r_mint = *alloc.regs.get(mintable).unwrap() as u8;
+                            let r_name = src_reg(name, scratch1, &mut code);
+                            let r_symbol = src_reg(symbol, scratch2, &mut code);
+                            let r_qty = src_reg(quantity, scratchd, &mut code);
+                            let r_mint = src_reg(mintable, scratch1, &mut code);
                             code.extend_from_slice(&encode_addi(10, r_name, 0).to_le_bytes());
                             code.extend_from_slice(&encode_addi(11, r_symbol, 0).to_le_bytes());
                             code.extend_from_slice(&encode_addi(12, r_qty, 0).to_le_bytes());
@@ -2211,6 +2279,9 @@ impl Compiler {
                                 syscalls::SYSCALL_REGISTER_ASSET as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
+                            let r_acc = src_reg(account, scratch1, &mut code);
+                            let r_name = src_reg(name, scratch2, &mut code);
+                            let r_qty = src_reg(quantity, scratchd, &mut code);
                             code.extend_from_slice(&encode_addi(10, r_acc, 0).to_le_bytes());
                             code.extend_from_slice(&encode_addi(11, r_name, 0).to_le_bytes());
                             code.extend_from_slice(&encode_addi(12, r_qty, 0).to_le_bytes());
@@ -2378,16 +2449,24 @@ impl Compiler {
                             code.extend_from_slice(&word.to_le_bytes());
                         }
                         Instr::CreateNft { nft, owner } => {
-                            let k_nft = string_map
+                            if let Some(k_nft) = string_map
                                 .get(&(func_idx, *nft))
                                 .map(|s| DataKey(DataKind::NftId, s.clone()))
-                                .expect("nft_id literal");
-                            let k_owner = string_map
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 10, k_nft);
+                            } else {
+                                let r = src_reg(nft, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
+                            }
+                            if let Some(k_owner) = string_map
                                 .get(&(func_idx, *owner))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
-                                .expect("owner literal");
-                            emit_literal_stub(&mut code, &mut fixups, 10, k_nft);
-                            emit_literal_stub(&mut code, &mut fixups, 11, k_owner);
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 11, k_owner);
+                            } else {
+                                let r = src_reg(owner, scratch2, &mut code);
+                                code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
+                            }
                             // Mirror TLVs into INPUT for r10 and r11
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -2416,13 +2495,13 @@ impl Compiler {
                             if let Some(kn) = k_nft {
                                 emit_literal_stub(&mut code, &mut fixups, 10, kn);
                             } else {
-                                let r = *alloc.regs.get(nft).unwrap() as u8;
+                                let r = src_reg(nft, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             if let Some(kj) = k_json {
                                 emit_literal_stub(&mut code, &mut fixups, 11, kj);
                             } else {
-                                let r = *alloc.regs.get(json).unwrap() as u8;
+                                let r = src_reg(json, scratch2, &mut code);
                                 code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             // Mirror both into INPUT
@@ -2450,7 +2529,7 @@ impl Compiler {
                             {
                                 emit_literal_stub(&mut code, &mut fixups, 10, kn);
                             } else {
-                                let r = *alloc.regs.get(nft).unwrap() as u8;
+                                let r = src_reg(nft, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             // Mirror into INPUT
@@ -2467,33 +2546,47 @@ impl Compiler {
                             code.extend_from_slice(&word.to_le_bytes());
                         }
                         Instr::TransferNft { from, nft, to } => {
-                            let k_from = string_map
+                            if let Some(k_from) = string_map
                                 .get(&(func_idx, *from))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
-                                .expect("from literal");
-                            let k_nft = string_map
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 10, k_from);
+                            } else {
+                                let r = src_reg(from, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
+                            }
+                            if let Some(k_nft) = string_map
                                 .get(&(func_idx, *nft))
                                 .map(|s| DataKey(DataKind::NftId, s.clone()))
-                                .expect("nft literal");
-                            let k_to = string_map
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 11, k_nft);
+                            } else {
+                                let r = src_reg(nft, scratch2, &mut code);
+                                code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
+                            }
+                            if let Some(k_to) = string_map
                                 .get(&(func_idx, *to))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
-                                .expect("to literal");
-                            emit_literal_stub(&mut code, &mut fixups, 10, k_from);
-                            emit_literal_stub(&mut code, &mut fixups, 11, k_nft);
-                            emit_literal_stub(&mut code, &mut fixups, 12, k_to);
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 12, k_to);
+                            } else {
+                                let r = src_reg(to, scratchd, &mut code);
+                                code.extend_from_slice(&encode_addi(12, r, 0).to_le_bytes());
+                            }
                             // Mirror TLVs into INPUT for r10, r11, r12
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes()); // r10
+                            code.extend_from_slice(&encode_addi(13, 10, 0).to_le_bytes());
                             code.extend_from_slice(&encode_addi(10, 11, 0).to_le_bytes());
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
                             code.extend_from_slice(&encode_addi(10, 12, 0).to_le_bytes());
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             code.extend_from_slice(&encode_addi(12, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 13, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_NFT_TRANSFER_ASSET as u8,
@@ -2520,9 +2613,16 @@ impl Compiler {
                                 if i >= regalloc::ARG_REGS.len() {
                                     break;
                                 }
-                                let rs = src_reg(a, scratch1, &mut code);
                                 let rd = regalloc::ARG_REGS[i] as u8;
-                                code.extend_from_slice(&encode_addi(rd, rs, 0).to_le_bytes());
+                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *a)).copied()
+                                    && let Some(value) = string_map.get(&(func_idx, *a)).cloned()
+                                {
+                                    let key = data_key_for_pointer(kind, &value);
+                                    emit_literal_stub(&mut code, &mut fixups, rd, key);
+                                } else {
+                                    let rs = src_reg(a, scratch1, &mut code);
+                                    code.extend_from_slice(&encode_addi(rd, rs, 0).to_le_bytes());
+                                }
                             }
                             // Emit placeholder JAL to be patched later
                             let at = code.len();
@@ -2555,9 +2655,16 @@ impl Compiler {
                                 if i >= regalloc::ARG_REGS.len() {
                                     break;
                                 }
-                                let rs = src_reg(a, scratch1, &mut code);
                                 let rd = regalloc::ARG_REGS[i] as u8;
-                                code.extend_from_slice(&encode_addi(rd, rs, 0).to_le_bytes());
+                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *a)).copied()
+                                    && let Some(value) = string_map.get(&(func_idx, *a)).cloned()
+                                {
+                                    let key = data_key_for_pointer(kind, &value);
+                                    emit_literal_stub(&mut code, &mut fixups, rd, key);
+                                } else {
+                                    let rs = src_reg(a, scratch1, &mut code);
+                                    code.extend_from_slice(&encode_addi(rd, rs, 0).to_le_bytes());
+                                }
                             }
                             // Emit JAL (placeholder) and record fixup
                             let at = code.len();
@@ -2858,6 +2965,10 @@ impl Compiler {
                                 -8,
                             );
                             code.extend_from_slice(&andi.to_le_bytes());
+                            // Zero-initialize the single key/value pair to keep Map::new deterministic.
+                            emit_addi(&mut code, scratch1, 0, 0);
+                            emit_store64(&mut code, 10, scratch1, 0, scratch2);
+                            emit_store64(&mut code, 10, scratch1, 8, scratch2);
                             // dest = x10
                             code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
@@ -2970,88 +3081,84 @@ impl Compiler {
                         Instr::MapGet { dest, map, key } => {
                             // Minimal map layout: [0..8) key (u64), [8..16) value (u64)
                             // Branchless compare/select via flag multiply:
-                            //   k_loaded := LOAD64 [map + 0]
-                            //   tmp_xor := k_loaded XOR key
-                            //   flag := SLTIU tmp_xor, 1  // 1 if equal else 0
+                            //   flag := SEQ(LOAD64 [map + 0], key)
                             //   dest := LOAD64 [map + 8]
                             //   dest := dest * flag
 
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
-                            let rmap = *alloc.regs.get(map).unwrap() as u8;
-                            let rkey = *alloc.regs.get(key).unwrap() as u8;
+                            let rmap = src_reg(map, scratch1, &mut code);
+                            let rkey = src_reg(key, scratch2, &mut code);
+                            let (rd, spilled, imm) = dst_reg(dest);
 
-                            // Choose scratch registers distinct from rd/rmap/rkey
-                            let mut s1 = 12u8;
-                            while s1 == rd || s1 == rmap || s1 == rkey {
-                                s1 += 1;
-                            }
-                            let mut sflag = s1 + 1;
-                            while sflag == rd || sflag == rmap || sflag == rkey {
-                                sflag += 1;
-                            }
-                            let mut sconst = sflag + 1;
-                            while sconst == rd || sconst == rmap || sconst == rkey {
-                                sconst += 1;
-                            }
-
-                            // Load stored key into s1 (s1 chosen distinct from rmap)
-                            emit_load64(&mut code, s1, rmap, 0, None);
-                            // s1 = s1 XOR rkey
-                            push_word(
-                                &mut code,
-                                encoding::wide::encode_rr(
-                                    instruction::wide::arithmetic::XOR,
-                                    s1,
-                                    s1,
-                                    rkey,
-                                ),
-                            );
-                            // sflag = SLTU(s1, 1)
-                            emit_addi(&mut code, sconst, 0, 1);
-                            let cmp = encoding::wide::encode_rr(
-                                instruction::wide::arithmetic::SLTU,
-                                sflag,
-                                s1,
-                                sconst,
-                            );
-                            push_word(&mut code, cmp);
-                            // dest = LOAD64 [map+8]
-                            let scratch_val = if rd == rmap {
-                                if s1 != rd {
-                                    Some(s1)
-                                } else if sflag != rd {
-                                    Some(sflag)
-                                } else {
-                                    Some(sconst)
+                            let mut flag_reg = None;
+                            for cand in [scratch1, scratch2, scratchd] {
+                                if cand != rmap && cand != rkey && cand != rd {
+                                    flag_reg = Some(cand);
+                                    break;
                                 }
+                            }
+
+                            if let Some(rflag) = flag_reg {
+                                emit_load64(&mut code, rflag, rmap, 0, None);
+                                let eq = encoding::wide::encode_rr(
+                                    instruction::wide::arithmetic::SEQ,
+                                    rflag,
+                                    rflag,
+                                    rkey,
+                                );
+                                push_word(&mut code, eq);
+
+                                let value_scratch = if rd == rmap {
+                                    Some(if rflag != scratch1 {
+                                        scratch1
+                                    } else {
+                                        scratch2
+                                    })
+                                } else {
+                                    None
+                                };
+                                emit_load64(&mut code, rd, rmap, 8, value_scratch);
+                                push_word(
+                                    &mut code,
+                                    encoding::wide::encode_rr(
+                                        instruction::wide::arithmetic::MUL,
+                                        rd,
+                                        rd,
+                                        rflag,
+                                    ),
+                                );
                             } else {
-                                None
-                            };
-                            emit_load64(&mut code, rd, rmap, 8, scratch_val);
-                            // dest = dest * sflag (MUL)
-                            push_word(
-                                &mut code,
-                                encoding::wide::encode_rr(
-                                    instruction::wide::arithmetic::MUL,
+                                // Fall back to using rd for the flag and reuse rkey (spilled) for value.
+                                emit_load64(&mut code, rd, rmap, 0, None);
+                                let eq = encoding::wide::encode_rr(
+                                    instruction::wide::arithmetic::SEQ,
                                     rd,
                                     rd,
-                                    sflag,
-                                ),
-                            );
+                                    rkey,
+                                );
+                                push_word(&mut code, eq);
+                                emit_load64(&mut code, rkey, rmap, 8, None);
+                                push_word(
+                                    &mut code,
+                                    encoding::wide::encode_rr(
+                                        instruction::wide::arithmetic::MUL,
+                                        rd,
+                                        rkey,
+                                        rd,
+                                    ),
+                                );
+                            }
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::Load64Imm { dest, base, imm } => {
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
-                            let rbase = *alloc.regs.get(base).unwrap() as u8;
+                            let rbase = src_reg(base, scratch1, &mut code);
+                            let (rd, spilled, imm_spill) = dst_reg(dest);
                             let scratch = if rd == rbase {
-                                if scratch1 != rd {
-                                    Some(scratch1)
-                                } else {
-                                    Some(scratch2)
-                                }
+                                Some(if rd != scratch1 { scratch1 } else { scratch2 })
                             } else {
                                 None
                             };
                             emit_load64(&mut code, rd, rbase, *imm as i64, scratch);
+                            spill_back(dest, rd, spilled, imm_spill, &mut code);
                         }
                         Instr::MapSet { map, key, value } => {
                             // Minimal map layout: [0..8) key, [8..16) value
@@ -3071,40 +3178,26 @@ impl Compiler {
                             offset,
                         } => {
                             // Load key at offset 0, value at offset 8
-                            let rmap = *alloc.regs.get(map).unwrap() as u8;
-                            let rd_k = *alloc.regs.get(dest_key).unwrap() as u8;
-                            let rd_v = *alloc.regs.get(dest_val).unwrap() as u8;
-                            let base_off = *offset; // in bytes
-                            // IVM LOAD uses 4-byte units in the immediate field
-                            let key_temp = if rd_k == rmap {
-                                if scratch1 != rmap { scratch1 } else { scratch2 }
+                            let rmap = src_reg(map, scratch1, &mut code);
+                            let (rd_k, spilled_k, imm_k) = dst_reg(dest_key);
+                            let (rd_v, spilled_v, imm_v) = dst_reg(dest_val);
+                            let base_off = *offset as i64; // in bytes
+
+                            let key_scratch = if rd_k == rmap {
+                                Some(if rmap != scratch1 { scratch1 } else { scratch2 })
                             } else {
-                                rd_k
+                                None
                             };
-                            emit_load64(&mut code, key_temp, rmap, base_off as i64, None);
+                            emit_load64(&mut code, rd_k, rmap, base_off, key_scratch);
+                            spill_back(dest_key, rd_k, spilled_k, imm_k, &mut code);
 
-                            if rd_v != rd_k {
-                                let val_temp = if rd_v == rmap {
-                                    if scratch2 != rmap && scratch2 != key_temp {
-                                        scratch2
-                                    } else if scratch1 != rmap && scratch1 != key_temp {
-                                        scratch1
-                                    } else {
-                                        panic!("no scratch available for MapLoadPair value load")
-                                    }
-                                } else {
-                                    rd_v
-                                };
-                                let imm_v = base_off + 8; // +8 bytes
-                                emit_load64(&mut code, val_temp, rmap, imm_v as i64, None);
-
-                                if rd_v != val_temp {
-                                    push_word(&mut code, encode_addi(rd_v, val_temp, 0));
-                                }
-                            }
-                            if rd_k != key_temp {
-                                push_word(&mut code, encode_addi(rd_k, key_temp, 0));
-                            }
+                            let val_scratch = if rd_v == rmap {
+                                Some(if rmap != scratch1 { scratch1 } else { scratch2 })
+                            } else {
+                                None
+                            };
+                            emit_load64(&mut code, rd_v, rmap, base_off + 8, val_scratch);
+                            spill_back(dest_val, rd_v, spilled_v, imm_v, &mut code);
                         }
                         Instr::StateGet { dest, path } => {
                             if !durable_enabled {
@@ -3194,7 +3287,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::Name, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(path).unwrap() as u8;
+                                let r = src_reg(path, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -3353,7 +3446,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::Json, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(json).unwrap() as u8;
+                                let r = src_reg(json, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -3366,8 +3459,9 @@ impl Compiler {
                                 syscalls::SYSCALL_JSON_ENCODE as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
+                            let (rd, spilled, imm) = dst_reg(dest);
                             code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::JsonDecode { dest, blob } => {
                             if !durable_enabled {
@@ -3383,7 +3477,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(blob).unwrap() as u8;
+                                let r = src_reg(blob, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -3396,8 +3490,9 @@ impl Compiler {
                                 syscalls::SYSCALL_JSON_DECODE as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
+                            let (rd, spilled, imm) = dst_reg(dest);
                             code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::NameDecode { dest, blob } => {
                             // r10=&NoritoBytes; publish; SCALL NAME_DECODE; move
@@ -3405,7 +3500,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(blob).unwrap() as u8;
+                                let r = src_reg(blob, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -3418,8 +3513,9 @@ impl Compiler {
                                 syscalls::SYSCALL_NAME_DECODE as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
+                            let (rd, spilled, imm) = dst_reg(dest);
                             code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::SchemaEncode { dest, schema, json } => {
                             if !durable_enabled {
@@ -3435,7 +3531,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::Name, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(schema).unwrap() as u8;
+                                let r = src_reg(schema, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -3447,7 +3543,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::Json, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 11, key);
                             } else {
-                                let r = *alloc.regs.get(json).unwrap() as u8;
+                                let r = src_reg(json, scratch2, &mut code);
                                 code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
@@ -3456,8 +3552,9 @@ impl Compiler {
                                 syscalls::SYSCALL_SCHEMA_ENCODE as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
+                            let (rd, spilled, imm) = dst_reg(dest);
                             code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::SchemaDecode { dest, schema, blob } => {
                             if !durable_enabled {
@@ -3473,7 +3570,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::Name, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(schema).unwrap() as u8;
+                                let r = src_reg(schema, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -3485,7 +3582,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 11, key);
                             } else {
-                                let r = *alloc.regs.get(blob).unwrap() as u8;
+                                let r = src_reg(blob, scratch2, &mut code);
                                 code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
@@ -3494,8 +3591,9 @@ impl Compiler {
                                 syscalls::SYSCALL_SCHEMA_DECODE as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
+                            let (rd, spilled, imm) = dst_reg(dest);
                             code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::SchemaInfo { dest, schema } => {
                             if !durable_enabled {
@@ -3508,7 +3606,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::Name, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(schema).unwrap() as u8;
+                                let r = src_reg(schema, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -3521,8 +3619,9 @@ impl Compiler {
                                 syscalls::SYSCALL_SCHEMA_INFO as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
+                            let (rd, spilled, imm) = dst_reg(dest);
                             code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::VrfVerify {
                             dest,
@@ -3545,7 +3644,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::Blob, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(input).unwrap() as u8;
+                                let r = src_reg(input, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
@@ -3553,7 +3652,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::Blob, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 11, key);
                             } else {
-                                let r = *alloc.regs.get(public_key).unwrap() as u8;
+                                let r = src_reg(public_key, scratch2, &mut code);
                                 code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
@@ -3561,7 +3660,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::Blob, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 12, key);
                             } else {
-                                let r = *alloc.regs.get(proof).unwrap() as u8;
+                                let r = src_reg(proof, scratchd, &mut code);
                                 code.extend_from_slice(&encode_addi(12, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
@@ -3572,8 +3671,9 @@ impl Compiler {
                                 syscalls::SYSCALL_VRF_VERIFY as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
+                            let (rd, spilled, imm) = dst_reg(dest);
                             code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::VrfVerifyBatch { dest, batch } => {
                             if !durable_enabled {
@@ -3586,7 +3686,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::Blob, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(batch).unwrap() as u8;
+                                let r = src_reg(batch, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -3599,8 +3699,9 @@ impl Compiler {
                                 syscalls::SYSCALL_VRF_VERIFY_BATCH as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
+                            let (rd, spilled, imm) = dst_reg(dest);
                             code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::AxtBegin { descriptor } => {
                             if !durable_enabled {
@@ -3613,7 +3714,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::AxtDescriptor, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(descriptor).unwrap() as u8;
+                                let r = src_reg(descriptor, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
@@ -3642,7 +3743,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::DataSpaceId, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(dsid).unwrap() as u8;
+                                let r = src_reg(dsid, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
@@ -3651,7 +3752,7 @@ impl Compiler {
                                     let key = DataKey(DataKind::NoritoBytes, s.clone());
                                     emit_literal_stub(&mut code, &mut fixups, 11, key);
                                 } else {
-                                    let r = *alloc.regs.get(m).unwrap() as u8;
+                                    let r = src_reg(m, scratch2, &mut code);
                                     code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                                 }
                                 code.extend_from_slice(&pub_word.to_le_bytes());
@@ -3679,7 +3780,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::DataSpaceId, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(dsid).unwrap() as u8;
+                                let r = src_reg(dsid, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
@@ -3688,7 +3789,7 @@ impl Compiler {
                                     let key = DataKey(DataKind::ProofBlob, s.clone());
                                     emit_literal_stub(&mut code, &mut fixups, 11, key);
                                 } else {
-                                    let r = *alloc.regs.get(p).unwrap() as u8;
+                                    let r = src_reg(p, scratch2, &mut code);
                                     code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                                 }
                                 code.extend_from_slice(&pub_word.to_le_bytes());
@@ -3720,7 +3821,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::AssetHandle, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(handle).unwrap() as u8;
+                                let r = src_reg(handle, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
@@ -3728,7 +3829,7 @@ impl Compiler {
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 11, key);
                             } else {
-                                let r = *alloc.regs.get(intent).unwrap() as u8;
+                                let r = src_reg(intent, scratch2, &mut code);
                                 code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
@@ -3737,7 +3838,7 @@ impl Compiler {
                                     let key = DataKey(DataKind::ProofBlob, s.clone());
                                     emit_literal_stub(&mut code, &mut fixups, 12, key);
                                 } else {
-                                    let r = *alloc.regs.get(p).unwrap() as u8;
+                                    let r = src_reg(p, scratchd, &mut code);
                                     code.extend_from_slice(&encode_addi(12, r, 0).to_le_bytes());
                                 }
                                 code.extend_from_slice(&pub_word.to_le_bytes());

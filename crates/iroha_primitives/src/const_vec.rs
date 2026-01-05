@@ -265,7 +265,7 @@ impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {
         for item in slice {
             let elem_hint = item.encoded_len_hint()?;
             if use_varint_offsets {
-                total = total.saturating_add(ncore::len_prefix_len(elem_hint));
+                total = total.saturating_add(ncore::varint_len_prefix_len(elem_hint));
             }
             total = total.saturating_add(elem_hint);
         }
@@ -306,7 +306,7 @@ impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {
         for item in slice {
             let elem_exact = item.encoded_len_exact()?;
             if use_varint_offsets {
-                total = total.checked_add(ncore::len_prefix_len(elem_exact))?;
+                total = total.checked_add(ncore::varint_len_prefix_len(elem_exact))?;
             }
             data_total = data_total.checked_add(elem_exact)?;
         }
@@ -414,7 +414,7 @@ impl<T: NoritoSerialize> ConstVec<T> {
         let mut hdr = Vec::with_capacity(entry_count.saturating_mul(2));
         for span in offsets.windows(2) {
             let sz = span[1].wrapping_sub(span[0]);
-            ncore::write_len_to_vec(&mut hdr, sz);
+            ncore::write_varint_len_to_vec(&mut hdr, sz);
         }
         writer.write_all(&hdr)?;
         writer.write_all(data)?;

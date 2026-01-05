@@ -179,6 +179,43 @@ fn ncb_enum_dict_names() {
 }
 
 #[test]
+fn ncb_enum_dict_codes_out_of_range_rejected() {
+    let rows = vec![
+        (1u64, ncb::EnumBorrow::Name("alpha"), true),
+        (2u64, ncb::EnumBorrow::Name("beta"), false),
+    ];
+    let mut bytes = ncb::encode_ncb_u64_enum_bool(
+        &rows, /*id-delta*/ false, /*dict*/ true, /*code-delta*/ false,
+    );
+    let n = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+    assert_eq!(n, rows.len());
+    let mut off = 5usize;
+    let mis = off & 7;
+    if mis != 0 {
+        off += 8 - mis;
+    }
+    off += 8 * n; // ids
+    off += n; // tags
+    let mis4 = off & 3;
+    if mis4 != 0 {
+        off += 4 - mis4;
+    }
+    let dict_len = u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
+    off += 4;
+    let dict_offs_len = 4 * (dict_len + 1);
+    off += dict_offs_len;
+    let dict_last = u32::from_le_bytes(bytes[off - 4..off].try_into().unwrap()) as usize;
+    off += dict_last;
+    let mis4_codes = off & 3;
+    if mis4_codes != 0 {
+        off += 4 - mis4_codes;
+    }
+    bytes[off..off + 4].copy_from_slice(&(dict_len as u32).to_le_bytes());
+    let res = ncb::view_ncb_u64_enum_bool(&bytes);
+    assert!(res.is_err());
+}
+
+#[test]
 fn ncb_enum_dict_names_codes_delta() {
     // Mix Name(Code by dict) and Code(u32) with code delta enabled
     let mut rows = Vec::new();
@@ -275,6 +312,27 @@ fn opt_str_column_basic() {
             _ => panic!("mismatch"),
         }
     }
+}
+
+#[test]
+fn opt_str_column_rejects_non_monotonic_offsets() {
+    let data = vec![Some("a"), Some("bb"), Some("ccc")];
+    let (mut bytes, present) = ncb::encode_opt_str_column(&data);
+    let n_rows = data.len();
+    let bit_bytes = n_rows.div_ceil(8);
+    let mut off = bit_bytes;
+    let mis4 = off & 3;
+    if mis4 != 0 {
+        off += 4 - mis4;
+    }
+    let offs_start = off;
+    let offs_len = 4 * (present + 1);
+    assert!(offs_start + offs_len <= bytes.len());
+    let off2 = u32::from_le_bytes(bytes[offs_start + 8..offs_start + 12].try_into().unwrap());
+    let bad = off2.saturating_add(1);
+    bytes[offs_start + 4..offs_start + 8].copy_from_slice(&bad.to_le_bytes());
+    let res = ncb::view_opt_str_column(&bytes, n_rows);
+    assert!(res.is_err());
 }
 
 #[test]

@@ -11,10 +11,10 @@ use std::{
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::{Arc, mpsc},
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use blake3::hash as blake3_hash;
+use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use eyre::{Result, eyre};
 use iroha_config::parameters::actual::{
     AdaptiveObservability, Common as CommonConfig, ConsensusMode, DaManifestPolicy,
@@ -33,6 +33,7 @@ use iroha_data_model::{
     da::{
         commitment::DaCommitmentRecord,
         prelude::{DaCommitmentBundle, DaPinIntentBundle},
+        types::StorageTicketId,
     },
     events::{EventBox, pipeline::PipelineEventBox},
     merge::{MergeCommitteeSignature, MergeQuorumCertificate},
@@ -2759,10 +2760,247 @@ struct ActorSubsystems {
     merge: MergeLaneState,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CacheOutcome {
+    Hit,
+    Miss,
+}
+
+impl CacheOutcome {
+    fn merge(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Hit, Self::Hit) => Self::Hit,
+            _ => Self::Miss,
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    fn as_telemetry(self) -> crate::telemetry::CacheResult {
+        match self {
+            Self::Hit => crate::telemetry::CacheResult::Hit,
+            Self::Miss => crate::telemetry::CacheResult::Miss,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SpoolDirStamp {
+    fingerprint: [u8; 32],
+    entries: usize,
+    total_bytes: u64,
+}
+
+impl SpoolDirStamp {
+    fn from_entries(entries: &[(String, u64, Option<SystemTime>)]) -> Self {
+        let mut hasher = Blake3Hasher::new();
+        let mut total_bytes = 0u64;
+        for (name, len, modified) in entries {
+            hasher.update(name.as_bytes());
+            hasher.update(&len.to_le_bytes());
+            total_bytes = total_bytes.saturating_add(*len);
+            let stamp = modified
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .unwrap_or_default();
+            hasher.update(&stamp.as_secs().to_le_bytes());
+            hasher.update(&stamp.subsec_nanos().to_le_bytes());
+        }
+        let fingerprint = *hasher.finalize().as_bytes();
+        Self {
+            fingerprint,
+            entries: entries.len(),
+            total_bytes,
+        }
+    }
+}
+
+fn is_da_spool_file(name: &str) -> bool {
+    (name.starts_with("da-commitment-")
+        || name.starts_with("da-pin-intent-")
+        || name.starts_with("da-receipt-"))
+        && name.ends_with(".norito")
+}
+
+fn scan_da_spool_stamp(spool_dir: &Path) -> Result<Option<SpoolDirStamp>, std::io::Error> {
+    let metadata = match fs::metadata(spool_dir) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    if !metadata.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "DA spool path is not a directory",
+        ));
+    }
+
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(spool_dir)? {
+        let entry = match entry {
+            Ok(value) => value,
+            Err(err) => {
+                warn!(?err, "failed to read DA spool entry");
+                continue;
+            }
+        };
+        let name = match entry.file_name().to_str() {
+            Some(value) => value.to_string(),
+            None => continue,
+        };
+        if !is_da_spool_file(&name) {
+            continue;
+        }
+        let metadata = match entry.metadata() {
+            Ok(meta) => meta,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %entry.path().display(),
+                    "failed to read DA spool metadata"
+                );
+                continue;
+            }
+        };
+        entries.push((name, metadata.len(), metadata.modified().ok()));
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(Some(SpoolDirStamp::from_entries(&entries)))
+}
+
+#[derive(Debug, Default)]
+struct DaSpoolCache {
+    dir_stamp: Option<SpoolDirStamp>,
+    commitment_bundle: Option<Option<DaCommitmentBundle>>,
+    pin_bundle: Option<Option<DaPinIntentBundle>>,
+    receipt_entries: Option<Vec<crate::da::receipts::DaReceiptEntry>>,
+}
+
+impl DaSpoolCache {
+    fn invalidate(&mut self) {
+        self.dir_stamp = None;
+        self.commitment_bundle = None;
+        self.pin_bundle = None;
+        self.receipt_entries = None;
+    }
+
+    fn refresh_if_stale(&mut self, spool_dir: &Path) -> Result<bool, std::io::Error> {
+        let stamp = match scan_da_spool_stamp(spool_dir)? {
+            Some(stamp) => stamp,
+            None => {
+                if self.dir_stamp.is_some() {
+                    self.invalidate();
+                }
+                return Ok(false);
+            }
+        };
+        if self.dir_stamp != Some(stamp) {
+            self.dir_stamp = Some(stamp);
+            self.commitment_bundle = None;
+            self.pin_bundle = None;
+            self.receipt_entries = None;
+        }
+        Ok(true)
+    }
+
+    fn load_commitment_bundle(
+        &mut self,
+        spool_dir: &Path,
+    ) -> Result<(Option<DaCommitmentBundle>, CacheOutcome), crate::da::commitments::DaSpoolError>
+    {
+        let exists = match self.refresh_if_stale(spool_dir) {
+            Ok(exists) => exists,
+            Err(source) => {
+                return Err(crate::da::commitments::DaSpoolError::ReadDir {
+                    path: spool_dir.to_path_buf(),
+                    source,
+                });
+            }
+        };
+
+        if let Some(cached) = &self.commitment_bundle {
+            return Ok((cached.clone(), CacheOutcome::Hit));
+        }
+
+        if !exists {
+            self.commitment_bundle = Some(None);
+            return Ok((None, CacheOutcome::Miss));
+        }
+
+        let bundle = crate::da::commitments::load_commitment_bundle(spool_dir)?;
+        self.commitment_bundle = Some(bundle.clone());
+        Ok((bundle, CacheOutcome::Miss))
+    }
+
+    fn load_pin_bundle(
+        &mut self,
+        spool_dir: &Path,
+    ) -> Result<
+        (Option<DaPinIntentBundle>, CacheOutcome),
+        crate::da::pin_intents::DaPinIntentSpoolError,
+    > {
+        let exists = match self.refresh_if_stale(spool_dir) {
+            Ok(exists) => exists,
+            Err(source) => {
+                return Err(crate::da::pin_intents::DaPinIntentSpoolError::ReadDir {
+                    path: spool_dir.to_path_buf(),
+                    source,
+                });
+            }
+        };
+
+        if let Some(cached) = &self.pin_bundle {
+            return Ok((cached.clone(), CacheOutcome::Hit));
+        }
+
+        if !exists {
+            self.pin_bundle = Some(None);
+            return Ok((None, CacheOutcome::Miss));
+        }
+
+        let intents =
+            crate::da::pin_intents::load_pin_intents(spool_dir)?.map(DaPinIntentBundle::new);
+        self.pin_bundle = Some(intents.clone());
+        Ok((intents, CacheOutcome::Miss))
+    }
+
+    fn load_receipt_entries(
+        &mut self,
+        spool_dir: &Path,
+    ) -> Result<
+        (Vec<crate::da::receipts::DaReceiptEntry>, CacheOutcome),
+        crate::da::receipts::DaReceiptSpoolError,
+    > {
+        let exists = match self.refresh_if_stale(spool_dir) {
+            Ok(exists) => exists,
+            Err(source) => {
+                return Err(crate::da::receipts::DaReceiptSpoolError::ReadDir {
+                    path: spool_dir.to_path_buf(),
+                    source,
+                });
+            }
+        };
+
+        if let Some(cached) = &self.receipt_entries {
+            return Ok((cached.clone(), CacheOutcome::Hit));
+        }
+
+        if !exists {
+            let empty = Vec::new();
+            self.receipt_entries = Some(empty.clone());
+            return Ok((empty, CacheOutcome::Miss));
+        }
+
+        let entries = crate::da::receipts::load_receipt_entries(spool_dir)?;
+        self.receipt_entries = Some(entries.clone());
+        Ok((entries, CacheOutcome::Miss))
+    }
+}
+
 struct DaRbcState {
     da: DaState,
     rbc: RbcState,
     spool_dir: PathBuf,
+    spool_cache: DaSpoolCache,
+    manifest_cache: crate::sumeragi::main_loop::ManifestSpoolCache,
 }
 
 struct MergeLaneState {
@@ -4926,6 +5164,8 @@ impl Actor {
                 da: DaState::new(),
                 rbc: rbc_state,
                 spool_dir: da_spool_dir,
+                spool_cache: DaSpoolCache::default(),
+                manifest_cache: crate::sumeragi::main_loop::ManifestSpoolCache::default(),
             },
             vrf: VrfActor::new(),
             merge: MergeLaneState {
@@ -8185,40 +8425,256 @@ pub enum PersistedLoadError {
     },
 }
 
-fn find_manifest_for_commitment(
-    spool_dir: &Path,
-    record: &DaCommitmentRecord,
-) -> std::io::Result<Option<PathBuf>> {
-    if !spool_dir.exists() {
-        return Ok(None);
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ManifestSpoolKey {
+    lane: u32,
+    epoch: u64,
+    sequence: u64,
+    ticket: StorageTicketId,
+}
+
+impl ManifestSpoolKey {
+    fn from_record(record: &DaCommitmentRecord) -> Self {
+        Self {
+            lane: record.lane_id.as_u32(),
+            epoch: record.epoch,
+            sequence: record.sequence,
+            ticket: record.storage_ticket,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ManifestSpoolEntry {
+    path: PathBuf,
+    file_modified: Option<SystemTime>,
+    file_len: u64,
+    digest: Option<ManifestDigest>,
+}
+
+#[derive(Debug)]
+enum ManifestSpoolLookupError {
+    SpoolScan(std::io::Error),
+    Read {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+}
+
+impl ManifestSpoolEntry {
+    fn digest(&mut self) -> Result<(ManifestDigest, CacheOutcome), ManifestSpoolLookupError> {
+        let metadata =
+            fs::metadata(&self.path).map_err(|source| ManifestSpoolLookupError::Read {
+                path: self.path.clone(),
+                source,
+            })?;
+        let file_len = metadata.len();
+        let file_modified = metadata.modified().ok();
+        if self.file_len != file_len || self.file_modified != file_modified {
+            self.file_len = file_len;
+            self.file_modified = file_modified;
+            self.digest = None;
+        }
+        if let Some(digest) = self.digest {
+            return Ok((digest, CacheOutcome::Hit));
+        }
+        let bytes = fs::read(&self.path).map_err(|source| ManifestSpoolLookupError::Read {
+            path: self.path.clone(),
+            source,
+        })?;
+        let digest = ManifestDigest::new(*blake3_hash(&bytes).as_bytes());
+        self.digest = Some(digest);
+        Ok((digest, CacheOutcome::Miss))
+    }
+}
+
+struct ManifestSpoolScan {
+    stamp: SpoolDirStamp,
+    entries: BTreeMap<ManifestSpoolKey, Vec<ManifestSpoolEntry>>,
+}
+
+fn scan_manifest_spool(spool_dir: &Path) -> Result<Option<ManifestSpoolScan>, std::io::Error> {
+    let metadata = match fs::metadata(spool_dir) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    if !metadata.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "manifest spool path is not a directory",
+        ));
     }
 
-    let lane = record.lane_id.as_u32();
-    let prefix = format!(
-        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-",
-        epoch = record.epoch,
-        sequence = record.sequence
-    );
-    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
-
-    let mut found = None;
+    let mut entries = Vec::new();
     for entry in fs::read_dir(spool_dir)? {
         let entry = match entry {
             Ok(value) => value,
-            Err(_) => continue,
+            Err(err) => {
+                warn!(?err, "failed to read manifest spool entry");
+                continue;
+            }
         };
-        let name = entry.file_name();
-        let Some(name_str) = name.to_str() else {
-            continue;
+        let name = match entry.file_name().to_str() {
+            Some(value) => value.to_string(),
+            None => continue,
         };
-        if !name_str.starts_with(&prefix) || !name_str.contains(&ticket_hex) {
+        if !name.starts_with("manifest-") || !name.ends_with(".norito") {
             continue;
         }
-        found = Some(entry.path());
-        break;
+        let Some(key) = parse_manifest_spool_key(&name) else {
+            continue;
+        };
+        let metadata = match entry.metadata() {
+            Ok(meta) => meta,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %entry.path().display(),
+                    "failed to read manifest spool metadata"
+                );
+                continue;
+            }
+        };
+        entries.push((
+            name,
+            key,
+            entry.path(),
+            metadata.len(),
+            metadata.modified().ok(),
+        ));
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let stamp_entries = entries
+        .iter()
+        .map(|(name, _, _, len, modified)| (name.clone(), *len, *modified))
+        .collect::<Vec<_>>();
+    let stamp = SpoolDirStamp::from_entries(&stamp_entries);
+
+    let mut map = BTreeMap::new();
+    for (_, key, path, file_len, file_modified) in entries {
+        map.entry(key)
+            .or_insert_with(Vec::new)
+            .push(ManifestSpoolEntry {
+                path,
+                file_modified,
+                file_len,
+                digest: None,
+            });
     }
 
-    Ok(found)
+    Ok(Some(ManifestSpoolScan {
+        stamp,
+        entries: map,
+    }))
+}
+
+#[derive(Debug, Default)]
+struct ManifestSpoolCache {
+    dir_stamp: Option<SpoolDirStamp>,
+    entries: BTreeMap<ManifestSpoolKey, Vec<ManifestSpoolEntry>>,
+}
+
+impl ManifestSpoolCache {
+    fn refresh_if_stale(&mut self, spool_dir: &Path) -> Result<bool, std::io::Error> {
+        let Some(scan) = scan_manifest_spool(spool_dir)? else {
+            self.dir_stamp = None;
+            self.entries.clear();
+            return Ok(false);
+        };
+        if self.dir_stamp != Some(scan.stamp) {
+            self.dir_stamp = Some(scan.stamp);
+            self.entries = scan.entries;
+        }
+        Ok(true)
+    }
+
+    fn force_refresh(&mut self, spool_dir: &Path) -> Result<bool, std::io::Error> {
+        let Some(scan) = scan_manifest_spool(spool_dir)? else {
+            self.dir_stamp = None;
+            self.entries.clear();
+            return Ok(false);
+        };
+        self.dir_stamp = Some(scan.stamp);
+        self.entries = scan.entries;
+        Ok(true)
+    }
+
+    fn manifest_digest_for_commitment(
+        &mut self,
+        spool_dir: &Path,
+        record: &DaCommitmentRecord,
+    ) -> Result<(Option<(ManifestDigest, PathBuf)>, CacheOutcome), ManifestSpoolLookupError> {
+        let exists = self
+            .refresh_if_stale(spool_dir)
+            .map_err(ManifestSpoolLookupError::SpoolScan)?;
+        if !exists {
+            return Ok((None, CacheOutcome::Miss));
+        }
+        let key = ManifestSpoolKey::from_record(record);
+        if let Some(entries) = self.entries.get_mut(&key) {
+            return Self::select_manifest_candidate(entries, record.manifest_hash);
+        }
+
+        let exists = self
+            .force_refresh(spool_dir)
+            .map_err(ManifestSpoolLookupError::SpoolScan)?;
+        if !exists {
+            return Ok((None, CacheOutcome::Miss));
+        }
+        match self.entries.get_mut(&key) {
+            Some(entries) => {
+                let (observed, outcome) =
+                    Self::select_manifest_candidate(entries, record.manifest_hash)?;
+                Ok((observed, outcome.merge(CacheOutcome::Miss)))
+            }
+            None => Ok((None, CacheOutcome::Miss)),
+        }
+    }
+
+    fn select_manifest_candidate(
+        entries: &mut [ManifestSpoolEntry],
+        expected: ManifestDigest,
+    ) -> Result<(Option<(ManifestDigest, PathBuf)>, CacheOutcome), ManifestSpoolLookupError> {
+        if entries.is_empty() {
+            return Ok((None, CacheOutcome::Miss));
+        }
+        let mut outcome = CacheOutcome::Hit;
+        let mut observed = None;
+        for entry in entries {
+            let (digest, entry_outcome) = entry.digest()?;
+            outcome = outcome.merge(entry_outcome);
+            if observed.is_none() {
+                observed = Some((digest, entry.path.clone()));
+            }
+            if digest == expected {
+                return Ok((Some((digest, entry.path.clone())), outcome));
+            }
+        }
+        Ok((observed, outcome))
+    }
+}
+
+fn parse_manifest_spool_key(name: &str) -> Option<ManifestSpoolKey> {
+    let name = name.strip_suffix(".norito")?;
+    let rest = name.strip_prefix("manifest-")?;
+    let mut parts = rest.splitn(5, '-');
+    let lane_hex = parts.next()?;
+    let epoch_hex = parts.next()?;
+    let sequence_hex = parts.next()?;
+    let ticket_hex = parts.next()?;
+    let lane = u32::from_str_radix(lane_hex, 16).ok()?;
+    let epoch = u64::from_str_radix(epoch_hex, 16).ok()?;
+    let sequence = u64::from_str_radix(sequence_hex, 16).ok()?;
+    let mut ticket_bytes = [0u8; 32];
+    hex::decode_to_slice(ticket_hex, &mut ticket_bytes).ok()?;
+    Some(ManifestSpoolKey {
+        lane,
+        epoch,
+        sequence,
+        ticket: StorageTicketId::new(ticket_bytes),
+    })
 }
 
 /// Errors raised by the manifest guard when validating DA commitments.
@@ -8389,71 +8845,91 @@ fn manifest_guard_reason(error: &ManifestGuardError) -> crate::telemetry::Manife
 }
 
 fn enforce_manifest_available_for_commitment(
+    manifest_cache: &mut ManifestSpoolCache,
     spool_dir: &Path,
     record: &DaCommitmentRecord,
-) -> Result<(), ManifestGuardError> {
+) -> (CacheOutcome, Result<(), ManifestGuardError>) {
     let lane = record.lane_id.as_u32();
     let epoch = record.epoch;
     let sequence = record.sequence;
-    let Some(path) = find_manifest_for_commitment(spool_dir, record).map_err(|source| {
-        ManifestGuardError::SpoolScan {
-            lane,
-            epoch,
-            sequence,
-            spool: spool_dir.to_path_buf(),
-            source,
-        }
-    })?
-    else {
-        return Err(ManifestGuardError::Missing {
-            lane,
-            epoch,
-            sequence,
-            spool: spool_dir.to_path_buf(),
-        });
+    let (observed, cache_outcome) =
+        match manifest_cache.manifest_digest_for_commitment(spool_dir, record) {
+            Ok(result) => result,
+            Err(err) => {
+                let guard_err = match err {
+                    ManifestSpoolLookupError::SpoolScan(source) => ManifestGuardError::SpoolScan {
+                        lane,
+                        epoch,
+                        sequence,
+                        spool: spool_dir.to_path_buf(),
+                        source,
+                    },
+                    ManifestSpoolLookupError::Read { path, source } => ManifestGuardError::Read {
+                        lane,
+                        epoch,
+                        sequence,
+                        path,
+                        source,
+                    },
+                };
+                return (CacheOutcome::Miss, Err(guard_err));
+            }
+        };
+
+    let Some((observed, path)) = observed else {
+        return (
+            cache_outcome,
+            Err(ManifestGuardError::Missing {
+                lane,
+                epoch,
+                sequence,
+                spool: spool_dir.to_path_buf(),
+            }),
+        );
     };
 
-    let bytes = fs::read(&path).map_err(|source| ManifestGuardError::Read {
-        lane,
-        epoch,
-        sequence,
-        path: path.clone(),
-        source,
-    })?;
-    let observed = ManifestDigest::new(*blake3_hash(&bytes).as_bytes());
     if observed != record.manifest_hash {
-        return Err(ManifestGuardError::HashMismatch {
-            lane,
-            epoch,
-            sequence,
-            expected_hex: hex::encode(record.manifest_hash.as_bytes()),
-            observed_hex: hex::encode(observed.as_bytes()),
-            path,
-        });
+        return (
+            cache_outcome,
+            Err(ManifestGuardError::HashMismatch {
+                lane,
+                epoch,
+                sequence,
+                expected_hex: hex::encode(record.manifest_hash.as_bytes()),
+                observed_hex: hex::encode(observed.as_bytes()),
+                path,
+            }),
+        );
     }
 
-    Ok(())
+    (cache_outcome, Ok(()))
 }
 
 fn manifest_guard_outcome(
+    manifest_cache: &mut ManifestSpoolCache,
     spool_dir: &Path,
     record: &DaCommitmentRecord,
     policy: DaManifestPolicy,
-) -> ManifestGuardOutcome {
-    match enforce_manifest_available_for_commitment(spool_dir, record) {
+) -> (ManifestGuardOutcome, CacheOutcome) {
+    let (cache_outcome, result) =
+        enforce_manifest_available_for_commitment(manifest_cache, spool_dir, record);
+    let outcome = match result {
         Ok(()) => ManifestGuardOutcome::Pass,
         Err(err @ ManifestGuardError::HashMismatch { .. }) => ManifestGuardOutcome::Reject(err),
         Err(err) => match policy {
             DaManifestPolicy::Strict => ManifestGuardOutcome::Reject(err),
             DaManifestPolicy::AuditOnly => ManifestGuardOutcome::Warn(err),
         },
-    }
+    };
+    (outcome, cache_outcome)
 }
 
 fn manifests_available_for_block(
+    manifest_cache: &mut ManifestSpoolCache,
     spool_dir: &Path,
     lane_config: &LaneConfigSnapshot,
     block: &SignedBlock,
+    cache_outcome: &mut CacheOutcome,
 ) -> Result<Vec<ManifestGuardError>, ManifestGuardError> {
     let Some(bundle) = block.da_commitments() else {
         return Ok(Vec::new());
@@ -8462,7 +8938,9 @@ fn manifests_available_for_block(
     let mut warnings = Vec::new();
     for record in &bundle.commitments {
         let policy = lane_config.manifest_policy(record.lane_id);
-        match manifest_guard_outcome(spool_dir, record, policy) {
+        let (outcome, cache) = manifest_guard_outcome(manifest_cache, spool_dir, record, policy);
+        *cache_outcome = cache_outcome.merge(cache);
+        match outcome {
             ManifestGuardOutcome::Pass => {}
             ManifestGuardOutcome::Warn(err) => warnings.push(err),
             ManifestGuardOutcome::Reject(err) => return Err(err),
@@ -8473,11 +8951,14 @@ fn manifests_available_for_block(
 }
 
 fn manifest_available_for_commitment(
+    manifest_cache: &mut ManifestSpoolCache,
     spool_dir: &Path,
     record: &DaCommitmentRecord,
     policy: DaManifestPolicy,
-) -> bool {
-    match manifest_guard_outcome(spool_dir, record, policy) {
+) -> (bool, CacheOutcome) {
+    let (outcome, cache_outcome) =
+        manifest_guard_outcome(manifest_cache, spool_dir, record, policy);
+    let allowed = match outcome {
         ManifestGuardOutcome::Pass => true,
         ManifestGuardOutcome::Warn(err) => {
             warn!(
@@ -8500,7 +8981,8 @@ fn manifest_available_for_commitment(
             );
             false
         }
-    }
+    };
+    (allowed, cache_outcome)
 }
 
 fn validate_da_bundle_caps(

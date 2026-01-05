@@ -153,24 +153,7 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
             }
             Item::State(st) => {
                 let ty = convert_type_expr(&st.ty)?;
-                if let Type::Map(k, v) = &ty {
-                    if !is_supported_durable_key_type(k) {
-                        return Err(SemanticError {
-                            message: format!(
-                                "state Map key type `{}` is not supported for durable storage; use int or pointer types",
-                                type_name(k)
-                            ),
-                        });
-                    }
-                    if !is_supported_durable_value_type(v) {
-                        return Err(SemanticError {
-                            message: format!(
-                                "state Map value type `{}` is not supported for durable storage; use int, bool, Json, Blob, or pointer types",
-                                type_name(v)
-                            ),
-                        });
-                    }
-                }
+                validate_state_type(&ty)?;
                 state.insert(st.name.clone(), ty);
             }
             Item::Function(f) => {
@@ -249,6 +232,42 @@ fn is_supported_durable_key_type(ty: &Type) -> bool {
         other if is_pointer_type(&other) => true,
         _ => false,
     }
+}
+
+fn is_in_memory_map_word_type(ty: &Type) -> bool {
+    match resolve_struct_type(ty) {
+        Type::Int | Type::Bool | Type::String | Type::Blob | Type::Bytes | Type::Json => true,
+        other if is_pointer_type(&other) => true,
+        _ => false,
+    }
+}
+
+fn ensure_in_memory_map_word_types(map_expr: &TypedExpr) -> Result<(), SemanticError> {
+    if typed_map_expr_is_state(map_expr) {
+        return Ok(());
+    }
+    match resolve_struct_type(&map_expr.ty) {
+        Type::Map(k, v) => {
+            if !is_in_memory_map_word_type(&k) {
+                return Err(SemanticError {
+                    message: format!(
+                        "in-memory Map key type `{}` is not supported; use int, bool, string, Blob, bytes, Json, or pointer types",
+                        type_name(&k)
+                    ),
+                });
+            }
+            if !is_in_memory_map_word_type(&v) {
+                return Err(SemanticError {
+                    message: format!(
+                        "in-memory Map value type `{}` is not supported; use int, bool, string, Blob, bytes, Json, or pointer types",
+                        type_name(&v)
+                    ),
+                });
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn validate_state_type(ty: &Type) -> Result<(), SemanticError> {
@@ -652,6 +671,15 @@ fn analyze_statement(
             let expected = vars.get(name).cloned().ok_or_else(|| SemanticError {
                 message: format!("undefined variable {name}"),
             })?;
+            if is_state_identifier(name)
+                && matches!(resolve_struct_type(&expected), Type::Map(_, _))
+            {
+                return Err(SemanticError {
+                    message:
+                        "E_STATE_MAP_ALIAS: state maps cannot be reassigned; use map indexing."
+                            .into(),
+                });
+            }
             let mut expr = analyze_expr(value, vars)?;
             if is_state_map_expr(&expr) {
                 return Err(SemanticError {
@@ -681,6 +709,7 @@ fn analyze_statement(
                         Type::Map(k, v) => {
                             ensure_assignable(&k, &key_t.ty)?;
                             ensure_assignable(&v, &val_t.ty)?;
+                            ensure_in_memory_map_word_types(&map_t)?;
                         }
                         other => {
                             return Err(SemanticError {
@@ -702,6 +731,15 @@ fn analyze_statement(
                     let expected = vars.get(name).cloned().ok_or_else(|| SemanticError {
                         message: format!("undefined variable {name}"),
                     })?;
+                    if is_state_identifier(name)
+                        && matches!(resolve_struct_type(&expected), Type::Map(_, _))
+                    {
+                        return Err(SemanticError {
+                            message:
+                                "E_STATE_MAP_ALIAS: state maps cannot be reassigned; use map indexing."
+                                    .into(),
+                        });
+                    }
                     let mut expr = analyze_expr(value, vars)?;
                     if is_state_map_expr(&expr) {
                         return Err(SemanticError {
@@ -895,6 +933,7 @@ fn analyze_statement(
                 }
                 let base_map = analyze_expr(map, &mut vars.clone())?;
                 ensure_state_map_iter_supported(&base_map)?;
+                ensure_in_memory_map_word_types(&base_map)?;
                 let mut local_vars = vars.clone();
                 let (k_ty, v_ty) = match &base_map.ty {
                     Type::Map(k, v) => ((**k).clone(), (**v).clone()),
@@ -941,6 +980,7 @@ fn analyze_statement(
                     let base_map = analyze_expr(&args[0], &mut vars.clone())?;
                     // Extend a local scope with loop variables bound to inferred types
                     ensure_state_map_iter_supported(&base_map)?;
+                    ensure_in_memory_map_word_types(&base_map)?;
                     let mut local_vars = vars.clone();
                     let (k_ty, v_ty) = match &base_map.ty {
                         Type::Map(k, v) => ((**k).clone(), (**v).clone()),
@@ -996,6 +1036,7 @@ fn analyze_statement(
                     }
                     let base_map = analyze_expr(&args[0], &mut vars.clone())?;
                     ensure_state_map_iter_supported(&base_map)?;
+                    ensure_in_memory_map_word_types(&base_map)?;
                     let mut local_vars = vars.clone();
                     let (k_ty, v_ty) = match &base_map.ty {
                         Type::Map(k, v) => ((**k).clone(), (**v).clone()),
@@ -1069,6 +1110,7 @@ fn analyze_statement(
                     // range(start, n)
                     let base_map = analyze_expr(&args[0], &mut vars.clone())?;
                     ensure_state_map_iter_supported(&base_map)?;
+                    ensure_in_memory_map_word_types(&base_map)?;
                     let mut local_vars = vars.clone();
                     let (k_ty, v_ty) = match &base_map.ty {
                         Type::Map(k, v) => ((**k).clone(), (**v).clone()),
@@ -1138,6 +1180,7 @@ fn analyze_statement(
                     }
                     let base_map = analyze_expr(&args[0], &mut vars.clone())?;
                     ensure_state_map_iter_supported(&base_map)?;
+                    ensure_in_memory_map_word_types(&base_map)?;
                     let mut local_vars = vars.clone();
                     let (k_ty, v_ty) = match &base_map.ty {
                         Type::Map(k, v) => ((**k).clone(), (**v).clone()),
@@ -1467,6 +1510,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
             match tgt.ty.clone() {
                 Type::Map(k, v) => {
                     ensure_assignable(&k, &idx.ty)?;
+                    ensure_in_memory_map_word_types(&tgt)?;
                     Ok(TypedExpr {
                         expr: ExprKind::Index {
                             target: Box::new(tgt),
@@ -1750,6 +1794,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     match &arg_typed[0].ty {
                         Type::Map(k, _v) => {
                             ensure_assignable(&k.clone(), &arg_typed[1].ty)?;
+                            ensure_in_memory_map_word_types(&arg_typed[0])?;
                             Ok(TypedExpr {
                                 expr: ExprKind::Call {
                                     name: name.clone(),
@@ -1776,6 +1821,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     match &arg_typed[0].ty {
                         Type::Map(k, _v) => {
                             ensure_assignable(&k.clone(), &arg_typed[1].ty)?;
+                            ensure_in_memory_map_word_types(&arg_typed[0])?;
                             Ok(TypedExpr {
                                 expr: ExprKind::Call {
                                     name: name.clone(),
@@ -1818,6 +1864,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     let resolved_key_ty = resolve_struct_type(&map_key_ty);
                     let resolved_value_ty = resolve_struct_type(&map_value_ty);
                     ensure_assignable(&resolved_key_ty, &call_args[1].ty)?;
+                    ensure_in_memory_map_word_types(&call_args[0])?;
 
                     if original_len == 2 {
                         match resolve_struct_type(&resolved_value_ty) {
@@ -4144,6 +4191,19 @@ mod tests {
     }
 
     #[test]
+    fn state_map_reassignment_is_rejected() {
+        let program = parse(
+            "state M: Map<int, int>; \
+             fn main() { \
+                 M = Map::new(); \
+             }",
+        )
+        .expect("parse state map reassignment");
+        let err = analyze(&program).expect_err("reassigning a state map should error");
+        assert!(err.message.contains("E_STATE_MAP_ALIAS"));
+    }
+
+    #[test]
     fn state_map_cannot_be_passed_to_user_fn() {
         let program = parse(
             "state M: Map<int, int>; \
@@ -4336,6 +4396,32 @@ mod tests {
     }
 
     #[test]
+    fn in_memory_map_rejects_tuple_key() {
+        let program = parse(
+            "fn f() { \
+                let m: Map<(int, int), int> = Map::new(); \
+                let _x = contains(m, (1, 2)); \
+            }",
+        )
+        .expect("parse tuple map key");
+        let err = analyze(&program).expect_err("tuple map key should error");
+        assert!(err.message.contains("in-memory Map key type"));
+    }
+
+    #[test]
+    fn in_memory_map_rejects_tuple_value() {
+        let program = parse(
+            "fn f() { \
+                let m: Map<int, (int, int)> = Map::new(); \
+                let _x = m[0]; \
+            }",
+        )
+        .expect("parse tuple map value");
+        let err = analyze(&program).expect_err("tuple map value should error");
+        assert!(err.message.contains("in-memory Map value type"));
+    }
+
+    #[test]
     fn blob_bytes_equality_is_allowed() {
         let program = parse(
             "fn f() { let b: bytes = blob(\"hi\"); let c: Blob = blob(\"hi\"); let _x = b == c; }",
@@ -4346,16 +4432,14 @@ mod tests {
 
     #[test]
     fn state_map_key_type_is_validated() {
-        let program = parse("state M: Map<string, int>; fn f() {}")
-            .expect("parse state map");
+        let program = parse("state M: Map<string, int>; fn f() {}").expect("parse state map");
         let err = analyze(&program).expect_err("state map key should be validated");
         assert!(err.message.contains("state Map key type"));
     }
 
     #[test]
     fn field_assignment_is_rejected() {
-        let program = parse("fn f() { let t = (1, 2); t.0 = 3; }")
-            .expect("parse field assignment");
+        let program = parse("fn f() { let t = (1, 2); t.0 = 3; }").expect("parse field assignment");
         let err = analyze(&program).expect_err("field assignment should error");
         assert!(err.message.contains("assignment target must be"));
     }
@@ -4364,5 +4448,20 @@ mod tests {
     fn info_accepts_int() {
         let program = parse("fn f() { info(42); }").expect("parse info");
         analyze(&program).expect("info should accept int");
+    }
+
+    #[test]
+    fn state_scalar_type_is_validated() {
+        let program = parse("state string label; fn f() {}").expect("parse state");
+        let err = analyze(&program).expect_err("unsupported state type should error");
+        assert!(err.message.contains("state type `string`"));
+    }
+
+    #[test]
+    fn state_struct_field_type_is_validated() {
+        let program =
+            parse("struct S { label: string } state S s; fn f() {}").expect("parse state struct");
+        let err = analyze(&program).expect_err("unsupported state field should error");
+        assert!(err.message.contains("state type `string`"));
     }
 }

@@ -219,6 +219,77 @@ impl Root {
             self.nexus.routing_policy = sora_routing_policy();
         }
     }
+
+    /// Apply Nexus storage budgets to component-level caps.
+    ///
+    /// This is a best-effort configuration pass that only affects Nexus-enabled nodes.
+    pub fn apply_storage_budget(&mut self) {
+        if !self.nexus.enabled {
+            return;
+        }
+
+        let max_wsv_mem = self.nexus.storage.max_wsv_memory_bytes.get();
+        if max_wsv_mem > 0 {
+            self.tiered_state.hot_retained_bytes =
+                min_nonzero_bytes(self.tiered_state.hot_retained_bytes, max_wsv_mem);
+            if !self.tiered_state.enabled {
+                self.tiered_state.enabled = true;
+            }
+            if self.tiered_state.cold_store_root.is_none() {
+                self.tiered_state.cold_store_root = Some(PathBuf::from(
+                    defaults::tiered_state::DEFAULT_COLD_STORE_ROOT,
+                ));
+            }
+        }
+
+        let max_disk = self.nexus.storage.max_disk_usage_bytes.get();
+        if max_disk == 0 {
+            return;
+        }
+
+        let weights = self.nexus.storage.disk_budget_weights;
+        let total_bps = u64::from(weights.total_bps().max(1));
+        let budget = |bps: u16| max_disk.saturating_mul(u64::from(bps)) / total_bps;
+
+        let mut kura_budget = budget(weights.kura_blocks_bps);
+        let wsv_budget = budget(weights.wsv_snapshots_bps);
+        let sorafs_budget = budget(weights.sorafs_bps);
+        let soranet_budget = budget(weights.soranet_spool_bps);
+        let soravpn_budget = budget(weights.soravpn_spool_bps);
+
+        let allocated = kura_budget
+            .saturating_add(wsv_budget)
+            .saturating_add(sorafs_budget)
+            .saturating_add(soranet_budget)
+            .saturating_add(soravpn_budget);
+        let remainder = max_disk.saturating_sub(allocated);
+        kura_budget = kura_budget.saturating_add(remainder);
+
+        let soranet_spool_budget = soranet_budget.saturating_add(soravpn_budget);
+        self.kura.max_disk_usage_bytes =
+            min_nonzero_bytes(self.kura.max_disk_usage_bytes, kura_budget);
+        self.tiered_state.max_cold_bytes =
+            min_nonzero_bytes(self.tiered_state.max_cold_bytes, wsv_budget);
+        self.torii.sorafs_storage.max_capacity_bytes =
+            min_nonzero_bytes(self.torii.sorafs_storage.max_capacity_bytes, sorafs_budget);
+        self.streaming.soranet.provision_spool_max_bytes = min_nonzero_bytes(
+            self.streaming.soranet.provision_spool_max_bytes,
+            soranet_spool_budget,
+        );
+        // TODO: split SoraVPN spool caps once local VPN storage is implemented.
+    }
+}
+
+fn min_nonzero_bytes(current: Bytes<u64>, limit: u64) -> Bytes<u64> {
+    if limit == 0 {
+        return current;
+    }
+    let current_val = current.get();
+    if current_val == 0 {
+        Bytes(limit)
+    } else {
+        Bytes(current_val.min(limit))
+    }
 }
 
 pub(crate) fn sora_lane_catalog() -> LaneCatalog {
@@ -428,6 +499,44 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .expect("lane config should be preserved")
                 .alias,
             "beta"
+        );
+    }
+
+    #[test]
+    fn apply_storage_budget_clamps_component_caps() {
+        let mut root = minimal_root();
+        root.nexus.enabled = true;
+        root.nexus.storage.max_disk_usage_bytes = Bytes(1_000);
+        root.nexus.storage.max_wsv_memory_bytes = Bytes(512);
+        root.nexus.storage.disk_budget_weights = NexusStorageWeights {
+            kura_blocks_bps: 5_000,
+            wsv_snapshots_bps: 2_000,
+            sorafs_bps: 2_000,
+            soranet_spool_bps: 500,
+            soravpn_spool_bps: 500,
+        };
+        root.tiered_state.enabled = false;
+        root.tiered_state.cold_store_root = None;
+        root.kura.max_disk_usage_bytes = Bytes(0);
+        root.tiered_state.max_cold_bytes = Bytes(0);
+        root.torii.sorafs_storage.max_capacity_bytes = Bytes(0);
+        root.streaming.soranet.provision_spool_max_bytes = Bytes(0);
+
+        root.apply_storage_budget();
+
+        assert_eq!(root.kura.max_disk_usage_bytes.get(), 500);
+        assert_eq!(root.tiered_state.max_cold_bytes.get(), 200);
+        assert_eq!(root.torii.sorafs_storage.max_capacity_bytes.get(), 200);
+        assert_eq!(root.streaming.soranet.provision_spool_max_bytes.get(), 100);
+        assert!(root.tiered_state.enabled, "tiered state should be enabled");
+        assert_eq!(root.tiered_state.hot_retained_bytes.get(), 512);
+        assert_eq!(
+            root.tiered_state
+                .cold_store_root
+                .as_ref()
+                .expect("cold store root defaulted")
+                .as_os_str(),
+            defaults::tiered_state::DEFAULT_COLD_STORE_ROOT
         );
     }
 }
@@ -1849,11 +1958,73 @@ impl Default for LaneRelayEmergency {
     }
 }
 
+/// Storage budget configuration for Nexus-enabled nodes.
+#[derive(Debug, Clone, Copy)]
+pub struct NexusStorage {
+    /// Aggregate on-disk storage budget (bytes).
+    pub max_disk_usage_bytes: Bytes<u64>,
+    /// WSV hot-tier serialized payload budget (bytes).
+    pub max_wsv_memory_bytes: Bytes<u64>,
+    /// Budget weights for dividing the disk cap across subsystems.
+    pub disk_budget_weights: NexusStorageWeights,
+}
+
+impl Default for NexusStorage {
+    fn default() -> Self {
+        Self {
+            max_disk_usage_bytes: defaults::nexus::storage::MAX_DISK_USAGE_BYTES,
+            max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
+            disk_budget_weights: NexusStorageWeights::default(),
+        }
+    }
+}
+
+/// Basis-point budget weights for Nexus storage subsystems.
+#[derive(Debug, Clone, Copy)]
+pub struct NexusStorageWeights {
+    /// Budget share for Kura block storage (basis points).
+    pub kura_blocks_bps: u16,
+    /// Budget share for tiered-state cold snapshots (basis points).
+    pub wsv_snapshots_bps: u16,
+    /// Budget share for SoraFS storage (basis points).
+    pub sorafs_bps: u16,
+    /// Budget share for SoraNet route spools (basis points).
+    pub soranet_spool_bps: u16,
+    /// Budget share reserved for future SoraVPN storage (basis points).
+    pub soravpn_spool_bps: u16,
+}
+
+impl NexusStorageWeights {
+    /// Total basis points across all weights.
+    #[must_use]
+    pub const fn total_bps(self) -> u32 {
+        self.kura_blocks_bps as u32
+            + self.wsv_snapshots_bps as u32
+            + self.sorafs_bps as u32
+            + self.soranet_spool_bps as u32
+            + self.soravpn_spool_bps as u32
+    }
+}
+
+impl Default for NexusStorageWeights {
+    fn default() -> Self {
+        Self {
+            kura_blocks_bps: defaults::nexus::storage::KURA_BLOCKS_BPS,
+            wsv_snapshots_bps: defaults::nexus::storage::WSV_SNAPSHOTS_BPS,
+            sorafs_bps: defaults::nexus::storage::SORAFS_BPS,
+            soranet_spool_bps: defaults::nexus::storage::SORANET_SPOOL_BPS,
+            soravpn_spool_bps: defaults::nexus::storage::SORAVPN_SPOOL_BPS,
+        }
+    }
+}
+
 /// Nexus configuration describing lanes, data spaces, and routing policy.
 #[derive(Debug, Clone)]
 pub struct Nexus {
     /// Whether multilane (Nexus/Iroha3) features are enabled at runtime.
     pub enabled: bool,
+    /// Storage budget configuration for Nexus-enabled nodes.
+    pub storage: NexusStorage,
     /// Staking guardrails for public lanes.
     pub staking: NexusStaking,
     /// Universal fee schedule for Nexus transactions.
@@ -1891,6 +2062,7 @@ impl Default for Nexus {
     fn default() -> Self {
         Self {
             enabled: false,
+            storage: NexusStorage::default(),
             staking: NexusStaking::default(),
             fees: NexusFees::default(),
             endorsement: NexusEndorsement::default(),
@@ -2678,10 +2850,17 @@ pub struct TieredState {
     pub enabled: bool,
     /// Maximum number of keys to keep hot (0 = unlimited).
     pub hot_retained_keys: usize,
+    /// Hot-tier byte budget based on serialized Norito JSON size (0 = unlimited).
+    /// Grace retention may temporarily exceed this budget.
+    pub hot_retained_bytes: Bytes<u64>,
+    /// Minimum snapshots to retain newly hot entries before demotion (0 = disabled).
+    pub hot_retained_grace_snapshots: u64,
     /// Optional on-disk root for cold shards.
     pub cold_store_root: Option<PathBuf>,
     /// Number of snapshots to retain on disk (0 = keep all).
     pub max_snapshots: usize,
+    /// Optional cold-tier byte budget across snapshots (0 = unlimited).
+    pub max_cold_bytes: Bytes<u64>,
 }
 
 /// Economics configuration for oracle slashing and rewards.
@@ -3133,6 +3312,8 @@ pub struct Kura {
     pub init_mode: InitMode,
     /// Directory path for on-disk storage.
     pub store_dir: WithOrigin<PathBuf>,
+    /// Maximum on-disk footprint for Kura (bytes, 0 = unlimited).
+    pub max_disk_usage_bytes: Bytes<u64>,
     /// Number of recent blocks kept in memory.
     pub blocks_in_memory: NonZeroUsize,
     /// Number of recent roster records retained for block-sync validation.
@@ -5482,6 +5663,8 @@ pub struct StreamingSoranet {
     pub channel_salt: String,
     /// Filesystem spool where privacy-route updates are staged for exit relays.
     pub provision_spool_dir: PathBuf,
+    /// Maximum on-disk footprint for the SoraNet provision spool (0 = unlimited).
+    pub provision_spool_max_bytes: Bytes<u64>,
 }
 
 impl StreamingSoranet {
@@ -5497,6 +5680,7 @@ impl StreamingSoranet {
                 .unwrap_or(StreamingSoranetAccessKind::Authenticated),
             channel_salt: defaults::streaming::soranet::CHANNEL_SALT.to_owned(),
             provision_spool_dir: PathBuf::from(defaults::streaming::soranet::PROVISION_SPOOL_DIR),
+            provision_spool_max_bytes: defaults::streaming::soranet::PROVISION_SPOOL_MAX_BYTES,
         }
     }
 }

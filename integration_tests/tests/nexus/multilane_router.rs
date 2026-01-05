@@ -188,6 +188,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
     let kura_cfg = KuraConfig {
         init_mode: InitMode::Strict,
         store_dir: WithOrigin::inline(store_dir.clone()),
+        max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
         debug_output_new_blocks: false,
         merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,

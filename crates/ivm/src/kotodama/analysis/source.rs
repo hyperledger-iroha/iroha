@@ -121,7 +121,7 @@ fn literal_i64(expr: &TypedExpr) -> Option<i64> {
         ExprKind::Unary {
             op: crate::kotodama::ast::UnaryOp::Neg,
             expr,
-        } => literal_i64(expr).map(|v| -v),
+        } => literal_i64(expr).and_then(|v| v.checked_neg()),
         _ => None,
     }
 }
@@ -643,6 +643,18 @@ mod tests {
             findings.iter().any(|f| f.code == "static-infinite-loop"),
             "expected loop finding, got {findings:?}"
         );
+    }
+
+    #[test]
+    fn unary_neg_on_i64_min_literal_does_not_panic() {
+        let findings = analyze_static(
+            r#"
+            fn neg_min() -> int {
+                return -(-9223372036854775808);
+            }
+        "#,
+        );
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
     }
 
     #[test]

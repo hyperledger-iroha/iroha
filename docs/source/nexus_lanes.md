@@ -88,6 +88,15 @@ LaneConfigEntry {
 - **Retention policy** — public lanes retain full block bodies; commitment-only lanes may compact older bodies after checkpoints because commitments are authoritative. Confidential lanes keep ciphertext journals in dedicated segments to avoid blocking other workloads.
 - **Tooling** — `cargo xtask nexus-lane-maintenance --config <path> [--compact-retired]` inspects `<store>/blocks` and `<store>/merge_ledger` using the derived `LaneConfig`, reports active vs retired segments, and archives retired directories/logs under `<store>/retired/...` to keep evidence deterministic. Maintenance utilities (`kagami`, CLI admin commands) should reuse the slugged namespace when exposing metrics, Prometheus labels, or archiving Kura segments.
 
+## Storage Budgets
+
+- `nexus.storage.max_disk_usage_bytes` defines the total on-disk budget that Nexus nodes should consume across Kura, cold WSV snapshots, SoraFS storage, and streaming spools (SoraNet/SoraVPN).
+- `nexus.storage.max_wsv_memory_bytes` caps the hot WSV tier by propagating a serialized-payload byte budget into `tiered_state.hot_retained_bytes`; grace retention may temporarily exceed the budget, but the overflow is observable via telemetry.
+- `nexus.storage.weights` splits the disk budget across components using basis points (must sum to 10,000). The derived caps are applied to `kura.max_disk_usage_bytes`, `tiered_state.max_cold_bytes`, `sorafs.storage.max_capacity_bytes`, and `streaming.soranet.provision_spool_max_bytes`.
+- Kura's storage budget enforcement sums block-store bytes across active + retired lane segments and includes queued blocks not yet persisted to avoid overshoot during write lag.
+- SoraVPN spool budgets are currently folded into the SoraNet provision spool cap until dedicated VPN-local storage is implemented.
+- Per-component limits still apply: when a component has an explicit non-zero cap, the smaller of the explicit cap and the derived Nexus budget is enforced.
+
 ## Routing & APIs
 
 - Torii REST/gRPC endpoints accept an optional `lane_id`; absence implies `lane_default`.
