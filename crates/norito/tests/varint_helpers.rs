@@ -34,3 +34,12 @@ fn compact_len_overflow_varint_rejected() {
     assert!(matches!(err, Error::LengthMismatch));
     core::reset_decode_state();
 }
+
+#[test]
+fn compact_len_rejects_non_canonical_varint() {
+    let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
+    let bytes = vec![0x80, 0x00]; // overlong encoding of zero
+    let err = core::read_len_dyn_slice(&bytes).expect_err("overlong varint");
+    assert!(matches!(err, Error::LengthMismatch));
+    core::reset_decode_state();
+}

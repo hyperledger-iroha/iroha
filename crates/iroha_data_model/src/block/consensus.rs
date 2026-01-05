@@ -1946,26 +1946,6 @@ mod tests {
             .collect()
     }
 
-    fn sample_commit_certificate() -> CommitCertificate {
-        let roster = sample_roster();
-        CommitCertificate {
-            phase: CertPhase::Prepare,
-            subject_block_hash: dummy_hash(),
-            height: 5,
-            view: 2,
-            epoch: 1,
-            mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
-            validator_set_hash: HashOf::new(&roster),
-            validator_set_hash_version: 1,
-            validator_set: roster,
-            aggregate: CommitAggregate {
-                signers_bitmap: vec![0x0F],
-                bls_aggregate_signature: vec![0xAA, 0xBB, 0xCC],
-            },
-        }
-    }
-
     fn sample_commit_certificate_ref() -> CommitCertificateRef {
         CommitCertificateRef {
             height: 4,

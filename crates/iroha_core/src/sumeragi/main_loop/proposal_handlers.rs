@@ -89,7 +89,6 @@ impl Actor {
         &mut self,
         hint: super::message::ProposalHint,
     ) -> Result<()> {
-        let mut hint = hint;
         let highest_qc = hint.highest_cert;
         let height = hint.height;
         let view = hint.view;
@@ -709,17 +708,14 @@ impl Actor {
             );
             return Ok(());
         }
-        {
-            let pending = match self.pending.pending_blocks.entry(block_hash) {
-                Entry::Occupied(mut occ) => {
-                    occ.get_mut()
-                        .replace_block(block, payload_hash, height, view);
-                    occ.into_mut()
-                }
-                Entry::Vacant(vac) => {
-                    vac.insert(PendingBlock::new(block, payload_hash, height, view))
-                }
-            };
+        match self.pending.pending_blocks.entry(block_hash) {
+            Entry::Occupied(mut occ) => {
+                occ.get_mut()
+                    .replace_block(block, payload_hash, height, view);
+            }
+            Entry::Vacant(vac) => {
+                vac.insert(PendingBlock::new(block, payload_hash, height, view));
+            }
         }
 
         let mut status_update = None;

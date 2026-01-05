@@ -1514,6 +1514,10 @@ fn varint_encoded_len(value: u64) -> usize {
     encode_varint(value, &mut buf)
 }
 
+pub(crate) fn varint_encoded_len_u64(value: u64) -> usize {
+    varint_encoded_len(value)
+}
+
 fn decode_varint_from_slice(bytes: &[u8]) -> Result<(u64, usize), Error> {
     if bytes.is_empty() {
         return Err(Error::LengthMismatch);
@@ -1527,7 +1531,11 @@ fn decode_varint_from_slice(bytes: &[u8]) -> Result<(u64, usize), Error> {
         }
         result |= payload << shift;
         if byte & 0x80 == 0 {
-            return Ok((result, idx + 1));
+            let used = idx + 1;
+            if used != varint_encoded_len(result) {
+                return Err(Error::LengthMismatch);
+            }
+            return Ok((result, used));
         }
         shift += 7;
         if shift >= 64 {
@@ -4395,9 +4403,11 @@ pub mod stream {
         pub(crate) fn read_varint_u64(&mut self) -> Result<u64, Error> {
             let mut result = 0u64;
             let mut shift = 0u32;
+            let mut used = 0usize;
             for _ in 0..super::MAX_VARINT_BYTES {
                 let mut byte = [0u8; 1];
                 self.read_exact(&mut byte)?;
+                used += 1;
                 let b = byte[0];
                 let payload = (b & 0x7f) as u64;
                 if shift == 63 && payload > 1 {
@@ -4405,6 +4415,9 @@ pub mod stream {
                 }
                 result |= payload << shift;
                 if b & 0x80 == 0 {
+                    if used != super::varint_encoded_len(result) {
+                        return Err(Error::LengthMismatch);
+                    }
                     return Ok(result);
                 }
                 shift += 7;

@@ -388,18 +388,18 @@ let metadata: [String: ToriiJSONValue] = [
 ]
 ```
 
-When Torii returns FASTPQ witness payloads (`/v1/offline/transfers/proof`), use the native bridge
-helper to derive proof bytes:
+Torii builds FASTPQ witness payloads from the transfer payload (pre-admission) or a settled bundle
+(`POST /v1/offline/transfers/proof`). Use the native bridge helper to derive proof bytes:
 
 ```swift
 let sumRequest = try await torii.requestOfflineTransferProof(
-    .init(bundleIdHex: bundleIdHex, kind: "sum")
+    .init(transfer: transfer, kind: "sum")
 )
 let counterRequest = try await torii.requestOfflineTransferProof(
-    .init(bundleIdHex: bundleIdHex, kind: "counter", counterCheckpoint: counterCheckpoint)
+    .init(transfer: transfer, kind: "counter", counterCheckpoint: counterCheckpoint)
 )
 let replayRequest = try await torii.requestOfflineTransferProof(
-    .init(bundleIdHex: bundleIdHex,
+    .init(transfer: transfer,
           kind: "replay",
           replayLogHeadHex: replayHeadHex,
           replayLogTailHex: replayTailHex)

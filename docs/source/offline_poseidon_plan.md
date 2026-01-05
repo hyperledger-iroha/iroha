@@ -115,7 +115,7 @@ giving the SDK/API layers a canonical schema as soon as the prover endpoints lan
 `iroha offline transfer proof --bundle <BUNDLE> --kind <sum|counter|replay>` (e.g.,
 `iroha offline transfer proof --bundle 11F7...C0DE --kind replay --replay-log-head ... --replay-log-tail ...`)
 so builders can fetch the Norito payloads directly from a node, and Torii exposes the same data via
-`POST /v1/offline/transfers/proof` (bundle id + kind, optional checkpoint/log hashes).
+`POST /v1/offline/transfers/proof` (transfer payload or bundle id + kind, optional checkpoint/log hashes).
 
 ### 5.2 Circuit Summaries
 

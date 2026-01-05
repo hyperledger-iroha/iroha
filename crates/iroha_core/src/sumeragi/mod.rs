@@ -253,7 +253,7 @@ mod tests {
         sync::{Arc, Mutex, mpsc},
     };
 
-    use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
+    use iroha_crypto::{Hash, KeyPair, SignatureOf};
     use iroha_data_model::{
         block::{
             BlockHeader, BlockSignature, SignedBlock,
@@ -4132,44 +4132,6 @@ impl SumeragiHandle {
                 },
             };
         match msg {
-            BlockMessage::CommitVote(vote) => {
-                let vote_ref = &vote;
-                let duplicate = !self.dedup_vote((
-                    Self::phase_id(vote_ref.phase),
-                    vote_ref.block_hash,
-                    vote_ref.height,
-                    vote_ref.view,
-                    vote_ref.epoch,
-                    vote_ref.signer,
-                ));
-                if duplicate {
-                    iroha_logger::debug!(
-                        phase = ?vote_ref.phase,
-                        height = vote_ref.height,
-                        view = vote_ref.view,
-                        epoch = vote_ref.epoch,
-                        signer = vote_ref.signer,
-                        block_hash = %vote_ref.block_hash,
-                        "dropping duplicate precommit vote from network"
-                    );
-                    return false;
-                }
-                iroha_logger::debug!(
-                    phase = ?vote_ref.phase,
-                    height = vote_ref.height,
-                    view = vote_ref.view,
-                    epoch = vote_ref.epoch,
-                    signer = vote_ref.signer,
-                    block_hash = %vote_ref.block_hash,
-                    "enqueueing precommit vote from network"
-                );
-                enqueue_blocking(
-                    &self.votes,
-                    BlockMessage::CommitVote(vote),
-                    "CommitVote",
-                    status::WorkerQueueKind::Votes,
-                )
-            }
             BlockMessage::CommitVote(vote) => {
                 let duplicate = !self.dedup_vote((
                     Self::phase_id(vote.phase),

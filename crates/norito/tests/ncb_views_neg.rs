@@ -200,6 +200,24 @@ fn str_bool_delta_ids_unterminated_varint() {
 }
 
 #[test]
+fn str_bool_delta_ids_non_canonical_varint() {
+    let rows: Vec<(u64, &str, bool)> = vec![(1, "a", true), (2, "b", false)];
+    let mut body = norito::columnar::encode_ncb_u64_str_bool_delta(&rows);
+    // Locate first delta varint (after header padding + base id).
+    let mut off = 5usize;
+    let mis = off & 7;
+    if mis != 0 {
+        off += 8 - mis;
+    }
+    off += 8;
+    // Replace canonical 0x02 with overlong 0x82 0x00.
+    body.insert(off, 0x82);
+    body[off + 1] = 0x00;
+    let res = norito::columnar::view_ncb_u64_str_bool(&body);
+    assert!(res.is_err());
+}
+
+#[test]
 fn enum_code_delta_unterminated_varint() {
     use norito::columnar::{EnumBorrow, encode_ncb_u64_enum_bool, view_ncb_u64_enum_bool};
     // Two CODE variants to ensure n_code >= 2 for delta varints

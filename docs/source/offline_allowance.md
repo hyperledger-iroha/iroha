@@ -397,9 +397,9 @@ host builders can stream identical witness bytes into the deterministic proof bu
 FASTPQ APIs. Refer to `crates/iroha_data_model/src/offline/mod.rs` for the canonical schema, and use
 `iroha offline transfer proof --bundle <BUNDLE> --kind sum` (counter/replay variants supported via
 `--kind {counter,replay}`) to dump the canonical Norito JSON for existing bundles. Torii exposes the
-same payloads over HTTP via `POST /v1/offline/transfers/proof` (body: `{ bundle_id_hex, kind,
-counter_checkpoint?, replay_log_head_hex?, replay_log_tail_hex? }`), returning the Norito JSON for
-the requested proof type.
+same payloads over HTTP via `POST /v1/offline/transfers/proof` and accepts either a transfer payload
+(`transfer`) or `{ bundle_id_hex, kind, counter_checkpoint?, replay_log_head_hex?,
+replay_log_tail_hex? }` for settled bundles, returning the Norito JSON for the requested proof type.
 
 For replay proofs, `replay_log_head_hex` / `replay_log_tail_hex` come from the receiver/POS
 anti-replay log (Torii does not derive or return them). The receiver maintains a local hash chain
@@ -712,7 +712,7 @@ CLI tools, and dashboards stay in sync with the roadmap requirements.
 | `POST` | `/v1/offline/settlements` | Submit a bundle for on-ledger settlement (submits `SubmitOfflineToOnlineTransfer`). |
 | `GET`  | `/v1/offline/settlements/{bundle_id_hex}` | Alias bundle detail endpoint. |
 | `POST` | `/v1/offline/settlements/query` | Alias bundle query endpoint. |
-| `POST` | `/v1/offline/transfers/proof` | Build `{sum,counter,replay}` witness payloads for a bundle. |
+| `POST` | `/v1/offline/transfers/proof` | Build `{sum,counter,replay}` witness payloads from a transfer payload or bundle id. |
 | `GET`  | `/v1/offline/receipts` | Audit list of flattened receipts extracted from settled bundles. |
 | `POST` | `/v1/offline/receipts/query` | Envelope-based queries for receipts. |
 | `POST` | `/v1/offline/spend-receipts` | Validate receipts and return their Poseidon `receipts_root`. |
@@ -732,12 +732,12 @@ When a request fails due to an offline validation rejection, Torii surfaces a st
 the `x-iroha-reject-code` response header (for example `certificate_expired`, `counter_conflict`,
 `max_tx_value_exceeded`, `allowance_exceeded`, `invoice_duplicate`).
 
-`/v1/offline/transfers/proof` accepts a Norito/JSON body
-`{ bundle_id_hex, kind, counter_checkpoint?, replay_log_head_hex?, replay_log_tail_hex? }`. The
-`kind` field selects the FASTPQ proof (`sum`, `counter`, or `replay`), optional `counter_checkpoint`
-overrides the inferred checkpoint (default = first receipt counter `- 1`), and replay proofs must
-provide both log hashes. The response mirrors the `OfflineProofRequest*` structs so SDKs can pass
-the payloads directly to the prover.
+`/v1/offline/transfers/proof` accepts a Norito/JSON body with either a `transfer` payload (for
+pre-admission bundles) or `{ bundle_id_hex, kind, counter_checkpoint?, replay_log_head_hex?,
+replay_log_tail_hex? }` (for settled bundles). The `kind` field selects the FASTPQ proof (`sum`,
+`counter`, or `replay`), optional `counter_checkpoint` overrides the inferred checkpoint (default =
+first receipt counter `- 1`), and replay proofs must provide both log hashes. The response mirrors
+the `OfflineProofRequest*` structs so SDKs can pass the payloads directly to the prover.
 
 Example request/response:
 

@@ -64,7 +64,8 @@ encoding:
     data.
   - If not set: `(len + 1)` u64 offsets, monotonic with the first offset 0.
 
-Varint encodings must fit in `u64`; overflow encodings are rejected.
+Varint encodings must fit in `u64` and use the shortest (canonical) encoding;
+overflow or overlong encodings are rejected.
 
 ## String Encoding
 
@@ -95,6 +96,13 @@ Maps encode deterministically with the same active layout flags:
     offset 0.
 - `HashMap` encodes entries in sorted key order for deterministic output;
   `BTreeMap` uses its natural ordering.
+
+## NCB Columnar (internal)
+
+NCB payloads are exact and canonical:
+- Alignment padding between NCB columns must be zero-filled.
+- Bitset padding bits (flags and presence) must be zero.
+- Trailing bytes after the NCB payload are rejected.
 
 ## AoS Ad-hoc (Adaptive Columnar)
 

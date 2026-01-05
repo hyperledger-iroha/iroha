@@ -63,7 +63,7 @@ pub fn generate_sm_operator_snippet(
         }
         None => {
             let mut rng = OsRng;
-            Sm2PrivateKey::random(distid.clone(), &mut rng)
+            Sm2PrivateKey::random(distid.clone(), &mut rng)?
         }
     };
 

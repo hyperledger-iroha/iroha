@@ -115,6 +115,46 @@ fn stream_vec_collect_handles_alignment_padding() {
 }
 
 #[test]
+fn stream_vec_collect_rejects_nonzero_padding() {
+    let data: Vec<AlignedWord> = (0..8)
+        .map(|i| AlignedWord((i as u128) << 32 | 0xBEEF))
+        .collect();
+    let mut buf = Vec::new();
+    serialize_into(&mut buf, &data, Compression::None).unwrap();
+    let payload_len = {
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&buf[norito::core::Header::SIZE - 17..norito::core::Header::SIZE - 9]);
+        u64::from_le_bytes(bytes) as usize
+    };
+    let padding = buf.len() - norito::core::Header::SIZE - payload_len;
+    assert!(padding > 0);
+    buf[norito::core::Header::SIZE] = 0xFF;
+
+    let out: Result<Vec<AlignedWord>, _> = stream_vec_collect_from_reader(buf.as_slice());
+    assert!(out.is_err());
+}
+
+#[test]
+fn deserialize_stream_rejects_nonzero_padding() {
+    let data: Vec<AlignedWord> = (0..4)
+        .map(|i| AlignedWord((i as u128) << 40 | 0xCAFE))
+        .collect();
+    let mut buf = Vec::new();
+    serialize_into(&mut buf, &data, Compression::None).unwrap();
+    let payload_len = {
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&buf[norito::core::Header::SIZE - 17..norito::core::Header::SIZE - 9]);
+        u64::from_le_bytes(bytes) as usize
+    };
+    let padding = buf.len() - norito::core::Header::SIZE - payload_len;
+    assert!(padding > 0);
+    buf[norito::core::Header::SIZE] = 1;
+
+    let decoded: Result<Vec<AlignedWord>, _> = deserialize_stream(buf.as_slice());
+    assert!(decoded.is_err());
+}
+
+#[test]
 fn stream_vec_iter_skips_alignment_padding() {
     use std::io::Cursor;
 

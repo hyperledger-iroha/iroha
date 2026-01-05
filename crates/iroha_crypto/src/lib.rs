@@ -210,7 +210,8 @@ impl KeyPair {
             Algorithm::Sm2 => {
                 let mut rng = sm2::elliptic_curve::rand_core::OsRng;
                 let private =
-                    sm::Sm2PrivateKey::random(sm::Sm2PublicKey::default_distid(), &mut rng);
+                    sm::Sm2PrivateKey::random(sm::Sm2PublicKey::default_distid(), &mut rng)
+                        .expect("sm2 default distid must be valid");
                 let public_key = PublicKey::new(PublicKeyFull::Sm2(private.public_key()));
                 let private_key = PrivateKey(Box::new(Secret::new(PrivateKeyInner::Sm2(private))));
                 KeyPair {

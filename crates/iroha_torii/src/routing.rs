@@ -24071,8 +24071,10 @@ pub struct OfflineTransferListParams {
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineTransferProofRequest {
-    /// Bundle identifier (hex, case-insensitive).
-    pub bundle_id_hex: String,
+    /// Optional bundle identifier (hex, case-insensitive) for on-ledger lookup.
+    pub bundle_id_hex: Option<String>,
+    /// Optional transfer payload to build proof requests before admission.
+    pub transfer: Option<OfflineToOnlineTransfer>,
     /// Proof request kind (`sum`, `counter`, `replay`).
     pub kind: String,
     /// Optional counter checkpoint supplied by the caller.
@@ -33399,39 +33401,59 @@ pub async fn handle_v1_offline_transfer_proof(
         dsl::CompoundPredicate, offline::prelude::FindOfflineToOnlineTransferById,
     };
 
-    let bundle_id = parse_hash_hex(&req.bundle_id_hex, "bundle_id_hex")?;
     let kind = OfflineProofRequestKind::from_str(req.kind.as_str()).map_err(|err| {
         conversion_error(format!("invalid proof request kind `{}`: {err}", req.kind))
     })?;
 
-    let state_view = state.view();
-    let mut results = ValidQuery::execute(
-        FindOfflineToOnlineTransferById::new(bundle_id),
-        CompoundPredicate::PASS,
-        &state_view,
-    )
-    .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?
-    .collect::<Vec<_>>();
-    let record = results.pop().ok_or_else(|| {
-        conversion_error(format!(
-            "offline transfer `{}` not found",
-            req.bundle_id_hex
-        ))
-    })?;
+    let bundle_id_hex = req.bundle_id_hex.clone();
+    let bundle_id = bundle_id_hex
+        .as_deref()
+        .map(|hex| parse_hash_hex(hex, "bundle_id_hex"))
+        .transpose()?;
+
+    let record;
+    let transfer = if let Some(transfer) = req.transfer.as_ref() {
+        if let Some(bundle_id) = bundle_id {
+            if transfer.bundle_id != bundle_id {
+                return Err(conversion_error(format!(
+                    "bundle_id_hex `{}` does not match transfer bundle_id",
+                    bundle_id_hex.as_deref().unwrap_or_default()
+                )));
+            }
+        }
+        transfer
+    } else {
+        let bundle_id = bundle_id.ok_or_else(|| missing_field_error("bundle_id_hex or transfer"))?;
+        let state_view = state.view();
+        let mut results = ValidQuery::execute(
+            FindOfflineToOnlineTransferById::new(bundle_id),
+            CompoundPredicate::PASS,
+            &state_view,
+        )
+        .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?
+        .collect::<Vec<_>>();
+        record = results.pop().ok_or_else(|| {
+            conversion_error(format!(
+                "offline transfer `{}` not found",
+                bundle_id_hex.as_deref().unwrap_or_default()
+            ))
+        })?;
+        &record.transfer
+    };
 
     match kind {
         OfflineProofRequestKind::Sum => {
-            let payload = record.to_proof_request_sum().map_err(proof_request_error)?;
+            let payload = transfer.to_proof_request_sum().map_err(proof_request_error)?;
             json_response(&payload)
         }
         OfflineProofRequestKind::Counter => {
             let checkpoint = match req.counter_checkpoint {
                 Some(value) => value,
-                None => record
+                None => transfer
                     .counter_checkpoint_hint()
                     .map_err(proof_request_error)?,
             };
-            let payload = record
+            let payload = transfer
                 .to_proof_request_counter(checkpoint)
                 .map_err(proof_request_error)?;
             json_response(&payload)
@@ -33447,7 +33469,7 @@ pub async fn handle_v1_offline_transfer_proof(
                 .ok_or_else(|| missing_field_error("replay_log_tail_hex"))?;
             let replay_log_head = parse_hash_hex(head_hex, "replay_log_head_hex")?;
             let replay_log_tail = parse_hash_hex(tail_hex, "replay_log_tail_hex")?;
-            let payload = record
+            let payload = transfer
                 .to_proof_request_replay(replay_log_head, replay_log_tail)
                 .map_err(proof_request_error)?;
             json_response(&payload)

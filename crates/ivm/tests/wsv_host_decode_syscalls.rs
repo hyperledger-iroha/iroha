@@ -1,4 +1,5 @@
 //! WsvHost JSON/Name/Schema decode syscalls coverage.
+#![allow(unexpected_cfgs)]
 
 use std::str::FromStr;
 

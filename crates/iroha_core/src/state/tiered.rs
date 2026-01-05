@@ -520,8 +520,10 @@ impl TieredStateBackend {
         let mut cold_bytes_total: u64 = 0;
         let mut cold_reused_entries: usize = 0;
         let mut cold_reused_bytes: u64 = 0;
+        let mut dirs_to_sync = BTreeSet::new();
         for cold in &plan.cold_entries {
             let abs_path = staging_dir.join(&cold.rel_path);
+            let mut parent_dirs = Vec::new();
             if let Some(parent) = abs_path.parent() {
                 fs::create_dir_all(parent).wrap_err_with(|| {
                     format!(
@@ -529,6 +531,12 @@ impl TieredStateBackend {
                         dir = parent.display()
                     )
                 })?;
+                for ancestor in parent.ancestors() {
+                    parent_dirs.push(ancestor.to_path_buf());
+                    if ancestor == staging_dir {
+                        break;
+                    }
+                }
             }
             let mut payload_len = None;
             let mut reused = false;
@@ -599,11 +607,23 @@ impl TieredStateBackend {
                 meta.last_cold_snapshot = plan.manifest.snapshot_index;
                 meta.last_cold_rel_path = Some(cold.rel_path.clone());
             }
+            for dir in parent_dirs {
+                dirs_to_sync.insert(dir);
+            }
         }
 
         plan.manifest.cold_bytes_total = cold_bytes_total;
         plan.manifest.cold_reused_entries = cold_reused_entries;
         plan.manifest.cold_reused_bytes = cold_reused_bytes;
+
+        for dir in dirs_to_sync {
+            Self::sync_dir(&dir).wrap_err_with(|| {
+                format!(
+                    "failed to sync cold shard directory {path}",
+                    path = dir.display()
+                )
+            })?;
+        }
 
         Self::write_manifest(&staging_dir, &plan.manifest)?;
         Self::sync_dir(&staging_dir).wrap_err_with(|| {

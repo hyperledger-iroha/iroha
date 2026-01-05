@@ -8523,14 +8523,9 @@ pub fn deserialize_stream<R: Read, T: for<'de> NoritoDeserialize<'de>>(
     match header.compression {
         Compression::None => {
             let mut buf = [0u8; 64 * 1024];
-            let mut padding = core::payload_alignment_padding_for::<T>();
-            while padding > 0 {
-                let chunk = padding.min(buf.len());
-                let read = reader.read(&mut buf[..chunk])?;
-                if read == 0 {
-                    return Err(Error::LengthMismatch);
-                }
-                padding -= read;
+            let padding = core::payload_alignment_padding_for::<T>();
+            if padding != 0 {
+                core::stream::skip_padding(&mut reader, padding)?;
             }
             let mut remaining = payload_len;
             while remaining > 0 {
@@ -8965,9 +8960,11 @@ where
     ) -> Result<u64, Error> {
         let mut result = 0u64;
         let mut shift = 0u32;
+        let mut used = 0usize;
         let mut buf = [0u8; 1];
         for _ in 0..STREAM_MAX_VARINT_BYTES {
             read_exact_update(reader, remaining, &mut buf)?;
+            used += 1;
             let byte = buf[0];
             let payload = (byte & 0x7f) as u64;
             if shift == 63 && payload > 1 {
@@ -8975,6 +8972,9 @@ where
             }
             result |= payload << shift;
             if byte & 0x80 == 0 {
+                if used != core::varint_encoded_len_u64(result) {
+                    return Err(Error::LengthMismatch);
+                }
                 return Ok(result);
             }
             shift += 7;
@@ -9757,6 +9757,7 @@ where
     fn read_varint_update(&mut self) -> Result<u64, Error> {
         let mut result = 0u64;
         let mut shift = 0u32;
+        let mut used = 0usize;
         let mut buf = [0u8; 1];
         for _ in 0..STREAM_MAX_VARINT_BYTES {
             Self::read_exact_update_buf(
@@ -9765,6 +9766,7 @@ where
                 &mut self.payload_remaining,
                 &mut buf,
             )?;
+            used += 1;
             let byte = buf[0];
             let payload = (byte & 0x7f) as u64;
             if shift == 63 && payload > 1 {
@@ -9772,6 +9774,9 @@ where
             }
             result |= payload << shift;
             if byte & 0x80 == 0 {
+                if used != core::varint_encoded_len_u64(result) {
+                    return Err(Error::LengthMismatch);
+                }
                 return Ok(result);
             }
             shift += 7;
@@ -9870,9 +9875,11 @@ where
         ) -> Result<u64, Error> {
             let mut result = 0u64;
             let mut shift = 0u32;
+            let mut used = 0usize;
             let mut b = [0u8; 1];
             for _ in 0..STREAM_MAX_VARINT_BYTES {
                 read_exact_update(src, &mut b, d, remaining)?;
+                used += 1;
                 let byte = b[0];
                 let payload = (byte & 0x7f) as u64;
                 if shift == 63 && payload > 1 {
@@ -9880,6 +9887,9 @@ where
                 }
                 result |= payload << shift;
                 if byte & 0x80 == 0 {
+                    if used != core::varint_encoded_len_u64(result) {
+                        return Err(Error::LengthMismatch);
+                    }
                     return Ok(result);
                 }
                 shift += 7;

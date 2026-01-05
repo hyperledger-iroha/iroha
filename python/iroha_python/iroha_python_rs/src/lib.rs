@@ -159,6 +159,22 @@ fn sm2_distid_arg(distid: Option<&str>) -> String {
         .unwrap_or_else(Sm2PublicKey::default_distid)
 }
 
+trait IntoSm2Result {
+    fn into_sm2_result(self) -> Result<Sm2PrivateKey, ParseError>;
+}
+
+impl IntoSm2Result for Sm2PrivateKey {
+    fn into_sm2_result(self) -> Result<Sm2PrivateKey, ParseError> {
+        Ok(self)
+    }
+}
+
+impl IntoSm2Result for Result<Sm2PrivateKey, ParseError> {
+    fn into_sm2_result(self) -> Result<Sm2PrivateKey, ParseError> {
+        self
+    }
+}
+
 fn parse_sm2_private_key(distid: Option<&str>, bytes: &[u8]) -> PyResult<Sm2PrivateKey> {
     if bytes.len() != SM2_PRIVATE_KEY_LENGTH {
         return Err(PyValueError::new_err(format!(
@@ -3507,6 +3523,23 @@ mod tests {
     }
 
     #[test]
+    fn generate_sm2_keypair_roundtrip() {
+        ensure_python();
+        Python::attach(|py| {
+            let (private_py, public_py) =
+                generate_sm2_keypair_py(py, None).expect("generate SM2 keypair");
+            let private_bytes = private_py.bind(py).as_bytes();
+            let public_bytes = public_py.bind(py).as_bytes();
+            assert_eq!(private_bytes.len(), SM2_PRIVATE_KEY_LENGTH);
+            assert_eq!(public_bytes.len(), SM2_PUBLIC_KEY_UNCOMPRESSED_LENGTH);
+            let private =
+                parse_sm2_private_key(None, private_bytes).expect("parse SM2 private key");
+            let derived_public = private.public_key().to_sec1_bytes(false);
+            assert_eq!(derived_public.as_slice(), public_bytes);
+        });
+    }
+
+    #[test]
     fn attachments_json_decodes_versioned_signed_transaction() {
         ensure_python();
         let signing = SigningKey::from_bytes(&[0x11u8; 32]);
@@ -6316,7 +6349,9 @@ fn generate_sm2_keypair_py(
 ) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
     let distid = sm2_distid_arg(distid);
     let mut rng = OsRng06;
-    let private = Sm2PrivateKey::random(distid, &mut rng);
+    let private = Sm2PrivateKey::random(distid, &mut rng)
+        .into_sm2_result()
+        .map_err(|err| PyValueError::new_err(format!("failed to generate SM2 key pair: {err}")))?;
     let public = private.public_key();
     let private_bytes = private.secret_bytes();
     let public_bytes = public.to_sec1_bytes(false);

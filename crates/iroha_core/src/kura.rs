@@ -2457,6 +2457,95 @@ impl Kura {
         })
     }
 
+    fn recover_indexed_sidecar_artifacts(data_path: &Path, index_path: &Path, kind: &str) {
+        let temp_data_path = data_path.with_extension("norito.tmp");
+        let temp_index_path = index_path.with_extension("index.tmp");
+        let temp_index_exists = temp_index_path.exists();
+        let temp_data_exists = temp_data_path.exists();
+        let index_promoted = if temp_index_exists {
+            Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "index")
+        } else {
+            false
+        };
+        if temp_data_exists {
+            if temp_index_exists {
+                if index_promoted {
+                    Self::promote_sidecar_temp(&temp_data_path, data_path, kind, "data");
+                } else {
+                    warn!(
+                        ?temp_data_path,
+                        kind,
+                        "sidecar temp data exists but index promotion failed; leaving temp data"
+                    );
+                }
+            } else {
+                warn!(
+                    ?temp_data_path,
+                    kind,
+                    "sidecar temp data exists without temp index; ignoring temp data"
+                );
+            }
+        }
+    }
+
+    fn promote_sidecar_temp(
+        temp_path: &Path,
+        main_path: &Path,
+        kind: &str,
+        label: &str,
+    ) -> bool {
+        if !temp_path.exists() {
+            return false;
+        }
+        if let Err(err) = std::fs::rename(temp_path, main_path) {
+            if main_path.exists() {
+                if let Err(remove_err) = std::fs::remove_file(main_path) {
+                    warn!(
+                        ?remove_err,
+                        ?main_path,
+                        kind,
+                        label,
+                        "failed to remove sidecar file before promoting temp"
+                    );
+                    return false;
+                }
+                if let Err(err) = std::fs::rename(temp_path, main_path) {
+                    warn!(
+                        ?err,
+                        ?temp_path,
+                        ?main_path,
+                        kind,
+                        label,
+                        "failed to promote sidecar temp file after removal"
+                    );
+                    return false;
+                }
+            } else {
+                warn!(
+                    ?err,
+                    ?temp_path,
+                    ?main_path,
+                    kind,
+                    label,
+                    "failed to promote sidecar temp file"
+                );
+                return false;
+            }
+        }
+        if let Some(parent) = main_path.parent() {
+            if let Err(err) = sync_dir(parent) {
+                warn!(
+                    ?err,
+                    ?parent,
+                    kind,
+                    label,
+                    "failed to sync sidecar parent after temp promotion"
+                );
+            }
+        }
+        true
+    }
+
     #[allow(clippy::too_many_lines)]
     fn append_indexed_sidecar(
         data_path: &Path,
@@ -2470,6 +2559,8 @@ impl Kura {
             iroha_logger::warn!(height, kind, "refusing to store sidecar for zero height");
             return false;
         }
+
+        Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind);
 
         let mut index = match std::fs::OpenOptions::new()
             .create(true)
@@ -2823,6 +2914,8 @@ impl Kura {
         dir.push(PIPELINE_DIR_NAME);
         let data_path = dir.join(data_file);
         let index_path = dir.join(index_file);
+
+        Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, kind);
 
         let mut index = std::fs::File::open(&index_path).ok()?;
         let index_meta = index.metadata().ok()?;
@@ -3178,7 +3271,11 @@ impl Kura {
                 "failed to replace sidecar index with pruned entries"
             );
             let _ = std::fs::remove_file(&temp_data_path);
-            let _ = std::fs::remove_file(&temp_index_path);
+            iroha_logger::warn!(
+                ?temp_index_path,
+                kind,
+                "leaving temp index for sidecar recovery"
+            );
             return false;
         }
         if let Some(parent) = data_path.parent() {
@@ -3473,17 +3570,18 @@ impl BlockStore {
         self.sync_target(FsyncTarget::Hashes, Self::ensure_hashes_file)?;
         self.sync_target(FsyncTarget::Index, Self::ensure_index_file)?;
 
-        self.fsync.clear();
         self.commit_pending_marker()?;
+        self.fsync.clear();
         Ok(())
     }
 
     fn commit_pending_marker(&mut self) -> Result<()> {
-        let Some(count) = self.commit_marker_pending.take() else {
+        let Some(count) = self.commit_marker_pending else {
             return Ok(());
         };
         self.write_commit_marker(count)?;
         self.commit_marker_count = count;
+        self.commit_marker_pending = None;
         Ok(())
     }
 
@@ -6300,6 +6398,129 @@ mod tests {
     }
 
     #[test]
+    fn pipeline_sidecar_promotes_temp_index_on_read() {
+        use iroha_config::base::WithOrigin;
+        let temp_dir = TempDir::new().unwrap();
+        let (kura, _count) = Kura::new(
+            &Config {
+                init_mode: InitMode::Strict,
+                store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: BLOCKS_IN_MEMORY,
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity:
+                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: iroha_config::kura::FsyncMode::Batched,
+                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                block_sync_roster_retention:
+                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention:
+                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .unwrap();
+
+        let block_hash = store_dummy_blocks(&kura, 1)[0];
+        let sidecar = PipelineRecoverySidecar::new_v1(
+            1,
+            block_hash,
+            PipelineDagSnapshot {
+                fingerprint: [0u8; 32],
+                key_count: 0,
+            },
+            Vec::new(),
+        );
+        let payload = sidecar.encode_framed().expect("encode sidecar");
+
+        let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
+        pipeline_dir.push(PIPELINE_DIR_NAME);
+        fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
+        let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
+        let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+        fs::write(&data_path, &payload).expect("write sidecar data");
+        std::fs::File::create(&index_path).expect("create empty index");
+
+        let temp_index_path = index_path.with_extension("index.tmp");
+        let entry = SidecarIndexEntry {
+            offset: 0,
+            len: payload.len() as u64,
+        }
+        .to_bytes();
+        let mut temp = std::fs::File::create(&temp_index_path).expect("create temp index");
+        temp.write_all(&entry).expect("write temp index entry");
+        temp.flush().expect("flush temp index");
+        temp.sync_data().expect("sync temp index");
+
+        let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
+        assert_eq!(got.block_hash, block_hash);
+        assert!(!temp_index_path.exists(), "temp index should be promoted");
+        let index_len = std::fs::metadata(&index_path)
+            .expect("index metadata")
+            .len();
+        assert_eq!(index_len, PIPELINE_INDEX_ENTRY_SIZE_U64);
+    }
+
+    #[test]
+    fn pipeline_sidecar_ignores_orphaned_temp_data() {
+        use iroha_config::base::WithOrigin;
+        let temp_dir = TempDir::new().unwrap();
+        let (kura, _count) = Kura::new(
+            &Config {
+                init_mode: InitMode::Strict,
+                store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: BLOCKS_IN_MEMORY,
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity:
+                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: iroha_config::kura::FsyncMode::Batched,
+                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                block_sync_roster_retention:
+                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention:
+                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .unwrap();
+
+        let hashes = store_dummy_blocks(&kura, 2);
+        let sidecar = PipelineRecoverySidecar::new_v1(
+            1,
+            hashes[0],
+            PipelineDagSnapshot {
+                fingerprint: [0u8; 32],
+                key_count: 0,
+            },
+            Vec::new(),
+        );
+        kura.write_pipeline_metadata(&sidecar);
+
+        let temp_sidecar = PipelineRecoverySidecar::new_v1(
+            1,
+            hashes[1],
+            PipelineDagSnapshot {
+                fingerprint: [1u8; 32],
+                key_count: 1,
+            },
+            Vec::new(),
+        );
+        let payload = temp_sidecar.encode_framed().expect("encode temp sidecar");
+
+        let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
+        pipeline_dir.push(PIPELINE_DIR_NAME);
+        let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
+        let temp_data_path = data_path.with_extension("norito.tmp");
+        fs::write(&temp_data_path, &payload).expect("write temp data");
+
+        let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
+        assert_eq!(got.block_hash, hashes[0]);
+    }
+
+    #[test]
     fn pipeline_sidecar_rejects_height_mismatch() {
         use iroha_config::base::WithOrigin;
         let temp_dir = TempDir::new().unwrap();
@@ -7715,6 +7936,50 @@ mod tests {
         assert!(
             store.next_fsync_wait().is_none(),
             "immediate fsync should not schedule a wait"
+        );
+    }
+
+    #[test]
+    fn commit_marker_write_failure_keeps_pending() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::with_fsync(
+            &blocks_dir,
+            FsyncMode::Batched,
+            Duration::from_millis(10),
+        );
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let block = DummyBlocks::new().next();
+        store
+            .append_block_to_chain(block.as_ref())
+            .expect("append block");
+
+        assert!(
+            store.commit_marker_pending.is_some(),
+            "expected pending commit marker before flush"
+        );
+        assert!(
+            store.fsync_pending_for_tests(),
+            "fsync should be pending before flush"
+        );
+
+        let tmp_marker = blocks_dir
+            .join(COUNT_FILE_NAME)
+            .with_extension("norito.tmp");
+        std::fs::create_dir_all(&tmp_marker).expect("create tmp marker directory");
+
+        store
+            .flush_pending_fsync(true)
+            .expect_err("flush should fail when commit marker temp is a directory");
+
+        assert!(
+            store.commit_marker_pending.is_some(),
+            "commit marker should remain pending after failure"
+        );
+        assert!(
+            store.fsync_pending_for_tests(),
+            "fsync should remain pending after commit marker failure"
         );
     }
 }

@@ -1319,7 +1319,6 @@ impl Actor {
         let pending_height = pending.height;
         let pending_view = pending.view;
         let now = Instant::now();
-        let da_enabled = self.runtime_da_enabled();
         debug!(
             height = pending_height,
             view = pending_view,
@@ -1644,10 +1643,8 @@ impl Actor {
         // Commit certificates remain authoritative, but the QC pipeline is required to
         // keep NEW_VIEW liveness (precommit QCs) and backfill telemetry.
         let enable_qc_pipeline = true;
-        let quorum_timeout = self.commit_quorum_timeout();
         let da_enabled = self.runtime_da_enabled();
         let rebroadcast_cooldown = self.rebroadcast_cooldown();
-        let payload_rebroadcast_cooldown = self.payload_rebroadcast_cooldown();
         let active_commit_topology = self.effective_commit_topology();
         let local_peer_id = self.common_config.peer.id().clone();
 
@@ -1688,12 +1685,6 @@ impl Actor {
             }
         }
 
-        let highest_pending_hash = self
-            .pending
-            .pending_blocks
-            .iter()
-            .max_by_key(|(_, pending)| (pending.height, pending.view))
-            .map(|(hash, _)| *hash);
         let mut pending_hashes: Vec<_> = self
             .pending
             .pending_blocks
@@ -1704,7 +1695,6 @@ impl Actor {
             .sort_by(|(h1, v1, hash1), (h2, v2, hash2)| (h1, v1, hash1).cmp(&(h2, v2, hash2)));
         let current_epoch = self.current_epoch();
         for (pending_height, pending_view, hash) in pending_hashes {
-            let allow_payload_rebroadcast = highest_pending_hash == Some(hash);
             let block_start = Instant::now();
             let validation_start = Instant::now();
             let (consensus_mode, _, _) = self.consensus_context_for_height(pending_height);
@@ -1748,8 +1738,6 @@ impl Actor {
                     Some(snapshot) => (snapshot.payload_hash, snapshot.aborted),
                     None => continue,
                 };
-            let (_, pending_mode_tag, pending_prf_seed) =
-                self.consensus_context_for_height(pending_height);
             let kura_has_block = self.kura.get_block_height_by_hash(hash).is_some();
             let (state_height, state_tip_hash) = {
                 let view = self.state.view();
@@ -1789,7 +1777,6 @@ impl Actor {
             let topology = super::network_topology::Topology::new(commit_topology.clone());
             let roster_len = topology.as_ref().len();
             let min_votes_for_commit = self.commit_min_votes(&topology);
-            let session_key = Self::session_key(&hash, pending_height, pending_view);
 
             let delivered = if da_enabled {
                 Self::ensure_block_matches_rbc_payload(
@@ -1808,7 +1795,6 @@ impl Actor {
             let mut replay_msg: Option<BlockMessage> = None;
             let mut replay_rbc_init: Option<crate::sumeragi::consensus::RbcInit> = None;
             let gate_start = Instant::now();
-            let chunk_max_bytes = self.config.rbc_chunk_max_bytes;
             let mut pending = match self.pending.pending_blocks.remove(&hash) {
                 Some(pending) => pending,
                 None => continue,
@@ -1971,7 +1957,6 @@ impl Actor {
                 continue;
             }
             let finalize_cost = finalize_start.elapsed();
-            let commit_cert_seen = pending.commit_certificate_seen;
             self.pending.pending_blocks.insert(hash, pending);
 
             let cached_precommit_votes = qc_cache_for_subject(&self.qc_cache, hash)
@@ -3503,10 +3488,6 @@ impl Actor {
         self.pending
             .missing_block_requests
             .retain(|_, request| request.height > height);
-        let latest_hash = {
-            let view = self.state.view();
-            view.latest_block_hash()
-        };
         self.refresh_p2p_topology();
         let commit_topology = self.effective_commit_topology();
         let commit_topology_hash = HashOf::new(&commit_topology);

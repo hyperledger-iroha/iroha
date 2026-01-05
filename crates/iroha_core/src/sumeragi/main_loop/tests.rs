@@ -10475,7 +10475,6 @@ fn synthesize_commit_certificate_accepts_valid_roster() {
         &block,
         &roster,
         PERMISSIONED_TAG,
-        0,
         iroha_config::parameters::actual::ConsensusMode::Permissioned,
     )
     .expect("certificate should be synthesized");

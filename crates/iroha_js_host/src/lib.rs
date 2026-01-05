@@ -529,19 +529,24 @@ pub fn sm2_default_distid() -> String {
 
 /// Generate an SM2 key pair using `iroha_crypto` defaults.
 #[napi]
-pub fn sm2_keypair(distid: Option<String>) -> JsKeyPair {
+pub fn sm2_keypair(distid: Option<String>) -> napi::Result<JsKeyPair> {
     let distid = sm2_distid_arg(distid);
     let mut rng = OsRng;
-    let private = Sm2PrivateKey::random(distid.clone(), &mut rng);
+    let private = Sm2PrivateKey::random(distid.clone(), &mut rng).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("failed to generate SM2 key pair: {err}"),
+        )
+    })?;
     let public = private.public_key();
     let private_bytes = private.secret_bytes();
     let public_bytes = public.to_sec1_bytes(false);
-    JsKeyPair {
+    Ok(JsKeyPair {
         algorithm: "sm2".to_owned(),
         public_key: Buffer::from(public_bytes),
         private_key: Buffer::from(private_bytes.to_vec()),
         distid: Some(distid),
-    }
+    })
 }
 
 /// Derive an SM2 key pair deterministically from a seed.
