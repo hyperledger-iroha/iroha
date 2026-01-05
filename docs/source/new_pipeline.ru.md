@@ -6,7 +6,7 @@ direction: ltr
 source: docs/source/new_pipeline.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 4aaaf361065a3d7ef8412c7548464691586653193081ca3d669d21201bd846fd
+source_hash: 7e409235a6709b12b0b7907b420f6a8fceb3ac6cd72cee2a9e29da6e5dc9c5c7
 source_last_modified: "2025-12-22T09:58:49.800969+00:00"
 translation_last_reviewed: null
 ---

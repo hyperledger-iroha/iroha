@@ -4329,7 +4329,7 @@ impl Actor {
         block: &SignedBlock,
         roster: &[PeerId],
         mode_tag: &str,
-        _epoch: u64,
+        epoch: u64,
         consensus_mode: ConsensusMode,
     ) -> Option<(CommitCertificate, Option<CommitStakeSnapshot>)> {
         if roster.is_empty() {
@@ -4339,12 +4339,35 @@ impl Actor {
             return None;
         }
         let height = block.header().height().get();
+        let view = u64::from(block.header().view_change_index());
         let cert = status::commit_certificate_history()
             .into_iter()
             .find(|candidate| {
                 candidate.height == height
                     && candidate.subject_block_hash == block.hash()
                     && matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit)
+            })
+            .or_else(|| {
+                let record = status::precommit_signers_for(block.hash())?;
+                if record.height != height || record.view != view || record.epoch != epoch {
+                    return None;
+                }
+                if record.mode_tag != mode_tag {
+                    return None;
+                }
+                if record.validator_set.as_slice() != roster {
+                    return None;
+                }
+                derive_block_sync_qc_from_signers(
+                    block.hash(),
+                    height,
+                    view,
+                    epoch,
+                    roster,
+                    mode_tag,
+                    &record.signers,
+                    record.bls_aggregate_signature,
+                )
             })?;
         if cert.mode_tag != mode_tag {
             return None;
@@ -5550,7 +5573,7 @@ impl Actor {
         view: u64,
     ) {
         let (consensus_mode, _, prf_seed) = self.consensus_context_for_height(height);
-        let epoch = self.current_epoch();
+        let epoch = self.epoch_for_height(height);
         self.record_membership_snapshot(height, view, epoch, topology);
         self.reset_collector_state();
         self.subsystems.propose.collector_plan_subject = Some((height, view));

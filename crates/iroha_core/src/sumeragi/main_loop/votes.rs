@@ -747,6 +747,7 @@ impl Actor {
             if let Some(roster) = self.roster_from_commit_certificate_history(height) {
                 return roster;
             }
+            return Vec::new();
         }
         active
     }
@@ -766,6 +767,9 @@ impl Actor {
             self.roster_from_commit_certificate_history_roll_forward(height, Some(block_hash))
         {
             return roster;
+        }
+        if height > committed_height.saturating_add(1) {
+            return Vec::new();
         }
         let active = self.effective_commit_topology();
         if !active.is_empty() {

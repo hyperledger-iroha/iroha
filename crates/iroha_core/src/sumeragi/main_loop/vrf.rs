@@ -377,6 +377,15 @@ impl Actor {
                 );
                 VrfNoteResult::RejectedOutOfWindow
             }
+            VrfNoteResult::RejectedUnknownSigner => {
+                warn!(
+                    height,
+                    epoch = commit.epoch,
+                    signer = commit.signer,
+                    "rejected VRF commit: signer not in active roster"
+                );
+                VrfNoteResult::RejectedUnknownSigner
+            }
             VrfNoteResult::RejectedInvalidReveal => {
                 warn!("rejected VRF commit: invalid reveal (commit path)");
                 VrfNoteResult::RejectedInvalidReveal
@@ -448,6 +457,15 @@ impl Actor {
                     "rejected VRF reveal: outside reveal window"
                 );
                 VrfNoteResult::RejectedOutOfWindow
+            }
+            VrfNoteResult::RejectedUnknownSigner => {
+                warn!(
+                    height,
+                    epoch = reveal.epoch,
+                    signer = reveal.signer,
+                    "rejected VRF reveal: signer not in active roster"
+                );
+                VrfNoteResult::RejectedUnknownSigner
             }
             VrfNoteResult::RejectedInvalidReveal => {
                 warn!(

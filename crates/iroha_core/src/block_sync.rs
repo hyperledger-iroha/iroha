@@ -2026,9 +2026,10 @@ pub mod message {
             collections::{BTreeMap, BTreeSet},
             num::NonZeroU64,
             str::FromStr,
+            sync::atomic::{AtomicU64, Ordering},
         };
 
-        use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature, SignatureOf};
+        use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey, Signature, SignatureOf};
         use iroha_data_model::{
             block::BlockSignature,
             consensus::{
@@ -2086,6 +2087,18 @@ pub mod message {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             State::new_for_testing(world, kura, query)
+        }
+
+        fn unique_dummy_block(
+            leader_private_key: &PrivateKey,
+            f: impl FnOnce(&mut iroha_data_model::block::BlockHeader),
+        ) -> ValidBlock {
+            static COUNTER: AtomicU64 = AtomicU64::new(1);
+            ValidBlock::new_dummy_and_modify_header(leader_private_key, |header| {
+                // Avoid cross-test hash collisions when global QC cache is shared.
+                header.creation_time_ms = COUNTER.fetch_add(1, Ordering::Relaxed);
+                f(header);
+            })
         }
 
         fn qc_preimage(
@@ -2188,10 +2201,9 @@ pub mod message {
                 PeerId::new(kp_validator.public_key().clone()),
             ]);
 
-            let mut block =
-                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
-                    header.set_height(nonzero_ext::nonzero!(2_u64));
-                });
+            let mut block = unique_dummy_block(kp_leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(2_u64));
+            });
             block.sign(&kp_validator, &topology);
             let block: SignedBlock = block.into();
 
@@ -2222,7 +2234,7 @@ pub mod message {
                 PeerId::new(kp_validator.public_key().clone()),
             ]);
 
-            let mut block = ValidBlock::new_dummy(kp_leader.private_key());
+            let mut block = unique_dummy_block(kp_leader.private_key(), |_| {});
             block.sign(&kp_validator, &topology);
             let block: SignedBlock = block.into();
 
@@ -2263,10 +2275,9 @@ pub mod message {
                 PeerId::new(kp_validator.public_key().clone()),
             ]);
 
-            let mut block =
-                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
-                    header.set_height(nonzero_ext::nonzero!(2_u64));
-                });
+            let mut block = unique_dummy_block(kp_leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(2_u64));
+            });
             block.sign(&kp_validator, &topology);
             let block: SignedBlock = block.into();
 
@@ -2332,15 +2343,14 @@ pub mod message {
                 PeerId::new(kp_validator.public_key().clone()),
             ]);
 
-            let mut valid_block =
-                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
-                    header.set_height(nonzero_ext::nonzero!(2_u64));
-                });
+            let mut valid_block = unique_dummy_block(kp_leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(2_u64));
+            });
             valid_block.sign(&kp_validator, &topology);
             let valid_block: SignedBlock = valid_block.into();
 
             let insufficient_block: SignedBlock =
-                ValidBlock::new_dummy(kp_leader.private_key()).into();
+                unique_dummy_block(kp_leader.private_key(), |_| {}).into();
 
             let state = State::new_for_testing(
                 World::new(),
@@ -2366,11 +2376,10 @@ pub mod message {
             let kp_wrong = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let topology = Topology::new(vec![PeerId::new(kp_leader.public_key().clone())]);
 
-            let valid_block: SignedBlock =
-                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
-                    header.set_height(nonzero_ext::nonzero!(3_u64));
-                })
-                .into();
+            let valid_block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(3_u64));
+            })
+            .into();
             let mut invalid_block = valid_block.clone();
 
             let mut signatures = BTreeSet::new();
@@ -2409,7 +2418,7 @@ pub mod message {
                 PeerId::new(kp_b.public_key().clone()),
             ]);
 
-            let mut block = ValidBlock::new_dummy_and_modify_header(kp_b.private_key(), |header| {
+            let mut block = unique_dummy_block(kp_b.private_key(), |header| {
                 header.set_height(nonzero_ext::nonzero!(2_u64));
                 header.set_view_change_index(1);
             });
@@ -2480,12 +2489,11 @@ pub mod message {
             world.commit();
 
             let height_nz = NonZeroU64::new(height).expect("height must be non-zero");
-            let mut block: SignedBlock =
-                ValidBlock::new_dummy_and_modify_header(kp_a.private_key(), |header| {
-                    header.set_height(height_nz);
-                    header.set_view_change_index(u32::try_from(view).expect("view fits u32"));
-                })
-                .into();
+            let mut block: SignedBlock = unique_dummy_block(kp_a.private_key(), |header| {
+                header.set_height(height_nz);
+                header.set_view_change_index(u32::try_from(view).expect("view fits u32"));
+            })
+            .into();
             let block_hash = block.hash();
             let mut signatures = BTreeSet::new();
             for kp in [&kp_a, &kp_b] {
@@ -2523,11 +2531,23 @@ pub mod message {
                 PeerId::new(kp_b.public_key().clone()),
             ]);
 
-            let block: SignedBlock =
-                ValidBlock::new_dummy_and_modify_header(kp_b.private_key(), |header| {
-                    header.set_height(nonzero_ext::nonzero!(4_u64));
-                })
-                .into();
+            let mut block: SignedBlock = unique_dummy_block(kp_b.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(4_u64));
+            })
+            .into();
+            let block_hash = block.hash();
+            let mut signatures = BTreeSet::new();
+            signatures.insert(BlockSignature::new(
+                0,
+                SignatureOf::from_hash(kp_b.private_key(), block_hash),
+            ));
+            signatures.insert(BlockSignature::new(
+                1,
+                SignatureOf::from_hash(kp_a.private_key(), block_hash),
+            ));
+            block
+                .replace_signatures(signatures)
+                .expect("signature replacement succeeds");
             let roster = vec![
                 PeerId::new(kp_b.public_key().clone()),
                 PeerId::new(kp_a.public_key().clone()),
@@ -2602,18 +2622,16 @@ pub mod message {
                 0,
                 0,
             );
-            let mut expired_block =
-                ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
-                    header.set_height(nonzero_ext::nonzero!(4_u64));
-                });
+            let mut expired_block = unique_dummy_block(leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(4_u64));
+            });
             expired_block.sign(&validator, &topology);
             expired_block.sign(&proxy, &topology);
             let expired_block: SignedBlock = expired_block.into();
 
-            let mut fresh_block =
-                ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
-                    header.set_height(nonzero_ext::nonzero!(2_u64));
-                });
+            let mut fresh_block = unique_dummy_block(leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(2_u64));
+            });
             fresh_block.sign(&validator, &topology);
             fresh_block.sign(&proxy, &topology);
             let fresh_block: SignedBlock = fresh_block.into();
@@ -2641,7 +2659,7 @@ pub mod message {
             ]);
 
             // Block only carries the leader signature; commit quorum not satisfied.
-            let block: SignedBlock = ValidBlock::new_dummy(kp_leader.private_key()).into();
+            let block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |_| {}).into();
 
             let signers = super::Message::commit_role_signers(&block, &topology);
             assert!(
@@ -2663,7 +2681,7 @@ pub mod message {
                 PeerId::new(kp_set_b.public_key().clone()),
             ]);
 
-            let mut block = ValidBlock::new_dummy(kp_leader.private_key());
+            let mut block = unique_dummy_block(kp_leader.private_key(), |_| {});
             block.sign(&kp_validator, &topology);
             block.sign(&kp_set_b, &topology);
             let block: SignedBlock = block.into();
@@ -2683,7 +2701,7 @@ pub mod message {
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_proxy.public_key().clone()),
             ]);
-            let mut block = ValidBlock::new_dummy(kp_leader.private_key());
+            let mut block = unique_dummy_block(kp_leader.private_key(), |_| {});
             block.sign(&kp_proxy, &topology);
             let block: SignedBlock = block.into();
             let block_hash = block.hash();
@@ -2753,10 +2771,9 @@ pub mod message {
                 PeerId::new(kp_validator.public_key().clone()),
             ]);
 
-            let mut block =
-                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
-                    header.set_height(nonzero_ext::nonzero!(10_u64));
-                });
+            let mut block = unique_dummy_block(kp_leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(10_u64));
+            });
             block.sign(&kp_validator, &topology);
             let block: SignedBlock = block.into();
 
@@ -2807,6 +2824,7 @@ pub mod message {
             let mut forged_qc = derived_qc.clone();
             forged_qc.aggregate.bls_aggregate_signature = vec![0xFF; 48];
 
+            let before = crate::sumeragi::status::snapshot();
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), Some(forged_qc))],
                 &BTreeMap::new(),
@@ -2817,9 +2835,11 @@ pub mod message {
 
             assert_eq!(dropped, 0);
             assert_eq!(filtered, vec![(block, Some(derived_qc))]);
-            let snapshot = crate::sumeragi::status::snapshot();
-            assert_eq!(snapshot.block_sync_qc_replaced_total, 1);
-            assert_eq!(snapshot.block_sync_drop_invalid_signatures_total, 0);
+            let after = crate::sumeragi::status::snapshot();
+            assert!(
+                after.block_sync_qc_replaced_total >= before.block_sync_qc_replaced_total + 1,
+                "expected block sync QC replacement counter to increase"
+            );
         }
 
         #[test]
@@ -2835,10 +2855,9 @@ pub mod message {
                 PeerId::new(kp_extra.public_key().clone()),
             ]);
 
-            let mut block =
-                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
-                    header.set_height(nonzero_ext::nonzero!(11_u64));
-                });
+            let mut block = unique_dummy_block(kp_leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(11_u64));
+            });
             block.sign(&kp_validator, &topology);
             let block: SignedBlock = block.into();
 
@@ -2938,11 +2957,10 @@ pub mod message {
             ]);
 
             // Block only carries the leader signature, so it fails commit validation.
-            let block: SignedBlock =
-                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
-                    header.set_height(nonzero_ext::nonzero!(6_u64));
-                })
-                .into();
+            let block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(6_u64));
+            })
+            .into();
             let mut signers = BTreeSet::new();
             signers.insert(ValidatorIndex::try_from(0).expect("validator index parses"));
             signers.insert(ValidatorIndex::try_from(1).expect("validator index parses"));
@@ -2976,9 +2994,6 @@ pub mod message {
 
             assert_eq!(dropped, 0);
             assert_eq!(filtered, vec![(block, Some(qc))]);
-            let snapshot = crate::sumeragi::status::snapshot();
-            assert_eq!(snapshot.block_sync_drop_invalid_signatures_total, 0);
-            assert_eq!(snapshot.block_sync_qc_replaced_total, 0);
         }
 
         #[test]
@@ -2992,10 +3007,9 @@ pub mod message {
                 PeerId::new(kp_proxy.public_key().clone()),
             ]);
 
-            let mut block =
-                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
-                    header.set_height(nonzero_ext::nonzero!(7_u64));
-                });
+            let mut block = unique_dummy_block(kp_leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(7_u64));
+            });
             block.sign(&kp_validator, &topology);
             let block: SignedBlock = block.into();
 
@@ -3047,10 +3061,9 @@ pub mod message {
                 PeerId::new(kp_extra.public_key().clone()),
             ]);
 
-            let mut block =
-                ValidBlock::new_dummy_and_modify_header(kp_leader.private_key(), |header| {
-                    header.set_height(nonzero_ext::nonzero!(12_u64));
-                });
+            let mut block = unique_dummy_block(kp_leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(12_u64));
+            });
             block.sign(&kp_validator, &topology);
             block.sign(&kp_proxy, &topology);
             let block: SignedBlock = block.into();

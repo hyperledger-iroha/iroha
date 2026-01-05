@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/nexus.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5fd6b703829be3f58bc207e2b6e924278c3b7038965909f5b837aa7dd8cd304f
+source_hash: c8da33b0abb8a6d46dbaaed657c8338a9d723a97f6f28ff29a62caf84c0dbfd6
 source_last_modified: "2025-12-27T07:56:34.355655+00:00"
 translation_last_reviewed: 2026-01-01
 ---
@@ -29,7 +29,7 @@ translation_last_reviewed: 2026-01-01
 
 אי-מטרות (שלב התחלתי)
 - הגדרת כלכלת טוקנים או תמריצי ולידטורים; תזמון וסטייקינג הם פלג-אין.
-- הוספת גרסת ABI חדשה; השינויים ממוקדים ב-ABI v1 עם הרחבות syscalls ו-pointer-ABI לפי מדיניות ה-IVM.
+- הוספת גרסת ABI חדשה או הרחבת משטחי syscalls/pointer-ABI; ABI v1 קבוע ו-runtime upgrades לא משנים את ABI ה-host.
 
 מונחים
 - Nexus Ledger: הלדג'ר הלוגי הגלובלי הנוצר מהרכבת בלוקים של Data Space להיסטוריה יחידה וסדורה ומחויבות מצב.
@@ -187,7 +187,7 @@ Smart Contracts והרחבות IVM
   - `use_asset_handle(handle, op, amount)` -> result (מותר רק אם המדיניות מאפשרת וה-handle תקף)
 - Asset Handles ו-fees:
   - פעולות נכס מאושרות לפי ISI/role policies של DS; fees משולמים בגז-טוקן של DS. ניתן להוסיף tokens ו-policy עשיר יותר מאוחר.
-- דטרמיניזם: syscalls חדשים הם טהורים ודטרמיניסטיים בהינתן הקלטים ו-read/write sets. אין אפקטי זמן או סביבה.
+- דטרמיניזם: syscalls הם טהורים ודטרמיניסטיים בהינתן הקלטים ו-read/write sets. אין אפקטי זמן או סביבה.
 
 Post-Quantum Validity Proofs (Generalized ISIs)
 - FASTPQ-ISI (PQ, ללא trusted setup): ארגומנט מבוסס hash המרחיב את דגם ה-transfer לכל ISI ומכוון להוכחות תת-שניות בקנה מידה 20k על חומרת GPU.
@@ -235,15 +235,10 @@ AIR Primer (ל-Nexus)
   - Prover מתחייב ל-traces ומבנה פולינומים; Verifier מאמת low-degree עם FRI.
 - Example (Transfer): pre_balance, amount, post_balance, nonce, selectors, ומולטי-proofs ל-old/new roots.
 
-ABI ו- Syscall Evolution (ABI v1)
-- Syscalls להוסיף:
-  - `SYS_AMX_BEGIN`, `SYS_AMX_TOUCH`, `SYS_AMX_COMMIT`, `SYS_VERIFY_SPACE_PROOF`, `SYS_USE_ASSET_HANDLE`.
-- Pointer-ABI types להוסיף:
-  - `PointerType::DataSpaceId`, `PointerType::AmxDescriptor`, `PointerType::AssetHandle`, `PointerType::ProofBlob`.
-- עדכונים נדרשים:
-  - להוסיף ל-`ivm::syscalls::abi_syscall_list()` ולשער לפי policy.
-  - למפות מספרים לא מוכרים ל-`VMError::UnknownSyscall`.
-  - לעדכן tests ו-docs בהתאם.
+יציבות ABI (ABI v1)
+- משטח ABI v1 קבוע; לא מוסיפים syscalls או pointer-ABI types חדשים במהדורה זו.
+- runtime upgrades חייבים להשאיר `abi_version = 1` עם `added_syscalls`/`added_pointer_types` ריקים.
+- ABI goldens (syscall list/ABI hash/IDs) מקובעים ואסור שישתנו.
 
 מודל פרטיות
 - Private Data Containment: נתוני טרנזקציה, diffs ו-snapshots של DS פרטי לא יוצאים.
@@ -313,7 +308,7 @@ Cross-Data-Space Workflow (Example)
 
 שינויים ברכיבי Iroha
 - `iroha_data_model`: הוספת `DataSpaceId`, AMX descriptors, DA commitments.
-- `ivm`: syscalls ו-pointer-ABI חדשים, עדכון ABI tests.
+- `ivm`: משטח ABI v1 קבוע (ללא syscalls/pointer-ABI חדשים); AMX/runtime upgrades משתמשים בפרימיטיבים v1 קיימים; ABI goldens מקובעים.
 - `iroha_core`: nexus scheduler, Space Directory, AMX validation, DS artifacts.
 - `kura`/`WSV`/`irohad`: עדכוני אחסון, snapshots, רשת ו-config.
 
@@ -332,7 +327,7 @@ Configuration and Determinism
 Migration Path (Iroha 2 -> Iroha 3)
 1) IDs לפי dataspace ו-global state composition.
 2) Kura/WSV erasure coding מאחורי feature flags.
-3) syscalls ו-pointer types ל-AMX, ABI v1.
+3) שמירה על משטח ABI v1 קבוע; יישום AMX ללא syscalls/pointer types חדשים; עדכון tests/docs בלי שינוי ABI.
 4) nexus chain מינימלי עם DS ציבורי אחד.
 5) הרחבה ל-AMX מלא ו-ML-DSA-87 בכל DS.
 
@@ -353,6 +348,6 @@ Open Questions
 7) read/write sets לעומת inference.
 
 נספח: תאימות למדיניות ריפוזיטורי
-- Norito לכל wire/JSON, ABI v1 בלבד, דטרמיניזם, ללא serde וללא env config ב-production.
+- Norito לכל wire/JSON, ABI v1 בלבד; משטח syscalls/pointer-ABI קבוע; דטרמיניזם, ללא serde וללא env config ב-production.
 
 </div>

@@ -1,13 +1,35 @@
 # Status
 
 ## Latest Updates
+- Genesis: enable DA in `defaults/genesis.json` across parameter blocks and refresh the consensus fingerprint to match the DA-enabled parameters (fixes genesis startup failures when defaults are used).
+- Tests: not run (not requested).
+- Sumeragi: validate RBC READY signatures before chunk-root rejection and keep sessions valid when mismatched roots arrive; extend regression test.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s waiting for build directory lock).
+- Sumeragi: fall back to full roster indices when the epoch roster provider is incomplete to avoid excluding validators during NPoS transitions; add regression test.
+- Tests: not run (not requested).
+- Sumeragi: reject VRF commit/reveal messages from non-roster signer indices to prevent off-roster entropy injection; add regression tests.
+- Tests: not run (not requested).
+- Sumeragi: apply pending NPoS roster activation at the activation height during catch-up (avoid pre-activation epoch snapshots using the new roster); add regression test.
+- Tests: not run (not requested).
+- Sumeragi: drop RBC READY messages with mismatched chunk roots so quorum only counts votes for the expected payload; add regression test.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/assignments and unexpected cfgs in unrelated modules).
+- Sumeragi: drop RBC chunks with mismatched epochs (align with INIT/READY/DELIVER filtering); add regression test.
+- Tests: not run (not requested).
+- Sumeragi: reject RBC INIT/READY/DELIVER messages with mismatched epochs to prevent cross-epoch availability drift; add regression tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/assignments and unexpected cfgs in unrelated modules).
+- Sumeragi: derive membership adverts and pacemaker precommit deferrals from per-height epochs to avoid cross-epoch mismatches; add regression tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/assignments in unrelated modules).
 - Sumeragi: hydrate existing RBC sessions on duplicate `BlockCreated` and emit precommit/exec votes with per-height epochs to avoid cross-epoch drops; add regression tests.
 - Irohad: remove the DA/RBC override for Iroha 3 so `sumeragi.da_enabled` is enforced by config validation; update docs and tests.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
 - Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/assignments in unrelated modules).
 - Core: silence unused warnings in Norito AoS helpers and Sumeragi commit/pacemaker paths, derive `Debug` for RBC sampling payloads, and add missing unit tests for Kura sidecar height mismatch cases.
 - Tests: `cargo test -p iroha_core` (timed out after 240s; multiple test failures still pending).
-- ABI/runtime upgrades: keep ABI v1 fixed (no version bumps), allow v1 runtime upgrades without ABI increments, re-enable runtime-upgrade admission tests, and update runtime-upgrade docs/translations.
+- ABI/runtime upgrades: keep ABI v1 fixed (no version bumps), allow v1 runtime upgrades without ABI increments, re-enable runtime-upgrade admission tests, and align runtime-upgrade + IVM syscall/pointer-ABI docs and the Swift ABI checklist with the v1-only policy.
 - Integration tests: ensure genesis peers always receive a genesis file to prevent empty-storage startup failures.
 - Sumeragi: drop votes/QCs with mismatched epochs (commit + exec paths) to avoid cross-epoch pollution; add regression tests.
 - Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/vars in unrelated modules).

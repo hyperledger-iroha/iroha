@@ -637,7 +637,10 @@ mod tests {
         let key = (block_hash, height, view);
         let inner = handle.store.inner.lock().expect("rbc status lock poisoned");
         let entry = inner.map.get(&key).expect("entry exists");
-        assert_eq!(entry.updated_at, updated_time);
+        assert_eq!(
+            system_time_to_ms(entry.updated_at),
+            system_time_to_ms(updated_time)
+        );
     }
 
     #[test]

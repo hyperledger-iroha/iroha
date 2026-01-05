@@ -526,7 +526,6 @@ impl Actor {
                 );
                 let persist_required = !pending.kura_persisted;
                 pending.mark_kura_persisted();
-                self.persist_roster_sidecar_for_commit(committed_block.as_ref(), &commit_topology);
                 let qc_key = (
                     crate::sumeragi::consensus::Phase::Commit,
                     block_hash,
@@ -717,6 +716,9 @@ impl Actor {
                     "state parameters after commit"
                 );
                 let cached_qc = self.qc_cache.get(&qc_key).cloned();
+                if let Some(qc) = cached_qc.as_ref() {
+                    super::status::record_commit_certificate(qc.clone());
+                }
                 if let Some(signers) = qc_signers.as_ref() {
                     let aggregate_signature = cached_qc.as_ref().map_or_else(
                         || {
@@ -768,6 +770,7 @@ impl Actor {
                         crate::sumeragi::status::record_precommit_signers(record);
                     }
                 }
+                self.persist_roster_sidecar_for_commit(committed_block.as_ref(), &commit_topology);
                 let tally = qc_signers.as_ref().map_or_else(
                     || {
                         crate::block::valid::commit_signature_tally(
@@ -3456,25 +3459,39 @@ impl Actor {
             view.height() as u64
         };
         let mut progress = false;
-        if let Some((activate_at, roster)) = self.pending_roster_activation.clone() {
-            if committed_height >= activate_at {
-                if let Err(err) = self.install_elected_roster(&roster) {
-                    warn!(
-                        ?err,
-                        "failed to install pending elected roster; retaining pending activation"
-                    );
-                } else {
-                    self.pending_roster_activation = None;
-                }
-            }
-        }
         let mut next_height = self.last_committed_height.saturating_add(1);
         while next_height <= committed_height {
+            if let Some((activate_at, roster)) = self.pending_roster_activation.clone() {
+                if next_height >= activate_at {
+                    if let Err(err) = self.install_elected_roster(&roster) {
+                        warn!(
+                            ?err,
+                            "failed to install pending elected roster; retaining pending activation"
+                        );
+                    } else {
+                        self.pending_roster_activation = None;
+                    }
+                }
+            }
             self.on_block_commit(next_height)?;
             self.block_count.0 = usize::try_from(next_height).unwrap_or(usize::MAX);
             self.last_committed_height = next_height;
             next_height = next_height.saturating_add(1);
             progress = true;
+        }
+        if !progress {
+            if let Some((activate_at, roster)) = self.pending_roster_activation.clone() {
+                if committed_height >= activate_at {
+                    if let Err(err) = self.install_elected_roster(&roster) {
+                        warn!(
+                            ?err,
+                            "failed to install pending elected roster; retaining pending activation"
+                        );
+                    } else {
+                        self.pending_roster_activation = None;
+                    }
+                }
+            }
         }
         Ok(progress)
     }

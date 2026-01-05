@@ -217,7 +217,7 @@ Root マルチシグ
 - 承認／拒否のイベントを発行し、監査ログに `accounts`, `context_hash`, `call` の概要、`justification` を記録する。
 
 ランタイムアップグレード
-- `RuntimeUpgradeManifest`: `name`, `description`, `abi_version`, `abi_hash`, 新規 `added_syscalls` / `added_pointer_types`, `start_height`, `end_height`。
+- `RuntimeUpgradeManifest`: `name`, `description`, `abi_version`（v1 固定）, `abi_hash`, `added_syscalls` / `added_pointer_types` は空, `start_height`, `end_height`。
 - `RuntimeUpgradePlan`: 準備段階のアーティファクト展開を定義。
 - `RuntimeUpgradeActivate`: `start_height` と `end_height` に基づきアクティベーションを管理する。アクティベーションはウィンドウ内で一度のみ有効。
 - マニフェスト staged apply パス: `RuntimeUpgradeStageApply { manifest_hash, artifact_ref, reproducibility_proof }` が検証済みバイナリを Aleph（内容アドレス型アーティファクトストア）に格納する。ノードは受理時に (1) `manifest` とバイナリの `code_hash/abi_hash` 一致を検証し、(2) CI 由来の再現性レポートや署名を Aleph のメタデータとして保存し、(3) `RuntimeUpgradeActivate` 実行前に `artifact_ref` から再取得してハッシュ照合を再度行う。Aleph への書き込みは一意の `manifest_hash` ごとに一回のみ許可され、差し替えは新しい `manifest_hash` を伴うステージング申請で扱う。

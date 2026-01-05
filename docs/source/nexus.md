@@ -16,7 +16,7 @@ Goals
 
 Non‑Goals (Initial Phase)
 - Defining token economics or validator incentives; scheduling and staking policies are pluggable.
-- Introducing a new ABI version; changes target ABI v1 with explicit syscall and pointer‑ABI extensions per IVM policy.
+- Introducing a new ABI version or expanding syscall/pointer‑ABI surfaces; ABI v1 is fixed and runtime upgrades do not change the host ABI.
 
 Terminology
 - Nexus Ledger: The global logical ledger formed by composing Data Space (DS) blocks into a single, ordered history and state commitment.
@@ -211,7 +211,7 @@ Smart Contracts and IVM Extensions
   - `use_asset_handle(handle, op, amount)` → result (operation permitted only if policy allows and handle is valid)
 - Asset Handles and Fees:
   - Asset operations are authorized by the DS’s ISI/role policies; fees are paid in the DS’s gas token. Optional capability tokens and richer policy (multi‑approver, rate‑limits, geofencing) can be added later without changing the atomic model.
-- Determinism: All new syscalls are pure and deterministic given inputs and declared AMX read/write sets. No hidden time or environment effects.
+- Determinism: All syscalls are pure and deterministic given inputs and declared AMX read/write sets. No hidden time or environment effects.
 
 Post‑Quantum Validity Proofs (Generalized ISIs)
 - FASTPQ‑ISI (PQ, no trusted setup): A kernelized, hash‑based argument that generalizes the transfer design to all ISI families while targeting sub‑second proving for 20k‑scale batches on GPU‑class hardware.
@@ -260,16 +260,10 @@ AIR Primer (for Nexus)
   - Verifier checks low‑degree via FRI (hash‑based, post‑quantum) with a few Merkle openings; cost is logarithmic in steps.
 - Example (Transfer): registers include pre_balance, amount, post_balance, nonce, and selectors. Constraints enforce non‑negativity/range, conservation, and nonce monotonicity, while an aggregated SMT multi‑proof links pre/post leaves to old/new roots.
 
-ABI and Syscall Evolution (ABI v1)
-- Syscalls to add (illustrative names):
-  - `SYS_AMX_BEGIN`, `SYS_AMX_TOUCH`, `SYS_AMX_COMMIT`, `SYS_VERIFY_SPACE_PROOF`, `SYS_USE_ASSET_HANDLE`.
-- Pointer‑ABI Types to add:
-  - `PointerType::DataSpaceId`, `PointerType::AmxDescriptor`, `PointerType::AssetHandle`, `PointerType::ProofBlob`.
-- Required updates:
-  - Add to `ivm::syscalls::abi_syscall_list()` (keep ordering), gate by policy.
-  - Map unknown numbers to `VMError::UnknownSyscall` in hosts.
-  - Update tests: syscall list golden, ABI hash, pointer type ID goldens, and policy tests.
-  - Docs: `crates/ivm/docs/syscalls.md`, `status.md`, `roadmap.md`.
+ABI Stability (ABI v1)
+- ABI v1 surface is fixed; no new syscalls or pointer‑ABI types are introduced in this release.
+- Runtime upgrades must keep `abi_version = 1` with empty `added_syscalls`/`added_pointer_types`.
+- ABI goldens (syscall list, ABI hash, pointer type IDs) remain pinned and must not change.
 
 Privacy Model
 - Private Data Containment: Transaction bodies, state diffs, and WSV snapshots for private DS never leave the private validator subset.
@@ -339,7 +333,7 @@ Cross‑Data‑Space Workflow (Example)
 
 Changes to Iroha Components
 - iroha_data_model: Introduce `DataSpaceId`, DS‑qualified identifiers, AMX descriptors (read/write sets), proof/DA commitment types. Norito‑only serialization.
-- ivm: Add syscalls and pointer‑ABI types for AMX (`amx_begin`, `amx_commit`, `amx_touch`), and DA proofs; update ABI tests/docs per v1 policy.
+- ivm: Keep ABI v1 surface fixed (no new syscalls/pointer‑ABI types); AMX/runtime upgrades must use existing v1 primitives; keep ABI goldens pinned.
 - iroha_core: Implement nexus scheduler, Space Directory, AMX routing/validation, DS artifact verification, and policy enforcement for DA sampling and quotas.
 - Space Directory & manifest loaders: Thread FMS endpoint metadata (and other common-good service descriptors) through DS manifest parsing so nodes auto-discover local service endpoints when joining a Data Space.
 - kura: Blob store with erasure coding, commitments, retrieval APIs respecting private/public policies.
@@ -361,13 +355,13 @@ Configuration and Determinism
 Migration Path (Iroha 2 → Iroha 3)
 1) Introduce data‑space‑qualified IDs and nexus block/global state composition in data model; add feature flags to keep Iroha 2 legacy modes during transition.
 2) Implement Kura/WSV erasure‑coding backends behind feature flags, preserving current backends as defaults during early phases.
-3) Add IVM syscalls and pointer types for AMX (atomic multi‑DS) operations; extend tests and docs; keep ABI v1.
+3) Keep ABI v1 surface fixed; implement AMX without new syscalls/pointer types and update tests/docs without changing ABI.
 4) Deliver minimal nexus chain with a single public DS and 1s blocks; then add first private‑DS pilot exporting proofs/commitments only.
 5) Expand to full atomic cross‑DS transactions (AMX) with DS‑local FASTPQ‑ISI proofs and DA attesters; enable ML‑DSA‑87 QCs across DS.
 
 Testing Strategy
 - Unit tests for data model types, Norito roundtrips, AMX syscall behaviors, and proof encoding/decoding.
-- IVM tests for new syscalls and ABI goldens.
+- IVM tests to pin ABI v1 syscall list/ABI hash/pointer‑type goldens.
 - Integration tests for atomic cross‑DS transactions (positive/negative), DA attester latency targets (≤300 ms), and performance isolation under load.
 - Security tests for DS QC verification (ML‑DSA‑87), conflict detection/abort semantics, and confidential shard leakage prevention.
 
@@ -391,6 +385,6 @@ Open Questions (Clarification Needed)
 
 Appendix: Compliance with Repository Policies
 - Norito is used for all wire formats and JSON serialization via Norito helpers.
-- ABI v1 only; no runtime toggles for ABI policies. Syscall and pointer-type additions follow the documented evolution process with golden tests.
+- ABI v1 only; no runtime toggles for ABI policies. Syscall and pointer‑type surfaces are fixed and pinned by golden tests.
 - Determinism preserved across hardware; acceleration is optional and gated.
 - No serde in production paths; no environment-based configuration in production.

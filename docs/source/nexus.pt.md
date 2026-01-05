@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/nexus.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5fd6b703829be3f58bc207e2b6e924278c3b7038965909f5b837aa7dd8cd304f
+source_hash: c8da33b0abb8a6d46dbaaed657c8338a9d723a97f6f28ff29a62caf84c0dbfd6
 source_last_modified: "2025-12-27T07:56:34.355655+00:00"
 translation_last_reviewed: 2026-01-01
 ---
@@ -25,7 +25,7 @@ Objetivos
 
 Nao-Objetivos (Fase inicial)
 - Definir economia de tokens ou incentivos de validadores; agendamento e staking sao plugaveis.
-- Introduzir uma nova versao de ABI; mudancas miram ABI v1 com extensoes explicitas de syscalls e pointer-ABI conforme a politica de IVM.
+- Introduzir uma nova versao de ABI ou ampliar superficies de syscalls/pointer-ABI; ABI v1 e fixo e as runtime upgrades nao mudam o ABI do host.
 
 Terminologia
 - Nexus Ledger: O ledger logico global formado ao compor blocos de Data Space (DS) em um historico unico e ordenado e um commitment de estado.
@@ -222,7 +222,7 @@ Contratos inteligentes e extensoes IVM
   - `use_asset_handle(handle, op, amount)` -> result (operacao permitida apenas se a politica permitir e o handle for valido)
 - Handles de assets e fees:
   - Operacoes de assets sao autorizadas pelas politicas ISI/roles do DS; fees sao pagas no token gas do DS. Tokens de capacidade opcionais e politicas mais ricas (multi-aprovador, rate-limits, geofencing) podem ser adicionadas depois sem mudar o modelo atomico.
-- Determinismo: Todas as novas syscalls sao puras e deterministicas dadas as entradas e os conjuntos de leitura/escrita AMX declarados. Sem efeitos ocultos de tempo ou ambiente.
+- Determinismo: Todas as syscalls sao puras e deterministicas dadas as entradas e os conjuntos de leitura/escrita AMX declarados. Sem efeitos ocultos de tempo ou ambiente.
 
 Provas de validade post-quantum (ISIs generalizados)
 - FASTPQ-ISI (PQ, sem trusted setup): Um argumento baseado em hash e kernelizado que generaliza o design de transfer para todas as familias ISI enquanto visa provas sub-segundo para lotes em escala 20k em hardware classe GPU.
@@ -271,16 +271,10 @@ Introducao a AIR (para Nexus)
   - O verificador checa baixo grau via FRI (baseado em hash, post-quantum) com algumas aberturas Merkle; o custo e logaritmico em passos.
 - Exemplo (Transfer): registros incluem pre_balance, amount, post_balance, nonce e seletores. Restricoes impoem nao-negatividade/range, conservacao e monotonicidade de nonce, enquanto uma multi-prova SMT agregada liga folhas pre/post as raizes old/new.
 
-Evolucao de ABI e syscalls (ABI v1)
-- Syscalls a adicionar (nomes ilustrativos):
-  - `SYS_AMX_BEGIN`, `SYS_AMX_TOUCH`, `SYS_AMX_COMMIT`, `SYS_VERIFY_SPACE_PROOF`, `SYS_USE_ASSET_HANDLE`.
-- Tipos pointer-ABI a adicionar:
-  - `PointerType::DataSpaceId`, `PointerType::AmxDescriptor`, `PointerType::AssetHandle`, `PointerType::ProofBlob`.
-- Atualizacoes necessarias:
-  - Adicionar a `ivm::syscalls::abi_syscall_list()` (manter ordem), gatear por politica.
-  - Mapear numeros desconhecidos para `VMError::UnknownSyscall` nos hosts.
-  - Atualizar testes: syscall list golden, ABI hash, golden de ids de pointer type e testes de politica.
-  - Docs: `crates/ivm/docs/syscalls.md`, `status.md`, `roadmap.md`.
+Estabilidade de ABI (ABI v1)
+- A superficie ABI v1 e fixa; nao se adicionam novos syscalls nem tipos pointer-ABI nesta versao.
+- As runtime upgrades devem manter `abi_version = 1` com `added_syscalls`/`added_pointer_types` vazios.
+- Os goldens de ABI (lista de syscalls, hash ABI, IDs de pointer type) permanecem fixos e nao devem mudar.
 
 Modelo de privacidade
 - Contencao de dados privados: corpos de transacao, diffs de estado e snapshots WSV para DS privados nunca saem do subconjunto de validadores privados.
@@ -350,7 +344,7 @@ Fluxo cross-Data-Space (Exemplo)
 
 Mudancas nos componentes Iroha
 - iroha_data_model: Introduzir `DataSpaceId`, identificadores qualificados por DS, descritores AMX (conjuntos de leitura/escrita), tipos de prova/commitment DA. Serializacao apenas Norito.
-- ivm: Adicionar syscalls e tipos pointer-ABI para AMX (`amx_begin`, `amx_commit`, `amx_touch`) e provas DA; atualizar testes/docs ABI conforme politica v1.
+- ivm: Manter a superficie ABI v1 fixa (sem novos syscalls nem tipos pointer-ABI); AMX/runtime upgrades usam primitivas v1 existentes; manter goldens ABI.
 - iroha_core: Implementar scheduler nexus, Space Directory, roteamento/validacao AMX, verificacao de artefatos DS e enforcement de politicas para amostragem DA e quotas.
 - Space Directory e loaders de manifestos: passar metadata de endpoints FMS (e outros descritores de servicos common-good) pelo parsing de manifestos DS para que nos auto-descubram endpoints locais ao ingressar em um Data Space.
 - kura: Blob store com erasure coding, commitments, APIs de recuperacao respeitando politicas privadas/publicas.
@@ -372,13 +366,13 @@ Configuracao e determinismo
 Caminho de migracao (Iroha 2 -> Iroha 3)
 1) Introduzir IDs qualificados por dataspace e composicao de bloco nexus/estado global no data model; adicionar feature flags para manter modos compativeis Iroha 2 durante a transicao.
 2) Implementar backends Kura/WSV em erasure coding atras de feature flags, preservando backends atuais como defaults nas fases iniciais.
-3) Adicionar syscalls e tipos pointer para operacoes AMX (atomicas multi-DS); estender testes e docs; manter ABI v1.
+3) Manter a superficie ABI v1 fixa; implementar AMX sem novos syscalls/tipos pointer e atualizar testes/docs sem mudar ABI.
 4) Entregar uma chain nexus minima com um DS publico e blocos de 1 s; depois adicionar o primeiro piloto DS privado exportando apenas provas/commitments.
 5) Expandir para transacoes atomicas cross-DS completas (AMX) com provas FASTPQ-ISI locais ao DS e attesters DA; habilitar QCs ML-DSA-87 em todos os DS.
 
 Estrategia de testes
 - Testes unitarios para tipos de data model, roundtrips Norito, comportamentos de syscalls AMX e codificacao/decodificacao de provas.
-- Testes IVM para novas syscalls e goldens ABI.
+- Testes IVM para fixar goldens de ABI v1 (lista de syscalls, hash ABI, IDs de pointer type).
 - Testes de integracao para transacoes atomicas cross-DS (positivas/negativas), metas de latencia de attesters DA (<=300 ms) e isolamento de performance sob carga.
 - Testes de seguranca para verificacao de DS QC (ML-DSA-87), deteccao de conflitos/semantica de abort e prevencao de vazamento de shards confidenciais.
 
@@ -402,6 +396,6 @@ Perguntas abertas (necessario esclarecimento)
 
 Anexo: Conformidade com politicas do repositorio
 - Norito e usado para todos os formatos on-wire e serializacao JSON via helpers Norito.
-- ABI v1 apenas; sem toggles de runtime para politicas de ABI. Adicoes de syscalls e pointer-types seguem o processo de evolucao documentado com testes golden.
+- ABI v1 apenas; sem toggles de runtime para politicas de ABI. Superficies de syscalls e pointer-types sao fixas e fixadas por testes golden.
 - Determinismo preservado entre hardware; aceleracao opcional e gateada.
 - Sem serde em caminhos de producao; sem configuracao baseada em ambiente em producao.

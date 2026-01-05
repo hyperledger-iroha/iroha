@@ -319,6 +319,7 @@ Root calls (normative)
 Runtime upgrade artifacts
 - Default executor upgrade: artifact is IVM bytecode (`.to`) and manifest; instruction: `Upgrade<DefaultExecutor> { code_hash, activation_height }`.
 - IVM upgrade: instruction toggles feature gates or version parameters (protocol‑gated) after deterministic conformance tests; artifact: versioned manifest and configuration.
+- ABI surface is fixed to v1; runtime upgrade manifests must keep `abi_version = 1` with empty `added_syscalls`/`added_pointer_types`.
 - Protocol parameters: `SetParameter` root calls update consensus/limits (protocol‑gated, with enactment delay).
 
 Sudo path (admin/multisig)

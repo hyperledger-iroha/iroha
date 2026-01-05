@@ -746,6 +746,7 @@ impl Actor {
                 );
             };
 
+            let proposal_epoch = self.epoch_for_height(proposal_height);
             let mut rbc_plan = self.prepare_rbc_plan(rbc::RbcPlanInputs {
                 signed_block: &signed_block,
                 transactions: &transactions_for_plan,
@@ -754,7 +755,7 @@ impl Actor {
                 payload_hash,
                 height: proposal_height,
                 view,
-                epoch: highest_qc.epoch,
+                epoch: proposal_epoch,
                 local_validator_index,
             })?;
             drop(payload_bytes);
@@ -1319,7 +1320,7 @@ impl Actor {
             }
         }
 
-        let epoch = self.current_epoch();
+        let epoch = self.epoch_for_height(height);
         let precommit_votes_at_view = self
             .vote_log
             .values()
