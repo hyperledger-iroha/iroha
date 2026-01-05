@@ -25,11 +25,11 @@ Consenso (Sumeragi)
     - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
 - Métricas: los gauges `sumeragi_new_view_receipts_by_hv{height,view}` reflejan los conteos.
 - GET `/v1/sumeragi/status`
-  - Instantánea del índice de líder, HighestQC/LockedQC (alturas, vistas, hashes de sujeto), contadores de colectores/VRF, aplazamientos del pacemaker, profundidad de la cola de transacciones y salud del almacén RBC (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`).
+  - Instantánea del índice de líder, Highest/Locked commit certificates (`highest_qc`/`locked_qc`, alturas, vistas, hashes de sujeto), contadores de colectores/VRF, aplazamientos del pacemaker, profundidad de la cola de transacciones y salud del almacén RBC (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`).
 - GET `/v1/sumeragi/status/sse`
   - Flujo SSE (≈1 s) del mismo payload que `/v1/sumeragi/status` para paneles en vivo.
 - GET `/v1/sumeragi/qc`
-  - Instantánea de HighestQC y LockedQC; incluye `subject_block_hash` para HighestQC cuando se conoce.
+  - Instantánea de highest/locked commit certificates; incluye `subject_block_hash` para el highest commit certificate cuando se conoce.
 - GET `/v1/sumeragi/pacemaker`
   - Temporizadores/configuración del pacemaker: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
 - GET `/v1/sumeragi/leader`
@@ -38,7 +38,7 @@ Consenso (Sumeragi)
   - Plan determinista de colectores derivado de la topología confirmada y los parámetros en cadena: exporta `mode`, el plan `(height, view)` (con `height` igual a la altura actual de la cadena), `collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, la lista ordenada de colectores y `epoch_seed` (hex) cuando NPoS está activo.
 - GET `/v1/sumeragi/params`
   - Instantánea de los parámetros de Sumeragi en cadena `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
-  - Cuando `da_enabled` es true, la evidencia de disponibilidad (`AvailabilityQC` o RBC `READY`) se rastrea pero el commit no espera a ella; el `DELIVER` local de RBC tampoco es un requisito. Los operadores pueden confirmar la salud del transporte de payloads mediante los endpoints RBC de abajo.
+  - Cuando `da_enabled` es true, la evidencia de disponibilidad (`availability evidence` o RBC `READY`) se rastrea pero el commit no espera a ella; el `DELIVER` local de RBC tampoco es un requisito. Los operadores pueden confirmar la salud del transporte de payloads mediante los endpoints RBC de abajo.
 - GET `/v1/sumeragi/rbc`
   - Contadores agregados de Reliable Broadcast: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, deliver_broadcasts_total, payload_bytes_delivered_total }`.
 - GET `/v1/sumeragi/rbc/sessions`
@@ -48,7 +48,7 @@ Consenso (Sumeragi)
 Evidencia (auditoría; no consenso)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
 - GET `/v1/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
-  - Incluye campos básicos (p. ej., DoublePrevote/Precommit, InvalidQC, InvalidProposal) para inspección.
+  - Incluye campos básicos (p. ej., DoublePrepare/Precommit, InvalidCommitCertificate, InvalidProposal) para inspección.
   - Ejemplos:
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence/count | jq .`
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`

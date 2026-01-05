@@ -504,7 +504,7 @@ AOT アーティファクト
 - ヘッダーには `height`, `prev_hash`, `state_root`, `commit_qc`, `validator_set_hash`, `timestamp_net`, `warnings_merkle_root` などを含める。
 - ライトクライアントは `commit_qc`（署名集合）と `validator_set_hash` から閾値署名を検証する。
 - `warnings_merkle_root` により、警告イベントの完全性を検証できるようにする。
-- ファイナリティは QC が揃った時点で発生し、ライトクライアントは確認ブロック数を設定で調整できる。
+- ファイナリティは commit certificate が揃った時点で発生し、ライトクライアントは確認ブロック数を設定で調整できる。
 
 ---
 

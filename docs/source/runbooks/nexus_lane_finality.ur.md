@@ -25,12 +25,12 @@ translation_last_reviewed: 2025-12-28
 
 - **Grafana (`dashboards/grafana/nexus_lanes.json`)** — “Nexus Lane Finality & Oracles” بورڈ شائع کرتا ہے۔ پینلز:
   - `histogram_quantile()` on `iroha_slot_duration_ms` (p50/p95/p99) اور تازہ ترین sample gauge۔
-  - `iroha_da_quorum_ratio` اور `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m])` سے DA churn نمایاں۔
+  - `iroha_da_quorum_ratio` اور `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])` سے DA churn نمایاں۔
   - اوریکل سطحیں: `iroha_oracle_price_local_per_xor`, `iroha_oracle_staleness_seconds`, `iroha_oracle_twap_window_seconds`, `iroha_oracle_haircut_basis_points`۔
   - سیٹلمنٹ بفر پینل (`iroha_settlement_buffer_xor`) جو `LaneBlockCommitment` receipts سے لائیو lane ڈیبٹس دکھاتا ہے۔
 - **Alert rules** — `ans3.md` کی Slot/DA SLO شقیں استعمال کرتی ہیں۔ Page جب:
   - slot-duration p95 > 1000 ms دو مسلسل 5 m ونڈوز میں،
-  - DA quorum ratio < 0.95 یا `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m]) > 0`,
+  - DA quorum ratio < 0.95 یا `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m]) > 0`,
   - oracle staleness > 90 s یا TWAP window ≠ 60 s،
   - settlement buffer < 25 % (soft) / 10 % (hard) جب میٹرک لائیو ہو۔
 
@@ -41,7 +41,7 @@ translation_last_reviewed: 2025-12-28
 | `histogram_quantile(0.95, iroha_slot_duration_ms)` | ≤ 1000 ms (hard), 950 ms warning | ڈیش بورڈ پینل استعمال کریں یا `scripts/telemetry/check_slot_duration.py` (`--json-out artifacts/nx18/slot_summary.json`) کو chaos رن کے Prometheus export پر چلائیں۔ |
 | `iroha_slot_duration_ms_latest` | تازہ ترین slot؛ اگر > 1100 ms ہو تو تحقیق کریں، چاہے quantiles ٹھیک ہوں۔ | انسیڈنٹ میں ویلیو ایکسپورٹ کریں۔ |
 | `iroha_da_quorum_ratio` | 30 m رولنگ ونڈو میں ≥ 0.95۔ | block commits کے دوران DA reschedules سے اخذ۔ |
-| `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m])` | chaos rehearsals کے باہر 0 رہنا چاہیے۔ | مسلسل اضافہ `missing-availability warning` شمار کریں۔ |
+| `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])` | chaos rehearsals کے باہر 0 رہنا چاہیے۔ | مسلسل اضافہ `missing-availability warning` شمار کریں۔ |
 
 ہر reschedule Torii pipeline میں `kind = "missing-availability warning"` warning بھی ٹرگر کرتا ہے۔ میٹرک اسپائیک کے ساتھ یہ ایونٹس کیپچر کریں تاکہ متاثرہ بلاک ہیڈر، retry کوشش اور requeue کاؤنٹرز واضح ہوں بغیر validator logs کھنگالے۔【crates/iroha_core/src/sumeragi/main_loop.rs:5164】
 | `iroha_oracle_staleness_seconds` | ≤ 60 s۔ 75 s پر الرٹ۔ | 60 s TWAP feeds کی staleness ظاہر کرتا ہے۔ |

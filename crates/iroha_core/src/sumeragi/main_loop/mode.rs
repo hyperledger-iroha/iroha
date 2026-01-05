@@ -97,7 +97,6 @@ impl Actor {
         self.qc_cache.clear();
         self.execution_qc_cache.clear();
         self.vote_log.clear();
-        self.commit_votes.clear();
         let (_, redundant_r) = self.collector_plan_params();
         self.subsystems.propose.collector_redundant_limit = redundant_r.max(1);
         self.pending.pending_replay_last_sent.clear();
@@ -118,8 +117,6 @@ impl Actor {
         reset_runtime_state_for_mode_flip(
             &mut self.subsystems.propose.pacemaker,
             &mut self.subsystems.propose.new_view_tracker,
-            &mut self.subsystems.propose.view_change_chain,
-            &mut self.subsystems.propose.broadcast_new_views,
             &mut self.phase_tracker,
             &mut self.subsystems.propose.propose_attempt_monitor,
             &mut self.subsystems.propose.pacemaker_backpressure,

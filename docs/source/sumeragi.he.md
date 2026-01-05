@@ -18,28 +18,28 @@ translator: manual
 ### סקירה
 - **תפקידים ורוטציה** – הטופולוגיה המסודרת מחלקת את העמיתים לתפקידים `Leader`, ‏`ValidatingPeer`, ‏`ProxyTail`, ‏`SetBValidator`. לאחר כל קומיט הקבוצה הראשונה (`min_votes_for_commit()`) זזה שמאלה לפי `hash(prev_block_hash) mod min_votes_for_commit()`; שינויי View מסובבים את כל הטופולוגיה כדי לקדם את הלידר. הפונקציה `rotated_for_prev_block_hash(prev_hash)` ב-`network_topology.rs` מספקת רוטציה דטרמיניסטית קלה לביקורת על בסיס האש הבלוק הקודם.
 - **מצב K-Collectors** – לכל גובה הטופולוגיה בוחרת דטרמיניסטית K אספנים כקטע רציף שמתחיל ב-`proxy_tail_index()` (כולל) ללא עטיפה; הלידר לעולם אינו נבחר. כאשר K=1 מתקבלת שוב תצורת הפרוקסי-טייל ההיסטורית.
-- **First-QC-wins** – כל אספן ייעודי (כולל Proxy Tail) שמרכיב QC תקף ל-Precommit מפרסם אותו. עמיתים מאמצים את ה-QC התקף הראשון עבור `(height,hash)` ומתעלמים מאיחורים; הקומיט מבוסס מעתה כולו על QCs אלו.
+- **First-commit-certificate-wins** – כל אספן ייעודי (כולל Proxy Tail) שמרכיב commit certificate תקף ל-Precommit מפרסם אותו. עמיתים מאמצים את ה-commit certificate התקף הראשון עבור `(height,hash)` ומתעלמים מאיחורים; הקומיט מבוסס מעתה כולו על commit certificates אלו.
 
 ### תפקידי נוד (קונפיגורציה)
 - `validator` (ברירת מחדל): משתתף בקונצנזוס לפי התפקיד בטופולוגיה הנוכחית.
-- `observer`: מוצא מהטופולוגיה (התפקיד הופך `Undefined`), אינו מציע/מצביע/אוסף גם אם משבצת המקור הייתה אספן. מסתנכרן בקאנונית באמצעות Gossip ויכול לקמוט באמצעות QCs שהתקבלו.
+- `observer`: מוצא מהטופולוגיה (התפקיד הופך `Undefined`), אינו מציע/מצביע/אוסף גם אם משבצת המקור הייתה אספן. מסתנכרן בקאנונית באמצעות Gossip ויכול לקמוט באמצעות commit certificates שהתקבלו.
 
 ### דרישות מפתח ולידטור
 - ולידטורים חייבים להשתמש במפתחות BLS-Normal ולהציג הוכחת החזקה (PoP). באתחול (גובה 0) נבנית רשימת הוולידטורים מ-`trusted_peers` לאחר סינון עמיתים ללא BLS-Normal או עם PoP חסר/שגוי.
-- QC נושאים חתימת BLS מצטברת על מסר אחיד, מערך חתימות מפורש ומפת חתימות קומפקטית. האימות נשען על החתימות המפורשות; הצבירה והביטמאפ הם ארטיפקטים לאודיט ואסור שישנו סמנטיקה.
+- commit certificate נושאים חתימת BLS מצטברת על מסר אחיד, מערך חתימות מפורש ומפת חתימות קומפקטית. האימות נשען על החתימות המפורשות; הצבירה והביטמאפ הם ארטיפקטים לאודיט ואסור שישנו סמנטיקה.
 
 ### זרימת הודעות (מצב יציב)
 - **לידר**: בעת צפייה לבלוק (טרנזקציות בתור או בלוק קודם שאינו ריק) והדד-ליין מתקרב – משדר `BlockCreated`.
 - **ולידטורים**: מאמתים, מפיקים Availability votes ושולחים Prevote/Precommit לאספנים המיועדים. בטיימאאוט לוקאלי ב-View 0 ניתן לפנות עד `r` אספנים נוספים.
-- **אספנים**: מרכזים הצבעות ומפרסמים Availability/Prevote/Precommit QC. ה-QC התקף הראשון עבור `(height,hash)` מנצח; איחורים נדחים.
-- **עמיתים מתבוננים**: אינם מצביעים ב-View 0. ב-Views מאוחרים עשויים להצביע; כאשר גוף הבלוק ו-QC תואם זמינים – מבצעים קומיט דטרמיניסטי.
-- **מקבלים**: בודקים QC, מעדכנים מעקב Highest/Locked QC ומנסים קומיט כאשר ה-QC והבלוק תואמים.
+- **אספנים**: מרכזים הצבעות ומפרסמים Availability/Prevote/Precommit commit certificate. ה-commit certificate התקף הראשון עבור `(height,hash)` מנצח; איחורים נדחים.
+- **עמיתים מתבוננים**: אינם מצביעים ב-View 0. ב-Views מאוחרים עשויים להצביע; כאשר גוף הבלוק ו-commit certificate תואם זמינים – מבצעים קומיט דטרמיניסטי.
+- **מקבלים**: בודקים commit certificate, מעדכנים מעקב Highest/Locked commit certificate ומנסים קומיט כאשר ה-commit certificate והבלוק תואמים.
 
-### כלל הקומיט (פייפליין של שני QC)
-- כל ולידטור עוקב אחר `highest_qc` (ה-QC האחרון שנצפה, לרוב לגובה הילד) ואחר `locked_qc` (שומר הבטיחות הנוכחי). הצעה נבנית רק אם `highest_qc` מרחיב את `locked_qc`; אחרת היא מושלכת גם אם קיים רוב NEW_VIEW.
-- בלוק בגובה `h` מצטבר כאשר מתקבל QC לגובה `h+1` שהורה שלו תואם ל-QC הנעול בגובה `h`. התנאי הדו-עומקי שומר על הפייפליין ומונע משרשרת מתנגשת להשיג קומיט.
-- כך אין צורך בהודעת סופיות נוספת: כאשר QC הילד מגיע הבלוק האב בטוח, וכל נוד המחזיק את הבלוק ושני ה-QC מסמן קומיט. מי שפספס את ה-QC הראשון משלים דרך Gossip/RBC ומגיע לאותה החלטה.
-- מכיוון שרק שני גבהים פתוחים בו-זמנית, אספנים, RBC וטלמטריה יכולים לצנר עבודה ללא סכנת קומיטים מתפצלים. האינווריאנטים מיושמים ב-`sumeragi::main_loop`: ‏`ensure_locked_qc_allows` מגן על הרכבת הצעות, בלוקים ממתינים נשמרים בזיכרון והקומיט משחרר `locked_qc` רק לאחר תצפית ב-QC ילד תואם.
+### כלל הקומיט (פייפליין של שני commit certificate)
+- כל ולידטור עוקב אחר `highest_qc` (ה-commit certificate האחרון שנצפה, לרוב לגובה הילד) ואחר `locked_qc` (שומר הבטיחות הנוכחי). הצעה נבנית רק אם `highest_qc` מרחיב את `locked_qc`; אחרת היא מושלכת גם אם קיים רוב NEW_VIEW.
+- בלוק בגובה `h` מצטבר כאשר מתקבל commit certificate לגובה `h+1` שהורה שלו תואם ל-commit certificate הנעול בגובה `h`. התנאי הדו-עומקי שומר על הפייפליין ומונע משרשרת מתנגשת להשיג קומיט.
+- כך אין צורך בהודעת סופיות נוספת: כאשר commit certificate הילד מגיע הבלוק האב בטוח, וכל נוד המחזיק את הבלוק ושני ה-commit certificate מסמן קומיט. מי שפספס את ה-commit certificate הראשון משלים דרך Gossip/RBC ומגיע לאותה החלטה.
+- מכיוון שרק שני גבהים פתוחים בו-זמנית, אספנים, RBC וטלמטריה יכולים לצנר עבודה ללא סכנת קומיטים מתפצלים. האינווריאנטים מיושמים ב-`sumeragi::main_loop`: ‏`ensure_locked_qc_allows` מגן על הרכבת הצעות, בלוקים ממתינים נשמרים בזיכרון והקומיט משחרר `locked_qc` רק לאחר תצפית ב-commit certificate ילד תואם.
 
 ### פייסמייקר (שינויי View)
 - ב-v1 בוטל מרווח ההצבעה של Observers ב-View 0: עמיתי צפייה אינם מצביעים כלל ב-View 0. בטיימאאוט מקומי הם מבקשים שינוי View ללא הרחבה לפני הרוטציה. התזמונים נשלטים על ידי `SumeragiParameters` השרשרתיים (`BlockTimeMs`,‏ `CommitTimeMs`) – הצעת לידר סביב שליש זמן הצינור וקומיט צפוי סביב שני שלישים.
@@ -55,19 +55,20 @@ translator: manual
 - `Topology::role_at(index)` מספק את תפקיד העמית, ו-`is_validator(idx)` מאשר חברות לגובה הנוכחי.
 
 ### ממשק API
-- `iroha_cli sumeragi status --summary` / `GET /v1/sumeragi/status/summary` מציגים טופולוגיה, חלוקת תפקידים, מצב QC, שימוש ב-RBC ואינפורמציה על האפוק (`epoch_len`,‏ `epoch_commit`,‏ `epoch_reveal`).
+- `iroha_cli sumeragi status --summary` / `GET /v1/sumeragi/status/summary` מציגים טופולוגיה, חלוקת תפקידים, מצב commit certificate, שימוש ב-RBC ואינפורמציה על האפוק (`epoch_len`,‏ `epoch_commit`,‏ `epoch_reveal`).
 - `iroha_cli sumeragi params --summary` / `GET /v1/sumeragi/params` מחזירים את פרמטרי הקונצנזוס: ‏`collectors_k`,‏ `collectors_redundant_send_r`, טיימרים, מוד.
-- `iroha_cli sumeragi status` / `GET /v1/sumeragi/status` מספקים רשומת Norito מלאה עם היסטוריית תפקידים, View עכשווי, Locked/Highest QC ובלוקים ממתינים.
+- `iroha_cli sumeragi status` / `GET /v1/sumeragi/status` מספקים רשומת Norito מלאה עם היסטוריית תפקידים, View עכשווי, Locked/Highest commit certificate ובלוקים ממתינים.
 
 ### עיקרי המימוש
-- `sumeragi::main_loop` הוא הלולאה המרכזית שמנהלת עדכוני QC, טיפוס הצעות וקומיט.
-- אחסון QC מנוהל באמצעות מבני `HighestQc` ו-`LockedQc` שמפיקים לוגים מפורטים ואירועי Evidence בעת אי-התאמה.
-- RBC פועל באופן אסינכרוני; עם הגעת גוף הבלוק וה-QC נבחנת האפשרות לקמוט מידית.
+- `sumeragi::main_loop` הוא הלולאה המרכזית שמנהלת עדכוני commit certificate, טיפוס הצעות וקומיט.
+- אחסון commit certificate מנוהל באמצעות מבני `HighestQc` ו-`LockedQc` שמפיקים לוגים מפורטים ואירועי Evidence בעת אי-התאמה.
+- RBC פועל באופן אסינכרוני; עם הגעת גוף הבלוק וה-commit certificate נבחנת האפשרות לקמוט מידית.
 - הפייסמייקר שולט בדופק ובשינוי View בהתאם לטיימרים ומרחיב View רק לאחר עמידה בסף.
 - טלמטריה מפרסמת את מדדי `sumeragi_*` ל-Prometheus, כולל עומסי תורים, ראיות ונתוני RBC.
 
 ### RBC / DA (זמינות נתונים)
 - RBC משתמש בקבוצת האספנים כדי להפיץ את גוף הבלוק. כותרת הבלוק מכילה מזהה סשן ומטא-נתונים.
+- `sumeragi.da_enabled = true` עוקב אחרי עדות זמינות (`availability evidence`) אבל לא מעכב קומיט (ל־RBC `DELIVER` מקומי אין תנאי). כאשר עדות זמינות חסרה, `sumeragi_da_gate_block_total{reason="missing_local_data"}` גדל ו־`da_reschedule_total` הוא legacy ולכן בדרך כלל נשאר 0.
 - תרחישים של ≥10 MiB נבחנים בסוויטת האינטגרציה ומודדים זמני RBC, קומיט, סף סינון תורים וזרימות P2P. הפרת SLO נכשלת במבחן ומפעילה התרעה.
 
 ### דוגמאות CLI לטופולוגיה ותפקידים
@@ -76,7 +77,7 @@ translator: manual
 - `iroha_cli sumeragi roles --peer <account>` מדווח על התפקיד הנוכחי של עמית מסוים.
 
 ### ראיות ו-Slashing
-- ראיות הכפלה (`double_vote`, ‏`double_propose`), QC/הצעה לא תקינים ואי-פעילות נשמרות כ-`Evidence`. הן מנוהלות ב-WSV עם אופק גיזום, מופצות ב-Prometheus ומחושבות עבור CLI.
+- ראיות הכפלה (`double_vote`, ‏`double_propose`), commit certificate/הצעה לא תקינים ואי-פעילות נשמרות כ-`Evidence`. הן מנוהלות ב-WSV עם אופק גיזום, מופצות ב-Prometheus ומחושבות עבור CLI.
 - טרנזקציית Evidence עוברת `validate_evidence`, ואם היא תקפה – הסנקציה מיושמת והמדווח מתוגמל.
 
 ### ממשל והחלפת מצבים
@@ -97,12 +98,12 @@ translator: manual
 - `GET /v1/sumeragi/params` – פרמטרים פעילים.
 
 ### מדדי טלמטריה
-- Counters: ‏`sumeragi_view_change_total`, ‏`sumeragi_backpressure_deferrals_total`, ‏`sumeragi_da_gate_block_total{reason="missing_availability_qc"}`, ‏`sumeragi_evidence_total`.
+- Counters: ‏`sumeragi_view_change_total`, ‏`sumeragi_backpressure_deferrals_total`, ‏`sumeragi_da_gate_block_total{reason="missing_local_data"}`, ‏`sumeragi_evidence_total`.
 - Histograms/Gauges: ‏`sumeragi_collect_witness_ms`, ‏`sumeragi_da_queue_depth`, ‏`sumeragi_pending_blocks`, ‏`sumeragi_locked_qc_height`.
 - לוחות מחוונים: טבלאות אספנים לפי קצב הצבעות, מדדי RBC, פייסמייקר EMA, חלונות VRF.
 
 ### כיסוי בדיקות
-- בדיקות יחידה: כיסוי encode/decode לטיפוסי Norito, אינווריאנטים של טופולוגיה, ניהול QC.
+- בדיקות יחידה: כיסוי encode/decode לטיפוסי Norito, אינווריאנטים של טופולוגיה, ניהול commit certificate.
 - אינטגרציה: `sumeragi_vote_qc_commit.rs`, ‏`sumeragi_da.rs`, ‏`sumeragi_randomness.rs`, ‏`sumeragi_lock_convergence.rs`, ‏`sumeragi_npos_performance.rs`, ‏`sumeragi_telemetry.rs`.
 - CI: הפעלה nightly של בדיקות ביצועים, RBC, ראיות.
 
@@ -119,22 +120,22 @@ translator: manual
 - `Pacemaker` אחראי על איסוף Viewchange והתקנות view חדש.
 - `Epoch` מסמן שינויי ממשל או טופולוגיה; `FetchedTopology` מחזיר את הסנאפשוט המתאים.
 
-### Highest / Locked QC
-- `HighestQc` ו-`LockedQc` מנוהלים באמצעות מבנים ברורים. `update_highest_qc` מקבל רק QC מתקדם יותר. `ensure_locked_qc_allows` מוודא שהצעה מרחיבה נעילה או נושאת QC גבוה יותר.
+### Highest / Locked commit certificate
+- `HighestQc` ו-`LockedQc` מנוהלים באמצעות מבנים ברורים. `update_highest_qc` מקבל רק commit certificate מתקדם יותר. `ensure_locked_qc_allows` מוודא שהצעה מרחיבה נעילה או נושאת commit certificate גבוה יותר.
 
 ### RBC
 - סשני RBC מזוהים באמצעות `RbcSessionId` ומכילים מטא-נתונים על גובה, hash, ומספר חלקים. הם מפיצים את גוף הבלוק ומספקים זמינות נתונים.
-- כאשר `sumeragi.da_enabled` פעיל, קומיט תלוי ב-`AvailabilityQC` (ולא בהשלמה מקומית של RBC). RBC משמש כמנגנון הפצה/שחזור של ה-payload.
+- כאשר `sumeragi.da_enabled` פעיל, קומיט תלוי ב-`availability evidence` (ולא בהשלמה מקומית של RBC). RBC משמש כמנגנון הפצה/שחזור של ה-payload.
 
 ### ExecQC וראיות
-- ExecQC מספק חתימות SBV-AM על שורש המצב לאחר ההרצה. כאשר `require_execution_qc` מופעל, קומיט תלוי הן ב-PrecommitQC והן ב-ExecQC.
+- ExecQC מספק חתימות SBV-AM על שורש המצב לאחר ההרצה. כאשר `require_execution_qc` מופעל, קומיט תלוי הן ב-commit certificate (precommit) והן ב-ExecQC.
 - `require_wsv_exec_qc` מבטיח שה-WSV שומר את ה-ExecQC לפני הקומיט, אחרת הקומיט מושהה.
 - כאשר שער ה-ExecQC נדרש, הודעות ExecutionQC מ-view ישן עדיין מתקבלות; אם ה-payload חסר הן מפעילות בקשת בלוק חסר כדי למנוע תקיעה במוד קפדני.
 
 ### הגדרת `proof_policy`
-- `proof_policy = "precommit_qc"` (ברירת מחדל): דרישה ל-PrecommitQC בלבד.
+- `proof_policy = "precommit_qc"` (ברירת מחדל): דרישה ל-commit certificate (precommit) בלבד.
 - `proof_policy = "exec_qc"` או `require_execution_qc = true`: מוסיפים שער ExecQC.
-- `proof_policy = "off"`: מבטל את דרישת ה-QC (לצורכי בדיקה בלבד, לא מומלץ לייצור).
+- `proof_policy = "off"`: מבטל את דרישת ה-commit certificate (לצורכי בדיקה בלבד, לא מומלץ לייצור).
 
 ### Telemetry & Backpressure
 - `pacemaker_backpressure_deferrals_total` מורה על עיכובים עקב לחץ תורים; `scripts/sumeragi_backpressure_log_scraper.py` קושר בין לוגים למדדים.
@@ -154,7 +155,7 @@ translator: manual
 
 ### מדריך טלמטריה לאספנים ולעדי־ביצוע
 
-כאשר אספן תקוע או עד ביצוע מאחר, הדבר יופיע כהעדר AvailabilityQC, איסוף DA מתמשך או `collect_witness_ms` גבוה. להלן המדדים המרכזיים:
+כאשר אספן תקוע או עד ביצוע מאחר, הדבר יופיע כהעדר availability evidence, איסוף DA מתמשך או `collect_witness_ms` גבוה. להלן המדדים המרכזיים:
 
 **לוחות מחוונים מרכזיים**
 - `sum(rate(sumeragi_da_votes_ingested_total[1m])) by (collector_idx)` — זיהוי אספנים שלא קולטים קולות.
@@ -162,13 +163,13 @@ translator: manual
 - `sumeragi_phase_latency_ms{phase="collect_da"}` ו-`{phase="collect_witness"}` (P95 על פני 5 דק') — זמן לאיסוף קולות זמינות ו-ACK עדים.
 - `sumeragi_phase_latency_ms{phase="collect_aggregator"}` — פיזור אספנים; קשרו ל-`sumeragi_gossip_fallback_total`, `block_created_dropped_by_lock_total`, `block_created_hint_mismatch_total`, `block_created_proposal_mismatch_total`, `pacemaker_backpressure_deferrals_total`.
 - `sumeragi_phase_latency_ema_ms{phase=…}` — ממוצע נע (EMA) לכל פאזת צינור. סטייה בין EMA למדידות גולמיות תחייב בדיקה.
-- `/v1/sumeragi/telemetry` / `iroha_cli sumeragi status --summary` — צילום מצב עם קולות פר אספן, זמני QC, backlog של RBC ו-H/L QC.
+- `/v1/sumeragi/telemetry` / `iroha_cli sumeragi status --summary` — צילום מצב עם קולות פר אספן, זמני commit certificate, backlog של RBC ו-H/L commit certificate.
 - `/v1/sumeragi/status/sse` — זרם SSE בקצב ≈1 שנייה לתצוגות חיות.
 - `/v1/sumeragi/phases` / `iroha_cli sumeragi phases --summary` — `{propose_ms,…,commit_ms,pipeline_total_ms}` ו-`ema_ms`.
-- `docs/source/grafana_sumeragi_overview.json` — דשבורד Grafana מוכן המציג סטיות בגובה QC, מוני דרופ ונתוני VRF.
+- `docs/source/grafana_sumeragi_overview.json` — דשבורד Grafana מוכן המציג סטיות בגובה commit certificate, מוני דרופ ונתוני VRF.
 
 **ספי התרעה**
-- זמני AvailabilityQC: אם `sumeragi_qc_last_latency_ms{kind="availability"}` חוצה `0.6 * CommitTimeMs` פעמיים או שה-P95 עובר `0.7 * CommitTimeMs`.
+- זמני availability evidence: אם `sumeragi_qc_last_latency_ms{kind="availability"}` חוצה `0.6 * CommitTimeMs` פעמיים או שה-P95 עובר `0.7 * CommitTimeMs`.
 - קיפאון הצבעות: `sum(rate(sumeragi_da_votes_ingested_total[2m])) == 0` בזמן ש-`sumeragi_rbc_backlog_sessions_pending > 0`.
 - עדי ביצוע: `collect_witness_ms` או P95 של `sumeragi_phase_latency_ms{phase="collect_witness"}` עולים על `0.75 * CommitTimeMs`, או נותרים אפס ≥3 סבבים למרות בלוקים חדשים.
 - פיזור אספנים: `collect_aggregator_ms` > `0.5 * sumeragi.npos.timeouts.aggregator_ms` בשלושה סבבים, ‎`sumeragi_redundant_sends_total` > `redundant_send_r`, ‎`rate(sumeragi_gossip_fallback_total[5m]) > 0`, או ‎`increase(block_created_*[5m]) > 0`/`increase(pacemaker_backpressure_deferrals_total[5m]) > 0`.

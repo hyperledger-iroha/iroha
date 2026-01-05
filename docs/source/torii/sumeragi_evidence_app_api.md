@@ -43,7 +43,7 @@ parameters (`EvidenceListQuery`):
 |-----------|------|---------|-------|
 | `limit`   | `usize` | 50 | Clamped to `1..=1000`. |
 | `offset`  | `usize` | `0` | Offset into the ordered snapshot. |
-| `kind`    | `string` | _none_ | One of `DoublePrevote`, `DoublePrecommit`, `DoubleExecVote`, `InvalidQC`, `InvalidProposal`. |
+| `kind`    | `string` | _none_ | One of `DoublePrepare`, `DoubleCommit`, `DoubleExecVote`, `InvalidCommitCertificate`, `InvalidProposal`. |
 
 Response JSON is a Norito JSON object:
 
@@ -52,7 +52,7 @@ Response JSON is a Norito JSON object:
   "total": 4,
   "items": [
     {
-      "kind": "DoublePrevote",
+      "kind": "DoublePrepare",
       "phase": "Prevote",
       "height": 1024,
       "view": 8,
@@ -104,7 +104,7 @@ Submits slashing evidence to the running Sumeragi instance.
 ```json
 {
   "status": "accepted",
-  "kind": "DoublePrevote"
+  "kind": "DoublePrepare"
 }
 ```
 

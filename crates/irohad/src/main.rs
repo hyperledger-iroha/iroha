@@ -808,18 +808,26 @@ impl NetworkRelay {
                 )
             }
             ConsensusParams(_) => ("ConsensusParams", None, None),
-            AvailabilityVote(vote) => ("AvailabilityVote", Some(vote.height), Some(vote.view)),
-            AvailabilityQC(qc) => ("AvailabilityQC", Some(qc.height), Some(qc.view)),
-            PrevoteVote(vote) => ("PrevoteVote", Some(vote.0.height), Some(vote.0.view)),
-            PrevoteQC(qc) => ("PrevoteQC", Some(qc.0.height), Some(qc.0.view)),
-            PrecommitVote(vote) => ("PrecommitVote", Some(vote.0.height), Some(vote.0.view)),
-            PrecommitQC(qc) => ("PrecommitQC", Some(qc.0.height), Some(qc.0.view)),
+            CommitVote(vote) => {
+                let label = match vote.phase {
+                    iroha_core::sumeragi::consensus::Phase::Prepare => "PrepareVote",
+                    iroha_core::sumeragi::consensus::Phase::Commit => "CommitVote",
+                    iroha_core::sumeragi::consensus::Phase::NewView => "NewViewVote",
+                };
+                (label, Some(vote.height), Some(vote.view))
+            }
+            CommitCertificate(cert) => {
+                let label = match cert.phase {
+                    iroha_core::sumeragi::consensus::Phase::Prepare => "PrepareCert",
+                    iroha_core::sumeragi::consensus::Phase::Commit => "CommitCert",
+                    iroha_core::sumeragi::consensus::Phase::NewView => "NewViewCert",
+                };
+                (label, Some(cert.height), Some(cert.view))
+            }
             VrfCommit(_) => ("VrfCommit", None, None),
             VrfReveal(_) => ("VrfReveal", None, None),
             ExecVote(vote) => ("ExecVote", Some(vote.height), Some(vote.view)),
             ExecutionQC(qc) => ("ExecutionQC", Some(qc.height), Some(qc.view)),
-            WitnessAvailAck(ack) => ("WitnessAvailAck", Some(ack.height), Some(ack.view)),
-            WitnessAvailQC(qc) => ("WitnessAvailQC", Some(qc.height), Some(qc.view)),
             ExecWitness(witness) => ("ExecWitness", Some(witness.height), Some(witness.view)),
             RbcInit(init) => ("RbcInit", Some(init.height), Some(init.view)),
             RbcChunk(chunk) => ("RbcChunk", Some(chunk.height), Some(chunk.view)),
@@ -832,7 +840,6 @@ impl NetworkRelay {
                 Some(proposal.header.height),
                 Some(proposal.header.view),
             ),
-            CommitVote(vote) => ("CommitVote", Some(vote.height), Some(vote.view)),
         }
     }
 
@@ -841,9 +848,7 @@ impl NetworkRelay {
     ) -> (&'static str, Option<u64>, Option<u64>) {
         use iroha_core::sumeragi::message::ControlFlow::*;
         match msg {
-            NewView(frame) => ("NewView", Some(frame.height), Some(frame.view)),
             Evidence(_) => ("Evidence", None, None),
-            ViewChangeProof(_) => ("ViewChangeProof", None, None),
         }
     }
 

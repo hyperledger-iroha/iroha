@@ -349,7 +349,7 @@ fn roster_for_evidence(
         }
         if let Some(cert) = commit_certs
             .iter()
-            .find(|cert| cert.height == height && cert.block_hash == hash)
+            .find(|cert| cert.height == height && cert.subject_block_hash == hash)
         {
             if !cert.validator_set.is_empty() {
                 return Some(cert.validator_set.clone());
@@ -457,7 +457,7 @@ fn evidence_epoch(evidence: &Evidence) -> u64 {
         EvidencePayload::DoubleVote { v1, .. } => v1.epoch,
         EvidencePayload::DoubleExecVote { v1, .. } => v1.epoch,
         EvidencePayload::InvalidProposal { proposal, .. } => proposal.header.epoch,
-        EvidencePayload::InvalidQc { qc, .. } => qc.epoch,
+        EvidencePayload::InvalidCommitCertificate { certificate, .. } => certificate.epoch,
         EvidencePayload::Censorship { .. } => {
             // TODO: derive censorship epoch from receipt heights once the attribution policy is defined.
             0
@@ -496,14 +496,16 @@ fn offender_indices(
             consensus_mode,
             prf_seed,
         ),
-        EvidencePayload::InvalidQc { qc, .. } => canonicalize_indices_for_view(
-            bitmap_indices(&qc.aggregate.signers_bitmap),
-            qc.height,
-            qc.view,
-            topology_len,
-            consensus_mode,
-            prf_seed,
-        ),
+        EvidencePayload::InvalidCommitCertificate { certificate, .. } => {
+            canonicalize_indices_for_view(
+                bitmap_indices(&certificate.aggregate.signers_bitmap),
+                certificate.height,
+                certificate.view,
+                topology_len,
+                consensus_mode,
+                prf_seed,
+            )
+        }
         EvidencePayload::Censorship { .. } => {
             // TODO: map censorship evidence to responsible leaders once the attribution policy is defined.
             Vec::new()
@@ -513,8 +515,8 @@ fn offender_indices(
 
 fn evidence_has_legitimate_empty_offenders(evidence: &Evidence) -> bool {
     match &evidence.payload {
-        EvidencePayload::InvalidQc { qc, .. } => {
-            bitmap_indices(&qc.aggregate.signers_bitmap).is_empty()
+        EvidencePayload::InvalidCommitCertificate { certificate, .. } => {
+            bitmap_indices(&certificate.aggregate.signers_bitmap).is_empty()
         }
         EvidencePayload::Censorship { .. }
         | EvidencePayload::DoubleVote { .. }
@@ -601,9 +603,7 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::AccountId,
-        block::consensus::{
-            Evidence, EvidenceKind, EvidencePayload, EvidenceRecord, Phase, Qc, QcAggregate, Vote,
-        },
+        block::consensus::{Evidence, EvidenceKind, EvidencePayload, EvidenceRecord},
         consensus::{CommitCertificate, ValidatorSetCheckpoint, VrfEpochRecord},
         parameter::system::SumeragiConsensusMode,
         prelude::{BlockHeader, DomainId, PeerId},
@@ -616,7 +616,10 @@ mod tests {
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
-        sumeragi::evidence::evidence_key,
+        sumeragi::{
+            consensus::{CommitAggregate, PERMISSIONED_TAG, Phase, Qc, Vote},
+            evidence::evidence_key,
+        },
         telemetry::StateTelemetry,
     };
 
@@ -763,19 +766,26 @@ mod tests {
 
     fn record_roster_history(height: u64, block_hash: HashOf<BlockHeader>, roster: Vec<PeerId>) {
         let commit_cert = CommitCertificate {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
             height,
-            block_hash,
             view: 0,
             epoch: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            signatures: Vec::new(),
+            aggregate: CommitAggregate {
+                signers_bitmap: Vec::new(),
+                bls_aggregate_signature: Vec::new(),
+            },
         };
         let checkpoint = ValidatorSetCheckpoint::new(
             height,
             block_hash,
             roster,
+            Vec::new(),
             Vec::new(),
             iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             None,
@@ -797,14 +807,13 @@ mod tests {
                 height: 2,
                 view: 1,
                 epoch: 0,
-                highest_qc: iroha_data_model::block::consensus::QcHeaderRef {
+                highest_cert: iroha_data_model::block::consensus::CommitCertificateRef {
                     height: 1,
                     view: 0,
                     epoch: 0,
                     subject_block_hash: parent_hash,
-                    phase: Phase::Precommit,
+                    phase: Phase::Commit,
                 },
-                avail_qc_ref: None,
             },
             payload_hash: Hash::prehashed([0xA4; 32]),
         };
@@ -1000,23 +1009,28 @@ mod tests {
         let keypair = KeyPair::random();
         let roster = vec![PeerId::new(keypair.public_key().clone())];
         let qc = Qc {
-            phase: crate::sumeragi::consensus::Phase::Prevote,
+            phase: Phase::Prepare,
             subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
                 [0x11; Hash::LENGTH],
             )),
             height: 1,
             view: 1,
             epoch: 0,
-            aggregate: QcAggregate {
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: CommitAggregate {
                 signers_bitmap: Vec::new(),
                 bls_aggregate_signature: Vec::new(),
             },
         };
         record_roster_history(qc.height, qc.subject_block_hash, roster);
         let evidence = Evidence {
-            kind: EvidenceKind::InvalidQC,
-            payload: EvidencePayload::InvalidQc {
-                qc,
+            kind: EvidenceKind::InvalidCommitCertificate,
+            payload: EvidencePayload::InvalidCommitCertificate {
+                certificate: qc,
                 reason: "empty bitmap".to_owned(),
             },
         };
@@ -1070,20 +1084,20 @@ mod tests {
         let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
         record_roster_history(2, block_hash, roster);
         let v1 = Vote {
-            phase: Phase::Prevote,
+            phase: Phase::Prepare,
             block_hash,
             height: 2,
             view: 1,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
         let mut v2 = v1.clone();
         v2.block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x23; Hash::LENGTH]));
         let evidence = Evidence {
-            kind: EvidenceKind::DoublePrevote,
+            kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
         let record = EvidenceRecord {
@@ -1134,20 +1148,20 @@ mod tests {
         let block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x31; Hash::LENGTH]));
         let v1 = Vote {
-            phase: Phase::Prevote,
+            phase: Phase::Prepare,
             block_hash,
             height: 3,
             view: 1,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
         let mut v2 = v1.clone();
         v2.block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x32; Hash::LENGTH]));
         let evidence = Evidence {
-            kind: EvidenceKind::DoublePrevote,
+            kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
         let record = EvidenceRecord {
@@ -1200,20 +1214,20 @@ mod tests {
         record_roster_history(4, block_hash, roster);
 
         let v1 = Vote {
-            phase: Phase::Prevote,
+            phase: Phase::Prepare,
             block_hash,
             height: 4,
             view: 1,
             epoch: 1,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
         let mut v2 = v1.clone();
         v2.block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; Hash::LENGTH]));
         let evidence = Evidence {
-            kind: EvidenceKind::DoublePrevote,
+            kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
         let record = EvidenceRecord {
@@ -1317,19 +1331,19 @@ mod tests {
         let block_hash_b =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x20; Hash::LENGTH]));
         let v1 = Vote {
-            phase: Phase::Prevote,
+            phase: Phase::Prepare,
             block_hash: block_hash_a,
             height: 5,
             view: 0,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
         let mut v2 = v1.clone();
         v2.block_hash = block_hash_b;
         let evidence = Evidence {
-            kind: EvidenceKind::DoublePrevote,
+            kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
 
@@ -1363,19 +1377,19 @@ mod tests {
         let block_hash_b =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB0; Hash::LENGTH]));
         let v1 = Vote {
-            phase: Phase::Prevote,
+            phase: Phase::Prepare,
             block_hash: block_hash_a,
             height: 1,
             view: 0,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
         let mut v2 = v1.clone();
         v2.block_hash = block_hash_b;
         let evidence = Evidence {
-            kind: EvidenceKind::DoublePrevote,
+            kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
 
@@ -1402,19 +1416,26 @@ mod tests {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB0; Hash::LENGTH]));
 
         let commit_cert = CommitCertificate {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash_b,
             height,
-            block_hash: block_hash_b,
             view: 0,
             epoch: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            signatures: Vec::new(),
+            aggregate: CommitAggregate {
+                signers_bitmap: Vec::new(),
+                bls_aggregate_signature: Vec::new(),
+            },
         };
         let checkpoint = ValidatorSetCheckpoint::new(
             height,
             block_hash_b,
             roster.clone(),
+            Vec::new(),
             Vec::new(),
             iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             None,
@@ -1423,19 +1444,19 @@ mod tests {
         crate::sumeragi::status::record_validator_checkpoint(checkpoint);
 
         let v1 = Vote {
-            phase: Phase::Prevote,
+            phase: Phase::Prepare,
             block_hash: block_hash_a,
             height,
             view: 0,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
         let mut v2 = v1.clone();
         v2.block_hash = block_hash_b;
         let evidence = Evidence {
-            kind: EvidenceKind::DoublePrevote,
+            kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
 

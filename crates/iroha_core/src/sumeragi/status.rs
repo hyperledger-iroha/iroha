@@ -42,14 +42,14 @@ use crate::{
     telemetry::TxGossipSnapshot,
 };
 
-/// Last-observed reason that data-availability tracking reported missing evidence.
+/// Last-observed reason that data-availability tracking reported missing data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum DaGateReasonSnapshot {
     /// No DA availability shortfall has been recorded.
     #[default]
     None,
-    /// Missing a quorum certificate for the availability check.
-    MissingAvailabilityQc,
+    /// Missing local data required to validate.
+    MissingLocalData,
     /// Manifest was not found on disk.
     ManifestMissing,
     /// Manifest hash mismatched the commitment.
@@ -64,7 +64,7 @@ impl DaGateReasonSnapshot {
     const fn as_code(self) -> u8 {
         match self {
             Self::None => 0,
-            Self::MissingAvailabilityQc => 1,
+            Self::MissingLocalData => 1,
             Self::ManifestMissing => 3,
             Self::ManifestHashMismatch => 4,
             Self::ManifestReadFailed => 5,
@@ -74,7 +74,7 @@ impl DaGateReasonSnapshot {
 
     fn from_code(code: u8) -> Self {
         match code {
-            1 => Self::MissingAvailabilityQc,
+            1 => Self::MissingLocalData,
             3 => Self::ManifestMissing,
             4 => Self::ManifestHashMismatch,
             5 => Self::ManifestReadFailed,
@@ -87,7 +87,7 @@ impl DaGateReasonSnapshot {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",
-            Self::MissingAvailabilityQc => "missing_availability_qc",
+            Self::MissingLocalData => "missing_local_data",
             Self::ManifestMissing => "manifest_missing",
             Self::ManifestHashMismatch => "manifest_hash_mismatch",
             Self::ManifestReadFailed => "manifest_read_failed",
@@ -99,7 +99,7 @@ impl DaGateReasonSnapshot {
 impl From<GateReason> for DaGateReasonSnapshot {
     fn from(value: GateReason) -> Self {
         match value {
-            GateReason::MissingAvailabilityQc => Self::MissingAvailabilityQc,
+            GateReason::MissingLocalData => Self::MissingLocalData,
             GateReason::ManifestGuard { kind, .. } => match kind {
                 ManifestGateKind::Missing => Self::ManifestMissing,
                 ManifestGateKind::HashMismatch => Self::ManifestHashMismatch,
@@ -110,27 +110,27 @@ impl From<GateReason> for DaGateReasonSnapshot {
     }
 }
 
-/// Last-observed satisfaction condition that cleared the DA availability shortfall.
+/// Last-observed satisfaction condition that cleared the DA gate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum DaGateSatisfactionSnapshot {
     /// No satisfaction recorded.
     #[default]
     None,
-    /// Availability QC observed.
-    AvailabilityQc,
+    /// Missing local data recovered.
+    MissingDataRecovered,
 }
 
 impl DaGateSatisfactionSnapshot {
     const fn as_code(self) -> u8 {
         match self {
             Self::None => 0,
-            Self::AvailabilityQc => 1,
+            Self::MissingDataRecovered => 1,
         }
     }
 
     fn from_code(code: u8) -> Self {
         match code {
-            1 => Self::AvailabilityQc,
+            1 => Self::MissingDataRecovered,
             _ => Self::None,
         }
     }
@@ -139,7 +139,7 @@ impl DaGateSatisfactionSnapshot {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",
-            Self::AvailabilityQc => "availability_qc",
+            Self::MissingDataRecovered => "missing_data_recovered",
         }
     }
 }
@@ -147,7 +147,7 @@ impl DaGateSatisfactionSnapshot {
 impl From<GateSatisfaction> for DaGateSatisfactionSnapshot {
     fn from(value: GateSatisfaction) -> Self {
         match value {
-            GateSatisfaction::AvailabilityQc => Self::AvailabilityQc,
+            GateSatisfaction::MissingDataRecovered => Self::MissingDataRecovered,
         }
     }
 }
@@ -159,8 +159,8 @@ pub struct DaGateSnapshot {
     pub reason: DaGateReasonSnapshot,
     /// Most recent condition that satisfied availability tracking.
     pub last_satisfied: DaGateSatisfactionSnapshot,
-    /// Count of times availability QC was missing.
-    pub missing_availability_total: u64,
+    /// Count of times local data was missing.
+    pub missing_local_data_total: u64,
     /// Count of times manifest guard reported missing/invalid manifests.
     pub manifest_guard_total: u64,
 }
@@ -449,7 +449,7 @@ static RBC_STORE_EVICTIONS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RBC_DELIVER_DEFER_READY_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RBC_DELIVER_DEFER_CHUNKS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DA_RESCHEDULE_TOTAL: AtomicU64 = AtomicU64::new(0);
-static DA_GATE_MISSING_AVAILABILITY_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DA_GATE_MISSING_LOCAL_DATA_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DA_GATE_LAST_REASON: AtomicU8 = AtomicU8::new(DaGateReasonSnapshot::None.as_code());
 static DA_GATE_LAST_SATISFIED: AtomicU8 = AtomicU8::new(DaGateSatisfactionSnapshot::None.as_code());
 static DA_GATE_MANIFEST_GUARD_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -2674,12 +2674,16 @@ pub struct PrecommitSignerRecord {
     pub view: u64,
     /// Epoch (permissioned mode uses zero).
     pub epoch: u64,
-    /// Signers that participated in the precommit QC.
+    /// Signers that participated in the precommit QC (canonical validator-set order).
     pub signers: BTreeSet<ValidatorIndex>,
     /// Aggregate BLS signature covering the precommit vote preimage.
     pub bls_aggregate_signature: Vec<u8>,
     /// Roster length used when forming the QC.
     pub roster_len: usize,
+    /// Mode tag used when forming the QC.
+    pub mode_tag: String,
+    /// Ordered validator set used when forming the QC.
+    pub validator_set: Vec<PeerId>,
 }
 
 fn precommit_signer_history_slot() -> &'static Mutex<VecDeque<PrecommitSignerRecord>> {
@@ -2724,7 +2728,7 @@ pub fn record_commit_certificate(cert: CommitCertificate) {
     // preserving alternate views for other hashes at the same height.
     guard.retain(|entry| {
         !(entry.height == cert.height
-            && entry.block_hash == cert.block_hash
+            && entry.subject_block_hash == cert.subject_block_hash
             && entry.view <= cert.view)
     });
     guard.push_back(cert);
@@ -2926,7 +2930,7 @@ fn da_gate_snapshot() -> DaGateSnapshot {
         last_satisfied: DaGateSatisfactionSnapshot::from_code(
             DA_GATE_LAST_SATISFIED.load(Ordering::Relaxed),
         ),
-        missing_availability_total: DA_GATE_MISSING_AVAILABILITY_TOTAL.load(Ordering::Relaxed),
+        missing_local_data_total: DA_GATE_MISSING_LOCAL_DATA_TOTAL.load(Ordering::Relaxed),
         manifest_guard_total: DA_GATE_MANIFEST_GUARD_TOTAL.load(Ordering::Relaxed),
     }
 }
@@ -3910,8 +3914,8 @@ pub fn record_da_gate_transition(previous: Option<GateReason>, current: Option<G
     let _guard = da_gate_test_guard();
     if let Some(reason) = current {
         match reason {
-            GateReason::MissingAvailabilityQc => {
-                DA_GATE_MISSING_AVAILABILITY_TOTAL.fetch_add(1, Ordering::Relaxed);
+            GateReason::MissingLocalData => {
+                DA_GATE_MISSING_LOCAL_DATA_TOTAL.fetch_add(1, Ordering::Relaxed);
             }
             GateReason::ManifestGuard { .. } => {
                 DA_GATE_MANIFEST_GUARD_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -3936,7 +3940,7 @@ pub fn record_da_gate_transition(previous: Option<GateReason>, current: Option<G
 #[cfg(test)]
 pub(crate) fn reset_da_gate_counters_for_tests() {
     let _guard = da_gate_test_guard();
-    DA_GATE_MISSING_AVAILABILITY_TOTAL.store(0, Ordering::Relaxed);
+    DA_GATE_MISSING_LOCAL_DATA_TOTAL.store(0, Ordering::Relaxed);
     DA_GATE_MANIFEST_GUARD_TOTAL.store(0, Ordering::Relaxed);
     DA_GATE_LAST_REASON.store(DaGateReasonSnapshot::None.as_code(), Ordering::Relaxed);
     DA_GATE_LAST_SATISFIED.store(
@@ -4655,8 +4659,8 @@ pub fn inc_qc_quorum_without_qc() {
 }
 
 /// Return the cumulative number of missing-availability transitions observed.
-pub fn da_gate_missing_availability_total() -> u64 {
-    DA_GATE_MISSING_AVAILABILITY_TOTAL.load(Ordering::Relaxed)
+pub fn da_gate_missing_local_data_total() -> u64 {
+    DA_GATE_MISSING_LOCAL_DATA_TOTAL.load(Ordering::Relaxed)
 }
 
 /// Return the cumulative number of DA reschedules observed locally.
@@ -4935,10 +4939,11 @@ fn commit_certificate_snapshot() -> CommitCertificateSnapshot {
             height: cert.height,
             view: cert.view,
             epoch: cert.epoch,
-            block_hash: Some(cert.block_hash),
+            block_hash: Some(cert.subject_block_hash),
             validator_set_hash: Some(cert.validator_set_hash),
             validator_set_len: u64::try_from(cert.validator_set.len()).unwrap_or(u64::MAX),
-            signatures_total: u64::try_from(cert.signatures.len()).unwrap_or(u64::MAX),
+            signatures_total: u64::try_from(crate::sumeragi::consensus::qc_signer_count(&cert))
+                .unwrap_or(u64::MAX),
         }
     } else {
         CommitCertificateSnapshot::default()
@@ -5322,6 +5327,7 @@ mod tests {
         ManifestGateKind, PrecommitSignerRecord, WorkerLoopStage, WorkerQueueKind,
     };
     use crate::governance::manifest::{GovernanceHooks, GovernanceRules, RuntimeUpgradeHook};
+    use crate::sumeragi::consensus::{CommitAggregate, PERMISSIONED_TAG, Phase};
 
     #[test]
     fn locked_qc_updates_monotonically() {
@@ -5495,6 +5501,7 @@ mod tests {
                 block_hash,
                 vec![peer_a.clone(), peer_b.clone()],
                 Vec::new(),
+                Vec::new(),
                 iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
                 None,
             );
@@ -5527,15 +5534,21 @@ mod tests {
         let cap = super::commit_cert_history_cap();
         for height in 0..(cap as u64 + 5) {
             let cert = CommitCertificate {
+                phase: Phase::Commit,
+                subject_block_hash: block_hash,
                 height,
-                block_hash,
                 view: height * 2,
                 epoch: 0,
+                mode_tag: PERMISSIONED_TAG.to_string(),
+                highest_cert: None,
                 validator_set_hash,
                 validator_set_hash_version:
                     iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
                 validator_set: validator_set.clone(),
-                signatures: Vec::new(),
+                aggregate: CommitAggregate {
+                    signers_bitmap: Vec::new(),
+                    bls_aggregate_signature: Vec::new(),
+                },
             };
             super::record_commit_certificate(cert);
         }
@@ -5585,24 +5598,36 @@ mod tests {
         let validator_set_hash = HashOf::new(&validator_set);
 
         let first = CommitCertificate {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash_a,
             height: 1,
-            block_hash: block_hash_a,
             view: 1,
             epoch: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
             validator_set_hash,
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: validator_set.clone(),
-            signatures: Vec::new(),
+            aggregate: CommitAggregate {
+                signers_bitmap: Vec::new(),
+                bls_aggregate_signature: Vec::new(),
+            },
         };
         let second = CommitCertificate {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash_b,
             height: 2,
-            block_hash: block_hash_b,
             view: 4,
             epoch: 1,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
             validator_set_hash,
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set,
-            signatures: Vec::new(),
+            aggregate: CommitAggregate {
+                signers_bitmap: Vec::new(),
+                bls_aggregate_signature: Vec::new(),
+            },
         };
 
         super::record_commit_certificate(first);
@@ -5612,7 +5637,7 @@ mod tests {
         assert_eq!(snapshot.height, second.height);
         assert_eq!(snapshot.view, second.view);
         assert_eq!(snapshot.epoch, second.epoch);
-        assert_eq!(snapshot.block_hash, Some(second.block_hash));
+        assert_eq!(snapshot.block_hash, Some(second.subject_block_hash));
         assert_eq!(snapshot.validator_set_hash, Some(second.validator_set_hash));
         assert_eq!(snapshot.validator_set_len, 2);
         assert_eq!(snapshot.signatures_total, 0);
@@ -5818,6 +5843,7 @@ mod tests {
         ));
         let mut signers = BTreeSet::new();
         signers.insert(0);
+        let validator_set = vec![PeerId::new(KeyPair::random().public_key().clone())];
         super::record_precommit_signers(PrecommitSignerRecord {
             block_hash,
             height: 1,
@@ -5826,6 +5852,8 @@ mod tests {
             signers,
             roster_len: 1,
             bls_aggregate_signature: vec![1],
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            validator_set,
         });
         assert!(!super::precommit_signer_history().is_empty());
 
@@ -6038,9 +6066,9 @@ mod tests {
             snapshot.da_gate.reason,
             super::DaGateReasonSnapshot::ManifestMissing
         );
-        assert_eq!(snapshot.da_gate.missing_availability_total, 0);
+        assert_eq!(snapshot.da_gate.missing_local_data_total, 0);
         assert_eq!(snapshot.da_gate.manifest_guard_total, 1);
-        assert_eq!(super::da_gate_missing_availability_total(), 0);
+        assert_eq!(super::da_gate_missing_local_data_total(), 0);
         assert_eq!(
             snapshot.da_gate.last_satisfied,
             super::DaGateSatisfactionSnapshot::None

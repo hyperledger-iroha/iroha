@@ -1338,7 +1338,7 @@ pub struct SumeragiEvidenceListFilter<'a> {
     pub limit: Option<u32>,
     /// Offset into the persisted evidence list.
     pub offset: Option<u32>,
-    /// Optional filter by evidence kind (`DoublePrevote`, `InvalidQC`, etc.).
+    /// Optional filter by evidence kind (`DoublePrepare`, `InvalidCommitCertificate`, etc.).
     pub kind: Option<&'a str>,
 }
 
@@ -1760,7 +1760,7 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     da_gate.insert(
         "reason".into(),
         Value::from(match wire.da_gate.reason {
-            SumeragiDaGateReason::MissingAvailabilityQc => "missing_availability_qc",
+            SumeragiDaGateReason::MissingLocalData => "missing_local_data",
             SumeragiDaGateReason::ManifestMissing => "manifest_missing",
             SumeragiDaGateReason::ManifestHashMismatch => "manifest_hash_mismatch",
             SumeragiDaGateReason::ManifestReadFailed => "manifest_read_failed",
@@ -1771,13 +1771,13 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     da_gate.insert(
         "last_satisfied".into(),
         Value::from(match wire.da_gate.last_satisfied {
-            SumeragiDaGateSatisfaction::AvailabilityQc => "availability_qc",
+            SumeragiDaGateSatisfaction::MissingDataRecovered => "missing_data_recovered",
             SumeragiDaGateSatisfaction::None => "none",
         }),
     );
     da_gate.insert(
-        "missing_availability_total".into(),
-        Value::from(wire.da_gate.missing_availability_total),
+        "missing_local_data_total".into(),
+        Value::from(wire.da_gate.missing_local_data_total),
     );
     da_gate.insert(
         "manifest_guard_total".into(),
@@ -2984,7 +2984,7 @@ mod evidence_filter_tests {
         let filter = SumeragiEvidenceListFilter {
             limit: Some(25),
             offset: Some(10),
-            kind: Some("InvalidQC"),
+            kind: Some("InvalidCommitCertificate"),
         };
         let params = filter.param_entries();
         assert_eq!(
@@ -2992,7 +2992,7 @@ mod evidence_filter_tests {
             vec![
                 ("limit", "25".to_string()),
                 ("offset", "10".to_string()),
-                ("kind", "InvalidQC".to_string())
+                ("kind", "InvalidCommitCertificate".to_string())
             ]
         );
     }
@@ -3127,7 +3127,8 @@ mod evidence_http_tests {
     use http::StatusCode;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature};
     use iroha_data_model::block::consensus::{
-        Evidence, EvidenceKind, EvidencePayload, EvidenceRecord, Phase, Vote,
+        CertPhase as Phase, CommitVote as Vote, Evidence, EvidenceKind, EvidencePayload,
+        EvidenceRecord,
     };
     use iroha_test_samples::gen_account_in;
     use norito::json::Value;
@@ -3785,7 +3786,7 @@ mod evidence_http_tests {
         let filter = SumeragiEvidenceListFilter {
             limit: Some(5),
             offset: Some(2),
-            kind: Some("InvalidQC"),
+            kind: Some("InvalidCommitCertificate"),
         };
 
         let json = with_mock_http(
@@ -3813,7 +3814,10 @@ mod evidence_http_tests {
             .collect();
         assert_eq!(params.get("limit"), Some(&"5".to_string()));
         assert_eq!(params.get("offset"), Some(&"2".to_string()));
-        assert_eq!(params.get("kind"), Some(&"InvalidQC".to_string()));
+        assert_eq!(
+            params.get("kind"),
+            Some(&"InvalidCommitCertificate".to_string())
+        );
     }
 
     #[test]
@@ -3837,24 +3841,23 @@ mod evidence_http_tests {
     fn make_vote(height: u64, view: u64, seed: u8) -> Vote {
         let hash = Hash::prehashed([seed; 32]);
         Vote {
-            phase: Phase::Prevote,
+            phase: Phase::Prepare,
             block_hash: HashOf::from_untyped_unchecked(hash),
             height,
             view,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         }
     }
 
     fn sample_record() -> EvidenceRecord {
         let v1 = make_vote(10, 3, 0x55);
-        let mut v2 = make_vote(10, 3, 0x66);
-        v2.signature = vec![0xAA];
+        let v2 = make_vote(10, 3, 0x66);
         EvidenceRecord {
             evidence: Evidence {
-                kind: EvidenceKind::DoublePrevote,
+                kind: EvidenceKind::DoublePrepare,
                 payload: EvidencePayload::DoubleVote { v1, v2 },
             },
             recorded_at_height: 42,
@@ -9114,7 +9117,8 @@ pub mod events_api {
                     filters,
                 } = self;
 
-                let msg = EventSubscriptionRequest::new(filters).encode();
+                let msg = norito::to_bytes(&EventSubscriptionRequest::new(filters))
+                    .expect("encode event subscription request");
                 InitData::new(R::new(HttpMethod::GET, url).headers(headers), msg, Events)
             }
         }
@@ -9127,7 +9131,7 @@ pub mod events_api {
             type Event = crate::data_model::prelude::EventBox;
 
             fn message(&self, message: Vec<u8>) -> Result<Self::Event> {
-                let event_socket_message = EventMessage::decode_all(&mut message.as_slice())?;
+                let event_socket_message: EventMessage = decode_from_bytes(&message)?;
                 Ok(event_socket_message.into())
             }
         }
@@ -9193,7 +9197,8 @@ mod blocks_api {
                     url,
                 } = self;
 
-                let msg = BlockSubscriptionRequest::new(height).encode();
+                let msg = norito::to_bytes(&BlockSubscriptionRequest::new(height))
+                    .expect("encode block subscription request");
                 InitData::new(R::new(HttpMethod::GET, url).headers(headers), msg, Events)
             }
         }
@@ -9206,7 +9211,8 @@ mod blocks_api {
             type Event = SignedBlock;
 
             fn message(&self, message: Vec<u8>) -> Result<Self::Event> {
-                Ok(BlockMessage::decode_all(&mut message.as_slice()).map(Into::into)?)
+                let block_message: BlockMessage = decode_from_bytes(&message)?;
+                Ok(block_message.into())
             }
         }
     }
@@ -9266,6 +9272,7 @@ mod tests {
         },
         *,
     };
+    use crate::http::ws::conn_flow::Events as _;
     use crate::{
         config::{BasicAuth, Config},
         da::{DaSampledChunk, DaSamplingPlan, PDP_COMMITMENT_HEADER},
@@ -9387,7 +9394,7 @@ mod tests {
             da_gate: SumeragiDaGateStatus {
                 reason: SumeragiDaGateReason::None,
                 last_satisfied: SumeragiDaGateSatisfaction::None,
-                missing_availability_total: 0,
+                missing_local_data_total: 0,
                 manifest_guard_total: 0,
             },
             kura_store: SumeragiKuraStoreStatus {
@@ -9503,6 +9510,100 @@ mod tests {
             sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
             sorafs_rollout_phase: SorafsRolloutPhase::Canary,
         }
+    }
+
+    #[test]
+    fn events_ws_flow_uses_framed_norito() {
+        use std::num::NonZeroU64;
+
+        use crate::data_model::events::{
+            EventBox, EventFilterBox,
+            pipeline::{
+                PipelineEventBox, PipelineEventFilterBox, PipelineWarning, TransactionEventFilter,
+            },
+            stream::{EventMessage, EventSubscriptionRequest},
+        };
+
+        let filters = vec![EventFilterBox::Pipeline(
+            PipelineEventFilterBox::Transaction(TransactionEventFilter::default()),
+        )];
+        let init = events_api::flow::Init::new(
+            filters.clone(),
+            HashMap::new(),
+            "http://127.0.0.1:8080".parse().expect("valid url"),
+        )
+        .expect("init events handler");
+        let init_data = <events_api::flow::Init as crate::http::ws::conn_flow::Init<
+            crate::http_default::DefaultWebSocketRequestBuilder,
+        >>::init(init);
+        let decoded: EventSubscriptionRequest = norito::decode_from_bytes(&init_data.first_message)
+            .expect("decode event subscription request");
+        assert_eq!(decoded.filters, filters);
+        assert!(decoded.proof_backend.is_none());
+        assert!(decoded.proof_call_hash.is_none());
+        assert!(decoded.proof_envelope_hash.is_none());
+
+        let header = BlockHeader::new(NonZeroU64::new(1).expect("height"), None, None, None, 0, 0);
+        let warning = PipelineWarning {
+            header,
+            kind: "test".to_string(),
+            details: "details".to_string(),
+        };
+        let event = EventBox::Pipeline(PipelineEventBox::Warning(warning));
+        let bytes = norito::to_bytes(&EventMessage(event.clone())).expect("encode event message");
+        let decoded_event = events_api::flow::Events
+            .message(bytes)
+            .expect("decode event message");
+        assert_eq!(decoded_event, event);
+    }
+
+    #[test]
+    fn blocks_ws_flow_uses_framed_norito() {
+        use std::num::NonZeroU64;
+
+        use crate::{
+            crypto::{PrivateKey, PublicKey},
+            data_model::{
+                block::{SignedBlock, stream::BlockMessage, stream::BlockSubscriptionRequest},
+                prelude::{AccountId, ChainId, DomainId, TransactionBuilder},
+            },
+        };
+
+        let height = NonZeroU64::new(1).expect("height");
+        let init = blocks_api::flow::Init::new(
+            height,
+            HashMap::new(),
+            "http://127.0.0.1:8080".parse().expect("valid url"),
+        )
+        .expect("init blocks handler");
+        let init_data = <blocks_api::flow::Init as crate::http::ws::conn_flow::Init<
+            crate::http_default::DefaultWebSocketRequestBuilder,
+        >>::init(init);
+        let decoded: BlockSubscriptionRequest = norito::decode_from_bytes(&init_data.first_message)
+            .expect("decode block subscription request");
+        assert_eq!(decoded.0, height);
+
+        let chain: ChainId = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("chain id");
+        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let public_key: PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .expect("public key");
+        let private_key: PrivateKey =
+            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                .parse()
+                .expect("private key");
+        let authority = AccountId::new(domain, public_key);
+        let tx = TransactionBuilder::new(chain, authority).sign(&private_key);
+        let block = SignedBlock::genesis(vec![tx], &private_key, None, None);
+
+        let bytes = norito::to_bytes(&BlockMessage(block.clone())).expect("encode block message");
+        let decoded_block = blocks_api::flow::Events
+            .message(bytes)
+            .expect("decode block message");
+        assert_eq!(decoded_block, block);
     }
 
     #[test]
@@ -11156,7 +11257,7 @@ mod tests {
             da_gate: SumeragiDaGateStatus {
                 reason: SumeragiDaGateReason::None,
                 last_satisfied: SumeragiDaGateSatisfaction::None,
-                missing_availability_total: 0,
+                missing_local_data_total: 0,
                 manifest_guard_total: 0,
             },
             kura_store: SumeragiKuraStoreStatus {
@@ -11435,7 +11536,7 @@ mod tests {
             da_gate: SumeragiDaGateStatus {
                 reason: SumeragiDaGateReason::None,
                 last_satisfied: SumeragiDaGateSatisfaction::None,
-                missing_availability_total: 0,
+                missing_local_data_total: 0,
                 manifest_guard_total: 0,
             },
             kura_store: SumeragiKuraStoreStatus {

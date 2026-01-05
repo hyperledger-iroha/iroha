@@ -107,5 +107,5 @@ Redes de alta variancia ou moveis
 - Verificar config: `max(sumeragi_pacemaker_backoff_multiplier)`, `max(sumeragi_pacemaker_rtt_floor_multiplier)`, `max(sumeragi_pacemaker_max_backoff_ms)`
 
 ## Determinismo e seguranca
-- Timers/backoff/jitter influenciam apenas quando os nos disparam propostas/mudancas de view; nao afetam validade de assinaturas nem regras de QC.
+- Timers/backoff/jitter influenciam apenas quando os nos disparam propostas/mudancas de view; nao afetam validade de assinaturas nem regras de commit certificate.
 - Mantenha qualquer aleatoriedade deterministica por no e por (height, view). Evite time-of-day ou RNG do SO em caminhos criticos do consenso.

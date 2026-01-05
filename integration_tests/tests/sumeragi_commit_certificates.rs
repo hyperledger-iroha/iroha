@@ -18,7 +18,7 @@ use iroha::data_model::{
     peer::PeerId,
     prelude::*,
 };
-use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
+use iroha_core::sumeragi::{consensus::qc_signer_count, network_topology::commit_quorum_from_len};
 use iroha_primitives::numeric::Numeric;
 use iroha_test_network::{NetworkBuilder, genesis_factory, init_instruction_registry};
 use norito::json;
@@ -164,11 +164,12 @@ async fn commit_certificate_block_sync_restores_restart_peer() -> Result<()> {
             peers.len(),
             cert.validator_set.len()
         );
+        let signer_count = commit_certificate_signer_count(&cert);
         ensure!(
-            cert.signatures.len() >= commit_quorum_from_len(peers.len()),
+            signer_count >= commit_quorum_from_len(peers.len()),
             "commit certificate signature quorum too small: expected >= {}, got {}",
             commit_quorum_from_len(peers.len()),
-            cert.signatures.len()
+            signer_count
         );
         Ok(())
     }
@@ -260,12 +261,8 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
             .iter()
             .position(|peer| peer == &high_stake_id)
             .ok_or_else(|| eyre!("high-stake peer missing from validator set"))?;
-        let high_index_u64 =
-            u64::try_from(high_index).map_err(|_| eyre!("validator index overflow"))?;
         ensure!(
-            cert.signatures
-                .iter()
-                .any(|sig| sig.index() == high_index_u64),
+            commit_certificate_has_signer(&cert, high_index),
             "commit certificate missing high-stake signature"
         );
         Ok(())
@@ -283,6 +280,19 @@ impl AsRef<Table> for ConfigLayer {
     fn as_ref(&self) -> &Table {
         &self.0
     }
+}
+
+fn commit_certificate_signer_count(cert: &CommitCertificate) -> usize {
+    qc_signer_count(cert)
+}
+
+fn commit_certificate_has_signer(cert: &CommitCertificate, index: usize) -> bool {
+    let byte_idx = index / 8;
+    let bit_idx = index % 8;
+    cert.aggregate
+        .signers_bitmap
+        .get(byte_idx)
+        .is_some_and(|byte| (byte >> bit_idx) & 1 == 1)
 }
 
 async fn wait_for_commit_certificate_quorum(
@@ -313,11 +323,9 @@ async fn wait_for_commit_certificate_quorum(
                             cert.validator_set.len()
                         ));
                     }
-                    if cert.signatures.len() < required {
-                        missing.push(format!(
-                            "{torii} signatures {} < {required}",
-                            cert.signatures.len()
-                        ));
+                    let signer_count = commit_certificate_signer_count(cert);
+                    if signer_count < required {
+                        missing.push(format!("{torii} signatures {} < {required}", signer_count));
                     }
                 }
                 Err(err) => {

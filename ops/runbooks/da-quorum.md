@@ -13,8 +13,8 @@ summary: Operator procedure for responding to DA quorum degradation, missing-ava
 
 | Input | Source | Notes |
 |-------|--------|-------|
-| Telemetry metrics | Grafana board `nexus_lanes` (`dashboards/grafana/nexus_lanes.json`) — panels “DA Quorum Ratio”, “DA Availability Warnings (5 m)”, “Finality Lag (slots)”. | Driven by `iroha_da_quorum_ratio`, `sumeragi_da_gate_block_total{reason="missing_availability_qc"}`, and `nexus_lane_finality_lag_slots`. |
-| Prometheus queries | `iroha_da_quorum_ratio{lane=...,dataspace=...}`, `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m])`, `nexus_lane_attester_health`. | Use `promtool query instant` or Grafana Explore to capture snapshots. |
+| Telemetry metrics | Grafana board `nexus_lanes` (`dashboards/grafana/nexus_lanes.json`) — panels “DA Quorum Ratio”, “DA Availability Warnings (5 m)”, “Finality Lag (slots)”. | Driven by `iroha_da_quorum_ratio`, `sumeragi_da_gate_block_total{reason="missing_local_data"}`, and `nexus_lane_finality_lag_slots`. |
+| Prometheus queries | `iroha_da_quorum_ratio{lane=...,dataspace=...}`, `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])`, `nexus_lane_attester_health`. | Use `promtool query instant` or Grafana Explore to capture snapshots. |
 | Torii/Sumeragi status | `iroha_cli sumeragi status --format json` or `/v1/sumeragi/status`. | Provides `lane_governance[].da_profile`, attester roster, and `lane_settlement_commitments`. |
 | DA attester manifests | Space Directory manifest bundle or `scripts/nexus_lane_registry_bundle.sh`. | Confirms which attesters should be active. |
 | Evidence log | `ops/drill-log.md`. | Record every alert, mitigation, and verification artefact. |
@@ -24,7 +24,7 @@ summary: Operator procedure for responding to DA quorum degradation, missing-ava
 | Signal | Target | Action |
 |--------|--------|--------|
 | `iroha_da_quorum_ratio` | ≥0.99 rolling | <0.98 = investigate, <0.95 = engage DA incident protocol. |
-| `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m])` | ≈0 | >0.05 warnings/slot indicates attester lag; >0.1 triggers paging. |
+| `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])` | ≈0 | >0.05 warnings/slot indicates attester lag; >0.1 triggers paging. |
 | `nexus_lane_finality_lag_slots` | 0–1 | Clamp by halting AMX/settlement for affected lanes when lag ≥3 slots. |
 | `nexus_lane_attester_health{status="degraded"}` | 0 | Non-zero means at least one attester is failing heartbeat checks. |
 | `iroha_slot_duration_ms_latest` | ≤1000 ms | If slot duration climbs while DA quorum drops, follow both this runbook and the settlement router playbook. |
@@ -47,7 +47,7 @@ summary: Operator procedure for responding to DA quorum degradation, missing-ava
    promtool query instant "$PROM" \
      'iroha_da_quorum_ratio{lane="lane-A",dataspace="profile.defi.v1"}'
    promtool query range "$PROM" --start "$START" --end "$END" --step 30s \
-     'increase(sumeragi_da_gate_block_total{reason="missing_availability_qc",lane="lane-A"}[5m])'
+     'increase(sumeragi_da_gate_block_total{reason="missing_local_data",lane="lane-A"}[5m])'
    ```
 3. Dump the relevant section of `sumeragi status`:
    ```bash

@@ -2,10 +2,14 @@
 #![allow(clippy::expect_used)]
 
 use std::{
+    collections::BTreeSet,
     num::NonZeroU64,
     sync::{LazyLock, Mutex, MutexGuard, PoisonError},
 };
 
+use iroha_core::sumeragi::consensus::{
+    PERMISSIONED_TAG, Phase, ValidatorIndex, Vote, vote_preimage,
+};
 use iroha_core::{
     bridge::{
         BridgeFinalityError, BridgeFinalityVerificationError, FinalityProofVerificationConfig,
@@ -18,12 +22,12 @@ use iroha_core::{
         record_commit_certificate, reset_commit_certs_for_tests, set_commit_cert_history_cap,
     },
 };
-use iroha_crypto::{Hash, HashOf, KeyPair, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
     ChainId,
-    block::{BlockHeader, BlockSignature, builder::BlockBuilder},
+    block::{BlockHeader, builder::BlockBuilder},
     bridge::BridgeFinalityProof,
-    consensus::{CommitCertificate, VALIDATOR_SET_HASH_VERSION_V1},
+    consensus::{CommitAggregate, CommitCertificate, VALIDATOR_SET_HASH_VERSION_V1},
     peer::PeerId,
 };
 
@@ -50,6 +54,105 @@ impl Drop for CommitCertHistoryGuard {
     fn drop(&mut self) {
         reset_commit_certs_for_tests();
         set_commit_cert_history_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
+    }
+}
+
+fn build_signers_bitmap(signers: &BTreeSet<ValidatorIndex>, roster_len: usize) -> Vec<u8> {
+    if roster_len == 0 {
+        return Vec::new();
+    }
+    let mut bitmap = vec![0u8; roster_len.div_ceil(8)];
+    for signer in signers {
+        let Ok(idx) = usize::try_from(*signer) else {
+            continue;
+        };
+        if idx >= roster_len {
+            continue;
+        }
+        let byte = idx / 8;
+        let bit = idx % 8;
+        bitmap[byte] |= 1u8 << bit;
+    }
+    bitmap
+}
+
+fn aggregate_signature_for_signers(
+    chain_id: &ChainId,
+    mode_tag: &str,
+    phase: Phase,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    signers: &BTreeSet<ValidatorIndex>,
+    keypairs: &[KeyPair],
+) -> Vec<u8> {
+    if signers.is_empty() {
+        return Vec::new();
+    }
+    let vote = Vote {
+        phase,
+        block_hash,
+        height,
+        view,
+        epoch,
+        highest_cert: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let preimage = vote_preimage(chain_id, mode_tag, &vote);
+    let mut signatures = Vec::with_capacity(signers.len());
+    for signer in signers {
+        let idx = usize::try_from(*signer).expect("signer index fits");
+        let kp = keypairs.get(idx).expect("signer keypair");
+        let sig = Signature::new(kp.private_key(), &preimage);
+        signatures.push(sig.payload().to_vec());
+    }
+    let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
+    iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate signature")
+}
+
+fn build_commit_certificate(
+    chain_id: &ChainId,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    peer_ids: &[PeerId],
+    keypairs: &[KeyPair],
+) -> CommitCertificate {
+    let signers: BTreeSet<_> = (0..peer_ids.len())
+        .filter_map(|idx| ValidatorIndex::try_from(idx).ok())
+        .collect();
+    let signers_bitmap = build_signers_bitmap(&signers, peer_ids.len());
+    let aggregate_signature = aggregate_signature_for_signers(
+        chain_id,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        &signers,
+        keypairs,
+    );
+    let validator_set = peer_ids.to_vec();
+    let validator_set_hash = HashOf::new(&validator_set);
+    CommitCertificate {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        height,
+        view,
+        epoch,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_cert: None,
+        validator_set_hash,
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set,
+        aggregate: CommitAggregate {
+            signers_bitmap,
+            bls_aggregate_signature: aggregate_signature,
+        },
     }
 }
 
@@ -80,18 +183,8 @@ fn build_proof_with_validators(
     let state = State::new_for_testing(world, kura, query_handle);
     let chain_id = state.view().chain_id().clone();
 
-    let signature = SignatureOf::from_hash(validators[0].private_key(), block_hash);
     let validator_set_hash = HashOf::new(&peer_ids);
-    let cert = CommitCertificate {
-        height: 1,
-        block_hash,
-        view: 0,
-        epoch: 0,
-        validator_set_hash,
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: peer_ids.clone(),
-        signatures: vec![BlockSignature::new(0, signature)],
-    };
+    let cert = build_commit_certificate(&chain_id, block_hash, 1, 0, 0, &peer_ids, validators);
     record_commit_certificate(cert);
 
     let view = state.view();
@@ -105,7 +198,7 @@ fn builds_finality_proof_for_stored_block() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
 
-    let kp = iroha_crypto::KeyPair::random();
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer_id = PeerId::new(kp.public_key().clone());
 
     let header = BlockHeader::new(
@@ -127,17 +220,17 @@ fn builds_finality_proof_for_stored_block() {
     let state = State::new_for_testing(world, kura, query_handle);
 
     // Record commit certificate matching the stored block.
-    let signature = SignatureOf::from_hash(kp.private_key(), block_hash);
-    let cert = CommitCertificate {
-        height: 1,
+    let validator_set = vec![peer_id.clone()];
+    let keypairs = vec![kp.clone()];
+    let cert = build_commit_certificate(
+        &state.view().chain_id().clone(),
         block_hash,
-        view: 0,
-        epoch: 0,
-        validator_set_hash: iroha_crypto::HashOf::new(&vec![peer_id.clone()]),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: vec![peer_id],
-        signatures: vec![iroha_data_model::block::BlockSignature::new(0, signature)],
-    };
+        1,
+        0,
+        0,
+        &validator_set,
+        &keypairs,
+    );
     record_commit_certificate(cert.clone());
 
     let view = state.view();
@@ -155,7 +248,7 @@ fn finality_proof_rejects_commit_certificate_hash_mismatch() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
 
-    let kp = KeyPair::random();
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer_id = PeerId::new(kp.public_key().clone());
 
     let header = BlockHeader::new(
@@ -180,19 +273,16 @@ fn finality_proof_rejects_commit_certificate_hash_mismatch() {
     let forged_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD1; Hash::LENGTH]));
     let validator_set = vec![peer_id.clone()];
-    let cert = CommitCertificate {
-        height: 1,
-        block_hash: forged_hash,
-        view: 0,
-        epoch: 0,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set,
-        signatures: vec![BlockSignature::new(
-            0,
-            SignatureOf::from_hash(kp.private_key(), forged_hash),
-        )],
-    };
+    let keypairs = vec![kp.clone()];
+    let cert = build_commit_certificate(
+        &state.view().chain_id().clone(),
+        forged_hash,
+        1,
+        0,
+        0,
+        &validator_set,
+        &keypairs,
+    );
     record_commit_certificate(cert);
 
     let view = state.view();
@@ -215,10 +305,10 @@ fn finality_proof_respects_commit_certificate_retention_cap() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(2);
 
-    let kp = KeyPair::random();
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer_id = PeerId::new(kp.public_key().clone());
     let validator_set = vec![peer_id.clone()];
-    let validator_set_hash = HashOf::new(&validator_set);
+    let keypairs = vec![kp.clone()];
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -240,17 +330,15 @@ fn finality_proof_respects_commit_certificate_retention_cap() {
         parent = Some(block_hash);
         kura.store_block(block).expect("store block");
 
-        let signature = SignatureOf::from_hash(kp.private_key(), block_hash);
-        let cert = CommitCertificate {
-            height,
+        let cert = build_commit_certificate(
+            &state.view().chain_id().clone(),
             block_hash,
-            view: 0,
-            epoch: 0,
-            validator_set_hash,
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: validator_set.clone(),
-            signatures: vec![BlockSignature::new(0, signature)],
-        };
+            height,
+            0,
+            0,
+            &validator_set,
+            &keypairs,
+        );
         record_commit_certificate(cert);
     }
 
@@ -266,7 +354,7 @@ fn finality_proof_respects_commit_certificate_retention_cap() {
 #[test]
 fn builds_finality_bundle_for_stored_block() {
     let _exclusive = lock_finality_tests();
-    let kp = iroha_crypto::KeyPair::random();
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer_id = PeerId::new(kp.public_key().clone());
 
     let genesis = BlockHeader::new(
@@ -300,18 +388,17 @@ fn builds_finality_bundle_for_stored_block() {
     let world = iroha_core::state::World::new();
     let state = iroha_core::state::State::new_for_testing(world, kura, query_handle);
 
-    let signature = SignatureOf::from_hash(kp.private_key(), block_hash);
     let validator_set = vec![peer_id.clone()];
-    let cert = CommitCertificate {
-        height: 2,
+    let keypairs = vec![kp.clone()];
+    let cert = build_commit_certificate(
+        &state.view().chain_id().clone(),
         block_hash,
-        view: 0,
-        epoch: 0,
-        validator_set_hash: iroha_crypto::HashOf::new(&validator_set),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: validator_set.clone(),
-        signatures: vec![iroha_data_model::block::BlockSignature::new(0, signature)],
-    };
+        2,
+        0,
+        0,
+        &validator_set,
+        &keypairs,
+    );
     record_commit_certificate(cert.clone());
 
     let view = state.view();
@@ -337,7 +424,7 @@ fn builds_finality_bundle_for_stored_block() {
 fn verify_finality_proof_accepts_valid_payload() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random()];
+    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
 
     let (proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     let config = FinalityProofVerificationConfig {
@@ -353,7 +440,7 @@ fn verify_finality_proof_accepts_valid_payload() {
 fn verify_finality_proof_rejects_chain_id_mismatch() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random()];
+    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
 
     let (proof, _chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     let wrong_chain: ChainId = "iroha:different-chain".parse().expect("chain id parses");
@@ -375,7 +462,7 @@ fn verify_finality_proof_rejects_chain_id_mismatch() {
 fn verify_finality_proof_rejects_height_mismatch() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random()];
+    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
 
     let (proof, chain_id, validator_set_hash) = build_proof_with_validators(&validators);
     let config = FinalityProofVerificationConfig {
@@ -397,10 +484,14 @@ fn verify_finality_proof_rejects_height_mismatch() {
 fn verify_finality_proof_rejects_trusted_roster_mismatch() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
-    let validators = [KeyPair::random()];
+    let validators = [KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
 
     let (proof, chain_id, advertised_hash) = build_proof_with_validators(&validators);
-    let other_peer = PeerId::new(KeyPair::random().public_key().clone());
+    let other_peer = PeerId::new(
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            .public_key()
+            .clone(),
+    );
     let trusted_hash = HashOf::new(&vec![other_peer]);
     let config = FinalityProofVerificationConfig {
         expected_chain_id: &chain_id,

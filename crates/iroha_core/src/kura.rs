@@ -2427,14 +2427,14 @@ impl Kura {
                 );
                 None
             } else if let Some(cert) = sidecar.commit_certificate.as_ref()
-                && (cert.height != sidecar.height || cert.block_hash != sidecar.block_hash)
+                && (cert.height != sidecar.height || cert.subject_block_hash != sidecar.block_hash)
             {
                 iroha_logger::warn!(
                     height,
                     sidecar_height = sidecar.height,
                     sidecar_hash = %sidecar.block_hash,
                     cert_height = cert.height,
-                    cert_hash = %cert.block_hash,
+                    cert_hash = %cert.subject_block_hash,
                     "roster sidecar commit certificate metadata mismatch"
                 );
                 None
@@ -4161,7 +4161,7 @@ impl BlockStore {
     pub fn prune(&mut self, height: u64) -> Result<()> {
         self.invalidate_data_mmap();
         let last_block_index: Option<BlockIndex>;
-        let mut pruned_index_count = 0u64;
+        let pruned_index_count;
 
         {
             let mut file =
@@ -4372,7 +4372,7 @@ mod tests {
             },
         },
     };
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf, bls_normal_pop_prove};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         ChainId, Level,
         account::Account,
@@ -4400,7 +4400,10 @@ mod tests {
         query::store::LiveQueryStore,
         smartcontracts::Registrable,
         state::State,
-        sumeragi::network_topology::Topology,
+        sumeragi::{
+            consensus::{CommitAggregate, PERMISSIONED_TAG, Phase},
+            network_topology::Topology,
+        },
     };
 
     #[test]
@@ -6296,6 +6299,7 @@ mod tests {
         assert_eq!(got.format_label(), "pipeline.recovery.v1");
     }
 
+    #[test]
     fn pipeline_sidecar_rejects_height_mismatch() {
         use iroha_config::base::WithOrigin;
         let temp_dir = TempDir::new().unwrap();
@@ -6893,7 +6897,6 @@ mod tests {
     #[test]
     fn roster_sidecar_roundtrip() {
         use iroha_config::base::WithOrigin;
-        use iroha_data_model::block::BlockSignature;
 
         let temp_dir = TempDir::new().unwrap();
         let (kura, _count) = Kura::new(
@@ -6922,17 +6925,23 @@ mod tests {
         let peer = PeerId::new(kp.public_key().clone());
         let roster = vec![peer];
         let block_hash = store_dummy_blocks(&kura, 1)[0];
-        let block_sig =
-            BlockSignature::new(0, SignatureOf::from_hash(kp.private_key(), block_hash));
+        let signers_bitmap = vec![0b0000_0001];
+        let bls_aggregate_signature = vec![0xAB; 96];
         let cert = CommitCertificate {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
             height: 1,
-            block_hash,
             view: 0,
             epoch: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            signatures: vec![block_sig],
+            aggregate: CommitAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: bls_aggregate_signature.clone(),
+            },
         };
         let sidecar = RosterSidecar::new_v1(1, block_hash, Some(cert.clone()), None, None);
 
@@ -6952,6 +6961,7 @@ mod tests {
         assert_eq!(got.roster_snapshot(), Some(roster));
     }
 
+    #[test]
     fn roster_sidecar_rejects_height_mismatch() {
         use iroha_config::base::WithOrigin;
         let temp_dir = TempDir::new().unwrap();
@@ -7050,7 +7060,6 @@ mod tests {
     #[test]
     fn roster_sidecar_rejects_commit_certificate_mismatch() {
         use iroha_config::base::WithOrigin;
-        use iroha_data_model::block::BlockSignature;
 
         let temp_dir = TempDir::new().unwrap();
         let (kura, _count) = Kura::new(
@@ -7086,17 +7095,21 @@ mod tests {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xEE; Hash::LENGTH]));
         assert_ne!(block_hash, mismatch_hash, "mismatch hash must differ");
 
-        let block_sig =
-            BlockSignature::new(0, SignatureOf::from_hash(kp.private_key(), mismatch_hash));
         let cert = CommitCertificate {
+            phase: Phase::Commit,
+            subject_block_hash: mismatch_hash,
             height: 1,
-            block_hash: mismatch_hash,
             view: 0,
             epoch: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster,
-            signatures: vec![block_sig],
+            aggregate: CommitAggregate {
+                signers_bitmap: vec![0b0000_0001],
+                bls_aggregate_signature: vec![0xAA; 96],
+            },
         };
         let sidecar = RosterSidecar::new_v1(1, block_hash, Some(cert), None, None);
         kura.write_roster_metadata(&sidecar);
@@ -7110,7 +7123,6 @@ mod tests {
     #[test]
     fn roster_sidecar_roundtrip_with_stake_snapshot() {
         use iroha_config::base::WithOrigin;
-        use iroha_data_model::block::BlockSignature;
 
         let temp_dir = TempDir::new().unwrap();
         let (kura, _count) = Kura::new(
@@ -7138,17 +7150,23 @@ mod tests {
         let peer = PeerId::new(kp.public_key().clone());
         let roster = vec![peer];
         let block_hash = store_dummy_blocks(&kura, 1)[0];
-        let block_sig =
-            BlockSignature::new(0, SignatureOf::from_hash(kp.private_key(), block_hash));
+        let signers_bitmap = vec![0b0000_0001];
+        let bls_aggregate_signature = vec![0xAC; 96];
         let cert = CommitCertificate {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
             height: 1,
-            block_hash,
             view: 0,
             epoch: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            signatures: vec![block_sig],
+            aggregate: CommitAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: bls_aggregate_signature.clone(),
+            },
         };
         let stake_snapshot = crate::sumeragi::stake_snapshot::CommitStakeSnapshot {
             validator_set_hash: HashOf::new(&roster),

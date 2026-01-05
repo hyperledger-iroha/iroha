@@ -27,11 +27,11 @@ translator: manual
   - דוגמה: `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
 - מדדים: מדדי `sumeragi_new_view_receipts_by_hv{height,view}` משקפים את הספירות.
 - `GET /v1/sumeragi/status`
-  - צילום מצב של אינדקס המוביל, HighestQC/LockedQC (גובה, תצוגה, hash), מוני אספנים/VRF, דחיות פייסמייקר, עומק תור טרנזקציות ובריאות חנות ה-RBC (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`).
+  - צילום מצב של אינדקס המוביל, Highest/Locked commit certificates (`highest_qc`/`locked_qc`, גובה/תצוגה/hash), מוני אספנים/VRF, דחיות פייסמייקר, עומק תור טרנזקציות ובריאות חנות ה-RBC (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`).
 - `GET /v1/sumeragi/status/sse`
   - זרם SSE (≈שנייה) של אותו מטען כמו `/v1/sumeragi/status` למעקב בזמן אמת.
 - `GET /v1/sumeragi/qc`
-  - צילום מצב של HighestQC ו-LockedQC; כולל `subject_block_hash` עבור HighestQC אם ידוע.
+  - צילום מצב של highest/locked commit certificates; כולל `subject_block_hash` עבור highest commit certificate אם ידוע.
 - `GET /v1/sumeragi/pacemaker`
   - טיימרים והגדרות פייסמייקר: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
 - `GET /v1/sumeragi/leader`
@@ -40,7 +40,7 @@ translator: manual
   - תכנית אספנים דטרמיניסטית מן הטופולוגיה והפרמטרים על השרשרת: כולל `mode`, התכנית `(height, view)` (גובה = גובה השרשרת הנוכחי), ‏`collectors_k`, ‏`redundant_send_r`, ‏`proxy_tail_index`, ‏`min_votes_for_commit`, רשימת האספנים המסודרת ו-`epoch_seed` (hex) כאשר NPoS פעיל.
 - `GET /v1/sumeragi/params`
   - צילום מצב של פרמטרי Sumeragi על השרשרת `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
-  - כאשר `da_enabled` הוא true, ה-commit ממתין ל-`AvailabilityQC` (ולא לאירוע `DELIVER` מקומי של RBC); בדקו את מצב ה-RBC דרך נקודות הקצה הבאות.
+  - כאשר `da_enabled` הוא true, ה-commit ממתין ל-`availability evidence` (ולא לאירוע `DELIVER` מקומי של RBC); בדקו את מצב ה-RBC דרך נקודות הקצה הבאות.
 - `GET /v1/sumeragi/rbc`
   - מוני שידור אמין במצטבר: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, deliver_broadcasts_total, payload_bytes_delivered_total }`.
 - `GET /v1/sumeragi/rbc/sessions`
@@ -51,7 +51,7 @@ translator: manual
 
 - `GET /v1/sumeragi/evidence/count` → ‏`{ "count": <u64> }`
 - `GET /v1/sumeragi/evidence` → ‏`{ "total": <u64>, "items": [...] }`
-  - כולל שדות בסיסיים (DoublePrevote/Precommit, ‏InvalidQC, ‏InvalidProposal) לבחינה.
+  - כולל שדות בסיסיים (DoublePrepare/Precommit, ‏InvalidCommitCertificate, ‏InvalidProposal) לבחינה.
   - דוגמאות:
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence/count | jq .`
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`

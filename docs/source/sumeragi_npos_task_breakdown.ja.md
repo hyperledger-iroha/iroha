@@ -18,24 +18,24 @@ translation_last_reviewed: 2026-01-01
 ### A2 - ワイヤレベルメッセージの採用
 - ✅ Norito の `Proposal`/`Vote`/`Qc` 型を `BlockMessage` に公開し、エンコード／デコードの往復テストを実施（`crates/iroha_data_model/tests/consensus_roundtrip.rs`）。
 - ✅ 旧 `BlockSigned/BlockCommitted` フレームを制御するトグルを退役前に `false` で固定。
-- ✅ 旧ブロックメッセージを切り替えるマイグレーションノブを廃止し、Vote/QC モードを唯一のワイヤ経路に。
+- ✅ 旧ブロックメッセージを切り替えるマイグレーションノブを廃止し、Vote/commit certificate モードを唯一のワイヤ経路に。
 - ✅ Torii ルータ、CLI、テレメトリ利用者を更新し、旧ブロックフレームより `/v1/sumeragi/*` JSON スナップショットを優先。
-- ✅ 統合テストで Vote/QC パイプラインのみを通した `/v1/sumeragi/*` エンドポイントを検証（`integration_tests/tests/sumeragi_vote_qc_commit.rs`）。
+- ✅ 統合テストで Vote/commit certificate パイプラインのみを通した `/v1/sumeragi/*` エンドポイントを検証（`integration_tests/tests/sumeragi_vote_qc_commit.rs`）。
 - ✅ 機能同等性と相互接続テストが揃い次第、旧フレームを削除。
 
 ### フレーム削除計画
-1. ✅ Telemetry/CI ハーネスの両方で 72 h のマルチノード耐久テストを実施。Torii スナップショットで提案スループットと QC 形成が安定していることを確認。
-2. ✅ Vote/QC パスのみで動作する統合テスト（`sumeragi_vote_qc_commit.rs`）を導入し、混在ピアでも旧フレームなしでコンセンサス可能なことを検証。
-3. ✅ オペレーター向けドキュメントと CLI ヘルプから旧ワイヤ経路の記述を削除し、トラブルシューティングを Vote/QC テレメトリに一本化。
-4. ✅ 旧メッセージバリアント、テレメトリカウンタ、ペンディングコミットキャッシュを削除。互換性マトリクスを Vote/QC-only に更新。
+1. ✅ Telemetry/CI ハーネスの両方で 72 h のマルチノード耐久テストを実施。Torii スナップショットで提案スループットと commit certificate 形成が安定していることを確認。
+2. ✅ Vote/commit certificate パスのみで動作する統合テスト（`sumeragi_vote_qc_commit.rs`）を導入し、混在ピアでも旧フレームなしでコンセンサス可能なことを検証。
+3. ✅ オペレーター向けドキュメントと CLI ヘルプから旧ワイヤ経路の記述を削除し、トラブルシューティングを Vote/commit certificate テレメトリに一本化。
+4. ✅ 旧メッセージバリアント、テレメトリカウンタ、ペンディングコミットキャッシュを削除。互換性マトリクスを Vote/commit certificate-only に更新。
 
 ### A3 - エンジンとペースメーカーの強化
-- ✅ `handle_message` 内で Lock/HighestQC の不変条件を強制（`block_created_header_sanity`）。
+- ✅ `handle_message` 内で Lock/Highestcommit certificate の不変条件を強制（`block_created_header_sanity`）。
 - ✅ データ可用性追跡が delivery 記録時に RBC ペイロードハッシュを検証し、不一致セッションを delivered 扱いにしない（`Actor::ensure_block_matches_rbc_payload`）。
 - ✅ `require_precommit_qc` を既定設定へ組み込み、負のテストを追加（既定 `true`。ゲート有／無両パスをカバー）。
 - ✅ ビュー全体の冗長送信ヒューリスティックを EMA バックのペースメーカー制御に置き換え（`aggregator_retry_deadline` がライブ EMA に基づき冗長送信期限を計算）。
 - ✅ キューのバックプレッシャーを検知して提案組み立てをブロック（`BackpressureGate` がキュー飽和時にペースメーカーを停止し、ステータス／テレメトリへ延期回数を記録）。
-- ✅ DA が必要な場合、proposal 検証後に availability 投票を送出（ローカル RBC `DELIVER` を待たない）。availability evidence は `AvailabilityQC` で追跡し、commit は待機せずに進行。payload 輸送と投票の循環待ちを避ける。
+- ✅ DA が必要な場合、proposal 検証後に availability 投票を送出（ローカル RBC `DELIVER` を待たない）。availability evidence は `availability evidence` で追跡し、commit は待機せずに進行。payload 輸送と投票の循環待ちを避ける。
 - ✅ 再起動／ライブネス回帰でコールドスタート時の RBC 復旧（`integration_tests/tests/sumeragi_da.rs::sumeragi_rbc_session_recovers_after_cold_restart`）とダウンタイム後のペースメーカー再開（`integration_tests/tests/sumeragi_npos_liveness.rs::npos_pacemaker_resumes_after_downtime`）を検証。
 - ✅ ロック収束を対象とした決定的な再起動／ビュー変更テストを追加（`integration_tests/tests/sumeragi_lock_convergence.rs`）。
 
@@ -46,7 +46,7 @@ translation_last_reviewed: 2026-01-01
 - ✅ GA-A4.3 - 遅延リビール復旧とゼロ参加エポックのテストを `integration_tests/tests/sumeragi_randomness.rs` に整備（`npos_late_vrf_reveal_clears_penalty_and_preserves_seed`, `npos_zero_participation_epoch_reports_full_no_participation`）。ペナルティ解除テレメトリを検証。オーナー: `@sumeragi-core`。トラッカー: `project_tracker/npos_sumeragi_phase_a.md:7`。
 
 ### A5 - 共同リコンフィグとエビデンス
-- ✅ エビデンスの足場、WSV 永続化、Norito 往復が二重投票、無効提案、無効 QC、二重 exec バリアントをカバー。決定的な重複排除と地平線カットを実装（`sumeragi::evidence`）。
+- ✅ エビデンスの足場、WSV 永続化、Norito 往復が二重投票、無効提案、無効 commit certificate、二重 exec バリアントをカバー。決定的な重複排除と地平線カットを実装（`sumeragi::evidence`）。
 - ✅ GA-A5.1 - 旧セットがコミットし新セットが次ブロックで有効化されるジョイントコンセンサスを強制し、対象統合テストを追加。
 - ✅ GA-A5.2 - スラッシュ／拘束ガバナンス文書と CLI フローを更新し、mdBook 同期テストでデフォルトと evidence horizon 記述を固定。
 - ✅ GA-A5.3 - 重複署名者、偽署名、古いエポック再生、マニフェスト混在といった負の経路テストと fuzz フィクスチャを導入し、Norito 往復検証をナイトリーで保護。

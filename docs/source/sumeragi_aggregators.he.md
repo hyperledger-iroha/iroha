@@ -34,7 +34,7 @@ translator: manual
 - מאמתים מחזיקים `CollectorPlan` לצד `VotingBlock` שבטיפול. התוכנית רושמת את מספר האוספים שנוצר קשר איתם ואם בוצעה הסלמה לגוסיפ.
 - שליחה עודפת (`r`) מיושמת דטרמיניסטית בהתקדמות לאורך התוכנית. כאשר לא נשארים אוספים נוספים – או שכל הניסיונות מוצו ללא אישור – התוכנית מסמנת שהופעל fallback. המדד `collect_aggregator_gossip_total` ב-`/v1/sumeragi/phases` משקף את מדד Prometheus כדי שמפעילים יוכלו להתראה על מיצוי חוזר.
 - fallback שולח את הבלוק וה-prevote החתומים לכל peer אחר בטופולוגיה (למעט העצמי). זה מבטיח חיות גם אם כל האוספים המתוכננים כשלו, ומחקה את פייל-סייפ הישן של “שידור לכולם” תוך שמירה על מיקוד בזמן עבודה רגיל.
-- ה-fallback מתרחש פעם אחת בלבד לכל בלוק כדי למנוע הצפת רשת. כל השלכה של הצעה בשל שער QC נעול מעלה את `block_created_dropped_by_lock_total`; מסלולי כשלי ולידציית כותרת מעלים את `block_created_hint_mismatch_total` ואת `block_created_proposal_mismatch_total`, ומאפשרים למפעילים לקשר fallback חוזר לבעיות במנהיג. תמונת `/v1/sumeragi/status` מציגה את ה-Highest/Locked QC העדכניים כך שניתן לחבר פסגות drop להאש־בלוקים מסוימים.
+- ה-fallback מתרחש פעם אחת בלבד לכל בלוק כדי למנוע הצפת רשת. כל השלכה של הצעה בשל שער commit certificate נעול מעלה את `block_created_dropped_by_lock_total`; מסלולי כשלי ולידציית כותרת מעלים את `block_created_hint_mismatch_total` ואת `block_created_proposal_mismatch_total`, ומאפשרים למפעילים לקשר fallback חוזר לבעיות במנהיג. תמונת `/v1/sumeragi/status` מציגה את ה-Highest/Locked commit certificate העדכניים כך שניתן לחבר פסגות drop להאש־בלוקים מסוימים.
 
 ## סיכום יישום
 

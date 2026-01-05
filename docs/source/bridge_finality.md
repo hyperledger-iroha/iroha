@@ -54,7 +54,7 @@ justification wrapper for bridge protocols that prefer the separation.
 
 1. Recompute `block_hash` from `block_header`; reject on mismatch.
 2. Check `commit_certificate.block_hash` matches the recomputed `block_hash`;
-   reject mismatched header/QC pairs.
+   reject mismatched header/commit certificate pairs.
 3. Check `chain_id` matches the expected Iroha chain.
 4. Recompute `validator_set_hash` from `commit_certificate.validator_set` and
    check it matches the recorded hash/version.

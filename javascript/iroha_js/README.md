@@ -1113,7 +1113,7 @@ await torii.getSumeragiRbcDelivered(candidate.height, candidate.view, {
   signal: controller.signal,
 });
 
-const evidence = await torii.listSumeragiEvidence({ limit: 20, kind: "DoublePrevote" });
+const evidence = await torii.listSumeragiEvidence({ limit: 20, kind: "DoublePrepare" });
 console.log(`Observed ${evidence.total} evidence entries`);
 const count = await torii.getSumeragiEvidenceCount();
 await torii.submitSumeragiEvidence({

@@ -64,7 +64,7 @@ justification pour les protocoles bridge qui preferent la separation.
 
 1. Recompute `block_hash` depuis `block_header`; rejeter en cas de mismatch.
 2. Verifier que `commit_certificate.block_hash` correspond au `block_hash` recompute;
-   rejeter les paires header/QC non correspondantes.
+   rejeter les paires header/commit certificate non correspondantes.
 3. Verifier que `chain_id` correspond a la chaine Iroha attendue.
 4. Recompute `validator_set_hash` depuis `commit_certificate.validator_set` et verifier
    qu il correspond au hash/version enregistres.

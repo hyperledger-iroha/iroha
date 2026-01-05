@@ -181,12 +181,12 @@ fn summarize_status(value: &Value) -> String {
         .and_then(|o| o.get("last_satisfied"))
         .and_then(norito::json::Value::as_str)
         .unwrap_or("none");
-    let da_missing_availability = da_gate
-        .and_then(|o| o.get("missing_availability_total"))
+    let da_missing_local_data = da_gate
+        .and_then(|o| o.get("missing_local_data_total"))
         .and_then(norito::json::Value::as_u64)
         .unwrap_or(0);
     let da_gate_summary = format!(
-        "{da_reason}(last={da_last_satisfied};avl={da_missing_availability})"
+        "{da_reason}(last={da_last_satisfied};missing={da_missing_local_data})"
     );
     let rbc_sessions = rbc
         .and_then(|o| o.get("sessions"))
@@ -612,14 +612,14 @@ mod tests {
                 "recent_evictions": []
             },
             "da_gate": {
-                "reason": "missing_availability_qc",
-                "last_satisfied": "availability_qc",
-                "missing_availability_total": 4
+                "reason": "missing_local_data",
+                "last_satisfied": "missing_data_recovered",
+                "missing_local_data_total": 4
             }
         });
         let summary = summarize_status(&value);
         assert!(
-            summary.contains("da_gate=missing_availability_qc(last=availability_qc;avl=4)"),
+            summary.contains("da_gate=missing_local_data(last=missing_data_recovered;missing=4)"),
             "DA availability summary missing or malformed: {summary}"
         );
     }

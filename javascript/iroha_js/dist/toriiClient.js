@@ -57,14 +57,14 @@ const HEADER_SORA_PROOF_STATUS = "sora-proof-status";
 const HEADER_SORA_PDP_COMMITMENT = "sora-pdp-commitment";
 
 const EVIDENCE_KIND_VALUES = new Set([
-  "DoublePrevote",
-  "DoublePrecommit",
+  "DoublePrepare",
+  "DoubleCommit",
   "DoubleExecVote",
-  "InvalidQC",
+  "InvalidCommitCertificate",
   "InvalidProposal",
 ]);
 
-const EVIDENCE_PHASE_VALUES = new Set(["Prevote", "Precommit", "Available"]);
+const EVIDENCE_PHASE_VALUES = new Set(["Prepare", "Commit", "NewView"]);
 
 const KAIGI_HEALTH_STATUS_VALUES = new Set(["healthy", "degraded", "unavailable"]);
 const KAIGI_EVENT_KIND_VALUES = new Set(["registration", "health"]);
@@ -18366,7 +18366,7 @@ function normalizeSumeragiEvidenceRecord(value, context) {
       `${context}.recorded_ms`,
     ),
   };
-  if (kind === "DoublePrevote" || kind === "DoublePrecommit") {
+  if (kind === "DoublePrepare" || kind === "DoubleCommit") {
     const phase = requireEvidencePhase(pickOverride(record, "phase", "phase"), `${context}.phase`);
     return {
       ...base,
@@ -18434,7 +18434,7 @@ function normalizeSumeragiEvidenceRecord(value, context) {
       ),
     };
   }
-  if (kind === "InvalidQC") {
+  if (kind === "InvalidCommitCertificate") {
     return {
       ...base,
       height: requireNonNegativeIntegerLike(

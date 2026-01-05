@@ -14,14 +14,17 @@ use iroha_core::{
     query::store::LiveQueryStore,
     queue::Queue,
     state::{State, World},
-    sumeragi::status::{record_commit_certificate, reset_commit_certs_for_tests},
+    sumeragi::{
+        consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage},
+        status::{record_commit_certificate, reset_commit_certs_for_tests},
+    },
 };
-use iroha_crypto::{HashOf, KeyPair, SignatureOf};
+use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature};
 use iroha_data_model::{
     ChainId,
     block::BlockHeader,
     bridge::{BridgeFinalityVerifier, BridgeFinalityVerifyError},
-    consensus::{CommitCertificate, VALIDATOR_SET_HASH_VERSION_V1},
+    consensus::{CommitAggregate, CommitCertificate, VALIDATOR_SET_HASH_VERSION_V1},
     peer::PeerId,
 };
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
@@ -48,7 +51,7 @@ async fn bridge_finality_endpoint_roundtrips_into_verifier() {
     let cfg = test_utils::mk_minimal_root_cfg();
     let chain_id: ChainId = cfg.common.chain.clone();
 
-    let kp = KeyPair::random();
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer_id = PeerId::from(kp.public_key().clone());
 
     let header = BlockHeader::new(
@@ -74,18 +77,34 @@ async fn bridge_finality_endpoint_roundtrips_into_verifier() {
 
     let validator_set = vec![peer_id.clone()];
     let validator_set_hash = HashOf::new(&validator_set);
-    let cert = CommitCertificate {
-        height: 1,
+    let mode_tag = PERMISSIONED_TAG;
+    let vote = Vote {
+        phase: Phase::Commit,
         block_hash,
+        height: 1,
         view: 0,
         epoch: 0,
+        highest_cert: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let preimage = vote_preimage(&chain_id, mode_tag, &vote);
+    let signature = Signature::new(kp.private_key(), &preimage);
+    let cert = CommitCertificate {
+        phase: Phase::Commit,
+        height: 1,
+        subject_block_hash: block_hash,
+        view: 0,
+        epoch: 0,
+        mode_tag: mode_tag.to_string(),
+        highest_cert: None,
         validator_set_hash,
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set,
-        signatures: vec![iroha_data_model::block::BlockSignature::new(
-            0,
-            SignatureOf::from_hash(kp.private_key(), block_hash),
-        )],
+        aggregate: CommitAggregate {
+            signers_bitmap: vec![1],
+            bls_aggregate_signature: signature.payload().to_vec(),
+        },
     };
     record_commit_certificate(cert);
 

@@ -112,7 +112,7 @@ WAN جغرافية موزعة
 - تحقق من config: `max(sumeragi_pacemaker_backoff_multiplier)`, `max(sumeragi_pacemaker_rtt_floor_multiplier)`, `max(sumeragi_pacemaker_max_backoff_ms)`
 
 ## الحتمية والسلامة
-- المؤقتات/backoff/jitter تؤثر فقط على توقيت اطلاق المقترحات/تغييرات view؛ ولا تؤثر على صحة التواقيع او قواعد QC.
+- المؤقتات/backoff/jitter تؤثر فقط على توقيت اطلاق المقترحات/تغييرات view؛ ولا تؤثر على صحة التواقيع او قواعد commit certificate.
 - اجعل اي عشوائية حتمية لكل عقدة ولكل (height, view). تجنب time-of-day او RNG للنظام في مسارات التوافق الحرجة.
 
 </div>

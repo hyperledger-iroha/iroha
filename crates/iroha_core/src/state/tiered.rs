@@ -2079,6 +2079,10 @@ mod tests {
         )));
         let hot_hash = manifest.hot_entries[0].key_hash_hex.clone();
 
+        assert!(
+            hot_hash == qc1_hash || hot_hash == qc2_hash,
+            "hot entry should match one of the recent QC hashes"
+        );
         let mutate = if hot_hash == qc1_hash { qc2 } else { qc1 };
         let mut updated = mutate.clone();
         updated.view = 99;

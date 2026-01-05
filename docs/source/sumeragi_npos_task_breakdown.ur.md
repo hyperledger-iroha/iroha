@@ -20,23 +20,24 @@ translation_last_reviewed: 2026-01-01
 ### A2 - Wire-level میسیج اپنانا
 - ✅ Norito `Proposal`/`Vote`/`Qc` ٹائپس کو `BlockMessage` میں نمایاں کیا اور encode/decode round-trips چلائے (`crates/iroha_data_model/tests/consensus_roundtrip.rs`).
 - ✅ پرانے `BlockSigned/BlockCommitted` frames کو gate کیا؛ migration toggle کو ریٹائرمنٹ سے پہلے `false` پر رکھا گیا۔
-- ✅ پرانے block messages ٹوگل کرنے والا migration knob ہٹا دیا؛ اب Vote/QC موڈ ہی واحد wire راستہ ہے۔
+- ✅ پرانے block messages ٹوگل کرنے والا migration knob ہٹا دیا؛ اب Vote/commit certificate موڈ ہی واحد wire راستہ ہے۔
 - ✅ Torii routers، CLI کمانڈز، اور telemetria consumers کو اپ ڈیٹ کیا تاکہ `/v1/sumeragi/*` JSON snapshots کو پرانے block frames پر ترجیح دیں۔
-- ✅ Integration coverage نے `/v1/sumeragi/*` endpoints کو صرف Vote/QC pipeline کے ذریعے exercise کیا (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
+- ✅ Integration coverage نے `/v1/sumeragi/*` endpoints کو صرف Vote/commit certificate pipeline کے ذریعے exercise کیا (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
 - ✅ فیچر parity اور interop tests مکمل ہونے پر پرانے frames ہٹا دیے گئے۔
 
 ### Frame removal پلان
-1. ✅ Telemetria اور CI harnesses دونوں پر 72 h کے multi-node soak tests چلائے گئے؛ Torii snapshots نے proposer throughput اور QC formation کو stable دکھایا اور کوئی regression نہ تھی۔
-2. ✅ Integration test coverage اب صرف Vote/QC path پر چلتی ہے (`sumeragi_vote_qc_commit.rs`)، جس سے mixed peers پرانے frames کے بغیر consensus تک پہنچتے ہیں۔
-3. ✅ Operator docs اور CLI help میں پرانے wire path کا ذکر نہیں رہا؛ troubleshooting guidance اب Vote/QC telemetria کی طرف اشارہ کرتی ہے۔
+1. ✅ Telemetria اور CI harnesses دونوں پر 72 h کے multi-node soak tests چلائے گئے؛ Torii snapshots نے proposer throughput اور commit certificate formation کو stable دکھایا اور کوئی regression نہ تھی۔
+2. ✅ Integration test coverage اب صرف Vote/commit certificate path پر چلتی ہے (`sumeragi_vote_qc_commit.rs`)، جس سے mixed peers پرانے frames کے بغیر consensus تک پہنچتے ہیں۔
+3. ✅ Operator docs اور CLI help میں پرانے wire path کا ذکر نہیں رہا؛ troubleshooting guidance اب Vote/commit certificate telemetria کی طرف اشارہ کرتی ہے۔
+4. ✅ سابقہ message variants، telemetria counters اور pending commit caches حذف کر دیے گئے؛ compatibility matrix اب Vote/commit certificate-only surface دکھاتا ہے۔
 
 ### A3 - Engine اور pacemaker enforcement
-- ✅ `handle_message` میں Lock/HighestQC invariants نافذ کیے گئے (دیکھیں `block_created_header_sanity`).
+- ✅ `handle_message` میں Lock/Highestcommit certificate invariants نافذ کیے گئے (دیکھیں `block_created_header_sanity`).
 - ✅ Data-availability tracking delivery ریکارڈ کرتے وقت RBC payload hash کو validate کرتی ہے (`Actor::ensure_block_matches_rbc_payload`) تاکہ mismatched sessions کو delivered نہ سمجھا جائے۔
-- ✅ PrecommitQC requirement (`require_precommit_qc`) کو default configs میں wire کیا اور negative tests شامل کیے (default اب `true` ہے؛ tests gated اور opt-out paths کور کرتے ہیں)۔
+- ✅ Precommitcommit certificate requirement (`require_precommit_qc`) کو default configs میں wire کیا اور negative tests شامل کیے (default اب `true` ہے؛ tests gated اور opt-out paths کور کرتے ہیں)۔
 - ✅ View-wide redundant-send heuristics کو EMA-backed pacemaker controllers سے replace کیا (`aggregator_retry_deadline` اب live EMA سے derive ہوتا ہے اور redundant send deadlines drive کرتا ہے)۔
 - ✅ Proposal assembly کو queue backpressure پر gate کیا (`BackpressureGate` اب queue saturated ہونے پر pacemaker روکتا ہے اور status/telemetry کیلئے deferrals ریکارڈ کرتا ہے)۔
-- ✅ Availability votes proposal validation کے بعد emit ہوتے ہیں جب DA لازم ہو (local RBC `DELIVER` کا انتظار کیے بغیر)، اور availability evidence کو `AvailabilityQC` کے ذریعے safety proof کے طور پر track کیا جاتا ہے جبکہ commit بغیر انتظار کے جاری رہتا ہے۔ اس سے payload transport اور voting کے بیچ circular waits ختم ہوتے ہیں۔
+- ✅ Availability votes proposal validation کے بعد emit ہوتے ہیں جب DA لازم ہو (local RBC `DELIVER` کا انتظار کیے بغیر)، اور availability evidence کو `availability evidence` کے ذریعے safety proof کے طور پر track کیا جاتا ہے جبکہ commit بغیر انتظار کے جاری رہتا ہے۔ اس سے payload transport اور voting کے بیچ circular waits ختم ہوتے ہیں۔
 - ✅ Restart/liveness coverage اب cold-start RBC recovery (`integration_tests/tests/sumeragi_da.rs::sumeragi_rbc_session_recovers_after_cold_restart`) اور downtime کے بعد pacemaker resume (`integration_tests/tests/sumeragi_npos_liveness.rs::npos_pacemaker_resumes_after_downtime`) کو exercise کرتی ہے۔
 - ✅ Lock convergence کیلئے deterministic restart/view-change regression tests شامل کیے گئے (`integration_tests/tests/sumeragi_lock_convergence.rs`).
 
@@ -47,7 +48,7 @@ translation_last_reviewed: 2026-01-01
 - ✅ GA-A4.3 - Late-reveal recovery اور zero-participation epoch tests کو `integration_tests/tests/sumeragi_randomness.rs` میں codify کیا (`npos_late_vrf_reveal_clears_penalty_and_preserves_seed`, `npos_zero_participation_epoch_reports_full_no_participation`)، penalty-clearing telemetria کو exercise کرتے ہوئے۔ مالکان: `@sumeragi-core`۔ Tracker: `project_tracker/npos_sumeragi_phase_a.md:7`۔
 
 ### A5 - Joint reconfiguration اور evidence
-- ✅ Evidence scaffolding، WSV persistence، اور Norito roundtrips اب double-vote، invalid proposal، invalid QC، اور double exec variants کو deterministic deduplication اور horizon pruning کے ساتھ cover کرتے ہیں (`sumeragi::evidence`)۔
+- ✅ Evidence scaffolding، WSV persistence، اور Norito roundtrips اب double-vote، invalid proposal، invalid commit certificate، اور double exec variants کو deterministic deduplication اور horizon pruning کے ساتھ cover کرتے ہیں (`sumeragi::evidence`)۔
 - ✅ GA-A5.1 - Joint-consensus activation (پرانا set commit کرتا ہے، نیا set اگلے block پر activate ہوتا ہے) enforced ہے اور targeted integration coverage شامل ہے۔
 - ✅ GA-A5.2 - Slashing/jailing کیلئے governance docs اور CLI flows اپ ڈیٹ کیے گئے، mdBook synchronization tests کے ساتھ جو defaults اور evidence horizon wording کو lock کرتے ہیں۔
 - ✅ GA-A5.3 - Negative-path evidence tests (duplicate signer, forged signature, stale epoch replay, mixed manifest payloads) اور fuzz fixtures شامل ہوئے اور nightly چلتے ہیں تاکہ Norito roundtrip validation محفوظ رہے۔

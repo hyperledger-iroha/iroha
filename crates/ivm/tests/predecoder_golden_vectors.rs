@@ -80,6 +80,11 @@ fn decode_artifact_invariant_across_metadata_fields() {
 
     let golden = decode(&base);
 
+    for vmin in [0u8, 1, 7, 42] {
+        let mut m = base.clone();
+        m.version_minor = vmin;
+        assert_eq!(&*golden, &*decode(&m), "minor {vmin}");
+    }
     for mode in 0u8..=0x07 {
         let mut m = base.clone();
         m.mode = mode;

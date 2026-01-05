@@ -4263,6 +4263,9 @@ pub mod stream {
             if read == 0 {
                 return Err(Error::LengthMismatch);
             }
+            if buf[..read].iter().any(|&b| b != 0) {
+                return Err(Error::LengthMismatch);
+            }
             padding -= read;
         }
         Ok(())

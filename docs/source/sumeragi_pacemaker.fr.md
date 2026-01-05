@@ -107,5 +107,5 @@ Reseaux a variance elevee ou mobiles
 - Verifier config: `max(sumeragi_pacemaker_backoff_multiplier)`, `max(sumeragi_pacemaker_rtt_floor_multiplier)`, `max(sumeragi_pacemaker_max_backoff_ms)`
 
 ## Determinisme et securite
-- Timers/backoff/jitter n influencent que le moment ou les noeuds declenchent des propositions/changements de vue; ils n affectent pas la validite des signatures ni les regles de QC.
+- Timers/backoff/jitter n influencent que le moment ou les noeuds declenchent des propositions/changements de vue; ils n affectent pas la validite des signatures ni les regles de commit certificate.
 - Garder toute alea deterministe par noeud et par (height, view). Eviter l heure du jour ou le RNG de l OS dans les chemins critiques du consensus.

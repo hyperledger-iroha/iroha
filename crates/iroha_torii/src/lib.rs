@@ -5348,6 +5348,7 @@ async fn handler_new_view_json(
 async fn handler_kaigi_relays(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
     AxQuery(params): AxQuery<routing::KaigiRelayFormatParams>,
 ) -> Result<Response, Error> {
     let key = rate_limit_key(&headers, None, "v1/kaigi/relays", app.api_token_enforced());
@@ -5356,15 +5357,25 @@ async fn handler_kaigi_relays(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    routing::handle_v1_kaigi_relays(app.state.clone(), app.telemetry.clone(), AxQuery(params))
-        .await
-        .map(axum::response::IntoResponse::into_response)
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    routing::handle_v1_kaigi_relays(
+        app.state.clone(),
+        app.telemetry.clone(),
+        AxQuery(params),
+        format,
+    )
+    .await
+    .map(axum::response::IntoResponse::into_response)
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 async fn handler_kaigi_relay_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
     AxPath(relay_id): AxPath<String>,
     AxQuery(params): AxQuery<routing::KaigiRelayFormatParams>,
 ) -> Result<Response, Error> {
@@ -5379,11 +5390,16 @@ async fn handler_kaigi_relay_detail(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
     routing::handle_v1_kaigi_relay_detail_with_policy(
         app.state.clone(),
         app.telemetry.clone(),
         AxPath(relay_id),
         AxQuery(params),
+        format,
         app.strict_addresses,
     )
     .await
@@ -5394,6 +5410,7 @@ async fn handler_kaigi_relay_detail(
 async fn handler_kaigi_relays_health(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
     let key = rate_limit_key(
         &headers,
@@ -5406,7 +5423,11 @@ async fn handler_kaigi_relays_health(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    routing::handle_v1_kaigi_relays_health(app.state.clone(), app.telemetry.clone())
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    routing::handle_v1_kaigi_relays_health(app.state.clone(), app.telemetry.clone(), format)
         .await
         .map(axum::response::IntoResponse::into_response)
 }
@@ -13947,7 +13968,7 @@ pub enum Error {
     /// Failed to get status
     StatusFailure(#[source] eyre::Report),
     #[cfg(feature = "telemetry")]
-    /// Telemetry endpoint disabled by active profile
+    /// Telemetry endpoint {endpoint} disabled by active profile {profile:?}
     TelemetryProfileRestricted {
         /// Logical endpoint or capability name
         endpoint: &'static str,
@@ -14240,12 +14261,17 @@ pub(crate) mod tests_runtime_handlers {
     use iroha_core::{
         kiso::KisoHandle,
         query::store::LiveQueryStore,
-        sumeragi::{consensus::PERMISSIONED_TAG, status::record_commit_certificate},
+        sumeragi::{
+            consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage},
+            status::record_commit_certificate,
+        },
     };
     use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
         block::{BlockSignature, SignedBlock},
-        consensus::{CommitCertificate, ExecutionQcRecord},
+        consensus::{
+            CommitAggregate, CommitCertificate, ExecutionQcRecord, VALIDATOR_SET_HASH_VERSION_V1,
+        },
         nexus::{AxtPolicySnapshot, AxtRejectReason, DataSpaceId, LaneId},
         peer::{Peer, PeerId},
         soranet::privacy_metrics::{
@@ -15225,20 +15251,37 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     fn record_commit_cert(height: u64) -> CommitCertificate {
-        let keypair = KeyPair::random();
+        let chain_id: ChainId = "chain".parse().expect("chain id");
+        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::from(keypair.public_key().clone());
         let block_hash = HashOf::from_untyped_unchecked(Hash::prehashed([height as u8; 32]));
-        let signature =
-            BlockSignature::new(0, SignatureOf::from_hash(keypair.private_key(), block_hash));
-        let cert = CommitCertificate {
-            height,
+        let vote = Vote {
+            phase: Phase::Commit,
             block_hash,
+            height,
             view: 0,
             epoch: 0,
+            highest_cert: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let preimage = vote_preimage(&chain_id, PERMISSIONED_TAG, &vote);
+        let signature = Signature::new(keypair.private_key(), &preimage);
+        let cert = CommitCertificate {
+            phase: Phase::Commit,
+            height,
+            subject_block_hash: block_hash,
+            view: 0,
+            epoch: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
             validator_set_hash: HashOf::new(&vec![peer_id.clone()]),
-            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: vec![peer_id],
-            signatures: vec![signature],
+            aggregate: CommitAggregate {
+                signers_bitmap: vec![0b0000_0001],
+                bls_aggregate_signature: signature.payload().to_vec(),
+            },
         };
         record_commit_certificate(cert.clone());
         cert
@@ -15409,7 +15452,7 @@ pub(crate) mod tests_runtime_handlers {
         let decoded: routing::ValidatorSetSnapshot =
             norito::core::NoritoDeserialize::deserialize(archived);
         assert_eq!(decoded.height, wanted.height);
-        assert_eq!(decoded.block_hash, wanted.block_hash);
+        assert_eq!(decoded.block_hash, wanted.subject_block_hash);
     }
 
     #[tokio::test]
