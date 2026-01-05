@@ -68,7 +68,6 @@ SoraFS CLI/SDK crates سب SemVer استعمال کرتے ہیں:
 
 - `MAJOR`: پہلی 1.0 release میں introduce ہوتا ہے۔ 1.0 سے پہلے `0.y` minor bump
   **breaking changes** کو ظاہر کرتا ہے، چاہے وہ CLI surface میں ہوں یا Norito schemas میں۔
-- `MINOR`: Backwards-compatible feature work (نئے commands/flags، optional policy کے پیچھے نئے Norito fields، telemetry additions)۔
 - `PATCH`: Bug fixes، documentation-only releases، اور dependency updates جو observable behavior کو تبدیل نہیں کرتے۔
 
 `sorafs_car`، `sorafs_manifest` اور `sorafs_chunker` کو ہمیشہ ایک ہی version پر رکھیں تاکہ
@@ -87,7 +86,6 @@ artifacts directory میں کاپی کریں اور sections کو concrete detai
 Minimum content:
 
 - **Highlights**: CLI اور SDK consumers کے لیے feature headlines۔
-- **Compatibility**: breaking changes، policy upgrades، minimum gateway/node requirements۔
 - **Upgrade steps**: cargo dependencies bump کرنے اور deterministic fixtures rerun کرنے کے TL;DR commands۔
 - **Verification**: command output hashes یا envelopes اور `ci/check_sorafs_cli_release.sh` کی exact revision جو execute ہوئی۔
 
@@ -146,7 +144,6 @@ Checks پاس ہونے اور hooks مکمل ہونے کے بعد:
 ## 6. Post-release follow-up
 
 - نئی version کی طرف اشارہ کرنے والی documentation (quickstarts, CI templates) اپڈیٹ کریں یا تصدیق کریں کہ کوئی تبدیلی درکار نہیں۔
-- اگر follow-on کام درکار ہو (مثلاً migration flags، legacy manifests کی deprecation) تو roadmap entries فائل کریں۔
 - Release gate output logs کو auditors کے لیے archive کریں - انہیں signed artifacts کے ساتھ محفوظ رکھیں۔
 
 اس pipeline کی پیروی ہر release cycle میں CLI، SDK crates اور governance collateral کو lock-step میں رکھتی ہے۔

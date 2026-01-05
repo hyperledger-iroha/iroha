@@ -10,7 +10,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Канонический источник
-Эта страница зеркалирует `docs/source/soranet/pq_rollout_plan.md`. Держите обе копии синхронизированными, пока legacy документация не будет выведена из эксплуатации.
 :::
 
 SNNet-16G завершает post-quantum rollout для транспорта SoraNet. Knobs `rollout_phase` позволяют операторам координировать детерминированный promotion от текущего Stage A guard requirement до Stage B majority coverage и Stage C strict PQ posture без редактирования сырого JSON/TOML для каждой поверхности.

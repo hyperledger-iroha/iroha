@@ -19,7 +19,7 @@ description: Checklist operacional para rollouts multi-origem em fases e negaç�
 ---
 
 :::note Fonte canônica
-Esta página espelha `docs/source/sorafs/runbooks/multi_source_rollout.md`. Mantenha ambas as cópias sincronizadas até que o conjunto legado de documentação seja retirado.
+Esta página espelha `docs/source/sorafs/runbooks/multi_source_rollout.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 ## Objetivo

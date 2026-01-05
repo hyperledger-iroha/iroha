@@ -4,7 +4,6 @@ description: Schema, API surface, and validation plan for Torii blob ingestion.
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/da/ingest_plan.md`. Keep both versions in sync until the legacy docs retire.
 :::
 
 # Sora Nexus Data Availability Ingest Plan

@@ -155,4 +155,4 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-Les fixtures enregistres sous `fixtures/nexus/lanes/` refletent les artefacts produits par le helper de bootstrap afin que les nouveaux manifests puissent etre lintes sans scripting sur mesure. La CI execute le meme flux via `ci/check_nexus_lane_smoke.sh` et `ci/check_nexus_lane_registry_bundle.sh` (alias: `make check-nexus-lanes`) pour prouver que le helper de smoke NX-7 reste compatible avec le format de payload publie et pour s'assurer que les digests/overlays du bundle restent reproductibles.
+Les fixtures enregistres sous `fixtures/nexus/lanes/` refletent les artefacts produits par le helper de bootstrap afin que les nouveaux manifests puissent etre lintes sans scripting sur mesure. La CI execute le meme flux via `ci/check_nexus_lane_smoke.sh` et `ci/check_nexus_lane_registry_bundle.sh` (alias: `make check-nexus-lanes`) pour prouver que le helper de smoke NX-7 reste conforme au format de payload publie et pour s'assurer que les digests/overlays du bundle restent reproductibles.

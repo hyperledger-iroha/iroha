@@ -11,7 +11,6 @@ import org.hyperledger.iroha.android.model.instructions.BurnTriggerRepetitionsIn
 import org.hyperledger.iroha.android.model.instructions.CastPlainBallotInstruction;
 import org.hyperledger.iroha.android.model.instructions.CastZkBallotInstruction;
 import org.hyperledger.iroha.android.model.instructions.CreateKaigiInstruction;
-import org.hyperledger.iroha.android.model.instructions.DeprecateVerifyingKeyInstruction;
 import org.hyperledger.iroha.android.model.instructions.EnactReferendumInstruction;
 import org.hyperledger.iroha.android.model.instructions.EndKaigiInstruction;
 import org.hyperledger.iroha.android.model.instructions.CompleteReplicationOrderInstruction;
@@ -344,9 +343,6 @@ public final class InstructionBox {
       }
       if ("UpdateVerifyingKey".equals(action)) {
         return UpdateVerifyingKeyInstruction.fromArguments(arguments);
-      }
-      if ("DeprecateVerifyingKey".equals(action)) {
-        return DeprecateVerifyingKeyInstruction.fromArguments(arguments);
       }
       if ("IssueReplicationOrder".equals(action)) {
         return IssueReplicationOrderInstruction.fromArguments(arguments);

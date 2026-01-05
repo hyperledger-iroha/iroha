@@ -32,7 +32,6 @@ public final class PendingQueueInspector {
       new OfflineSigningEnvelopeCodec();
   private static final DateTimeFormatter ISO_FORMATTER =
       DateTimeFormatter.ISO_OFFSET_DATE_TIME.withLocale(Locale.ROOT);
-  private static final String LEGACY_SEPARATOR = ",";
   private static final String DEFAULT_ALIAS = "pending.queue";
 
   private PendingQueueInspector() {}
@@ -72,10 +71,12 @@ public final class PendingQueueInspector {
   }
 
   private static EntrySummary decodeLine(final String line, final int index) throws IOException {
-    if (line.contains(",")) {
-      return fromLegacyLine(line, index);
+    final byte[] bytes;
+    try {
+      bytes = DECODER.decode(line);
+    } catch (final IllegalArgumentException ex) {
+      throw new IOException("Failed to decode queue entry " + index, ex);
     }
-    final byte[] bytes = DECODER.decode(line);
     try {
       final OfflineSigningEnvelope envelope = ENVELOPE_CODEC.decode(bytes);
       final SignedTransaction transaction =
@@ -100,27 +101,6 @@ public final class PendingQueueInspector {
     } catch (final Exception ex) {
       throw new IOException("Failed to decode queue entry " + index, ex);
     }
-  }
-
-  private static EntrySummary fromLegacyLine(final String line, final int index)
-      throws IOException {
-    final String[] segments = line.split(LEGACY_SEPARATOR, 4);
-    if (segments.length != 4) {
-      throw new IOException("Corrupted legacy queue entry: " + line);
-    }
-    final byte[] payload = DECODER.decode(segments[0]);
-    final byte[] signature = DECODER.decode(segments[1]);
-    final byte[] publicKey = DECODER.decode(segments[2]);
-    final String schema = new String(DECODER.decode(segments[3]), StandardCharsets.UTF_8);
-    final SignedTransaction transaction =
-      new SignedTransaction(payload, signature, publicKey, schema);
-    return new EntrySummary(
-        index,
-        SignedTransactionHasher.hashHex(transaction),
-        schema,
-        DEFAULT_ALIAS,
-        OptionalLong.empty(),
-        false);
   }
 
   private static void printUsage() {

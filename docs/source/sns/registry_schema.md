@@ -134,7 +134,7 @@ Enum AuctionKind {
 ```text
 Struct PriceTierV1 {
     tier_id: u8,
-    label_regex: String,       // RE2-compatible pattern describing eligible labels
+    label_regex: String,       // RE2-syntax pattern describing eligible labels
     base_price: TokenValue,    // Price per one-year term before suffix coefficient
     auction_kind: AuctionKind, // Default auction when the tier triggers
     dutch_floor: Option<TokenValue>,

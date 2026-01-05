@@ -1,6 +1,6 @@
 //! CoreHost durable state syscalls: STATE_GET/SET/DEL with pointer-ABI.
 
-use ivm::{CoreHost, IVM, Memory, PointerType, encoding, instruction, syscalls};
+use ivm::{CoreHost, IVM, Memory, PointerType, VMError, encoding, instruction, syscalls};
 mod common;
 
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -76,4 +76,31 @@ fn core_host_state_set_get_del_roundtrip() {
     vm.load_program(&get_prog).expect("load get again");
     vm.run().expect("state get after del");
     assert_eq!(vm.register(10), 0);
+}
+
+#[test]
+fn core_host_state_syscalls_require_pointers() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+
+    let get_prog = common::assemble_syscalls(&[syscalls::SYSCALL_STATE_GET as u8]);
+    vm.set_register(10, 0);
+    vm.load_program(&get_prog).expect("load get");
+    let err = vm.run().expect_err("state get without path should fail");
+    assert!(matches!(err, VMError::NoritoInvalid));
+
+    let path_tlv = make_tlv(PointerType::Name, b"foo");
+    let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
+    let set_prog = common::assemble_syscalls(&[syscalls::SYSCALL_STATE_SET as u8]);
+    vm.set_register(10, p_path);
+    vm.set_register(11, 0);
+    vm.load_program(&set_prog).expect("load set");
+    let err = vm.run().expect_err("state set without value should fail");
+    assert!(matches!(err, VMError::NoritoInvalid));
+
+    let del_prog = common::assemble_syscalls(&[syscalls::SYSCALL_STATE_DEL as u8]);
+    vm.set_register(10, 0);
+    vm.load_program(&del_prog).expect("load del");
+    let err = vm.run().expect_err("state del without path should fail");
+    assert!(matches!(err, VMError::NoritoInvalid));
 }

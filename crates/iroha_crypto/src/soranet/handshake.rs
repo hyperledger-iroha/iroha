@@ -72,8 +72,14 @@ const TELEMETRY_ED25519_LABEL: &[u8] = b"soranet.sig.ed25519.telemetry";
 const ALARM_DILITHIUM_LABEL: &[u8] = b"soranet.sig.dilithium.alarm";
 const ALARM_ED25519_LABEL: &[u8] = b"soranet.sig.ed25519.alarm";
 const FIXTURE_RELAY_SIGNATURE_KEY: [u8; NOISE_SECRET_LEN] = [0x42; NOISE_SECRET_LEN];
+const CAPABILITY_PQKEM: u16 = 0x0101;
+const CAPABILITY_PQSIG: u16 = 0x0102;
+const CAPABILITY_TRANSCRIPT_COMMIT: u16 = 0x0103;
 const CAPABILITY_SUITE_LIST: u16 = 0x0104;
+const CAPABILITY_ROLE: u16 = 0x0201;
+const CAPABILITY_PADDING: u16 = 0x0202;
 const CAPABILITY_CONSTANT_RATE: u16 = 0x0203;
+const CAPABILITY_REQUIRED_FLAG: u8 = 0x01;
 /// Negotiated handshake suite identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -146,7 +152,7 @@ pub struct CapabilityTlv {
     pub ty: u16,
     /// Raw TLV payload.
     pub value: Vec<u8>,
-    /// Whether the client marked the capability as required.
+    /// Whether the capability was marked as required by its TLV-specific flag.
     pub required: bool,
 }
 
@@ -237,10 +243,7 @@ pub fn parse_capabilities(buf: &[u8]) -> Result<Vec<CapabilityTlv>, HarnessError
         let mut value = buf[offset..offset + len].to_vec();
         offset += len;
 
-        let required = !value.is_empty() && (value[0] & 0x80) != 0;
-        if !value.is_empty() {
-            value[0] &= 0x7F; // strip required flag for payload processing
-        }
+        let required = parse_required_flag(ty, &mut value);
 
         out.push(CapabilityTlv {
             ty,
@@ -300,12 +303,12 @@ fn option_str_to_value(value: Option<&str>) -> Value {
 
 fn capability_name(ty: u16) -> Option<&'static str> {
     match ty {
-        0x0101 => Some("snnet.pqkem"),
-        0x0102 => Some("snnet.pqsig"),
-        0x0103 => Some("snnet.descriptor-commit"),
+        CAPABILITY_PQKEM => Some("snnet.pqkem"),
+        CAPABILITY_PQSIG => Some("snnet.pqsig"),
+        CAPABILITY_TRANSCRIPT_COMMIT => Some("snnet.transcript_commit"),
         CAPABILITY_SUITE_LIST => Some("snnet.suite_list"),
-        0x0201 => Some("snnet.role"),
-        0x0202 => Some("snnet.padding"),
+        CAPABILITY_ROLE => Some("snnet.role"),
+        CAPABILITY_PADDING => Some("snnet.padding"),
         CAPABILITY_CONSTANT_RATE => Some("snnet.constant_rate"),
         _ => None,
     }
@@ -318,11 +321,46 @@ fn capability_label(ty: u16) -> String {
     )
 }
 
-fn is_mandatory_capability(ty: u16) -> bool {
-    matches!(
-        ty,
-        0x0101 | 0x0102 | 0x0103 | 0x0201 | 0x0202 | CAPABILITY_CONSTANT_RATE
-    )
+fn parse_required_flag(ty: u16, value: &mut [u8]) -> bool {
+    match ty {
+        CAPABILITY_SUITE_LIST => {
+            if let Some(first) = value.first_mut() {
+                let required = (*first & 0x80) != 0;
+                *first &= 0x7F;
+                required
+            } else {
+                false
+            }
+        }
+        CAPABILITY_PQKEM | CAPABILITY_PQSIG | CAPABILITY_CONSTANT_RATE => value
+            .get(1)
+            .is_some_and(|flags| (flags & CAPABILITY_REQUIRED_FLAG) != 0),
+        _ => false,
+    }
+}
+
+fn apply_required_flag(ty: u16, value: &mut [u8], required: bool) {
+    match ty {
+        CAPABILITY_SUITE_LIST => {
+            if let Some(first) = value.first_mut() {
+                if required {
+                    *first |= 0x80;
+                } else {
+                    *first &= 0x7F;
+                }
+            }
+        }
+        CAPABILITY_PQKEM | CAPABILITY_PQSIG | CAPABILITY_CONSTANT_RATE => {
+            if let Some(flags) = value.get_mut(1) {
+                if required {
+                    *flags |= CAPABILITY_REQUIRED_FLAG;
+                } else {
+                    *flags &= !CAPABILITY_REQUIRED_FLAG;
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn parse_suite_list(cap: &CapabilityTlv) -> Result<SuiteList, HarnessError> {
@@ -528,8 +566,7 @@ pub fn diff_capabilities(
         if cap.is_grease() {
             continue;
         }
-        let mandatory = cap.required || is_mandatory_capability(cap.ty);
-        if !mandatory {
+        if !cap.required {
             continue;
         }
         let supported = relay.iter().any(|r| r.ty == cap.ty && r.value == cap.value);
@@ -550,13 +587,7 @@ fn encode_capabilities(entries: &[CapabilityTlv]) -> Vec<u8> {
     let mut buf = Vec::new();
     for cap in entries {
         let mut value = cap.value.clone();
-        if cap.required {
-            if value.is_empty() {
-                value.push(0x80);
-            } else {
-                value[0] |= 0x80;
-            }
-        }
+        apply_required_flag(cap.ty, &mut value, cap.required);
         buf.extend_from_slice(&cap.ty.to_be_bytes());
         let len = u16::try_from(value.len()).expect("capability value fits u16");
         buf.extend_from_slice(&len.to_be_bytes());
@@ -1848,7 +1879,7 @@ const FIXTURES: &[FixtureSpec] = &[
     FixtureSpec {
         id: "snnet-cap-006-constant-rate",
         description: "Client requires snnet.constant_rate; relay lacking TLV triggers downgrade",
-        client_hex: "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe020300028101",
+        client_hex: "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe020300020101",
         relay_hex: "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f12000412345678",
         descriptor_commit_hex: "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
         client_nonce_hex: "1f2e3d4c5b6a79888796a5b4c3d2e1f00112233445566778899aabbccddeeff0",
@@ -1856,7 +1887,7 @@ const FIXTURES: &[FixtureSpec] = &[
         resume_hash_hex: None,
         kem_id: 1,
         sig_id: 1,
-        transcript_hash_hex: "0e5e72c676a20704b992e94df59a7f07f00c81f8c84a20a7b06f6913c6c97b4c",
+        transcript_hash_hex: "78e0c7782b4cfa1a6c0ffe750562776b986be13514ff7b7b42ac5a17936ff680",
         warnings: &["relay missing required capability type=0x0203 (snnet.constant_rate)"],
         expected_outcome: "downgrade_abort",
         expected_alarm: None,
@@ -1882,7 +1913,7 @@ const FIXTURES: &[FixtureSpec] = &[
     FixtureSpec {
         id: "snnet-cap-004-grease",
         description: "Negotiation succeeds while preserving GREASE TLVs for transcript hashing",
-        client_hex: "0101000281010102000281010104000282030202000280047f200004112233447f2100085566778899aabbcc",
+        client_hex: "0101000201010102000201010104000282030202000280047f200004112233447f2100085566778899aabbcc",
         relay_hex: "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f220004deadc0de7f2300080011223344556677",
         descriptor_commit_hex: "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
         client_nonce_hex: "112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00",
@@ -1890,7 +1921,7 @@ const FIXTURES: &[FixtureSpec] = &[
         resume_hash_hex: Some("aabbccddeeff00112233445566778899"),
         kem_id: 1,
         sig_id: 1,
-        transcript_hash_hex: "7cf8152768910bbbca807eb82b456948ffbc575ec60c2f1388fd5329942122f8",
+        transcript_hash_hex: "3c2d5722530ebee2557851e6626033a9c90edb8507527d24f163019d98ff3ed8",
         warnings: &[],
         expected_outcome: "success",
         expected_alarm: None,
@@ -4724,13 +4755,7 @@ mod tests {
         let mut buf = Vec::new();
         for cap in entries {
             let mut value = cap.value.clone();
-            if cap.required {
-                if value.is_empty() {
-                    value.push(0x80);
-                } else {
-                    value[0] |= 0x80;
-                }
-            }
+            apply_required_flag(cap.ty, &mut value, cap.required);
             buf.extend_from_slice(&cap.ty.to_be_bytes());
             let len = u16::try_from(value.len()).expect("capability value fits u16");
             buf.extend_from_slice(&len.to_be_bytes());
@@ -5075,7 +5100,7 @@ mod tests {
 
     #[test]
     fn parse_and_diff_capabilities_handles_required_flag() {
-        let client = decode_hex("010100028001") // type 0x0101, required flag set, value 0x01
+        let client = decode_hex("010100020101") // type 0x0101, required flag set, value 0x01
             .expect("client hex");
         let relay = Vec::new(); // relay omits the required capability
         let client_caps = parse_capabilities(&client).expect("parse client");
@@ -5085,6 +5110,18 @@ mod tests {
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].capability_type, 0x0101);
         assert!(warnings[0].message.contains("0x0101"));
+    }
+
+    #[test]
+    fn encode_capabilities_sets_required_flag_in_flags_byte() {
+        let entries = vec![CapabilityTlv {
+            ty: CAPABILITY_PQKEM,
+            value: vec![0x01, 0x00],
+            required: true,
+        }];
+        let encoded = encode_capabilities(&entries);
+        let expected = decode_hex("010100020101").expect("expected hex");
+        assert_eq!(encoded, expected);
     }
 
     #[test]
@@ -5887,11 +5924,12 @@ mod tests {
 
     #[test]
     fn simulate_handshake_surfaces_warnings() {
-        let client_caps =
-            decode_hex("0101000201010102000201010202000200047f100004deadbeef7f110004cafebabe")
-                .expect("client hex");
+        let client_caps = decode_hex(
+            "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
+        )
+        .expect("client hex");
         let relay_caps = decode_hex(
-            "0102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f02010001010202000200047f1300040badc0de",
+            "0102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f1300040badc0de",
         )
         .expect("relay hex");
         let descriptor_commit =

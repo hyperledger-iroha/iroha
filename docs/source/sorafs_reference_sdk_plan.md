@@ -53,7 +53,6 @@ Default policy constants (override via Norito `PolicyOverrideV1` or CLI `--polic
 - Admission envelopes must reference approved senior council keyset (multi-signature) and admission window ≤ 7 days.
 - Replication orders validate:
   - Manifest digest and CAR digest equality (Blake3).
-  - Provider assignments obey chunking profile compatibility + capacity weights.
   - Order version supported by local `sorafs_manifest`.
   - Pricing schedule conforms to `sorafs_pricing.md` tiers.
 - PoR:

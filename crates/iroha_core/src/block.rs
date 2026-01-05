@@ -640,18 +640,11 @@ fn expected_pipeline_dag_fingerprint(
         );
         return None;
     }
-    let Some(sidecar_hash) = sidecar.block_hash else {
-        iroha_logger::debug!(
-            height,
-            "pipeline sidecar missing block hash; ignoring expected DAG fingerprint"
-        );
-        return None;
-    };
-    if sidecar_hash != block_hash {
+    if sidecar.block_hash != block_hash {
         iroha_logger::debug!(
             height,
             expected = %block_hash,
-            actual = %sidecar_hash,
+            actual = %sidecar.block_hash,
             "pipeline sidecar block hash mismatch; ignoring expected DAG fingerprint"
         );
         return None;
@@ -841,26 +834,19 @@ mod pipeline_recovery_tests {
             writes: Vec::new(),
         }];
 
-        let sidecar_v1 = PipelineRecoverySidecar::new_v1(height, dag, txs.clone());
-        assert!(
-            expected_pipeline_dag_fingerprint(height, block_hash, &[call_hash], &sidecar_v1)
-                .is_none(),
-            "v1 sidecars without block hashes should be ignored"
-        );
-
         let sidecar_mismatch =
-            PipelineRecoverySidecar::new_v2(height, other_hash, dag, txs.clone());
+            PipelineRecoverySidecar::new_v1(height, other_hash, dag, txs.clone());
         assert!(
             expected_pipeline_dag_fingerprint(height, block_hash, &[call_hash], &sidecar_mismatch)
                 .is_none(),
             "sidecars anchored to a different block hash should be ignored"
         );
 
-        let sidecar_match = PipelineRecoverySidecar::new_v2(height, block_hash, dag, txs);
+        let sidecar_match = PipelineRecoverySidecar::new_v1(height, block_hash, dag, txs);
         assert_eq!(
             expected_pipeline_dag_fingerprint(height, block_hash, &[call_hash], &sidecar_match),
             Some(dag.fingerprint),
-            "matching v2 sidecars should provide expected fingerprint"
+            "matching v1 sidecars should provide expected fingerprint"
         );
     }
 }
@@ -1454,7 +1440,7 @@ pub enum BlockValidationError {
 /// Error during signature verification
 #[derive(Debug, displaydoc::Display, Clone, Copy, PartialEq, Eq, Error)]
 pub enum SignatureVerificationError {
-    /// The block doesn't have enough valid signatures to be committed (`votes_count` out of `min_votes_for_commit`)
+    /// The block doesn't have enough valid signatures to be committed ({votes_count} out of {min_votes_for_commit})
     NotEnoughSignatures {
         /// Current number of signatures
         votes_count: usize,
@@ -4874,8 +4860,8 @@ pub(crate) mod valid {
                 );
             }
 
-            // Persist admission sets and DAG fingerprint for idempotent recovery (best-effort)
-            // Store a compact JSON using Norito json wrappers.
+            // Persist admission sets and DAG fingerprint for idempotent recovery (best-effort).
+            // Store a compact Norito sidecar for diagnostics.
             #[allow(unused)]
             {
                 let txs_sidecar: Vec<PipelineTxSnapshot> = txs
@@ -4903,7 +4889,7 @@ pub(crate) mod valid {
                 );
 
                 let mut sidecar =
-                    PipelineRecoverySidecar::new_v2(height, block_hash, dag_snapshot, txs_sidecar);
+                    PipelineRecoverySidecar::new_v1(height, block_hash, dag_snapshot, txs_sidecar);
                 #[cfg(feature = "zk-preverify")]
                 {
                     let proofs = crate::zk::collect_trace_proofs_for_height(height);

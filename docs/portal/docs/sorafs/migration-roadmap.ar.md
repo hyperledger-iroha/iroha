@@ -33,25 +33,12 @@ title: "خارطة طريق ترحيل SoraFS"
 
 | المعلم | النافذة | الأهداف الأساسية | ما يجب تسليمه | المالكون |
 |--------|---------|------------------|----------------|----------|
-| **M0 - Bootstrap** | الأسابيع 1-6 | نشر fixtures chunker حتمية ونشر artefacts بشكل مزدوج (legacy + SoraFS). | fixtures `sorafs_chunker`، تكامل CLI `sorafs_manifest_stub`، إدخالات سجل الترحيل. | Docs, DevRel, Storage |
 | **M1 - Deterministic Enforcement** | الأسابيع 7-12 | فرض fixtures موقعة وتجهيز إثباتات alias بينما تعتمد خطوط الأنابيب expectation flags. | تحقق ليلي من fixtures، manifests موقعة من المجلس، إدخالات staging في سجل alias. | Storage, Governance, SDKs |
-| **M2 - Registry First** | الأسابيع 13-20 | تمرير pins عبر registry وتجميد bundles legacy وإظهار تليمترية التكافؤ. | عقد Pin Registry + CLI (`sorafs pin propose/approve`)، لوحات observability، runbooks للمشغلين. | Governance, Ops, Observability |
-| **M3 - Alias Only** | الأسبوع 21+ | تفكيك الاستضافة legacy وفرض إثباتات alias للاسترجاع. | Gateways alias-only، تنبيهات التكافؤ، تحديث defaults للـ SDK، إشعار تفكيك legacy. | Ops, Networking, SDKs |
 
 يتم تتبع حالة المعالم في `docs/source/sorafs/migration_ledger.md`. كل تغيير في هذه
 الخارطة يجب أن يحدِّث السجل ليبقى الحوكمة وهندسة الإصدارات على نفس النسق.
 
 ## مسارات العمل
-
-### 1. إعادة تغليف البيانات legacy
-
-| الخطوة | المعلم | الوصف | المالك(ون) | المخرجات |
-|--------|--------|-------|------------|----------|
-| الجرد والوسم | M0 | تصدير digests من نوع SHA3-256 للـ bundles legacy وتسجيلها في سجل الترحيل (append-only). | Docs, DevRel | إدخالات سجل مع `source_path`, `sha3_digest`, `owner`, `planned_manifest_cid`. |
-| إعادة بناء حتمية | M0-M1 | استدعاء `sorafs_manifest_stub` لكل artefact إصدار وحفظ CAR وmanifest وsignature envelope وfetch plan في `artifacts/<team>/<alias>/<timestamp>/`. | Docs, CI | Bundles CAR + manifest قابلة لإعادة الإنتاج لكل إصدار. |
-| حلقة التحقق | M1 | إعادة تشغيل `sorafs_fetch` على بوابات staging للتأكد من تطابق حدود/digests للـ chunks مع fixtures. تسجيل pass/fail في تعليقات السجل. | Governance QA | تقرير تحقق staging + issue في GitHub لانحراف البيانات. |
-| التحول إلى registry | M2 | قلب حالة السجل إلى `Pinned` عند وجود digest للـ manifest on-chain؛ bundle legacy يتحول إلى قراءة فقط (خدمة دون تعديل). | Governance, Ops | hash معاملة registry، تذكرة read-only لتخزين legacy. |
-| التفكيك | M3 | إزالة إدخالات CDN legacy بعد فترة سماح 30 يوما، أرشفة موافقات تغييرات DNS، ونشر post-mortem. | Ops | قائمة تفكيك، سجل تغييرات DNS، إغلاق تذكرة حادث. |
 
 ### 2. اعتماد pinning الحتمي
 
@@ -85,9 +72,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
 | الخطوة | المعلم | الوصف | المالك(ون) | المخرجات |
 |--------|--------|-------|------------|----------|
 | إثباتات alias في staging | M1 | تسجيل مطالبات alias في Pin Registry الخاص بـ staging وإرفاق إثباتات Merkle مع manifests (`--alias`). | Governance, Docs | bundle إثباتات مخزن بجوار manifest + تعليق في السجل باسم alias. |
-| DNS مزدوج + إشعار | M1-M2 | تشغيل DNS legacy وTorii/SoraDNS بالتوازي؛ نشر إشعارات الترحيل للمشغلين وقنوات SDK. | Networking, DevRel | منشور إعلان + تذكرة تغيير DNS. |
 | فرض الإثباتات | M2 | Gateways ترفض manifests بدون رؤوس `Sora-Proof` حديثة؛ CI يضيف خطوة `sorafs alias verify` لجلب الإثباتات. | Networking | تصحيح إعدادات gateway + مخرجات CI توثق التحقق الناجح. |
-| Rollout alias-only | M3 | إزالة DNS legacy، تحديث defaults للـ SDK للاعتماد على Torii/SoraDNS + إثباتات alias، توثيق نافذة rollback. | SDK Maintainers, Ops | ملاحظات إصدار SDK، تحديث runbook للعمليات، خطة rollback. |
 
 ### 4. الاتصالات والتدقيق
 
@@ -104,7 +89,6 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
 |---------|-------|---------|
 | توفر عقد Pin Registry | يمنع rollout M2 pin-first. | تجهيز العقد قبل M2 مع اختبارات replay؛ الحفاظ على fallback للـ envelope حتى زوال أي regressions. |
 | مفاتيح توقيع المجلس | مطلوبة لـ manifest envelopes وموافقات registry. | مراسم التوقيع موثقة في `docs/source/sorafs/signing_ceremony.md`؛ تدوير المفاتيح بتداخل وتدوين ذلك في السجل. |
-| Gateway parity tooling | مطلوب لفرض إثباتات alias وتكافؤ chunks. | إطلاق تحديثات gateway في M1، إبقاء السلوك legacy خلف feature flag حتى تحقيق معايير M2. |
 | إيقاع إصدارات SDK | يجب على العملاء احترام إثباتات alias قبل M3. | مواءمة نوافذ إصدار SDK مع بوابات المعالم؛ إضافة checklists للترحيل في قوالب الإصدار. |
 
 المخاطر المتبقية ووسائل التخفيف مذكورة أيضا في `docs/source/sorafs_architecture_rfc.md`
@@ -114,10 +98,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
 
 | المعلم | المعايير |
 |--------|----------|
-| M0 | - إعادة بناء كل artefacts المستهدفة عبر `sorafs_manifest_stub` مع expectation flags. <br /> - تعبئة سجل الترحيل لكل عائلة artefacts. <br /> - نشر مزدوج (legacy + SoraFS) قائم. |
 | M1 | - مهمة fixtures الليلية خضراء لسبعة أيام متتالية. <br /> - تحقق إثباتات alias في staging داخل CI. <br /> - الحوكمة تصادق على سياسة expectation flags. |
-| M2 | - تمرير 100% من manifests الجديدة عبر Pin Registry. <br /> - وضع storage legacy كقراءة فقط؛ اعتماد playbook الحوادث. <br /> - لوحات observability تعمل مع عتبات تنبيه. |
-| M3 | - Gateways alias-only في الإنتاج. <br /> - إزالة DNS legacy وانعكاس ذلك في تذاكر التغيير. <br /> - تحديث defaults للـ SDK وإصداره. <br /> - إضافة الحالة النهائية إلى سجل الترحيل. |
 
 ## إدارة التغيير
 

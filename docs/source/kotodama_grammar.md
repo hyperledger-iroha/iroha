@@ -107,6 +107,10 @@ Semantics
 - `meta { ... }` fields override compiler defaults for the emitted IVM header: `abi_version`, `vector_length` (0 means unset), `max_cycles` (0 means compiler default), `features` toggles header feature bits (ZK tracing, vector announce). Unsupported features are ignored with a warning. When `meta {}` is omitted, the compiler emits `abi_version = 1` and uses the option defaults for the remaining header fields.
 - `features: ["zk", "simd"]` (aliases: `"vector"`) explicitly requests the corresponding header bits. Unknown feature strings now produce a parser error instead of being ignored.
 - `state` declares contract variables. Today the compiler lowers them to per-run ephemeral storage (allocated at function entry); durable host-backed overlays and conflict tracking remain TODO. For host-backed reads/writes, use the explicit helpers `state_get/state_set/state_del` and the `get_or_insert_default` map helpers; these route through Norito TLVs and keep names/field order stable for future persistence.
+- State identifiers are reserved; shadowing a `state` name in parameters or `let` bindings is rejected (`E_STATE_SHADOWED`).
+- State map values are not first-class: use the state identifier directly for map operations and iteration. Binding or passing state maps to user-defined functions is rejected (`E_STATE_MAP_ALIAS`).
+- Durable state maps currently support `int` and pointer-ABI key types only; other key types are rejected at compile time.
+- Durable state fields must be `int`, `bool`, `Json`, `Blob`/`bytes`, or pointer-ABI types (including structs/tuples composed of these fields); `string` is not supported for durable state.
 
 ## Functions and Parameters
 
@@ -123,12 +127,15 @@ Parameters and returns
 ## Statements
 
 - Variable bindings: `let x = expr;`, `let mut x = expr;` (mutability is a compile-time check; runtime mutation is allowed for locals only).
-- Assignment: `x = expr;` and compound forms `x += 1;` etc.
+- Assignment: `x = expr;` and compound forms `x += 1;` etc. Targets must be variables or map indices; tuple/struct fields are immutable.
 - Control: `if (cond) { ... } else { ... }`, `while (cond) { ... }`, C-style `for (init; cond; step) { ... }`.
+  - `for` initializers and steps must be simple `let name = expr` or expression statements; complex destructuring is rejected (`E0005`, `E0006`).
+  - `for` scoping: bindings from the init clause are visible in the loop and after it; bindings created in the body or step do not escape the loop.
+- Equality (`==`, `!=`) is supported for `int`, `bool`, `string`, pointer-ABI scalars (e.g., `AccountId`, `Name`, `Blob`/`bytes`, `Json`); tuples, structs, and maps are not comparable.
 - Map loop: `for (k, v) in map { ... }` (deterministic; see below).
 - Flow: `return expr;`, `break;`, `continue;`.
 - Call: `name(args...);` or `call name(args...);` (both accepted; compiler normalizes to call statements).
-- Assertions: `assert(cond, msg_id?);`, `assert_eq(a, b, msg_id?);` map to IVM `ASSERT*` in non-ZK builds or ZK constraints in ZK mode.
+- Assertions: `assert(cond);`, `assert_eq(a, b);` map to IVM `ASSERT*` in non-ZK builds or ZK constraints in ZK mode.
 
 ## Expressions
 
@@ -142,11 +149,12 @@ Precedence (high → low)
 7. Equality: `== !=`
 8. Bitwise AND/XOR/OR: `& ^ |`
 9. Logical AND/OR: `&& ||`
-10. Ternary (reserved): `cond ? a : b` (not implemented yet)
+10. Ternary: `cond ? a : b`
 
 Calls and tuples
 - Calls use positional arguments: `f(a, b, c)`.
 - Tuple literal: `(a, b, c)` and destructure: `let (x, y) = pair;`.
+- Tuple destructuring requires tuple/struct types with matching arity; mismatches are rejected.
 
 Strings and bytes
 - Strings are UTF‑8; functions that require raw bytes accept `Blob` pointers via constructors (see Builtins).
@@ -179,7 +187,7 @@ Prelude macros provide shorter aliases and inline validation for these construct
 The macros expand to the constructors above and reject invalid literals at compile time.
 
 Implementation status
-- Implemented: constructors above accept string literal arguments and lower to typed Norito TLV envelopes placed in the INPUT region. They return immutable typed pointers usable as syscall arguments. `blob`/`norito_bytes` also accept `bytes`-typed values at runtime without macro shims.
+- Implemented: constructors above accept string literal arguments and lower to typed Norito TLV envelopes placed in the INPUT region. They return immutable typed pointers usable as syscall arguments. Non-literal string expressions are rejected; use `Blob`/`bytes` for dynamic inputs. `blob`/`norito_bytes` also accept `bytes`-typed values at runtime without macro shims.
 - Extended forms:
   - `json(Blob[NoritoBytes]) -> Json*` via `JSON_DECODE` syscall.
   - `name(Blob[NoritoBytes]) -> Name*` via `NAME_DECODE` syscall.
@@ -210,7 +218,7 @@ Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
 - `contains(Map<K,V>, K) -> bool`
 
 Utility builtins
-- `info(string|int|tuple)`: emits a structured event/message via OUTPUT.
+- `info(string|int)`: emits a structured event/message via OUTPUT.
 - `hash(blob) -> Blob*`: returns a Norito-encoded hash as Blob.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `pointer_to_norito(ptr) -> NoritoBytes*`: wraps an existing pointer-ABI TLV as NoritoBytes for storage or transport.
@@ -225,7 +233,10 @@ Notes
 ## Collections and Maps
 
 Type: `Map<K, V>`
-- Key and value types must be serializable to Norito TLV. Supported K: `int`, `string`, tuples and structs of supported types. V: any supported type.
+- In-memory maps (heap-allocated via `Map::new()` or passed as parameters) store a single key/value pair; keys and values must be word-sized types: `int`, `bool`, `string`, `Blob`, `bytes`, `Json`, or pointer types (e.g., `AccountId`, `Name`).
+- Durable state maps (`state Map<...>`) use Norito-encoded keys/values. Supported keys: `int` or pointer types. Supported values: `int`, `bool`, `Json`, `Blob`/`bytes`, or pointer types.
+- `Map::new()` allocates and zero-initializes the single in-memory entry (key/value = 0); for non-`Map<int,int>` maps, provide an explicit type annotation or return type.
+- State maps are not first-class values: you cannot reassign them (e.g., `M = Map::new()`); update entries via indexing (`M[key] = value`).
 - Operations:
   - Indexing: `map[key]` get/set value (set performed via host syscall; see runtime API mapping).
   - Existence: `contains(map, key) -> bool` (lowered helper; may be an intrinsic syscall).
@@ -253,6 +264,11 @@ Notes on dynamic bounds
 Compile-time diagnostics (examples)
 - `E_UNBOUNDED_ITERATION`: loop over map lacks a bound.
 - `E_MUT_DURING_ITER`: structural mutation of iterated map in loop body.
+- `E_STATE_SHADOWED`: local bindings cannot shadow `state` declarations.
+- `E_BREAK_OUTSIDE_LOOP`: `break` used outside a loop.
+- `E_CONTINUE_OUTSIDE_LOOP`: `continue` used outside a loop.
+- `E0005`: for-loop initializer is more complex than supported.
+- `E0006`: for-loop step clause is more complex than supported.
 - `E_BAD_POINTER_USE`: using a pointer-ABI constructor result where a first-class type is required.
 - `E_UNRESOLVED_NAME`, `E_TYPE_MISMATCH`, `E_ARITY_MISMATCH`, `E_DUP_SYMBOL`.
 - Tooling: `koto_compile` runs the lint pass before emitting bytecode; use `--no-lint` to skip or `--deny-lint-warnings` to fail the build on lint output.

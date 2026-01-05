@@ -11,7 +11,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/developer/sdk/rust.md` کی عکاسی کرتا ہے۔ جب تک legacy Sphinx set ریٹائر نہ ہو دونوں کاپیاں ہم آہنگ رکھیں۔
 :::
 
 اس repository کے Rust crates CLI کو power کرتے ہیں اور custom orchestrators یا services میں embed کیے جا سکتے ہیں۔

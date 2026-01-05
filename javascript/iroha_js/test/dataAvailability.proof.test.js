@@ -73,16 +73,22 @@ test("generateDaProofSummary normalises options and transforms native payloads",
     __nativeBinding: stubBinding,
   });
 
-  assert.equal(summary.blobHashHex, "aa");
-  assert.equal(summary.chunkRootHex, "bb");
-  assert.equal(summary.leafCount, 4);
-  assert.equal(summary.sampleSeed, 7);
-  assert.equal(summary.sampleCount, 5);
-  assert.equal(summary.proofCount, 1);
+  assert.equal(summary.blob_hash_hex, "aa");
+  assert.equal(summary.chunk_root_hex, "bb");
+  assert.equal(summary.leaf_count, 4);
+  assert.equal(summary.sample_seed, 7);
+  assert.equal(summary.sample_count, 5);
+  assert.equal(summary.proof_count, 1);
   assert.equal(summary.proofs.length, 1);
-  assert.deepEqual(summary.proofs[0].segmentLeavesHex, ["aa"]);
-  assert.equal(summary.proofs[0].leafBytes.length, 3);
-  assert.equal(summary.proofs[0].leafBytesB64, Buffer.from([1, 2, 3]).toString("base64"));
+  assert.deepEqual(summary.proofs[0].segment_leaves_hex, ["aa"]);
+  assert.equal(
+    Buffer.from(summary.proofs[0].leaf_bytes_b64, "base64").length,
+    3,
+  );
+  assert.equal(
+    summary.proofs[0].leaf_bytes_b64,
+    Buffer.from([1, 2, 3]).toString("base64"),
+  );
   assert(summary.proofs[0].verified);
 });
 
@@ -143,8 +149,8 @@ test("generateDaProofSummary accepts snake_case proof options", () => {
     __nativeBinding: stubBinding,
   });
 
-  assert.equal(summary.sampleCount, 5);
-  assert.equal(summary.sampleSeed, 7);
+  assert.equal(summary.sample_count, 5);
+  assert.equal(summary.sample_seed, 7);
   assert.equal(summary.proofs.length, 1);
 });
 
@@ -174,36 +180,36 @@ test("deriveDaChunkerHandle enforces supported options", () => {
 
 test("buildDaProofSummaryArtifact produces Norito-aligned payload", () => {
   const summary = {
-    blobHashHex: "AA",
-    chunkRootHex: "BB",
-    porRootHex: "CC",
-    leafCount: 4n,
-    segmentCount: 2,
-    chunkCount: 1,
-    sampleCount: 5,
-    sampleSeed: 7n,
-    proofCount: 1,
+    blob_hash_hex: "AA",
+    chunk_root_hex: "BB",
+    por_root_hex: "CC",
+    leaf_count: 4n,
+    segment_count: 2,
+    chunk_count: 1,
+    sample_count: 5,
+    sample_seed: 7n,
+    proof_count: 1,
     proofs: [
       {
         origin: "explicit",
-        leafIndex: 0,
-        chunkIndex: 1,
-        segmentIndex: 2,
-        leafOffset: 0n,
-        leafLength: 32,
-        segmentOffset: 64n,
-        segmentLength: 128,
-        chunkOffset: 256n,
-        chunkLength: 512,
-        payloadLength: 1_024n,
-        chunkDigestHex: "11",
-        chunkRootHex: "22",
-        segmentDigestHex: "33",
-        leafDigestHex: "44",
-        leafBytes: Buffer.from([9, 8, 7]),
-        segmentLeavesHex: ["aa"],
-        chunkSegmentsHex: ["bb"],
-        chunkRootsHex: ["cc"],
+        leaf_index: 0,
+        chunk_index: 1,
+        segment_index: 2,
+        leaf_offset: 0n,
+        leaf_length: 32,
+        segment_offset: 64n,
+        segment_length: 128,
+        chunk_offset: 256n,
+        chunk_length: 512,
+        payload_len: 1_024n,
+        chunk_digest_hex: "11",
+        chunk_root_hex: "22",
+        segment_digest_hex: "33",
+        leaf_digest_hex: "44",
+        leaf_bytes_b64: Buffer.from([9, 8, 7]).toString("base64"),
+        segment_leaves_hex: ["aa"],
+        chunk_segments_hex: ["bb"],
+        chunk_roots_hex: ["cc"],
         verified: true,
       },
     ],
@@ -225,36 +231,36 @@ test("buildDaProofSummaryArtifact produces Norito-aligned payload", () => {
 
 test("emitDaProofSummaryArtifact writes JSON artifacts", async () => {
   const summary = {
-    blobHashHex: "DD",
-    chunkRootHex: "EE",
-    porRootHex: "FF",
-    leafCount: 2,
-    segmentCount: 1,
-    chunkCount: 1,
-    sampleCount: 1,
-    sampleSeed: 1,
-    proofCount: 1,
+    blob_hash_hex: "DD",
+    chunk_root_hex: "EE",
+    por_root_hex: "FF",
+    leaf_count: 2,
+    segment_count: 1,
+    chunk_count: 1,
+    sample_count: 1,
+    sample_seed: 1,
+    proof_count: 1,
     proofs: [
       {
         origin: "sampled",
-        leafIndex: 0,
-        chunkIndex: 0,
-        segmentIndex: 0,
-        leafOffset: 0,
-        leafLength: 32,
-        segmentOffset: 0,
-        segmentLength: 64,
-        chunkOffset: 0,
-        chunkLength: 64,
-        payloadLength: 64,
-        chunkDigestHex: "55",
-        chunkRootHex: "66",
-        segmentDigestHex: "77",
-        leafDigestHex: "88",
-        leafBytesB64: Buffer.from([1, 2]).toString("base64"),
-        segmentLeavesHex: [],
-        chunkSegmentsHex: [],
-        chunkRootsHex: [],
+        leaf_index: 0,
+        chunk_index: 0,
+        segment_index: 0,
+        leaf_offset: 0,
+        leaf_length: 32,
+        segment_offset: 0,
+        segment_length: 64,
+        chunk_offset: 0,
+        chunk_length: 64,
+        payload_len: 64,
+        chunk_digest_hex: "55",
+        chunk_root_hex: "66",
+        segment_digest_hex: "77",
+        leaf_digest_hex: "88",
+        leaf_bytes_b64: Buffer.from([1, 2]).toString("base64"),
+        segment_leaves_hex: [],
+        chunk_segments_hex: [],
+        chunk_roots_hex: [],
         verified: true,
       },
     ],

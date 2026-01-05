@@ -200,7 +200,7 @@ The script:
 3. Emits `summary.json` describing the release (paths, Torii URL, CLI path,
    timestamp) so portal automation can upload the bundle to artefact storage.
 4. Produces `metrics.prom` (override via `--metrics`) containing
-   Prometheus-compatible counters for total requests, suffix distribution,
+Prometheus-format counters for total requests, suffix distribution,
    asset totals, and submission outcomes. The summary JSON links to this file.
 
 CI workflows simply archive the release directory as a single artefact, which

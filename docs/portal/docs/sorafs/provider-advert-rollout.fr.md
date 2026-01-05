@@ -12,12 +12,12 @@ translation_last_reviewed: 2025-12-30
 ---
 
 ---
-title: "Plan de déploiement et de compatibilité des adverts de providers SoraFS"
+title: "Plan de déploiement des adverts de providers SoraFS"
 ---
 
 > Adapté de [`docs/source/sorafs/provider_advert_rollout.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_rollout.md).
 
-# Plan de déploiement et de compatibilité des adverts de providers SoraFS
+# Plan de déploiement des adverts de providers SoraFS
 
 Ce plan coordonne la bascule des adverts permissifs des providers vers la surface
 entièrement gouvernée `ProviderAdvertV1` requise pour la récupération de chunks
@@ -27,8 +27,7 @@ multi-source. Il se concentre sur trois livrables :
   terminer avant chaque gate.
 - **Couverture de télémétrie.** Dashboards et alertes qu'Observabilité et Ops
   utilisent pour confirmer que le réseau n'accepte que des adverts conformes.
-- **Calendrier de compatibilité.** Dates explicites pour rejeter les envelopes
-  legacy afin que les équipes SDK et tooling planifient leurs releases.
+- **Calendrier de déploiement.** Dates explicites pour rejeter les envelopes
 
 Le déploiement s'aligne sur les jalons SF-2b/2c de la
 [roadmap de migration SoraFS](./migration-roadmap) et suppose que la politique
@@ -39,10 +38,6 @@ vigueur.
 
 | Phase | Fenêtre (cible) | Comportement | Actions opérateur | Focus observabilité |
 |-------|-----------------|-----------|------------------|-------------------|
-| **R0 – Observation de base** | Jusqu'au **2025-03-31** | Torii accepte à la fois les adverts approuvés par la gouvernance et les payloads legacy antérieurs à `ProviderAdvertV1`. Les logs d'ingestion avertissent quand les adverts omettent `chunk_range_fetch` ou les `profile_aliases` canoniques. | - Régénérer les adverts via le pipeline de publication des provider adverts (ProviderAdvertV1 + envelope de gouvernance) en garantissant `profile_id=sorafs.sf1@1.0.0`, des `profile_aliases` canoniques et `signature_strict=true`. <br />- Exécuter les nouveaux tests `sorafs_fetch` en local ; les warnings sur des capabilities inconnues doivent être triés. | Publier des panneaux Grafana provisoires (voir ci-dessous) et définir des seuils d'alerte tout en restant en mode avertissement uniquement. |
-| **R1 – Gate d'avertissement** | **2025-04-01 → 2025-05-15** | Torii continue d'accepter les adverts legacy mais incrémente `torii_sorafs_admission_total{result="warn"}` lorsque le payload manque `chunk_range_fetch` ou transporte des capabilities inconnues sans `allow_unknown_capabilities=true`. Le tooling CLI échoue désormais à la régénération si le handle canonique est absent. | - Faire tourner les adverts en staging et production pour inclure les payloads `CapabilityType::ChunkRangeFetch` et, lors des tests GREASE, définir `allow_unknown_capabilities=true`. <br />- Annoter les runbooks d'opérations avec les nouvelles requêtes de télémétrie. | Promouvoir les dashboards en rotation on-call ; configurer des avertissements lorsque les événements `warn` dépassent 5 % du trafic pendant 15 minutes. |
-| **R2 – Enforcement** | **2025-05-16 → 2025-06-30** | Torii rejette les adverts qui n'ont pas d'envelopes de gouvernance, le handle canonique de profil ou la capability `chunk_range_fetch`. Les handles legacy uniquement `namespace-name` ne sont plus parsés. Les capabilities inconnues sans opt-in GREASE échouent désormais avec `reason="unknown_capability"`. | - Confirmer que les envelopes de production existent sous `torii.sorafs.admission_envelopes_dir` et faire tourner tout advert legacy restant. <br />- Vérifier que les SDKs n'émettent que des handles canoniques plus des aliases optionnels pour la compatibilité arrière. | Activer les pager alerts : `torii_sorafs_admission_total{result="reject"}` > 0 pendant 5 minutes déclenche l'action opérateur. Suivre le ratio d'acceptation et les histogrammes de raisons d'admission. |
-| **R3 – Extinction legacy** | **2025-07-01 et après** | Discovery supprime le support des adverts binaires qui ne définissent pas `signature_strict=true` ou qui omettent `profile_aliases`. Le cache discovery de Torii purge les entrées périmées dont la deadline de refresh est passée sans renouvellement. | - Planifier la fenêtre finale de decommission pour les stacks legacy de providers. <br />- Confirmer que les runs GREASE `--allow-unknown` n'ont lieu que pendant des drills contrôlés et sont journalisés. <br />- Mettre à jour les playbooks d'incident pour traiter la sortie d'avertissement de `sorafs_fetch` comme un bloqueur avant les releases. | Durcir les alertes : tout résultat `warn` alerte l'on-call. Ajouter des checks synthétiques qui récupèrent le JSON de discovery et valident les listes de capabilities des providers. |
 
 ## Checklist opérateur
 
@@ -184,14 +179,13 @@ Exécutez `scripts/check_prometheus_rules.sh observability/prometheus/sorafs_adm
 avant de pousser les changements pour vérifier que la syntaxe passe
 `promtool check rules`.
 
-## Matrice de compatibilité
+## Matrice de déploiement
 
 | Caractéristiques de l'advert | R0 | R1 | R2 | R3 |
 |------------------------|----|----|----|----|
 | `profile_id = sorafs.sf1@1.0.0`, `chunk_range_fetch` présent, aliases canoniques, `signature_strict=true` | ✅ | ✅ | ✅ | ✅ |
 | Absence de capability `chunk_range_fetch` | ⚠️ Warn (ingest + telemetry) | ⚠️ Warn | ❌ Reject (`reason="missing_capability"`) | ❌ Reject |
 | TLVs de capability inconnue sans `allow_unknown_capabilities=true` | ✅ | ⚠️ Warn (`reason="unknown_capability"`) | ❌ Reject | ❌ Reject |
-| Handle legacy uniquement (`profile_id = sorafs.sf1@1.0.0`) | ⚠️ Warn | ❌ Reject | ❌ Reject | ❌ Reject |
 | `refresh_deadline` expiré | ❌ Reject | ❌ Reject | ❌ Reject | ❌ Reject |
 | `signature_strict=false` (fixtures diagnostic) | ✅ (développement uniquement) | ⚠️ Warn | ⚠️ Warn | ❌ Reject |
 
@@ -202,7 +196,6 @@ requiert la mise à jour de ce fichier et du ledger dans la même PR.
 > **Note d'implémentation :** R1 introduit la série `result="warn"` dans
 > `torii_sorafs_admission_total`. Le patch d'ingestion Torii qui ajoute le nouveau
 > label est suivi avec les tâches de télémétrie SF-2 ; jusque-là, utilisez le
-> sampling des logs pour surveiller les adverts legacy.
 
 ## Communication & gestion d'incident
 

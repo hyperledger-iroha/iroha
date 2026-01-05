@@ -341,6 +341,12 @@ pub enum CarVerifyError {
     UnsupportedSectionCodec { section_index: usize, codec: u64 },
     #[error("chunk digest mismatch at index {chunk_index}")]
     ChunkDigestMismatch { chunk_index: usize },
+    #[error("chunk payload size {len} exceeds configured maximum {max} at section {section_index}")]
+    ChunkSizeExceeded {
+        section_index: usize,
+        len: u64,
+        max: u64,
+    },
     #[error("chunk length mismatch at index {chunk_index} (expected {expected}, found {actual})")]
     ChunkLengthMismatch {
         chunk_index: usize,

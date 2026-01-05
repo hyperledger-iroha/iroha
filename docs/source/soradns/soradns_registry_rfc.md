@@ -161,7 +161,6 @@ namehash = 0x4a0d3a7bcefb6cc4439af5efec3f61e141c4bf7f45ed05edbf6a6844d8b89990
 
 Resolvers must verify the selector version and suffix ID, rejecting unknown
 values. Future selector versions MUST change the `version` byte and retain v1
-compatibility logic.
 
 ## 6. Zone Bundles & Proofs
 

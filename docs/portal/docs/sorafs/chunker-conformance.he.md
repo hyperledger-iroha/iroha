@@ -27,7 +27,6 @@ description: דרישות ותהליכי עבודה לשימור פרופיל ch
 
 ## פרופיל קנוני
 
-- Handle פרופיל: `sorafs.sf1@1.0.0` (alias legacy `sorafs.sf1@1.0.0`)
 - Seed קלט (hex): `0000000000dec0ded`
 - גודל יעד: 262144 bytes (256 KiB)
 - גודל מינימלי: 65536 bytes (64 KiB)

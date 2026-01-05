@@ -63,9 +63,9 @@ faltantes hacen fallar la ejecución.
 Todos los crates de CLI/SDK de SoraFS usan SemVer:
 
 - `MAJOR`: Se introduce para el primer release 1.0. Antes de 1.0 el incremento
-  menor `0.y` **indica cambios incompatibles** en la superficie del CLI o en los
+  menor `0.y` **indica cambios con ruptura** en la superficie del CLI o en los
   esquemas Norito.
-- `MINOR`: Trabajo de funciones compatible hacia atrás (nuevos comandos/flags, nuevos
+- `MINOR`: Trabajo de funciones sin ruptura (nuevos comandos/flags, nuevos
   campos Norito protegidos por política opcional, adiciones de telemetría).
 - `PATCH`: Correcciones de bugs, releases solo de documentación y actualizaciones de
   dependencias que no cambian el comportamiento observable.
@@ -90,7 +90,7 @@ release y completa las secciones con detalles concretos).
 Contenido mínimo:
 
 - **Destacados**: titulares de funciones para consumidores de CLI y SDK.
-- **Compatibilidad**: cambios incompatibles, upgrades de políticas, requisitos
+- **Impacto**: cambios con ruptura, upgrades de políticas, requisitos
   mínimos de gateway/nodo.
 - **Pasos de actualización**: comandos TL;DR para actualizar dependencias cargo y
   reejecutar fixtures deterministas.
@@ -189,7 +189,6 @@ Después de que los checks pasen y los hooks se completen:
 - Asegura que la documentación que apunta a la nueva versión (quickstarts, plantillas de CI)
   esté actualizada o confirma que no se requieren cambios.
 - Registra entradas de roadmap si se requiere trabajo posterior (por ejemplo, flags de
-  migración, deprecación de manifests legacy).
 - Archiva los logs de salida del gate de release para auditoría: guárdalos junto a los
   artefactos firmados.
 

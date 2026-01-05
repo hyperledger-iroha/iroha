@@ -49,7 +49,7 @@ enveloppes d'admission comparent les corps d'advert et de proposition
 
 ### Extensions de fetch par plages
 
-Les fournisseurs compatibles range incluent les métadonnées suivantes :
+Les fournisseurs avec capacité range incluent les métadonnées suivantes :
 
 | Champ | Objectif |
 |-------|----------|
@@ -112,7 +112,7 @@ Erreurs courantes remontées aux opérateurs/SDKs :
 | Erreur | Description |
 |--------|-------------|
 | `no providers were supplied` | Aucune entrée éligible après filtrage. |
-| `no compatible providers available for chunk {index}` | Incompatibilité de plage ou de budget pour un chunk spécifique. |
+| `no compatible providers available for chunk {index}` | Erreur de plage ou de budget pour un chunk spécifique. |
 | `retry budget exhausted after {attempts}` | Augmentez `--retry-budget` ou évincez les peers en échec. |
 | `no healthy providers remaining` | Tous les fournisseurs sont désactivés après des échecs répétés. |
 | `streaming observer failed` | Le writer CAR downstream a avorté. |

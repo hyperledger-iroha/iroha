@@ -74,7 +74,6 @@ If the incident is specifically about Local-8/Local-12 collisions, follow the
 
 - Follow `address_manifest_ops.md` to re-validate the latest manifest bundle and
   ensure no Local-8 selectors resurfaced.
-- Use `scripts/address_local_toolkit.sh audit …` when legacy Local selectors
   appear in payloads.
 
 ### Malicious or malformed traffic

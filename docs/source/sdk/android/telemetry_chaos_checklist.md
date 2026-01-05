@@ -36,7 +36,7 @@ suite quarterly and prior to major releases.
 | C7 | Attestation rejection rehearsal | Validate alerting + audit flow when StrongBox attestation fails | 1. Capture a fresh bundle on the Pixel (`scripts/android_keystore_attestation.sh --bundle-dir artifacts/android/attestation/pixel8/$(date +%F) --trust-root vendor.pem`).\n2. On an emulator (or a device without StrongBox), run a debug build configured with `KeySecurityPreference.STRONGBOX_ONLY` and attempt to sign a sample transaction.\n3. Confirm `android.keystore.attestation.failure` fires and PagerDuty `android-crypto` notifies on-call.\n4. Run `scripts/android_strongbox_attestation_ci.sh` to prove the archived bundles still pass on StrongBox hardware.\n5. Update `android_strongbox_device_matrix.md` with the rehearsal result. | Alert and metric fire once, audit log records hashed alias + bundle path, and CI confirms production StrongBox devices remain healthy. |
 
 > **Note:** `ci/run_android_telemetry_chaos_prep.sh` compiles `PendingQueueInspector`
-on demand; run `java/iroha_android/run_tests.sh` manually only if you plan to
+on demand; run `ci/run_android_tests.sh` manually only if you plan to
 invoke the inspector outside the helper.
 
 ## Pre-Run Checklist

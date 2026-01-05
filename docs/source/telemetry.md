@@ -2,7 +2,7 @@
 
 日本語の概要は [`telemetry.ja.md`](./telemetry.ja.md) を参照してください。
 
-Iroha exports Prometheus-compatible metrics and a JSON status summary. This page lists key metrics and example PromQL queries you can use to build dashboards.
+Iroha exports Prometheus-format metrics and a JSON status summary. This page lists key metrics and example PromQL queries you can use to build dashboards.
 
 Endpoints
 - `/metrics`: Prometheus exposition text. Hidden when telemetry is disabled or the profile does not allow expensive metrics.
@@ -413,9 +413,7 @@ Torii integration
 - `Torii::new` (when the `telemetry` feature is enabled) remains as a convenience wrapper; it now forwards to `new_with_handle` with an operator profile by default. Tests can use `routing::MaybeTelemetry::for_tests()` to obtain an in-process telemetry handle.
 
 - `torii_address_invalid_total{endpoint,reason}` increments whenever HTTP routes reject an account identifier (invalid IH58/compressed payloads, domain mismatches, etc.). Keep the `<0.1%` SLO by watching the dedicated Grafana board in `dashboards/grafana/address_ingest.json`.
-- Legacy Local‑8 counters were removed; monitor `torii_address_invalid_total{endpoint,reason}` alongside `torii_address_collision_total` to catch malformed selectors and Local‑12 collisions without relying on deprecated metrics.
 - `torii_address_collision_total{endpoint,kind="local12_digest"}` and `torii_address_collision_domain_total{endpoint,domain}` record Local‑12 selector collisions. Both feed the collision panel/alert in `dashboards/grafana/address_ingest.json` so operators can tie spikes to specific domains. Production should stay flat; any increment blocks manifest promotions until governance signs off on the fix.
-- `torii_address_domain_total{endpoint,domain_kind}` counts every accepted literal and labels it as `local12`, `global`, or `default`. The `AddressLocal8Resurgence`/`AddressInvalidRatioSlo` alerts in `dashboards/alerts/address_ingest_rules.yml` rely on this series to prove Local‑12 traffic stays at zero for 30 days before mainnet disables the legacy selectors. When verifying ADDR‑7 readiness, export the `domain_kind="local12"` slice via `address_ingest.json` and attach the PromQL output to the change ticket.
 
 Pipeline metrics
 - pipeline_stage_ms: Histogram of per-stage durations with label `stage` in {"access","overlays","dag","schedule","apply","layers_prep","layers_exec","layers_merge"}.
@@ -866,7 +864,6 @@ Pre-auth connection gating exposes two metrics:
 - `torii_pre_auth_reject_total{reason}` — counter of rejected connections. Reasons: `global_cap`, `ip_cap`, `rate`, `ban`.
 - `torii_operator_auth_total{action,result,reason}` — operator auth events; `action` is `gate|register_options|register_verify|login_options|login_verify`, `result` is `allowed|denied|rate_limited|locked`, and `reason` mirrors the auth error labels.
 - `torii_operator_auth_lockout_total{action,reason}` — operator auth lockouts per action and failure reason.
-- `torii_sorafs_admission_total{result,reason}` — SoraFS provider advert admission results; `result` is `accepted`/`rejected` (and `warn` once the SF-2 rollout adds legacy tracking), while `reason` surfaces the validator path (e.g., `stored`, `duplicate`, `unknown_capabilities`, `admission_missing`, `policy_violation`, `stale`).
 - `torii_contract_throttled_total{endpoint}` — contract API requests rejected by the deploy limiter (`endpoint` = `code`, `deploy`, `activate`).
 - `torii_contract_errors_total{endpoint}` — contract API requests that failed for other reasons (missing token, queue error, etc.).
 - `torii_active_connections_total{scheme}` — gauge tracking concurrent connections per scheme (`http`, `ws`).

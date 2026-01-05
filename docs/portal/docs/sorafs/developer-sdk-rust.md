@@ -6,7 +6,6 @@ description: Minimal Rust examples for consuming proof streams and manifests.
 ---
 
 :::note Canonical Source
-This page mirrors `docs/source/sorafs/developer/sdk/rust.md`. Keep both copies in sync until the legacy Sphinx set is retired.
 :::
 
 The Rust crates in this repository power the CLI and can be embedded inside

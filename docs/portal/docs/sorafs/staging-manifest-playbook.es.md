@@ -19,7 +19,7 @@ description: Checklist para habilitar el perfil de chunker ratificado por el Par
 ---
 
 :::note Fuente canónica
-Esta página refleja `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Mantén la copia de Docusaurus y el Markdown legado alineados hasta que el conjunto de Sphinx se retire por completo.
+Esta página refleja `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Mantén ambas copias sincronizadas.
 :::
 
 ## Resumen

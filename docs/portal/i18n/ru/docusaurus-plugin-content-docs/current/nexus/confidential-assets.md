@@ -142,7 +142,6 @@ Swift SDKs теперь могут выдавать shield-инструкции 
 ## Жизненный цикл verifier и параметров
 ### ZK Registry
 - Ledger хранит `ZkVerifierEntry { vk_id, circuit_id, version, proving_system, curve, public_inputs_schema_hash, vk_hash, vk_len, max_proof_bytes, gas_schedule_id, activation_height, deprecation_height, withdraw_height, status, metadata_uri_cid, vk_bytes_cid }`, где `proving_system` сейчас фиксирован на `Halo2`.
-- Жизненный цикл registry следует `Proposed → Active → Deprecated → Withdrawn`. Только `Active` записи могут валидировать proofs; `Deprecated` записи остаются пригодными до `deprecation_height`; `Withdrawn` записи детерминированно отклоняют proofs.
 - Пары `(circuit_id, version)` глобально уникальны; registry поддерживает вторичный индекс для поиска по метаданным circuit. Попытки зарегистрировать дубликат отклоняются при admission.
 - `circuit_id` не может быть пустым, а `public_inputs_schema_hash` обязателен (обычно Blake2b-32 хэш канонического публичного ввода verifier). Admission отклоняет записи без этих полей.
 - Инструкции governance включают:
@@ -160,7 +159,6 @@ Swift SDKs теперь могут выдавать shield-инструкции 
 ### Pedersen & Poseidon Parameters
 - Отдельные registry (`PedersenParams`, `PoseidonParams`) зеркалируют контроль жизненного цикла verifier, каждая с `params_id`, хэшами генераторов/констант, высотами активации, deprecation и withdraw.
 - Commitments и хэши доменно разделяют `params_id`, поэтому ротация параметров никогда не переиспользует битовые паттерны из устаревших наборов; ID встраивается в commitments notes и доменные теги nullifier.
-- Circuits поддерживают выбор множества параметров при проверке; deprecated наборы остаются тратимыми до их `deprecation_height`, а withdrawn наборы отклоняются ровно на `withdraw_height`.
 
 ## Детерминированный порядок и nullifiers
 - Каждый актив поддерживает `CommitmentTree` с `next_leaf_index`; блоки добавляют commitments в детерминированном порядке: итерация транзакций по порядку блока; внутри каждой транзакции — shielded outputs по возрастанию сериализованного `output_idx`.
@@ -359,7 +357,6 @@ Observer узлы, намеренно пропускающие проверку 
      - ✅ Frontier checkpoints теперь учитывают `reorg_depth_bound`, удаляя checkpoints старше заданного окна при сохранении детерминированных снимков.
    - Ввести `AssetConfidentialPolicy`, policy FSM и enforcement gates для инструкций mint/transfer/reveal.
    - Коммитить `conf_features` в заголовках блоков и отказывать в участии валидаторов при расхождении registry/parameter digests.
-   - Реализовать registry FSM (Proposed/Active/Deprecated/Withdrawn) с высотами активации/деактивации/withdraw и обработкой emergency withdrawal.
 2. **Phase M1 — Registries & Parameters**
    - Внедрить registry `ZkVerifierEntry`, `PedersenParams`, `PoseidonParams` с governance ops, genesis anchoring и управлением кэшем.
    - Подключить syscall для обязательных registry lookups, gas schedule IDs, schema hashing и size checks.

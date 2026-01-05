@@ -97,7 +97,6 @@ changelog を公開する必要があります。`docs/examples/sorafs_release_n
 最低限の内容:
 
 - **Highlights**: CLI/SDK 利用者向けの機能ハイライト。
-- **Compatibility**: 破壊的変更、ポリシーアップグレード、最低限の gateway/node 要件。
 - **Upgrade steps**: cargo 依存更新と決定的 fixtures 再生成の TL;DR コマンド。
 - **Verification**: コマンド出力のハッシュ/エンベロープと、実行した
   `ci/check_sorafs_cli_release.sh` の正確なリビジョン。
@@ -184,7 +183,6 @@ scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_c
 
 - 新バージョンを参照するドキュメント（quickstart、CI テンプレート）を更新するか、
   変更不要であることを確認します。
-- 追従作業が必要な場合（例: 移行フラグ、legacy manifests の廃止）に roadmap を追加します。
 - リリースゲートの出力ログを監査用に保管し、署名済みアーティファクトと並べて保存します。
 
 このプロセスを守ることで、CLI、SDK クレート、ガバナンス関連資料が各リリースサイクルで

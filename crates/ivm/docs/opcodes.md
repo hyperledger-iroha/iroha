@@ -14,6 +14,7 @@ Conventions and notes
 - Mode gating: vector/SIMD instructions execute only when the program header `VECTOR` bit is set; otherwise they deterministically trap with a mode-disabled error. ZK-specific instructions execute only when the `ZK` bit is set. Reserved HTM instructions are disabled unless an explicit feature/mode enables them.
 - Pointer-ABI: instructions that dereference Norito TLV pointers (e.g., signature verify opcodes) follow the pointer-ABI documented in `syscalls.md`/`tlv_examples.md`. Hosts/VM validate TLVs on first dereference and trap on invalid envelopes.
 - Memory: all loads/stores require natural alignment; region permissions (INPUT/OUTPUT/CODE/HEAP/STACK) are enforced uniformly. Misaligned accesses deterministically trap with `MisalignedAccess`.
+- Control flow: `JALR` masks the low two bits of the computed target so control transfers are 4-byte aligned.
 - See also: `instruction.rs` API docs for authoritative field extractors and masks used by encoders/decoders.
 ## Encoding Format
 

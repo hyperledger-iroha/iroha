@@ -16,7 +16,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ## Motivacao
 - Entregar fluxos de ativos blindados opt-in para que dominios preservem privacidade transacional sem alterar a circulacao transparente.
-- Manter execucao determinista em hardware heterogeneo de validadores e preservar compatibilidade Norito/Kotodama ABI v1.
+- Manter execucao determinista em hardware heterogeneo de validadores e preservar Norito/Kotodama ABI v1.
 - Fornecer a auditores e operadores controles de ciclo de vida (ativacao, rotacao, revogacao) para circuitos e parametros criptograficos.
 
 ## Threat model
@@ -54,7 +54,7 @@ descrito abaixo para que wallets fiquem alinhadas com Rust.
 - Governance pode preparar upgrades programando `next_conf_features` com um `activation_height` futuro; ate essa altura, produtores de bloco devem continuar emitindo o digest anterior.
 - Nodes validadores DEVEM operar com `confidential.enabled = true` e `assume_valid = false`. Checks de startup recusam entrar no set validador se qualquer condicao falhar ou se o `conf_features` local divergir.
 - A metadata do handshake P2P agora inclui `{ enabled, assume_valid, conf_features }`. Peers que anunciam features incompativeis sao rejeitados com `HandshakeConfidentialMismatch` e nunca entram em rotacao de consenso.
-- Outcomes de compatibilidade entre validadores, observers e peers desatualizados sao capturados na matriz de handshake em [Node Capability Negotiation](#node-capability-negotiation). Falhas de handshake expoem `HandshakeConfidentialMismatch` e mantem o peer fora da rotacao de consenso ate que o digest coincida.
+- Outcomes de handshake entre validadores, observers e peers sao capturados na matriz de handshake em [Node Capability Negotiation](#node-capability-negotiation). Falhas de handshake expoem `HandshakeConfidentialMismatch` e mantem o peer fora da rotacao de consenso ate que o digest coincida.
 - Observers nao validadores podem definir `assume_valid = true`; aplicam deltas confidenciais sem verificar proofs, mas nao influenciam a seguranca do consenso.
 
 ## Politicas de assets
@@ -124,7 +124,7 @@ Transicoes nao listadas acima sao rejeitadas durante submissao de governance. O 
 
 ### Sequenciamento de migracao
 
-1. **Preparar registries:** ativar todas as entradas de verificador e parametros referenciadas pela politica alvo. Nodes anunciam o `conf_features` resultante para que peers verifiquem compatibilidade.
+1. **Preparar registries:** ativar todas as entradas de verificador e parametros referenciadas pela politica alvo. Nodes anunciam o `conf_features` resultante para que peers verifiquem coerencia.
 2. **Agendar a transicao:** submeter `ScheduleConfidentialPolicyTransition` com um `effective_height` que respeite `policy_transition_delay_blocks`. Ao mover para `ShieldedOnly`, especificar uma janela de conversao (`window >= policy_transition_window_blocks`).
 3. **Publicar guia para operadores:** registrar o `transition_id` retornado e circular um runbook on/off-ramp. Wallets e auditores assinam `/v1/confidential/assets/{id}/transitions` para aprender a altura de abertura da janela.
 4. **Aplicar janela:** quando a janela abre, o runtime muda a politica para `Convertible`, emite `PolicyTransitionWindowOpened { transition_id }`, e comeca a rejeitar requests de governance conflitantes.
@@ -147,7 +147,6 @@ Redes novas que iniciam com confidencialidade habilitada codificam a politica de
 ## Ciclo de vida de verifiers e parametros
 ### ZK Registry
 - O ledger armazena `ZkVerifierEntry { vk_id, circuit_id, version, proving_system, curve, public_inputs_schema_hash, vk_hash, vk_len, max_proof_bytes, gas_schedule_id, activation_height, deprecation_height, withdraw_height, status, metadata_uri_cid, vk_bytes_cid }` onde `proving_system` atualmente e fixo em `Halo2`.
-- O ciclo de vida do registry segue `Proposed -> Active -> Deprecated -> Withdrawn`. Apenas entradas `Active` podem validar proofs; entradas `Deprecated` continuam usaveis ate `deprecation_height`; entradas `Withdrawn` rejeitam proofs deterministicamente.
 - Pares `(circuit_id, version)` sao globalmente unicos; o registry mantem um indice secundario para buscas por metadata de circuito. Tentativas de registrar um par duplicado sao rejeitadas durante admission.
 - `circuit_id` deve ser nao vazio e `public_inputs_schema_hash` deve ser fornecido (tipicamente um hash Blake2b-32 do encoding canonico de public inputs do verificador). Admission rejeita registros que omitem esses campos.
 - Instrucoes de governance incluem:
@@ -207,7 +206,7 @@ Redes novas que iniciam com confidencialidade habilitada codificam a politica de
 - Config suporta `assume_valid` apenas para observers: quando desabilitado, encontrar instrucoes confidenciais gera `UnsupportedInstruction` determinista sem panic; quando habilitado, observers aplicam deltas declarados sem verificar proofs.
 - Mempool rejeita transacoes confidenciais se a capacidade local estiver desabilitada. Filtros de gossip evitam enviar transacoes shielded para peers incompativeis enquanto encaminham cegamente IDs de verifier desconhecidos dentro de limites de tamanho.
 
-### Matriz de compatibilidade de handshake
+### Matriz de handshake
 
 | Anuncio remoto | Resultado para nodes validadores | Notas de operador |
 |----------------------|-----------------------------|----------------|
@@ -339,7 +338,7 @@ Documente overrides locais no runbook de operacoes; politicas de governance que 
 - Equivalencia de estado: nodes validator/full/observer produzem roots de estado identicos na cadeia canonica.
 - Fuzzing negativo: proofs malformadas, payloads superdimensionados e colisoes de nullifier sao rejeitados deterministicamente.
 
-## Migracao e compatibilidade
+## Migracao
 - Rollout com feature flag: ate Phase C3 terminar, `enabled` default a `false`; nodes anunciam capacidades antes de entrar no set validador.
 - Assets transparentes nao sao afetados; instrucoes confidenciais requerem entradas de registry e negociacao de capacidades.
 - Nodes compilados sem suporte confidencial rejeitam blocos relevantes deterministicamente; nao podem entrar no set validador mas podem operar como observers com `assume_valid=true`.
@@ -364,7 +363,6 @@ Documente overrides locais no runbook de operacoes; politicas de governance que 
      - [x] Frontier checkpoints agora respeitam `reorg_depth_bound`, podando checkpoints mais antigos que a janela configurada e mantendo snapshots deterministas.
    - Introduzir `AssetConfidentialPolicy`, policy FSM e gates de enforcement para instrucoes mint/transfer/reveal.
    - Commit `conf_features` nos headers de bloco e recusar participacao de validadores quando digests de registry/parametros divergem.
-   - Implementar registry FSM (Proposed/Active/Deprecated/Withdrawn) com activation/deprecation/withdraw heights e manejo de emergency withdrawal.
 2. **Phase M1 - Registries e parametros**
    - Entregar registries `ZkVerifierEntry`, `PedersenParams`, e `PoseidonParams` com ops de governance, ancoragem de genesis e gestao de cache.
    - Conectar syscall para exigir lookups de registry, gas schedule IDs, schema hashing, e checks de tamanho.

@@ -8,7 +8,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 :::note Source canonique
 Reflete `docs/source/da/replication_policy.md`. Gardez les deux versions en
-sync tant que les docs legacy ne sont pas retires.
 :::
 
 # Politique de replication Data Availability (DA-4)

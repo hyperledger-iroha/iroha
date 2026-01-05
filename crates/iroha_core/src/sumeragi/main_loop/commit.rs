@@ -2749,12 +2749,20 @@ impl Actor {
     pub(super) fn compute_da_gate_status(
         pending: &mut PendingBlock,
         da_enabled: bool,
+        manifest_cache: &mut ManifestSpoolCache,
         spool_dir: &Path,
         lane_config: &LaneConfigSnapshot,
         telemetry: Option<&crate::telemetry::Telemetry>,
     ) -> DaGateStatus {
         if pending.block.da_commitments().is_some() {
-            match manifests_available_for_block(spool_dir, lane_config, &pending.block) {
+            let mut cache_outcome = super::CacheOutcome::Hit;
+            match manifests_available_for_block(
+                manifest_cache,
+                spool_dir,
+                lane_config,
+                &pending.block,
+                &mut cache_outcome,
+            ) {
                 Ok(warnings) => {
                     #[cfg(feature = "telemetry")]
                     if warnings.is_empty() {
@@ -2822,23 +2830,41 @@ impl Actor {
                     };
                 }
             }
+            #[cfg(feature = "telemetry")]
+            if let Some(telemetry) = telemetry {
+                telemetry.note_da_manifest_cache(cache_outcome.as_telemetry());
+            }
         }
 
         recompute_da_gate_status(pending, da_enabled)
     }
 
-    fn refresh_da_gate_status(&self, pending: &mut PendingBlock) -> DaGateStatus {
+    fn refresh_da_gate_status(&mut self, pending: &mut PendingBlock) -> DaGateStatus {
         let da_enabled = self.runtime_da_enabled();
         let lane_config = self.state.nexus_snapshot().lane_config.clone();
+        let telemetry = {
+            #[cfg(feature = "telemetry")]
+            {
+                Some(&self.telemetry)
+            }
+            #[cfg(not(feature = "telemetry"))]
+            {
+                None
+            }
+        };
 
-        let gate = Self::compute_da_gate_status(
-            pending,
-            da_enabled,
-            &self.subsystems.da_rbc.spool_dir,
-            &lane_config,
-            self.telemetry_handle(),
-        );
-        record_da_gate_telemetry(self.telemetry_handle(), &gate);
+        let gate = {
+            let da_rbc = &mut self.subsystems.da_rbc;
+            Self::compute_da_gate_status(
+                pending,
+                da_enabled,
+                &mut da_rbc.manifest_cache,
+                &da_rbc.spool_dir,
+                &lane_config,
+                telemetry,
+            )
+        };
+        record_da_gate_telemetry(telemetry, &gate);
         gate
     }
 

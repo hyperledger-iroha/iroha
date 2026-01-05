@@ -6,7 +6,6 @@ description: Operating the `soranet-puzzle-service` daemon for Argon2/ML-DSA adm
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/soranet/puzzle_service_operations.md`. Keep both versions in sync until the legacy docs retire.
 :::
 
 # Puzzle Service Operations Guide

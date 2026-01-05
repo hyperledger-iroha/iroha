@@ -52,20 +52,22 @@ final class ToriiOfflineListParamsTests: XCTestCase {
         XCTAssertEqual(map["only_missing_verdict"], "true")
     }
 
-    func testAddressFormatAliasNormalization() throws {
+    func testAddressFormatAliasRejection() {
         let params = ToriiOfflineListParams(addressFormat: "  SnX1 ")
-        let items = try XCTUnwrap(params.queryItems())
-        let map = Self.map(from: items)
-        XCTAssertEqual(map["address_format"], "compressed")
+        XCTAssertThrowsError(try params.queryItems()) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload, got \(error)")
+            }
+        }
     }
 
-    func testOfflineRevocationQueryItemsNormalizeAddressFormat() throws {
+    func testOfflineRevocationQueryItemsIncludeAddressFormat() throws {
         let params = ToriiOfflineRevocationListParams(
             filter: "{\"op\":\"eq\",\"args\":[\"reason\",\"device_compromised\"]}",
             limit: 25,
             offset: 5,
             sort: "revoked_at_ms:desc",
-            addressFormat: "  canonical "
+            addressFormat: "ih58"
         )
         let items = try XCTUnwrap(params.queryItems())
         let map = Self.map(from: items)
@@ -88,8 +90,8 @@ final class ToriiOfflineListParamsTests: XCTestCase {
             "note": "lost device",
             "metadata": { "ticket": "INC-1" },
             "record": {
-              "verdict_id": "aa",
-              "issuer": "operator@test",
+              "verdict_id_hex": "aa",
+              "issuer_id": "operator@test",
               "revoked_at_ms": 123,
               "reason": "device_compromised",
               "note": "lost device",
@@ -115,8 +117,8 @@ final class ToriiOfflineListParamsTests: XCTestCase {
         }
     }
 
-    func testOfflineBundleProofStatusParamsNormalizeHexAndFormat() throws {
-        let params = ToriiOfflineBundleProofStatusParams(bundleIdHex: "0xDEADBEEF", addressFormat: "snx1")
+    func testOfflineBundleProofStatusParamsIncludeCanonicalFormat() throws {
+        let params = ToriiOfflineBundleProofStatusParams(bundleIdHex: "0xDEADBEEF", addressFormat: "compressed")
         let items = try params.queryItems()
         let map = Self.map(from: items)
         XCTAssertEqual(map["bundle_id_hex"], "deadbeef")
@@ -206,7 +208,7 @@ final class ToriiOfflineListParamsTests: XCTestCase {
             limit: 20,
             offset: 5,
             sort: "recorded_at_ms:desc",
-            addressFormat: "snx1",
+            addressFormat: "compressed",
             controllerId: " alice@wonderland ",
             receiverId: "bob@wonderland",
             bundleIdHex: "0xDEADBEEF",

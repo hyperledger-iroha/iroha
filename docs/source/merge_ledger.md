@@ -181,7 +181,9 @@ value; deterministic replay must reproduce the same reduction.
   without its sealing metadata. The merge-ledger log is pruned in lock-step
   with the validated block height during startup recovery, and cached in memory
   with a bounded window (`kura.merge_ledger_cache_capacity`, default 256) to
-  avoid unbounded growth on long-running nodes.
+  avoid unbounded growth on long-running nodes. Recovery truncates partial or
+  oversized merge-ledger tail entries, and append rejects entries above the
+  maximum payload size guard to cap allocations.
 - `crates/iroha_core/src/block.rs`: block validation rejects empty payloads
   (`BlockValidationError::EmptyBlock`), ensuring the non-empty policy is
   enforced before signatures are requested and carried into the merge ledger.
@@ -195,18 +197,3 @@ value; deterministic replay must reproduce the same reduction.
 - Cross-component tests: golden replay coverage for the merge reduction is
   tracked with the integration-test backlog to ensure future changes to
   `reduce_merge_hint_roots` keep the recorded roots stable.
-
-## 5. Compatibility & Migration
-
-- Existing single-lane deployments treat `K=1`. The merge ledger still records
-  entries, but `ReduceMergeHints` degenerates to identity. The non-empty policy
-  matches current behaviour (no empty blocks).
-- When additional lanes are enabled, older nodes that lack merge support must be
-  gated off the committee path; otherwise they cannot verify `MergeLedgerEntry`.
-- Persistence format is forward-compatible: future entries MAY carry aux fields
-  after the Norito header. Unknown fields are rejected until an ABI version bump
-  lands.
-
-This design completes the Milestone 5 "Merge-Ledger Design Notes" deliverable.
-Implementation owners should use the notes above when scheduling runtime and
-storage changes so the plan remains on track.

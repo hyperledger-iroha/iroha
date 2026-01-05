@@ -203,9 +203,7 @@ UIとSDKはセレクタ種別の表示に備えるべきです:
    `--allow-errors` を使い、CIでLocalセレクタをブロックできる段階になったら
    `--fail-on-warning` で自動化をゲートします。
 6. 行単位の書き換えが必要な場合は
-  `iroha address normalize --input legacy.txt --only-local --append-domain --network-prefix 753 --format ih58 --output normalized.txt`
   を使用します。Localセレクタの是正スプレッドシートには
-  `iroha address audit --input legacy.txt --allow-errors --network-prefix 753 --format csv`
   を使い、`input,status,format,...` CSVを出力して正規エンコード、警告、
   パース失敗を一度に可視化します。ヘルパーはデフォルトで非Local行を
   スキップし、残りのエントリを要求エンコード(IH58/圧縮/hex/JSON)へ

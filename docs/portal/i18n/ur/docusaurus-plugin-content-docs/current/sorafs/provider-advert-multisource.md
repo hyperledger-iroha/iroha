@@ -67,7 +67,6 @@ Regression coverage یہاں موجود ہے:
 - `cargo xtask sorafs-admission-fixtures` اپنے JSON artefacts میں stream budgets اور transport hints دکھاتا ہے تاکہ dashboards feature adoption track کر سکیں۔
 - `fixtures/sorafs_manifest/provider_admission/` کے تحت fixtures اب شامل کرتے ہیں:
   - canonical multi-source adverts،
-  - downgrade testing کے لیے legacy، range-less variant، اور
   - `multi_fetch_plan.json` تاکہ SDK suites deterministic multi-peer fetch plan replay کر سکیں۔
 
 ## Orchestrator اور Torii انضمام

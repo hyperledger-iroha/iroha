@@ -33,7 +33,7 @@ impl ncore::NoritoSerialize for Metadata {
         let len = self.0.len();
         if ncore::use_compact_seq_len() {
             ncore::note_compact_seq_len_emitted();
-            ncore::write_len(&mut writer, len as u64)?;
+            ncore::write_varint_len(&mut writer, len as u64)?;
         } else {
             ncore::WriteBytesExt::write_u64::<ncore::LittleEndian>(&mut writer, len as u64)?;
         }
@@ -54,10 +54,11 @@ impl ncore::NoritoSerialize for Metadata {
             offsets.push(total);
 
             if ncore::use_varint_offsets() {
+                ncore::note_varint_offsets_emitted();
                 let mut hdr = Vec::with_capacity(len * 2);
                 for window in offsets.windows(2) {
                     let span = window[1].wrapping_sub(window[0]);
-                    ncore::write_len_to_vec(&mut hdr, span);
+                    ncore::write_varint_len_to_vec(&mut hdr, span);
                 }
                 std::io::Write::write_all(&mut writer, &hdr)?;
             } else {
@@ -93,7 +94,11 @@ impl ncore::NoritoSerialize for Metadata {
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        let mut total = ncore::len_prefix_len(self.0.len());
+        let mut total = if ncore::use_compact_seq_len() {
+            ncore::varint_len_prefix_len(self.0.len())
+        } else {
+            8
+        };
 
         if ncore::use_packed_seq() {
             let len = self.0.len();
@@ -103,7 +108,7 @@ impl ncore::NoritoSerialize for Metadata {
                 let entry = entry_len_hint(name, json)?;
                 data_total = data_total.saturating_add(entry);
                 if ncore::use_varint_offsets() {
-                    varint_total = varint_total.saturating_add(ncore::len_prefix_len(entry));
+                    varint_total = varint_total.saturating_add(ncore::varint_len_prefix_len(entry));
                 }
             }
             if ncore::use_varint_offsets() {
@@ -127,7 +132,11 @@ impl ncore::NoritoSerialize for Metadata {
 
     fn encoded_len_exact(&self) -> Option<usize> {
         let len = self.0.len();
-        let mut total = ncore::len_prefix_len(len);
+        let mut total = if ncore::use_compact_seq_len() {
+            ncore::varint_len_prefix_len(len)
+        } else {
+            8
+        };
 
         if ncore::use_packed_seq() {
             let mut data_total = 0usize;
@@ -136,7 +145,7 @@ impl ncore::NoritoSerialize for Metadata {
                 let entry = entry_len_exact(name, json)?;
                 data_total = data_total.saturating_add(entry);
                 if ncore::use_varint_offsets() {
-                    varint_total = varint_total.saturating_add(ncore::len_prefix_len(entry));
+                    varint_total = varint_total.saturating_add(ncore::varint_len_prefix_len(entry));
                 }
             }
 

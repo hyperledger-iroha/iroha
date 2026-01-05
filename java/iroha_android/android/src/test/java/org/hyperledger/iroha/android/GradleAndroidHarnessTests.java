@@ -12,8 +12,7 @@ import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
 /**
- * Runs the Android-only main-based tests under Gradle so CI no longer depends on the bespoke
- * {@code run_tests.sh} harness.
+ * Runs the Android-only main-based tests under Gradle for CI coverage.
  */
 @RunWith(Parameterized.class)
 public final class GradleAndroidHarnessTests {

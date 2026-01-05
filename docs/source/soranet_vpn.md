@@ -47,7 +47,10 @@ the same deterministic framing.
   live usage alongside adapter/unit tests. Runtime counters now split data vs
   cover traffic for frames/bytes (`soranet_vpn_{data,cover}_{frames,bytes}_total`),
   where byte counters track payload bytes (derive on-wire bytes as
-  `frames * 1024` when you need padding spend).【tools/soranet-relay/src/runtime.rs:1984】【tools/soranet-relay/src/metrics.rs:744】【tools/soranet-relay/tests/vpn_adapter.rs:1】
+  `frames * 1024` when you need padding spend). Control/keepalive cell classes
+  (for example, route-open control frames) are tracked separately via
+  `soranet_vpn_control_{frames,bytes}_total` and are excluded from VPN payload
+  metrics and receipts.【tools/soranet-relay/src/runtime.rs:1984】【tools/soranet-relay/src/metrics.rs:744】【tools/soranet-relay/tests/vpn_adapter.rs:1】
 - **End-to-end metrics harness:** The adapter suite now includes a paced
   bridge→adapter round-trip that pumps data and cover cells over a duplex link
   and asserts ingress/egress counters for cover/data frames and bytes on both

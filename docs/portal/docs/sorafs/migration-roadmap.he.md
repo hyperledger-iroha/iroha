@@ -22,7 +22,6 @@ title: "מפת דרכים להגירת SoraFS"
 מסמך זה מממש את הנחיות ההגירה המופיעות ב-
 `docs/source/sorafs_architecture_rfc.md`. הוא מרחיב את תוצרי SF-1 לאבני דרך
 מוכנות לביצוע, קריטריוני שער, ורשימות בדיקה לבעלים כך שצוותי storage,
-governance, DevRel ו-SDK יוכלו לתאם את המעבר מאירוח artefacts legacy
 לפרסום הנתמך ב-SoraFS.
 
 מפת הדרכים דטרמיניסטית במכוון: כל אבן דרך מציינת artefacts נדרשים,
@@ -33,26 +32,13 @@ governance, DevRel ו-SDK יוכלו לתאם את המעבר מאירוח artef
 
 | אבן דרך | חלון | מטרות עיקריות | חייבים לספק | בעלים |
 |---------|-------|---------------|-------------|-------|
-| **M0 - Bootstrap** | שבועות 1-6 | פרסום chunker fixtures דטרמיניסטיים ופרסום כפול של artefacts (legacy + SoraFS). | fixtures של `sorafs_chunker`, שילוב CLI של `sorafs_manifest_stub`, רשומות ביומן ההגירה. | Docs, DevRel, Storage |
 | **M1 - Deterministic Enforcement** | שבועות 7-12 | אכיפת fixtures חתומים והכנת alias proofs בזמן שהפייפליינים מאמצים expectation flags. | אימות ליילי של fixtures, manifests חתומים ע"י המועצה, רשומות staging ב-alias registry. | Storage, Governance, SDKs |
-| **M2 - Registry First** | שבועות 13-20 | ניתוב pins דרך ה-registry, הקפאת bundles legacy והצגת טלמטריית parity. | חוזה Pin Registry + CLI (`sorafs pin propose/approve`), dashboards של observability, runbooks למפעילים. | Governance, Ops, Observability |
-| **M3 - Alias Only** | שבוע 21+ | פירוק אירוח legacy ודרישה ל-alias proofs לצורך שליפה. | Gateways alias-only, parity alerts, עדכון defaults של SDK, הודעת פירוק legacy. | Ops, Networking, SDKs |
 
 סטטוס אבני הדרך מתועד ב-`docs/source/sorafs/migration_ledger.md`. כל שינוי
 במפת הדרכים הזו חייב לעדכן את ה-ledger כדי לשמור על סנכרון בין governance
 ל-release engineering.
 
 ## זרמי עבודה
-
-### 1. עטיפה מחדש של נתוני legacy
-
-| שלב | אבן דרך | תיאור | Owner(s) | פלט |
-|------|---------|-------|----------|-----|
-| מיפוי ותיוג | M0 | ייצוא SHA3-256 digests של bundles legacy ותיעודם ב-ledger ההגירה (append-only). | Docs, DevRel | רשומות ledger עם `source_path`, `sha3_digest`, `owner`, `planned_manifest_cid`. |
-| בניה מחדש דטרמיניסטית | M0-M1 | הפעלת `sorafs_manifest_stub` לכל artefact ריליס ושמירת CAR, manifest, signature envelope ו-fetch plan ב-`artifacts/<team>/<alias>/<timestamp>/`. | Docs, CI | Bundles CAR + manifest ניתנים לשחזור לכל ריליס. |
-| לולאת אימות | M1 | להריץ מחדש `sorafs_fetch` מול gateways ב-staging כדי לוודא שגבולות/digests של chunks תואמים fixtures. לרשום pass/fail בהערות ledger. | Governance QA | דוח אימות staging + GitHub issue עבור drift. |
-| מעבר ל-registry | M2 | החלפת סטטוס ledger ל-`Pinned` לאחר ש-digest של manifest קיים on-chain; bundle legacy הופך לקריאה בלבד (מגיש אך לא משנה). | Governance, Ops | Hash טרנזקציית registry, כרטיס read-only ל-legacy storage. |
-| Decommission | M3 | הסרת רשומות CDN legacy לאחר תקופת חסד של 30 יום, ארכוב אישורי שינוי DNS ופרסום post-mortem. | Ops | checklist decommission, רישום שינוי DNS, סגירת כרטיס incident. |
 
 ### 2. אימוץ pinning דטרמיניסטי
 
@@ -86,9 +72,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
 | שלב | אבן דרך | תיאור | Owner(s) | פלט |
 |------|---------|-------|----------|-----|
 | Alias proofs ב-staging | M1 | רישום claims של alias ב-Pin Registry של staging וצירוף Merkle proofs ל-manifests (`--alias`). | Governance, Docs | bundle הוכחות נשמר לצד manifest + הערת ledger עם שם alias. |
-| DNS כפול + הודעה | M1-M2 | הפעלת DNS legacy ו-Torii/SoraDNS במקביל; פרסום הודעות הגירה למפעילים ולערוצי SDK. | Networking, DevRel | פוסט הודעה + כרטיס שינוי DNS. |
 | Proof enforcement | M2 | Gateways דוחים manifests ללא headers `Sora-Proof` עדכניים; CI מוסיף שלב `sorafs alias verify` למשיכת proofs. | Networking | פאטץ' קונפיג gateway + פלט CI עם אימות מוצלח. |
-| Rollout alias-only | M3 | הסרת DNS legacy, עדכון defaults של SDK להסתמך על Torii/SoraDNS + alias proofs, ותיעוד חלון rollback. | SDK Maintainers, Ops | הערות ריליס SDK, עדכון runbook ops, תכנית rollback. |
 
 ### 4. תקשורת וביקורת
 
@@ -105,7 +89,6 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
 |------|-------|-------|
 | זמינות חוזה Pin Registry | חוסם rollout M2 pin-first. | להכין את החוזה לפני M2 עם replay tests; לשמור fallback envelope עד שאין regressions. |
 | מפתחות חתימה של המועצה | נדרשים עבור manifest envelopes ואישורי registry. | ceremony חתימה מתועד ב-`docs/source/sorafs/signing_ceremony.md`; לסובב מפתחות עם overlap ולהוסיף הערה ב-ledger. |
-| Gateway parity tooling | נדרש לאכיפת alias proofs ו-parity של chunks. | לשחרר עדכוני gateway ב-M1, להשאיר התנהגות legacy מאחורי feature flag עד עמידה בקריטריוני M2. |
 | קצב ריליס SDK | לקוחות חייבים לכבד alias proofs לפני M3. | ליישר חלונות ריליס SDK עם milestone gates; להוסיף checklists להגירה לתבניות ריליס. |
 
 הסיכונים הנותרים והמיתונים משוכפלים ב-`docs/source/sorafs_architecture_rfc.md`
@@ -115,10 +98,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
 
 | אבן דרך | קריטריונים |
 |---------|------------|
-| M0 | - כל artefacts היעד נבנו מחדש דרך `sorafs_manifest_stub` עם expectation flags. <br /> - ledger ההגירה מולא לכל משפחת artefact. <br /> - פרסום כפול (legacy + SoraFS) פעיל. |
 | M1 | - job ליילי של fixtures ירוק שבעה ימים רצופים. <br /> - alias proofs ב-staging אומתו ב-CI. <br /> - governance מאשר מדיניות expectation flags. |
-| M2 | - 100% מה-manifests החדשים עוברים דרך Pin Registry. <br /> - legacy storage מסומן read-only; incident playbook מאושר. <br /> - dashboards observability באוויר עם ספי התראה. |
-| M3 | - gateways alias-only בפרודקשן. <br /> - DNS legacy הוסר והופיע בכרטיסי שינוי. <br /> - defaults של SDK עודכנו ופורסמו. <br /> - סטטוס סופי נוסף ל-ledger ההגירה. |
 
 ## ניהול שינוי
 

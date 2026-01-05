@@ -6,7 +6,6 @@ description: SF-2c plan for the capacity marketplace, replication orders, teleme
 ---
 
 :::note Canonical Source
-This page mirrors `docs/source/sorafs/storage_capacity_marketplace.md`. Keep both locations aligned while the legacy documentation remains active.
 :::
 
 # SoraFS Storage Capacity Marketplace (SF-2c Draft)

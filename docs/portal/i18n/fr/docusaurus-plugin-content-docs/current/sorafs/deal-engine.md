@@ -11,7 +11,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 
 :::note Source canonique
-Cette page reflète `docs/source/sorafs/deal_engine.md`. Gardez les deux emplacements alignés tant que la documentation legacy reste active.
 :::
 
 # Moteur d'accords SoraFS

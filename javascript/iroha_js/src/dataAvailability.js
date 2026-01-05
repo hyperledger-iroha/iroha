@@ -151,40 +151,40 @@ export function buildDaProofSummaryArtifact(summaryInput, options = {}) {
     manifest_path: normalizeOptionalPath(record.manifestPath ?? record.manifest_path),
     payload_path: normalizeOptionalPath(record.payloadPath ?? record.payload_path),
     blob_hash: toLowerHexField(
-      summary.blobHashHex ?? summary.blob_hash_hex,
-      "daProofSummary.blobHashHex",
+      summary.blob_hash_hex,
+      "daProofSummary.blob_hash_hex",
     ),
     chunk_root: toLowerHexField(
-      summary.chunkRootHex ?? summary.chunk_root_hex,
-      "daProofSummary.chunkRootHex",
+      summary.chunk_root_hex,
+      "daProofSummary.chunk_root_hex",
     ),
     por_root: toLowerHexField(
-      summary.porRootHex ?? summary.por_root_hex,
-      "daProofSummary.porRootHex",
+      summary.por_root_hex,
+      "daProofSummary.por_root_hex",
     ),
     leaf_count: toJsonInteger(
-      summary.leafCount ?? summary.leaf_count,
-      "daProofSummary.leafCount",
+      summary.leaf_count,
+      "daProofSummary.leaf_count",
     ),
     segment_count: toJsonInteger(
-      summary.segmentCount ?? summary.segment_count,
-      "daProofSummary.segmentCount",
+      summary.segment_count,
+      "daProofSummary.segment_count",
     ),
     chunk_count: toJsonInteger(
-      summary.chunkCount ?? summary.chunk_count,
-      "daProofSummary.chunkCount",
+      summary.chunk_count,
+      "daProofSummary.chunk_count",
     ),
     sample_count: toJsonInteger(
-      summary.sampleCount ?? summary.sample_count,
-      "daProofSummary.sampleCount",
+      summary.sample_count,
+      "daProofSummary.sample_count",
     ),
     sample_seed: toJsonInteger(
-      summary.sampleSeed ?? summary.sample_seed,
-      "daProofSummary.sampleSeed",
+      summary.sample_seed,
+      "daProofSummary.sample_seed",
     ),
     proof_count: toJsonInteger(
-      summary.proofCount ?? summary.proof_count ?? proofs.length,
-      "daProofSummary.proofCount",
+      summary.proof_count ?? proofs.length,
+      "daProofSummary.proof_count",
     ),
     proofs: proofs.map((proof, index) => buildDaProofRecord(proof, index)),
   };
@@ -588,15 +588,15 @@ function transformDaProofSummary(raw) {
     throw new TypeError("native proof summary payload must be an object");
   }
   return {
-    blobHashHex: raw.blob_hash_hex,
-    chunkRootHex: raw.chunk_root_hex,
-    porRootHex: raw.por_root_hex,
-    leafCount: toSafeIntegerLike(raw.leaf_count),
-    segmentCount: toSafeIntegerLike(raw.segment_count),
-    chunkCount: toSafeIntegerLike(raw.chunk_count),
-    sampleCount: raw.sample_count,
-    sampleSeed: toSafeIntegerLike(raw.sample_seed),
-    proofCount: raw.proof_count,
+    blob_hash_hex: raw.blob_hash_hex,
+    chunk_root_hex: raw.chunk_root_hex,
+    por_root_hex: raw.por_root_hex,
+    leaf_count: toSafeIntegerLike(raw.leaf_count),
+    segment_count: toSafeIntegerLike(raw.segment_count),
+    chunk_count: toSafeIntegerLike(raw.chunk_count),
+    sample_count: raw.sample_count,
+    sample_seed: toSafeIntegerLike(raw.sample_seed),
+    proof_count: raw.proof_count,
     proofs: Array.isArray(raw.proofs)
       ? raw.proofs.map(transformDaProofRecord)
       : [],
@@ -607,33 +607,30 @@ function transformDaProofRecord(raw) {
   if (!raw || typeof raw !== "object") {
     throw new TypeError("native proof record payload must be an object");
   }
-  const leafBytesB64 =
-    typeof raw.leaf_bytes_b64 === "string" ? raw.leaf_bytes_b64 : "";
   return {
     origin: raw.origin,
-    leafIndex: raw.leaf_index,
-    chunkIndex: raw.chunk_index,
-    segmentIndex: raw.segment_index,
-    leafOffset: toSafeIntegerLike(raw.leaf_offset),
-    leafLength: raw.leaf_length,
-    segmentOffset: toSafeIntegerLike(raw.segment_offset),
-    segmentLength: raw.segment_length,
-    chunkOffset: toSafeIntegerLike(raw.chunk_offset),
-    chunkLength: raw.chunk_length,
-    payloadLength: toSafeIntegerLike(raw.payload_len),
-    chunkDigestHex: raw.chunk_digest_hex,
-    chunkRootHex: raw.chunk_root_hex,
-    segmentDigestHex: raw.segment_digest_hex,
-    leafDigestHex: raw.leaf_digest_hex,
-    leafBytes: Buffer.from(leafBytesB64, "base64"),
-    leafBytesB64,
-    segmentLeavesHex: Array.isArray(raw.segment_leaves_hex)
+    leaf_index: raw.leaf_index,
+    chunk_index: raw.chunk_index,
+    segment_index: raw.segment_index,
+    leaf_offset: toSafeIntegerLike(raw.leaf_offset),
+    leaf_length: raw.leaf_length,
+    segment_offset: toSafeIntegerLike(raw.segment_offset),
+    segment_length: raw.segment_length,
+    chunk_offset: toSafeIntegerLike(raw.chunk_offset),
+    chunk_length: raw.chunk_length,
+    payload_len: toSafeIntegerLike(raw.payload_len),
+    chunk_digest_hex: raw.chunk_digest_hex,
+    chunk_root_hex: raw.chunk_root_hex,
+    segment_digest_hex: raw.segment_digest_hex,
+    leaf_digest_hex: raw.leaf_digest_hex,
+    leaf_bytes_b64: raw.leaf_bytes_b64,
+    segment_leaves_hex: Array.isArray(raw.segment_leaves_hex)
       ? raw.segment_leaves_hex.slice()
       : [],
-    chunkSegmentsHex: Array.isArray(raw.chunk_segments_hex)
+    chunk_segments_hex: Array.isArray(raw.chunk_segments_hex)
       ? raw.chunk_segments_hex.slice()
       : [],
-    chunkRootsHex: Array.isArray(raw.chunk_roots_hex)
+    chunk_roots_hex: Array.isArray(raw.chunk_roots_hex)
       ? raw.chunk_roots_hex.slice()
       : [],
     verified: Boolean(raw.verified),
@@ -710,77 +707,77 @@ function buildDaProofRecord(proofInput, index) {
   const proof = ensureRecord(proofInput, `daProofSummary.proofs[${index}]`);
   return {
     origin: requireNonEmptyString(
-      proof.origin ?? proof.proof_origin ?? "",
+      proof.origin ?? "",
       `daProofSummary.proofs[${index}].origin`,
     ),
     leaf_index: toJsonInteger(
-      proof.leafIndex ?? proof.leaf_index,
-      `daProofSummary.proofs[${index}].leafIndex`,
+      proof.leaf_index,
+      `daProofSummary.proofs[${index}].leaf_index`,
     ),
     chunk_index: toJsonInteger(
-      proof.chunkIndex ?? proof.chunk_index,
-      `daProofSummary.proofs[${index}].chunkIndex`,
+      proof.chunk_index,
+      `daProofSummary.proofs[${index}].chunk_index`,
     ),
     segment_index: toJsonInteger(
-      proof.segmentIndex ?? proof.segment_index,
-      `daProofSummary.proofs[${index}].segmentIndex`,
+      proof.segment_index,
+      `daProofSummary.proofs[${index}].segment_index`,
     ),
     leaf_offset: toJsonInteger(
-      proof.leafOffset ?? proof.leaf_offset,
-      `daProofSummary.proofs[${index}].leafOffset`,
+      proof.leaf_offset,
+      `daProofSummary.proofs[${index}].leaf_offset`,
     ),
     leaf_length: toJsonInteger(
-      proof.leafLength ?? proof.leaf_length,
-      `daProofSummary.proofs[${index}].leafLength`,
+      proof.leaf_length,
+      `daProofSummary.proofs[${index}].leaf_length`,
     ),
     segment_offset: toJsonInteger(
-      proof.segmentOffset ?? proof.segment_offset,
-      `daProofSummary.proofs[${index}].segmentOffset`,
+      proof.segment_offset,
+      `daProofSummary.proofs[${index}].segment_offset`,
     ),
     segment_length: toJsonInteger(
-      proof.segmentLength ?? proof.segment_length,
-      `daProofSummary.proofs[${index}].segmentLength`,
+      proof.segment_length,
+      `daProofSummary.proofs[${index}].segment_length`,
     ),
     chunk_offset: toJsonInteger(
-      proof.chunkOffset ?? proof.chunk_offset,
-      `daProofSummary.proofs[${index}].chunkOffset`,
+      proof.chunk_offset,
+      `daProofSummary.proofs[${index}].chunk_offset`,
     ),
     chunk_length: toJsonInteger(
-      proof.chunkLength ?? proof.chunk_length,
-      `daProofSummary.proofs[${index}].chunkLength`,
+      proof.chunk_length,
+      `daProofSummary.proofs[${index}].chunk_length`,
     ),
     payload_len: toJsonInteger(
-      proof.payloadLength ?? proof.payload_len,
-      `daProofSummary.proofs[${index}].payloadLength`,
+      proof.payload_len,
+      `daProofSummary.proofs[${index}].payload_len`,
     ),
     chunk_digest: toLowerHexField(
-      proof.chunkDigestHex ?? proof.chunk_digest_hex ?? proof.chunk_digest,
-      `daProofSummary.proofs[${index}].chunkDigestHex`,
+      proof.chunk_digest_hex,
+      `daProofSummary.proofs[${index}].chunk_digest_hex`,
     ),
     chunk_root: toLowerHexField(
-      proof.chunkRootHex ?? proof.chunk_root_hex ?? proof.chunk_root,
-      `daProofSummary.proofs[${index}].chunkRootHex`,
+      proof.chunk_root_hex,
+      `daProofSummary.proofs[${index}].chunk_root_hex`,
     ),
     segment_digest: toLowerHexField(
-      proof.segmentDigestHex ?? proof.segment_digest_hex ?? proof.segment_digest,
-      `daProofSummary.proofs[${index}].segmentDigestHex`,
+      proof.segment_digest_hex,
+      `daProofSummary.proofs[${index}].segment_digest_hex`,
     ),
     leaf_digest: toLowerHexField(
-      proof.leafDigestHex ?? proof.leaf_digest_hex ?? proof.leaf_digest,
-      `daProofSummary.proofs[${index}].leafDigestHex`,
+      proof.leaf_digest_hex,
+      `daProofSummary.proofs[${index}].leaf_digest_hex`,
     ),
     leaf_bytes_b64: resolveLeafBytesB64(proof, index),
     segment_leaves: normalizeHexArray(
-      proof.segmentLeavesHex ?? proof.segment_leaves_hex ?? proof.segment_leaves,
-      `daProofSummary.proofs[${index}].segmentLeavesHex`,
+      proof.segment_leaves_hex,
+      `daProofSummary.proofs[${index}].segment_leaves_hex`,
     ),
     chunk_segments: normalizeHexArray(
-      proof.chunkSegmentsHex ?? proof.chunk_segments_hex ?? proof.chunk_segments,
-      `daProofSummary.proofs[${index}].chunkSegmentsHex`,
+      proof.chunk_segments_hex,
+      `daProofSummary.proofs[${index}].chunk_segments_hex`,
     ),
     chunk_roots: normalizeHexArray(
-      proof.chunkRootsHex ?? proof.chunk_roots_hex ?? proof.chunk_roots,
-      `daProofSummary.proofs[${index}].chunkRootsHex`,
+      proof.chunk_roots_hex,
+      `daProofSummary.proofs[${index}].chunk_roots_hex`,
     ),
     verified: Boolean(proof.verified),
   };
@@ -822,16 +819,10 @@ function toJsonInteger(value, name) {
 }
 
 function resolveLeafBytesB64(proof, index) {
-  if (typeof proof.leafBytesB64 === "string" && proof.leafBytesB64.trim() !== "") {
-    return proof.leafBytesB64;
-  }
   if (typeof proof.leaf_bytes_b64 === "string" && proof.leaf_bytes_b64.trim() !== "") {
     return proof.leaf_bytes_b64;
   }
-  if (proof.leafBytes && Buffer.isBuffer(proof.leafBytes)) {
-    return proof.leafBytes.toString("base64");
-  }
-  throw new TypeError(`daProofSummary.proofs[${index}].leafBytesB64 is required`);
+  throw new TypeError(`daProofSummary.proofs[${index}].leaf_bytes_b64 is required`);
 }
 
 function normalizeHexArray(values, context) {

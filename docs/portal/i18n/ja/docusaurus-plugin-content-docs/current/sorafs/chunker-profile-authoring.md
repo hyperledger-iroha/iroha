@@ -44,7 +44,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 - プロファイル ID は正の整数で、欠番なしに単調増加します。
 - 正規ハンドル (`namespace.name@semver`) は alias リストに含まれ、**必ず** 最初の
-  エントリになります。legacy alias（例: `sorafs.sf1@1.0.0`）はその後に続きます。
 - alias は他の正規ハンドルと衝突せず、重複してはいけません。
 - alias は空であってはならず、前後の空白を取り除く必要があります。
 
@@ -70,7 +69,6 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 | `name` | 人が読めるラベル。 | `sf1` |
 | `semver` | パラメータセットのセマンティックバージョン文字列。 | `1.0.0` |
 | `profile_id` | プロファイルが登録されたときに一度だけ割り当てる単調増加の数値 ID。次の id を予約するが既存の番号は再利用しない。 | `1` |
-| `profile_aliases` | 交渉時にクライアントへ公開する追加ハンドル（legacy 名、短縮名）。正規ハンドルを必ず最初のエントリとして含める。 | `["sorafs.sf1@1.0.0"]` |
 | `profile.min_size` | チャンク長の最小値 (bytes)。 | `65536` |
 | `profile.target_size` | チャンク長のターゲット値 (bytes)。 | `262144` |
 | `profile.max_size` | チャンク長の最大値 (bytes)。 | `524288` |
@@ -157,50 +155,6 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
 `docs/source/sorafs/proposals/` に格納します。以下の JSON テンプレートは期待される形を示します
 （必要に応じて値を置き換えてください）:
 
-```json
-{
-  "ChunkerProfileProposalV1": {
-    "namespace": "sorafs",
-    "name": "sf2",
-    "semver": "1.0.0",
-    "reserved_profile_id": 2,
-    "profile": {
-      "min_size": 65536,
-      "target_size": 262144,
-      "max_size": 524288,
-      "break_mask": "0x0000ffff",
-      "polynomial": "0x3da3358b4dc173",
-      "gear_seed": "sorafs-v2-gear"
-    },
-    "chunk_multihash": {
-      "code": 31,
-      "digest": "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482"
-    },
-    "profile_aliases": ["sorafs.sf2", "sorafs-sf2"],
-    "fixtures_root": "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/",
-    "por_seed": "0xfeedbeefcafebabe",
-    "compatibility": {
-      "supersedes": ["sorafs.sf1@1.0.0"],
-      "grace_epochs": 2,
-      "notes": "Carry envelopes for sf1 during dual-publish window."
-    },
-    "artifacts": {
-      "chunk_boundaries": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.json",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.ts",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.go"
-      ],
-      "fuzz_corpora": [
-        "fuzz/sorafs_chunker/sf2_backpressure.json"
-      ],
-      "por_witnesses": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/por_samples.json"
-      ]
-    },
-    "determinism_report": "docs/source/sorafs/reports/sf2_determinism.md"
-  }
-}
-```
 
 対応する Markdown レポート (`determinism_report`) を用意し、コマンド出力、チャンク digest、
 検証中に発生した差分を記録してください。
@@ -216,7 +170,6 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
    プロファイル・エンベロープへ署名を追加します。
 4. **レジストリ公開。** マージによりレジストリ、docs、fixtures が更新されます。既定の CLI は
    ガバナンスが移行準備完了を宣言するまで以前のプロファイルに留まります。
-5. **廃止の追跡。** 移行ウィンドウの後、レジストリを更新して置換されたプロファイルを deprecated
    とし、migration ledger を通じてオペレーターへ通知します。
 
 ## オーサリングのヒント

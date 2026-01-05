@@ -50,7 +50,7 @@ CI and release engineers should call the script whenever they download a preview
    - Captures the returned manifest digest and SoraFS CID.
    - Serialises `{ commit, branch, checksum_manifest, cid }` into Norito JSON (`docs/portal/preview/preview_descriptor.json`).
 2. Store the descriptor alongside the build artefact and expose the CID in the pull-request comment.
-3. Add integration tests that exercise `sorafs_cli` in dry-run mode to ensure future changes keep the metadata schema compatible.
+3. Add integration tests that exercise `sorafs_cli` in dry-run mode to ensure future changes keep the metadata schema stable.
 
 ## Phase 3 — Governance & Auditing
 

@@ -539,7 +539,7 @@ fn proof_stream_command_consumes_ndjson() {
 
     let mut item_map = sample_to_map(flat_index, &por_proof);
     item_map.insert(
-        "manifest_id_hex".into(),
+        "manifest_digest_hex".into(),
         Value::from(manifest_digest_hex.clone()),
     );
     let provider_id_hex = "22".repeat(32);
@@ -2454,7 +2454,7 @@ fn write_proof_stream_manifest(dir: &Path, file_name: &str) -> PathBuf {
     path
 }
 
-fn manifest_id_hex(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
+fn manifest_digest_hex(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
     let bytes = fs::read(path)?;
     let manifest: ManifestV1 = decode_from_bytes(&bytes)?;
     let digest = manifest
@@ -2725,14 +2725,14 @@ fn proof_stream_potr_stream_summary_includes_failure_reason()
     let manifest_path =
         write_proof_stream_manifest(tempdir.path(), "stream_potr_summary_manifest.to");
     let provider_id_hex = hex_encode([0x22u8; 32]);
-    let manifest_hex = manifest_id_hex(&manifest_path)?;
+    let manifest_hex = manifest_digest_hex(&manifest_path)?;
 
     let success_line = format!(
-        "{{\"manifest_id_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",\"proof_kind\":\"potr\",\"result\":\"success\",\"latency_ms\":45000,\"deadline_ms\":90000,\"tier\":\"hot\",\"recorded_at_ms\":1700000000000,\"trace_id\":\"{trace_hex}\"}}",
+        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",\"proof_kind\":\"potr\",\"result\":\"success\",\"latency_ms\":45000,\"deadline_ms\":90000,\"tier\":\"hot\",\"recorded_at_ms\":1700000000000,\"trace_id\":\"{trace_hex}\"}}",
         trace_hex = hex_encode([0x44u8; 16])
     );
     let failure_line = format!(
-        "{{\"manifest_id_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",\"proof_kind\":\"potr\",\"result\":\"failure\",\"failure_reason\":\"missed_deadline\",\"latency_ms\":120000,\"deadline_ms\":90000,\"tier\":\"hot\",\"recorded_at_ms\":1700000500000}}"
+        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",\"proof_kind\":\"potr\",\"result\":\"failure\",\"failure_reason\":\"missed_deadline\",\"latency_ms\":120000,\"deadline_ms\":90000,\"tier\":\"hot\",\"recorded_at_ms\":1700000500000}}"
     );
 
     let server = MockServer::start();

@@ -2761,7 +2761,11 @@ pub unsafe extern "C" fn connect_norito_connect_derive_keys(
             Ok(bytes) => bytes,
             Err(code) => return code,
         };
-        let (app_key, wallet_key) = connect_sdk::x25519_derive_keys(&local_sk, &peer_pk, &sid);
+        let (app_key, wallet_key) = match connect_sdk::x25519_derive_keys(&local_sk, &peer_pk, &sid)
+        {
+            Ok(keys) => keys,
+            Err(_) => return -2,
+        };
         ptr::copy_nonoverlapping(app_key.as_ptr(), out_app_ptr, 32);
         ptr::copy_nonoverlapping(wallet_key.as_ptr(), out_wallet_ptr, 32);
         0

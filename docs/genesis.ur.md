@@ -26,13 +26,15 @@ translation_last_reviewed: 2025-11-14
   executor استعمال ہوتا ہے۔
 - `ivm_dir`: وہ ڈائریکٹری جس میں IVM bytecode لائبریریز موجود ہوں۔ اگر یہ
   فیلڈ نہ ہو تو ڈیفالٹ `"."` استعمال ہوتا ہے۔
+- `consensus_mode`: manifest میں اعلان کردہ consensus mode۔ لازم ہے؛ Iroha3 کے لیے `"Npos"` (default) اور Iroha2 کے لیے `"Permissioned"` استعمال کریں۔
 - `transactions`: genesis ٹرانزیکشنز کی فہرست، جو sequentially execute ہوتی
   ہیں۔ ہر entry میں یہ sub‑فیلڈز ہو سکتے ہیں:
   - `parameters`: نیٹ ورک کے ابتدائی parameters۔
   - `instructions`: Norito‑encoded instructions۔
   - `ivm_triggers`: triggers، جن کے ساتھ IVM bytecode executables ہوتے ہیں۔
-  - `topology`: peers کی ابتدائی topology۔ ہر entry میں PoP کے لیے `pop_hex`
-    (اختیاری) شامل ہو سکتا ہے مگر سائن کرنے سے پہلے اس کا ہونا ضروری ہے۔
+  - `topology`: peers کی ابتدائی topology۔ ہر entry میں `peer` (PeerId بطور
+    string، یعنی public key) اور `pop_hex` ہوتے ہیں؛ `pop_hex` تیار کرتے
+    وقت چھوڑا جا سکتا ہے مگر سائن سے پہلے ضروری ہے۔
 - `crypto`: کرپٹو کنفیگریشن کا snapshot، جو `iroha_config.crypto` سے mirror
   ہوتا ہے (`default_hash`, `allowed_signing`, `allowed_curve_ids`,
   `sm2_distid_default`, `sm_openssl_preview`)۔ فیلڈ `allowed_curve_ids`,
@@ -42,7 +44,7 @@ translation_last_reviewed: 2025-11-14
   کرے تو اسے hash کو `sm3-256` پر بھی سوئچ کرنا ہو گا، اور جو builds بغیر
   `sm` feature کے compile ہوں گی، وہ `sm2` کو مکمل طور پر reject کریں گی۔
 
-مثال (کمانڈ `kagami genesis generate default` کی آؤٹ پٹ، instructions
+مثال (کمانڈ `kagami genesis generate default --consensus-mode npos` کی آؤٹ پٹ، instructions
 مختصر کیے گئے ہیں):
 
 ```json
@@ -57,6 +59,7 @@ translation_last_reviewed: 2025-11-14
       "topology": []
     }
   ],
+  "consensus_mode": "Npos",
   "crypto": {
     "default_hash": "blake2b-256",
     "allowed_signing": ["ed25519"],
@@ -152,6 +155,7 @@ cargo run -p iroha_cli --features sm -- \
    ```bash
    cargo run -p iroha_kagami -- genesis generate \
      [--executor <path/to/executor.to>] \
+     --consensus-mode npos \
      [--genesis-public-key <public-key>] \
      > genesis.json
    ```
@@ -163,6 +167,7 @@ cargo run -p iroha_cli --features sm -- \
      پر دستخط کیے جائیں گے؛ اسے `iroha_crypto::Algorithm` میں سپورٹڈ
      multihash ہونا چاہیے (بشمول GOST TC26 variants جب متعلقہ feature
      فعال ہو)۔
+   - Iroha3 میں `--consensus-mode npos` لازمی ہے اور staged cutovers سپورٹ نہیں ہوتے؛ Iroha2 میں default موڈ `permissioned` ہے۔
 
 2. edit کے دوران validate کریں:
 
@@ -198,6 +203,9 @@ distribute کریں۔ signed payloads کے لیے `.nrt` suffix کو ترجیح 
 آپ کو genesis میں executor upgrade کی ضرورت نہ ہو تو `executor` فیلڈ کو
 چھوڑ دیں اور `.to` فائل فراہم نہ کریں۔
 
+NPoS منشورات (`--consensus-mode npos` یا مرحلہ وار کٹ اوور صرف Iroha2 میں) پر دستخط کرتے وقت `kagami genesis sign` کو `sumeragi_npos_parameters` payload درکار ہوتا ہے؛ اسے `kagami genesis generate --consensus-mode npos` سے بنائیں یا یہ parameter دستی طور پر شامل کریں۔
+ڈیفالٹ طور پر `kagami genesis sign` manifest کے `consensus_mode` کو استعمال کرتا ہے؛ `--consensus-mode` سے override کریں۔
+
 ## Genesis کیا کر سکتا ہے؟
 
 Genesis درج ذیل آپریشنز کو سپورٹ کرتا ہے۔ Kagami انہیں ایک well‑defined
@@ -219,9 +227,10 @@ sequence deterministically execute کریں:
 - **IVM triggers**: ایسے triggers register کرنا جو IVM bytecode execute
   کرتے ہیں (تفصیل `ivm_triggers` میں)۔ triggers کے executables، `ivm_dir`
   کے نسبتاً paths کے طور پر resolve ہوتے ہیں۔
-- **Topology**: `topology` array (یعنی `PeerId` کی فہرست) کے ذریعے ابتدائی
-  peers کی فہرست فراہم کرنا، جو کسی بھی ٹرانزیکشن (اکثر پہلی یا آخری)
-  میں شامل ہو سکتی ہے۔
+- **Topology**: `topology` array کے ذریعے ابتدائی peers فراہم کرنا، جو کسی بھی
+  ٹرانزیکشن (اکثر پہلی یا آخری) میں شامل ہو سکتی ہے۔ ہر entry
+  `{ "peer": "<public_key>", "pop_hex": "<hex>" }` ہوتی ہے؛ `pop_hex` کو
+  تیاری کے وقت چھوڑا جا سکتا ہے، مگر دستخط سے پہلے لازم ہے۔
 - **Executor upgrade (اختیاری)**: اگر `executor` موجود ہو، تو genesis پہلی
   ٹرانزیکشن کی جگہ ایک `Upgrade` instruction insert کرتا ہے؛ بصورتِ دیگر
   genesis براہِ راست parameters/instructions سے شروع ہو جاتا ہے۔
@@ -244,7 +253,7 @@ Kagami اور node کا کوڈ اس آرڈر کو enforce کرتے ہیں، تا
 
 - Kagami template سے شروع کریں:
   - صرف built‑in ISI:  
-    `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> [--consensus-mode npos] > genesis.json`
+    `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (Iroha3 default؛ Iroha2 کے لیے `--consensus-mode permissioned`)
   - optional executor upgrade کے ساتھ: `--executor <path/to/executor.to>` شامل کریں۔
 - `<PK>` کوئی بھی multihash ہو سکتا ہے جسے `iroha_crypto::Algorithm`
   پہچانتا ہو، بشمول TC26 GOST variants (مثلاً

@@ -55,6 +55,7 @@ Minimal envelope table
 Ordering and OUTPUT
 - Syscalls execute in program order. Hosts must apply their side effects in the order received.
 - `COMMIT_OUTPUT (0xFE)` makes the VM OUTPUT region visible to the host. Programs may write multiple times to OUTPUT, but content becomes observable only after `COMMIT_OUTPUT` runs. If `COMMIT_OUTPUT` is called multiple times, hosts should treat the last call’s contents as final for that run.
+- The VM clears OUTPUT (and resets its append-only cursor) when loading a program; within a run, OUTPUT writes must move forward (rewinds trap).
 - Event emission that reflects syscall outcomes must preserve syscall order. VM implementations must not reorder syscalls, including under acceleration. Deterministic overlays and commit phases in the node preserve this ordering across the pipeline.
 - Host lifecycle: `begin_tx`/`finish_tx` return `Result`; hosts must surface overlay flush errors (e.g., durable state writes) instead of swallowing them, clear staged overlays on failure, and rely on checkpoints to restore pre-tx state when a VM run aborts.
 
@@ -67,7 +68,7 @@ Lifecycle / Utility
 - 0x01 EXIT — Args: `r10=status:u64` → Return: `u64=status` — Gas: G_exit
 - 0x02 ABORT — Args: none → Return: `u64=0` — Gas: G_abort
 - 0x03 DEBUG_LOG — Args: `r10=&Json` → Return: 0 — Gas: G_debug
-- 0xE0 INPUT_PUBLISH_TLV — Args: `r10=&Blob(TLV)` → Return: `ptr (r10)` — Gas: G_input_publish
+- 0xE0 INPUT_PUBLISH_TLV — Args: `r10=&Blob(TLV)` → Return: `ptr (r10)` — Gas: G_input_publish (rejects invalid TLV envelopes and disallowed pointer types)
 - 0x90 SM3_HASH — Args: `r10=&Blob(message)` → Return: `ptr (&Blob(digest))` — Gas: G_sm3
 - 0x91 SM2_VERIFY — Args: `r10=&Blob(msg)`, `r11=&Blob(sig)` (64-byte r∥s), `r12=&Blob(pubkey)` (SEC1), `r13=&Blob(distid)` *(optional, 0 for default)* → Return: `u64=0/1` — Gas: G_sm2_verify
 - 0x92 SM4_GCM_SEAL — Args: `r10=&Blob(key16)`, `r11=&Blob(nonce12)`, `r12=&Blob(aad)` *(0 => empty)*, `r13=&Blob(plaintext)` → Return: `ptr (&Blob(ciphertext || tag16))` — Gas: G_sm4_seal
@@ -381,12 +382,17 @@ This section summarizes how to safely evolve the IVM ABI (syscall surface and po
 
 
 Codec helpers
+- 0x53 DECODE_INT — Args: `r10=&NoritoBytes(ASCII decimal)` or `r10=&Blob(ASCII decimal)` → Return: `r10=i64`
 - 0x57 JSON_ENCODE — Args: `r10=&Json` → Return: `ptr (&NoritoBytes)` — Gas: G_json_encode
-- 0x58 JSON_DECODE — Args: `r10=&NoritoBytes(JSON bytes)` → Return: `ptr (&Json)` — Gas: G_json_decode
+- 0x58 JSON_DECODE — Args: `r10=&NoritoBytes(JSON bytes)` or `r10=&Blob(JSON bytes)` → Return: `ptr (&Json)` — Gas: G_json_decode
+- 0x5A SCHEMA_DECODE — Args: `r10=&Name(schema), r11=&NoritoBytes` or `r11=&Blob` → Return: `ptr (&Json)`
 - 0x5F TLV_EQ — Args: `r10=&Tlv, r11=&Tlv` → Return: `r10=1 if equal else 0` — Gas: -
-- 0x5C NAME_DECODE — Args: `r10=&NoritoBytes(UTF‑8 string)` → Return: `ptr (&Name)` — Gas: G_name_decode
+- 0x5C NAME_DECODE — Args: `r10=&NoritoBytes(UTF-8 string)` → Return: `ptr (&Name)` — Gas: G_name_decode
+- NAME_DECODE validates Name grammar (non-empty, no whitespace or `@/#/$`) and normalizes the output.
 - 0x5D POINTER_TO_NORITO — Args: `r10=&PointerType<T>` → Return: `ptr (&NoritoBytes(TLV envelope))`
 - 0x5E POINTER_FROM_NORITO — Args: `r10=&NoritoBytes(TLV envelope), r11=expected?:u16` → Return: `ptr (&PointerType<T>)`
+- Null inputs: DECODE_INT, JSON_DECODE, NAME_DECODE, and POINTER_FROM_NORITO accept `r10=0` and return `r10=0` without error.
+- All other pointer-typed syscalls require explicit non-zero pointers; there is no implicit last-input fallback.
 ZK (Halo2 OpenVerify)
 - 0x68 ZK_VERIFY_BATCH — Args: `r10=&NoritoBytes(Vec<OpenVerifyEnvelope>)` → Return: `r10=ptr (&NoritoBytes(Vec<u8> statuses))`, `r11=status:u64` — Gas: G_verify
   - Verifies a batch of Halo2 OpenVerify envelopes (transparent IPA). Per‑item statuses are `1 = verified true`, `0 = verified false` (including verification failure or precheck gating).

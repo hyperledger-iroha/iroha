@@ -207,7 +207,7 @@ El script:
    timestamp) para que la automatizacion del portal pueda cargar el bundle a
    almacenamiento de artefactos.
 4. Produce `metrics.prom` (override via `--metrics`) que contiene contadores
-   compatibles con Prometheus para total de solicitudes, distribucion de sufijos,
+   en formato Prometheus para total de solicitudes, distribucion de sufijos,
    totales de asset y resultados de envio. El JSON de resumen enlaza a este
    archivo.
 

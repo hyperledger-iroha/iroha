@@ -161,6 +161,32 @@ def test_list_telemetry_peers_info_rejects_non_list_payload() -> None:
         raise AssertionError("expected RuntimeError for invalid telemetry response")
 
 
+def test_list_telemetry_peers_info_rejects_camelcase_config_fields() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload=[
+                {
+                    "url": "https://peer-2.example",
+                    "connected": True,
+                    "telemetry_unsupported": False,
+                    "config": {
+                        "publicKey": "ed011122",
+                    },
+                }
+            ]
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    try:
+        client.list_telemetry_peers_info()
+    except RuntimeError as exc:
+        assert "missing `public_key`" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError for camelCase telemetry config")
+
+
 def test_get_health_status_returns_plain_text() -> None:
     session = RecordingSession()
     session.queue(StubResponse(text="Healthy"))
@@ -169,6 +195,25 @@ def test_get_health_status_returns_plain_text() -> None:
     assert client.get_health_status() == "Healthy"
     assert session.calls[0]["url"].endswith("/v1/health")
     assert session.calls[0]["method"] == "GET"
+
+
+def test_runtime_manifest_rejects_alias_fields() -> None:
+    try:
+        ToriiClient._normalize_runtime_manifest_payload(
+            {
+                "name": "upgrade-1",
+                "description": "First upgrade",
+                "abiVersion": 1,
+                "abi_hash": "0" * 64,
+                "start_height": 1,
+                "end_height": 2,
+            },
+            context="runtime upgrade manifest",
+        )
+    except RuntimeError as exc:
+        assert "abi_version is required" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError for alias manifest fields")
 
 
 def test_get_node_version_returns_string() -> None:
@@ -1139,7 +1184,7 @@ def test_list_sumeragi_evidence_parses_records() -> None:
                         "recorded_height": 13,
                         "recorded_view": 14,
                         "recorded_ms": 15,
-                        "detail": "legacy entry",
+                        "detail": "unknown entry",
                     },
                 ],
             }
@@ -1161,7 +1206,7 @@ def test_list_sumeragi_evidence_parses_records() -> None:
     assert invalid_proposal.reason == "payload mismatch"
     fallback = page.items[2]
     assert fallback.kind == "UnknownEvidence"
-    assert fallback.detail == "legacy entry"
+    assert fallback.detail == "unknown entry"
     call = session.calls[0]
     assert call["url"].endswith("/v1/sumeragi/evidence")
     assert call["params"] == {"limit": 5, "offset": 1, "kind": "DoublePrepare"}
@@ -1461,12 +1506,12 @@ def test_get_kaigi_relay_returns_detail_and_none_on_404() -> None:
             payload={
                 "relay": {
                     "relay_id": "relay-alpha",
-                    "domain_id": "kaigi.core",
+                    "domain": "kaigi.core",
                     "bandwidth_class": 3,
                     "hpke_fingerprint_hex": "cd" * 32,
                 },
                 "hpke_public_key_b64": "QUJDRA==",
-                "reported_call": {"domain": "kaigi.core", "call_name": "register"},
+                "reported_call": {"domain_id": "kaigi.core", "call_name": "register"},
                 "reported_by": "ops@example",
                 "notes": "Primary relay",
                 "metrics": {
@@ -1621,47 +1666,7 @@ def test_get_connect_status_parses_payload() -> None:
     assert snapshot.policy is not None
     assert snapshot.policy.ws_max_sessions == 32
     assert snapshot.policy.heartbeat_interval_ms == 5000
-    assert snapshot.policy.ping_interval_ms == 5000  # legacy alias
     assert session.calls[0]["url"].endswith("/v1/connect/status")
-
-
-def test_connect_status_policy_accepts_legacy_ping_fields() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "enabled": True,
-                "sessions_total": 1,
-                "sessions_active": 1,
-                "per_ip_sessions": [],
-                "buffered_sessions": 0,
-                "total_buffer_bytes": 0,
-                "dedupe_size": 0,
-                "frames_in_total": 0,
-                "frames_out_total": 0,
-                "ciphertext_total": 0,
-                "dedupe_drops_total": 0,
-                "buffer_drops_total": 0,
-                "plaintext_control_drops_total": 0,
-                "monotonic_drops_total": 0,
-                "ping_miss_total": 0,
-                "policy": {
-                    "relay_enabled": False,
-                    "ping_interval_ms": 60000,
-                    "ping_miss_tolerance": 2,
-                    "ping_min_interval_ms": 5000,
-                },
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    snapshot = client.get_connect_status()
-
-    assert snapshot.policy is not None
-    assert snapshot.policy.heartbeat_interval_ms == 60000
-    assert snapshot.policy.ping_miss_tolerance == 2
-    assert snapshot.policy.heartbeat_min_interval_ms == 5000
 
 
 def test_create_and_delete_connect_session() -> None:
@@ -1743,7 +1748,6 @@ def test_connect_app_registry_and_policy_helpers() -> None:
     policy = client.get_connect_app_policy()
     assert policy.relay_enabled is False
     assert policy.heartbeat_interval_ms == 15000
-    assert policy.ping_interval_ms == 15000
 
     updated = client.update_connect_app_policy({"relay_enabled": True, "heartbeat_interval_ms": 12000})
     assert updated.relay_enabled is True

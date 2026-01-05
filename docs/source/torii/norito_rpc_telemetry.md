@@ -26,7 +26,7 @@ Owners: Observability liaison, Torii Platform TL
 #### Decode Failures
 - **Metric**: `torii_norito_decode_failures_total{payload_kind,reason}`  
   - Incremented whenever a Norito RPC body fails validation (invalid magic, checksum mismatch, unsupported feature, etc.).  
-  - Recorded inside the shared extractor (`decode_as_norito` in `crates/iroha_torii/src/utils.rs:394`), ensuring every endpoint reuses the same counters.
+- Recorded inside the shared extractor (`decode_as_norito` in `crates/iroha_torii/src/utils.rs:527`), ensuring every endpoint reuses the same counters.
 
 #### Connection/Pre-auth Gauges
 - Reuse existing gauges/counters (`torii_active_connections_total{scheme}`, `torii_pre_auth_reject_total{reason}`) with new label values:  

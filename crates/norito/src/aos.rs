@@ -12,12 +12,93 @@
 //!   and `ver` is a single byte where the low nibble carries the version number
 //!   (currently `0x1`) and the high nibble is reserved and must be zero.
 //! - After the header, rows are laid out sequentially without padding.
+//! - Length prefixes for AoS bodies are determined solely by the compile-time
+//!   `compact-len` feature and ignore header flag settings.
 //!
 //! Notes
 //! - These helpers are intentionally `pub` so tests and other crates can use
 //!   them for building/inspecting AoS bodies in isolation when needed.
 
-use crate::core::{self, Error};
+use crate::core::Error;
+
+const MAX_VARINT_BYTES: usize = 10;
+
+#[inline]
+fn write_len_prefix(buf: &mut Vec<u8>, value: usize) {
+    #[cfg(feature = "compact-len")]
+    {
+        let mut v = value as u64;
+        loop {
+            let byte = (v & 0x7f) as u8;
+            v >>= 7;
+            if v == 0 {
+                buf.push(byte);
+                break;
+            } else {
+                buf.push(byte | 0x80);
+            }
+        }
+    }
+    #[cfg(not(feature = "compact-len"))]
+    {
+        buf.extend_from_slice(&(value as u64).to_le_bytes());
+    }
+}
+
+#[inline]
+fn read_len_from_slice_fixed(bytes: &[u8]) -> Result<(usize, usize), Error> {
+    #[cfg(feature = "compact-len")]
+    {
+        if bytes.is_empty() {
+            return Err(Error::LengthMismatch);
+        }
+        let mut result = 0u64;
+        let mut shift = 0u32;
+        for (idx, byte) in bytes.iter().copied().enumerate().take(MAX_VARINT_BYTES) {
+            let payload = (byte & 0x7f) as u64;
+            result |= payload << shift;
+            if byte & 0x80 == 0 {
+                let len = usize::try_from(result).map_err(|_| Error::LengthMismatch)?;
+                return Ok((len, idx + 1));
+            }
+            shift += 7;
+            if shift >= 64 {
+                break;
+            }
+        }
+        Err(Error::LengthMismatch)
+    }
+    #[cfg(not(feature = "compact-len"))]
+    {
+        if bytes.len() < 8 {
+            return Err(Error::LengthMismatch);
+        }
+        let mut len_bytes = [0u8; 8];
+        len_bytes.copy_from_slice(&bytes[..8]);
+        let len =
+            usize::try_from(u64::from_le_bytes(len_bytes)).map_err(|_| Error::LengthMismatch)?;
+        Ok((len, 8))
+    }
+}
+
+#[inline]
+fn len_prefix_len(value: usize) -> usize {
+    #[cfg(feature = "compact-len")]
+    {
+        let mut v = value as u64;
+        let mut len = 1usize;
+        while v >= 0x80 {
+            v >>= 7;
+            len += 1;
+        }
+        len
+    }
+    #[cfg(not(feature = "compact-len"))]
+    {
+        let _ = value;
+        8
+    }
+}
 
 #[inline]
 fn take_bytes<'a>(body: &'a [u8], off: &mut usize, len: usize) -> Result<&'a [u8], Error> {
@@ -67,7 +148,7 @@ fn read_len_prefix(body: &[u8], off: &mut usize) -> Result<usize, Error> {
             body.len().saturating_sub(*off),
         )
     })?;
-    let (len, used) = core::read_len_from_slice(tail)?;
+    let (len, used) = read_len_from_slice_fixed(tail)?;
     *off = (*off).checked_add(used).ok_or_else(|| {
         Error::length_mismatch_detail(
             "advancing AoS length prefix cursor",
@@ -84,12 +165,13 @@ fn read_len_prefix(body: &[u8], off: &mut usize) -> Result<usize, Error> {
 /// The low nibble encodes the version of the AoS body layout, starting at 0x1.
 /// High nibble is reserved (must be 0 for now).
 pub const AOS_FORMAT_VERSION: u8 = 0x1;
+const MIN_AOS_ROW_BYTES: usize = 10;
 
 #[inline]
 pub fn write_len_and_ver(buf: &mut Vec<u8>, n: usize) {
     // Length prefix according to compact-len feature, followed by a single
     // version byte (currently low nibble = 0x1, high nibble reserved 0).
-    core::write_len_to_vec(buf, n as u64);
+    write_len_prefix(buf, n);
     buf.push(AOS_FORMAT_VERSION);
 }
 
@@ -107,6 +189,11 @@ pub fn read_len_and_ver(body: &[u8]) -> Result<(usize, usize), Error> {
             found: ver,
             expected: AOS_FORMAT_VERSION,
         });
+    }
+    let remaining = body.len().saturating_sub(off);
+    let max_rows = remaining / MIN_AOS_ROW_BYTES;
+    if n > max_rows {
+        return Err(Error::LengthMismatch);
     }
     Ok((n, off))
 }
@@ -149,7 +236,7 @@ pub fn encode_rows_u64_bytes_bool(rows: &[(u64, &[u8], bool)]) -> Vec<u8> {
     write_len_and_ver(&mut buf, rows.len());
     for &(id, bs, flag) in rows {
         buf.extend_from_slice(&id.to_le_bytes());
-        core::write_len_to_vec(&mut buf, bs.len() as u64);
+        write_len_prefix(&mut buf, bs.len());
         buf.extend_from_slice(bs);
         buf.push(if flag { 1 } else { 0 });
     }
@@ -203,7 +290,7 @@ pub fn encode_rows_u64_bytes_u32_bool(rows: &[(u64, &[u8], u32, bool)]) -> Vec<u
     write_len_and_ver(&mut buf, rows.len());
     for &(id, bs, v, flag) in rows {
         buf.extend_from_slice(&id.to_le_bytes());
-        core::write_len_to_vec(&mut buf, bs.len() as u64);
+        write_len_prefix(&mut buf, bs.len());
         buf.extend_from_slice(bs);
         buf.extend_from_slice(&v.to_le_bytes());
         buf.push(if flag { 1 } else { 0 });
@@ -266,7 +353,7 @@ pub fn encode_rows_u64_optstr_bool(rows: &[(u64, Option<&str>, bool)]) -> Vec<u8
             None => buf.push(0u8),
             Some(s) => {
                 buf.push(1u8);
-                core::write_len_to_vec(&mut buf, s.len() as u64);
+                write_len_prefix(&mut buf, s.len());
                 buf.extend_from_slice(s.as_bytes());
             }
         }
@@ -351,13 +438,13 @@ use crate::columnar::{EnumBorrow, RowEnumOwned};
 pub fn encode_rows_u64_enum_bool(rows: &[(u64, EnumBorrow<'_>, bool)]) -> Vec<u8> {
     let mut buf = Vec::new();
     // Length prefix only (no version byte) for enum AoS
-    core::write_len_to_vec(&mut buf, rows.len() as u64);
+    write_len_prefix(&mut buf, rows.len());
     for (id, en, flag) in rows.iter() {
         buf.extend_from_slice(&id.to_le_bytes());
         match en {
             EnumBorrow::Name(s) => {
                 buf.push(0u8);
-                core::write_len_to_vec(&mut buf, s.len() as u64);
+                write_len_prefix(&mut buf, s.len());
                 buf.extend_from_slice(s.as_bytes());
             }
             EnumBorrow::Code(v) => {
@@ -375,6 +462,15 @@ pub fn decode_rows_u64_enum_bool(body: &[u8]) -> Result<Vec<(u64, RowEnumOwned, 
     // Read length without version byte for enum AoS
     let mut off = 0usize;
     let n = read_len_prefix(body, &mut off)?;
+    let prefix_len = len_prefix_len(0);
+    let name_min = 8usize + 1 + prefix_len + 1;
+    let code_min = 8usize + 1 + 4 + 1;
+    let min_row = name_min.min(code_min);
+    let remaining = body.len().saturating_sub(off);
+    let max_rows = remaining / min_row;
+    if n > max_rows {
+        return Err(Error::LengthMismatch);
+    }
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
         let mut idb = [0u8; 8];
@@ -474,5 +570,21 @@ mod tests {
         let bytes = encode_rows_u64_optu32_bool(&rows);
         let decoded = decode_rows_u64_optu32_bool(&bytes).expect("decode");
         assert_eq!(decoded, vec![(10, Some(7), true), (11, None, false)]);
+    }
+
+    #[test]
+    fn aos_header_rejects_excessive_row_count() {
+        let mut body = Vec::new();
+        write_len_and_ver(&mut body, 1);
+        let result = read_len_and_ver(&body);
+        assert!(matches!(result, Err(Error::LengthMismatch)));
+    }
+
+    #[test]
+    fn aos_enum_rejects_excessive_row_count() {
+        let mut body = Vec::new();
+        write_len_prefix(&mut body, 1);
+        let result = decode_rows_u64_enum_bool(&body);
+        assert!(matches!(result, Err(Error::LengthMismatch)));
     }
 }

@@ -1,6 +1,6 @@
 //! Integration-style test: non-VM (native ISI) transaction gas metering and fee transfer.
 #![allow(clippy::similar_names)]
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use iroha_config::parameters::actual::{GasLiquidity, GasVolatility};
 #[cfg(feature = "telemetry")]
@@ -11,10 +11,12 @@ use iroha_core::{
     kura::Kura,
     query,
     state::{State, World, WorldReadOnly},
+    tx::{AcceptedTransaction, TransactionRejectionReason},
 };
 use iroha_data_model::prelude::*;
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::gen_account_in;
+use ivm::{ProgramMetadata, encoding, kotodama::wide as kwide};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use rust_decimal::Decimal;
@@ -181,4 +183,165 @@ fn non_vm_gas_limit_too_low_rejects() {
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let res = executor.execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache);
     assert!(matches!(res, Err(ValidationFail::NotPermitted(_))));
+}
+
+#[test]
+fn ivm_gas_fees_record_settlement_receipt() {
+    // 1) Minimal world: domains, accounts, asset definition, payer balance, tech account
+    let (alice_id, alice_kp) = gen_account_in("wonderland");
+    let (gas_id, _gas_kp) = gen_account_in("ivm");
+    let dom_w: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice_id);
+    let dom_i: Domain = Domain::new("ivm".parse().unwrap()).build(&gas_id);
+    let alice: Account = Account::new(alice_id.clone()).build(&alice_id);
+    let tech: Account = Account::new(gas_id.clone()).build(&gas_id);
+    let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+    let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
+    let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
+    let init = 100_000u128;
+    let payer_balance = Asset::new(payer_asset.clone(), Numeric::new(init, 0));
+    let world = World::with_assets([dom_w, dom_i], [alice, tech], [ad], [payer_balance], []);
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = query::store::LiveQueryStore::start_test();
+    let mut state = new_state(world, kura, query_handle);
+
+    // 2) Configure pipeline gas policy
+    let mut pipeline = state.pipeline.clone();
+    pipeline.gas.tech_account_id = gas_id.to_string();
+    pipeline.gas.accepted_assets = vec![asset_def_id.to_string()];
+    let rate: u64 = 7;
+    pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
+        asset: asset_def_id.to_string(),
+        units_per_gas: rate,
+        twap_local_per_xor: Decimal::ONE,
+        liquidity: GasLiquidity::Tier2,
+        volatility: GasVolatility::Stable,
+    }];
+    state.set_pipeline(pipeline);
+
+    // 3) Build a minimal IVM program that consumes gas
+    let mut code = Vec::new();
+    code.extend_from_slice(&kwide::encode_add(1, 0, 0).to_le_bytes());
+    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    let meta = ProgramMetadata {
+        version_major: 1,
+        version_minor: 0,
+        mode: 0,
+        vector_length: 0,
+        max_cycles: 0,
+        abi_version: 1,
+    };
+    let mut program = meta.encode();
+    program.extend_from_slice(&code);
+
+    // Metadata specifying gas asset + generous limit
+    let mut md = Metadata::default();
+    md.insert(
+        "gas_asset_id".parse().unwrap(),
+        iroha_primitives::json::Json::new(asset_def_id.to_string()),
+    );
+    md.insert("gas_limit".parse().unwrap(), 1_000_000u64);
+
+    let chain: ChainId = "test-chain".parse().unwrap();
+    let tx = iroha_data_model::transaction::TransactionBuilder::new(chain, alice_id.clone())
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+        .with_metadata(md)
+        .sign(alice_kp.private_key());
+    let tx_hash = tx.hash();
+
+    // 4) Execute via executor and verify settlement receipt is recorded
+    let executor = Executor::default();
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(block_header);
+    let mut state_tx = block.transaction();
+    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
+    executor
+        .execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache)
+        .expect("execution");
+
+    assert!(state_tx.last_tx_gas_used > 0);
+    let fee = u128::from(state_tx.last_tx_gas_used) * u128::from(rate);
+
+    let mut receipts = state_tx.drain_settlement_records();
+    let record = receipts
+        .remove(&tx_hash)
+        .expect("settlement receipt recorded");
+    assert_eq!(record.asset_definition_id, asset_def_id);
+    assert_eq!(record.local_amount_micro, fee);
+}
+
+#[test]
+fn rejected_tx_does_not_record_settlement_receipt_when_block_gas_limit_exceeded() {
+    let (alice_id, alice_kp) = gen_account_in("wonderland");
+    let (gas_id, _gas_kp) = gen_account_in("ivm");
+    let dom_w: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice_id);
+    let dom_i: Domain = Domain::new("ivm".parse().unwrap()).build(&gas_id);
+    let alice: Account = Account::new(alice_id.clone()).build(&alice_id);
+    let tech: Account = Account::new(gas_id.clone()).build(&gas_id);
+    let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+    let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
+
+    let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
+        alice_id.clone(),
+        "k".parse().unwrap(),
+        iroha_primitives::json::Json::new("v"),
+    )
+    .into();
+    let exec = Executable::from(core::iter::once(instruction));
+    let used = isi_gas::meter_instructions(match &exec {
+        Executable::Instructions(v) => v.as_ref(),
+        _ => unreachable!(),
+    });
+    assert!(used > 0);
+
+    let rate: u64 = 10;
+    let fee = u128::from(used) * u128::from(rate);
+    let init = fee.saturating_add(100);
+    let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
+    let payer_balance = Asset::new(payer_asset, Numeric::new(init, 0));
+    let world = World::with_assets([dom_w, dom_i], [alice, tech], [ad], [payer_balance], []);
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = query::store::LiveQueryStore::start_test();
+    let mut state = new_state(world, kura, query_handle);
+
+    let mut pipeline = state.pipeline.clone();
+    pipeline.gas.tech_account_id = gas_id.to_string();
+    pipeline.gas.accepted_assets = vec![asset_def_id.to_string()];
+    pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
+        asset: asset_def_id.to_string(),
+        units_per_gas: rate,
+        twap_local_per_xor: Decimal::ONE,
+        liquidity: GasLiquidity::Tier2,
+        volatility: GasVolatility::Stable,
+    }];
+    state.set_pipeline(pipeline);
+
+    let mut md = Metadata::default();
+    md.insert(
+        "gas_asset_id".parse().unwrap(),
+        iroha_primitives::json::Json::new(asset_def_id.to_string()),
+    );
+    md.insert("gas_limit".parse().unwrap(), 1_000_000u64);
+
+    let chain: ChainId = "test-chain".parse().unwrap();
+    let tx = iroha_data_model::transaction::TransactionBuilder::new(chain, alice_id.clone())
+        .with_executable(exec)
+        .with_metadata(md)
+        .sign(alice_kp.private_key());
+
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(block_header);
+    block.gas_limit_per_block = used.saturating_sub(1);
+
+    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
+    let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+    let (_hash, res) = block.validate_transaction(accepted, &mut ivm_cache);
+    assert!(matches!(
+        res,
+        Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(_)
+        ))
+    ));
+
+    let receipts = block.drain_settlement_records();
+    assert!(receipts.is_empty(), "rejected tx must not emit receipts");
 }

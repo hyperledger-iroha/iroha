@@ -54,8 +54,8 @@ final class OfflineWalletRevocationTests: XCTestCase {
           "transfers": [],
           "summaries": [],
           "revocations": [{
-            "verdict_id": "\(hashLiteral)",
-            "issuer": "alice@wonderland",
+            "verdict_id_hex": "\(hashLiteral)",
+            "issuer_id": "alice@wonderland",
             "revoked_at_ms": 321,
             "reason": "compromised"
           }],
@@ -156,8 +156,8 @@ final class OfflineWalletRevocationTests: XCTestCase {
     private func makeRevocationList(verdictHex: String) throws -> ToriiOfflineRevocationList {
         let hashLiteral = try SocialKeyedHash(pepperId: "pepper", digest: verdictHex).digest
         let record: [String: Any] = [
-            "verdict_id": hashLiteral,
-            "issuer": "alice@wonderland",
+            "verdict_id_hex": hashLiteral,
+            "issuer_id": "alice@wonderland",
             "revoked_at_ms": NSNumber(value: 777),
             "reason": "compromised"
         ]
@@ -201,8 +201,8 @@ final class OfflineWalletRevocationTests: XCTestCase {
                 "apple_key_counters": [:],
                 "android_series_counters": [:]
             ],
-            "verdict_id": verdictLiteral,
-            "attestation_nonce": verdictLiteral,
+            "verdict_id_hex": verdictLiteral,
+            "attestation_nonce_hex": verdictLiteral,
             "refresh_at_ms": NSNumber(value: 777)
         ]
     }

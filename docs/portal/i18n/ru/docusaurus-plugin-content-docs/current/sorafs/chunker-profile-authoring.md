@@ -45,7 +45,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 - ID профилей — положительные целые числа, монотонно возрастающие без пропусков.
 - Канонический handle (`namespace.name@semver`) должен присутствовать в списке alias и
-  **должен** быть первой записью. Далее идут legacy alias (например, `sorafs.sf1@1.0.0`).
 - Ни один alias не должен конфликтовать с другим каноническим handle и повторяться.
 - Alias должны быть непустыми и без пробелов по краям.
 
@@ -71,7 +70,6 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 | `name` | Читаемая человеком метка. | `sf1` |
 | `semver` | Строка семантической версии для набора параметров. | `1.0.0` |
 | `profile_id` | Монотонный числовой идентификатор, назначаемый после попадания профиля. Резервируйте следующий id, но не переиспользуйте существующие номера. | `1` |
-| `profile_aliases` | Опциональные дополнительные handles (legacy имена, сокращения), доступные клиентам при переговорах. Всегда включайте канонический handle первым. | `["sorafs.sf1@1.0.0"]` |
 | `profile.min_size` | Минимальная длина чанка в bytes. | `65536` |
 | `profile.target_size` | Целевая длина чанка в bytes. | `262144` |
 | `profile.max_size` | Максимальная длина чанка в bytes. | `524288` |
@@ -159,50 +157,6 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
 `docs/source/sorafs/proposals/`. JSON шаблон ниже показывает ожидаемую форму
 (подставьте свои значения по мере необходимости):
 
-```json
-{
-  "ChunkerProfileProposalV1": {
-    "namespace": "sorafs",
-    "name": "sf2",
-    "semver": "1.0.0",
-    "reserved_profile_id": 2,
-    "profile": {
-      "min_size": 65536,
-      "target_size": 262144,
-      "max_size": 524288,
-      "break_mask": "0x0000ffff",
-      "polynomial": "0x3da3358b4dc173",
-      "gear_seed": "sorafs-v2-gear"
-    },
-    "chunk_multihash": {
-      "code": 31,
-      "digest": "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482"
-    },
-    "profile_aliases": ["sorafs.sf2", "sorafs-sf2"],
-    "fixtures_root": "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/",
-    "por_seed": "0xfeedbeefcafebabe",
-    "compatibility": {
-      "supersedes": ["sorafs.sf1@1.0.0"],
-      "grace_epochs": 2,
-      "notes": "Carry envelopes for sf1 during dual-publish window."
-    },
-    "artifacts": {
-      "chunk_boundaries": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.json",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.ts",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.go"
-      ],
-      "fuzz_corpora": [
-        "fuzz/sorafs_chunker/sf2_backpressure.json"
-      ],
-      "por_witnesses": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/por_samples.json"
-      ]
-    },
-    "determinism_report": "docs/source/sorafs/reports/sf2_determinism.md"
-  }
-}
-```
 
 Предоставьте соответствующий Markdown отчет (`determinism_report`), фиксирующий вывод
 команд, digests чанков и любые отклонения, обнаруженные при валидации.
@@ -220,7 +174,6 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
 4. **Публикация реестра.** Merge обновляет реестр, docs и fixtures. По умолчанию CLI
    остается на предыдущем профиле, пока governance не объявит миграцию готовой.
 5. **Отслеживание депрекации.** После окна миграции обновите реестр, отметив замененные
-   профили как deprecated, и уведомите операторов через migration ledger.
 
 ## Советы по авторингу
 

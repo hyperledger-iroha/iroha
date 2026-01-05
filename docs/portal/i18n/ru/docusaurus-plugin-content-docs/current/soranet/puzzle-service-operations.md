@@ -10,7 +10,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Канонический источник
-Зеркалирует `docs/source/soranet/puzzle_service_operations.md`. Держите обе версии синхронизированными, пока legacy docs не будут выведены из эксплуатации.
 :::
 
 # Руководство по эксплуатации Puzzle Service

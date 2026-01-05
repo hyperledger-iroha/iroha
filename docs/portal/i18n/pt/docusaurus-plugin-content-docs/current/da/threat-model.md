@@ -8,7 +8,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 :::note Fonte canonica
 Espelha `docs/source/da/threat_model.md`. Mantenha as duas versoes em
-sincronia ate que os docs legacy sejam aposentados.
 :::
 
 # Modelo de ameacas de Data Availability da Sora Nexus

@@ -2,6 +2,8 @@
 
 use core::fmt;
 
+use thiserror::Error;
+
 /// Deterministic host mapping inputs.
 #[derive(Debug, Clone)]
 pub struct HostMappingInput<'a> {
@@ -45,14 +47,17 @@ impl<'a> HostMappingInput<'a> {
     ///
     /// The returned URLs use the pattern `scheme://host/direct/v1/car/{digest}`.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `scheme` contains characters not permitted in a URL scheme.
-    #[must_use]
-    pub fn direct_car_locator(&self, scheme: &str, manifest_digest_hex: &str) -> DirectCarLocator {
-        validate_scheme(scheme);
+    /// Returns [`HostMappingError`] when `scheme` is empty or contains invalid characters.
+    pub fn direct_car_locator(
+        &self,
+        scheme: &str,
+        manifest_digest_hex: &str,
+    ) -> Result<DirectCarLocator, HostMappingError> {
+        validate_scheme(scheme)?;
         let summary = self.to_summary();
-        DirectCarLocator {
+        Ok(DirectCarLocator {
             canonical_url: format!(
                 "{scheme}://{}/direct/v1/car/{manifest_digest_hex}",
                 summary.canonical
@@ -61,20 +66,29 @@ impl<'a> HostMappingInput<'a> {
                 "{scheme}://{}/direct/v1/car/{manifest_digest_hex}",
                 summary.vanity
             ),
-        }
+        })
     }
 }
 
-fn validate_scheme(scheme: &str) {
+fn validate_scheme(scheme: &str) -> Result<(), HostMappingError> {
     if scheme.is_empty() {
-        panic!("URL scheme must not be empty");
+        return Err(HostMappingError::EmptyScheme);
     }
-    if !scheme
-        .bytes()
-        .all(|b| matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'+' | b'-' | b'.'))
+    let bytes = scheme.as_bytes();
+    if !matches!(bytes[0], b'a'..=b'z' | b'A'..=b'Z') {
+        return Err(HostMappingError::InvalidSchemeStart {
+            scheme: scheme.to_string(),
+        });
+    }
+    if !bytes[1..]
+        .iter()
+        .all(|&b| matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'+' | b'-' | b'.'))
     {
-        panic!("invalid characters in scheme `{scheme}`");
+        return Err(HostMappingError::InvalidScheme {
+            scheme: scheme.to_string(),
+        });
     }
+    Ok(())
 }
 
 /// Summary struct describing deterministic hostnames.
@@ -93,6 +107,20 @@ pub struct DirectCarLocator {
     pub canonical_url: String,
     /// Direct-CAR endpoint bound to the vanity host.
     pub vanity_url: String,
+}
+
+/// Errors returned while constructing host mappings.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum HostMappingError {
+    /// URL scheme was not provided.
+    #[error("URL scheme must not be empty")]
+    EmptyScheme,
+    /// URL scheme does not start with a letter.
+    #[error("URL scheme must start with an ASCII letter: {scheme}")]
+    InvalidSchemeStart { scheme: String },
+    /// URL scheme contains invalid characters.
+    #[error("invalid characters in scheme `{scheme}`")]
+    InvalidScheme { scheme: String },
 }
 
 impl fmt::Display for DirectCarLocator {
@@ -124,7 +152,9 @@ mod tests {
             chain_id: "devnet",
             provider_id: &provider,
         };
-        let locator = input.direct_car_locator("https", "deadbeef");
+        let locator = input
+            .direct_car_locator("https", "deadbeef")
+            .expect("locator");
         assert_eq!(
             locator.canonical_url,
             "https://11111111.devnet.sorafs/direct/v1/car/deadbeef"
@@ -136,13 +166,41 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "URL scheme must not be empty")]
     fn locator_rejects_empty_scheme() {
         let provider = [0xFF; 32];
         let input = HostMappingInput {
             chain_id: "nexus",
             provider_id: &provider,
         };
-        let _ = input.direct_car_locator("", "abcd");
+        let err = input
+            .direct_car_locator("", "abcd")
+            .expect_err("scheme should be required");
+        assert_eq!(err, HostMappingError::EmptyScheme);
+    }
+
+    #[test]
+    fn locator_rejects_invalid_scheme_start() {
+        let provider = [0xAA; 32];
+        let input = HostMappingInput {
+            chain_id: "nexus",
+            provider_id: &provider,
+        };
+        let err = input
+            .direct_car_locator("1https", "abcd")
+            .expect_err("scheme must start with a letter");
+        assert!(matches!(err, HostMappingError::InvalidSchemeStart { .. }));
+    }
+
+    #[test]
+    fn locator_rejects_invalid_scheme_chars() {
+        let provider = [0xBB; 32];
+        let input = HostMappingInput {
+            chain_id: "nexus",
+            provider_id: &provider,
+        };
+        let err = input
+            .direct_car_locator("ht^tp", "abcd")
+            .expect_err("scheme must be ascii");
+        assert!(matches!(err, HostMappingError::InvalidScheme { .. }));
     }
 }

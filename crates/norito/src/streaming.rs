@@ -25,7 +25,7 @@ use core::{fmt, str::FromStr};
 use thiserror::Error;
 
 use crate::{
-    ArchiveSlice, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
     core::{self as norito_core, DecodeFromSlice, Error as CoreError},
     json,
     json::Value as NoritoJsonValue,
@@ -614,14 +614,7 @@ pub struct SoranetRoute {
 
 impl<'a> DecodeFromSlice<'a> for SoranetRoute {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), CoreError> {
-        let align = std::mem::align_of::<norito_core::Archived<Self>>();
-        let archive = ArchiveSlice::new(bytes, align)?;
-        let slice = archive.as_slice();
-        let archived = norito_core::archived_from_slice_unchecked::<Self>(slice);
-        let guard = norito_core::PayloadCtxGuard::enter(archived.bytes());
-        let value = <Self as NoritoDeserialize>::try_deserialize(archived.as_ref())?;
-        drop(guard);
-        Ok((value, bytes.len()))
+        norito_core::decode_field_canonical::<Self>(bytes)
     }
 }
 
@@ -1346,15 +1339,7 @@ macro_rules! impl_decode_from_slice_via_archived {
         $(
             impl<'a> DecodeFromSlice<'a> for $ty {
                 fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), CoreError> {
-                    let align = std::mem::align_of::<norito_core::Archived<$ty>>();
-                    let archive = ArchiveSlice::new(bytes, align)?;
-                    let slice = archive.as_slice();
-                    let archived = norito_core::archived_from_slice_unchecked::<$ty>(slice);
-                    let _ctx = norito_core::PayloadCtxGuard::enter(archived.bytes());
-                    let value =
-                        <Self as NoritoDeserialize>::try_deserialize(archived.as_ref())?;
-                    drop(_ctx);
-                    Ok((value, bytes.len()))
+                    norito_core::decode_field_canonical::<$ty>(bytes)
                 }
             }
         )*
@@ -6600,16 +6585,27 @@ pub mod codec {
             *slot = u32::from_le_bytes(buf) as usize;
             cursor += 4;
         }
-        let total_len: usize = lengths.iter().sum();
-        if stream.len() != cursor + total_len {
+        let total_len = lengths
+            .iter()
+            .try_fold(0usize, |acc, len| acc.checked_add(*len))
+            .ok_or(BundleDecodeError::LengthMismatch)?;
+        let expected_end = cursor
+            .checked_add(total_len)
+            .ok_or(BundleDecodeError::LengthMismatch)?;
+        if stream.len() != expected_end {
             return Err(BundleDecodeError::LengthMismatch);
         }
         let mut decoders: [Option<BundleRansDecoder<'_>>; 4] = [None, None, None, None];
         let mut lane_cursor = cursor;
         for (idx, len) in lengths.iter().enumerate() {
-            let lane_slice = &stream[lane_cursor..lane_cursor + len];
+            let next = lane_cursor
+                .checked_add(*len)
+                .ok_or(BundleDecodeError::LengthMismatch)?;
+            let lane_slice = stream
+                .get(lane_cursor..next)
+                .ok_or(BundleDecodeError::LengthMismatch)?;
             decoders[idx] = Some(BundleRansDecoder::new(lane_slice, tables)?);
-            lane_cursor += len;
+            lane_cursor = next;
         }
 
         let mut out = Vec::with_capacity(bundles.len());
@@ -8793,6 +8789,32 @@ mod tests {
             out.push(char::from(LUT[(byte & 0x0f) as usize]));
         }
         out
+    }
+
+    #[test]
+    fn decode_from_slice_rejects_short_payloads() {
+        let err = <SoranetRoute as crate::core::DecodeFromSlice>::decode_from_slice(&[])
+            .expect_err("short soranet route");
+        assert!(matches!(err, crate::core::Error::LengthMismatch));
+
+        let err = <FeedbackHint as crate::core::DecodeFromSlice>::decode_from_slice(&[])
+            .expect_err("short feedback hint");
+        assert!(matches!(err, crate::core::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn decode_bundle_stream_simd_rejects_length_mismatch() {
+        let tables = codec::default_bundle_tables();
+        let mut stream = Vec::new();
+        stream.extend_from_slice(b"BR4\x01");
+        stream.extend_from_slice(&1u32.to_le_bytes());
+        stream.extend_from_slice(&0u32.to_le_bytes());
+        stream.extend_from_slice(&0u32.to_le_bytes());
+        stream.extend_from_slice(&0u32.to_le_bytes());
+        let bundles: Vec<codec::BundleRecord> = Vec::new();
+        let err =
+            codec::decode_bundle_stream(&stream, &bundles, tables.as_ref()).expect_err("bad len");
+        assert!(matches!(err, codec::BundleDecodeError::LengthMismatch));
     }
 
     #[test]

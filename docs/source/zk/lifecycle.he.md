@@ -25,9 +25,7 @@ translator: manual
 ## מפתחות אימות
 
 - רשומות מאוחסנות במצב-העולם תחת `verifying_keys[(backend, name)]`.
-- כל רשומה מכילה מטא־נתונים מלאים: `version`, `circuit_id`, `backend`, `curve`, `public_inputs_schema_hash`, `commitment`, `vk_len`, `max_proof_bytes`, `gas_schedule_id`, כתובות אופציונליות (`metadata_uri_cid`, `vk_bytes_cid`), גבהי מחזור חיי (`activation_height`, `deprecation_height`, `withdraw_height`) ו-`status` (`Active`/`Deprecated`). במידה וקיים payload inline הוא נשמר עבור ביקורת.
 - בעת רישום VK חדש ההתחייבות חייבת להתאים למטען המגובה או לבייטים האינליין שנשלחו בעסקה. עדכון מעלה את הגרסה וחייב לשמור על סדר עולה.
-- VK שהוגדר כ-`Deprecated` נשאר זמין לשאילתות אבל יידחה בעבור עדכונים עתידיים.
 
 ### נקודות קצה רלוונטיות
 

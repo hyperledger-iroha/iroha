@@ -14,7 +14,10 @@ use iroha_data_model::{
 };
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
 
-use super::{ensure_npos_parameters, generate::ConsensusModeArg};
+use super::{
+    build_line_from_env, ensure_npos_parameters, generate::ConsensusModeArg,
+    validate_consensus_mode_for_line,
+};
 use crate::{Outcome, RunArgs, tui};
 
 /// Sign the genesis block
@@ -56,6 +59,7 @@ pub struct Args {
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         tui::status("Signing genesis manifest");
+        let build_line = build_line_from_env();
         match (self.next_consensus_mode, self.mode_activation_height) {
             (Some(_), None) => {
                 return Err(eyre!(
@@ -76,15 +80,34 @@ impl<T: Write> RunArgs<T> for Args {
                 "`--mode-activation-height` must be greater than zero"
             ));
         }
-        let consensus_mode = self.consensus_mode.map_or(
-            SumeragiConsensusMode::Permissioned,
-            SumeragiConsensusMode::from,
-        );
+        let consensus_mode_override = self.consensus_mode.map(SumeragiConsensusMode::from);
         let next_consensus_mode = self.next_consensus_mode.map(SumeragiConsensusMode::from);
 
-        let genesis = RawGenesisTransaction::from_path(&self.genesis_file)?
-            .with_consensus_mode(consensus_mode);
-        if matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos)) {
+        let mut genesis = RawGenesisTransaction::from_path(&self.genesis_file)?;
+        let consensus_mode = consensus_mode_override
+            .or(genesis.consensus_mode())
+            .ok_or_else(|| {
+                eyre!(
+                    "genesis manifest missing consensus_mode; pass --consensus-mode or regenerate with `kagami genesis generate --consensus-mode <mode>`"
+                )
+            })?;
+        let params = genesis.effective_parameters();
+        let staged_next_mode = params.sumeragi().next_mode();
+        let staged_activation_height = params.sumeragi().mode_activation_height();
+        if build_line.is_iroha3() {
+            validate_consensus_mode_for_line(build_line, consensus_mode, next_consensus_mode)?;
+            if staged_next_mode.is_some() || staged_activation_height.is_some() {
+                return Err(eyre!(
+                    "Iroha3 does not support staged consensus cutovers; remove `next_mode` and `mode_activation_height` from genesis"
+                ));
+            }
+        }
+        if self.topology.is_some() {
+            genesis = genesis.clear_topology();
+        }
+        if matches!(consensus_mode, SumeragiConsensusMode::Npos)
+            || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos))
+        {
             ensure_npos_parameters(&genesis)?;
         }
         let mut builder = genesis.into_builder();
@@ -256,16 +279,19 @@ mod tests {
     use iroha_crypto::KeyPair as CryptoKeyPair;
     use iroha_data_model::{
         ChainId,
-        parameter::{Parameter, system::SumeragiNposParameters},
+        parameter::{
+            Parameter,
+            system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
+        },
     };
-    use iroha_genesis::GenesisBuilder;
+    use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
 
     use super::*;
 
     #[test]
     fn peer_pops_without_topology_is_rejected() {
         let args = Args {
-            genesis_file: minimal_genesis_file(),
+            genesis_file: npos_genesis_file(),
             out_file: None,
             topology: None,
             peer_pops: vec!["pk=00".to_string()],
@@ -294,7 +320,7 @@ mod tests {
         let pk = peer.public_key();
         let dup = format!("{pk}=00");
         let args = Args {
-            genesis_file: minimal_genesis_file(),
+            genesis_file: npos_genesis_file(),
             out_file: None,
             topology: Some(topology_json),
             peer_pops: vec![dup.clone(), dup],
@@ -346,19 +372,8 @@ mod tests {
 
     #[test]
     fn run_returns_err_on_invalid_topology_json() {
-        let mut genesis_file = tempfile::NamedTempFile::new().expect("create temp genesis file");
-        let genesis_json = r#"{
-            "chain": "test-chain",
-            "executor": null,
-            "ivm_dir": ".",
-            "transactions": [
-                {}
-            ]
-        }"#;
-        write!(genesis_file, "{genesis_json}").expect("write genesis json");
-
         let args = Args {
-            genesis_file: genesis_file.path().to_path_buf(),
+            genesis_file: npos_genesis_file(),
             out_file: None,
             topology: Some("not valid json".to_owned()),
             peer_pops: Vec::new(),
@@ -378,19 +393,8 @@ mod tests {
 
     #[test]
     fn run_requires_key_material() {
-        let mut genesis_file = tempfile::NamedTempFile::new().expect("create temp genesis file");
-        let genesis_json = r#"{
-            "chain": "test-chain",
-            "executor": null,
-            "ivm_dir": ".",
-            "transactions": [
-                {}
-            ]
-        }"#;
-        write!(genesis_file, "{genesis_json}").expect("write genesis json");
-
         let args = Args {
-            genesis_file: genesis_file.path().to_path_buf(),
+            genesis_file: npos_genesis_file(),
             out_file: None,
             topology: None,
             peer_pops: Vec::new(),
@@ -408,25 +412,40 @@ mod tests {
     }
 
     #[test]
-    fn missing_pops_fail_when_topology_provided() {
-        let mut genesis_file = tempfile::NamedTempFile::new().expect("create temp genesis file");
-        let genesis_json = r#"{
-            "chain": "test-chain",
-            "executor": null,
-            "ivm_dir": ".",
-            "transactions": [
-                {}
-            ]
-        }"#;
-        write!(genesis_file, "{genesis_json}").expect("write genesis json");
+    fn sign_requires_consensus_mode_in_manifest() {
+        let args = Args {
+            genesis_file: legacy_genesis_file_missing_consensus_mode(),
+            out_file: None,
+            topology: None,
+            peer_pops: Vec::new(),
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
 
+        let mut writer = BufWriter::new(Vec::new());
+        let err = args
+            .run(&mut writer)
+            .expect_err("missing consensus_mode should be rejected");
+        assert!(
+            err.to_string().contains("consensus_mode"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn missing_pops_fail_when_topology_provided() {
+        let genesis_file = npos_genesis_file();
         let peer_a = PeerId::new(CryptoKeyPair::random().public_key().clone());
         let peer_b = PeerId::new(CryptoKeyPair::random().public_key().clone());
         let topology_json = norito::json::to_json(&vec![peer_a.clone(), peer_b]).unwrap();
 
         // Provide PoP only for peer_a to trigger the missing-pop validation.
         let args = Args {
-            genesis_file: genesis_file.path().to_path_buf(),
+            genesis_file,
             out_file: None,
             topology: Some(topology_json),
             peer_pops: vec![format!(
@@ -451,9 +470,75 @@ mod tests {
     }
 
     #[test]
+    fn topology_override_replaces_existing_entries() {
+        use iroha_data_model::{
+            block::decode_framed_signed_block, isi::register::RegisterPeerWithPop,
+            transaction::Executable,
+        };
+
+        let existing_kp = CryptoKeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let existing_peer = PeerId::new(existing_kp.public_key().clone());
+        let existing_pop = iroha_crypto::bls_normal_pop_prove(existing_kp.private_key())
+            .expect("generate BLS PoP");
+        let mut genesis_file = tempfile::NamedTempFile::new().expect("create temp genesis file");
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from("topology-override"),
+            PathBuf::from("."),
+        )
+        .append_parameter(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ))
+        .set_topology(vec![GenesisTopologyEntry::new(existing_peer, existing_pop)])
+        .build_raw()
+        .with_consensus_mode(SumeragiConsensusMode::Npos);
+        let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
+        fs::write(genesis_file.path(), json).expect("write genesis json");
+
+        let new_kp = CryptoKeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let new_peer = PeerId::new(new_kp.public_key().clone());
+        let topology_json = norito::json::to_json(&vec![new_peer.clone()]).unwrap();
+
+        let args = Args {
+            genesis_file: genesis_file.path().to_path_buf(),
+            out_file: None,
+            topology: Some(topology_json),
+            peer_pops: vec![format!("{}=01", new_peer.public_key())],
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        args.run(&mut writer).expect("sign should succeed");
+        writer.flush().expect("flush output");
+        let bytes = writer.into_inner().expect("extract buffer");
+        let block = decode_framed_signed_block(&bytes).expect("decode signed block");
+
+        let mut registered_peers = Vec::new();
+        for tx in block.external_transactions() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instr in instructions {
+                    if let Some(register) = instr.as_any().downcast_ref::<RegisterPeerWithPop>() {
+                        registered_peers.push(register.peer.clone());
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            registered_peers,
+            vec![new_peer],
+            "expected topology override to replace existing entries"
+        );
+    }
+
+    #[test]
     fn mode_activation_requires_next_mode_flag() {
         let args = Args {
-            genesis_file: minimal_genesis_file(),
+            genesis_file: npos_genesis_file(),
             out_file: None,
             topology: None,
             peer_pops: Vec::new(),
@@ -501,6 +586,31 @@ mod tests {
     }
 
     #[test]
+    fn npos_consensus_mode_requires_npos_parameters() {
+        let args = Args {
+            genesis_file: minimal_genesis_file(),
+            out_file: None,
+            topology: None,
+            peer_pops: Vec::new(),
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            consensus_mode: Some(ConsensusModeArg::Npos),
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        let err = args
+            .run(&mut writer)
+            .expect_err("NPoS consensus should require NPoS parameters");
+        assert!(
+            err.to_string().contains("sumeragi_npos_parameters"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn npos_sign_accepts_manifest_with_npos_parameters() {
         let args = Args {
             genesis_file: npos_genesis_file(),
@@ -520,9 +630,78 @@ mod tests {
             .expect("NPoS genesis with parameters should sign");
     }
 
+    #[test]
+    fn sign_rejects_permissioned_on_iroha3() {
+        let args = Args {
+            genesis_file: minimal_genesis_file(),
+            out_file: None,
+            topology: None,
+            peer_pops: Vec::new(),
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        let err = args
+            .run(&mut writer)
+            .expect_err("permissioned genesis should be rejected on Iroha3");
+        assert!(
+            err.to_string().contains("Iroha3 requires"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn sign_rejects_staged_cutover_on_iroha3() {
+        let args = Args {
+            genesis_file: staged_npos_genesis_file(),
+            out_file: None,
+            topology: None,
+            peer_pops: Vec::new(),
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        let err = args
+            .run(&mut writer)
+            .expect_err("staged cutover should be rejected on Iroha3");
+        assert!(
+            err.to_string().contains("staged consensus cutovers"),
+            "unexpected error: {err}"
+        );
+    }
+
     fn minimal_genesis_file() -> PathBuf {
         let mut genesis_file = tempfile::Builder::new()
             .prefix("kagami-genesis-test-")
+            .tempfile()
+            .expect("create temp genesis file");
+        let genesis_json = r#"{
+            "chain": "test-chain",
+            "executor": null,
+            "ivm_dir": ".",
+            "consensus_mode": "Permissioned",
+            "transactions": [
+                {}
+            ]
+        }"#;
+        write!(genesis_file, "{genesis_json}").expect("write genesis json");
+        let (_file, path) = genesis_file.keep().expect("persist temp genesis");
+        path
+    }
+
+    fn legacy_genesis_file_missing_consensus_mode() -> PathBuf {
+        let mut genesis_file = tempfile::Builder::new()
+            .prefix("kagami-genesis-legacy-")
             .tempfile()
             .expect("create temp genesis file");
         let genesis_json = r#"{
@@ -548,7 +727,32 @@ mod tests {
                 .append_parameter(Parameter::Custom(
                     SumeragiNposParameters::default().into_custom_parameter(),
                 ))
-                .build_raw();
+                .build_raw()
+                .with_consensus_mode(SumeragiConsensusMode::Npos);
+        let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
+        fs::write(genesis_file.path(), json).expect("write genesis json");
+        let (_file, path) = genesis_file.keep().expect("persist temp genesis");
+        path
+    }
+
+    fn staged_npos_genesis_file() -> PathBuf {
+        let genesis_file = tempfile::Builder::new()
+            .prefix("kagami-npos-staged-")
+            .tempfile()
+            .expect("create temp genesis file");
+        let manifest =
+            GenesisBuilder::new_without_executor(ChainId::from("npos-staged"), PathBuf::from("."))
+                .append_parameter(Parameter::Custom(
+                    SumeragiNposParameters::default().into_custom_parameter(),
+                ))
+                .append_parameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
+                    SumeragiConsensusMode::Npos,
+                )))
+                .append_parameter(Parameter::Sumeragi(
+                    SumeragiParameter::ModeActivationHeight(5),
+                ))
+                .build_raw()
+                .with_consensus_mode(SumeragiConsensusMode::Npos);
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");

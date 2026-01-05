@@ -80,7 +80,6 @@ pub struct DaCommitmentBundle {
 ```
 
 The bundle hash feeds into both the block hash and `SignedBlockWire` metadata.
-When a block carries no DA data the field stays `None` so legacy lanes avoid the
 overhead.
 
 Implementation note: `BlockPayload` and the transparent `BlockBuilder` now expose

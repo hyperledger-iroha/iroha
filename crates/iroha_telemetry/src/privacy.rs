@@ -318,6 +318,37 @@ mod tests {
     }
 
     #[test]
+    fn drain_ready_flushes_across_modes() {
+        let mut config = base_config();
+        config.min_contributors = 1;
+        config.flush_delay_buckets = 1;
+        config.force_flush_buckets = 2;
+        let aggregator = SoranetSecureAggregator::new(config).expect("config should be valid");
+
+        let ready_time = SystemTime::UNIX_EPOCH + Duration::from_secs(8);
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10);
+        aggregator.record_handshake_success(SoranetPrivacyModeV1::Entry, now, None, None);
+        aggregator.record_handshake_success(SoranetPrivacyModeV1::Exit, ready_time, None, None);
+
+        let (drained, snapshot) = aggregator.drain_ready_with_snapshot(now);
+        assert_eq!(
+            drained.len(),
+            1,
+            "ready buckets must drain even when earlier modes are not ready"
+        );
+        assert_eq!(drained[0].mode, SoranetPrivacyModeV1::Exit);
+        assert_eq!(snapshot.drained_buckets, 1);
+        assert_eq!(
+            snapshot
+                .open_buckets
+                .get(&SoranetPrivacyModeV1::Entry)
+                .copied()
+                .unwrap_or(0),
+            1
+        );
+    }
+
+    #[test]
     fn gar_categories_are_hashed_and_counted() {
         let aggregator =
             SoranetSecureAggregator::new(base_config()).expect("config should be valid");
@@ -328,6 +359,7 @@ mod tests {
         aggregator.record_gar_category(SoranetPrivacyModeV1::Exit, bucket_time, "fraud");
         aggregator.record_gar_category(SoranetPrivacyModeV1::Exit, bucket_time, "spam");
         aggregator.record_gar_category(SoranetPrivacyModeV1::Exit, bucket_time, "");
+        aggregator.record_gar_category(SoranetPrivacyModeV1::Exit, bucket_time, "   ");
 
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(15);
         let (drained, _) = aggregator.drain_ready_with_snapshot(now);
@@ -636,10 +668,11 @@ impl SoranetSecureAggregator {
         when: SystemTime,
         category: &str,
     ) {
-        if category.is_empty() {
+        let trimmed = category.trim();
+        if trimmed.is_empty() {
             return;
         }
-        let hash = gar_category_hash(category);
+        let hash = gar_category_hash(trimmed);
         self.with_bucket(mode, when, |bucket| bucket.record_gar_category(hash));
     }
 
@@ -821,7 +854,7 @@ impl PrivacyState {
             let meets_delay = age > 0 && age >= config.flush_delay_buckets;
             let force_flush = age > 0 && age >= config.force_flush_buckets;
             if !meets_delay && !force_flush {
-                break;
+                continue;
             }
             let contributor_count = stats.handshake_events();
             if meets_delay && contributor_count >= config.min_contributors {

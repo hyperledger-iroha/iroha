@@ -4,13 +4,11 @@ Status: Drafted for AND4 readiness – aligns with the “Design Torii Norito RP
 
 ## 1. Goals & Scope
 
-The AND4 milestone requires that mobile and JavaScript SDKs can swap between the legacy JSON `/v1/pipeline` surface and the Norito RPC transport without drifting behaviour. This document enumerates the HTTP routes and streaming feeds that must stay in lockstep, clarifies the deterministic retry contract, and defines a common SSE observer bridge so SDKs share the same buffering and replay semantics.
 
 Key outcomes:
 
 1. Canonical mapping between `/v1/pipeline/*` routes and their Norito RPC equivalents for submissions, status polling, and recovery helpers.
 2. Documented retry/queue semantics so clients react identically to backpressure and duplicate submissions.
-3. A streaming bridge spec that keeps EventSource-based observers in lockstep now that SNNet-11 Norito streaming is live, so legacy/regulated clients can still mirror pipeline events.
 
 ## 2. Endpoint Parity Matrix
 
@@ -45,9 +43,8 @@ Key outcomes:
 
 ## 4. SSE Bridge Contract
 
-Even with SNNet-11 providing the default Norito streaming feed, every SDK must keep adapting the JSON SSE stream produced by `handle_v1_events_sse` for legacy or fallback scenarios. The bridge contract:
 
-1. **Subscription** – Issue `GET /v1/events/sse` with `Accept: text/event-stream`. Optional `filter` query parameters accept the same JSON filter expressions handled in `routing.rs`. Proof-specific filters (`proof_backend`, `proof_call_hash`, `proof_envelope_hash`) mirror the extra selectors in the handler docstring.【crates/iroha_torii/src/routing.rs:15547】
+1. **Subscription** – Issue `GET /v1/events/sse` with `Accept: text/event-stream`. Optional `filter` query parameters accept the same JSON filter expressions handled in `routing.rs`. Proof-specific filters (`proof_backend`, `proof_call_hash`, `proof_envelope_hash`) mirror the extra selectors in the handler docstring.【crates/iroha_torii/src/routing.rs:15547】 Invalid or unsupported filters return `400 Bad Request`, and non-matching events are dropped without a `filtered` comment.
 2. **Event payload** – Each `data:` chunk is the JSON produced by `event_to_json_value`. Pipeline transactions include `category`, `event`, `hash`, `lane_id`, `dataspace_id`, optional `block_height`, and `status` (stringified `TransactionStatus`). Blocks, warnings, merges, and witness events include their type-specific fields.【crates/iroha_torii/src/routing.rs:18247】
    Note: `Committed` is emitted after Kura persistence (before WSV apply). Clients that need apply semantics should wait for `Applied`. Pipeline events are emitted from the commit worker thread, so ordering with data events is not single-threaded; within a block the logical order remains `Committed` -> `Applied`.
 3. **Lag handling** – When the SSE channel drops events, the handler emits `comment: lagged`; bridges must treat this as a signal to resubscribe and optionally fast-forward via `/v1/pipeline/recovery/{height}` or `/query` snapshots.
@@ -75,7 +72,6 @@ All SDKs should provide a default implementation that:
 
 | Item | Android | JavaScript | Swift |
 |------|---------|------------|-------|
-| Pipeline endpoint selection | `HttpClientTransport#pipelineEndpoints` switches between `/v1/pipeline/transactions` and legacy paths via configuration to keep AND4 previews in sync.【java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/HttpClientTransport.java:60】 | `ToriiClient#getTransactionStatusTyped` and friends read the same paths (`/v1/pipeline/transactions` + `/status`) before falling back to legacy endpoints when required.【javascript/iroha_js/src/toriiClient.js:1207】 | `ToriiClient.pipelineEndpoints(for:)` exposes `.pipeline` vs `.legacy` modes so CLI/tests can flip transports via `pipelineEndpointMode`.【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3412】 |
 | Status polling helpers | `PipelineStatusOptions` + `PipelineStatusExtractor` define retry intervals and timeout enforcement to align with queue semantics.【java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/HttpClientTransportStatusTests.java:38】 | `extractPipelineStatusKind` normalises the Norito JSON payload before surfacing typed statuses, ensuring parity with Android/Swift logic.【javascript/iroha_js/src/toriiClient.js:5039】 | `PipelineStatusPollOptions` encodes the same success/failure sets and retry windows; `submitAndWait` uses it by default.【IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:287】 |
 | SSE bridge | `ToriiMockServer` and harness tests assert SSE observations and lag handling so Android parity evidence is reproducible during AND4 rehearsals.【java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/mock/ToriiMockServer.java:57】 | JS exposes `subscribePipelineEvents(filter)` built on `EventSource`, enforcing the same observer contract described above (bridge lives next to `toriiClient`).【javascript/iroha_js/src/toriiClient.js:1252】 | Swift’s `ToriiEventStream` wrapper uses `URLSession` SSE tasks and emits typed callbacks to match Android/JS observer signatures (tested under `IrohaSwiftTests`).【IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift:335】 |
 

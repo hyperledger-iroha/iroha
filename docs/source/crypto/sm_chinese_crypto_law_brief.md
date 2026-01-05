@@ -37,7 +37,6 @@
 ## 2. Certification & Testing
 
 - Certain sectors (finance, telecom, critical infrastructure) may require accredited lab testing or certification (e.g., CC-Grade/OSCCA certification).
-- Provide compatibility with approved hardware security modules (HSMs/SM KMS) where mandated; document FFI/provider options (`sm-ffi-openssl`, domestic providers).
 - Include regression test artefacts demonstrating compliance with GM/T specifications.
 
 ## 3. MLPS 2.0 Operational Controls

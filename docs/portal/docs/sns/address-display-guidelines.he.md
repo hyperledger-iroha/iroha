@@ -190,9 +190,7 @@ payload bit: │version  │ class  │  norm  │ext │
    כאשר אתם מבקרים dumps מורשתיים שמכילים שורות זבל, ונעלו אוטומציה עם
    `--fail-on-warning` כאשר המפעילים מוכנים לחסום סלקטורים Local ב-CI.
 6. כאשר צריך שכתוב שורה-לשורה, השתמשו
-  `iroha address normalize --input legacy.txt --only-local --append-domain --network-prefix 753 --format ih58 --output normalized.txt`.
   עבור גיליונות remediation של סלקטורים Local, השתמשו
-  `iroha address audit --input legacy.txt --allow-errors --network-prefix 753 --format csv`
   כדי לייצא CSV `input,status,format,...` שמדגיש קידודים קנוניים, אזהרות ושגיאות
   parse במעבר אחד. העוזר מדלג על שורות שאינן Local כברירת מחדל, ממיר כל ערך
   שנותר לקידוד המבוקש (IH58/דחוס/hex/JSON), ומשמר את הדומיין המקורי כאשר

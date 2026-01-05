@@ -32,7 +32,7 @@ translator: manual
 
 - POST `/v1/sumeragi/evidence`
   - מגיש ראיה מקודדת Norito (hex) אל שחקן Sumeragi (`ControlFlow::Evidence`).
-  - גוף הבקשה (JSON): `{ "evidence_hex": "<hex string>" }`; רווחים מותרים.
+  - גוף הבקשה (JSON): `{ "evidence_hex": "<hex string>" }`; מחרוזת ה-hex מייצגת בתים של `ConsensusEvidence` עם framing של Norito ורווחים מותרים.
   - תגובה (JSON): `{ "status": "accepted", "kind": "<variant>" }`.
   - ולידציה בוחנת התאמת חותמים/גובה/תצוגה/אפוק עבור כפלי הצבעה, דורשת payload לא ריק לחתימה בודדת, דורשת קוורום קבלות חתומות (`TransactionSubmissionReceipt`) עבור `Censorship`, ודוחה `InvalidProposal` שאינן מקדמות height/view או שה-hash של ההורה אינו תואם את ה-commit certificate.
   - כלי CLI: `iroha sumeragi evidence submit --evidence-hex <hex>` או `--evidence-hex-file <path>`.

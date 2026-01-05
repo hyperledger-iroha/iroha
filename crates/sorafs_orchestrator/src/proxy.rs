@@ -54,11 +54,13 @@ const PROXY_CAPABILITIES: &[&str] = &[
 const PROXY_SESSION_ID_LEN: usize = 16;
 const PROXY_CACHE_TAG_SALT_LEN: usize = 16;
 const PROXY_STREAM_VERSION: u8 = 1;
+const PROXY_MAX_FRAME_BYTES: usize = 1024 * 1024;
 const STREAM_ACK_OK: u8 = 0;
 const STREAM_ACK_UNSUPPORTED_SERVICE: u8 = 1;
 const STREAM_ACK_MODE_DISABLED: u8 = 2;
 const STREAM_ACK_BAD_REQUEST: u8 = 3;
 const STREAM_ACK_INTERNAL_ERROR: u8 = 4;
+const STREAM_ACK_UNSUPPORTED_VERSION: u8 = 5;
 const STREAM_ACK_NOT_IMPLEMENTED: u8 = 7;
 const CACHE_TAG_FIELD_SEPARATOR: u8 = 0x1f;
 
@@ -854,7 +856,7 @@ impl Default for ProxyCacheTagging {
             alg: "HMAC-SHA256-128".into(),
             tag_header: "x-sorafs-cache-tag".into(),
             salt_hex: None,
-            attach_on: vec!["car".into(), "norito".into(), "kaigi".into()],
+            attach_on: vec!["car".into(), "norito".into(), "kaigi".into(), "tcp".into()],
         }
     }
 }
@@ -1342,6 +1344,8 @@ async fn handle_connection(
         write_frame(&mut send_stream, &ack)
             .await
             .map_err(|err| ProxyError::Handshake(err.to_string()))?;
+        let _ = send_stream.finish();
+        let _ = recv_stream.stop(VarInt::from_u32(0));
         record_transport_event(telemetry_label, "handshake_reject", "unsupported_version");
         return Ok(());
     }
@@ -1405,10 +1409,24 @@ async fn handle_connection(
     Ok(())
 }
 
-async fn read_frame(stream: &mut quinn::RecvStream) -> Result<Vec<u8>, quinn::ReadExactError> {
+#[derive(Debug, Error)]
+enum FrameError {
+    #[error("frame length {len} exceeds max {max} bytes")]
+    FrameTooLarge { len: usize, max: usize },
+    #[error("frame read error: {0}")]
+    Read(#[from] quinn::ReadExactError),
+}
+
+async fn read_frame(stream: &mut quinn::RecvStream) -> Result<Vec<u8>, FrameError> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).await?;
     let len = u32::from_be_bytes(len_buf) as usize;
+    if len > PROXY_MAX_FRAME_BYTES {
+        return Err(FrameError::FrameTooLarge {
+            len,
+            max: PROXY_MAX_FRAME_BYTES,
+        });
+    }
     let mut buf = vec![0u8; len];
     stream.read_exact(&mut buf).await?;
     Ok(buf)
@@ -1443,6 +1461,24 @@ async fn handle_application_stream(
         .map_err(|err| ProxyError::Stream(err.to_string()))?;
     let open_frame: ProxyStreamOpenV1 =
         decode_from_bytes(&frame_bytes).map_err(|err| ProxyError::Stream(err.to_string()))?;
+
+    if open_frame.version != PROXY_STREAM_VERSION {
+        record_transport_event(telemetry_label, "stream_reject", "unsupported_version");
+        let ack = ProxyStreamAckV1 {
+            version: PROXY_STREAM_VERSION,
+            code: STREAM_ACK_UNSUPPORTED_VERSION,
+            accepted: false,
+            message: Some("unsupported version".into()),
+            cache_tag_hex: None,
+        };
+        write_frame(&mut send_stream, &ack)
+            .await
+            .map_err(ProxyError::Stream)?;
+        let _ = send_stream.finish();
+        let _ = recv_stream.stop(VarInt::from_u32(0));
+        return Ok(());
+    }
+
     let service = ProxyStreamService::from_label(&open_frame.service);
 
     if matches!(session.mode, ProxyMode::MetadataOnly) {
@@ -2185,12 +2221,13 @@ impl ProxyStreamService {
 
 #[cfg(test)]
 mod tests {
-    use std::{io, net::SocketAddr, sync::Arc};
+    use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
     use tempfile::TempDir;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
+        task::JoinHandle,
     };
 
     use super::*;
@@ -2198,12 +2235,13 @@ mod tests {
     const TEST_GUARD_KEY: &str = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
 
     use quinn::{
-        ClientConfig, Endpoint, VarInt, crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
+        ClientConfig, Endpoint, ServerConfig, VarInt,
+        crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
     };
     use rustls::{
         DigitallySignedStruct, Error as RustlsError, SignatureScheme,
         client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-        pki_types::{CertificateDer, ServerName, UnixTime},
+        pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime},
     };
 
     fn should_skip_socket_permission(message: &str) -> bool {
@@ -2227,6 +2265,41 @@ mod tests {
         let cert_pem = cert.pem().to_string();
         let cert_der = cert.der().to_vec();
         (cert_pem, cert_der)
+    }
+
+    fn spawn_frame_server_or_skip() -> Option<(
+        Endpoint,
+        SocketAddr,
+        JoinHandle<Result<Vec<u8>, FrameError>>,
+    )> {
+        let rcgen::CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec!["localhost".into()]).expect("generate certificate");
+        let cert_der: CertificateDer<'static> = cert.der().clone();
+        let private_key =
+            PrivateKeyDer::try_from(signing_key.serialize_der()).expect("private key");
+        let mut server_config =
+            ServerConfig::with_single_cert(vec![cert_der], private_key).expect("server config");
+        server_config.transport = Arc::new(quinn::TransportConfig::default());
+
+        let endpoint = match Endpoint::server(server_config, "127.0.0.1:0".parse().expect("addr")) {
+            Ok(endpoint) => endpoint,
+            Err(err) if should_skip_socket_permission(&err.to_string()) => {
+                eprintln!("skipping frame test (loopback socket unavailable): {err}");
+                return None;
+            }
+            Err(err) => panic!("spawn frame server: {err}"),
+        };
+        let local_addr = endpoint.local_addr().expect("local addr");
+        let endpoint_handle = endpoint.clone();
+        let join_handle = tokio::spawn(async move {
+            let incoming = endpoint_handle.accept().await.expect("accept incoming");
+            let connecting = incoming.accept().expect("accept connection");
+            let connection = connecting.await.expect("connect");
+            let (_send, mut recv) = connection.accept_bi().await.expect("accept stream");
+            read_frame(&mut recv).await
+        });
+
+        Some((endpoint, local_addr, join_handle))
     }
 
     #[test]
@@ -2332,12 +2405,20 @@ mod tests {
         let expected = hex::encode_upper(hmac_sha256_128(guard_key.as_bytes(), &expected_message));
         assert_eq!(actual, expected);
 
-        assert!(
-            session
-                .cache_tag_for(ProxyStreamService::Tcp, &open_frame)
-                .is_none(),
-            "cache tags should be skipped for services not listed in attach_on"
-        );
+        let tcp_tag = session
+            .cache_tag_for(ProxyStreamService::Tcp, &open_frame)
+            .expect("tcp cache tag");
+        let mut tcp_message = Vec::new();
+        tcp_message.extend_from_slice(&expected_context.salt);
+        append_tag_component(&mut tcp_message, Some("tcp"));
+        append_tag_component(&mut tcp_message, open_frame.authority.as_deref());
+        append_tag_component(&mut tcp_message, open_frame.target.as_deref());
+        append_tag_component(&mut tcp_message, open_frame.client_id.as_deref());
+        append_tag_component(&mut tcp_message, open_frame.route_policy_id.as_deref());
+        append_tag_component(&mut tcp_message, open_frame.exit_country.as_deref());
+        append_tag_component(&mut tcp_message, session.session_id.as_deref());
+        let expected_tcp = hex::encode_upper(hmac_sha256_128(guard_key.as_bytes(), &tcp_message));
+        assert_eq!(tcp_tag, expected_tcp);
     }
 
     #[test]
@@ -2397,6 +2478,39 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn read_frame_rejects_oversized_payload() {
+        let Some((server_endpoint, server_addr, server_task)) = spawn_frame_server_or_skip() else {
+            return;
+        };
+        let (client_endpoint, connection) = connect_proxy_client(server_addr).await;
+        let (mut send_stream, _recv_stream) = connection.open_bi().await.expect("open stream");
+        let oversized_len =
+            u32::try_from(PROXY_MAX_FRAME_BYTES + 1).expect("frame length fits u32");
+        send_stream
+            .write_all(&oversized_len.to_be_bytes())
+            .await
+            .expect("write frame length");
+        send_stream.flush().await.expect("flush frame length");
+        send_stream.finish().expect("finish stream");
+
+        let result = tokio::time::timeout(Duration::from_secs(2), server_task)
+            .await
+            .expect("server task timeout")
+            .expect("server task join");
+        match result {
+            Err(FrameError::FrameTooLarge { len, max }) => {
+                assert_eq!(len, PROXY_MAX_FRAME_BYTES + 1);
+                assert_eq!(max, PROXY_MAX_FRAME_BYTES);
+            }
+            other => panic!("expected FrameTooLarge error, got {other:?}"),
+        }
+
+        connection.close(VarInt::from_u32(0), b"done");
+        client_endpoint.wait_idle().await;
+        server_endpoint.wait_idle().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn handshake_manifest_includes_cache_tagging() {
         let config = LocalQuicProxyConfig {
             bind_addr: "127.0.0.1:0".into(),
@@ -2426,6 +2540,81 @@ mod tests {
                 && cache.attach_on.iter().any(|label| label == "car"),
             "expected cache tagging to advertise both norito and car services"
         );
+
+        connection.close(VarInt::from_u32(0), b"done");
+        endpoint.wait_idle().await;
+        proxy.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stream_rejects_version_mismatch() {
+        let config = LocalQuicProxyConfig {
+            bind_addr: "127.0.0.1:0".into(),
+            proxy_mode: ProxyMode::Bridge,
+            emit_browser_manifest: false,
+            ..LocalQuicProxyConfig::default()
+        };
+        let Some(proxy) = spawn_proxy_or_skip(config) else {
+            return;
+        };
+        let proxy_addr = proxy.local_addr();
+
+        let (endpoint, connection) = connect_proxy_client(proxy_addr).await;
+        let handshake_ack = perform_proxy_handshake(&connection).await;
+        assert!(handshake_ack.accepted);
+
+        let open_frame = ProxyStreamOpenV1 {
+            version: PROXY_STREAM_VERSION.saturating_add(1),
+            service: "norito".into(),
+            authority: Some("torii.dev:9443".into()),
+            target: Some("routes/route-alpha".into()),
+            route_policy_id: None,
+            exit_country: None,
+            client_id: Some("test-client".into()),
+        };
+        let (mut stream_send, mut stream_recv, stream_ack) =
+            open_proxy_stream(&connection, &open_frame).await;
+        assert!(!stream_ack.accepted);
+        assert_eq!(stream_ack.code, STREAM_ACK_UNSUPPORTED_VERSION);
+        let _ = stream_send.finish();
+        let _ = stream_recv.stop(VarInt::from_u32(0));
+
+        connection.close(VarInt::from_u32(0), b"done");
+        endpoint.wait_idle().await;
+        proxy.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn handshake_rejects_version_mismatch() {
+        let config = LocalQuicProxyConfig {
+            bind_addr: "127.0.0.1:0".into(),
+            emit_browser_manifest: false,
+            ..LocalQuicProxyConfig::default()
+        };
+        let Some(proxy) = spawn_proxy_or_skip(config) else {
+            return;
+        };
+        let proxy_addr = proxy.local_addr();
+
+        let (endpoint, connection) = connect_proxy_client(proxy_addr).await;
+        let (mut handshake_send, mut handshake_recv) =
+            connection.open_bi().await.expect("open handshake stream");
+        let handshake = ProxyHandshakeV1 {
+            version: PROXY_HANDSHAKE_VERSION.saturating_add(1),
+            client: Some("test-client".into()),
+            user_agent: Some("orchestrator-test".into()),
+        };
+        write_frame(&mut handshake_send, &handshake)
+            .await
+            .expect("write handshake");
+        handshake_send.finish().expect("finish handshake send");
+        let ack_bytes = read_frame(&mut handshake_recv)
+            .await
+            .expect("read handshake ack");
+        let ack: TestHandshakeAck = decode_from_bytes(&ack_bytes).expect("decode handshake ack");
+        assert_eq!(ack.version, PROXY_HANDSHAKE_VERSION);
+        assert!(!ack.accepted);
+        assert_eq!(ack.message.as_deref(), Some("unsupported version"));
 
         connection.close(VarInt::from_u32(0), b"done");
         endpoint.wait_idle().await;

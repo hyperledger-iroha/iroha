@@ -4263,6 +4263,13 @@ impl StateTelemetry {
         }
     }
 
+    /// Reset total fee units for the current (latest) block.
+    pub fn reset_block_fee_units(&self) {
+        if self.is_enabled() {
+            self.metrics.block_fee_total_units.set(0);
+        }
+    }
+
     /// Record proof-health alert telemetry for a provider.
     #[cfg(feature = "telemetry")]
     /// Record a `SoraFS` proof-health alert snapshot in the cached status state.
@@ -4686,6 +4693,12 @@ pub fn record_state_tiered_snapshot(
     hot_entries: usize,
     cold_entries: usize,
     cold_bytes: u64,
+    hot_promotions: usize,
+    hot_demotions: usize,
+    hot_grace_overflow_keys: usize,
+    hot_grace_overflow_bytes: u64,
+    cold_reused_entries: usize,
+    cold_reused_bytes: u64,
 ) {
     if telemetry.is_enabled() {
         telemetry
@@ -4701,6 +4714,30 @@ pub fn record_state_tiered_snapshot(
             .state_tiered_cold_entries
             .set(cold_entries as u64);
         telemetry.metrics.state_tiered_cold_bytes.set(cold_bytes);
+        telemetry
+            .metrics
+            .state_tiered_hot_promotions
+            .set(hot_promotions as u64);
+        telemetry
+            .metrics
+            .state_tiered_hot_demotions
+            .set(hot_demotions as u64);
+        telemetry
+            .metrics
+            .state_tiered_hot_grace_overflow_keys
+            .set(hot_grace_overflow_keys as u64);
+        telemetry
+            .metrics
+            .state_tiered_hot_grace_overflow_bytes
+            .set(hot_grace_overflow_bytes);
+        telemetry
+            .metrics
+            .state_tiered_cold_reused_entries
+            .set(cold_reused_entries as u64);
+        telemetry
+            .metrics
+            .state_tiered_cold_reused_bytes
+            .set(cold_reused_bytes);
     }
 }
 
@@ -4853,6 +4890,47 @@ impl ManifestGuardReason {
             ManifestGuardReason::HashMismatch => "hash_mismatch",
             ManifestGuardReason::ReadError => "read_error",
             ManifestGuardReason::SpoolScan => "spool_scan",
+        }
+    }
+}
+
+/// Cache outcome classification used for DA spool/manifest caching telemetry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheResult {
+    /// Cache entry served without disk re-read.
+    Hit,
+    /// Cache entry was refreshed from disk.
+    Miss,
+}
+
+impl CacheResult {
+    #[must_use]
+    fn label(self) -> &'static str {
+        match self {
+            CacheResult::Hit => "hit",
+            CacheResult::Miss => "miss",
+        }
+    }
+}
+
+/// DA spool cache classification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DaSpoolCacheKind {
+    /// Commitment bundle spool.
+    Commitments,
+    /// Pin intent spool.
+    PinIntents,
+    /// Receipt spool.
+    Receipts,
+}
+
+impl DaSpoolCacheKind {
+    #[must_use]
+    fn label(self) -> &'static str {
+        match self {
+            DaSpoolCacheKind::Commitments => "commitments",
+            DaSpoolCacheKind::PinIntents => "pin_intents",
+            DaSpoolCacheKind::Receipts => "receipts",
         }
     }
 }
@@ -5140,6 +5218,28 @@ impl Telemetry {
         self.metrics
             .sumeragi_da_manifest_guard_total
             .with_label_values(&[result.label(), reason.label()])
+            .inc();
+    }
+
+    /// Record the outcome of the DA manifest cache lookup.
+    pub fn note_da_manifest_cache(&self, result: CacheResult) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics
+            .sumeragi_da_manifest_cache_total
+            .with_label_values(&[result.label()])
+            .inc();
+    }
+
+    /// Record the outcome of the DA spool cache lookup.
+    pub fn note_da_spool_cache(&self, kind: DaSpoolCacheKind, result: CacheResult) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.metrics
+            .sumeragi_da_spool_cache_total
+            .with_label_values(&[kind.label(), result.label()])
             .inc();
     }
 
@@ -9108,6 +9208,62 @@ mod tests {
     }
 
     #[test]
+    fn da_spool_cache_metrics_record_hits_and_misses() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.note_da_spool_cache(DaSpoolCacheKind::Commitments, CacheResult::Miss);
+        telemetry.note_da_spool_cache(DaSpoolCacheKind::Commitments, CacheResult::Hit);
+        telemetry.note_da_spool_cache(DaSpoolCacheKind::Receipts, CacheResult::Hit);
+
+        assert_eq!(
+            metrics
+                .sumeragi_da_spool_cache_total
+                .with_label_values(&["commitments", "miss"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_da_spool_cache_total
+                .with_label_values(&["commitments", "hit"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_da_spool_cache_total
+                .with_label_values(&["receipts", "hit"])
+                .get(),
+            1
+        );
+    }
+
+    #[test]
+    fn da_manifest_cache_metrics_record_hits_and_misses() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.note_da_manifest_cache(CacheResult::Miss);
+        telemetry.note_da_manifest_cache(CacheResult::Hit);
+
+        assert_eq!(
+            metrics
+                .sumeragi_da_manifest_cache_total
+                .with_label_values(&["miss"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_da_manifest_cache_total
+                .with_label_values(&["hit"])
+                .get(),
+            1
+        );
+    }
+
+    #[test]
     fn pin_intent_spool_metrics_record_outcomes() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(metrics.clone(), true);
@@ -9976,6 +10132,17 @@ mod tests {
         assert_eq!(metrics.confidential_gas_total.get(), 42);
     }
 
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn block_fee_units_reset_clears_gauge() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics.clone(), true);
+        telemetry.add_block_fee_units(42);
+        assert_eq!(metrics.block_fee_total_units.get(), 42);
+        telemetry.reset_block_fee_units();
+        assert_eq!(metrics.block_fee_total_units.get(), 0);
+    }
+
     #[test]
     fn space_directory_metrics_cover_lifecycle() {
         let metrics = Arc::new(Metrics::default());
@@ -10842,11 +11009,17 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
 
-        record_state_tiered_snapshot(&telemetry, 7, 3, 2, 1024);
+        record_state_tiered_snapshot(&telemetry, 7, 3, 2, 1024, 1, 2, 3, 2048, 4, 512);
         assert_eq!(metrics.state_tiered_last_snapshot_index.get(), 7);
         assert_eq!(metrics.state_tiered_hot_entries.get(), 3);
         assert_eq!(metrics.state_tiered_cold_entries.get(), 2);
         assert_eq!(metrics.state_tiered_cold_bytes.get(), 1024);
+        assert_eq!(metrics.state_tiered_hot_promotions.get(), 1);
+        assert_eq!(metrics.state_tiered_hot_demotions.get(), 2);
+        assert_eq!(metrics.state_tiered_hot_grace_overflow_keys.get(), 3);
+        assert_eq!(metrics.state_tiered_hot_grace_overflow_bytes.get(), 2048);
+        assert_eq!(metrics.state_tiered_cold_reused_entries.get(), 4);
+        assert_eq!(metrics.state_tiered_cold_reused_bytes.get(), 512);
     }
 
     #[cfg(feature = "telemetry")]

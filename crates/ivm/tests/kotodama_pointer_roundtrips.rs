@@ -1,3 +1,5 @@
+//! Kotodama pointer roundtrip tests.
+
 use ivm::{CoreHost, IVM, kotodama::compiler::Compiler as KotodamaCompiler};
 
 fn run_prog(src: &str) {
@@ -53,6 +55,33 @@ fn roundtrip_nft_burn_asset() {
     let src = r#"
         fn main() {
           nft_burn_asset(nft_id("rose:uuid:bead$wonderland"));
+        }
+    "#;
+    run_prog(src);
+}
+
+#[test]
+fn roundtrip_nft_mint_asset_accepts_runtime_owner() {
+    let src = r#"
+        fn main() {
+          let owner = authority();
+          nft_mint_asset(
+            nft_id("rose:uuid:0123$wonderland"),
+            owner
+          );
+        }
+    "#;
+    run_prog(src);
+}
+
+#[test]
+fn roundtrip_nft_transfer_asset_accepts_runtime_from() {
+    let src = r#"
+        fn main() {
+          let from = authority();
+          let to = account_id("ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland");
+          let nft = nft_id("rose:uuid:bead$wonderland");
+          nft_transfer_asset(from, nft, to);
         }
     "#;
     run_prog(src);

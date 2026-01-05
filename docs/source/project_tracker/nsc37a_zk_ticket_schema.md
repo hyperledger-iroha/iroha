@@ -80,7 +80,6 @@ updated before the next migration phase begins.
      must match the locally archived nullifier.
 
 5. **Update issuance pipelines.**  
-   - Replace legacy ticket builders with the Norito SDK helpers:  
      - Python: `iroha_streaming.ticket.issue_ticket()`  
      - JavaScript: `sdk.streaming.issueTicket()` (pending release 0.9.0)  
      - Java: `StreamingTicketBuilder` (shipped in `norito-java 0.6.0`)  
@@ -98,7 +97,6 @@ updated before the next migration phase begins.
 7. **Sign-off and documentation.**  
    - Attach the smoke-test report and manifest change log to the issuer’s migration ticket.  
    - Update the operational runbook (`ops/streaming_tickets.md`) with the new CLI commands and
-     rollback procedure (revoke ticket, remove nullifier, reissue legacy ticket if needed).  
    - Notify the governance channel that NSC-37a issuer onboarding is complete.
 
 All issuers must complete steps 1–4 before the network toggles the “nullifier required” policy

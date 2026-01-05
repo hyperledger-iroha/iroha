@@ -135,7 +135,6 @@ if replay.observe(&gossip, now_unix_ms)? {
 
 Integration tests covering round-trips, expiry handling, and tampering live in
 `crates/sorafs_orchestrator/tests/taikai_cache.rs`, ensuring future changes to
-the gossip plane preserve wire compatibility and replay safety.
 
 ## Telemetry
 

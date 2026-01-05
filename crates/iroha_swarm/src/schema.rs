@@ -59,10 +59,22 @@ fn genesis_env_to_value(env: &GenesisEnv<'_>) -> norito::json::Value {
                 Value::String(mode.to_owned()),
             );
         }
+        if let Some(mode) = env.next_consensus_mode {
+            map.insert(
+                "GENESIS_NEXT_CONSENSUS_MODE".into(),
+                Value::String(mode.to_owned()),
+            );
+        }
         if let Some(height) = env.mode_activation_height {
             map.insert(
                 "GENESIS_MODE_ACTIVATION_HEIGHT".into(),
                 Value::String(height.to_string()),
+            );
+        }
+        if !env.peer_pops.is_empty() {
+            map.insert(
+                "GENESIS_PEER_POPS".into(),
+                Value::String(format_peer_pop_args(&env.peer_pops)),
             );
         }
         map.insert(
@@ -81,6 +93,34 @@ fn genesis_env_to_value(env: &GenesisEnv<'_>) -> norito::json::Value {
     value
 }
 
+fn format_peer_pop_args(entries: &[String]) -> String {
+    let mut args = String::new();
+    for (idx, entry) in entries.iter().enumerate() {
+        if idx > 0 {
+            args.push(' ');
+        }
+        args.push_str("--peer-pop ");
+        args.push_str(entry);
+    }
+    args
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        write!(&mut out, "{byte:02x}").expect("format hex byte");
+    }
+    out
+}
+
+fn peer_pop_entries(network: &std::collections::BTreeMap<u16, peer::PeerInfo>) -> Vec<String> {
+    network
+        .values()
+        .map(|(_, _, (public_key, _), pop)| format!("{public_key}=0x{}", encode_hex(pop)))
+        .collect()
+}
+
 #[cfg(test)]
 mod json_value_tests {
     use norito::json::{self, Map, Value};
@@ -96,8 +136,10 @@ mod json_value_tests {
         std::collections::BTreeSet<iroha_data_model::prelude::Peer>,
     ) {
         let chain = peer::chain();
-        let primary_pair = peer::generate_key_pair(Some(b"swarm-json-primary"), b"node-0");
-        let secondary_pair = peer::generate_key_pair(Some(b"swarm-json-secondary"), b"node-1");
+        let (primary_pair, _primary_pop) =
+            peer::generate_bls_key_pair(Some(b"swarm-json-primary"), b"node-0");
+        let (secondary_pair, _secondary_pop) =
+            peer::generate_bls_key_pair(Some(b"swarm-json-secondary"), b"node-1");
         let ports = [crate::BASE_PORT_P2P, crate::BASE_PORT_API];
         let other_ports = [crate::BASE_PORT_P2P + 1, crate::BASE_PORT_API + 1];
         let mut topology = std::collections::BTreeSet::new();
@@ -167,6 +209,8 @@ mod json_value_tests {
             &topology,
             None,
             None,
+            None,
+            Vec::new(),
         );
 
         let actual = genesis_env_to_value(&env);
@@ -201,7 +245,9 @@ mod json_value_tests {
             (&genesis_pair.0, &genesis_pair.1),
             &topology,
             Some("npos"),
+            Some("npos"),
             Some(42),
+            vec!["pk=00".to_string()],
         );
 
         let Value::Object(map) = genesis_env_to_value(&env) else {
@@ -212,8 +258,16 @@ mod json_value_tests {
             Some(&Value::String("npos".to_owned()))
         );
         assert_eq!(
+            map.get("GENESIS_NEXT_CONSENSUS_MODE"),
+            Some(&Value::String("npos".to_owned()))
+        );
+        assert_eq!(
             map.get("GENESIS_MODE_ACTIVATION_HEIGHT"),
             Some(&Value::String("42".to_owned()))
+        );
+        assert_eq!(
+            map.get("GENESIS_PEER_POPS"),
+            Some(&Value::String("--peer-pop pk=00".to_owned()))
         );
     }
 }
@@ -476,7 +530,9 @@ struct GenesisEnv<'a> {
     genesis: ContainerFile<'a>,
     topology: std::collections::BTreeSet<&'a iroha_data_model::peer::PeerId>,
     consensus_mode: Option<&'a str>,
+    next_consensus_mode: Option<&'a str>,
     mode_activation_height: Option<u64>,
+    peer_pops: Vec<String>,
 }
 
 impl<'a> GenesisEnv<'a> {
@@ -487,7 +543,9 @@ impl<'a> GenesisEnv<'a> {
         (genesis_public_key, genesis_private_key): peer::ExposedKeyRefPair<'a>,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
         consensus_mode: Option<&'a str>,
+        next_consensus_mode: Option<&'a str>,
         mode_activation_height: Option<u64>,
+        peer_pops: Vec<String>,
     ) -> Self {
         Self {
             base: PeerEnv::new(key_pair, ports, chain, genesis_public_key, topology),
@@ -498,7 +556,9 @@ impl<'a> GenesisEnv<'a> {
                 .map(iroha_data_model::prelude::Peer::id)
                 .collect(),
             consensus_mode,
+            next_consensus_mode,
             mode_activation_height,
+            peer_pops,
         }
     }
 }
@@ -696,14 +756,16 @@ const SIGN_AND_SUBMIT_GENESIS: &str = r#"/bin/sh -c "
     jq \\
         --arg executor \"$$EXECUTOR_ABSOLUTE_PATH\" \\
         --arg ivm_dir \"$$IVM_DIR_ABSOLUTE_PATH\" \\
-        --argjson topology \"$$TOPOLOGY\" \\
-        'if ($executor|length)>0 then .executor = $$executor else del(.executor) end | if ($ivm_dir|length)>0 then .ivm_dir = $$ivm_dir else del(.ivm_dir) end | .topology = $$topology' /config/genesis.json \\
+        'if ($executor|length)>0 then .executor = $$executor else del(.executor) end | if ($ivm_dir|length)>0 then .ivm_dir = $$ivm_dir else del(.ivm_dir) end' /config/genesis.json \\
         >/tmp/genesis.json && \\
     kagami genesis sign /tmp/genesis.json \\
         --public-key $$GENESIS_PUBLIC_KEY \\
         --private-key $$GENESIS_PRIVATE_KEY \\
         ${GENESIS_CONSENSUS_MODE:+--consensus-mode $$GENESIS_CONSENSUS_MODE} \\
+        ${GENESIS_NEXT_CONSENSUS_MODE:+--next-consensus-mode $$GENESIS_NEXT_CONSENSUS_MODE} \\
         ${GENESIS_MODE_ACTIVATION_HEIGHT:+--mode-activation-height $$GENESIS_MODE_ACTIVATION_HEIGHT} \\
+        --topology \"$$TOPOLOGY\" \\
+        ${GENESIS_PEER_POPS:+$$GENESIS_PEER_POPS} \\
         --out-file $$GENESIS \\
     && \\
     exec irohad
@@ -778,7 +840,9 @@ impl<'a> BuildOrPull<'a> {
         network: &'a std::collections::BTreeMap<u16, peer::PeerInfo>,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
         consensus_mode: Option<&'a str>,
+        next_consensus_mode: Option<&'a str>,
         mode_activation_height: Option<u64>,
+        peer_pops: Vec<String>,
     ) -> Self {
         Self::Pull {
             irohad0: Self::irohad0(
@@ -790,7 +854,9 @@ impl<'a> BuildOrPull<'a> {
                 network,
                 topology,
                 consensus_mode,
+                next_consensus_mode,
                 mode_activation_height,
+                peer_pops,
             ),
             irohads: Self::irohads(
                 image,
@@ -814,7 +880,9 @@ impl<'a> BuildOrPull<'a> {
         network: &'a std::collections::BTreeMap<u16, peer::PeerInfo>,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
         consensus_mode: Option<&'a str>,
+        next_consensus_mode: Option<&'a str>,
         mode_activation_height: Option<u64>,
+        peer_pops: Vec<String>,
     ) -> Self {
         Self::Build {
             irohad0: Self::irohad0(
@@ -826,7 +894,9 @@ impl<'a> BuildOrPull<'a> {
                 network,
                 topology,
                 consensus_mode,
+                next_consensus_mode,
                 mode_activation_height,
+                peer_pops,
             ),
             irohads: Self::irohads(
                 BuiltImage::new(image.image),
@@ -850,9 +920,11 @@ impl<'a> BuildOrPull<'a> {
         network: &'a std::collections::BTreeMap<u16, peer::PeerInfo>,
         topology: &'a std::collections::BTreeSet<iroha_data_model::peer::Peer>,
         consensus_mode: Option<&'a str>,
+        next_consensus_mode: Option<&'a str>,
         mode_activation_height: Option<u64>,
+        peer_pops: Vec<String>,
     ) -> Irohad0<'a, Image> {
-        let (_, ports, key_pair) = network.get(&0).expect("irohad0 must be present");
+        let (_, ports, key_pair, _) = network.get(&0).expect("irohad0 must be present");
         Irohad0::new(
             image,
             GenesisEnv::new(
@@ -862,7 +934,9 @@ impl<'a> BuildOrPull<'a> {
                 (genesis_public_key, genesis_private_key),
                 topology,
                 consensus_mode,
+                next_consensus_mode,
                 mode_activation_height,
+                peer_pops,
             ),
             *ports,
             volumes,
@@ -882,7 +956,7 @@ impl<'a> BuildOrPull<'a> {
         network
             .iter()
             .skip(1)
-            .map(|(id, (_, ports, key_pair))| {
+            .map(|(id, (_, ports, key_pair, _))| {
                 (
                     IrohadRef(*id),
                     Irohad::new(
@@ -951,10 +1025,13 @@ impl<'a> DockerCompose<'a> {
             network,
             topology,
             consensus_mode,
+            next_consensus_mode,
             mode_activation_height,
         }: &'a PeerSettings,
     ) -> Self {
         let image = ImageId(name);
+        let peer_pops = peer_pop_entries(network);
+        let peer_pops_for_build = peer_pops.clone();
         let volumes = [
             PathMapping(
                 HostFile(config_dir, GENESIS_FILE),
@@ -979,7 +1056,9 @@ impl<'a> DockerCompose<'a> {
                         network,
                         topology,
                         consensus_mode.as_deref(),
+                        next_consensus_mode.as_deref(),
                         *mode_activation_height,
+                        peer_pops,
                     )
                 },
                 |build| {
@@ -992,7 +1071,9 @@ impl<'a> DockerCompose<'a> {
                         network,
                         topology,
                         consensus_mode.as_deref(),
+                        next_consensus_mode.as_deref(),
                         *mode_activation_height,
+                        peer_pops_for_build,
                     )
                 },
             ),
@@ -1060,7 +1141,7 @@ mod tests {
 
     #[test]
     fn peer_env_produces_exhaustive_config() {
-        let key_pair = peer::generate_key_pair(None, &[]);
+        let (key_pair, _pop) = peer::generate_bls_key_pair(None, &[]);
         let genesis_key_pair = peer::generate_key_pair(None, &[]);
         let ports = [BASE_PORT_P2P, BASE_PORT_API];
         let chain = peer::chain();
@@ -1076,7 +1157,7 @@ mod tests {
 
     #[test]
     fn genesis_env_produces_exhaustive_config_sans_genesis_private_key_and_topology() {
-        let key_pair = peer::generate_key_pair(None, &[]);
+        let (key_pair, _pop) = peer::generate_bls_key_pair(None, &[]);
         let (genesis_public_key, genesis_private_key) = &peer::generate_key_pair(None, &[]);
         let ports = [BASE_PORT_P2P, BASE_PORT_API];
         let chain = peer::chain();
@@ -1089,6 +1170,8 @@ mod tests {
             &topology,
             None,
             None,
+            None,
+            Vec::new(),
         );
         let mock_env = iroha_config::base::env::MockEnv::from(env);
         let _ = iroha_config::base::read::ConfigReader::new()
@@ -1106,7 +1189,7 @@ mod tests {
 
     #[test]
     fn genesis_env_with_consensus_overrides_is_exhaustive_plus_overrides() {
-        let key_pair = peer::generate_key_pair(None, &[]);
+        let (key_pair, _pop) = peer::generate_bls_key_pair(None, &[]);
         let (genesis_public_key, genesis_private_key) = &peer::generate_key_pair(None, &[]);
         let ports = [BASE_PORT_P2P, BASE_PORT_API];
         let chain = peer::chain();
@@ -1118,7 +1201,9 @@ mod tests {
             (genesis_public_key, genesis_private_key),
             &topology,
             Some("npos"),
+            Some("npos"),
             Some(7),
+            Vec::new(),
         );
         let mock_env = iroha_config::base::env::MockEnv::from(env);
         let _ = iroha_config::base::read::ConfigReader::new()
@@ -1132,6 +1217,7 @@ mod tests {
             [
                 "GENESIS_CONSENSUS_MODE",
                 "GENESIS_MODE_ACTIVATION_HEIGHT",
+                "GENESIS_NEXT_CONSENSUS_MODE",
                 "GENESIS_PRIVATE_KEY",
                 "TOPOLOGY"
             ]

@@ -18,7 +18,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 1. **Build и подпись** - следуйте [deployment guide](./deploy-guide.md), чтобы запустить
    `npm run build`, `scripts/preview_wave_preflight.sh` и шаги отправки Sigstore + manifest.
    Скрипт preflight пишет `preflight-summary.json`, чтобы каждый preview нес metadata build/link/probe.
-2. **Pin и верификация** - `sorafs_cli manifest submit`, `verify-sorafs-binding.mjs`
+2. **Pin и верификация** - `sorafs_cli manifest submit`, `cargo xtask soradns-verify-binding`
    и план DNS cutover дают детерминированные artefacts для governance.
 3. **Архивация доказательств** - сохраняйте CAR summary, Sigstore bundle, alias proof,
    probe output и снимки дашборда `docs_portal.json` под `artifacts/sorafs/<tag>/`.
@@ -71,32 +71,30 @@ Try it, bindings и DNS без разбора evidence bundle.
   "bindings": [
     {
       "label": "portal",
-      "url": "https://docs-preview.sora.link/.well-known/sorafs/manifest",
+      "bindingPath": "../../artifacts/sorafs/portal.gateway.binding.json",
       "alias": "docs-preview.sora.link",
-      "contentCid": "bafybeiaff84aef0aaaf6a7c246c8ca1889e62d69c8d9b20d94933cb7b09902f3",
-      "manifest": "8b8f3d2a4a7e92abdb17e5fafd4f9d67c6c7a8547ff985bb0d71f87209c1444d",
-      "status": "ok",
-      "expectHost": "docs-preview.sora.link"
+      "hostname": "docs-preview.sora.link",
+      "proofStatus": "ok",
+      "manifestJson": "../../artifacts/sorafs/portal.manifest.json"
     },
     {
       "label": "openapi",
-      "url": "https://docs-preview.sora.link/.well-known/sorafs/openapi",
+      "bindingPath": "../../artifacts/sorafs/openapi.gateway.binding.json",
       "alias": "docs-preview.sora.link",
-      "contentCid": "bafybeidevopenapi",
-      "manifest": "dad4b9fd48e35297c7fd71cd15b52c4ff0bb62dd8a1da4c5c2c1536ae2732b55",
-      "status": "ok",
-      "expectHost": "docs-preview.sora.link"
+      "hostname": "docs-preview.sora.link",
+      "proofStatus": "ok",
+      "manifestJson": "../../artifacts/sorafs/openapi.manifest.json"
     },
     {
       "label": "portal-sbom",
-      "url": "https://docs-preview.sora.link/.well-known/sorafs/portal-sbom",
+      "bindingPath": "../../artifacts/sorafs/portal-sbom.gateway.binding.json",
       "alias": "docs-preview.sora.link",
-      "contentCid": "bafybeiportalssbom",
-      "manifest": "e2b2790f9f4c1ecbc8f1bdb9f8ba3fd65fd687e9e5e4de3c3d67c3d3192b79c8",
-      "status": "ok",
-      "expectHost": "docs-preview.sora.link"
+      "hostname": "docs-preview.sora.link",
+      "proofStatus": "ok",
+      "manifestJson": "../../artifacts/sorafs/portal-sbom.manifest.json"
     }
   ],
+
   "dns": [
     {
       "label": "docs-preview CNAME",
@@ -124,13 +122,13 @@ Try it, bindings и DNS без разбора evidence bundle.
 > не задан `allowInsecureHttp: true` в config. Держите probes production/staging на HTTPS;
 > опция существует только для локальных previews.
 
-Каждая запись binding проверяет `Sora-Name`, `Sora-Proof` и `Sora-Content-CID`
-(headers и payload) плюс guard `expectHost`, чтобы DNS promotion
-(`docs.sora` vs. `docs-preview.sora.link`) не отклонялся от alias в pin registry.
-Checks падают сразу, если gateway перестает stapling заголовки
-`Sora-Content-CID`/`Sora-Proof`, если в proof появляется неверный base64, или если
-advertised manifest/CID расходится с pinned payloads
-(сайт, OpenAPI и SBOM).
+Each binding entry runs `cargo xtask soradns-verify-binding` against the captured
+`portal.gateway.binding.json` bundle (and optional `manifestJson`) so alias,
+proof status, and content CID stay aligned with the published evidence. The
+optional `hostname` guard confirms the alias-derived canonical host matches the
+gateway host you intend to promote, preventing DNS cutovers that drift from the
+recorded binding.
+
 
 Опциональный блок `dns` подключает rollout SoraDNS из DOCS-7 к тому же monitor.
 Каждая запись разрешает пару hostname/record-type (например CNAME
@@ -180,7 +178,7 @@ npm run check:openapi-versions
   `tryit_proxy_requests_total{status="error"}`.
 - **Gateway SLO** - `DocsPortal/GatewayRefusals` гарантирует, что alias bindings продолжают
   рекламировать pinned manifest digest; эскалации ссылаются на CLI transcript
-  `verify-sorafs-binding.mjs`, захваченный во время публикации.
+  `cargo xtask soradns-verify-binding`, захваченный во время публикации.
 
 ### 3. Evidence trail
 
@@ -189,7 +187,7 @@ npm run check:openapi-versions
 - Evidence bundle `monitor-publishing` (`summary.json`, файлы по разделам и `checksums.sha256`).
 - Grafana screenshots для board `docs_portal` за окно релиза.
 - Transcripts изменения/rollback прокси Try it (логи `npm run manage:tryit-proxy`).
-- Вывод проверки alias из `scripts/verify-sorafs-binding.mjs`.
+- Вывод проверки alias из `cargo xtask soradns-verify-binding`.
 
 Складывайте это под `artifacts/sorafs/<tag>/monitoring/` и линкуйте в release issue,
 чтобы аудит-трейл сохранялся после истечения CI логов.

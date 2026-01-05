@@ -147,28 +147,16 @@ public final class OfflineRevocationJournal {
     private static func parseRawRevocation(_ value: ToriiJSONValue,
                                            recordedAtMs: UInt64) -> OfflineVerdictRevocationEntry? {
         guard case let .object(object) = value else { return nil }
-        let recordObject: [String: ToriiJSONValue]
-        if case let .object(record) = object["record"] {
-            recordObject = record
-        } else {
-            recordObject = [:]
-        }
-
-        func lookup(_ keys: [String]) -> ToriiJSONValue? {
-            Self.lookup(keys: keys, in: object) ?? Self.lookup(keys: keys, in: recordObject)
-        }
-
-        let verdictValue = lookup(["verdict_id_hex", "verdictIdHex"])
-            ?? lookup(["verdict_id", "verdictId"])
+        let verdictValue = object["verdict_id_hex"]
         guard let verdictIdHex = normalizeVerdictIdHex(verdictValue) else { return nil }
-        guard let revokedAtMs = lookup(["revoked_at_ms", "revokedAtMs"])?.normalizedUInt64 else {
+        guard let revokedAtMs = object["revoked_at_ms"]?.normalizedUInt64 else {
             return nil
         }
-        let issuerId = lookup(["issuer_id", "issuerId", "issuer"])?.normalizedString
-        let issuerDisplay = lookup(["issuer_display", "issuerDisplay"])?.normalizedString
-        let reason = lookup(["reason"])?.normalizedString
-        let note = lookup(["note"])?.normalizedString
-        let metadata = lookup(["metadata"])
+        let issuerId = object["issuer_id"]?.normalizedString
+        let issuerDisplay = object["issuer_display"]?.normalizedString
+        let reason = object["reason"]?.normalizedString
+        let note = object["note"]?.normalizedString
+        let metadata = object["metadata"]
 
         return OfflineVerdictRevocationEntry(
             verdictIdHex: verdictIdHex,
@@ -180,16 +168,6 @@ public final class OfflineRevocationJournal {
             metadata: metadata,
             recordedAtMs: recordedAtMs
         )
-    }
-
-    private static func lookup(keys: [String],
-                               in object: [String: ToriiJSONValue]) -> ToriiJSONValue? {
-        for key in keys {
-            if let value = object[key] {
-                return value
-            }
-        }
-        return nil
     }
 
     private static func normalizeVerdictIdHex(_ value: ToriiJSONValue?) -> String? {

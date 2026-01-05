@@ -17,7 +17,7 @@ description: Ponto de entrada canônico para os runbooks de operadores do SoraFS
 > build do portal.
 
 Use esta página para verificar quais runbooks concluíram a migração da árvore de docs
-legada para o portal. Cada entrada lista a responsabilidade, o caminho de origem canônico
+alternativa para o portal. Cada entrada lista a responsabilidade, o caminho de origem canônico
 e a cópia no portal para que revisores possam ir direto ao guia desejado durante a prévia beta.
 
 ## Host de prévia beta

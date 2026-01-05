@@ -7,7 +7,9 @@ use iroha_data_model::soranet::vpn::{
 use soranet_relay::{
     config::VpnConfig,
     metrics::Metrics,
-    vpn::{VpnFrameIoError, VpnOverlay, read_frame, write_frame},
+    vpn::{
+        CoverFrameMeta, VpnFrameBuildError, VpnFrameIoError, VpnOverlay, read_frame, write_frame,
+    },
 };
 use tokio::{
     io::{AsyncWriteExt, duplex},
@@ -197,6 +199,56 @@ fn overlay_rejects_cover_flag_mismatch() {
             class: VpnCellClassV1::Data,
             ..
         }
+    ));
+}
+
+#[test]
+fn overlay_rejects_cover_cell_without_cover_flag() {
+    let overlay = overlay();
+    let cell = VpnCellV1 {
+        header: VpnCellHeaderV1 {
+            version: 1,
+            class: VpnCellClassV1::Cover,
+            flags: VpnCellFlagsV1::new(false, false, false, false),
+            circuit_id: [0x10; 16],
+            flow_label: VpnFlowLabelV1::from_u32(2).expect("flow"),
+            sequence: 0,
+            ack: 0,
+            padding_budget_ms: overlay.config().padding_budget_ms,
+            payload_len: 0,
+        },
+        payload: vec![0xAB; 4],
+    };
+
+    let err = overlay
+        .pad_cell(cell)
+        .expect_err("cover flag should be required");
+    assert!(matches!(
+        err,
+        VpnFrameBuildError::Cell(VpnCellError::FlagClassMismatch {
+            class: VpnCellClassV1::Cover,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn overlay_rejects_cover_frame_with_unknown_flags() {
+    let overlay = overlay();
+    let meta = CoverFrameMeta {
+        circuit_id: [0x77; 16],
+        flow_label: VpnFlowLabelV1::from_u32(5).expect("flow"),
+        ack: 0,
+        flags: VpnCellFlagsV1::from_bits(0x80),
+        start_sequence: 0,
+    };
+
+    let err = overlay
+        .cover_frame(&meta, 1)
+        .expect_err("invalid flags should be rejected");
+    assert!(matches!(
+        err,
+        VpnFrameBuildError::Cell(VpnCellError::InvalidFlags { bits, .. }) if bits & 0x80 != 0
     ));
 }
 

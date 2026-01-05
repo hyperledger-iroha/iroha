@@ -5,6 +5,7 @@ import path from 'node:path';
 import {tmpdir} from 'node:os';
 
 import {
+  buildBindingCommand,
   loadMonitorConfig,
   monitorPortal,
   monitorTryIt,
@@ -14,6 +15,32 @@ import {
   writeEvidenceBundle,
   renderPrometheusMetrics,
 } from '../monitor-publishing.mjs';
+
+test('buildBindingCommand assembles xtask invocation', () => {
+  const manifestJson = 'artifacts/sorafs/portal.manifest.json';
+  const {args, command, bindingPath} = buildBindingCommand({
+    bindingPath: 'artifacts/sorafs/portal.gateway.binding.json',
+    alias: 'docs.sora.link',
+    contentCid: 'bafytestcid',
+    hostname: 'docs.sora.link',
+    proofStatus: 'ok',
+    manifestJson,
+  });
+  assert.equal(args[0], 'xtask');
+  assert.equal(args[1], 'soradns-verify-binding');
+  assert.equal(args[2], '--binding');
+  assert.equal(bindingPath, path.resolve(process.cwd(), 'artifacts/sorafs/portal.gateway.binding.json'));
+  assert.ok(args.includes('--alias'));
+  assert.ok(args.includes('--content-cid'));
+  assert.ok(args.includes('--hostname'));
+  assert.ok(args.includes('--proof-status'));
+  assert.ok(args.includes('--manifest-json'));
+  assert.match(command, /cargo xtask soradns-verify-binding/);
+  assert.equal(
+    args[args.indexOf('--manifest-json') + 1],
+    path.resolve(process.cwd(), manifestJson),
+  );
+});
 
 test('loadMonitorConfig parses config file', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'monitor-config-'));
@@ -93,14 +120,13 @@ test('monitorTryIt surfaces probe failures', async () => {
 
 test('monitorBinding wraps successful verification', async () => {
   const summary = {
-    url: 'https://docs.sora/.well-known/sorafs/manifest',
-    statusCode: 200,
-    headers: {},
-    proof: {alias: 'docs.sora.link'},
+    command: 'cargo xtask soradns-verify-binding --binding /tmp/portal.gateway.binding.json',
+    stdout: '[soradns] verified gateway binding docs.sora.link -> bafytestcid',
+    stderr: '',
   };
   let captured;
   const result = await monitorBinding(
-    {url: summary.url, contentCid: 'bafytestcid'},
+    {bindingPath: '/tmp/portal.gateway.binding.json', contentCid: 'bafytestcid'},
     {
       verifyBindingImpl: async (options) => {
         captured = options;
@@ -112,30 +138,29 @@ test('monitorBinding wraps successful verification', async () => {
   assert.equal(result.entries.length, 1);
   assert.equal(result.entries[0].ok, true);
   assert.deepEqual(result.entries[0].summary, summary);
-  assert.equal(captured.expectedContentCid, 'bafytestcid');
+  assert.equal(captured.contentCid, 'bafytestcid');
 });
 
-test('monitorBinding supports multiple bindings and host validation', async () => {
+test('monitorBinding supports multiple bindings', async () => {
   const results = [
     {
-      url: 'https://docs.sora/.well-known/sorafs/manifest',
-      headers: {'sora-name': 'docs.sora', 'sora-proof-status': 'ok', 'sora-content-cid': 'cid1'},
-      proof: {manifest: 'man1'},
+      bindingPath: '/tmp/portal.gateway.binding.json',
+      command: 'cargo xtask soradns-verify-binding --binding /tmp/portal.gateway.binding.json',
     },
     {
-      url: 'https://docs.sora/static/openapi.json',
-      headers: {'sora-name': 'docs.sora', 'sora-proof-status': 'ok', 'sora-content-cid': 'cid2'},
-      proof: {manifest: 'man2'},
+      bindingPath: '/tmp/openapi.gateway.binding.json',
+      command: 'cargo xtask soradns-verify-binding --binding /tmp/openapi.gateway.binding.json',
     },
   ];
 
   const result = await monitorBinding(
     [
-      {label: 'site', url: results[0].url, manifest: 'man1', expectHost: 'docs.sora'},
-      {label: 'openapi', url: results[1].url, manifest: 'man2', expectHost: 'docs.sora'},
+      {label: 'site', bindingPath: results[0].bindingPath, alias: 'docs.sora'},
+      {label: 'openapi', bindingPath: results[1].bindingPath, alias: 'docs.sora'},
     ],
     {
-      verifyBindingImpl: async ({url}) => results.find((entry) => entry.url === url),
+      verifyBindingImpl: async ({bindingPath}) =>
+        results.find((entry) => entry.bindingPath === bindingPath),
     },
   );
 
@@ -146,26 +171,31 @@ test('monitorBinding supports multiple bindings and host validation', async () =
     ['site', 'openapi'],
   );
   assert.deepEqual(
-    result.entries.map((entry) => entry.manifest),
-    ['man1', 'man2'],
+    result.entries.map((entry) => entry.bindingPath),
+    ['/tmp/portal.gateway.binding.json', '/tmp/openapi.gateway.binding.json'],
   );
 });
 
-test('monitorBinding flags host mismatches and missing urls', async () => {
+test('monitorBinding flags missing bindings and verifier failures', async () => {
   const result = await monitorBinding(
     [
-      {label: 'missing-url'},
-      {label: 'wrong-host', url: 'https://docs.dev/.well-known/sorafs/manifest', expectHost: 'docs.sora'},
+      {label: 'missing-path'},
+      {label: 'invalid-binding', bindingPath: '/tmp/missing.gateway.binding.json'},
     ],
     {
-      verifyBindingImpl: async () => ({headers: {}, proof: {}}),
+      verifyBindingImpl: async ({bindingPath}) => {
+        if (bindingPath.includes('missing.gateway.binding.json')) {
+          throw new Error('binding not found');
+        }
+        return {command: 'cargo xtask soradns-verify-binding --binding ok'};
+      },
     },
   );
 
   assert.equal(result.ok, false);
   assert.equal(result.entries.length, 2);
-  assert.match(result.entries[0].error, /binding url not provided/);
-  assert.match(result.entries[1].error, /host mismatch/);
+  assert.match(result.entries[0].error, /binding path not provided/);
+  assert.match(result.entries[1].error, /binding not found/);
 });
 
 test('monitorDnsRecords validates expected answers', async () => {
@@ -200,7 +230,7 @@ test('runMonitor aggregates failures across sections', async () => {
   const config = {
     portal: {baseUrl: 'https://docs.sora'},
     tryIt: {proxyUrl: 'https://tryit.sora'},
-    binding: {url: 'https://docs.sora/.well-known/sorafs/manifest'},
+    binding: {bindingPath: '/tmp/portal.gateway.binding.json'},
     dns: {hostname: 'docs.sora'},
   };
   const summary = await runMonitor(config, {
@@ -221,7 +251,7 @@ test('runMonitor aggregates failures across sections', async () => {
     },
     binding: {
       verifyBindingImpl: async () => {
-        throw new Error('missing alias binding');
+        throw new Error('missing gateway binding');
       },
     },
     dns: {
@@ -233,7 +263,7 @@ test('runMonitor aggregates failures across sections', async () => {
   assert.equal(summary.ok, false);
   assert.equal(summary.binding.ok, false);
   assert.equal(summary.binding.entries.length, 1);
-  assert.match(summary.binding.entries[0].error, /missing alias binding/);
+  assert.match(summary.binding.entries[0].error, /missing gateway binding/);
   assert.equal(summary.dns.ok, false);
 });
 
@@ -269,7 +299,7 @@ test('renderPrometheusMetrics emits gauges for sections', () => {
     binding: {
       target: 'sorafs-binding',
       ok: true,
-      entries: [{label: 'portal', ok: true, expectHost: 'docs.sora'}],
+      entries: [{label: 'portal', ok: true, hostname: 'docs.sora'}],
     },
     dns: {
       target: 'soradns',

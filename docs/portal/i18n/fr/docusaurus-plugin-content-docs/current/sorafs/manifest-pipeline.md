@@ -115,4 +115,4 @@ Lors de la proposition de nouveaux profils de chunker :
 4. Soumettez le rapport de conformité de la charte avec des signatures de gouvernance.
 
 L'automatisation doit privilégier les handles canoniques (`namespace.name@semver`) et ne
-revenir aux IDs numériques que lorsque c'est nécessaire pour la compatibilité ascendante.
+revenir aux IDs numériques que lorsque c'est nécessaire pour le registre.

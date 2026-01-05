@@ -300,24 +300,21 @@ export class OfflineCounterJournal {
       for (const entry of items) {
         const record = entry && typeof entry === "object" ? entry : {};
         const certificateIdHex = normalizeHexId(
-          record.certificate_id_hex ?? record.certificateIdHex,
+          record.certificate_id_hex,
           "certificate_id_hex",
         );
         const controllerId = normalizeNonEmptyString(
-          record.controller_id ?? record.controllerId,
+          record.controller_id,
           "controller_id",
         );
-        const controllerDisplay =
-          record.controller_display ??
-          record.controllerDisplay ??
-          null;
-        const summaryHashRaw = record.summary_hash_hex ?? record.summaryHashHex ?? null;
+        const controllerDisplay = record.controller_display ?? null;
+        const summaryHashRaw = record.summary_hash_hex ?? null;
         const appleCounters = normalizeCounterMap(
-          record.apple_key_counters ?? record.appleKeyCounters,
+          record.apple_key_counters,
           "apple_key_counters",
         );
         const androidCounters = normalizeCounterMap(
-          record.android_series_counters ?? record.androidSeriesCounters,
+          record.android_series_counters,
           "android_series_counters",
         );
         const computedHash = OfflineCounterJournal.computeSummaryHashHex(

@@ -6,7 +6,6 @@ description: Validation plan for ManifestV1 gating ahead of the SF-4 Pin Registr
 ---
 
 :::note Canonical Source
-This page mirrors `docs/source/sorafs/pin_registry_validation_plan.md`. Keep both locations aligned while the legacy documentation remains active.
 :::
 
 # Pin Registry Manifest Validation Plan (SF-4 Prep)

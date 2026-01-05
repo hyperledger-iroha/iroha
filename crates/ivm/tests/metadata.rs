@@ -57,17 +57,6 @@ fn parse_accepts_vector_len_with_flag() {
 }
 
 #[test]
-fn parse_accepts_future_abi_versions() {
-    // Parser should accept unknown/forward ABI versions; hosts map them to policy.
-    let bytes = encode_with(ProgramMetadata::default(), |m| {
-        m.abi_version = 2;
-    });
-    let parsed = ProgramMetadata::parse(&bytes).expect("parse ok for future abi_version");
-    assert_eq!(parsed.code_offset, ivm::METADATA_MAGIC.len() + 13);
-    assert_eq!(parsed.metadata.abi_version, 2);
-}
-
-#[test]
 fn parse_rejects_wrong_major_version() {
     let bytes = encode_with(ProgramMetadata::default(), |m| {
         m.version_major = 0;
@@ -77,6 +66,15 @@ fn parse_rejects_wrong_major_version() {
 
     let bytes = encode_with(ProgramMetadata::default(), |m| {
         m.version_major = 2;
+    });
+    let err = ProgramMetadata::parse(&bytes).unwrap_err();
+    assert_eq!(err, VMError::InvalidMetadata);
+}
+
+#[test]
+fn parse_rejects_nonzero_minor_version() {
+    let bytes = encode_with(ProgramMetadata::default(), |m| {
+        m.version_minor = 1;
     });
     let err = ProgramMetadata::parse(&bytes).unwrap_err();
     assert_eq!(err, VMError::InvalidMetadata);

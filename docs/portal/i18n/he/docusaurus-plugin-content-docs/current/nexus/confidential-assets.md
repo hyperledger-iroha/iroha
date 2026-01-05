@@ -142,7 +142,6 @@ Wallets ואודיטורים בודקים `GET /v1/confidential/assets/{definiti
 ## מחזור חיים של verifier ופרמטרים
 ### ZK Registry
 - ה-ledger מאחסן `ZkVerifierEntry { vk_id, circuit_id, version, proving_system, curve, public_inputs_schema_hash, vk_hash, vk_len, max_proof_bytes, gas_schedule_id, activation_height, deprecation_height, withdraw_height, status, metadata_uri_cid, vk_bytes_cid }` כאשר `proving_system` קבוע כעת ל-`Halo2`.
-- מחזור החיים של הרגיסטרי עוקב `Proposed → Active → Deprecated → Withdrawn`. רק entries `Active` יכולים לאמת proofs; entries `Deprecated` נשארים שימושיים עד `deprecation_height`; entries `Withdrawn` דוחים proofs דטרמיניסטית.
 - זוגות `(circuit_id, version)` ייחודיים גלובלית; הרגיסטרי מחזיק אינדקס משני לחיפושים לפי metadata של circuit. ניסיונות לרשום זוג כפול נדחים ב-admission.
 - `circuit_id` חייב להיות לא ריק ו-`public_inputs_schema_hash` חייב להיות מסופק (לרוב hash Blake2b-32 של הקידוד הקנוני של public-input). Admission דוחה רשומות שחסרות שדות אלו.
 - הוראות governance כוללות:
@@ -159,8 +158,6 @@ Wallets ואודיטורים בודקים `GET /v1/confidential/assets/{definiti
 
 ### Pedersen & Poseidon Parameters
 - רגיסטרים נפרדים (`PedersenParams`, `PoseidonParams`) משקפים את בקרות מחזור החיים של verifier, לכל אחד `params_id`, hashes של generators/constants, וגבהי activation/deprecation/withdraw.
-- Commitments ו-hashes מבצעים domain-separation עם `params_id` כך שרוטציית פרמטרים לעולם לא עושה שימוש חוזר בדפוסי ביטים מסטים deprecated; ה-ID מוטמע ב-note commitments ובתגי דומיין של nullifier.
-- Circuits תומכים בבחירת multi-parameter בעת אימות; סטים deprecated נשארים ניתנים להוצאה עד `deprecation_height`, וסטים withdrawn נדחים בדיוק ב-`withdraw_height`.
 
 ## Deterministic Ordering & Nullifiers
 - כל נכס שומר `CommitmentTree` עם `next_leaf_index`; בלוקים מצרפים commitments בסדר דטרמיניסטי: מעבר על טרנזקציות לפי סדר הבלוק; בתוך כל טרנזקציה מעבר על outputs shielded לפי `output_idx` מסודר.
@@ -201,17 +198,6 @@ Wallets ואודיטורים בודקים `GET /v1/confidential/assets/{definiti
 - Handshake מפרסם `feature_bits.confidential` יחד עם `ConfidentialFeatureDigest { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`. השתתפות ולידטור דורשת `confidential.enabled=true`, `assume_valid=false`, מזהי verifier backend זהים ו-digest תואם; חוסר התאמה נכשל ב-`HandshakeConfidentialMismatch`.
 - Config תומך ב-`assume_valid` לצמתי observer בלבד: כאשר כבוי, מפגש עם הוראות חסויות מפיק `UnsupportedInstruction` דטרמיניסטי ללא panic; כאשר מופעל, observers מיישמים state deltas מוצהרים ללא אימות proofs.
 - Mempool דוחה טרנזקציות חסויות אם היכולת המקומית כבויה. Gossip filters נמנעים מלשלוח טרנזקציות shielded ל-peers לא תואמים תוך העברת מזהי verifier לא ידועים בצורה עיוורת בתוך מגבלות גודל.
-
-### Handshake Compatibility Matrix
-
-| פרסום צד מרוחק | תוצאה עבור ולידטורים | הערות אופרטור |
-|----------------------|-----------------------------|----------------|
-| `enabled=true`, `assume_valid=false`, backend תואם, digest תואם | Accepted | ה-peer מגיע ל-`Ready` ומשתתף ב-proposal, vote ו-RBC fan-out. אין צורך בפעולה ידנית. |
-| `enabled=true`, `assume_valid=false`, backend תואם, digest ישן או חסר | Rejected (`HandshakeConfidentialMismatch`) | הצד המרוחק צריך להחיל הפעלות registry/parameter ממתינות או להמתין ל-`activation_height`. עד תיקון, ה-node נשאר ניתן לגילוי אך לא נכנס לרוטציית קונצנזוס. |
-| `enabled=true`, `assume_valid=true` | Rejected (`HandshakeConfidentialMismatch`) | ולידטורים דורשים אימות proofs; הגדירו את הצד המרוחק כ-observer עם Torii בלבד או עברו ל-`assume_valid=false` לאחר הפעלת אימות מלא. |
-| `enabled=false`, שדות handshake חסרים (בניה מיושנת), או backend שונה | Rejected (`HandshakeConfidentialMismatch`) | peers מיושנים או משודרגים חלקית לא יכולים להצטרף לרשת הקונצנזוס. שדרגו לגרסה הנוכחית ואמתו התאמת backend + digest לפני חיבור מחדש. |
-
-Observers שמדלגים בכוונה על אימות proofs אינם צריכים לפתוח חיבורי קונצנזוס מול ולידטורים עם capability gates. הם יכולים לקלוט בלוקים דרך Torii או APIs ארכיוניים, אך רשת הקונצנזוס תדחה אותם עד שיפרסמו יכולות תואמות.
 
 ### Reveal Pruning & Nullifier Retention Policy
 
@@ -359,7 +345,6 @@ Ledgers חסויים חייבים לשמור מספיק היסטוריה כדי 
      - ✅ frontier checkpoints מכבדים `reorg_depth_bound`, גוזמים checkpoints ישנים יותר מהחלון המוגדר תוך שמירת snapshots דטרמיניסטיים.
    - להציג `AssetConfidentialPolicy`, policy FSM ו-enforcement gates עבור הוראות mint/transfer/reveal.
    - להתחייב ל-`conf_features` בכותרות בלוק ולסרב להשתתפות ולידטורים כאשר digestים של registry/parameter שונים.
-   - לממש registry FSM (Proposed/Active/Deprecated/Withdrawn) עם גבהי activation/deprecation/withdraw וטיפול ב-emergency withdrawal.
 2. **Phase M1 — Registries & Parameters**
    - להשיק registries של `ZkVerifierEntry`, `PedersenParams`, `PoseidonParams` עם governance ops, anchoring של genesis וניהול cache.
    - לחבר syscall לדרוש registry lookups, מזהי gas schedule, schema hashing ובדיקות גודל.

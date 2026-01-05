@@ -168,7 +168,6 @@ O merge ring DEVE aplicar o seguinte antes de aceitar um compromisso de lane:
   `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_local_data"}`,
   `lane_relay_invalid_total{error}`, `lane_relay_emergency_override_total{outcome}`, e
   `nexus_audit_outcome_total` ja existem em `crates/iroha_telemetry/src/metrics.rs`. Operadores
-  devem alertar sobre picos de missing-availability (os contadores de reschedule sao legacy e devem
   permanecer em zero), e `lane_relay_invalid_total` deve permanecer em zero fora de exercicios
   adversariais.
 - **Superficies Torii:**  

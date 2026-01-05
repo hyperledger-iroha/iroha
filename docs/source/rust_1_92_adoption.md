@@ -35,7 +35,6 @@ entries.
 | Area | Highlight | Action | Status | Notes |
 |------|-----------|--------|--------|-------|
 | Language | `never_type_fallback_flowing_into_unsafe`, `dependency_on_unit_never_type_fallback` deny-by-default | Run the 1.92 lint sweep and fix any new findings | TODO | `ci/check_rust_1_92_lints.sh` is ready; run it before merging new unsafe work. |
-| Compatibility | `invalid_macro_export_arguments` now deny-by-default (also in deps) | Audit proc-macro exports and update diagnostics if failures appear | TODO | Expect failures to surface in dependencies now that the lint is deny-by-default. |
 | Libraries | `RwLockWriteGuard::downgrade` | Replace write-then-read lock handoffs where a downgrade suffices | TODO | Focus on std `RwLock` sites that drop a write guard just to re-acquire read. |
 | Libraries | `Location::file_as_c_str` | Use when feeding caller file paths into FFI or logging C APIs | TODO | Consider for any `Location::caller()` -> C string conversions. |
 | Libraries | `NonZero::div_ceil` | Adopt in rate/limit conversions that currently rely on `get().div_ceil()` | DONE | Operator auth rate limit conversion updated in this change. |

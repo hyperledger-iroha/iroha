@@ -93,7 +93,7 @@ requirements:
 - Possess a `range_capability` descriptor with `max_chunk_span` ≥ the largest chunk
   in the plan.
 - Honour alignment expectations if `requires_alignment` is true.
-- Advertise a `stream_budget` compatible with the plan’s largest chunk.
+- Advertise a `stream_budget` large enough for the plan’s largest chunk.
 - Remain within governance validity windows (`refresh_deadline`, `expires_at`).
 
 Ineligible providers are reported in the scoreboard file with an explicit reason and
@@ -333,17 +333,6 @@ governance triage.
 
 All bindings MUST call into the Rust implementation without diverging from the
 ordering, verification, or telemetry semantics described above.
-
-# 9. Determinism and Compatibility
-
-- Scoreboard computation and scheduling are pure functions of the manifest,
-  adverts, telemetry snapshot, and configuration. No system clocks or randomness are
-  consulted.
-- The orchestrator rejects providers whose metadata changes mid-session by honouring
-  the Norito validity window: callers must reload metadata before invoking the next
-  session.
-- Output chunks, receipts, and telemetry are stable across hardware platforms as
-  long as the same inputs are supplied.
 
 # 10. Open Items
 

@@ -71,11 +71,6 @@ public final class OfflineAuditLogger {
     }
   }
 
-  /** Alias of {@link #exportJson()} for backwards compatibility. */
-  public byte[] exportAuditJson() throws IOException {
-    return exportJson();
-  }
-
   public void clear() throws IOException {
     synchronized (lock) {
       entries.clear();

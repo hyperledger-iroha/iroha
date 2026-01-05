@@ -1,6 +1,6 @@
 //! This module contains [`State`] snapshot actor service.
 use std::{
-    io::{Read, Write},
+    io::Write,
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::Arc,
@@ -13,7 +13,7 @@ use iroha_config::{
     snapshot::Mode,
 };
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf, KeyPair, MerkleTree, PublicKey, Signature};
-use iroha_data_model::block::BlockHeader;
+use iroha_data_model::{ChainId, block::BlockHeader};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
 use norito::json::{self, JsonDeserialize, JsonSerialize, JsonSerialize as JsonSerializeTrait};
@@ -36,6 +36,10 @@ impl JsonSerializeTrait for State {
         let prev_commit_topology = view.prev_commit_topology.to_vec();
 
         out.push('{');
+        json::write_json_string("chain_id", out);
+        out.push(':');
+        json::JsonSerialize::json_serialize(&self.chain_id, out);
+        out.push(',');
         json::write_json_string("world", out);
         out.push(':');
         self.world.json_serialize(out);
@@ -71,6 +75,10 @@ const SNAPSHOT_TMP_FILE_NAME: &str = "snapshot.tmp";
 const SNAPSHOT_DIGEST_FILE_NAME: &str = "snapshot.sha256";
 /// Name of the signature accompanying the digest.
 const SNAPSHOT_SIGNATURE_FILE_NAME: &str = "snapshot.sig";
+/// Name of the temporary digest file.
+const SNAPSHOT_DIGEST_TMP_FILE_NAME: &str = "snapshot.sha256.tmp";
+/// Name of the temporary signature file.
+const SNAPSHOT_SIGNATURE_TMP_FILE_NAME: &str = "snapshot.sig.tmp";
 /// Name of the Merkle metadata accompanying the snapshot file.
 const SNAPSHOT_MERKLE_FILE_NAME: &str = "snapshot.merkle.json";
 /// Name of the temporary Merkle metadata file.
@@ -107,6 +115,13 @@ enum SnapshotMerkleError {
         /// Length recorded in metadata.
         expected: u64,
         /// Actual snapshot payload length.
+        actual: u64,
+    },
+    /// Snapshot Merkle leaf count mismatch (expected `{expected}`, got `{actual}`)
+    LeafCountMismatch {
+        /// Expected number of leaves for the snapshot length and chunk size.
+        expected: u64,
+        /// Actual number of leaves recorded in metadata.
         actual: u64,
     },
     /// Snapshot Merkle root could not be parsed from hex
@@ -189,6 +204,15 @@ impl SnapshotMerkleMetadata {
             .collect()
     }
 
+    fn expected_leaf_count(&self, chunk_size: NonZeroUsize) -> Result<u64, SnapshotMerkleError> {
+        let chunk = u64::try_from(chunk_size.get())
+            .map_err(|_| SnapshotMerkleError::ChunkSizeInvalid(self.chunk_size_bytes))?;
+        if self.total_len_bytes == 0 {
+            return Ok(1);
+        }
+        Ok((self.total_len_bytes - 1) / chunk + 1)
+    }
+
     fn tree(&self) -> Result<MerkleTree<[u8; 32]>, SnapshotMerkleError> {
         let leaves = self.parse_leaves()?;
         Ok(MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(leaves))
@@ -196,6 +220,14 @@ impl SnapshotMerkleMetadata {
 
     fn verify_self(&self) -> Result<(), SnapshotMerkleError> {
         let chunk_size = self.chunk_size()?;
+        let expected_leaves = self.expected_leaf_count(chunk_size)?;
+        let actual_leaves = self.leaf_hashes_hex.len() as u64;
+        if expected_leaves != actual_leaves {
+            return Err(SnapshotMerkleError::LeafCountMismatch {
+                expected: expected_leaves,
+                actual: actual_leaves,
+            });
+        }
         let tree = self.tree()?;
         let Some(root) = tree.root() else {
             return Err(SnapshotMerkleError::RootHexMalformed);
@@ -207,7 +239,6 @@ impl SnapshotMerkleMetadata {
                 actual: hex::encode(root.as_ref()),
             });
         }
-        let _ = chunk_size;
         Ok(())
     }
 
@@ -418,6 +449,171 @@ impl SnapshotMaker {
     }
 }
 
+fn read_optional_bytes(path: &Path) -> Result<Option<Vec<u8>>, TryReadError> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(TryReadError::IO(err, path.to_path_buf())),
+    }
+}
+
+fn read_optional_string(path: &Path) -> Result<Option<String>, TryReadError> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => Ok(Some(contents.trim().to_owned())),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(TryReadError::IO(err, path.to_path_buf())),
+    }
+}
+
+fn select_digest_with_fallback(
+    digest_path: &Path,
+    digest_tmp_path: &Path,
+    actual_digest: &str,
+) -> Result<bool, TryReadError> {
+    let main = read_optional_string(digest_path)?;
+    if let Some(expected) = main.as_ref() {
+        if expected == actual_digest {
+            return Ok(false);
+        }
+    }
+    let tmp = read_optional_string(digest_tmp_path)?;
+    if let Some(expected) = tmp.as_ref() {
+        if expected == actual_digest {
+            return Ok(true);
+        }
+    }
+    match (main, tmp) {
+        (Some(expected), _) => Err(TryReadError::ChecksumMismatch {
+            expected,
+            actual: actual_digest.to_owned(),
+        }),
+        (None, Some(expected)) => Err(TryReadError::ChecksumMismatch {
+            expected,
+            actual: actual_digest.to_owned(),
+        }),
+        (None, None) => Err(TryReadError::ChecksumMissing(digest_path.to_path_buf())),
+    }
+}
+
+fn verify_signature_hex(
+    signature_hex: &str,
+    digest: &[u8],
+    verification_key: &PublicKey,
+) -> Result<(), TryReadError> {
+    let signature = Signature::from_hex(signature_hex)
+        .map_err(|_| TryReadError::SignatureMalformed(signature_hex.to_owned()))?;
+    signature
+        .verify(verification_key, digest)
+        .map_err(|err| TryReadError::SignatureInvalid(err.to_string()))
+}
+
+fn verify_signature_with_fallback(
+    sig_path: &Path,
+    sig_tmp_path: &Path,
+    digest: &[u8],
+    verification_key: &PublicKey,
+) -> Result<bool, TryReadError> {
+    let mut main_error = None;
+    if let Some(signature_hex) = read_optional_string(sig_path)? {
+        match verify_signature_hex(&signature_hex, digest, verification_key) {
+            Ok(()) => return Ok(false),
+            Err(err) => main_error = Some(err),
+        }
+    }
+    if let Some(signature_hex) = read_optional_string(sig_tmp_path)? {
+        match verify_signature_hex(&signature_hex, digest, verification_key) {
+            Ok(()) => return Ok(true),
+            Err(err) => return Err(main_error.unwrap_or(err)),
+        }
+    }
+    Err(main_error.unwrap_or_else(|| TryReadError::SignatureMissing(sig_path.to_path_buf())))
+}
+
+fn read_merkle_metadata(path: &Path) -> Result<Option<SnapshotMerkleMetadata>, TryReadError> {
+    match SnapshotMerkleMetadata::from_path(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(SnapshotMerkleError::Missing) => Ok(None),
+        Err(err) => Err(merkle_err_to_try_read(err, path.to_path_buf())),
+    }
+}
+
+fn verify_merkle_with_fallback(
+    merkle_path: &Path,
+    merkle_tmp_path: &Path,
+    bytes: &[u8],
+    merkle_chunk_size: NonZeroUsize,
+) -> Result<bool, TryReadError> {
+    let mut main_error = None;
+    if let Some(metadata) = read_merkle_metadata(merkle_path)? {
+        match metadata
+            .verify_against_bytes(bytes, merkle_chunk_size)
+            .map_err(|err| merkle_err_to_try_read(err, merkle_path.to_path_buf()))
+        {
+            Ok(()) => return Ok(false),
+            Err(err) => main_error = Some(err),
+        }
+    }
+    if let Some(metadata) = read_merkle_metadata(merkle_tmp_path)? {
+        match metadata
+            .verify_against_bytes(bytes, merkle_chunk_size)
+            .map_err(|err| merkle_err_to_try_read(err, merkle_tmp_path.to_path_buf()))
+        {
+            Ok(()) => return Ok(true),
+            Err(err) => return Err(main_error.unwrap_or(err)),
+        }
+    }
+    Err(main_error.unwrap_or_else(|| TryReadError::MerkleMissing(merkle_path.to_path_buf())))
+}
+
+fn promote_tmp_file(tmp: &Path, main: &Path, kind: &str) -> bool {
+    if let Err(err) = std::fs::rename(tmp, main) {
+        if main.exists() {
+            if let Err(remove_err) = std::fs::remove_file(main) {
+                iroha_logger::warn!(
+                    ?remove_err,
+                    ?main,
+                    kind,
+                    "failed to remove snapshot file before promoting temp"
+                );
+                return false;
+            }
+            if let Err(err) = std::fs::rename(tmp, main) {
+                iroha_logger::warn!(
+                    ?err,
+                    ?tmp,
+                    ?main,
+                    kind,
+                    "failed to promote snapshot temp file after removal"
+                );
+                return false;
+            }
+            return true;
+        }
+        iroha_logger::warn!(
+            ?err,
+            ?tmp,
+            ?main,
+            kind,
+            "failed to promote snapshot temp file"
+        );
+        return false;
+    }
+    true
+}
+
+fn sync_dir_best_effort(path: &Path) {
+    match std::fs::File::open(path) {
+        Ok(file) => {
+            if let Err(err) = file.sync_all() {
+                iroha_logger::warn!(?err, ?path, "failed to sync snapshot directory");
+            }
+        }
+        Err(err) => {
+            iroha_logger::warn!(?err, ?path, "failed to open snapshot directory for sync");
+        }
+    }
+}
+
 /// Try to deserialize [`State`] from a snapshot file.
 ///
 /// # Errors
@@ -431,60 +627,37 @@ pub fn try_read_snapshot(
     BlockCount(block_count): BlockCount,
     merkle_chunk_size: NonZeroUsize,
     verification_key: &PublicKey,
+    expected_chain_id: &ChainId,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
 ) -> Result<State, TryReadError> {
-    let mut bytes = Vec::new();
-    let path = store_dir.as_ref().join(SNAPSHOT_FILE_NAME);
-    let mut file = match std::fs::OpenOptions::new().read(true).open(&path) {
-        Ok(file) => file,
-        Err(err) => {
-            return if err.kind() == std::io::ErrorKind::NotFound {
-                Err(TryReadError::NotFound)
-            } else {
-                Err(TryReadError::IO(err, path.clone()))
-            };
-        }
+    let store_dir = store_dir.as_ref();
+    let path = store_dir.join(SNAPSHOT_FILE_NAME);
+    let tmp_path = store_dir.join(SNAPSHOT_TMP_FILE_NAME);
+    let (bytes, data_used_tmp) = match read_optional_bytes(&path)? {
+        Some(bytes) => (bytes, false),
+        None => match read_optional_bytes(&tmp_path)? {
+            Some(bytes) => (bytes, true),
+            None => return Err(TryReadError::NotFound),
+        },
     };
-    file.read_to_end(&mut bytes)
-        .map_err(|err| TryReadError::IO(err, path.clone()))?;
 
-    let digest_path = store_dir.as_ref().join(SNAPSHOT_DIGEST_FILE_NAME);
-    let expected_digest = match std::fs::read_to_string(&digest_path) {
-        Ok(contents) => contents.trim().to_owned(),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Err(TryReadError::ChecksumMissing(digest_path));
-        }
-        Err(err) => return Err(TryReadError::IO(err, digest_path)),
-    };
+    let digest_path = store_dir.join(SNAPSHOT_DIGEST_FILE_NAME);
+    let digest_tmp_path = store_dir.join(SNAPSHOT_DIGEST_TMP_FILE_NAME);
     let digest_bytes = Sha256::digest(&bytes);
     let digest_vec = digest_bytes.to_vec();
     let actual_digest = hex::encode(&digest_vec);
-    if expected_digest != actual_digest {
-        return Err(TryReadError::ChecksumMismatch {
-            expected: expected_digest,
-            actual: actual_digest,
-        });
-    }
+    let digest_used_tmp =
+        select_digest_with_fallback(&digest_path, &digest_tmp_path, &actual_digest)?;
 
-    let sig_path = store_dir.as_ref().join(SNAPSHOT_SIGNATURE_FILE_NAME);
-    let signature_hex = match std::fs::read_to_string(&sig_path) {
-        Ok(contents) => contents.trim().to_owned(),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Err(TryReadError::SignatureMissing(sig_path));
-        }
-        Err(err) => return Err(TryReadError::IO(err, sig_path)),
-    };
-    let signature = Signature::from_hex(&signature_hex)
-        .map_err(|_| TryReadError::SignatureMalformed(signature_hex.clone()))?;
-    signature
-        .verify(verification_key, &digest_vec)
-        .map_err(|err| TryReadError::SignatureInvalid(err.to_string()))?;
-    let merkle_path = store_dir.as_ref().join(SNAPSHOT_MERKLE_FILE_NAME);
-    let merkle_meta = SnapshotMerkleMetadata::from_path(&merkle_path)
-        .map_err(|err| merkle_err_to_try_read(err, merkle_path.clone()))?;
-    merkle_meta
-        .verify_against_bytes(&bytes, merkle_chunk_size)
-        .map_err(|err| merkle_err_to_try_read(err, merkle_path.clone()))?;
+    let sig_path = store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME);
+    let sig_tmp_path = store_dir.join(SNAPSHOT_SIGNATURE_TMP_FILE_NAME);
+    let signature_used_tmp =
+        verify_signature_with_fallback(&sig_path, &sig_tmp_path, &digest_vec, verification_key)?;
+
+    let merkle_path = store_dir.join(SNAPSHOT_MERKLE_FILE_NAME);
+    let merkle_tmp_path = store_dir.join(SNAPSHOT_MERKLE_TMP_FILE_NAME);
+    let merkle_used_tmp =
+        verify_merkle_with_fallback(&merkle_path, &merkle_tmp_path, &bytes, merkle_chunk_size)?;
     #[cfg(test)]
     {
         eprintln!(
@@ -513,6 +686,12 @@ pub fn try_read_snapshot(
     let state = seed
         .into_state_from_json(value)
         .map_err(TryReadError::Serialization)?;
+    if &state.chain_id != expected_chain_id {
+        return Err(TryReadError::ChainIdMismatch {
+            expected: expected_chain_id.clone(),
+            actual: state.chain_id.clone(),
+        });
+    }
     let (snapshot_height, snapshot_hashes) = {
         let state_view = state.view();
         let hashes = state_view.block_hashes.iter().copied().collect::<Vec<_>>();
@@ -528,7 +707,7 @@ pub fn try_read_snapshot(
         let height = idx + 1;
         let kura_block = kura
             .get_block(NonZeroUsize::new(height).expect("iterating from 1"))
-            .expect("Kura has height at least as large as state height");
+            .ok_or(TryReadError::MissingBlock { height })?;
         if kura_block.hash() != snapshot_block_hash {
             if height == snapshot_height {
                 iroha_logger::warn!(
@@ -546,6 +725,22 @@ pub fn try_read_snapshot(
                 });
             }
         }
+    }
+    let mut promoted = false;
+    if data_used_tmp {
+        promoted |= promote_tmp_file(&tmp_path, &path, "snapshot data");
+    }
+    if digest_used_tmp {
+        promoted |= promote_tmp_file(&digest_tmp_path, &digest_path, "snapshot digest");
+    }
+    if signature_used_tmp {
+        promoted |= promote_tmp_file(&sig_tmp_path, &sig_path, "snapshot signature");
+    }
+    if merkle_used_tmp {
+        promoted |= promote_tmp_file(&merkle_tmp_path, &merkle_path, "snapshot merkle metadata");
+    }
+    if promoted {
+        sync_dir_best_effort(store_dir);
     }
     Ok(state)
 }
@@ -569,12 +764,8 @@ fn try_write_snapshot(
     let path_to_signature_file = store_dir.as_ref().join(SNAPSHOT_SIGNATURE_FILE_NAME);
     let path_to_merkle_file = store_dir.as_ref().join(SNAPSHOT_MERKLE_FILE_NAME);
     let path_to_tmp_file = store_dir.as_ref().join(SNAPSHOT_TMP_FILE_NAME);
-    let path_to_tmp_digest = store_dir
-        .as_ref()
-        .join(format!("{SNAPSHOT_DIGEST_FILE_NAME}.tmp"));
-    let path_to_tmp_sig = store_dir
-        .as_ref()
-        .join(format!("{SNAPSHOT_SIGNATURE_FILE_NAME}.tmp"));
+    let path_to_tmp_digest = store_dir.as_ref().join(SNAPSHOT_DIGEST_TMP_FILE_NAME);
+    let path_to_tmp_sig = store_dir.as_ref().join(SNAPSHOT_SIGNATURE_TMP_FILE_NAME);
     let path_to_tmp_merkle = store_dir.as_ref().join(SNAPSHOT_MERKLE_TMP_FILE_NAME);
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -603,10 +794,38 @@ fn try_write_snapshot(
     let digest_vec = digest_bytes.to_vec();
     let digest_hex = hex::encode(&digest_vec);
     let merkle = SnapshotMerkleMetadata::from_bytes(&snapshot_bytes, merkle_chunk_size);
-    std::fs::write(&path_to_tmp_digest, format!("{digest_hex}\n"))
+    let digest_line = format!("{digest_hex}\n");
+    let mut digest_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path_to_tmp_digest)
+        .map_err(|err| TryWriteError::IO(err, path_to_tmp_digest.clone()))?;
+    digest_file
+        .write_all(digest_line.as_bytes())
+        .map_err(|err| TryWriteError::IO(err, path_to_tmp_digest.clone()))?;
+    digest_file
+        .flush()
+        .map_err(|err| TryWriteError::IO(err, path_to_tmp_digest.clone()))?;
+    digest_file
+        .sync_data()
         .map_err(|err| TryWriteError::IO(err, path_to_tmp_digest.clone()))?;
     let signature = Signature::new(signing_key.private_key(), &digest_vec);
-    std::fs::write(&path_to_tmp_sig, hex::encode(signature.payload()))
+    let signature_hex = hex::encode(signature.payload());
+    let mut sig_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path_to_tmp_sig)
+        .map_err(|err| TryWriteError::IO(err, path_to_tmp_sig.clone()))?;
+    sig_file
+        .write_all(signature_hex.as_bytes())
+        .map_err(|err| TryWriteError::IO(err, path_to_tmp_sig.clone()))?;
+    sig_file
+        .flush()
+        .map_err(|err| TryWriteError::IO(err, path_to_tmp_sig.clone()))?;
+    sig_file
+        .sync_data()
         .map_err(|err| TryWriteError::IO(err, path_to_tmp_sig.clone()))?;
     let mut merkle_file = std::fs::OpenOptions::new()
         .create(true)
@@ -629,7 +848,15 @@ fn try_write_snapshot(
         .map_err(|err| TryWriteError::IO(err, path_to_signature_file.clone()))?;
     std::fs::rename(path_to_tmp_merkle, &path_to_merkle_file)
         .map_err(|err| TryWriteError::IO(err, path_to_merkle_file.clone()))?;
+    sync_dir(store_dir.as_ref())?;
     Ok(())
+}
+
+fn sync_dir(path: &Path) -> Result<(), TryWriteError> {
+    let file =
+        std::fs::File::open(path).map_err(|err| TryWriteError::IO(err, path.to_path_buf()))?;
+    file.sync_all()
+        .map_err(|err| TryWriteError::IO(err, path.to_path_buf()))
 }
 
 /// Error variants for snapshot reading
@@ -690,14 +917,21 @@ pub enum TryReadError {
         /// Reason the Merkle verification failed.
         reason: String,
     },
-    /// Snapshot is in a non-consistent state. Snapshot has greater height (`snapshot_height`) than kura block store (`kura_height`)
+    /// Snapshot chain id mismatch (expected `{expected}`, got `{actual}`)
+    ChainIdMismatch {
+        /// Expected chain id from configuration.
+        expected: ChainId,
+        /// Chain id recorded in the snapshot payload.
+        actual: ChainId,
+    },
+    /// Snapshot is in a non-consistent state. Snapshot has greater height ({snapshot_height}) than kura block store ({kura_height})
     MismatchedHeight {
         /// The amount of block hashes stored by snapshot
         snapshot_height: usize,
         /// The amount of blocks stored by [`Kura`]
         kura_height: usize,
     },
-    /// Snapshot is in a non-consistent state. Hash of the block at height `height` is different between snapshot (`snapshot_block_hash`) and kura (`kura_block_hash`)
+    /// Snapshot is in a non-consistent state. Hash of the block at height {height} is different between snapshot ({snapshot_block_hash}) and kura ({kura_block_hash})
     MismatchedHash {
         /// Height at which block hashes differs between snapshot and [`Kura`]
         height: usize,
@@ -705,6 +939,11 @@ pub enum TryReadError {
         snapshot_block_hash: HashOf<BlockHeader>,
         /// Hash of the block stored in kura
         kura_block_hash: HashOf<BlockHeader>,
+    },
+    /// Snapshot is in a non-consistent state. Kura is missing block {height}.
+    MissingBlock {
+        /// Height of the missing block in [`Kura`].
+        height: usize,
     },
     /// Failed to reconcile snapshot state with Kura while committing a block revert
     StateCommit(TransactionsBlockError),
@@ -726,6 +965,11 @@ fn merkle_err_to_try_read(err: SnapshotMerkleError, path: PathBuf) -> TryReadErr
         }
         SnapshotMerkleError::LengthMismatch { expected, actual } => {
             TryReadError::MerkleLengthMismatch { expected, actual }
+        }
+        SnapshotMerkleError::LeafCountMismatch { expected, actual } => {
+            TryReadError::MerkleMetadataMalformed(format!(
+                "leaf count mismatch (expected {expected}, got {actual})"
+            ))
         }
         SnapshotMerkleError::RootHexMalformed => {
             TryReadError::MerkleMetadataMalformed("invalid Merkle root hex".into())
@@ -762,8 +1006,8 @@ enum TryWriteError {
 mod tests {
     use std::{fs::File, io::Write, num::NonZeroUsize};
 
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use iroha_data_model::peer::PeerId;
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_data_model::{ChainId, peer::PeerId};
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
     use tokio::test;
@@ -774,15 +1018,18 @@ mod tests {
     };
 
     const TEST_CHUNK_SIZE: NonZeroUsize = nonzero!(1024_usize);
+    const TEST_CHAIN_ID: &str = "test-chain";
 
     fn state_factory() -> State {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        State::new(
+        let mut state = State::new(
             crate::queue::tests::world_with_test_domains(),
             kura,
             query_handle,
-        )
+        );
+        state.chain_id = ChainId::from(TEST_CHAIN_ID);
+        state
     }
 
     #[test]
@@ -812,6 +1059,7 @@ mod tests {
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
         )
@@ -819,10 +1067,104 @@ mod tests {
     }
 
     #[test]
+    async fn snapshot_read_promotes_tmp_bundle() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair = KeyPair::random();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+
+        let main_paths = vec![
+            store_dir.join(SNAPSHOT_FILE_NAME),
+            store_dir.join(SNAPSHOT_DIGEST_FILE_NAME),
+            store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME),
+            store_dir.join(SNAPSHOT_MERKLE_FILE_NAME),
+        ];
+        let tmp_paths = vec![
+            store_dir.join(SNAPSHOT_TMP_FILE_NAME),
+            store_dir.join(SNAPSHOT_DIGEST_TMP_FILE_NAME),
+            store_dir.join(SNAPSHOT_SIGNATURE_TMP_FILE_NAME),
+            store_dir.join(SNAPSHOT_MERKLE_TMP_FILE_NAME),
+        ];
+
+        for (main, tmp) in main_paths.iter().zip(tmp_paths.iter()) {
+            std::fs::rename(main, tmp).expect("move snapshot files to temp");
+        }
+
+        let _wsv = try_read_snapshot(
+            &store_dir,
+            &Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        )
+        .unwrap();
+
+        for path in main_paths {
+            assert!(
+                path.is_file(),
+                "expected promoted snapshot artifact: {}",
+                path.display()
+            );
+        }
+        for path in tmp_paths {
+            assert!(
+                !path.exists(),
+                "temp snapshot artifact should be removed: {}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    async fn snapshot_write_cleans_temp_files() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair = KeyPair::random();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+
+        let tmp_paths = [
+            store_dir.join(SNAPSHOT_TMP_FILE_NAME),
+            store_dir.join(SNAPSHOT_DIGEST_TMP_FILE_NAME),
+            store_dir.join(SNAPSHOT_SIGNATURE_TMP_FILE_NAME),
+            store_dir.join(SNAPSHOT_MERKLE_TMP_FILE_NAME),
+        ];
+        for path in tmp_paths {
+            assert!(
+                !path.exists(),
+                "temp snapshot artifact should be removed: {}",
+                path.display()
+            );
+        }
+
+        let final_paths = [
+            store_dir.join(SNAPSHOT_FILE_NAME),
+            store_dir.join(SNAPSHOT_DIGEST_FILE_NAME),
+            store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME),
+            store_dir.join(SNAPSHOT_MERKLE_FILE_NAME),
+        ];
+        for path in final_paths {
+            assert!(
+                path.is_file(),
+                "expected snapshot artifact: {}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
     async fn cannot_find_snapshot_on_read_is_not_found() {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let key_pair = KeyPair::random();
+        let chain_id = ChainId::from(TEST_CHAIN_ID);
 
         let Err(error) = try_read_snapshot(
             store_dir,
@@ -831,6 +1173,7 @@ mod tests {
             BlockCount(15),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -846,6 +1189,7 @@ mod tests {
         let store_dir = tmp_root.path().join("snapshot");
         std::fs::create_dir(&store_dir).unwrap();
         let key_pair = KeyPair::random();
+        let chain_id = ChainId::from(TEST_CHAIN_ID);
         let corrupted = [1, 4, 1, 2, 3, 4, 1, 4];
         {
             let mut file = File::create(store_dir.join(SNAPSHOT_FILE_NAME)).unwrap();
@@ -872,6 +1216,7 @@ mod tests {
             BlockCount(15),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -899,6 +1244,7 @@ mod tests {
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -906,6 +1252,66 @@ mod tests {
         };
 
         assert!(matches!(error, TryReadError::ChecksumMismatch { .. }));
+    }
+
+    #[test]
+    async fn chain_id_mismatch_rejected() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair = KeyPair::random();
+        let expected_chain_id = ChainId::from("other-chain");
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+
+        let Err(error) = try_read_snapshot(
+            &store_dir,
+            &Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &expected_chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
+        ) else {
+            panic!("should not be ok")
+        };
+
+        assert!(matches!(error, TryReadError::ChainIdMismatch { .. }));
+    }
+
+    #[test]
+    async fn missing_kura_block_is_reported() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair = KeyPair::random();
+        let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; 32]));
+
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push(hash);
+            block_hashes.commit_for_tests();
+        }
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+
+        let Err(error) = try_read_snapshot(
+            &store_dir,
+            &Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test,
+            BlockCount(1),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
+        ) else {
+            panic!("missing Kura block should error");
+        };
+
+        assert!(matches!(error, TryReadError::MissingBlock { height: 1 }));
     }
 
     #[test]
@@ -925,6 +1331,7 @@ mod tests {
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -951,6 +1358,7 @@ mod tests {
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -983,6 +1391,7 @@ mod tests {
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -990,6 +1399,42 @@ mod tests {
         };
 
         assert!(matches!(error, TryReadError::MerkleMismatch { .. }));
+    }
+
+    #[test]
+    async fn merkle_leaf_count_mismatch_rejected() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair = KeyPair::random();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+        let mut metadata =
+            SnapshotMerkleMetadata::from_path(&store_dir.join(SNAPSHOT_MERKLE_FILE_NAME))
+                .expect("metadata");
+        assert!(
+            metadata.leaf_hashes_hex.pop().is_some(),
+            "expected at least one Merkle leaf"
+        );
+        let mut merkle_file =
+            File::create(store_dir.join(SNAPSHOT_MERKLE_FILE_NAME)).expect("merkle file");
+        json::to_writer(&mut merkle_file, &metadata).expect("write merkle");
+
+        let Err(error) = try_read_snapshot(
+            &store_dir,
+            &Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
+        ) else {
+            panic!("should not be ok")
+        };
+
+        assert!(matches!(error, TryReadError::MerkleMetadataMalformed(_)));
     }
 
     #[test]
@@ -1015,6 +1460,7 @@ mod tests {
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -1115,6 +1561,7 @@ mod tests {
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         )
@@ -1197,6 +1644,7 @@ mod tests {
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
+            &state.chain_id,
             #[cfg(feature = "telemetry")]
             <_>::default(),
         )

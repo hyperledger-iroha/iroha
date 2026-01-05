@@ -168,7 +168,6 @@ payloads round-trip cleanly before the Torii APIs land.【crates/sorafs_node/tes
 2. **Discovery / Adverts**:
    - Generate `ProviderAdvertV1` documents using current capacity/health, sign
      them with the council-approved key, and publish via the discovery channel.
-     Use the new `profile_aliases` list so canonical and legacy handles remain
      available.
 3. **Pin Workflow**:
    - Gateway receives a signed manifest (including chunk plan, PoR root, council

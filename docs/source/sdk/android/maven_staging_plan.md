@@ -32,7 +32,7 @@ can be cited in governance reviews and `status.md`.
 
 1. **Quality gates**
    - Ensure `scripts/publish_android_sdk.sh --version <X.Y.Z>` succeeds without `--skip-sbom`.
-   - Confirm `scripts/check_android_samples.sh` and `java/iroha_android/run_tests.sh`
+   - Confirm `scripts/check_android_samples.sh` and `ci/run_android_tests.sh`
      run inside `publish_android_sdk.sh` (review the log if invoked manually).
 2. **Artifact audit**
    - Verify `artifacts/android/maven/<X.Y.Z>/publish_summary.json` and

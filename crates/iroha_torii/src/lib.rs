@@ -155,6 +155,7 @@ pub use crate::app_auth::{
 pub mod openapi;
 
 mod content;
+mod proof_filters;
 use crate::api_version::ApiVersion;
 pub mod sorafs;
 use std::{
@@ -622,6 +623,7 @@ struct AppState {
     content_egress_limiter: limits::RateLimiter,
     proof_limits: routing::ProofApiLimits,
     content_config: iroha_config::parameters::actual::Content,
+    ws_message_timeout: Duration,
     require_api_token: bool,
     api_tokens_set: Arc<HashSet<String>>,
     operator_auth: Arc<operator_auth::OperatorAuth>,
@@ -5538,7 +5540,7 @@ async fn handler_events_sse(
 ) -> Result<Response, Error> {
     if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
         return Ok(
-            routing::handle_v1_events_sse(app.events.clone(), AxQuery(params)).into_response(),
+            routing::handle_v1_events_sse(app.events.clone(), AxQuery(params))?.into_response(),
         );
     }
     let token_hdr = headers
@@ -5561,7 +5563,7 @@ async fn handler_events_sse(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    Ok(routing::handle_v1_events_sse(app.events.clone(), AxQuery(params)).into_response())
+    Ok(routing::handle_v1_events_sse(app.events.clone(), AxQuery(params))?.into_response())
 }
 
 #[cfg(feature = "app_api")]
@@ -5660,8 +5662,12 @@ async fn handler_subscription_ws(
         // Subscribe before upgrade to buffer events emitted during the WS handshake.
         let events_rx = app.events.subscribe();
         return Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
-            if let Err(error) =
-                routing::event::handle_events_stream_with_receiver(events_rx, ws).await
+            if let Err(error) = routing::event::handle_events_stream_with_receiver(
+                events_rx,
+                ws,
+                app.ws_message_timeout,
+            )
+            .await
             {
                 iroha_logger::error!(%error, "Failure during event streaming");
             }
@@ -5697,7 +5703,12 @@ async fn handler_subscription_ws(
     // Subscribe before upgrade to buffer events emitted during the WS handshake.
     let events_rx = app.events.subscribe();
     Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
-        if let Err(error) = routing::event::handle_events_stream_with_receiver(events_rx, ws).await
+        if let Err(error) = routing::event::handle_events_stream_with_receiver(
+            events_rx,
+            ws,
+            app.ws_message_timeout,
+        )
+        .await
         {
             iroha_logger::error!(%error, "Failure during event streaming");
         }
@@ -5714,7 +5725,9 @@ async fn handler_blocks_stream_ws(
     if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
         let kura = app.kura.clone();
         return Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
-            if let Err(error) = routing::block::handle_blocks_stream(kura, ws).await {
+            if let Err(error) =
+                routing::block::handle_blocks_stream(kura, ws, app.ws_message_timeout).await
+            {
                 iroha_logger::error!(%error, "Failure during block streaming");
             }
         }))
@@ -5743,7 +5756,9 @@ async fn handler_blocks_stream_ws(
     }
     let kura = app.kura.clone();
     Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
-        if let Err(error) = routing::block::handle_blocks_stream(kura, ws).await {
+        if let Err(error) =
+            routing::block::handle_blocks_stream(kura, ws, app.ws_message_timeout).await
+        {
             iroha_logger::error!(%error, "Failure during block streaming");
         }
     }))
@@ -9404,16 +9419,28 @@ async fn handle_connect_ws_logic(
     let mut sid = [0u8; 32];
     sid.copy_from_slice(&sid_bytes);
     let role = match q.role.as_str() {
-        "app" | "App" => iroha_torii_shared::connect::Role::App,
-        _ => iroha_torii_shared::connect::Role::Wallet,
+        "app" => iroha_torii_shared::connect::Role::App,
+        "wallet" => iroha_torii_shared::connect::Role::Wallet,
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("connect: bad role {other}"),
+            )
+                .into_response();
+        }
     };
     let token = match resolve_connect_ws_token(&headers) {
         Ok(token) => token,
         Err(response) => return response,
     };
-    if let Err((code, msg)) = bus.authorize_token(sid, role, &token).await {
+    if let Err((code, msg)) = bus.authorize_token(sid, role, &token.token).await {
         return (code, msg).into_response();
     }
+    let ws = if let Some(protocol) = token.protocol {
+        ws.protocols([protocol])
+    } else {
+        ws
+    };
     ws.on_upgrade(move |ws| async move {
         if let Err(e) = connect::handle_ws(bus, q, ws, remote_ip).await {
             iroha_logger::warn!(%e, "connect ws session ended with error");
@@ -9570,18 +9597,45 @@ fn parse_connect_ws_query(
             }
         }
     }
+    fn normalize_role(raw: &str) -> Option<String> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "app" => Some("app".to_string()),
+            "wallet" => Some("wallet".to_string()),
+            _ => None,
+        }
+    }
+
     match (sid, role) {
-        (Some(sid), Some(role)) => Ok(routing::ConnectWsQuery { sid, role }),
+        (Some(sid), Some(role_raw)) => {
+            let Some(role) = normalize_role(&role_raw) else {
+                return Err(
+                    (StatusCode::BAD_REQUEST, "connect query has invalid role").into_response()
+                );
+            };
+            Ok(routing::ConnectWsQuery { sid, role })
+        }
         _ => Err((StatusCode::BAD_REQUEST, "connect query missing sid/role").into_response()),
     }
 }
 
 const CONNECT_PROTOCOL_TOKEN_PREFIX: &str = "iroha-connect.token.v1.";
 
+#[derive(Debug)]
+struct ConnectWsToken {
+    token: String,
+    protocol: Option<String>,
+}
+
+#[derive(Debug)]
+struct ProtocolToken {
+    token: String,
+    protocol: String,
+}
+
 #[allow(clippy::result_large_err)]
 fn resolve_connect_ws_token(
     headers: &axum::http::HeaderMap,
-) -> Result<String, axum::response::Response> {
+) -> Result<ConnectWsToken, axum::response::Response> {
     use axum::http::StatusCode;
 
     let auth_token = parse_authorization_token(headers)?;
@@ -9589,19 +9643,29 @@ fn resolve_connect_ws_token(
 
     if let Some(auth) = auth_token {
         if let Some(proto) = protocol_token.as_ref() {
-            if proto != &auth {
+            if proto.token != auth {
                 return Err((
                     StatusCode::BAD_REQUEST,
                     "connect: conflicting tokens in Authorization and Sec-WebSocket-Protocol headers",
                 )
                     .into_response());
             }
+            return Ok(ConnectWsToken {
+                token: auth,
+                protocol: Some(proto.protocol.clone()),
+            });
         }
-        return Ok(auth);
+        return Ok(ConnectWsToken {
+            token: auth,
+            protocol: None,
+        });
     }
 
     if let Some(proto) = protocol_token {
-        return Ok(proto);
+        return Ok(ConnectWsToken {
+            token: proto.token,
+            protocol: Some(proto.protocol),
+        });
     }
 
     Err((
@@ -9625,6 +9689,20 @@ mod connect_token_tests {
     }
 
     #[test]
+    fn connect_query_rejects_invalid_role() {
+        let err = parse_connect_ws_query(Some("sid=abc&role=operator"))
+            .expect_err("invalid role should be rejected");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn connect_query_accepts_case_insensitive_role() {
+        let ok = parse_connect_ws_query(Some("sid=abc&role=Wallet"))
+            .expect("case-insensitive role should be accepted");
+        assert_eq!(ok.role, "wallet");
+    }
+
+    #[test]
     fn resolve_connect_ws_token_requires_headers() {
         let headers = HeaderMap::new();
         let err = resolve_connect_ws_token(&headers).expect_err("missing token should fail");
@@ -9636,7 +9714,8 @@ mod connect_token_tests {
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, "Bearer test-token".parse().unwrap());
         let token = resolve_connect_ws_token(&headers).expect("bearer token ok");
-        assert_eq!(token, "test-token");
+        assert_eq!(token.token, "test-token");
+        assert!(token.protocol.is_none());
     }
 }
 
@@ -9686,7 +9765,7 @@ fn parse_authorization_token(
 #[allow(clippy::result_large_err)]
 fn parse_protocol_token(
     headers: &axum::http::HeaderMap,
-) -> Result<Option<String>, axum::response::Response> {
+) -> Result<Option<ProtocolToken>, axum::response::Response> {
     use axum::http::{StatusCode, header};
 
     let mut values_iter = headers.get_all(header::SEC_WEBSOCKET_PROTOCOL).iter();
@@ -9708,7 +9787,10 @@ fn parse_protocol_token(
             let candidate = entry.trim();
             if let Some(encoded) = candidate.strip_prefix(CONNECT_PROTOCOL_TOKEN_PREFIX) {
                 let token = decode_protocol_token(encoded)?;
-                return Ok(Some(token));
+                return Ok(Some(ProtocolToken {
+                    token,
+                    protocol: candidate.to_string(),
+                }));
             }
         }
     }
@@ -10573,6 +10655,7 @@ pub struct Torii {
     query_service: LiveQueryStoreHandle,
     kura: Arc<Kura>,
     transaction_max_content_len: ConfigBytes<u64>,
+    ws_message_timeout: Duration,
     address: WithOrigin<SocketAddr>,
     state: Arc<CoreState>,
     telemetry: routing::MaybeTelemetry,
@@ -11245,7 +11328,7 @@ impl Torii {
             let group = group;
 
             let group = group
-                // VK registry lifecycle (app API convenience): register, update, deprecate
+                // VK registry lifecycle (app API convenience): register, update
                 .route("/v1/zk/vk/register", post(handler_post_vk_register))
                 .route("/v1/zk/vk/update", post(handler_post_vk_update))
                 .route(
@@ -12404,6 +12487,7 @@ impl Torii {
             content_config: content_snapshot,
             address: config.address,
             transaction_max_content_len: config.max_content_len,
+            ws_message_timeout: config.ws_message_timeout,
             #[cfg(any(feature = "p2p_ws", feature = "connect"))]
             p2p: None,
             query_rate_per_authority_per_sec: config.query_rate_per_authority_per_sec,
@@ -12625,6 +12709,7 @@ impl Torii {
             content_egress_limiter: self.content_egress_limiter.clone(),
             proof_limits: self.proof_limits,
             content_config: self.content_config.clone(),
+            ws_message_timeout: self.ws_message_timeout,
             require_api_token: self.require_api_token,
             api_tokens_set: self.api_tokens_set.clone(),
             operator_auth: self.operator_auth.clone(),
@@ -13811,14 +13896,14 @@ async fn handler_confidential_derive_keyset_route(
 pub enum Error {
     /// Failed to process query
     Query(#[from] iroha_data_model::ValidationFail),
-    /// Validation error for app-facing query parameters.
+    /// Validation error for app-facing query parameters `{code}`: {message}
     AppQueryValidation {
         /// Stable machine-readable code.
         code: &'static str,
         /// Human-readable error message.
         message: String,
     },
-    /// Proof endpoint throttled the request.
+    /// Proof endpoint `{endpoint}` throttled the request; retry after {retry_after_secs}s
     ProofRateLimited {
         /// Logical endpoint label.
         endpoint: &'static str,
@@ -13831,7 +13916,7 @@ pub enum Error {
     AcceptTransaction(#[from] iroha_core::tx::AcceptTransactionFail),
     /// Failed to get or set configuration
     Config(#[source] eyre::Report),
-    /// Failed to serialize response payload
+    /// Failed to serialize response payload for `{context}`: {source}
     SerializationFailure {
         /// Logical context for the serialization failure.
         context: &'static str,
@@ -13839,12 +13924,12 @@ pub enum Error {
         #[source]
         source: norito::json::Error,
     },
-    /// Failed to apply Nexus lane lifecycle plan
+    /// Failed to apply Nexus lane lifecycle plan: {reason}
     LaneLifecycle {
         /// Human-readable reason for the failure.
         reason: String,
     },
-    /// Failed to push into queue
+    /// Failed to push into queue ({source}; backpressure={backpressure:?})
     PushIntoQueue {
         /// Root cause from the core queue implementation.
         #[source]
@@ -14175,7 +14260,6 @@ pub(crate) mod tests_runtime_handlers {
         transaction::signed::{TransactionBuilder, TransactionResultInner},
         trigger::DataTriggerSequence,
     };
-    use norito::{codec::DecodeAll, core::NoritoDeserialize};
 
     use super::*;
     #[cfg(feature = "telemetry")]
@@ -14365,6 +14449,7 @@ pub(crate) mod tests_runtime_handlers {
             content_egress_limiter: limits::RateLimiter::new_u64(None, None),
             proof_limits: routing::ProofApiLimits::default(),
             content_config: content_config_snapshot,
+            ws_message_timeout: Duration::from_millis(defaults::torii::WS_MESSAGE_TIMEOUT_MS),
             require_api_token: false,
             api_tokens_set: api_tokens_set.clone(),
             operator_auth,
@@ -16092,13 +16177,13 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .unwrap()
             .to_bytes();
-        #[derive(norito::codec::Decode)]
+        #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
         struct ExecRootWire {
             block_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
             exec_root: Option<iroha_crypto::Hash>,
         }
-        let mut slice: &[u8] = bytes.as_ref();
-        let wire = ExecRootWire::decode_all(&mut slice).expect("decode exec_root norito");
+        let wire: ExecRootWire =
+            norito::decode_from_bytes(&bytes).expect("decode exec_root norito");
         assert!(wire.exec_root.is_none());
 
         // exec_qc
@@ -16138,9 +16223,8 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .unwrap()
             .to_bytes();
-        let mut slice: &[u8] = bytes.as_ref();
-        let decoded_opt =
-            Option::<ExecutionQcRecord>::decode_all(&mut slice).expect("decode exec_qc norito");
+        let decoded_opt: Option<ExecutionQcRecord> =
+            norito::decode_from_bytes(&bytes).expect("decode exec_qc norito");
         assert!(decoded_opt.is_none());
     }
 
@@ -16948,7 +17032,6 @@ mod tests {
         transaction::signed::{TransactionBuilder, TransactionResultInner},
     };
     use nonzero_ext::nonzero;
-    use norito::codec::DecodeAll;
 
     use super::*;
     #[cfg(feature = "telemetry")]

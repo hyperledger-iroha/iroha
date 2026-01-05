@@ -18,6 +18,7 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
             store_dir: iroha_config::base::WithOrigin::inline(
                 temp_dir.path().to_str().unwrap().into(),
             ),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -70,7 +71,7 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
     fingerprint[..3].copy_from_slice(&[0xAB, 0xCD, 0xEF]);
     let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32]));
     let block_hash_str = block_hash.to_string();
-    let sidecar = PipelineRecoverySidecar::new_v2(
+    let sidecar = PipelineRecoverySidecar::new_v1(
         1,
         block_hash,
         PipelineDagSnapshot {
@@ -93,7 +94,7 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
     let v: norito::json::Value = norito::json::from_slice(&resp_body).unwrap();
     assert_eq!(
         v.get("format").and_then(|x| x.as_str()),
-        Some("pipeline.recovery.v2")
+        Some("pipeline.recovery.v1")
     );
     assert_eq!(
         v.get("block_hash").and_then(|x| x.as_str()),

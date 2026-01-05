@@ -10,7 +10,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/soranet/constant_rate_profiles.md`. Mantenha as duas copias alinhadas ate que o conjunto legado de documentacao seja retirado.
+Esta pagina espelha `docs/source/soranet/constant_rate_profiles.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 SNNet-17B introduz lanes de transporte de taxa fixa para que os relays movam trafego em celulas de 1,024 B independentemente do tamanho do payload. Os operadores escolhem entre tres presets:

@@ -24,13 +24,15 @@ suivants :
   intégré est utilisé.
 - `ivm_dir` : répertoire contenant les bibliothèques de bytecode IVM. Par
   défaut `"."` si omis.
+- `consensus_mode` : mode de consensus annoncé dans le manifest. Requis ; utilisez `"Npos"` pour Iroha3 (par défaut) et `"Permissioned"` pour Iroha2.
 - `transactions` : liste de transactions de genesis exécutées séquentiellement.
   Chaque entrée peut contenir :
   - `parameters` : paramètres initiaux du réseau.
   - `instructions` : instructions encodées avec Norito.
   - `ivm_triggers` : triggers avec exécutables bytecode IVM.
-  - `topology` : topologie initiale des pairs. Chaque entrée peut inclure
-    `pop_hex` (optionnel) pour le PoP, mais il doit être présent avant la signature.
+  - `topology` : topologie initiale des pairs. Chaque entrée utilise `peer`
+    (PeerId sous forme de chaîne, c’est‑à‑dire la clé publique) et `pop_hex` ;
+    `pop_hex` peut être omis lors de la composition, mais doit être présent avant la signature.
 - `crypto` : instantané de configuration cryptographique reflétant
   `iroha_config.crypto` (`default_hash`, `allowed_signing`,
   `allowed_curve_ids`, `sm2_distid_default`, `sm_openssl_preview`).
@@ -41,7 +43,7 @@ suivants :
   tandis que les builds compilées sans le feature `sm` rejettent
   systématiquement `sm2`.
 
-Exemple (sortie de `kagami genesis generate default`, instructions tronquées) :
+Exemple (sortie de `kagami genesis generate default --consensus-mode npos`, instructions tronquées) :
 
 ```json
 {
@@ -55,6 +57,7 @@ Exemple (sortie de `kagami genesis generate default`, instructions tronquées) :
       "topology": []
     }
   ],
+  "consensus_mode": "Npos",
   "crypto": {
     "default_hash": "blake2b-256",
     "allowed_signing": ["ed25519"],
@@ -150,6 +153,7 @@ cargo run -p iroha_cli --features sm -- \
    ```bash
    cargo run -p iroha_kagami -- genesis generate \
      [--executor <path/to/executor.to>] \
+     --consensus-mode npos \
      [--genesis-public-key <public-key>] \
      > genesis.json
    ```
@@ -161,6 +165,7 @@ cargo run -p iroha_cli --features sm -- \
      bloc de genesis ; elle doit être un multihash reconnu par
      `iroha_crypto::Algorithm` (y compris les variantes GOST TC26 lorsque le
      build inclut le feature correspondant).
+   - Sur Iroha3, `--consensus-mode npos` est obligatoire et les basculements planifiés ne sont pas pris en charge ; sur Iroha2, le mode par défaut est `permissioned`.
 
 2. Valider pendant l’édition :
 
@@ -197,6 +202,9 @@ d’utiliser le suffixe `.nrt` pour les payloads signées ; si vous n’avez pas
 besoin de mettre à jour l’exécuteur à genesis, vous pouvez omettre le champ
 `executor` et ne pas fournir de fichier `.to`.
 
+Lors de la signature de manifests NPoS (`--consensus-mode npos` ou un basculement planifié uniquement sur Iroha2), `kagami genesis sign` exige la charge utile `sumeragi_npos_parameters` ; générez-la avec `kagami genesis generate --consensus-mode npos` ou ajoutez le paramètre manuellement.
+Par défaut, `kagami genesis sign` utilise le `consensus_mode` du manifest ; passez `--consensus-mode` pour le remplacer.
+
 ## Ce que Genesis peut faire
 
 Genesis prend en charge les opérations suivantes. Kagami les assemble en
@@ -220,8 +228,9 @@ séquence de manière déterministe :
   (voir `ivm_triggers`). Les exécutables de triggers sont résolus relativement
   à `ivm_dir`.
 - **Topologie** : fournir l’ensemble initial de pairs via le tableau
-  `topology` (liste de `PeerId`) dans n’importe quelle transaction
-  (généralement la première ou la dernière).
+  `topology` dans n’importe quelle transaction (généralement la première ou la dernière).
+  Chaque entrée est `{ "peer": "<public_key>", "pop_hex": "<hex>" }` ; `pop_hex`
+  peut être omis lors de la composition, mais doit être présent avant la signature.
 - **Mise à niveau de l’exécuteur (optionnel)** : si `executor` est présent,
   Genesis insère une instruction `Upgrade` unique comme première transaction ;
   sinon, Genesis commence directement avec paramètres/instructions.
@@ -245,7 +254,7 @@ dans la même transaction.
 
 - Partir d’un template généré par Kagami :
   - ISI intégrées uniquement :  
-    `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> [--consensus-mode npos] > genesis.json`
+    `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (Iroha3 par défaut ; utilisez `--consensus-mode permissioned` pour Iroha2)
   - Avec upgrade d’exécuteur (optionnel) : ajouter `--executor <path/to/executor.to>`
 - `<PK>` est n’importe quel multihash reconnu par `iroha_crypto::Algorithm`,
   y compris les variantes GOST TC26 lorsque Kagami est compilé avec

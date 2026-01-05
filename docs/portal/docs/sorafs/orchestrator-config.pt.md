@@ -19,7 +19,7 @@ description: Configure o orquestrador de fetch multi-origem, interprete falhas e
 ---
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/developer/orchestrator.md`. Mantenha ambas as copias sincronizadas ate que a documentacao legada seja retirada.
+Esta pagina espelha `docs/source/sorafs/developer/orchestrator.md`. Mantenha ambas as copias sincronizadas ate que a documentacao alternativa seja retirada.
 :::
 
 # Guia do orquestrador de fetch multi-origem
@@ -179,7 +179,7 @@ codificado em Norito. O snapshot binario contem:
   relay, flags de capacidade, politica ML-KEM e assinaturas duplas Ed25519/ML-DSA-65.
 
 A CLI verifica cada bundle contra as chaves de emissor declaradas antes de
-mesclar o directory com o cache de guards. Esbocos JSON legados nao sao mais
+mesclar o directory com o cache de guards. Esbocos JSON alternativos nao sao mais
 aceitos; snapshots SRCv2 sao obrigatorios.
 
 Invoque a CLI com `--guard-directory` para mesclar o consenso mais recente com o
@@ -207,7 +207,7 @@ Directories de guards agora podem embutir um bundle SRCv2 completo via
 assinaturas Ed25519/ML-DSA e retém o certificado analisado junto ao cache de
 guards. Quando um certificado esta presente ele se torna a fonte canonica para
 chaves PQ, preferencias de handshake e ponderacao; certificados expirados sao
-descartados e o seletor retorna aos campos legados do descriptor. Certificados
+descartados e o seletor retorna aos campos alternativos do descriptor. Certificados
 propagam-se pela gestao do ciclo de vida de circuitos e sao expostos via
 `telemetry::sorafs.guard` e `telemetry::sorafs.circuit`, que registram a janela
 de validade, suites de handshake e se assinaturas duplas foram observadas para
@@ -366,8 +366,8 @@ certificado existente e da chave de cache de guard, a v2 adiciona:
   `x-sorafs-cache-tag` ao emitir requisicoes HTTP ou TCP para que selecoes de guard
   em cache permaneçam criptografadas em repouso.
 
-Esses campos sao retrocompativeis; clientes antigos podem ignorar as novas chaves
-continuar usando o subconjunto v1.
+Esses campos fazem parte do schema atual; clientes devem utilizar o conjunto
+completo ao negociar streams.
 
 ## 2. Semantica de falhas
 

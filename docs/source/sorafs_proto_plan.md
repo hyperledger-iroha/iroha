@@ -26,7 +26,6 @@ This document completes **SF-10 — Publish `sora-proto` schemas** and supersede
 Each struct derives `NoritoSerialize`/`NoritoDeserialize` and `JsonSerialize` so the same definitions drive binary and JSON views. Any schema change MUST land here first.
 
 ## Versioning Policy
-- **Module layout.** Versioned types live under `v1` modules. Introduce `v2` modules rather than mutating existing structs once on-wire compatibility would break.
 - **Identifiers.** Numeric enums use explicit `#[repr(u8/u16)]` discriminants. Keep them stable across versions; new values append at the end.
 - **Defaulting.** Optional fields leverage `#[norito(default)]` so omitted values decode deterministically. Builders in each module provide helper constructors to enforce invariants.
 - **Validation.** `validate()` methods exist on major structs (e.g., `ProviderAdvertV1::validate`). CI executes round-trip and validation tests across all fixtures.

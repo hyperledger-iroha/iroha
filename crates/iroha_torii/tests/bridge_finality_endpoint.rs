@@ -135,6 +135,10 @@ async fn bridge_finality_endpoint_roundtrips_into_verifier() {
         .body(Body::empty())
         .expect("request");
     let resp = app.oneshot(req).await.expect("response");
+    if !cfg!(feature = "telemetry") {
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        return;
+    }
     assert_eq!(resp.status(), StatusCode::OK);
 
     let body = to_bytes(resp.into_body(), usize::MAX)

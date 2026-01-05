@@ -10,7 +10,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Source canonique
-Reflete `docs/source/soranet/puzzle_service_operations.md`. Gardez les deux versions synchronisees jusqu'a la retraite des docs legacy.
 :::
 
 # Guide d'operations du service de puzzles

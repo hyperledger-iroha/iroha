@@ -8,7 +8,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 :::note Канонический источник
 Эта страница отражает `docs/source/da/replication_policy.md`. Держите обе версии
-синхронизированными до ухода legacy-доков.
 :::
 
 # Политика репликации Data Availability (DA-4)

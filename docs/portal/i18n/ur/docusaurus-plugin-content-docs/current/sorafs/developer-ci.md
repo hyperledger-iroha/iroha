@@ -11,7 +11,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/developer/ci.md` کی عکاسی کرتا ہے۔ جب تک legacy docs ریٹائر نہ ہوں دونوں ورژنز کو ہم آہنگ رکھیں۔
 :::
 
 # SoraFS CI recipes

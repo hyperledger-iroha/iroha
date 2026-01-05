@@ -20,7 +20,7 @@ This memo acts as the agreement artifact referenced by `roadmap.md` (OA13/OA14) 
 | Field `q` | `2^64 - 2^32 + 1 = 0xffff_ffff_0000_0001` (Goldilocks) | Matches FASTPQ Standard(3) |
 | Width `t` | 3 | 2 rate elements + 1 capacity |
 | Rate `r` | 2 | Leaves absorb six field elements by streaming pairs |
-| Capacity `c` | 1 | Keeps sponge compatible with FASTPQ Poseidon2 |
+| Capacity `c` | 1 | Keeps sponge aligned with FASTPQ Poseidon2 |
 | S-box | `x ↦ x^5` | Full rounds apply to all lanes; partial rounds only mutate lane 0 |
 | Full rounds `R_F` | 8 | Four at the start, four at the end |
 | Partial rounds `R_P` | 57 | Spread across the center of the permutation |
@@ -139,7 +139,6 @@ so builders can fetch the Norito payloads directly from a node, and Torii expose
 
 ### 5.3 Ledger & SDK Integration (OA14.3 / OA14.a)
 
-* **Ledger knobs:** add `offline.proofs.mode` (`legacy`, `optional`, `required`) with default
   `optional`. Failing proofs emit structured errors (reason + receipts root) and Prometheus counters.
 * **SDK builders:** Swift/Android maintain rolling Poseidon trees, call the FASTPQ APIs via FFI, and
   attach `AggregateProofEnvelope`. Builders expose telemetry hooks so apps can surface progress.

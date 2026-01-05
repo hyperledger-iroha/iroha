@@ -126,9 +126,9 @@ The trailing header byte encodes feature/layout flags for the payload and is app
 
 - `PACKED_SEQ (0x01)`: Variable-length collections (e.g., `Vec<T>`) use a packed layout:
   - `[len:u64][(len+1)*u64 offsets][data...]`
-  - Offsets are monotonic; the last offset equals the size of the contiguous data segment.
+  - Offsets start at 0, are monotonic, and the last offset equals the size of the contiguous data segment.
 
-- `COMPACT_LEN (0x02)`: Lengths for string-like values and collection elements are varint-encoded instead of fixed `u64` prefixes.
+- `COMPACT_LEN (0x02)`: Per-value length prefixes (string-like values, element payloads, blobs) are varint-encoded instead of fixed `u64` prefixes.
 
 - `PACKED_STRUCT (0x04)`: Derive-generated structs use packed layout. With `COMPACT_LEN`, derives emit a compact bitset of which fields carry explicit sizes, then only those sizes and the data block (no redundant per-field headers).
 
@@ -142,6 +142,11 @@ Flags are set explicitly by the encoder and recorded in the header. The
 default v1 helpers (`to_bytes`, `to_compressed_bytes`, `to_bytes_auto`) emit
 `flags = 0x00` unless you opt into a layout and frame those bytes with the
 corresponding header flags.
+
+Flag scoping:
+- `COMPACT_LEN` affects per-value length prefixes only.
+- `COMPACT_SEQ_LEN` affects only the outer sequence length header.
+- `VARINT_OFFSETS` affects only packed-sequence offsets.
 
 ## Error Mapping
 

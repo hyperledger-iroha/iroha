@@ -6,11 +6,10 @@ description: Requirements and workflows for preserving the deterministic SF1 chu
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/sorafs/chunker_conformance.md`. Keep both versions in sync until the legacy docs are retired.
 :::
 
 This guide codifies the requirements every implementation must follow to stay
-compatible with the SoraFS deterministic chunker profile (SF1). It also
+aligned with the SoraFS deterministic chunker profile (SF1). It also
 documents the regeneration workflow, signing policy, and verification steps so
 fixture consumers across SDKs remain in sync.
 

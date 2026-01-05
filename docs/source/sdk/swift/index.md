@@ -125,7 +125,6 @@ is reused by Rust, Python, JavaScript, and Swift; CI enforces parity via
   (defaults: 3 retries, 0.5s backoff, multiplier 2.0, retrying 429/5xx and transport
   errors).
 - `pipelineEndpointMode` toggles between the modern `/v1/pipeline/*` endpoints and the
-  legacy `/v1/transactions*` surface. Use `.legacy` only when interacting with prerelease
   Torii nodes that have not adopted the pipeline routes yet.
 - Completion-based APIs return a `Task<Void, Never>` so callers can cancel outstanding
   polls from UI layers.
@@ -645,7 +644,7 @@ if let receipt = ingest.receipt {
 `ToriiDaBlobSubmission` defaults match the CLI (chunk size 256 KiB, RS 12/10 profile, `da.default`
 retention tag). When the NoritoBridge XCFramework is linked the builder hashes the payload with BLAKE3
 automatically, but environments without the bridge must still provide a 32-byte `clientBlobId`
-(the CLI’s `blake3(payload)` output remains compatible). Signers can pass a raw Ed25519 seed (`privateKey`),
+(the CLI’s `blake3(payload)` output matches). Signers can pass a raw Ed25519 seed (`privateKey`),
 hex string (`privateKeyHex`), or a pre-computed `signatureHex` +
 `submitterPublicKeyHex`. Metadata entries accept raw `Data` values with visibility/encryption flags so the
 JSON matches Torii’s Norito schema.
@@ -822,7 +821,6 @@ you need the full decrypted payload (sign results, encrypted controls), or
 
 For higher-level walkthroughs, see:
 
-- `docs/connect_swift_ios.md` — SDK-first Connect quickstart plus the legacy CryptoKit reference.
 - `docs/connect_swift_integration.md` — full Xcode integration guide covering NoritoBridgeKit,
   ConnectClient/ConnectSession wiring, and ChaChaPoly envelope handling.
 - `docs/norito_demo_contributor.md` — SwiftUI demo setup (local Torii), acceleration toggles, and telemetry tips.
@@ -841,7 +839,7 @@ For higher-level walkthroughs, see:
   pagination/filtering via `ToriiListOptions`/`ToriiListFilter`/`ToriiListSort`, while
   `iterateDomains(pageSize:maxItems:)` (iOS 15/macOS 12+) emits an
   `AsyncThrowingStream<ToriiDomainRecord>` that walks the full dataset behind the same
-  options. Use `.json(.object([...]))` for Norito-compatible filters or `.fields(["name",
+  options. Use `.json(.object([...]))` for Norito-format filters or `.fields(["name",
   "-created_at"])` to render standard `sort` clauses—the helpers take care of encoding and
   offset bookkeeping.
 - **Contracts:** register/deploy/fetch manifest/code bytes.
@@ -955,31 +953,6 @@ try await torii.deprecateVerifyingKey(deprecate)
 Completion-style overloads return `Task<Void, Never>` so UIKit/SwiftUI layers can cancel
 submission if the user dismisses a flow mid-flight.
 
-```swift
-if #available(iOS 15, macOS 12, *) {
-    let events = torii.streamVerifyingKeyEvents(
-        filter: ToriiVerifyingKeyEventFilter(backend: "halo2/ipa", name: "vk_main"),
-        lastEventId: nil
-    )
-
-    Task.detached {
-        do {
-            for try await message in events {
-                switch message.event {
-                case .registered(let id, _):
-                    print("registered:", id)
-                case .updated(_, let record):
-                    print("updated to version", record.version)
-                case .deprecated(let id):
-                    print("deprecated:", id)
-                }
-            }
-        } catch {
-            print("stream closed with error:", error)
-        }
-    }
-}
-```
 
 For proof verification outcomes, the proof event stream follows the same pattern:
 

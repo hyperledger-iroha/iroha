@@ -184,7 +184,6 @@ Depois que os checks passarem e os hooks forem concluidos:
 - Garanta que a documentacao apontando para a nova versao (quickstarts, templates de CI)
   esteja atualizada ou confirme que nenhuma mudanca e necessaria.
 - Registre entradas no roadmap se for necessario trabalho posterior (por exemplo, flags
-  de migracao, deprecacao de manifests legacy).
 - Arquive os logs do gate de release para auditoria - guarde-os ao lado dos artefatos
   assinados.
 

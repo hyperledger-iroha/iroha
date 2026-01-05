@@ -27,7 +27,6 @@ title: "SoraFS プロバイダー広告のロールアウトと互換計画"
   手順を段階的に示す。
 - **テレメトリカバレッジ。** Observability と Ops が、ネットワークが準拠 adverts のみを
   受け付けていることを確認するための dashboards と alerts。
-- **互換タイムライン。** legacy envelopes を拒否する明示的な日付を示し、SDK と tooling
   チームのリリース計画を支援する。
 
 ロールアウトは [SoraFS migration roadmap](./migration-roadmap) の SF-2b/2c マイルストーンに
@@ -38,10 +37,6 @@ title: "SoraFS プロバイダー広告のロールアウトと互換計画"
 
 | フェーズ | 期間 (目標) | 挙動 | オペレーターの対応 | Observability の焦点 |
 |-------|-----------------|-----------|------------------|-------------------|
-| **R0 - ベースライン観測** | **2025-03-31** まで | Torii は governance 承認済み adverts と `ProviderAdvertV1` 以前の legacy payloads を両方受け入れる。adverts が `chunk_range_fetch` または正規の `profile_aliases` を欠くと、ingestion logs が警告する。 | - provider advert publishing pipeline (ProviderAdvertV1 + governance envelope) で adverts を再生成し、`profile_id=sorafs.sf1@1.0.0`、正規の `profile_aliases`、`signature_strict=true` を満たす。 <br />- 新しい `sorafs_fetch` テストをローカルで実行し、不明な capabilities の警告は triage する。 | 仮の Grafana パネル (下記) を公開し、アラート閾値を設定するが warning のみで運用する。 |
-| **R1 - Warning gate** | **2025-04-01 → 2025-05-15** | Torii は legacy adverts を受け入れ続けるが、payload が `chunk_range_fetch` を欠く場合や `allow_unknown_capabilities=true` なしに未知 capabilities を含む場合、`torii_sorafs_admission_total{result="warn"}` を増加させる。CLI tooling は canonical handle がないと再生成に失敗する。 | - staging と production の adverts を回し、`CapabilityType::ChunkRangeFetch` payloads を含める。GREASE テスト時は `allow_unknown_capabilities=true` を設定する。 <br />- 新しいテレメトリクエリを operations runbooks に追記する。 | dashboards を on-call ローテーションに昇格し、`warn` が 15 分間で 5% を超えた場合に警告を出す。 |
-| **R2 - Enforcement** | **2025-05-16 → 2025-06-30** | Torii は governance envelope、canonical profile handle、`chunk_range_fetch` capability を欠く adverts を拒否する。legacy な `namespace-name` handle は解析されなくなる。GREASE opt-in なしの未知 capability は `reason="unknown_capability"` で失敗する。 | - production envelopes が `torii.sorafs.admission_envelopes_dir` に存在することを確認し、残っている legacy adverts をローテーションする。 <br />- SDKs が canonical handles と後方互換用の optional aliases のみを発行することを確認する。 | pager alerts を有効化: `torii_sorafs_admission_total{result="reject"}` > 0 が 5 分続いたらオペレーター対応。受理比率と admission reason ヒストグラムを追跡する。 |
-| **R3 - Legacy 停止** | **2025-07-01 以降** | Discovery は `signature_strict=true` を設定しない、または `profile_aliases` を欠くバイナリ adverts のサポートを削除する。Torii discovery cache は refresh deadline を超えて更新されない stale entries を破棄する。 | - legacy provider stacks の最終 decommission ウィンドウを計画する。 <br />- `--allow-unknown` の GREASE 実行は制御された drills のみで行い、ログに残す。 <br />- `sorafs_fetch` の警告出力をリリース前のブロッカーとして扱うよう incident playbooks を更新する。 | alerts を厳格化: `warn` が出たら on-call に通知。discovery JSON を取得し、provider capabilities のリストを検証する synthetic checks を追加する。 |
 
 ## オペレーター向けチェックリスト
 
@@ -174,7 +169,6 @@ groups:
 | `profile_id = sorafs.sf1@1.0.0`, `chunk_range_fetch` が存在、canonical aliases、`signature_strict=true` | ✅ | ✅ | ✅ | ✅ |
 | `chunk_range_fetch` capability が欠落 | ⚠️ Warn (ingest + telemetry) | ⚠️ Warn | ❌ Reject (`reason="missing_capability"`) | ❌ Reject |
 | `allow_unknown_capabilities=true` なしの未知 capability TLV | ✅ | ⚠️ Warn (`reason="unknown_capability"`) | ❌ Reject | ❌ Reject |
-| legacy handle のみ (`profile_id = sorafs.sf1@1.0.0`) | ⚠️ Warn | ❌ Reject | ❌ Reject | ❌ Reject |
 | `refresh_deadline` の期限切れ | ❌ Reject | ❌ Reject | ❌ Reject | ❌ Reject |
 | `signature_strict=false` (診断用 fixtures) | ✅ (開発のみ) | ⚠️ Warn | ⚠️ Warn | ❌ Reject |
 
@@ -184,7 +178,6 @@ groups:
 
 > **実装ノート:** R1 で `torii_sorafs_admission_total` に `result="warn"` シリーズを追加する。
 > 新しいラベルを追加する Torii ingestion パッチは SF-2 のテレメトリタスクと
-> 一緒に追跡されているため、反映まではログサンプリングで legacy adverts を監視する。
 
 ## コミュニケーションとインシデント対応
 

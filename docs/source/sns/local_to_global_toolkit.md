@@ -7,7 +7,6 @@
 Roadmap link: **ADDR-5c** — “Local → Global Normalisation Toolkit”
 
 This guide packages the operational steps, CLI helpers, and automation hooks
-required to migrate legacy Local-domain selectors (a.k.a. “Local-8/Local-12”
 addresses) to canonical IH58 or compressed forms ahead of the strict-mode
 cutover. Pair it with:
 
@@ -22,7 +21,6 @@ cutover. Pair it with:
 
 ## 1. Goals
 
-1. Detect and quantify Local selectors in legacy CSV/JSON exports.
 2. Provide deterministic conversion helpers (IH58/compressed) so operators can
    refresh manifests, customer lists, and wallet address books.
 3. Capture artefacts (audit report + converted list) suitable for compliance

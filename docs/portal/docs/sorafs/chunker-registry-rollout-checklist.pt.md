@@ -19,7 +19,7 @@ description: Plano de rollout passo a passo para atualizacoes do registro de chu
 ---
 
 :::note Fonte canonica
-Reflete `docs/source/sorafs/chunker_registry_rollout_checklist.md`. Mantenha ambas as copias sincronizadas ate que o conjunto legado de documentacao Sphinx seja retirado.
+Reflete `docs/source/sorafs/chunker_registry_rollout_checklist.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 # Checklist de rollout do registro da SoraFS

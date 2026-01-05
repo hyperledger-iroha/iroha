@@ -19,7 +19,7 @@ aplicar as mesmas verificacoes que Ops usa para impor o SLO.
    `npm run build`, `scripts/preview_wave_preflight.sh`, e as etapas de envio Sigstore + manifest.
    O script de preflight emite `preflight-summary.json` para que cada preview carregue
    metadata de build/link/probe.
-2. **Pin e verificacao** - `sorafs_cli manifest submit`, `verify-sorafs-binding.mjs`,
+2. **Pin e verificacao** - `sorafs_cli manifest submit`, `cargo xtask soradns-verify-binding`,
    e o plano de cutover DNS fornecem artefatos deterministas para a governanca.
 3. **Arquivar evidencia** - guarde o resumo CAR, bundle Sigstore, proof de alias,
    saida de probe e snapshots do dashboard `docs_portal.json` sob
@@ -73,32 +73,30 @@ Exemplo de config com knobs requeridos e multiplos bindings:
   "bindings": [
     {
       "label": "portal",
-      "url": "https://docs-preview.sora.link/.well-known/sorafs/manifest",
+      "bindingPath": "../../artifacts/sorafs/portal.gateway.binding.json",
       "alias": "docs-preview.sora.link",
-      "contentCid": "bafybeiaff84aef0aaaf6a7c246c8ca1889e62d69c8d9b20d94933cb7b09902f3",
-      "manifest": "8b8f3d2a4a7e92abdb17e5fafd4f9d67c6c7a8547ff985bb0d71f87209c1444d",
-      "status": "ok",
-      "expectHost": "docs-preview.sora.link"
+      "hostname": "docs-preview.sora.link",
+      "proofStatus": "ok",
+      "manifestJson": "../../artifacts/sorafs/portal.manifest.json"
     },
     {
       "label": "openapi",
-      "url": "https://docs-preview.sora.link/.well-known/sorafs/openapi",
+      "bindingPath": "../../artifacts/sorafs/openapi.gateway.binding.json",
       "alias": "docs-preview.sora.link",
-      "contentCid": "bafybeidevopenapi",
-      "manifest": "dad4b9fd48e35297c7fd71cd15b52c4ff0bb62dd8a1da4c5c2c1536ae2732b55",
-      "status": "ok",
-      "expectHost": "docs-preview.sora.link"
+      "hostname": "docs-preview.sora.link",
+      "proofStatus": "ok",
+      "manifestJson": "../../artifacts/sorafs/openapi.manifest.json"
     },
     {
       "label": "portal-sbom",
-      "url": "https://docs-preview.sora.link/.well-known/sorafs/portal-sbom",
+      "bindingPath": "../../artifacts/sorafs/portal-sbom.gateway.binding.json",
       "alias": "docs-preview.sora.link",
-      "contentCid": "bafybeiportalssbom",
-      "manifest": "e2b2790f9f4c1ecbc8f1bdb9f8ba3fd65fd687e9e5e4de3c3d67c3d3192b79c8",
-      "status": "ok",
-      "expectHost": "docs-preview.sora.link"
+      "hostname": "docs-preview.sora.link",
+      "proofStatus": "ok",
+      "manifestJson": "../../artifacts/sorafs/portal-sbom.manifest.json"
     }
   ],
+
   "dns": [
     {
       "label": "docs-preview CNAME",
@@ -126,13 +124,13 @@ possam comparar resultados sem reexecutar probes.
 > `allowInsecureHttp: true` esteja definido na config. Mantenha probes production/staging
 > em HTTPS; a opcao existe apenas para previews locais.
 
-Cada entrada de binding aplica `Sora-Name`, `Sora-Proof` e `Sora-Content-CID`
-(headers e payload) mais o guard `expectHost`, para que a promocao DNS
-(`docs.sora` vs. `docs-preview.sora.link`) nao derive do alias registrado
-no pin registry. Os checks falham rapido se um gateway parar de staplar
-os headers `Sora-Content-CID`/`Sora-Proof`, se base64 invalido aparecer
-na prova, ou se o manifest/CID anunciado divergir dos payloads fixados
-(site, OpenAPI e SBOM).
+Each binding entry runs `cargo xtask soradns-verify-binding` against the captured
+`portal.gateway.binding.json` bundle (and optional `manifestJson`) so alias,
+proof status, and content CID stay aligned with the published evidence. The
+optional `hostname` guard confirms the alias-derived canonical host matches the
+gateway host you intend to promote, preventing DNS cutovers that drift from the
+recorded binding.
+
 
 O bloco opcional `dns` conecta o rollout SoraDNS do DOCS-7 ao mesmo monitor.
 Cada entrada resolve um par hostname/record-type (por exemplo o CNAME
@@ -184,7 +182,7 @@ publicado ficam fora de sincronia.
   `tryit_proxy_requests_total{status="error"}`.
 - **Gateway SLO** - `DocsPortal/GatewayRefusals` garante que os bindings de alias
   continuem anunciando o digest do manifest fixado; escalations apontam para a
-  transcricao do CLI `verify-sorafs-binding.mjs` capturada durante a publicacao.
+  transcricao do CLI `cargo xtask soradns-verify-binding` capturada durante a publicacao.
 
 ### 3. Trilho de evidencia
 
@@ -194,7 +192,7 @@ Cada execucao de monitoramento deve anexar:
   `checksums.sha256`).
 - Screenshots do Grafana para o board `docs_portal` na janela de release.
 - Transcripts de change/rollback do proxy Try it (logs de `npm run manage:tryit-proxy`).
-- Saida de verificacao de alias de `scripts/verify-sorafs-binding.mjs`.
+- Saida de verificacao de alias de `cargo xtask soradns-verify-binding`.
 
 Armazene isto em `artifacts/sorafs/<tag>/monitoring/` e linke no issue de release
 para que a trilha de auditoria sobreviva apos a expiracao dos logs de CI.

@@ -872,7 +872,7 @@ export interface ToriiAttachmentMetadata {
   tenant: string | null;
 }
 
-export type ToriiVerifyingKeyStatus = "Proposed" | "Active" | "Deprecated" | "Withdrawn";
+export type ToriiVerifyingKeyStatus = "Proposed" | "Active" | "Withdrawn";
 
 export interface ToriiVerifyingKeyInline {
   backend: string;
@@ -892,7 +892,6 @@ export interface ToriiVerifyingKeyRecord {
   metadata_uri_cid: string | null;
   vk_bytes_cid: string | null;
   activation_height: number | null;
-  deprecation_height: number | null;
   withdraw_height: number | null;
   status: ToriiVerifyingKeyStatus;
   inline_key: ToriiVerifyingKeyInline | null;
@@ -938,7 +937,6 @@ export interface ToriiVerifyingKeyRegisterPayload {
   metadata_uri_cid?: string;
   vk_bytes_cid?: string;
   activation_height?: NumericLike;
-  deprecation_height?: NumericLike;
   withdraw_height?: NumericLike;
   commitment_hex?: string;
   vk_bytes?: Buffer | ArrayBuffer | ArrayBufferView | string;
@@ -960,19 +958,11 @@ export interface ToriiVerifyingKeyUpdatePayload {
   metadata_uri_cid?: string;
   vk_bytes_cid?: string;
   activation_height?: NumericLike;
-  deprecation_height?: NumericLike;
   withdraw_height?: NumericLike;
   commitment_hex?: string;
   vk_bytes?: Buffer | ArrayBuffer | ArrayBufferView | string;
   vk_len?: NumericLike;
   status?: ToriiVerifyingKeyStatus | string;
-}
-
-export interface ToriiVerifyingKeyDeprecatePayload {
-  authority: string;
-  private_key: string;
-  backend: string;
-  name: string;
 }
 
 export interface ToriiPeerRecord {
@@ -4643,38 +4633,37 @@ export interface DaProofSummaryOptions {
 
 export interface DaProofRecord {
   origin: string;
-  leafIndex: number;
-  chunkIndex: number;
-  segmentIndex: number;
-  leafOffset: number | bigint;
-  leafLength: number;
-  segmentOffset: number | bigint;
-  segmentLength: number;
-  chunkOffset: number | bigint;
-  chunkLength: number;
-  payloadLength: number | bigint;
-  chunkDigestHex: string;
-  chunkRootHex: string;
-  segmentDigestHex: string;
-  leafDigestHex: string;
-  leafBytes: Buffer;
-  leafBytesB64: string;
-  segmentLeavesHex: ReadonlyArray<string>;
-  chunkSegmentsHex: ReadonlyArray<string>;
-  chunkRootsHex: ReadonlyArray<string>;
+  leaf_index: number;
+  chunk_index: number;
+  segment_index: number;
+  leaf_offset: number | bigint;
+  leaf_length: number;
+  segment_offset: number | bigint;
+  segment_length: number;
+  chunk_offset: number | bigint;
+  chunk_length: number;
+  payload_len: number | bigint;
+  chunk_digest_hex: string;
+  chunk_root_hex: string;
+  segment_digest_hex: string;
+  leaf_digest_hex: string;
+  leaf_bytes_b64: string;
+  segment_leaves_hex: ReadonlyArray<string>;
+  chunk_segments_hex: ReadonlyArray<string>;
+  chunk_roots_hex: ReadonlyArray<string>;
   verified: boolean;
 }
 
 export interface DaProofSummary {
-  blobHashHex: string;
-  chunkRootHex: string;
-  porRootHex: string;
-  leafCount: number | bigint;
-  segmentCount: number | bigint;
-  chunkCount: number | bigint;
-  sampleCount: number;
-  sampleSeed: number | bigint;
-  proofCount: number;
+  blob_hash_hex: string;
+  chunk_root_hex: string;
+  por_root_hex: string;
+  leaf_count: number | bigint;
+  segment_count: number | bigint;
+  chunk_count: number | bigint;
+  sample_count: number;
+  sample_seed: number | bigint;
+  proof_count: number;
   proofs: ReadonlyArray<DaProofRecord>;
 }
 
@@ -5904,10 +5893,6 @@ export declare class ToriiClient {
   ): Promise<void>;
   updateVerifyingKey(
     payload: ToriiVerifyingKeyUpdatePayload,
-    options?: { signal?: AbortSignal },
-  ): Promise<void>;
-  deprecateVerifyingKey(
-    payload: ToriiVerifyingKeyDeprecatePayload,
     options?: { signal?: AbortSignal },
   ): Promise<void>;
   evaluateAliasVoprf(blindedElementHex: string): Promise<AliasVoprfEvaluateResponse>;

@@ -19,7 +19,6 @@ sidebar_label: Apercu developpeur
 ---
 
 :::note Source canonique
-Cette page reflète `docs/source/sorafs/developer/index.md`. Gardez les deux versions synchronisées jusqu'à la retraite des docs legacy.
 :::
 
 # Guides de developpeurs SoraFS

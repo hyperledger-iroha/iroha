@@ -1,7 +1,5 @@
 package org.hyperledger.iroha.android.tx;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Objects;
@@ -42,26 +40,8 @@ public final class SignedTransactionHasher {
     try {
       return SignedTransactionEncoder.encode(transaction);
     } catch (NoritoException ex) {
-      return fallbackCanonicalBytes(transaction);
+      throw new IllegalStateException("Failed to encode signed transaction", ex);
     }
-  }
-
-  private static byte[] fallbackCanonicalBytes(final SignedTransaction transaction) {
-    // Preserve compatibility with pre-Norito datasets by hashing the original payload/signature tuple.
-    final byte[] payload = transaction.encodedPayload();
-    final byte[] signature = transaction.signature();
-    final byte[] publicKey = transaction.publicKey();
-    final byte[] bls = transaction.blsPublicKey().orElse(new byte[0]);
-    final ByteBuffer buffer =
-        ByteBuffer
-            .allocate(
-                Integer.BYTES * 4 + payload.length + signature.length + publicKey.length + bls.length)
-            .order(ByteOrder.BIG_ENDIAN);
-    buffer.putInt(payload.length).put(payload);
-    buffer.putInt(signature.length).put(signature);
-    buffer.putInt(publicKey.length).put(publicKey);
-    buffer.putInt(bls.length).put(bls);
-    return buffer.array();
   }
 
   private static byte[] blake2bCanonical(final byte[] canonical) {

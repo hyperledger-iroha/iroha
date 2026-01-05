@@ -19,7 +19,6 @@ description: GitHub اور GitLab pipelines میں keyless signing کے ساتھ
 ---
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/developer/ci.md` کی عکاسی کرتا ہے۔ جب تک legacy docs ریٹائر نہ ہوں دونوں ورژنز کو ہم آہنگ رکھیں۔
 :::
 
 # SoraFS CI recipes

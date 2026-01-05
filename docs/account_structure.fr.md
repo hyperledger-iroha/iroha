@@ -27,7 +27,7 @@ de fournir :
   offre des formes textuelles déterministes adaptées à l’interopérabilité.
 - Des identifiants de domaine globalement uniques, appuyés par un registre
   interrogeable via Nexus pour le routage cross‑chain.
-- Des couches de compatibilité qui maintiennent les alias `alias@domain`
+- Des couches de transition qui maintiennent les alias `alias@domain`
   fonctionnels pendant que nous migrons wallets, APIs et contrats vers le
   nouveau format.
 
@@ -39,7 +39,7 @@ routage bruts de la forme `alias@domain`. Cela pose deux problèmes majeurs :
 1. **Aucun ancrage réseau.** La chaîne ne contient ni checksum ni préfixe de
    réseau, de sorte qu’un utilisateur peut coller une adresse provenant d’un
    autre réseau sans feedback immédiat. La transaction finira par être rejetée
-   (incompatibilité de `chain_id`) ou, pire, pourrait réussir contre un compte
+   (écart de `chain_id`) ou, pire, pourrait réussir contre un compte
    inattendu si la destination existe localement.
 2. **Collision de domaines.** Les domaines sont de simples espaces de noms et
    peuvent être réutilisés sur chaque chaîne. La fédération de services
@@ -58,7 +58,7 @@ nom de domaine et chaîne autoritative.
   et définir son processus de gouvernance/registre.
 - Expliquer comment introduire un registre global de domaines sans casser les
   déploiements existants et spécifier des règles de normalisation/anti‑spoofing.
-- Documenter les attentes de compatibilité, les étapes de migration et les
+- Documenter les attentes opérationnelles, les étapes de migration et les
   questions ouvertes.
 
 ## Hors périmètre
@@ -331,7 +331,7 @@ de courbe cohérents entre SDKs et workflows opérateur.
 - Le parse des alias `address@domain` dans Torii et les SDKs renvoie
   désormais les mêmes codes `ERR_*` lorsque les entrées IH58/compressées
   échouent avant le fallback vers l’alias (par exemple checksum invalide,
-  digest de domaine incompatible), ce qui permet aux clients de relayer des
+  digest de domaine invalide), ce qui permet aux clients de relayer des
   raisons structurées plutôt que d’inférer à partir de messages libres.
 
 #### 2.5 Vecteurs binaires normatifs
@@ -519,11 +519,9 @@ la piste d’audit puisse être reconstruite offline.
    `--append-domain` rejoue l’encodage converti sous la forme
    `<ih58>@wonderland` pour la mise à jour du manifest. Pour des exports
    ligne‑par‑ligne, utiliser
-   `iroha address normalize --input legacy.txt --only-local --append-domain --network-prefix 753 --format ih58 --output normalized.txt`
    afin de convertir massivement des sélecteurs Local en formes IH58
    canoniques (ou compressées/hex/JSON) en ignorant les lignes non locales.
    Pour une preuve exploitable sous forme de feuille de calcul, exécuter
-   `iroha address audit --input legacy.txt --allow-errors --network-prefix 753 --format csv`
    pour obtenir un CSV (`input,status,format,domain_kind,…`) mettant en
    évidence sélecteurs locaux, encodages canoniques et échecs de parse.
 3. **Ajouter les entrées au manifest.** Préparer l’entrée `tombstone` (et le

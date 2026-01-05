@@ -53,7 +53,7 @@ Les ingenieurs CI et release doivent appeler le script chaque fois qu'ils telech
    - Capture le digest du manifeste renvoye et le CID SoraFS.
    - Serialise `{ commit, branch, checksum_manifest, cid }` en JSON Norito (`docs/portal/preview/preview_descriptor.json`).
 2. Stocker le descripteur avec l'artefact de build et exposer le CID dans le commentaire de pull request.
-3. Ajouter des tests d'integration qui exercent `sorafs_cli` en mode dry-run afin d'assurer que les evolutions futures conservent la compatibilite du schema de metadonnees.
+3. Ajouter des tests d'integration qui exercent `sorafs_cli` en mode dry-run afin d'assurer que les evolutions futures conservent la coherence du schema de metadonnees.
 
 ## Phase 3 - Gouvernance et audit
 

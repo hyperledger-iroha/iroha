@@ -8,7 +8,7 @@ for design notes and CLI flag reference material.
 ## Prerequisites
 
 - Rust toolchain (`rustup update`), workspace cloned locally.
-- Optional: [OpenSSL-compatible Ed25519 keypair](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
+- Optional: [OpenSSL-generated Ed25519 keypair](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
   for signing manifests.
 - Optional: Node.js ≥ 18 if you plan to preview the Docusaurus portal.
 

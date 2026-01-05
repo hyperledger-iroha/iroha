@@ -4,7 +4,6 @@ description: Governance-enforced retention profiles applied to all DA ingest sub
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/da/replication_policy.md`. Keep both versions in sync until the legacy docs retire.
 :::
 
 # Data Availability Replication Policy (DA-4)

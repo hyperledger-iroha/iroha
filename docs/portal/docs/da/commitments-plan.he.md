@@ -96,7 +96,6 @@ pub struct DaCommitmentBundle {
 ```
 
 ה-hash של ה-bundle נכנס גם ל-hash הבלוק וגם למטא-דטה של `SignedBlockWire`.
-כאשר בלוק לא נושא נתוני DA השדה נשאר `None` כדי ש-lanes legacy ימנעו תקורה.
 
 הערת מימוש: `BlockPayload` ו-`BlockBuilder` השקוף חושפים כעת setters/getters
 של `da_commitments` (ראו `BlockBuilder::set_da_commitments` ו-

@@ -84,7 +84,7 @@ pub mod boilerplate {
 pub enum Error {
     /// Failed IO operation
     Io(#[source] std::sync::Arc<io::Error>),
-    /// Failed to bind TCP listener for configured addresses `{listen_addr}` / `{public_address}`
+    /// Failed to bind TCP listener for configured addresses `{listen_addr}` / `{public_address}`: {error}
     BindListener {
         /// Listen address (with origin) that failed to bind.
         listen_addr: String,

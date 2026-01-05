@@ -12,7 +12,7 @@ Features:
 - Ed25519 key management & signing via CryptoKit (iOS 15+)
 - Confidential key derivation (`ConfidentialKeyset.derive`) mirroring the Rust HKDF so wallets can obtain `sk_spend`, `nk`, `ivk`, `ovk`, and `fvk` locally, plus Torii wrappers for `/v1/confidential/derive-keyset`
 - Runtime capability helpers (`ToriiClient.getNodeCapabilities`, `getRuntimeMetrics`, `getRuntimeAbiActive`) mirroring the Torii `/v1/node/capabilities` and `/v1/runtime/*` surfaces
-- Verifying key registry helpers (`ToriiClient.getVerifyingKey`, `listVerifyingKeys`, register/update/deprecate) covering `/v1/zk/vk` operations
+- Verifying key registry helpers (`ToriiClient.getVerifyingKey`, `listVerifyingKeys`, register/update) covering `/v1/zk/vk` operations
 
 ## Installation
 
@@ -628,7 +628,7 @@ on callback-first code.
 
 ### Verifying key registry
 
-Register, update, list, and deprecate verifying keys via the Torii helpers:
+Register, update, and list verifying keys via the Torii helpers:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
@@ -754,7 +754,7 @@ if #available(iOS 15, macOS 12, *) {
 ```
 
 Completion-style overloads mirror the async variants (`registerVerifyingKey(_:completion:)`,
-`updateVerifyingKey(_:completion:)`, `deprecateVerifyingKey(_:completion:)`) and return a
+`updateVerifyingKey(_:completion:)`) and return a
 `Task<Void, Never>` so UI layers can cancel inflight submissions if needed.
 
 ```swift
@@ -771,8 +771,8 @@ if #available(iOS 15, macOS 12, *) {
                     print("registered:", id)
                 case .updated(_, let record):
                     print("updated to version", record.version)
-                case .deprecated(let id):
-                    print("deprecated:", id)
+                @unknown default:
+                    break
                 }
             }
         } catch {

@@ -14,6 +14,7 @@ use iroha_crypto::Hash as CryptoHash;
 use iroha_data_model::{
     account::NewAccount,
     block::BlockHeader,
+    confidential::ConfidentialEncryptedPayload,
     events::{
         EventBox,
         data::{DataEvent, confidential::ConfidentialEvent},
@@ -97,7 +98,7 @@ fn shield_emits_confidential_event() {
         account_id.clone(),
         123u128,
         commitment,
-        Vec::new(),
+        ConfidentialEncryptedPayload::default(),
     ));
     let chain_id = ChainId::from("confidential_chain");
     let tx = TransactionBuilder::new(chain_id, account_id.clone())
@@ -221,7 +222,7 @@ fn unshield_emits_confidential_event() {
             account_id.clone(),
             500u128,
             [0x11; 32],
-            Vec::new(),
+            ConfidentialEncryptedPayload::default(),
         );
         stx.world
             .executor()

@@ -174,7 +174,6 @@ Deletion is encoded by zero value limbs; absent keys use zero leaf + neighbour w
 - **Stage 2 DoD**
   - Transcript spec implemented; golden transcript (`tests/fixtures/transcript_v1.json`) and domain tags verified.
   - Poseidon2 parameter commit `3f2b7fe` pinned in prover and verifier with endianness tests across architectures.
-  - Prover/verifier compatibility suite (1k/5k/20k rows) passes; proofs archived for replay.
   - Soundness CI guard active; proof size/RAM/latency SLOs recorded.
 - **Stage 3 DoD**
   - Scheduler API (`SubmitProofRequest`, `ProofResult`) documented with idempotency keys.
@@ -196,7 +195,6 @@ Deletion is encoded by zero value limbs; absent keys use zero leaf + neighbour w
     export FASTPQ_METAL_LIB="$OUT_DIR/fastpq.metallib"
     ```
     Successful builds emit `FASTPQ_METAL_LIB=<path>` so the runtime can load the metallib deterministically.【crates/fastpq_prover/build.rs:188】【crates/fastpq_prover/src/metal.rs:42】
-  - The host precomputes one Goldilocks twiddle per FFT stage (8 bytes per stage), caches the tables per `(log_len, inverse)` pair, and reuses the long-lived buffers instead of rebuilding them for every dispatch. The Metal bench exports a `twiddle_cache` block (hits/misses plus `before_ms`/`after_ms`) so release artefacts prove how much host time the cache saves compared to the legacy per-dispatch uploads.【crates/fastpq_prover/src/metal.rs:896】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:976】
   - The LDE kernel now assumes the evaluation buffer is zero-initialised on the host. Keep the existing `vec![0; ..]` allocation path or explicitly zero buffers when reusing them.【crates/fastpq_prover/src/metal.rs:233】【crates/fastpq_prover/metal/kernels/ntt_stage.metal:141】
   - Coset multiplication is fused into the final FFT stage to avoid an extra pass; any changes to LDE staging must preserve that invariant.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:193】
   - The shared-memory FFT/LDE kernel now stops at the tile depth and hands the remaining butterflies plus any inverse scaling to a dedicated `fastpq_fft_post_tiling` pass. The Rust host threads the same column batches through both kernels and only launches the post-tile dispatch when `log_len` exceeds the tile limit, so queue-depth telemetry, kernel stats, and fallback behaviour stay deterministic while the GPU handles the wide-stage work entirely on-device.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:447】【crates/fastpq_prover/src/metal.rs:654】
@@ -217,7 +215,6 @@ Deletion is encoded by zero value limbs; absent keys use zero leaf + neighbour w
   - The benchmark report now emits a `post_tile_dispatches` object that records how many FFT/IFFT/LDE batches ran in the dedicated post-tiling kernel (per-kind dispatch counts plus the stage/log₂ boundaries). `scripts/fastpq/wrap_benchmark.py` copies the block into `benchmarks.post_tile_dispatches`/`benchmarks.post_tile_summary`, and the manifest gate refuses GPU captures that omit the evidence so every 20 k-row artefact proves the multi-pass kernel ran on-device.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1048】【scripts/fastpq/wrap_benchmark.py:255】【xtask/src/fastpq.rs:280】
   - Set `FASTPQ_METAL_TRACE=1` to emit per-dispatch debug logs (pipeline label, threadgroup width, launch groups, elapsed time) for Instruments/Metal trace correlation.【crates/fastpq_prover/src/metal.rs:346】
 - The dispatch queue is now instrumented: `FASTPQ_METAL_MAX_IN_FLIGHT` caps concurrent Metal command buffers (auto default derived from the detected GPU core count via `system_profiler`, clamped to at least the queue fan-out floor with a host-parallelism fallback when macOS refuses to report the device). The bench enables queue-depth sampling so the exported JSON carries a `metal_dispatch_queue` object with `limit`, `dispatch_count`, `max_in_flight`, `busy_ms`, and `overlap_ms` fields for release evidence, adds a nested `metal_dispatch_queue.poseidon` block whenever a Poseidon-only capture (`--operation poseidon_hash_columns`) runs, and emits a `metal_heuristics` block describing the resolved command-buffer limit plus the FFT/LDE batch columns (including whether overrides forced the values) so reviewers can audit the scheduling decisions alongside the telemetry. Poseidon kernels also feed a dedicated `poseidon_profiles` block distilled from the kernel samples so bytes/thread, occupancy, and dispatch geometry are tracked across artefacts. If the primary run can’t collect queue depth or the LDE zero-fill stats (for example, when a GPU dispatch silently falls back to the CPU), the harness automatically fires a single probe dispatch to gather the missing telemetry and now synthesizes host zero-fill timings when the GPU refuses to report them, so published evidence always includes the `zero_fill` block.【crates/fastpq_prover/src/metal.rs:2056】【crates/fastpq_prover/src/metal.rs:247】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1524】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:2078】
-- Production nodes should set Metal tuning via `fastpq.metal_{max_in_flight,threadgroup_width,metal_trace,metal_debug_enum,metal_debug_fused}` (applied during lane start via `fastpq_prover::apply_metal_overrides`); the legacy `FASTPQ_METAL_*`/`FASTPQ_DEBUG_*` env shims now serve as dev/test fallbacks and are ignored once the config supplies values.【crates/iroha_core/src/fastpq/lane.rs:109】【crates/fastpq_prover/src/overrides.rs:11】
   - Set `FASTPQ_SKIP_GPU_BUILD=1` when cross-compiling without the Metal toolchain; the warning records the skip and the planner continues on the CPU path.【crates/fastpq_prover/build.rs:45】【crates/fastpq_prover/src/backend.rs:195】
   - Runtime detection uses `system_profiler` to confirm Metal support; if the framework, device, or metallib is missing the build script clears `FASTPQ_METAL_LIB` and the planner stays on the deterministic CPU path.【crates/fastpq_prover/build.rs:29】【crates/fastpq_prover/src/backend.rs:293】【crates/fastpq_prover/src/backend.rs:605】【crates/fastpq_prover/src/metal.rs:43】
   - Operator checklist (Metal hosts):
@@ -245,7 +242,6 @@ Deletion is encoded by zero value limbs; absent keys use zero leaf + neighbour w
   (FASTPQ batches emit by default; pass `--no-fastpq-batches` only if you need to trim the output).
    Every batch entry now emits a `row_usage` object (`total_rows`, `transfer_rows`,
    `non_transfer_rows`, per-selector counts, and `transfer_ratio`). Archive that JSON snippet
-   next to the Metal benchmark so Grafana can compare gadget vs legacy row allocation without
    reprocessing raw transcripts.【crates/iroha_cli/src/audit.rs:209】 Compare the new capture against
    the previous baseline with `scripts/fastpq/check_row_usage.py` so CI fails if transfer ratios or
    total rows regress:
@@ -275,7 +271,6 @@ Deletion is encoded by zero value limbs; absent keys use zero leaf + neighbour w
      --output artifacts/fastpq_benchmarks/fastpq_row_usage_65k.json
    ```
 
-   Feed the synthesized JSON into `scripts/fastpq/check_row_usage.py` alongside the legacy capture so CI can gate the planner ceiling even before full ExecWitnesses are available.
    Stage 7-3 rollout bundles must also pass `scripts/fastpq/validate_row_usage_snapshot.py`, which
    enforces that every `row_usage` entry contains the selector counts and that
    `transfer_ratio = transfer_rows / total_rows`; `ci/check_fastpq_rollout.sh` calls the helper
@@ -1011,7 +1006,7 @@ The hashing pipeline consumes columns in this deterministic order:
 3. Auxiliary scalars: `delta`, `running_asset_delta`, `metadata_hash`, `supply_counter`, `perm_hash`, `neighbour_leaf`, `dsid`, `slot`.
 4. Sparse Merkle witnesses for every level `ℓ ∈ [0, SMT_HEIGHT)`: `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`.
 
-`trace::column_hashes` walks the columns in exactly this order, so the placeholder backend and Stage 2 STARK implementation remain trace-compatible across releases.【crates/fastpq_prover/src/trace.rs:474】
+`trace::column_hashes` walks the columns in exactly this order, so the placeholder backend and Stage 2 STARK implementation remain trace-stable across releases.【crates/fastpq_prover/src/trace.rs:474】
 
 ### Transcript domain tags
 Stage 2 fixes the Fiat–Shamir catalog below to keep challenge generation deterministic:
@@ -1027,5 +1022,3 @@ Stage 2 fixes the Fiat–Shamir catalog below to keep challenge generation det
 | `fastpq:v1:fri_layer:<round>` | Commit the Merkle root for each FRI layer. |
 | `fastpq:v1:fri:final` | Record the final FRI layer before opening queries. |
 | `fastpq:v1:query_index:0` | Deterministically derive verifier query indices. |
-
-Tweaking these tags (or the column-domain tags above) would change the Fiat–Shamir transcript and break compatibility, so any future edits must land alongside corresponding prover/verifier changes.【crates/fastpq_prover/src/backend.rs:1008】

@@ -193,7 +193,6 @@ que manifests et payloads se round-trip correctement avant l'arrivée des APIs T
    - Générer des documents `ProviderAdvertV1` avec la capacité/santé courante, les signer
      avec la clé approuvée par le conseil, et publier via le canal de discovery.
      Utiliser la nouvelle liste `profile_aliases` pour garder les handles canoniques
-     et legacy disponibles.
 3. **Workflow de pin** :
    - Le gateway reçoit un manifest signé (incluant plan de chunk, racine PoR, signatures
      du conseil). Valider la liste d'alias (`sorafs.sf1@1.0.0` requis) et s'assurer que

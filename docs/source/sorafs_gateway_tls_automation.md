@@ -180,7 +180,6 @@ cargo xtask sorafs-gateway-probe \
   automation helpers. When targeting stdout the probe prints its human-readable
   results to stderr so the JSON stream stays parseable.
 - Exits non-zero on mismatch so CI/paging hooks can fail fast. Set
-  `--allow-missing-tls-state` when probing legacy gateways that have not adopted
   the TLS-state header yet.
 
 #### Paging & rollback drill automation
@@ -233,7 +232,6 @@ call the probe directly without bolting on custom logging or PagerDuty glue.
 Run the new route planner once the release manifest has been built so the
 cutover ticket carries a deterministic `Sora-*` header block and explicit
 rollback metadata. The helper now ships inside the CLI (`iroha sorafs gateway
-route-plan`) and still mirrors the legacy `scripts/sorafs-gateway route plan`
 wrapper when you need to automate from CI:
 
 ```bash

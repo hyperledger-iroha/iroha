@@ -29,7 +29,7 @@
       "area": "edge",
       "cadence": "quarterly",
       "targets": ["gateway-h3", "waf"],
-      "exclusions": ["legacy-http1"],
+      "exclusions": ["http1"],
       "notes": "Cover TLS/ECH rotation and cache-version binding."
     },
     {

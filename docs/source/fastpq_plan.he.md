@@ -170,7 +170,6 @@ else:
       *(EN follow-up: when you need a standalone Poseidon microbench artefact for dashboards, run
       `python3 scripts/fastpq/export_poseidon_microbench.py --bundle artifacts/fastpq_benchmarks/<metal>.json`
       to drop a summary under `benchmarks/poseidon/poseidon_microbench_<timestamp>.json`; the helper
-      accepts both wrapped bundles and raw `fastpq_metal_bench*.json` captures so legacy runs can be
       exported retroactively. Refresh the aggregated manifest via
       `python3 scripts/fastpq/aggregate_poseidon_microbench.py --input benchmarks/poseidon --output benchmarks/poseidon/manifest.json`.)*
       הפלט כולל כעת את השדות `speedup.ratio` ו-`speedup.delta_ms` לכל פעולה כדי להוכיח את יתרון ה-GPU מול ה-CPU בלי לנתח שוב את המדידות.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:521】
@@ -179,7 +178,6 @@ else:
       (`iroha_cli audit witness --binary --out exec.witness`) ופענחו אותו עם
       `iroha_cli audit witness --decode exec.witness --fastpq-parameter fastpq-lane-balanced`
       (אצוות FASTPQ נכללות כברירת מחדל; ניתן להשבית אותן רק אם צריך פלט מצומצם בעזרת `--no-fastpq-batches`).
-       כל batch כולל כעת אובייקט `row_usage` (`total_rows`, `transfer_rows`, `non_transfer_rows`, חלוקה לפי selectors ו-`transfer_ratio`). שמרו את המקטע הזה לצד ה-benchmark כדי ש-Grafana תוכל להציג את היחס בין גאדג׳ט לנתיב legacy ללא עיבוד נוסף של הטרנסקריפטים.【crates/iroha_cli/src/audit.rs:209】 להרצה ב-CI השתמשו ב-`scripts/fastpq/check_row_usage.py` כדי להשוות בין הבייסליין הישן לבין הארטיפקט החדש ולכסות רגרסיות ב-`transfer_ratio`/`total_rows`.
 
        ```bash
        python3 scripts/fastpq/check_row_usage.py \

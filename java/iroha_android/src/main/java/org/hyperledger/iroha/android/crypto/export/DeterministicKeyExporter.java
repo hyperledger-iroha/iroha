@@ -88,7 +88,7 @@ public final class DeterministicKeyExporter {
     fillRandomNonZero(nonce);
     guardSaltNonceReuse(salt, nonce);
     final byte bundleVersion = KeyExportBundle.VERSION_V3;
-    final KdfResult kdf = derivePreferredKey(alias, passphrase, salt, bundleVersion);
+    final KdfResult kdf = derivePreferredKey(alias, passphrase, salt);
     try {
       final Cipher cipher = Cipher.getInstance(AES_TRANSFORMATION);
       final GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_BITS, nonce);
@@ -265,23 +265,20 @@ public final class DeterministicKeyExporter {
       final KeyExportBundle bundle, final char[] passphrase) throws KeyExportException {
     Objects.requireNonNull(bundle, "bundle");
     Objects.requireNonNull(passphrase, "passphrase");
-    if (bundle.version() >= KeyExportBundle.VERSION_V3) {
-      ensurePassphraseStrength(passphrase);
+    if (bundle.version() != KeyExportBundle.VERSION_V3) {
+      throw new KeyExportException("Unsupported key export version: " + bundle.version());
     }
-    if (!bundle.isLegacyDeterministic()
-        && (isAllZero(bundle.nonce()) || isAllZero(bundle.salt()))) {
+    ensurePassphraseStrength(passphrase);
+    if (isAllZero(bundle.nonce()) || isAllZero(bundle.salt())) {
       throw new KeyExportException("Salt and nonce must be non-zero for deterministic import");
     }
     final byte[] aesKey =
-        bundle.isLegacyDeterministic()
-            ? deriveLegacyKey(bundle.alias(), passphrase)
-            : deriveKeyForBundle(
-                bundle.alias(),
-                passphrase,
-                bundle.salt(),
-                bundle.kdfKind(),
-                bundle.kdfWorkFactor(),
-                bundle.version());
+        deriveKeyForBundle(
+            bundle.alias(),
+            passphrase,
+            bundle.salt(),
+            bundle.kdfKind(),
+            bundle.kdfWorkFactor());
     try {
       final Cipher cipher = Cipher.getInstance(AES_TRANSFORMATION);
       final GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_BITS, bundle.nonce());
@@ -315,8 +312,7 @@ public final class DeterministicKeyExporter {
       final char[] passphrase,
       final byte[] salt,
       final int kdfKind,
-      final int workFactor,
-      final byte version)
+      final int workFactor)
       throws KeyExportException {
     if (salt == null || salt.length != SALT_LENGTH_BYTES) {
       throw new KeyExportException("Salt must be provided for key import");
@@ -326,27 +322,27 @@ public final class DeterministicKeyExporter {
     }
     return switch (kdfKind) {
       case KDF_KIND_PBKDF2_HMAC_SHA256 ->
-          derivePbkdf2Key(alias, passphrase, salt, workFactor, version);
+          derivePbkdf2Key(alias, passphrase, salt, workFactor);
       case KDF_KIND_ARGON2ID ->
-          deriveArgon2Key(alias, passphrase, salt, workFactor, version);
+          deriveArgon2Key(alias, passphrase, salt, workFactor);
       default -> throw new KeyExportException("Unsupported KDF kind: " + kdfKind);
     };
   }
 
   private static KdfResult derivePreferredKey(
-      final String alias, final char[] passphrase, final byte[] salt, final byte version)
+      final String alias, final char[] passphrase, final byte[] salt)
       throws KeyExportException {
     if (argon2Available()) {
       try {
         final byte[] argonKey =
-            deriveArgon2Key(alias, passphrase, salt, DEFAULT_ARGON2_ITERATIONS, version);
+            deriveArgon2Key(alias, passphrase, salt, DEFAULT_ARGON2_ITERATIONS);
         return new KdfResult(argonKey, KDF_KIND_ARGON2ID, DEFAULT_ARGON2_ITERATIONS);
       } catch (final KeyExportException | RuntimeException | LinkageError ex) {
         // fall through to PBKDF2 fallback
       }
     }
     final byte[] pbkdfKey =
-        derivePbkdf2Key(alias, passphrase, salt, DEFAULT_PBKDF2_ITERATIONS, version);
+        derivePbkdf2Key(alias, passphrase, salt, DEFAULT_PBKDF2_ITERATIONS);
     return new KdfResult(pbkdfKey, KDF_KIND_PBKDF2_HMAC_SHA256, DEFAULT_PBKDF2_ITERATIONS);
   }
 
@@ -354,8 +350,7 @@ public final class DeterministicKeyExporter {
       final String alias,
       final char[] passphrase,
       final byte[] salt,
-      final int iterations,
-      final byte version)
+      final int iterations)
       throws KeyExportException {
     if (!argon2Available()) {
       throw new KeyExportException("Argon2id derivation unavailable");
@@ -395,8 +390,8 @@ public final class DeterministicKeyExporter {
       final byte[] derived =
           hkdf(
               kdfOutput,
-              sha256(hkdfSaltDomain(version), aliasBytes),
-              hkdfInfoDomain(version).getBytes(StandardCharsets.UTF_8),
+              sha256(hkdfSaltDomain(), aliasBytes),
+              hkdfInfoDomain().getBytes(StandardCharsets.UTF_8),
               AES_KEY_LENGTH_BYTES);
       Arrays.fill(kdfOutput, (byte) 0);
       return derived;
@@ -413,8 +408,7 @@ public final class DeterministicKeyExporter {
       final String alias,
       final char[] passphrase,
       final byte[] salt,
-      final int iterations,
-      final byte version)
+      final int iterations)
       throws KeyExportException {
     final byte[] aliasBytes = alias.getBytes(StandardCharsets.UTF_8);
     final byte[] kdfSalt = ByteBuffer.allocate(salt.length + aliasBytes.length)
@@ -430,8 +424,8 @@ public final class DeterministicKeyExporter {
       final byte[] derived =
           hkdf(
               kdfOutput,
-              sha256(hkdfSaltDomain(version), aliasBytes),
-              hkdfInfoDomain(version).getBytes(StandardCharsets.UTF_8),
+              sha256(hkdfSaltDomain(), aliasBytes),
+              hkdfInfoDomain().getBytes(StandardCharsets.UTF_8),
               AES_KEY_LENGTH_BYTES);
       Arrays.fill(kdfOutput, (byte) 0);
       return derived;
@@ -445,45 +439,6 @@ public final class DeterministicKeyExporter {
         Arrays.fill(kdfOutput, (byte) 0);
       }
       Arrays.fill(kdfSalt, (byte) 0);
-    }
-  }
-
-  private static byte[] deriveLegacyKey(final String alias, final char[] passphrase)
-      throws KeyExportException {
-    final DerivationMaterial material =
-        deriveKeyAndNonceLegacy(
-            alias, passphrase, "software-export", AESKeyNonceLengths.of(AES_KEY_LENGTH_BYTES, NONCE_LENGTH_BYTES));
-    return material.key();
-  }
-
-  private static DerivationMaterial deriveKeyAndNonceLegacy(
-      final String alias, final char[] passphrase, final String domain, final AESKeyNonceLengths lengths)
-      throws KeyExportException {
-    final byte[] aliasBytes = alias.getBytes(StandardCharsets.UTF_8);
-    final byte[] salt = sha256("iroha-android-" + domain + "-salt", aliasBytes);
-    final byte[] domainBytes =
-        ("iroha-android-" + domain + "-info").getBytes(StandardCharsets.UTF_8);
-    final ByteBuffer infoBuffer =
-        ByteBuffer.allocate(domainBytes.length + 2 + aliasBytes.length)
-            .put(domainBytes)
-            .putShort((short) aliasBytes.length)
-            .put(aliasBytes);
-    final byte[] info = infoBuffer.array();
-
-    byte[] ikm = null;
-    try {
-      ikm = encodeUtf8(passphrase);
-      final byte[] hkdfOutput =
-          hkdf(ikm, salt, info, lengths.keyLength() + lengths.nonceLength());
-      final byte[] key = Arrays.copyOfRange(hkdfOutput, 0, lengths.keyLength());
-      final byte[] nonce =
-          Arrays.copyOfRange(hkdfOutput, lengths.keyLength(), hkdfOutput.length);
-      Arrays.fill(hkdfOutput, (byte) 0);
-      return new DerivationMaterial(key, nonce);
-    } finally {
-      if (ikm != null) {
-        Arrays.fill(ikm, (byte) 0);
-      }
     }
   }
 
@@ -557,18 +512,12 @@ public final class DeterministicKeyExporter {
     }
   }
 
-  private static String hkdfSaltDomain(final byte version) {
-    if (version >= KeyExportBundle.VERSION_V3) {
-      return "iroha-android-software-export-v3-salt";
-    }
-    return "iroha-android-software-export-v2-salt";
+  private static String hkdfSaltDomain() {
+    return "iroha-android-software-export-v3-salt";
   }
 
-  private static String hkdfInfoDomain(final byte version) {
-    if (version >= KeyExportBundle.VERSION_V3) {
-      return "iroha-android-software-export-v3-info";
-    }
-    return "iroha-android-software-export-v2-info";
+  private static String hkdfInfoDomain() {
+    return "iroha-android-software-export-v3-info";
   }
 
   private static void guardSaltNonceReuse(final byte[] salt, final byte[] nonce)
@@ -633,9 +582,6 @@ public final class DeterministicKeyExporter {
     }
   }
 
-  /** Container for the key and nonce produced by the derivation. */
-  private record DerivationMaterial(byte[] key, byte[] nonce) {}
-
   /** Holds derived key pair material. */
   public static final class KeyPairData {
     private final PrivateKey privateKey;
@@ -655,9 +601,4 @@ public final class DeterministicKeyExporter {
     }
   }
 
-  private record AESKeyNonceLengths(int keyLength, int nonceLength) {
-    static AESKeyNonceLengths of(final int keyLength, final int nonceLength) {
-      return new AESKeyNonceLengths(keyLength, nonceLength);
-    }
-  }
 }

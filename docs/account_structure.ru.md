@@ -484,7 +484,6 @@ Release‑автоматизация публикует `manifest.sigstore` и `
 | Тип            | Назначение | Обязательные поля |
 |----------------|-----------|-------------------|
 | `global_domain` | Объявляет, что домен зарегистрирован глобально и должен сопоставляться с дискриминантом цепи и IH58‑префиксом. | `{ "domain": "<label>", "chain": "sora:nexus:global", "ih58_prefix": 753, "selector": "global" }` |
-| `local_alias`   | Отслеживает legacy‑селекторы (`Local-12`), которые всё ещё маршрутизируются локально. Добавляет 12‑байтовый digest и опциональный `alias_label`. | `{ "domain": "<label>", "selector": { "kind": "local", "digest_hex": "<12-byte-hex>" }, "alias_label": "<optional>" }` |
 | `tombstone`     | Безвозвратно снимает alias/selector. Обязателен при удалении Local‑8‑digest’ов или полном удалении домена. | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
 
 Записи `global_domain` могут опционально содержать `manifest_url` или
@@ -510,11 +509,9 @@ Release‑автоматизация публикует `manifest.sigstore` и `
    содержит домен в поле `input_domain`, а флаг `--append-domain` формирует
    `<ih58>@wonderland` для обновления manifest’а. Для построчных экспортов
    используйте
-   `iroha address normalize --input legacy.txt --only-local --append-domain --network-prefix 753 --format ih58 --output normalized.txt`,
    чтобы массово перевести Local‑селекторы в каноническую IH58‑форму (или
    compressed/hex/JSON), пропуская нелокальные строки. Для доказательной
    выгрузки под таблицы пригодится
-   `iroha address audit --input legacy.txt --allow-errors --network-prefix 753 --format csv`,
    формирующая CSV (`input,status,format,domain_kind,…`) с пометкой
    Local‑селекторов, канонических кодировок и ошибок парсинга.
 3. **Добавить записи в manifest.** Подготовьте запись `tombstone` (и

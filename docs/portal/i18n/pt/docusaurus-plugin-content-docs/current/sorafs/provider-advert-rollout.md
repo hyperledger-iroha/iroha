@@ -10,7 +10,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 > Adaptado de [`docs/source/sorafs/provider_advert_rollout.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_rollout.md).
 
-# Plano de rollout e compatibilidade de adverts de providers SoraFS
+# Plano de rollout de adverts de providers SoraFS
 
 Este plano coordena o cut-over de adverts permissivos de providers para a
 superficie totalmente governada `ProviderAdvertV1` exigida para retrieval
@@ -19,7 +19,6 @@ multi-source de chunks. Ele foca em tres deliverables:
 - **Guia de operadores.** Passos que storage providers precisam concluir antes de cada gate.
 - **Cobertura de telemetria.** Dashboards e alerts que Observability e Ops usam
   para confirmar que a rede aceita apenas adverts conformes.
-- **Timeline de compatibilidade.** Datas explicitas para rejeitar envelopes legacy
   para que equipes de SDK e tooling planejem releases.
 
 O rollout se alinha aos marcos SF-2b/2c no
@@ -30,10 +29,6 @@ no [provider admission policy](./provider-admission-policy) ja esta ativa.
 
 | Fase | Janela (alvo) | Comportamento | Acoes do operador | Foco de observabilidade |
 |-------|-----------------|-----------|------------------|-------------------|
-| **R0 - Observacao base** | Ate **2025-03-31** | Torii aceita adverts aprovados por governance e payloads legacy anteriores a `ProviderAdvertV1`. Logs de ingestao alertam quando adverts omitem `chunk_range_fetch` ou `profile_aliases` canonicos. | - Regenerar adverts via pipeline de publicacao de provider advert (ProviderAdvertV1 + governance envelope), garantindo `profile_id=sorafs.sf1@1.0.0`, `profile_aliases` canonicos e `signature_strict=true`. <br />- Rodar os novos testes `sorafs_fetch` localmente; warnings sobre capabilities desconhecidas devem ser triageadas. | Publicar panels Grafana provisorios (ver abaixo) e definir thresholds de alerta, mantendo-os apenas em modo de warning. |
-| **R1 - Gate de warning** | **2025-04-01 -> 2025-05-15** | Torii continua aceitando adverts legacy, mas incrementa `torii_sorafs_admission_total{result="warn"}` quando o payload carece de `chunk_range_fetch` ou carrega capabilities desconhecidas sem `allow_unknown_capabilities=true`. O tooling CLI agora falha ao regenerar sem o handle canonico. | - Rotacionar adverts em staging e production para incluir payloads `CapabilityType::ChunkRangeFetch` e, quando houver GREASE testing, definir `allow_unknown_capabilities=true`. <br />- Anotar os runbooks de operacoes com as novas queries de telemetria. | Promover dashboards para rotacao on-call; configurar warnings quando eventos `warn` excederem 5% do trafego por 15 minutos. |
-| **R2 - Enforcement** | **2025-05-16 -> 2025-06-30** | Torii rejeita adverts sem governance envelope, handle canonico de perfil ou capability `chunk_range_fetch`. Handles legacy `namespace-name` nao sao mais parseados. Capabilities desconhecidas sem opt-in GREASE agora falham com `reason="unknown_capability"`. | - Confirmar envelopes de production em `torii.sorafs.admission_envelopes_dir` e rotacionar qualquer advert legacy restante. <br />- Verificar que SDKs emitem apenas handles canonicos e aliases opcionais para compatibilidade retroativa. | Ativar pager alerts: `torii_sorafs_admission_total{result="reject"}` > 0 por 5 minutos aciona acao do operador. Acompanhar ratio de aceitacao e histogramas de motivos de admissao. |
-| **R3 - Shutdown legacy** | **2025-07-01 em diante** | Discovery deixa de suportar adverts binarios que nao definem `signature_strict=true` ou omitem `profile_aliases`. O cache de discovery do Torii remove entradas stale cujo refresh deadline expirou sem renovacao. | - Agendar janela final de decommission para stacks legacy de providers. <br />- Confirmar que runs GREASE `--allow-unknown` ocorram apenas em drills controlados e sejam logados. <br />- Atualizar playbooks de incidentes para tratar warning output de `sorafs_fetch` como blocker antes de releases. | Endurecer alerts: qualquer resultado `warn` alerta on-call. Adicionar checks sinteticos que busquem o discovery JSON e validem listas de capabilities de providers. |
 
 ## Checklist do operador
 
@@ -168,14 +163,13 @@ groups:
 Execute `scripts/check_prometheus_rules.sh observability/prometheus/sorafs_admission.rules.yml`
 antes de enviar mudancas para garantir que a sintaxe passe `promtool check rules`.
 
-## Matriz de compatibilidade
+## Matriz de rollout
 
 | Caracteristicas do advert | R0 | R1 | R2 | R3 |
 |------------------------|----|----|----|----|
 | `profile_id = sorafs.sf1@1.0.0`, `chunk_range_fetch` presente, aliases canonicos, `signature_strict=true` | OK | OK | OK | OK |
 | Ausencia de `chunk_range_fetch` capability | WARN (ingest + telemetry) | WARN | REJECT (`reason="missing_capability"`) | REJECT |
 | TLVs de capability desconhecida sem `allow_unknown_capabilities=true` | OK | WARN (`reason="unknown_capability"`) | REJECT | REJECT |
-| Handle legacy apenas (`profile_id = sorafs.sf1@1.0.0`) | WARN | REJECT | REJECT | REJECT |
 | `refresh_deadline` expirado | REJECT | REJECT | REJECT | REJECT |
 | `signature_strict=false` (diagnostic fixtures) | OK (development apenas) | WARN | WARN | REJECT |
 
@@ -186,7 +180,6 @@ arquivo e o ledger no mesmo PR.
 > **Nota de implementacao:** R1 introduz a serie `result="warn"` em
 > `torii_sorafs_admission_total`. O patch de ingestao do Torii que adiciona o
 > novo label e acompanhado junto das tarefas de telemetria SF-2; ate la, use
-> log sampling para monitorar adverts legacy.
 
 ## Comunicacao e tratamento de incidentes
 

@@ -219,7 +219,7 @@ scripts/nexus_lane_smoke.py \
 Las fixtures bajo `fixtures/nexus/lanes/` reflejan los artefactos producidos por el helper de
 bootstrap para que nuevos manifests se puedan lint sin scripting a medida. CI ejecuta el mismo flujo
 via `ci/check_nexus_lane_smoke.sh` y tambien corre `ci/check_nexus_lane_registry_bundle.sh`
-(alias: `make check-nexus-lanes`) para garantizar que el helper de smoke NX-7 siga siendo compatible
+(alias: `make check-nexus-lanes`) para garantizar que el helper de smoke NX-7 siga estando alineado
 con el formato de payload publicado y para asegurar que los digests/overlays del bundle sigan siendo
 reproducibles.
 

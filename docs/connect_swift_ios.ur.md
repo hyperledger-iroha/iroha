@@ -249,7 +249,7 @@ func joinWs(node: String, sid: String, role: String, token: String, onMessage: @
 ### Norito فریمنگ ڈیمو (Placeholder)
 
 ذیل میں دیا گیا framing کم سے کم اور غیر canonical ہے، جو صرف مقامی demos کے لیے کافی
-ہے۔ یہ Norito‑compatible نہیں ہے اور جب آپ کے پاس صحیح Norito encoder/decoder آ جائے
+ہے۔ یہ Norito format کے مطابق نہیں ہے اور جب آپ کے پاس صحیح Norito encoder/decoder آ جائے
 تو اسے ضرور تبدیل کریں۔ اس کا مقصد صرف یہ ہے کہ فیلڈز کو ایک مستقل little‑endian
 آرڈر میں جوڑ کر آپ بغیر مکمل codec کے iOS پر end‑to‑end WebSocket transport کو
 آزمانے کے قابل ہوں۔
@@ -371,4 +371,3 @@ JSON نکل آئے، پھر اسے اپنی ایپ کے ٹائپس میں decode
   مزید incident ہینڈلنگ کا محتاج ہے۔
 
 </div>
-

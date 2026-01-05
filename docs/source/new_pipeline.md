@@ -63,7 +63,6 @@ Harmonization constraints
   with identical permission checks, metering, and event semantics.
 - Acceleration (AOT_SIMD, CUDA/Metal) is feature‑gated and produces bit‑exact
   results with a canonical fallback path to preserve cross‑hardware determinism.
- - Norito serialization compatibility is preserved with round‑trip invariants
    for all public data structures and transactions.
 
 Implementation status (current node)
@@ -275,7 +274,6 @@ Phases (normative)
 
 ABI & Norito
 - ABI is a Norito schema over entrypoints and their types. `abi_hash` binds to the manifest; invocation envelopes carry canonical Norito‑encoded args/returns.
-- Backward compatibility: minor version may add optional fields; breaking changes bump major and require new `contract_id` or `version` + migration.
 
 Permissions & governance
 - Register/Upgrade require domain‑level permissions (e.g., `CanRegisterSmartContract`, `CanUpgradeSmartContract`); calls may require `CanCall<contract_id.entrypoint>` role tokens.
@@ -444,7 +442,6 @@ Kotodama integration
   uncertainty is detected (e.g., data‑dependent key construction). Supersets
   reduce parallelism but never break safety.
 
-4) Norito compatibility
 - Access‑set metadata included on‑wire is optional and advisory; the canonical
   state transition remains the executed semantics. Nodes must not rely on
   external hints for correctness.
@@ -458,7 +455,6 @@ Wire/advisory format (implemented)
   - Canonical bytes are the Norito encoding of the enum value; sorting and
     deduplication are provided via `canonicalize()` to keep envelopes compact.
 - Round‑trip tests are included in `crates/iroha_data_model` to preserve Norito
-  compatibility and ordering invariants.
 
 5) Enforcement (normative)
 - During stateful execution, the executor MUST assert that all state reads and
@@ -708,7 +704,6 @@ Host Syscalls
   with explicit capability descriptors. They are metered and logged for access
   set auditing in dry‑run mode.
 
-Compatibility notes
 - Kotodama/IVM ABI is stable across minor versions; deprecations follow a
   capability‑flag negotiation so old bytecode remains executable.
 
@@ -902,7 +897,7 @@ Gadget APIs (deterministic host calls)
   - `SCALL_ZK_HASH(data_ptr:u64, data_len:u32, out_ptr:u64) -> err:u8`
     - Writes 32‑byte Blake2b output with LSB set to 1 (as in `Hash::prehashed`). No domain tag is added here; higher‑level callers (Merkle, transcripts) prefix their own.
   - `SCALL_ZK_HASH2(h1_ptr:u64, h2_ptr:u64, out_ptr:u64) -> err:u8` concatenates two 32‑byte digests and hashes them.
-- Ed25519 verify (RFC 8032 strict, ZIP‑215 compatible encodings disabled)
+- Ed25519 verify (RFC 8032 strict, ZIP‑215 encodings disabled)
   - `SCALL_ZK_ED25519_VERIFY(pk_ptr:u64[32], msg_ptr:u64, msg_len:u32, sig_ptr:u64[64]) -> ok:u8`
     - Canonical encodings enforced: `s < L`, `R` and `A` not small‑order; reject non‑canonical points/encodings; constant‑time.
 - secp256k1 verify (low‑s, strict DER signature)
@@ -1633,7 +1628,7 @@ Determinism specification (normative, summary)
   (compiler, linker, libc, flags, dep digests). Rebuild artifacts are
   byte‑reproducible.
 - Capabilities & protocol version: on‑chain protocol/VM version gates behavior
-  and feature negotiation; nodes refuse incompatible artifacts.
+  and feature negotiation; nodes refuse mismatched artifacts.
 - Gas schedule version: gas pricing changes (e.g., SHA3BLOCK/AESDEC/ECDSAVERIFY)
   are introduced under a new protocol/VM version and activated via governance
   to preserve consensus; validators reject mixed schedules.
@@ -1715,7 +1710,6 @@ Phase 4: Triggers & Polishing
 - Tune epoch sizing/limits; expose observability (epoch counts, conflicts) via
   telemetry.
 
-Phase 5: Harmonization & Compatibility
 - Validate Kotodama metadata emission and IVM pre‑decode cache stability.
 - Add Norito round‑trip tests for any new/changed types and transaction forms.
 - Document mempool selection policies and ensure leader reproducibility.
@@ -1848,7 +1842,7 @@ Data Availability
 - Queries: snapshot isolation; correct height reported; budgets enforced; heavy queries do not impact block pipeline latency.
 - Prover lane: snapshot root/height pinned in public inputs; quotas and priority classes enforced; kill‑switch disables safely; artifacts stored/evicted by policy.
 - Serialization: Norito round‑trip for all modified types; canonical key encoding stable; compressed forms decode to identical canonical bytes.
-- Upgrade gates: protocol/VM version negotiation works; incompatible features rejected; feature kill‑switches disable AOT/SIMD/ZK safely.
+- Upgrade gates: protocol/VM version negotiation works; unsupported features rejected; feature kill‑switches disable AOT/SIMD/ZK safely.
   Hermeticity: independent hermetic rebuilds produce byte‑identical AOT artifacts and identical translation‑validation outcomes.
 - Cross‑arch CI: matrices for x86‑64 (SSE4.2/AVX2/AVX‑512) and ARM64 (NEON) with and without SIMD/AOT; determinism verified.
 - Observability: metrics exported (DAG size, overlays, violations, acceleration hit rates); optional per‑tx trace digests are correct and bounded.

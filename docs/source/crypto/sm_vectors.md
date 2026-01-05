@@ -126,24 +126,6 @@ These cases inform the regression suite in `crates/iroha_crypto/tests/sm3_sm4_ve
 | Multicodec (provisional) | `862641040AE4…` (`sm2-pub`, varint `0x1306`) | Derived from Annex Example 1 |
 | Prefixed multihash | `sm2:862641040AE4…` | Derived (matches `sm_known_answers.toml`) |
 
-### Legacy Default SM2 Fixture (SDK Fallback)
-
-This legacy vector remains at the top level of `sm2_fixture.json` so older SDKs
-that only understand the root fields can continue to operate. New clients should
-prefer the structured entries under `vectors`.
-
-| Field | Value (hex unless noted) | Notes |
-|-------|--------------------------|-------|
-| Distinguishing ID | `"1234567812345678"` | Shared default exposed via `SM2_DEFAULT_DISTINGUISHED_ID` |
-| Seed | `0x11` repeated 32 times | Input to `Sm2PrivateKey::from_seed` |
-| Private key | `A333F581EC034C1689B750A827E150240565B483DEB28294DDB2089AD925A569` | Stored in `fixtures/sm/sm2_fixture.json` |
-| Public key (SEC1 uncompressed) | `04361255A512347E76EA947EBB416C12D4C07E30B150C0EC2047ECC5E142907499B8D99C4C5CF69BFF6527E7B67396B55E42EF98625B339696DBEF9A3AABBFC06F` | Matches `PublicKey::to_sec1_bytes(false)` |
-| Public key multihash | `86264104361255A512347E76EA947EBB416C12D4C07E30B150C0EC2047ECC5E142907499B8D99C4C5CF69BFF6527E7B67396B55E42EF98625B339696DBEF9A3AABBFC06F` | Output of `PublicKey::to_string()` |
-| Prefixed multihash | `sm2:86264104361255A512347E76EA947EBB416C12D4C07E30B150C0EC2047ECC5E142907499B8D99C4C5CF69BFF6527E7B67396B55E42EF98625B339696DBEF9A3AABBFC06F` | Output of `PublicKey::to_prefixed_string()` |
-| ZA | `E54EDEDE2A2FCC1C9DF868C56F8A2DD8C562F1AD3C78DC11DD7D91BB6F0EBD46` | Computed with `Sm2PublicKey::compute_z` |
-| Message | `"iroha sm sdk fixture"` (hex `69726F686120736D2073646B2066697874757265`) | Canonical SDK payload |
-| Signature `(r, s)` | `1877845D5FFE0305946EEA3046D0279BE886B866EF620B7325413602CAD17C7F`, `F72EBF26C29E77AAAB2226EDFBEE2D6D6ABC0D6C9B2C9A2248E2BD9324A12268` | Produced via `Signature::new` |
-
 ### Rust SDK Deterministic Signing Fixture (SM-3c)
 
 The structured vectors array includes the Rust/Python/JavaScript parity payload

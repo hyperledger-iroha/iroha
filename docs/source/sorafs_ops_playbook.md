@@ -12,7 +12,6 @@ incident retrospectives.
 
 > **Portal:** This runbook is mirrored in the Docusaurus portal at
 > `docs/portal/docs/sorafs/operations-playbook.md`. Keep the two copies in sync
-> until the legacy Sphinx set is retired.
 
 ## Key References
 

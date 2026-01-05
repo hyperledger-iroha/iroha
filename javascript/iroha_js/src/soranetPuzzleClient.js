@@ -306,15 +306,15 @@ function normalizePuzzleConfig(payload, context) {
     required: coerceBoolean(record.required, `${context}.required`),
     difficulty: coerceNonNegativeInteger(record.difficulty, `${context}.difficulty`),
     maxFutureSkewSecs: coerceNonNegativeInteger(
-      record.max_future_skew_secs ?? record.maxFutureSkewSecs,
+      record.max_future_skew_secs,
       `${context}.max_future_skew_secs`,
     ),
     minTicketTtlSecs: coerceNonNegativeInteger(
-      record.min_ticket_ttl_secs ?? record.minTicketTtlSecs,
+      record.min_ticket_ttl_secs,
       `${context}.min_ticket_ttl_secs`,
     ),
     ticketTtlSecs: coerceNonNegativeInteger(
-      record.ticket_ttl_secs ?? record.ticketTtlSecs,
+      record.ticket_ttl_secs,
       `${context}.ticket_ttl_secs`,
     ),
     puzzle,
@@ -325,8 +325,8 @@ function normalizePuzzleConfig(payload, context) {
 function normalizePuzzleParams(payload, context) {
   const record = ensureRecord(payload, context);
   return {
-    memoryKib: coercePositiveInteger(record.memory_kib ?? record.memoryKib, `${context}.memory_kib`),
-    timeCost: coercePositiveInteger(record.time_cost ?? record.timeCost, `${context}.time_cost`),
+    memoryKib: coercePositiveInteger(record.memory_kib, `${context}.memory_kib`),
+    timeCost: coercePositiveInteger(record.time_cost, `${context}.time_cost`),
     lanes: coercePositiveInteger(record.lanes, `${context}.lanes`),
   };
 }
@@ -338,8 +338,7 @@ function normalizeTokenConfig(payload, context) {
     value === undefined || value === null ? null : String(value);
   const coerceNumberOption = (value, label) =>
     value === undefined || value === null ? null : coerceNonNegativeInteger(value, label);
-  const ids =
-    record.revocation_ids_hex || record.revocationIdsHex || record.revocation_ids || [];
+  const ids = record.revocation_ids_hex || [];
   if (!Array.isArray(ids)) {
     throw new TypeError(`${context}.revocation_ids_hex must be an array`);
   }
@@ -350,27 +349,27 @@ function normalizeTokenConfig(payload, context) {
     enabled,
     suite: coerceOption(record.suite, `${context}.suite`),
     relayIdHex: coerceOption(
-      record.relay_id_hex ?? record.relayIdHex,
+      record.relay_id_hex,
       `${context}.relay_id_hex`,
     ),
     issuerFingerprintHex: coerceOption(
-      record.issuer_fingerprint_hex ?? record.issuerFingerprintHex,
+      record.issuer_fingerprint_hex,
       `${context}.issuer_fingerprint_hex`,
     ),
     maxTtlSecs: coerceNumberOption(
-      record.max_ttl_secs ?? record.maxTtlSecs,
+      record.max_ttl_secs,
       `${context}.max_ttl_secs`,
     ),
     minTtlSecs: coerceNumberOption(
-      record.min_ttl_secs ?? record.minTtlSecs,
+      record.min_ttl_secs,
       `${context}.min_ttl_secs`,
     ),
     defaultTtlSecs: coerceNumberOption(
-      record.default_ttl_secs ?? record.defaultTtlSecs,
+      record.default_ttl_secs,
       `${context}.default_ttl_secs`,
     ),
     clockSkewSecs: coerceNumberOption(
-      record.clock_skew_secs ?? record.clockSkewSecs,
+      record.clock_skew_secs,
       `${context}.clock_skew_secs`,
     ),
     revocationIdsHex,
@@ -379,13 +378,12 @@ function normalizeTokenConfig(payload, context) {
 
 function normalizePuzzleMintResponse(payload, context) {
   const record = ensureRecord(payload, context);
-  const signedB64Raw = record.signed_ticket_b64 ?? record.signedTicketB64 ?? null;
+  const signedB64Raw = record.signed_ticket_b64 ?? null;
   const signedTicketB64 =
     signedB64Raw === undefined || signedB64Raw === null
       ? null
       : requireNonEmptyString(signedB64Raw, `${context}.signed_ticket_b64`);
-  const fingerprintRaw =
-    record.signed_ticket_fingerprint_hex ?? record.signedTicketFingerprintHex ?? null;
+  const fingerprintRaw = record.signed_ticket_fingerprint_hex ?? null;
   const signedTicketFingerprintHex =
     fingerprintRaw === undefined || fingerprintRaw === null
       ? null
@@ -395,13 +393,13 @@ function normalizePuzzleMintResponse(payload, context) {
           `${context}.signed_ticket_fingerprint_hex`,
         );
   return {
-    ticketB64: requireNonEmptyString(record.ticket_b64 ?? record.ticketB64, `${context}.ticket_b64`),
+    ticketB64: requireNonEmptyString(record.ticket_b64, `${context}.ticket_b64`),
     signedTicketB64,
     signedTicketFingerprintHex,
     difficulty: coerceNonNegativeInteger(record.difficulty, `${context}.difficulty`),
-    ttlSecs: coerceNonNegativeInteger(record.ttl_secs ?? record.ttlSecs, `${context}.ttl_secs`),
+    ttlSecs: coerceNonNegativeInteger(record.ttl_secs, `${context}.ttl_secs`),
     expiresAt: coerceNonNegativeInteger(
-      record.expires_at ?? record.expiresAt,
+      record.expires_at,
       `${context}.expires_at`,
     ),
   };
@@ -410,26 +408,26 @@ function normalizePuzzleMintResponse(payload, context) {
 function normalizeTokenMintResponse(payload, context) {
   const record = ensureRecord(payload, context);
   return {
-    tokenB64: requireNonEmptyString(record.token_b64 ?? record.tokenB64, `${context}.token_b64`),
+    tokenB64: requireNonEmptyString(record.token_b64, `${context}.token_b64`),
     tokenIdHex: normalizeHexString(
-      record.token_id_hex ?? record.tokenIdHex,
+      record.token_id_hex,
       32,
       `${context}.token_id_hex`,
     ),
-    issuedAt: coerceNonNegativeInteger(record.issued_at ?? record.issuedAt, `${context}.issued_at`),
+    issuedAt: coerceNonNegativeInteger(record.issued_at, `${context}.issued_at`),
     expiresAt: coerceNonNegativeInteger(
-      record.expires_at ?? record.expiresAt,
+      record.expires_at,
       `${context}.expires_at`,
     ),
-    ttlSecs: coerceNonNegativeInteger(record.ttl_secs ?? record.ttlSecs, `${context}.ttl_secs`),
+    ttlSecs: coerceNonNegativeInteger(record.ttl_secs, `${context}.ttl_secs`),
     flags: coerceByte(record.flags, `${context}.flags`),
     issuerFingerprintHex: normalizeHexString(
-      record.issuer_fingerprint_hex ?? record.issuerFingerprintHex,
+      record.issuer_fingerprint_hex,
       32,
       `${context}.issuer_fingerprint_hex`,
     ),
     relayIdHex: normalizeHexString(
-      record.relay_id_hex ?? record.relayIdHex,
+      record.relay_id_hex,
       32,
       `${context}.relay_id_hex`,
     ),

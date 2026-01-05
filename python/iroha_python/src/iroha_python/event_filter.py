@@ -37,7 +37,6 @@ class VerifyingKeyFilter(EventFilter):
     name: Optional[str] = None
     registered: bool = True
     updated: bool = True
-    deprecated: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         id_matcher: Optional[Dict[str, str]]
@@ -50,7 +49,6 @@ class VerifyingKeyFilter(EventFilter):
         event_set = {
             "Registered": bool(self.registered),
             "Updated": bool(self.updated),
-            "Deprecated": bool(self.deprecated),
         }
         if not any(event_set.values()):
             raise ValueError("verifying key filter must enable at least one event type")
@@ -201,9 +199,9 @@ class DataEventFilter(EventFilter):
 
     @classmethod
     def verifying_key(cls, *, backend: Optional[str] = None, name: Optional[str] = None,
-                      registered: bool = True, updated: bool = True, deprecated: bool = True) -> "DataEventFilter":
+                      registered: bool = True, updated: bool = True) -> "DataEventFilter":
         return cls(VerifyingKeyFilter(backend=backend, name=name, registered=registered,
-                                      updated=updated, deprecated=deprecated).to_dict())
+                                      updated=updated).to_dict())
 
     @classmethod
     def proof(cls, *, backend: Optional[str] = None, proof_hash_hex: Optional[str] = None,

@@ -11,7 +11,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/sorafs_node_storage.md` کی عکاسی کرتا ہے۔ جب تک legacy Sphinx docs ریٹائر نہ ہوں دونوں کاپیاں ہم آہنگ رکھیں۔
 :::
 
 ## SoraFS node storage design (Draft)
@@ -129,7 +128,6 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
    - SoraFS gateway routes register کریں (Norito JSON POST/GET endpoints for pin, fetch, PoR sample, telemetry)۔
    - PoR sampling worker اور quota monitor spawn کریں۔
 2. **Discovery / Adverts**:
-   - current capacity/health کے ساتھ `ProviderAdvertV1` documents generate کریں، council-approved key سے sign کریں، اور discovery channel کے ذریعے publish کریں۔ canonical اور legacy handles دستیاب رکھنے کے لیے `profile_aliases` list استعمال کریں۔
 3. **Pin workflow**:
    - Gateway signed manifest وصول کرتا ہے (chunk plan، PoR root، council signatures شامل)۔ alias list validate کریں (`sorafs.sf1@1.0.0` required) اور chunk plan کو manifest metadata سے match کریں۔
    - Quotas check کریں۔ اگر capacity/pin limits exceed ہوں تو policy error (structured Norito) دیں۔

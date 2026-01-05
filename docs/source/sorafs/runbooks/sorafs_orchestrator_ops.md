@@ -81,7 +81,6 @@ When a fetch fails:
 
 To revert an orchestrator rollout:
 
-1. Distribute a configuration that sets `--max-peers=1` (effectively disabling multi-source scheduling) or switch clients back to the legacy single-source fetch path.
 2. Remove any `--boost-provider` overrides so the scoreboard reverts to neutral weighting.
 3. Continue scraping the orchestrator metrics for at least one day to confirm no residual fetches are in-flight.
 

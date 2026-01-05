@@ -19,7 +19,7 @@ description: Pasos de ensayo para guardia al promover o degradar la politica de 
 ---
 
 :::note Fuente canonica
-Esta pagina refleja `docs/source/soranet/pq_ratchet_runbook.md`. Mantengan ambas copias alineadas hasta que el conjunto legado de documentacion se retire.
+Esta pagina refleja `docs/source/soranet/pq_ratchet_runbook.md`. Manten ambas copias sincronizadas.
 :::
 
 ## Proposito

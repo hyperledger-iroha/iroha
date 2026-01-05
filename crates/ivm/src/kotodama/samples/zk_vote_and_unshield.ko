@@ -11,39 +11,23 @@
 // proper Norito TLVs (envelopes and InstructionBox bytes) and may preload them
 // into INPUT.
 seiyaku ZkVoteAndUnshield {
-  // Verify a ballot proof, then enqueue a SubmitBallot instruction via the vendor bridge.
-  fn verify_and_submit_ballot(election_id: string,
-                              ciphertext: Blob,
-                              nullifier: Blob,
-                              proof_env: Blob) {
+  // Verify a ballot proof, then enqueue a prebuilt SubmitBallot instruction via the vendor bridge.
+  fn verify_and_submit_ballot(proof_env: Blob, submit: Blob) {
     // 1) Verify the ballot using ZK_VOTE_VERIFY_BALLOT.
     //    `proof_env` must be a Norito-encoded OpenVerifyEnvelope in a NoritoBytes TLV.
     zk_vote_verify_ballot(proof_env);
 
-    // 2) Build a SubmitBallot InstructionBox inline and enqueue it via the vendor bridge.
-    //    The builder returns a Blob pointer to NoritoBytes payload stored in the data section.
-    let proof = blob!("proof-bytes");
-    let vk = blob!("vk-bytes");
-    let backend = "halo2/ipa";
-    let submit = build_submit_ballot_inline(election_id, ciphertext, nullifier, backend, proof, vk);
+    // 2) Enqueue the prebuilt SubmitBallot InstructionBox.
     // Generic entry point: lowers to SMARTCONTRACT_EXECUTE_INSTRUCTION (0xA0)
     execute_instruction(submit);
   }
 
-  // Verify an unshield proof, then enqueue an Unshield instruction via the vendor bridge.
-  fn verify_and_unshield(to: AccountId,
-                         asset: AssetDefinitionId,
-                         public_amount: int,
-                         proof_env: Blob) {
+  // Verify an unshield proof, then enqueue a prebuilt Unshield instruction via the vendor bridge.
+  fn verify_and_unshield(proof_env: Blob, unshield: Blob) {
     // 1) Verify the unshield using ZK_VERIFY_UNSHIELD (0x61).
     zk_verify_unshield(proof_env);
 
-    // 2) Build an Unshield instruction inline and enqueue via vendor bridge.
-    let inputs32 = blob!("32-bytes-input-nullifier");
-    let backend = "halo2/ipa";
-    let proof = blob!("proof-bytes");
-    let vk = blob!("vk-bytes");
-    let unshield = build_unshield_inline(asset, to, public_amount, inputs32, backend, proof, vk);
+    // 2) Enqueue the prebuilt Unshield instruction.
     execute_instruction(unshield);
   }
 
@@ -53,16 +37,27 @@ seiyaku ZkVoteAndUnshield {
     let env_ballot = norito_bytes("ENV-BALLOT");
     let env_unshield = norito_bytes("ENV-UNSHIELD");
 
-    // Demo submit ballot
-    let election_id = "election-1";
-    let ciphertext = blob!("ciphertext");
-    let nullifier = blob!("0123456789abcdef0123456789abcdef");
-    verify_and_submit_ballot(election_id, ciphertext, nullifier, env_ballot);
+    // Inline builders require literal inputs; for runtime data, prebuild
+    // the Norito InstructionBox and pass it as a Blob/NoritoBytes pointer.
+    let submit = build_submit_ballot_inline(
+      "election-1",
+      blob!("ciphertext"),
+      blob!("0123456789abcdef0123456789abcdef"),
+      "halo2/ipa",
+      blob!("proof-bytes"),
+      blob!("vk-bytes")
+    );
+    verify_and_submit_ballot(env_ballot, submit);
 
-  // Demo unshield
-  let to = account!("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland");
-  let asset = asset_definition!("rose#wonderland");
-  let amount = 1;
-  verify_and_unshield(to, asset, amount, env_unshield);
+    let unshield = build_unshield_inline(
+      asset_definition!("rose#wonderland"),
+      account!("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"),
+      1,
+      blob!("0123456789abcdef0123456789abcdef"),
+      "halo2/ipa",
+      blob!("proof-bytes"),
+      blob!("vk-bytes")
+    );
+    verify_and_unshield(env_unshield, unshield);
 }
 }

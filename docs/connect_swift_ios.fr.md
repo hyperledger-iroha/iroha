@@ -245,7 +245,7 @@ Notes :
 ### Démo de framing Norito (exemple)
 
 Ce qui suit est un framing minimal, non canonique, suffisant pour des démos locales. Il
-n’est PAS compatible Norito et doit être remplacé par un encodeur/décodeur Norito correct
+n’est PAS au format Norito et doit être remplacé par un encodeur/décodeur Norito correct
 lorsqu’il sera disponible. Il concatène simplement les champs dans un ordre little‑endian
 stable afin de tester le transport WS de bout en bout sans embarquer un codec complet dans
 iOS.

@@ -13,7 +13,6 @@ Iroha 2 and Iroha 3 dual-track runbook.
 - `scripts/release/generate_changelog.sh` – draft script (needs per-track sections)
 - `scripts/build_release_bundle.sh` – builds `iroha2`/`iroha3` with `--profile`, emits manifests, hashes, and optional signatures when `--signing-key` is provided
 - `scripts/build_release_image.sh` – saves profile-specific Docker images with matching metadata/signature support
-- `scripts/security/sign_artifacts.sh` – legacy helper for ad-hoc signing (still available)
 - GitHub workflow: `release-artifacts.yml` (builds artifacts on demand)
 
 ## Proposed changes

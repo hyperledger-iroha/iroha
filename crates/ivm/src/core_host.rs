@@ -4,13 +4,7 @@
 //! arguments and returns success. It is intended for end-to-end tests that
 //! exercise TLV validation from VM bytecode through host dispatch.
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    io::Cursor,
-    num::NonZeroU64,
-    str::FromStr,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, io::Cursor, num::NonZeroU64, str::FromStr, sync::Arc};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::{Hash as IrohaHash, Sm3Digest};
@@ -79,7 +73,6 @@ pub struct CoreHost {
     axt_active: bool,
     fastpq_batch_active: bool,
     fastpq_batch_has_entries: bool,
-    last_input_tlv: HashMap<PointerType, u64>,
     sm_enabled: bool,
     access_log: AccessLog,
 }
@@ -97,7 +90,6 @@ struct CoreHostSnapshot {
     axt_active: bool,
     fastpq_batch_active: bool,
     fastpq_batch_has_entries: bool,
-    last_input_tlv: HashMap<PointerType, u64>,
     sm_enabled: bool,
     access_log: AccessLog,
 }
@@ -117,7 +109,6 @@ impl CoreHost {
             axt_active: false,
             fastpq_batch_active: false,
             fastpq_batch_has_entries: false,
-            last_input_tlv: HashMap::new(),
             sm_enabled: false,
             access_log: AccessLog::default(),
         }
@@ -138,7 +129,6 @@ impl CoreHost {
             axt_active: false,
             fastpq_batch_active: false,
             fastpq_batch_has_entries: false,
-            last_input_tlv: HashMap::new(),
             sm_enabled: false,
             access_log: AccessLog::default(),
         }
@@ -694,25 +684,6 @@ impl CoreHost {
         njson::Value::Object(map)
     }
 
-    fn arg_ptr_or_last(&self, vm: &IVM, reg: usize, expected: PointerType) -> Result<u64, VMError> {
-        let ptr = vm.register(reg);
-        if ptr != 0 {
-            if crate::dev_env::decode_trace_enabled() {
-                eprintln!(
-                    "[CoreHost] arg_ptr_or_last reg={reg} expected={expected:?} direct=0x{ptr:08x}"
-                );
-            }
-            return Ok(ptr);
-        }
-        if crate::dev_env::decode_trace_enabled() {
-            eprintln!("[CoreHost] arg_ptr_or_last reg={reg} expected={expected:?} fallback");
-        }
-        self.last_input_tlv
-            .get(&expected)
-            .copied()
-            .ok_or(VMError::NoritoInvalid)
-    }
-
     fn load_u32(vm: &IVM, addr: usize) -> Option<u32> {
         let slice = vm.memory.load_region(addr as u64, 4).ok()?;
         Some(u32::from_le_bytes(slice.try_into().ok()?))
@@ -847,14 +818,23 @@ impl CoreHost {
     ) -> Result<pointer_abi::Tlv<'a>, VMError> {
         let input_lo = Memory::INPUT_START;
         let input_hi = Memory::INPUT_START + Memory::INPUT_SIZE;
-        if addr >= input_lo && addr + 7 <= input_hi {
+        let tlv = if addr >= input_lo && addr + 7 <= input_hi {
             let tlv = vm.memory.validate_tlv(addr)?;
             if tlv.type_id != expected {
                 return Err(VMError::NoritoInvalid);
             }
-            return Ok(tlv);
+            tlv
+        } else {
+            self.decode_tlv_from_code(vm, addr, expected)?
+        };
+        let policy = vm.syscall_policy();
+        if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+            return Err(VMError::AbiTypeNotAllowed {
+                abi: vm.abi_version(),
+                type_id: tlv.type_id as u16,
+            });
         }
-        self.decode_tlv_from_code(vm, addr, expected)
+        Ok(tlv)
     }
 
     fn decode_tlv_from_code<'a>(
@@ -915,7 +895,10 @@ impl IVMHost for CoreHost {
             // Durable state: pointer-ABI paths (Name) and NoritoBytes values
             syscalls::SYSCALL_STATE_GET => {
                 // r10 = &Name path; return r10 = &NoritoBytes value in INPUT (or 0 if absent)
-                let ptr = self.arg_ptr_or_last(vm, 10, PointerType::Name)?;
+                let ptr = vm.register(10);
+                if ptr == 0 {
+                    return Err(VMError::NoritoInvalid);
+                }
                 let tlv = self.decode_tlv(vm, ptr, PointerType::Name)?;
                 let path = self.decode_name_payload(tlv.payload)?;
                 self.log_read_key(path.as_ref());
@@ -943,7 +926,6 @@ impl IVMHost for CoreHost {
                     if crate::dev_env::decode_trace_enabled() {
                         eprintln!("[CoreHost] STATE_GET path='{path}' miss");
                     }
-                    self.last_input_tlv.remove(&PointerType::NoritoBytes);
                     vm.set_register(10, 0);
                 }
                 Ok(0)
@@ -961,24 +943,13 @@ impl IVMHost for CoreHost {
                         aux2 = vm.register(13)
                     );
                 }
-                let path_ptr = self.arg_ptr_or_last(vm, 10, PointerType::Name)?;
-                let val_ptr = self.arg_ptr_or_last(vm, 11, PointerType::NoritoBytes)?;
+                let path_ptr = vm.register(10);
+                let val_ptr = vm.register(11);
+                if path_ptr == 0 || val_ptr == 0 {
+                    return Err(VMError::NoritoInvalid);
+                }
                 let p_path = self.decode_tlv(vm, path_ptr, PointerType::Name)?;
                 let p_val = self.decode_tlv(vm, val_ptr, PointerType::NoritoBytes)?;
-                // Enforce pointer-ABI policy for the value type
-                let policy = vm.syscall_policy();
-                if !pointer_abi::is_type_allowed_for_policy(policy, p_val.type_id) {
-                    if crate::dev_env::decode_trace_enabled() {
-                        eprintln!(
-                            "[CoreHost] STATE_SET policy rejects type {:?} under {:?}",
-                            p_val.type_id, policy
-                        );
-                    }
-                    return Err(VMError::AbiTypeNotAllowed {
-                        abi: vm.abi_version(),
-                        type_id: p_val.type_id as u16,
-                    });
-                }
                 let path = self.decode_name_payload(p_path.payload)?;
                 self.log_write_key(path.as_ref());
                 self.state.set(path.as_ref(), p_val.payload.to_vec())?;
@@ -992,7 +963,10 @@ impl IVMHost for CoreHost {
             }
             syscalls::SYSCALL_STATE_DEL => {
                 // r10 = &Name path
-                let ptr = self.arg_ptr_or_last(vm, 10, PointerType::Name)?;
+                let ptr = vm.register(10);
+                if ptr == 0 {
+                    return Err(VMError::NoritoInvalid);
+                }
                 let p_path = self.decode_tlv(vm, ptr, PointerType::Name)?;
                 let path = self.decode_name_payload(p_path.payload)?;
                 self.log_write_key(path.as_ref());
@@ -1007,7 +981,7 @@ impl IVMHost for CoreHost {
                 Ok(0)
             }
             syscalls::SYSCALL_DECODE_INT => {
-                // r10 = &NoritoBytes (ASCII decimal); return r10 = parsed i64
+                // r10 = &NoritoBytes or &Blob (ASCII decimal); return r10 = parsed i64
                 let addr = vm.register(10);
                 if addr == 0 {
                     if crate::dev_env::decode_trace_enabled() {
@@ -1017,10 +991,10 @@ impl IVMHost for CoreHost {
                     return Ok(0);
                 }
                 let tlv = vm.memory.validate_tlv(addr)?;
-                if tlv.type_id != PointerType::NoritoBytes {
+                if !matches!(tlv.type_id, PointerType::NoritoBytes | PointerType::Blob) {
                     return Err(VMError::NoritoInvalid);
                 }
-                // Enforce ABI policy allows NoritoBytes
+                // Enforce ABI policy allows the input pointer type.
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
                     return Err(VMError::AbiTypeNotAllowed {
@@ -1152,14 +1126,25 @@ impl IVMHost for CoreHost {
                 Ok(0)
             }
             syscalls::SYSCALL_JSON_DECODE => {
-                // r10 = &NoritoBytes -> r10 = &Json (minified)
+                // r10 = &NoritoBytes or &Blob -> r10 = &Json (minified)
                 let r10_before = vm.register(10);
                 if crate::dev_env::decode_trace_enabled() {
                     eprintln!("[CoreHost] JSON_DECODE enter r10=0x{r10_before:08x}");
                 }
+                if r10_before == 0 {
+                    vm.set_register(10, 0);
+                    return Ok(0);
+                }
                 let tlv = vm.memory.validate_tlv(r10_before)?;
-                if tlv.type_id != PointerType::NoritoBytes {
+                if !matches!(tlv.type_id, PointerType::NoritoBytes | PointerType::Blob) {
                     return Err(VMError::NoritoInvalid);
+                }
+                let policy = vm.syscall_policy();
+                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: tlv.type_id as u16,
+                    });
                 }
                 let v: njson::Value =
                     njson::from_slice(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
@@ -1235,13 +1220,28 @@ impl IVMHost for CoreHost {
                 }
             }
             syscalls::SYSCALL_SCHEMA_DECODE => {
-                // r10 = &Name schema; r11 = &NoritoBytes -> r10 = &Json (minified)
+                // r10 = &Name schema; r11 = &NoritoBytes or &Blob -> r10 = &Json (minified)
                 let s_ptr = vm.register(10);
                 let b_ptr = vm.register(11);
                 let s_tlv = vm.memory.validate_tlv(s_ptr)?;
                 let b_tlv = vm.memory.validate_tlv(b_ptr)?;
-                if s_tlv.type_id != PointerType::Name || b_tlv.type_id != PointerType::NoritoBytes {
+                if s_tlv.type_id != PointerType::Name
+                    || !matches!(b_tlv.type_id, PointerType::NoritoBytes | PointerType::Blob)
+                {
                     return Err(VMError::NoritoInvalid);
+                }
+                let policy = vm.syscall_policy();
+                if !pointer_abi::is_type_allowed_for_policy(policy, s_tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: s_tlv.type_id as u16,
+                    });
+                }
+                if !pointer_abi::is_type_allowed_for_policy(policy, b_tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: b_tlv.type_id as u16,
+                    });
                 }
                 let schema = self.decode_name_payload(s_tlv.payload)?.to_string();
                 if crate::dev_env::decode_trace_enabled() {
@@ -1332,7 +1332,12 @@ impl IVMHost for CoreHost {
             }
             syscalls::SYSCALL_NAME_DECODE => {
                 // r10 = &NoritoBytes (UTF-8) -> r10 = &Name (minified string)
-                let tlv = vm.memory.validate_tlv(vm.register(10))?;
+                let r10_before = vm.register(10);
+                if r10_before == 0 {
+                    vm.set_register(10, 0);
+                    return Ok(0);
+                }
+                let tlv = vm.memory.validate_tlv(r10_before)?;
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
@@ -1345,18 +1350,15 @@ impl IVMHost for CoreHost {
                     });
                 }
                 let s = core::str::from_utf8(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-                // Minimal validation: reject any whitespace and control characters
-                if s.chars().any(|c| c.is_whitespace() || c.is_control()) {
-                    return Err(VMError::NoritoInvalid);
-                }
-                // Build Name TLV and mirror into INPUT
-                let body = s.as_bytes();
+                let name = Name::from_str(s).map_err(|_| VMError::NoritoInvalid)?;
+                // Build Name TLV and mirror into INPUT using the normalized form.
+                let body = name.as_ref().as_bytes();
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Name as u16).to_be_bytes());
                 out.push(1);
                 out.extend_from_slice(&(body.len() as u32).to_be_bytes());
                 out.extend_from_slice(body);
-                let h: [u8; 32] = IrohaHash::new(&out[7..7 + body.len()]).into();
+                let h: [u8; 32] = IrohaHash::new(body).into();
                 out.extend_from_slice(&h);
                 let p = vm.alloc_input_tlv(&out)?;
                 vm.set_register(10, p);
@@ -1375,11 +1377,13 @@ impl IVMHost for CoreHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                let mut body = Vec::with_capacity(2 + 1 + 4 + tlv.payload.len());
+                let mut body = Vec::with_capacity(2 + 1 + 4 + tlv.payload.len() + 32);
                 body.extend_from_slice(&(tlv.type_id_raw().to_be_bytes()));
                 body.push(tlv.version);
                 body.extend_from_slice(&(tlv.payload.len() as u32).to_be_bytes());
                 body.extend_from_slice(tlv.payload);
+                let inner_hash: [u8; 32] = iroha_crypto::Hash::new(tlv.payload).into();
+                body.extend_from_slice(&inner_hash);
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
                 out.push(1);
@@ -1389,11 +1393,14 @@ impl IVMHost for CoreHost {
                 out.extend_from_slice(&h);
                 let p = vm.alloc_input_tlv(&out)?;
                 vm.set_register(10, p);
-                self.last_input_tlv.insert(PointerType::NoritoBytes, p);
                 Ok(0)
             }
             syscalls::SYSCALL_POINTER_FROM_NORITO => {
-                let ptr = self.arg_ptr_or_last(vm, 10, PointerType::NoritoBytes)?;
+                if vm.register(10) == 0 {
+                    vm.set_register(10, 0);
+                    return Ok(0);
+                }
+                let ptr = vm.register(10);
                 let tlv = self.decode_tlv(vm, ptr, PointerType::NoritoBytes)?;
                 let policy = vm.syscall_policy();
                 let (inner_type, inner_version, inner_payload) = {
@@ -1419,7 +1426,6 @@ impl IVMHost for CoreHost {
                 out.extend_from_slice(&h);
                 let p = vm.alloc_input_tlv(&out)?;
                 vm.set_register(10, p);
-                self.last_input_tlv.insert(inner_type, p);
                 Ok(0)
             }
             syscalls::SYSCALL_TLV_EQ => {
@@ -1471,7 +1477,10 @@ impl IVMHost for CoreHost {
                 if !self.sm_enabled {
                     return Err(VMError::PermissionDenied);
                 }
-                let ptr = self.arg_ptr_or_last(vm, 10, PointerType::Blob)?;
+                let ptr = vm.register(10);
+                if ptr == 0 {
+                    return Err(VMError::NoritoInvalid);
+                }
                 let tlv = self.decode_tlv(vm, ptr, PointerType::Blob)?;
                 let digest = Sm3Digest::hash(tlv.payload);
                 let bytes = digest.as_bytes();
@@ -1484,7 +1493,6 @@ impl IVMHost for CoreHost {
                 out.extend_from_slice(&hash);
                 let addr = vm.alloc_input_tlv(&out)?;
                 vm.set_register(10, addr);
-                self.last_input_tlv.insert(PointerType::Blob, addr);
                 Ok(0)
             }
             syscalls::SYSCALL_SM2_VERIFY
@@ -1549,37 +1557,35 @@ impl IVMHost for CoreHost {
                 Ok(0)
             }
             syscalls::SYSCALL_INPUT_PUBLISH_TLV => {
-                // Mirror TLV from program memory at x10 into INPUT, return new pointer in x10
+                // Mirror TLV into INPUT (no-op if already INPUT); validate envelope/policy.
                 let original = vm.register(10);
                 if original == 0 {
-                    if let Some(ptr) = self.last_input_tlv.get(&PointerType::NoritoBytes) {
-                        if crate::dev_env::decode_trace_enabled() {
-                            eprintln!(
-                                "[CoreHost] INPUT_PUBLISH_TLV src=0 reuse NoritoBytes=0x{ptr:08x}"
-                            );
-                        }
-                        vm.set_register(10, *ptr);
-                        return Ok(0);
-                    }
                     if crate::dev_env::decode_trace_enabled() {
                         eprintln!("[CoreHost] INPUT_PUBLISH_TLV src=0 (noop)");
                     }
                     vm.set_register(10, 0);
                     return Ok(0);
                 }
+                let input_lo = Memory::INPUT_START;
+                let input_hi = Memory::INPUT_START + Memory::INPUT_SIZE;
                 let mut src = original;
                 // Fast-path: if `src` already points to a valid INPUT TLV, keep it.
-                if let Ok(tlv) = vm.memory.validate_tlv(src) {
-                    if crate::dev_env::decode_trace_enabled() {
-                        eprintln!("[CoreHost] INPUT_PUBLISH_TLV passthrough src=0x{src:08x}");
+                if src >= input_lo && src < input_hi {
+                    let tlv = vm.memory.validate_tlv(src)?;
+                    let policy = vm.syscall_policy();
+                    if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                        return Err(VMError::AbiTypeNotAllowed {
+                            abi: vm.abi_version(),
+                            type_id: tlv.type_id as u16,
+                        });
                     }
                     if crate::dev_env::decode_trace_enabled() {
+                        eprintln!("[CoreHost] INPUT_PUBLISH_TLV passthrough src=0x{src:08x}");
                         eprintln!(
                             "[CoreHost] INPUT_PUBLISH_TLV cache {:?} @0x{src:08x}",
                             tlv.type_id
                         );
                     }
-                    self.last_input_tlv.insert(tlv.type_id, src);
                     return Ok(0);
                 }
                 if crate::dev_env::decode_trace_enabled() {
@@ -1606,14 +1612,20 @@ impl IVMHost for CoreHost {
                     .load_region(src, total as u64)
                     .map_err(|_| VMError::NoritoInvalid)?
                     .to_vec();
-                let ptr_ty =
-                    PointerType::from_u16(u16::from_be_bytes([bytes_vec[0], bytes_vec[1]]));
+                let tlv = pointer_abi::validate_tlv_bytes(&bytes_vec)?;
+                let policy = vm.syscall_policy();
+                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: tlv.type_id as u16,
+                    });
+                }
                 let dst = vm.alloc_input_tlv(&bytes_vec)?;
-                if let Some(ptr_ty) = ptr_ty {
-                    if crate::dev_env::decode_trace_enabled() {
-                        eprintln!("[CoreHost] INPUT_PUBLISH_TLV cache {ptr_ty:?} -> 0x{dst:08x}");
-                    }
-                    self.last_input_tlv.insert(ptr_ty, dst);
+                if crate::dev_env::decode_trace_enabled() {
+                    eprintln!(
+                        "[CoreHost] INPUT_PUBLISH_TLV cache {:?} -> 0x{dst:08x}",
+                        tlv.type_id
+                    );
                 }
                 vm.set_register(10, dst);
                 if crate::dev_env::decode_trace_enabled() {
@@ -1672,7 +1684,6 @@ impl IVMHost for CoreHost {
             axt_active: self.axt_active,
             fastpq_batch_active: self.fastpq_batch_active,
             fastpq_batch_has_entries: self.fastpq_batch_has_entries,
-            last_input_tlv: self.last_input_tlv.clone(),
             sm_enabled: self.sm_enabled,
             access_log: self.access_log.clone(),
         }))
@@ -1691,7 +1702,6 @@ impl IVMHost for CoreHost {
             self.axt_active = saved.axt_active;
             self.fastpq_batch_active = saved.fastpq_batch_active;
             self.fastpq_batch_has_entries = saved.fastpq_batch_has_entries;
-            self.last_input_tlv = saved.last_input_tlv.clone();
             self.sm_enabled = saved.sm_enabled;
             self.access_log = saved.access_log.clone();
             return true;
@@ -1791,6 +1801,109 @@ mod tests {
         vm.load_program(&program).expect("load program");
         vm.set_register(10, ptr1);
         vm.set_register(11, ptr2);
+        vm.run().expect("run");
+        assert_eq!(vm.register(10), 0);
+    }
+
+    #[test]
+    fn pointer_to_norito_roundtrips_via_pointer_from_norito() {
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(CoreHost::new());
+        let ptr = vm
+            .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, b"wonderland"))
+            .expect("alloc tlv");
+        let program = assemble_program(&[
+            encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                syscalls::SYSCALL_POINTER_TO_NORITO as u8,
+            ),
+            encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                syscalls::SYSCALL_POINTER_FROM_NORITO as u8,
+            ),
+            encoding::wide::encode_halt(),
+        ]);
+        vm.load_program(&program).expect("load program");
+        vm.set_register(10, ptr);
+        vm.set_register(11, PointerType::Name as u64);
+        vm.run().expect("run");
+        let out_ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(out_ptr).expect("out tlv");
+        assert_eq!(tlv.type_id, PointerType::Name);
+        assert_eq!(tlv.payload, b"wonderland");
+    }
+
+    #[test]
+    fn json_decode_null_pointer_returns_zero() {
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(CoreHost::new());
+        let program = assemble_program(&[
+            encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                syscalls::SYSCALL_JSON_DECODE as u8,
+            ),
+            encoding::wide::encode_halt(),
+        ]);
+        vm.load_program(&program).expect("load program");
+        vm.set_register(10, 0);
+        vm.run().expect("run");
+        assert_eq!(vm.register(10), 0);
+    }
+
+    #[test]
+    fn name_decode_null_pointer_returns_zero() {
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(CoreHost::new());
+        let program = assemble_program(&[
+            encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                syscalls::SYSCALL_NAME_DECODE as u8,
+            ),
+            encoding::wide::encode_halt(),
+        ]);
+        vm.load_program(&program).expect("load program");
+        vm.set_register(10, 0);
+        vm.run().expect("run");
+        assert_eq!(vm.register(10), 0);
+    }
+
+    #[test]
+    fn pointer_from_norito_null_pointer_returns_zero() {
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(CoreHost::new());
+        let program = assemble_program(&[
+            encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                syscalls::SYSCALL_POINTER_FROM_NORITO as u8,
+            ),
+            encoding::wide::encode_halt(),
+        ]);
+        vm.load_program(&program).expect("load program");
+        vm.set_register(10, 0);
+        vm.set_register(11, 0);
+        vm.run().expect("run");
+        assert_eq!(vm.register(10), 0);
+    }
+
+    #[test]
+    fn input_publish_tlv_null_pointer_is_noop() {
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(CoreHost::new());
+        let ptr = vm.alloc_input_tlv(&make_tlv(b"reuse")).expect("alloc tlv");
+        let program = assemble_program(&[
+            encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+            ),
+            encoding::wide::encode_rr(instruction::wide::arithmetic::XOR, 10, 10, 10),
+            encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+            ),
+            encoding::wide::encode_halt(),
+        ]);
+        vm.load_program(&program).expect("load program");
+        vm.set_register(10, ptr);
         vm.run().expect("run");
         assert_eq!(vm.register(10), 0);
     }

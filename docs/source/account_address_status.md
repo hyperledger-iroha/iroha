@@ -24,7 +24,7 @@ Flags:
 
 - `--out <path>` — optional override when producing ad-hoc bundles (defaults to `fixtures/account/address_vectors.json`).
 - `--stdout` — emit JSON to stdout instead of writing to disk.
-- `--verify` — compare the current file against freshly generated content (fails fast on drift; incompatible with `--stdout`).
+- `--verify` — compare the current file against freshly generated content (fails fast on drift; cannot be used with `--stdout`).
 
 ### 3. Artefact Matrix
 

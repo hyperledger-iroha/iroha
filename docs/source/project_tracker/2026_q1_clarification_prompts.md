@@ -15,18 +15,3 @@ bracketed placeholders, and attach any local diffs or logs before routing to
 
 ## Dual Iroha 2/3 Release Track — Build & Packaging Decisions
 
-````markdown
-We are scoping the **dual build matrix for Iroha 2 vs. Iroha 3** and need your decisions before wiring CI and release automation.
-
-**Current implementation snapshot**
-- Roadmap items 1364–1375 outline the pending tasks; no shared pipeline exists yet.
-- Release manifests currently assume a single artifact family.
-- Operator docs (`docs/source/release_procedure.org`) mention only the legacy flow.
-
-**Questions for you**
-1. How should we name and label the dual artifacts so Sora Nexus reliably picks Iroha 3 while other networks default to Iroha 2?
-2. Are there configuration knobs we must expose via `iroha_config` to help operators verify they have the correct build?
-3. What signing and publication targets should we treat as authoritative for each build flavor (container registry, package buckets, checksum manifests)?
-
-Once we have these answers we can finalise the CI plan and update the operator documentation.
-````

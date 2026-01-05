@@ -11,7 +11,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 
 :::note Канонический источник
-Эта страница отражает `docs/source/sorafs/deal_engine.md`. Держите оба расположения синхронизированными, пока legacy документация активна.
 :::
 
 # Движок сделок SoraFS

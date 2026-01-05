@@ -17,7 +17,7 @@ Norito Streaming define el formato en la red, los frames de control y el codec d
 
 - **Manifests y frames.** `ManifestV1` y `PrivacyRoute*` describen la linea de tiempo de segmentos, los descriptores de chunks y las pistas de ruta. Los frames de control (`KeyUpdate`, `ContentKeyUpdate` y el feedback de cadencia) viven junto al manifest para que los viewers puedan validar commitments antes de decodificar.
 - **Codec base.** `BaselineEncoder`/`BaselineDecoder` fuerzan ids de chunk monotonos, aritmetica de timestamps y verificacion de commitments. Los hosts deben llamar a `EncodedSegment::verify_manifest` antes de servir a viewers o relays.
-- **Bits de feature.** La negociacion de capacidades anuncia `streaming.feature_bits` (por defecto `0b11` = baseline feedback + proveedor de rutas de privacidad) para que relays y clientes rechacen peers incompatibles de forma determinista.
+- **Bits de feature.** La negociacion de capacidades anuncia `streaming.feature_bits` (por defecto `0b11` = baseline feedback + proveedor de rutas de privacidad) para que relays y clientes rechacen peers sin capacidades coincidentes de forma determinista.
 
 ## Claves, suites y cadencia
 
@@ -29,7 +29,7 @@ Norito Streaming define el formato en la red, los frames de control y el codec d
 ## Configuracion de runtime
 
 - **Material de claves.** Proporciona claves dedicadas con `streaming.identity_public_key`/`streaming.identity_private_key` (multihash Ed25519) y material Kyber opcional via `streaming.kyber_public_key`/`streaming.kyber_secret_key`. Las cuatro deben estar presentes al sobrescribir los valores por defecto; `streaming.kyber_suite` acepta `mlkem512|mlkem768|mlkem1024` (alias `kyber512/768/1024`, por defecto `mlkem768`).
-- **Guardrails del codec.** CABAC permanece deshabilitado a menos que el build lo habilite; rANS empaquetado requiere `ENABLE_RANS_BUNDLES=1`. Se impone via `streaming.codec.{entropy_mode,bundle_width,bundle_accel}` y el opcional `streaming.codec.rans_tables_path` cuando se proveen tablas personalizadas. El `bundle_width` empaquetado debe estar entre 2 y 3 (inclusive); ancho 1 es solo legado.
+- **Guardrails del codec.** CABAC permanece deshabilitado a menos que el build lo habilite; rANS empaquetado requiere `ENABLE_RANS_BUNDLES=1`. Se impone via `streaming.codec.{entropy_mode,bundle_width,bundle_accel}` y el opcional `streaming.codec.rans_tables_path` cuando se proveen tablas personalizadas. El `bundle_width` empaquetado debe estar entre 2 y 3 (inclusive); ancho 1 no se admite.
 - **Rutas SoraNet.** `streaming.soranet.*` controla el transporte anonimo: `exit_multiaddr` (por defecto `/dns/torii/udp/9443/quic`), `padding_budget_ms` (por defecto 25 ms), `access_kind` (`authenticated` vs `read-only`), `channel_salt` opcional y `provision_spool_dir` (por defecto `./storage/streaming/soranet_routes`).
 - **Gate de sincronizacion.** `streaming.sync` habilita el control de drift para streams audiovisuales: `enabled`, `observe_only`, `ewma_threshold_ms` y `hard_cap_ms` gobiernan cuando se rechazan segmentos por deriva temporal.
 

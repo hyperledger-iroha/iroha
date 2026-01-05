@@ -104,7 +104,8 @@ async fn run_connect_app() -> anyhow::Result<()> {
     let (_app_pk, app_sk) = x.keypair(KeyGenOption::UseSeed(app_seed.to_vec()));
     let (wallet_pk, _wallet_sk) = x.keypair(KeyGenOption::UseSeed(wallet_seed.to_vec()));
     let wallet_pk_bytes: [u8; 32] = *wallet_pk.as_bytes();
-    let (k_app, k_wallet) = sdk::x25519_derive_keys(&app_sk.to_bytes(), &wallet_pk_bytes, &sid_arr);
+    let (k_app, k_wallet) = sdk::x25519_derive_keys(&app_sk.to_bytes(), &wallet_pk_bytes, &sid_arr)
+        .expect("x25519 derive keys");
 
     send_app_action(&mut ws, &k_app, &sid_arr, action.as_str()).await?;
 

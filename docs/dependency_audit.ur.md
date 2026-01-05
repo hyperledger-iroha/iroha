@@ -32,7 +32,6 @@ advisory DB کے ساتھ چلا کر، اور الگ سے crates کی legitimac
 - crossbeam-channel — RUSTSEC‑2025‑0024  
   - فِکس: `crates/ivm/Cargo.toml` میں ورژن `0.5.15` پر اپ ڈیٹ کیا گیا۔
 
-- pprof کا deprecated codec — RUSTSEC‑2024‑0437  
   - فِکس: `crates/iroha_torii/Cargo.toml` میں `pprof` کو `prost-codec` پر
     سوئچ کیا گیا۔
 
@@ -68,7 +67,6 @@ legitimacy اور “main crate” assessment (اہم نکات):
 - FFI/libs: `libsodium-sys-stable`, `openssl` — legitimate؛ production
   paths میں OpenSSL کے بجائے Rustls کو ترجیح دی جاتی ہے (جیسا کہ
   موجودہ کوڈ پہلے ہی کرتا ہے)۔
-- pprof 0.13.0 (crates.io) — upstream فِکس merge ہو چکا؛ deprecated codec سے
   بچنے کے لیے official release کے `prost-codec` + frame‑pointer configuration
   کو استعمال کیا جا رہا ہے۔
 
@@ -99,16 +97,13 @@ legitimacy اور “main crate” assessment (اہم نکات):
   میں تبدیلی نہ آئے۔ alignment پلان:
   - secret key serialization کو ایک canonical 32‑byte little‑endian output
     پر normalize کریں جو `w3f-bls` اور `blstrs` دونوں کے لیے
-    قابلِ فہم ہو (`Scalar::to_bytes_le`) اور legacy mixed‑endian helper کو
     ختم کریں۔
   - public key compression کے لیے ایک explicit wrapper فراہم کریں جو
     `blstrs::G1Affine::to_compressed` استعمال کرے، اور w3f encoding کے خلاف
-    compatibility چیک کرے، تاکہ wire bytes مکمل طور پر identical ہوں۔
   - `crates/iroha_crypto/tests/bls_backend_compat.rs` میں round‑trip fixtures
     شامل کریں، جو ایک بار keys derive کر کے دونوں backends (`SecretKey`,
     `PublicKey`, signature aggregation) میں equality assert کریں۔
   - نئے backend کو CI میں feature `bls-backend-blstrs` کے پیچھے gate کریں،
-    لیکن default backend کے لیے بھی compatibility tests فعال رکھیں، تاکہ
     کسی regression کو backend flip سے پہلے ہی پکڑا جا سکے۔
 
 Follow‑ups (مجوزہ آئٹمز):

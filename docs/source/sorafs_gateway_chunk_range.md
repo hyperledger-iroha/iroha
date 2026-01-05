@@ -1,6 +1,5 @@
 ---
 title: SoraFS Gateway Chunk-Range & Scheduler Integration
-summary: Specification for deterministic chunk-range endpoints and orchestrator compatibility.
 ---
 
 # SoraFS Gateway Chunk-Range & Scheduler Integration
@@ -10,7 +9,6 @@ summary: Specification for deterministic chunk-range endpoints and orchestrator 
 - Implement deterministic HTTP range endpoints honouring `dag-scope` semantics.
 - Enforce per-peer stream tokens tied to admission policy and capacity declarations.
 - Emit telemetry for range requests (`Sora-Chunk-Range`) to feed orchestrator and observability.
-- Validate compatibility with multi-source fetch orchestrator (SF-6b) under induced failures.
 
 ## API Requirements
 
@@ -54,12 +52,6 @@ Metrics:
 Logs:
 - Structured events when token issued/revoked
 - Correlation ID linking token to orchestrator fetch (future SF-6b integration)
-
-## Orchestrator Compatibility Tests
-
-- Multi-peer replay: fetch same manifest from ≥3 providers, ensure deterministic ordering.
-- Failure injection: token exhaustion, range mismatch, mid-stream proof tampering.
-- Recovery: orchestrator should fall back to alternate provider w/out digest drift.
 
 ## Token Signing & Rotation
 

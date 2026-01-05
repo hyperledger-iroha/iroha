@@ -156,7 +156,7 @@
           "placement": "right"
         }
       },
-      "description": "Accepted address literals grouped by domain_kind so operators can prove Local-12 traffic has dropped to zero before retiring the legacy selectors."
+      "description": "Accepted address literals grouped by domain_kind so operators can prove Local-12 traffic has dropped to zero before retiring the archived selectors."
     },
     {
       "type": "stat",

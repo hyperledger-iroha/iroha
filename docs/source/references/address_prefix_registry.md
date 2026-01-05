@@ -14,7 +14,7 @@ updates.
 
 Machine-readable data is published alongside this document at
 [`address_prefix_registry.json`](address_prefix_registry.json). The JSON file
-includes a `version` field so automated tooling can detect incompatible schema
+includes a `version` field so automated tooling can detect schema-breaking
 changes.
 
 ## Registered Prefixes

@@ -117,4 +117,4 @@ Ao propor novos perfis de chunker:
 4. Envie o relatório de conformidade do charter com assinaturas de governança.
 
 A automação deve preferir handles canônicos (`namespace.name@semver`) e recorrer a IDs
-numéricos apenas quando necessário para compatibilidade retroativa.
+numéricos apenas quando necessário pelo registro.

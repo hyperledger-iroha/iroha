@@ -4,7 +4,7 @@ These guidelines apply to the `crates/iroha_data_model` crate.
 
 ## Overview
 - Defines core data types and schemas used across the system.
-- Norito serialization compatibility must be preserved.
+- Norito serialization layout stability must be preserved.
 
 ## Development workflow
 - Any change to public types requires serialization roundtrip tests and, where relevant, versioning updates.

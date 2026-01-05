@@ -9,7 +9,7 @@ set -euo pipefail
 #  - derive/proc-macro crates (codegen may intentionally reference serde_json)
 #  - tests/examples/benches directories
 #  - known test-only files that live under src (cfg(test))
-#  - iroha_version (maintains compatibility shims and wrappers)
+#  - iroha_version (maintains Norito wrappers)
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
 

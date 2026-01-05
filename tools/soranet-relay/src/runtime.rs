@@ -23,7 +23,7 @@ use iroha_crypto::{
         handshake::{
             HandshakeSuite, HarnessError as NoiseHandshakeError,
             RuntimeParams as NoiseRuntimeParams, SessionSecrets, process_client_hello,
-            relay_finalize_handshake,
+            relay_finalize_handshake, update_suite_list,
         },
         pow::{self, Parameters as PowParameters, Ticket as PowTicket},
         puzzle::{self, ChallengeBinding as PuzzleBinding},
@@ -66,7 +66,7 @@ use tracing::{debug, info, warn};
 use crate::{
     capability::{
         self, CapabilityError, CapabilityWarning, GreaseEntry, NegotiatedCapabilities,
-        ServerCapabilities, encode_relay_advertisement, negotiate_capabilities,
+        ServerCapabilities, SignatureId, encode_relay_advertisement, negotiate_capabilities,
         parse_client_advertisement,
     },
     circuit::{
@@ -95,7 +95,7 @@ use crate::{
         CELL_SIZE_BYTES, Cell, CellClass, CellScheduler, OverflowPolicy, QueueDepths,
         SchedulerConfig,
     },
-    vpn::{VpnOverlay, VpnSession, VpnSessionHandle},
+    vpn::{VpnOverlay, VpnSessionHandle},
     vpn_adapter::VpnAdapter,
 };
 
@@ -134,6 +134,11 @@ const FALLBACK_NORITO_UNSUPPORTED_CATEGORY: &str = "stream.norito.unsupported";
 const FALLBACK_KAIGI_UNSUPPORTED_CATEGORY: &str = "stream.kaigi.unsupported";
 /// Minimum acceptable dummy ratio before alerting operators that cover traffic has fallen.
 const LOW_DUMMY_RATIO_THRESHOLD: f64 = 0.20;
+/// Default ordering of supported handshake suites.
+const DEFAULT_HANDSHAKE_SUITES: [HandshakeSuite; 2] = [
+    HandshakeSuite::Nk2Hybrid,
+    HandshakeSuite::Nk3PqForwardSecure,
+];
 
 /// Shared context required by `monitor_circuit`.
 #[derive(Clone)]
@@ -636,25 +641,20 @@ struct HandshakeByteGuard<'a> {
     metrics: &'a Metrics,
     bytes: u64,
     consumed: bool,
-    vpn_session: Option<VpnSession>,
 }
 
 impl<'a> HandshakeByteGuard<'a> {
-    fn new(metrics: &'a Metrics, vpn_session: Option<VpnSession>) -> Self {
+    fn new(metrics: &'a Metrics) -> Self {
         Self {
             metrics,
             bytes: 0,
             consumed: false,
-            vpn_session,
         }
     }
 
     fn add(&mut self, delta: usize) {
         if !self.consumed {
             self.bytes = self.bytes.saturating_add(delta as u64);
-            if let Some(session) = self.vpn_session.as_ref() {
-                session.record_ingress(delta as u64, false);
-            }
         }
     }
 
@@ -695,13 +695,17 @@ fn record_route_open_ingress_metrics(
     vpn_adapter: Option<&VpnAdapter>,
     vpn_session: Option<&VpnSessionHandle>,
 ) {
+    let bytes = RouteOpenFrame::length() as u64;
     if let Some(adapter) = vpn_adapter {
-        adapter.record_ingress_frame_count(RouteOpenFrame::length() as u64, false);
+        adapter
+            .session()
+            .metrics()
+            .record_vpn_control_ingress(bytes);
     } else if let Some(session) = vpn_session {
         session
             .session()
-            .record_bytes(RouteOpenFrame::length() as u64);
-        session.session().metrics().record_vpn_frame_ingress(false);
+            .metrics()
+            .record_vpn_control_ingress(bytes);
     }
 }
 
@@ -709,13 +713,11 @@ fn record_route_open_egress_metrics(
     vpn_adapter: Option<&VpnAdapter>,
     vpn_session: Option<&VpnSessionHandle>,
 ) {
+    let bytes = RouteOpenFrame::length() as u64;
     if let Some(adapter) = vpn_adapter {
-        adapter.record_egress_frame_count(RouteOpenFrame::length() as u64, false);
+        adapter.session().metrics().record_vpn_control_egress(bytes);
     } else if let Some(session) = vpn_session {
-        session
-            .session()
-            .record_bytes(RouteOpenFrame::length() as u64);
-        session.session().metrics().record_vpn_frame_egress(false);
+        session.session().metrics().record_vpn_control_egress(bytes);
     }
 }
 
@@ -729,6 +731,7 @@ pub struct RelayRuntime {
     registry: Arc<CircuitRegistry>,
     padding_budget: Option<Arc<PaddingBudget>>,
     server_caps: Arc<ServerCapabilities>,
+    handshake_suites: Arc<Vec<HandshakeSuite>>,
     grease: Arc<Vec<GreaseEntry>>,
     descriptor_commit: Arc<Vec<u8>>,
     certificate_bundle: Option<Arc<RelayCertificateBundleV2>>,
@@ -752,6 +755,7 @@ struct CircuitContext {
     privacy_events: Arc<PrivacyEventBuffer>,
     proxy_policy_events: Arc<ProxyPolicyEventBuffer>,
     server_caps: Arc<ServerCapabilities>,
+    handshake_suites: Arc<Vec<HandshakeSuite>>,
     grease: Arc<Vec<GreaseEntry>>,
     registry: Arc<CircuitRegistry>,
     padding: config::PaddingConfig,
@@ -1087,6 +1091,7 @@ impl RelayRuntime {
         let certificate_bundle_arc = certificate_bundle
             .as_ref()
             .map(|bundle| Arc::new(bundle.clone()));
+        let handshake_suites = Arc::new(resolve_handshake_suites(certificate_bundle.as_ref())?);
 
         let registry = Arc::new(CircuitRegistry::default());
         let lane_manager = Arc::new(ConstantRateLaneManager::new(
@@ -1102,6 +1107,7 @@ impl RelayRuntime {
             registry,
             padding_budget,
             server_caps: Arc::new(server_caps),
+            handshake_suites,
             grease: Arc::new(grease_entries),
             descriptor_commit,
             certificate_bundle: certificate_bundle_arc,
@@ -1151,6 +1157,7 @@ impl RelayRuntime {
             privacy_events: Arc::clone(&self.privacy_events),
             proxy_policy_events: Arc::clone(&self.proxy_policy_events),
             server_caps: Arc::clone(&self.server_caps),
+            handshake_suites: Arc::clone(&self.handshake_suites),
             grease: Arc::clone(&self.grease),
             registry: Arc::clone(&self.registry),
             padding: self.config.padding_config().clone(),
@@ -3100,7 +3107,7 @@ impl RelayRuntime {
             .vpn
             .as_ref()
             .map(|overlay| overlay.start_session(Arc::clone(&context.metrics)));
-        let mut byte_guard = HandshakeByteGuard::new(&context.metrics, vpn_session.clone());
+        let mut byte_guard = HandshakeByteGuard::new(&context.metrics);
         let mut puzzle_verify_micros: Option<u64> = None;
 
         let pow_params = context.dos.current_pow_parameters();
@@ -3189,18 +3196,24 @@ impl RelayRuntime {
             .map_err(HandshakeError::Capability)?;
         let mut negotiated = negotiate_capabilities(&client_caps, context.server_caps.as_ref())
             .map_err(HandshakeError::Capability)?;
+        validate_client_selection(&negotiated, client_hello.kem_id(), client_hello.sig_id())?;
 
         let mut response_caps = negotiated.clone();
         response_caps.grease.extend(context.grease.iter().cloned());
+        let grease_entries = std::mem::take(&mut response_caps.grease);
         let relay_caps_bytes =
             encode_relay_advertisement(&response_caps, context.server_caps.role_bits);
+        let relay_caps_bytes =
+            update_suite_list(&relay_caps_bytes, context.handshake_suites.as_slice(), true)
+                .map_err(HandshakeError::Noise)?;
+        let relay_caps_bytes = append_grease_tlvs(relay_caps_bytes, &grease_entries);
 
         let mut rng = StdRng::from_os_rng();
         let runtime_params = NoiseRuntimeParams {
             descriptor_commit: context.descriptor_commit.as_slice(),
             client_capabilities: client_hello.raw_capabilities(),
             relay_capabilities: &relay_caps_bytes,
-            kem_id: client_hello.kem_id(),
+            kem_id: negotiated.kem.id.code(),
             sig_id: client_hello.sig_id(),
             resume_hash: client_hello.resume_hash(),
         };
@@ -3665,6 +3678,59 @@ fn ensure_nonzero(field: &'static str, bytes: &[u8]) -> Result<(), HandshakeErro
     }
 }
 
+fn resolve_handshake_suites(
+    bundle: Option<&RelayCertificateBundleV2>,
+) -> Result<Vec<HandshakeSuite>, ConfigError> {
+    let suites = match bundle {
+        Some(bundle) => bundle.certificate.handshake_suites.clone(),
+        None => DEFAULT_HANDSHAKE_SUITES.to_vec(),
+    };
+    let mut unique = Vec::new();
+    for suite in suites {
+        if !unique.contains(&suite) {
+            unique.push(suite);
+        }
+    }
+    if unique.is_empty() {
+        return Err(ConfigError::Handshake(
+            "handshake suite list must not be empty".to_string(),
+        ));
+    }
+    Ok(unique)
+}
+
+fn validate_client_selection(
+    negotiated: &NegotiatedCapabilities,
+    kem_id: u8,
+    sig_id: u8,
+) -> Result<(), HandshakeError> {
+    if negotiated.kem.id.code() != kem_id {
+        return Err(HandshakeError::InvalidClient(
+            "client kem_id does not match negotiated capability",
+        ));
+    }
+    let Some(sig) = SignatureId::from_code(sig_id) else {
+        return Err(HandshakeError::InvalidClient(
+            "client sig_id is not a supported signature suite",
+        ));
+    };
+    if !negotiated.signatures.iter().any(|entry| entry.id == sig) {
+        return Err(HandshakeError::InvalidClient(
+            "client sig_id does not match negotiated capability",
+        ));
+    }
+    Ok(())
+}
+
+fn append_grease_tlvs(mut base: Vec<u8>, grease: &[GreaseEntry]) -> Vec<u8> {
+    for entry in grease {
+        base.extend_from_slice(&entry.ty.to_be_bytes());
+        base.extend_from_slice(&(entry.value.len() as u16).to_be_bytes());
+        base.extend_from_slice(&entry.value);
+    }
+    base
+}
+
 fn downgrade_detail_from_warnings(warnings: &[CapabilityWarning]) -> Option<String> {
     let slug_source = warnings
         .iter()
@@ -3725,7 +3791,7 @@ mod tests {
         soranet::{
             certificate::{
                 CapabilityToggle, KemRotationModeV1, KemRotationPolicyV1, RelayCapabilityFlagsV1,
-                RelayCertificateV2, RelayEndpointV2, RelayRolesV2,
+                RelayCertificateBundleV2, RelayCertificateV2, RelayEndpointV2, RelayRolesV2,
             },
             handshake::HandshakeSuite,
             pow,
@@ -3755,6 +3821,10 @@ mod tests {
 
     use super::*;
     use crate::{
+        capability::{
+            GreaseEntry, KemAdvertisement, KemId, NegotiatedCapabilities, SignatureAdvertisement,
+            SignatureId,
+        },
         constant_rate,
         privacy::{PrivacyAggregator, PrivacyConfig, ProxyPolicyEventBuffer},
         scheduler::CellClass,
@@ -3774,16 +3844,25 @@ mod tests {
         record_route_open_ingress_metrics(Some(&adapter), Some(&handle));
         let snapshot = metrics.snapshot();
         let bytes = RouteOpenFrame::length() as u64;
-        assert_eq!(1, snapshot.vpn_frames);
-        assert_eq!(1, snapshot.vpn_ingress_frames);
-        assert_eq!(bytes, snapshot.vpn_bytes);
+        assert_eq!(0, snapshot.vpn_frames);
+        assert_eq!(0, snapshot.vpn_ingress_frames);
+        assert_eq!(0, snapshot.vpn_bytes);
+        assert_eq!(1, snapshot.vpn_control_frames);
+        assert_eq!(1, snapshot.vpn_control_ingress_frames);
+        assert_eq!(bytes, snapshot.vpn_control_bytes);
+        assert_eq!(bytes, snapshot.vpn_control_ingress_bytes);
 
         record_route_open_egress_metrics(Some(&adapter), Some(&handle));
         let snapshot = metrics.snapshot();
-        assert_eq!(2, snapshot.vpn_frames);
-        assert_eq!(1, snapshot.vpn_egress_frames);
-        assert_eq!(bytes, snapshot.vpn_egress_bytes);
-        assert_eq!(bytes * 2, snapshot.vpn_bytes);
+        assert_eq!(0, snapshot.vpn_frames);
+        assert_eq!(0, snapshot.vpn_egress_frames);
+        assert_eq!(0, snapshot.vpn_egress_bytes);
+        assert_eq!(0, snapshot.vpn_bytes);
+        assert_eq!(2, snapshot.vpn_control_frames);
+        assert_eq!(1, snapshot.vpn_control_ingress_frames);
+        assert_eq!(1, snapshot.vpn_control_egress_frames);
+        assert_eq!(bytes * 2, snapshot.vpn_control_bytes);
+        assert_eq!(bytes, snapshot.vpn_control_egress_bytes);
     }
 
     #[test]
@@ -3797,15 +3876,40 @@ mod tests {
         record_route_open_ingress_metrics(None, Some(&handle));
         let snapshot = metrics.snapshot();
         let bytes = RouteOpenFrame::length() as u64;
-        assert_eq!(1, snapshot.vpn_frames);
-        assert_eq!(1, snapshot.vpn_ingress_frames);
-        assert_eq!(bytes, snapshot.vpn_bytes);
+        assert_eq!(0, snapshot.vpn_frames);
+        assert_eq!(0, snapshot.vpn_ingress_frames);
+        assert_eq!(0, snapshot.vpn_bytes);
+        assert_eq!(1, snapshot.vpn_control_frames);
+        assert_eq!(1, snapshot.vpn_control_ingress_frames);
+        assert_eq!(bytes, snapshot.vpn_control_bytes);
+        assert_eq!(bytes, snapshot.vpn_control_ingress_bytes);
 
         record_route_open_egress_metrics(None, Some(&handle));
         let snapshot = metrics.snapshot();
-        assert_eq!(2, snapshot.vpn_frames);
-        assert_eq!(1, snapshot.vpn_egress_frames);
-        assert_eq!(bytes * 2, snapshot.vpn_bytes);
+        assert_eq!(0, snapshot.vpn_frames);
+        assert_eq!(0, snapshot.vpn_egress_frames);
+        assert_eq!(0, snapshot.vpn_bytes);
+        assert_eq!(2, snapshot.vpn_control_frames);
+        assert_eq!(1, snapshot.vpn_control_ingress_frames);
+        assert_eq!(1, snapshot.vpn_control_egress_frames);
+        assert_eq!(bytes * 2, snapshot.vpn_control_bytes);
+        assert_eq!(bytes, snapshot.vpn_control_egress_bytes);
+    }
+
+    #[test]
+    fn handshake_byte_guard_does_not_touch_vpn_bytes() {
+        let metrics = Arc::new(Metrics::new());
+        let overlay = VpnOverlay::from_config(Default::default());
+        let _session = overlay.start_session(Arc::clone(&metrics));
+        let mut guard = HandshakeByteGuard::new(metrics.as_ref());
+
+        guard.add(128);
+        guard.finish();
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(128, snapshot.handshake_bytes);
+        assert_eq!(0, snapshot.vpn_bytes);
+        assert_eq!(0, snapshot.vpn_ingress_bytes);
     }
 
     #[test]
@@ -3961,10 +4065,10 @@ mod tests {
     #[test]
     fn verify_puzzle_ticket_respects_resume_hash_binding() {
         let params = PuzzleParameters::new(
-            NonZeroU32::new(8_192).expect("non-zero memory"),
-            NonZeroU32::new(2).expect("non-zero iterations"),
+            NonZeroU32::new(1_024).expect("non-zero memory"),
+            NonZeroU32::new(1).expect("non-zero iterations"),
             NonZeroU32::new(1).expect("non-zero lanes"),
-            6,
+            8,
             Duration::from_secs(180),
             Duration::from_secs(45),
         );
@@ -4234,6 +4338,7 @@ mod tests {
 
     struct CertificateTestFixture {
         descriptor_commit: [u8; 32],
+        bundle: RelayCertificateBundleV2,
         identity_seed_hex: String,
         bundle_file: NamedTempFile,
         manifest_file: NamedTempFile,
@@ -4341,6 +4446,7 @@ mod tests {
 
             Self {
                 descriptor_commit,
+                bundle,
                 identity_seed_hex,
                 bundle_file,
                 manifest_file,
@@ -4416,6 +4522,25 @@ mod tests {
     }
 
     #[test]
+    fn resolve_handshake_suites_defaults_without_certificate() {
+        let suites = resolve_handshake_suites(None).expect("suites");
+        assert_eq!(
+            suites,
+            vec![
+                HandshakeSuite::Nk2Hybrid,
+                HandshakeSuite::Nk3PqForwardSecure
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_handshake_suites_uses_certificate_order() {
+        let fixture = CertificateTestFixture::new();
+        let suites = resolve_handshake_suites(Some(&fixture.bundle)).expect("suites");
+        assert_eq!(suites, fixture.bundle.certificate.handshake_suites);
+    }
+
+    #[test]
     fn runtime_rejects_descriptor_commit_mismatch() {
         let fixture = CertificateTestFixture::new();
         let mismatch_hex = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
@@ -4488,6 +4613,88 @@ mod tests {
             Err(other) => panic!("expected handshake config error, got {other:?}"),
             Ok(_) => panic!("expected certificate verification to fail"),
         }
+    }
+
+    fn negotiated_caps_fixture() -> NegotiatedCapabilities {
+        NegotiatedCapabilities {
+            kem: KemAdvertisement {
+                id: KemId::MlKem768,
+                required: true,
+            },
+            signatures: vec![SignatureAdvertisement {
+                id: SignatureId::Dilithium3,
+                required: true,
+            }],
+            padding: 1024,
+            descriptor_commit: None,
+            grease: Vec::new(),
+            constant_rate: None,
+        }
+    }
+
+    #[test]
+    fn validate_client_selection_rejects_kem_mismatch() {
+        let negotiated = negotiated_caps_fixture();
+        let err = validate_client_selection(
+            &negotiated,
+            KemId::MlKem1024.code(),
+            SignatureId::Dilithium3.code(),
+        )
+        .expect_err("kem mismatch should fail");
+        match err {
+            HandshakeError::InvalidClient(field) => {
+                assert_eq!(field, "client kem_id does not match negotiated capability");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_client_selection_rejects_signature_mismatch() {
+        let negotiated = negotiated_caps_fixture();
+        let err = validate_client_selection(
+            &negotiated,
+            KemId::MlKem768.code(),
+            SignatureId::Falcon512.code(),
+        )
+        .expect_err("signature mismatch should fail");
+        match err {
+            HandshakeError::InvalidClient(field) => {
+                assert_eq!(field, "client sig_id does not match negotiated capability");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_client_selection_accepts_matching_ids() {
+        let negotiated = negotiated_caps_fixture();
+        validate_client_selection(
+            &negotiated,
+            KemId::MlKem768.code(),
+            SignatureId::Dilithium3.code(),
+        )
+        .expect("matching ids accepted");
+    }
+
+    #[test]
+    fn append_grease_tlvs_preserves_order() {
+        let base = vec![0xAA, 0xBB];
+        let grease = vec![
+            GreaseEntry {
+                ty: 0x7f10,
+                value: vec![0x01],
+            },
+            GreaseEntry {
+                ty: 0x7f11,
+                value: vec![0x02, 0x03],
+            },
+        ];
+        let appended = append_grease_tlvs(base.clone(), &grease);
+        let expected = [
+            0xAA, 0xBB, 0x7f, 0x10, 0x00, 0x01, 0x01, 0x7f, 0x11, 0x00, 0x02, 0x02, 0x03,
+        ];
+        assert_eq!(appended, expected);
     }
 
     #[test]

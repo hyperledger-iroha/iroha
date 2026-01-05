@@ -125,7 +125,6 @@ trigger, actions, and follow-ups).
 - `make android-lint` wraps `ci/check_android_javac_lint.sh`, compiling
   `java/iroha_android` and the shared `java/norito_java` sources with
   `javac --release 21 -Xlint:all -Werror` (with the flagged categories noted in
-  the script temporarily suppressed until the legacy warnings are fixed).
 - After compilation, the script enforces the AND6 dependency policy with
   `jdeps --summary`, failing if any module outside the approved allowlist
   (`java.base`, `java.net.http`, `jdk.httpserver`) appears. This keeps the
@@ -152,7 +151,7 @@ trigger, actions, and follow-ups).
 - `.github/workflows/android-and6.yml` now runs all AND6 gates (javac lint +
   dependency scan, Android test suite, StrongBox attestation verifier, and
   device-lab slot validation) on every PR/push touching the Android surface.
-- `ci/run_android_tests.sh` wraps `java/iroha_android/run_tests.sh` and emits
+- `ci/run_android_tests.sh` wraps `ci/run_android_tests.sh` and emits
   a deterministic summary at `artifacts/android/tests/test-summary.json` while
   persisting the console log to `artifacts/android/tests/test.log`. Attach both
   files to compliance packets when referencing CI runs.

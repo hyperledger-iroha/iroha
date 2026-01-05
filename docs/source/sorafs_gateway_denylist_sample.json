@@ -44,7 +44,7 @@
   },
   {
     "kind": "account_alias",
-    "account_alias": "legacy@sora",
+    "account_alias": "blocked@sora",
     "reason": "Alias retired by compliance",
     "issued_at": "2025-04-15T00:00:00Z",
     "expires_at": "2025-05-01T00:00:00Z"

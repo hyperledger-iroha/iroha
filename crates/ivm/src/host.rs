@@ -1415,8 +1415,26 @@ impl IVMHost for DefaultHost {
                 Ok(0)
             }
             crate::syscalls::SYSCALL_INPUT_PUBLISH_TLV => {
-                // Copy a TLV from program memory into INPUT and return its new INPUT pointer.
+                // Mirror a TLV into INPUT (no-op if already INPUT); validate envelope/policy.
                 let src = vm.register(10);
+                if src == 0 {
+                    vm.set_register(10, 0);
+                    return Ok(0);
+                }
+                let input_lo = crate::memory::Memory::INPUT_START;
+                let input_hi =
+                    crate::memory::Memory::INPUT_START + crate::memory::Memory::INPUT_SIZE;
+                if src >= input_lo && src < input_hi {
+                    let tlv = vm.memory.validate_tlv(src)?;
+                    let policy = vm.syscall_policy();
+                    if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                        return Err(VMError::AbiTypeNotAllowed {
+                            abi: vm.abi_version(),
+                            type_id: tlv.type_id as u16,
+                        });
+                    }
+                    return Ok(0);
+                }
                 // Read header to determine total length
                 let hdr = vm
                     .memory
@@ -1432,12 +1450,27 @@ impl IVMHost for DefaultHost {
                     .load_region(src, total as u64)
                     .map_err(|_| VMError::NoritoInvalid)?
                     .to_vec();
+                let tlv = pointer_abi::validate_tlv_bytes(&bytes_vec)?;
+                let policy = vm.syscall_policy();
+                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: tlv.type_id as u16,
+                    });
+                }
                 let dst = vm.alloc_input_tlv(&bytes_vec)?;
                 vm.set_register(10, dst);
                 Ok(0)
             }
             crate::syscalls::SYSCALL_GET_MERKLE_PATH => {
                 let addr = vm.register(10);
+                let max_addr = vm
+                    .memory
+                    .stack_top()
+                    .saturating_add(crate::Memory::STACK_SLOP);
+                if addr >= max_addr {
+                    return Err(VMError::MemoryOutOfBounds);
+                }
                 let dest = vm.register(11);
                 let root_out = vm.register(12);
                 let (root, path) = vm.memory.merkle_root_and_path(addr);
@@ -1452,6 +1485,13 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_GET_MERKLE_COMPACT => {
                 let addr = vm.register(10);
+                let max_addr = vm
+                    .memory
+                    .stack_top()
+                    .saturating_add(crate::Memory::STACK_SLOP);
+                if addr >= max_addr {
+                    return Err(VMError::MemoryOutOfBounds);
+                }
                 let dest = vm.register(11);
                 let depth_cap_raw = vm.register(12) as usize;
                 let depth_cap = if depth_cap_raw == 0 {
@@ -1480,7 +1520,11 @@ impl IVMHost for DefaultHost {
                 Ok(0)
             }
             crate::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT => {
-                let idx = vm.register(10) as usize;
+                let idx_raw = vm.register(10);
+                let idx = usize::try_from(idx_raw).map_err(|_| VMError::RegisterOutOfBounds)?;
+                if idx >= crate::parallel::REGISTER_COUNT {
+                    return Err(VMError::RegisterOutOfBounds);
+                }
                 let dest = vm.register(11);
                 let depth_cap_raw = vm.register(12) as usize;
                 let depth_cap = if depth_cap_raw == 0 {

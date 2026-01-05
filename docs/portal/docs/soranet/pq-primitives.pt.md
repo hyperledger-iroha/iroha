@@ -19,7 +19,7 @@ description: Visao geral do crate `soranet_pq` e de como o handshake do SoraNet 
 ---
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/soranet/pq_primitives.md`. Mantenha as duas copias alinhadas ate que o conjunto legado de documentacao seja retirado.
+Esta pagina espelha `docs/source/soranet/pq_primitives.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 O crate `soranet_pq` contem os blocos pos-quanticos nos quais todo relay, client e componente de tooling do SoraNet confia. Ele envolve as suites Kyber (ML-KEM) e Dilithium (ML-DSA) suportadas por PQClean e adiciona helpers de HKDF e RNG hedged amigaveis ao protocolo para que todas as superficies compartilhem implementacoes identicas.

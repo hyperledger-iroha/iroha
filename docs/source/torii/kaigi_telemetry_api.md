@@ -104,8 +104,7 @@ objects with the following structure (one per SSE event):
 
 Query parameters allow optional filtering by `domain`, `relay`, and `kind`
 (`registration` or `health`). Unsupported events are dropped with an SSE
-comment (`"ignored"`), and filter mismatches yield `"filtered"` comments to
-match existing proof SSE semantics.
+comment (`"ignored"`), and filter mismatches yield `"filtered"` comments.
 
 ### Rate Limiting and Access Control
 

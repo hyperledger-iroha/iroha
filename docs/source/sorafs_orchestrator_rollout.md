@@ -12,7 +12,6 @@ summary: Default-on checklist, overrides, and telemetry evidence required for SF
 
 This note focuses on the operator-facing steps required to flip the orchestrator
 on by default across binaries/SDKs and to gate releases when a regression forces
-a fallback to the legacy single-source path.
 
 # 2. Surface Defaults
 

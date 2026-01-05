@@ -48,7 +48,6 @@ Le manifest sérialise les profils via `ChunkingProfileV1`. La structure enregis
 du registre (namespace, name, semver) aux côtés des paramètres CDC bruts et de la liste d'alias ci-dessus.
 Les consommateurs doivent d'abord tenter une recherche dans le registre par `profile_id` et revenir aux
 paramètres inline lorsque des IDs inconnus apparaissent ; la liste d'alias garantit que les clients HTTP
-peuvent continuer d'envoyer des handles legacy dans `Accept-Chunker` sans deviner. Les règles de la charte
 du registre exigent que le handle canonique (`namespace.name@semver`) soit la première entrée de
 `profile_aliases`, suivi des alias hérités.
 
@@ -77,22 +76,19 @@ Tous les flags du CLI qui écrivent du JSON (`--json-out`, `--por-json-out`, `--
 créer un fichier. Cela facilite le piping des données vers les outils tout en conservant le
 comportement par défaut d'imprimer le rapport principal.
 
-### Matrice de compatibilité et plan de rollout
+### Matrice de rollout et plan de déploiement
 
 
 Le tableau ci-dessous capture le statut de support actuel pour `sorafs.sf1@1.0.0` dans les
-composants principaux. "Bridge" désigne la voie de compatibilité CARv1 + SHA-256 qui
+composants principaux. "Bridge" désigne la voie CARv1 + SHA-256 qui
 nécessite une négociation explicite côté client (`Accept-Chunker` + `Accept-Digest`).
 
 | Composant | Statut | Notes |
 |-----------|--------|-------|
 | `sorafs_manifest_chunk_store` | ✅ Supporté | Valide le handle canonique + alias, streame les rapports via `--json-out=-` et applique la charte du registre via `ensure_charter_compliance()`. |
-| `sorafs_manifest_stub` | ⚠️ Legacy | Builder de manifest legacy ; utilisez `iroha sorafs toolkit pack` pour le packaging CAR/manifest et gardez `--plan=-` pour une revalidation déterministe. |
-| `sorafs_provider_advert_stub` | ⚠️ Legacy | Helper de validation offline uniquement ; les provider adverts doivent être produits par le pipeline de publication et validés via `/v1/sorafs/providers`. |
 | `sorafs_fetch` (developer orchestrator) | ✅ Supporté | Lit `chunk_fetch_specs`, comprend les payloads de capacité `range` et assemble une sortie CARv2. |
 | Fixtures SDK (Rust/Go/TS) | ✅ Supporté | Régénérées via `export_vectors` ; le handle canonique apparaît en premier dans chaque liste d'alias et est signé par des enveloppes du conseil. |
 | Négociation de profils du gateway Torii | ✅ Supporté | Implémente toute la grammaire `Accept-Chunker`, inclut les headers `Content-Chunker` et n'expose le bridge CARv1 que sur des demandes de downgrade explicites. |
-| Bridge CARv1 (`sha2-256`) | ⚠️ Transitionnel | Disponible pour les clients legacy lorsque la requête annonce à la fois le profil canonique et `Accept-Digest: sha2-256` ; les réponses incluent `Content-Chunker: ...;legacy=true`. |
 
 Déploiement de la télémétrie :
 
@@ -194,27 +190,22 @@ Lorsqu'ils demandent des données CAR, les clients doivent envoyer un header `Ac
 `(namespace, name, semver)` par ordre de préférence :
 
 ```
-Accept-Chunker: sorafs.sf1;version=1.0.0, legacy.fastcdc;version=0.9.0
-```
 
 Les gateways sélectionnent un profil supporté mutuellement (par défaut `sorafs.sf1@1.0.0`)
 et reflètent la décision via le header de réponse `Content-Chunker`. Les manifests
 intègrent le profil choisi afin que les nœuds downstream puissent valider le layout des chunks
 sans s'appuyer sur la négociation HTTP.
 
-### Compatibilité CAR
+### Support CAR
 
-L'enveloppe canonique du manifest utilise des racines CIDv1 avec `dag-cbor` (`0x71`). Pour la compatibilité legacy,
 nous conservons une voie d'export CARv1+SHA-2 :
 
 * **Chemin principal** – CARv2, digest de payload BLAKE3 (`0x1f` multihash),
   `MultihashIndexSorted`, profil de chunk enregistré comme ci-dessus.
-* **Bridge legacy** – CARv1, digest de payload SHA-256 (`0x12` multihash). Les serveurs
   PEUVENT exposer cette variante lorsque le client omet `Accept-Chunker` ou demande
   `Accept-Digest: sha2-256`.
 
-Les manifests annoncent toujours l'engagement CARv2/BLAKE3. Les voies legacy fournissent des headers
-supplémentaires pour la compatibilité mais ne doivent pas remplacer le digest canonique.
+supplémentaires pour la transition mais ne doivent pas remplacer le digest canonique.
 
 ### Conformité
 

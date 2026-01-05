@@ -77,7 +77,6 @@ translator: manual
 - `GET /v1/zk/vk/{backend}/{name}`
 - `GET /v1/zk/vk` (מסננים `backend`, ‏`status`, ‏`name_contains`, ‏`limit`, ‏`offset`, ‏`order`, ‏`ids_only`)
 
-גוף JSON כולל שדות משותפים: `authority`, ‏`private_key`, ‏`backend`, ‏`name`, ‏`version`, ‏`gas_schedule_id`, אופציונלי `status` (`"Active"`/`"Deprecated"`), ‏`max_proof_bytes`, ‏`metadata_uri_cid`, ‏`vk_bytes_cid`, ‏`activation_height`/`deprecation_height`/`withdraw_height`. יש לבחור אחד:
 - `vk_bytes` (base64) — מצרף מפתח מלא; Torii יחושב את ה-commitment ויוודא מול `commitment_hex` אם נכלל. `vk_len` אופציונלי אך חייב להתאים לאורך הבייטים אם מוגדר.
 - `commitment_hex` (hex באורך 64) — רישום לפי commitment בלבד; במקרה זה חובה לציין `vk_len` כדי לשמר מידע על אורך המפתח.
 
@@ -112,19 +111,11 @@ CLI: `iroha zk vk register/update/deprecate/get`.
 
 הערות:
 - Commits הם hash מופרד (backend||bytes). נבדקים בעת שליחה.
-- פינוי deprecated: `zk.vk_deprecated_cap_per_backend` מגביל; entries ישנים נמחקים אך commitment/version נשמרים.
 
 ### מנוי לאירועי רישום VK
 
 `DataEventFilter.VerifyingKey` מאפשר Subscribe (JSON5). CLI לדוגמה:
 
-```
-iroha trigger register \
-  --id vk_watcher \
-  --filter data \
-  --data-filter '{ VerifyingKey: { id_matcher: { backend: "halo2/ipa", name: "vk_main" }, event_set: { Registered: true, Updated: true, Deprecated: true } } }' \
-  --path ./on_vk_update.ko
-```
 
 ### אירועי הוכחה
 

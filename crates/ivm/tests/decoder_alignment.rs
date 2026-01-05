@@ -7,7 +7,7 @@ fn decoder_traps_on_misaligned_fetch() {
     program.extend_from_slice(b"IVM\0");
     program.extend_from_slice(&[1, 0, 0, 0]); // version, mode, vec len
     program.extend_from_slice(&0u64.to_le_bytes()); // max_cycles
-    program.push(0); // abi_version
+    program.push(1); // abi_version
     program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
 
     let mut vm = IVM::new(10_000);

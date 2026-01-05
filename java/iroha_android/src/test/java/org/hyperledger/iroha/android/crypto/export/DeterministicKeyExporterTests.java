@@ -1,19 +1,13 @@
 package org.hyperledger.iroha.android.crypto.export;
 
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
-import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
 import java.security.Provider;
 import java.security.Security;
 import java.util.Arrays;
-import javax.crypto.Cipher;
-import javax.crypto.Mac;
-import javax.crypto.spec.GCMParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
 import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
 
 public final class DeterministicKeyExporterTests {
@@ -33,7 +27,7 @@ public final class DeterministicKeyExporterTests {
     tamperedNonceFails();
     saltLengthTamperFails();
     nonceLengthTamperFails();
-    legacyBundleRemainsDecodable();
+    rejectsUnsupportedVersion();
     shortPassphraseRejected();
     zeroSaltOrNonceRejected();
     System.out.println("[IrohaAndroid] Deterministic key exporter tests passed.");
@@ -286,22 +280,22 @@ public final class DeterministicKeyExporterTests {
     }
   }
 
-  private static void legacyBundleRemainsDecodable() throws Exception {
+  private static void rejectsUnsupportedVersion() throws Exception {
     final SoftwareKeyProvider provider = new SoftwareKeyProvider();
-    final KeyPair legacyKeyPair = provider.generate("legacy-alias");
-    final char[] passphrase = "legacy-passphrase".toCharArray();
-
-    final KeyExportBundle legacyBundle =
-        exportLegacyBundle(legacyKeyPair, "legacy-alias", passphrase);
-    final byte[] encoded = legacyBundle.encode();
-    final KeyExportBundle decoded = KeyExportBundle.decode(encoded);
-    final DeterministicKeyExporter.KeyPairData imported =
-        DeterministicKeyExporter.importKeyPair(decoded, passphrase);
-
-    assert Arrays.equals(legacyKeyPair.getPrivate().getEncoded(), imported.privateKey().getEncoded())
-        : "Legacy v0 bundle should still import correctly";
-    assert Arrays.equals(legacyKeyPair.getPublic().getEncoded(), imported.publicKey().getEncoded())
-        : "Legacy v0 bundle should preserve the public key";
+    final KeyPair keyPair = provider.generate("version-reject");
+    final char[] passphrase = "versioned-passphrase".toCharArray();
+    final KeyExportBundle bundle =
+        DeterministicKeyExporter.exportKeyPair(
+            keyPair.getPrivate(), keyPair.getPublic(), "version-reject", passphrase);
+    final byte[] raw = bundle.encode();
+    raw[MAGIC_LENGTH] = 0x01;
+    boolean threw = false;
+    try {
+      KeyExportBundle.decode(raw);
+    } catch (final KeyExportException expected) {
+      threw = true;
+    }
+    assert threw : "Decoder must reject unsupported bundle versions";
     Arrays.fill(passphrase, '\0');
   }
 
@@ -368,88 +362,4 @@ public final class DeterministicKeyExporterTests {
     Arrays.fill(passphrase, '\0');
   }
 
-  private static KeyExportBundle exportLegacyBundle(
-      final KeyPair keyPair, final String alias, final char[] passphrase) throws Exception {
-    final byte[] aliasBytes = alias.getBytes(StandardCharsets.UTF_8);
-    final byte[] salt = sha256("iroha-android-software-export-salt", aliasBytes);
-    final byte[] info = legacyInfo("iroha-android-software-export-info", aliasBytes);
-    final byte[] passphraseBytes = encodeUtf8(passphrase);
-    final byte[] keyNonceMaterial;
-    try {
-      keyNonceMaterial =
-          hkdf(passphraseBytes, salt, info, 32 + KeyExportBundle.EXPECTED_NONCE_LENGTH_BYTES);
-    } finally {
-      Arrays.fill(passphraseBytes, (byte) 0);
-    }
-    final byte[] aesKey = Arrays.copyOfRange(keyNonceMaterial, 0, 32);
-    final byte[] nonce =
-        Arrays.copyOfRange(keyNonceMaterial, 32, keyNonceMaterial.length);
-    Arrays.fill(keyNonceMaterial, (byte) 0);
-
-    final Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-    cipher.init(
-        Cipher.ENCRYPT_MODE, new SecretKeySpec(aesKey, "AES"), new GCMParameterSpec(128, nonce));
-    cipher.updateAAD(aliasBytes);
-    final byte[] ciphertext = cipher.doFinal(keyPair.getPrivate().getEncoded());
-    Arrays.fill(aesKey, (byte) 0);
-
-    return new KeyExportBundle(
-        alias,
-        keyPair.getPublic().getEncoded(),
-        nonce,
-        ciphertext,
-        new byte[0],
-        0,
-        0,
-        KeyExportBundle.VERSION_V0);
-  }
-
-  private static byte[] legacyInfo(final String domain, final byte[] aliasBytes) {
-    final byte[] domainBytes = domain.getBytes(StandardCharsets.UTF_8);
-    final ByteBuffer buffer =
-        ByteBuffer.allocate(domainBytes.length + 2 + aliasBytes.length)
-            .put(domainBytes)
-            .putShort((short) aliasBytes.length)
-            .put(aliasBytes);
-    return buffer.array();
-  }
-
-  private static byte[] encodeUtf8(final char[] chars) {
-    final byte[] encoded = new String(chars).getBytes(StandardCharsets.UTF_8);
-    return encoded;
-  }
-
-  private static byte[] hkdf(
-      final byte[] ikm, final byte[] salt, final byte[] info, final int length) throws Exception {
-    final Mac mac = Mac.getInstance("HmacSHA256");
-    final byte[] saltValue = salt == null ? new byte[mac.getMacLength()] : salt.clone();
-    mac.init(new SecretKeySpec(saltValue, "HmacSHA256"));
-    final byte[] prk = mac.doFinal(ikm);
-    final byte[] result = new byte[length];
-    byte[] previous = new byte[0];
-    int offset = 0;
-    int blockIndex = 1;
-    while (offset < length) {
-      mac.init(new SecretKeySpec(prk, "HmacSHA256"));
-      mac.update(previous);
-      mac.update(info);
-      mac.update((byte) blockIndex);
-      previous = mac.doFinal();
-      final int copy = Math.min(previous.length, length - offset);
-      System.arraycopy(previous, 0, result, offset, copy);
-      offset += copy;
-      blockIndex++;
-    }
-    Arrays.fill(prk, (byte) 0);
-    Arrays.fill(previous, (byte) 0);
-    Arrays.fill(saltValue, (byte) 0);
-    return result;
-  }
-
-  private static byte[] sha256(final String domain, final byte[] data) throws Exception {
-    final MessageDigest digest = MessageDigest.getInstance("SHA-256");
-    digest.update(domain.getBytes(StandardCharsets.UTF_8));
-    digest.update(data);
-    return digest.digest();
-  }
 }

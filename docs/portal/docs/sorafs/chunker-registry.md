@@ -6,7 +6,6 @@ description: Profile IDs, parameters, and negotiation plan for the SoraFS chunke
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/sorafs/chunker_registry.md`. Keep both copies in sync until the legacy Sphinx documentation set is retired.
 :::
 
 ## SoraFS Chunker Profile Registry (SF-2a)
@@ -111,8 +110,6 @@ and will transparently truncate when the request exceeds the available leaves:
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
-```
-```
 
 The manifest stub mirrors the same data, which is convenient when scripting `--chunker-profile-id` selection in pipelines. Both chunk store CLIs also accept the canonical handle form (`--profile=sorafs.sf1@1.0.0`) so build scripts can avoid hard-coding numeric IDs:
 
@@ -166,11 +163,6 @@ Gateways select a mutually supported profile (defaulting to `sorafs.sf1@1.0.0`)
 and reflect the decision via the `Content-Chunker` response header. Manifests
 embed the chosen profile so downstream nodes can validate the chunk layout
 without relying on HTTP negotiation.
-
-### CAR Compatibility
-
-The canonical manifest envelope uses CIDv1 roots with `dag-cbor` (`0x71`) and
-always advertises the CARv2/BLAKE3 commitment (multihash `0x1f`).
 
 ### Conformance
 

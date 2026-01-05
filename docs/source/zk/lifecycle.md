@@ -13,15 +13,12 @@ This document captures how verifying keys (VKs) and zero-knowledge proof envelop
 ## Verifying keys
 
 - Registry entries live in the world state under `verifying_keys[(backend, name)]`.
-- Each record captures the full verifier metadata: `version`, `circuit_id`, `backend`, `curve`, `public_inputs_schema_hash`, `commitment`, `vk_len`, `max_proof_bytes`, `gas_schedule_id`, optional URIs (`metadata_uri_cid`, `vk_bytes_cid`), lifecycle heights (`activation_height`, `deprecation_height`, `withdraw_height`), and `status` (`Active` or `Deprecated`). Inline verifier bytes are kept when available for auditors.
 - When a new VK is registered, the commitment must match the hashed payload or inline bytes bundled with the transaction. Updates bump the version and must preserve monotonicity.
-- Deprecated VKs remain queryable but are rejected for future updates.
 
 ### Relevant endpoints
 
 - `POST /v1/zk/vk/register` – submit a signed `RegisterVerifyingKey` instruction.
 - `POST /v1/zk/vk/update` – submit `UpdateVerifyingKey` with a higher version.
-- `POST /v1/zk/vk/deprecate` – mark an existing VK as deprecated.
 - `GET  /v1/zk/vk` – list VKs with optional filters (`backend`, `status`, `name_contains`).
 - `GET  /v1/zk/vk/{backend}/{name}` – fetch a single VK record.
 

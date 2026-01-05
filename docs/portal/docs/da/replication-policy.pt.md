@@ -11,7 +11,6 @@ translation_last_reviewed: 2026-01-01
 
 :::note Fonte canonica
 Espelha `docs/source/da/replication_policy.md`. Mantenha as duas versoes em
-sincronia ate que os docs legacy sejam aposentados.
 :::
 
 # Politica de replicacao de Data Availability (DA-4)

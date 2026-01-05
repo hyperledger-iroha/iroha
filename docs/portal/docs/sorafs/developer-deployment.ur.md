@@ -19,7 +19,6 @@ description: CI سے production تک SoraFS pipeline promote کرنے کی check
 ---
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/developer/deployment.md` کی عکاسی کرتا ہے۔ جب تک legacy docs ریٹائر نہ ہوں دونوں ورژنز کو ہم آہنگ رکھیں۔
 :::
 
 # Deployment notes

@@ -26,7 +26,6 @@ generated.
   stays intact.
 - **Bundle timestamp:** `bundle.json` now carries
   `generated_at_unix` (seconds). GC prefers this timestamp and falls back to
-  the file mtime for legacy bundles.
 
 ## Running garbage collection
 
@@ -45,7 +44,6 @@ iroha soracles evidence-gc \
 Flags:
 - `--root`: directory containing bundle folders (each with `bundle.json`).
 - `--retention-days`: remove bundles whose `generated_at_unix` (or `mtime` for
-  legacy bundles) is older than this window. `0` deletes everything.
 - `--dispute-retention-days`: minimum retention window for bundles that contain
   dispute evidence (default **365**). Use this to keep dispute payloads longer
   than standard observations/reports.

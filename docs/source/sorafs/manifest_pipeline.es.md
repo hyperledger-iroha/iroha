@@ -78,8 +78,7 @@ Cuando se proporciona `--manifest-signatures-out` (junto con al menos un flag
 `manifest_signatures.json` que contiene el digest BLAKE3 del manifiesto, el digest
 SHA3-256 agregado del plan de chunks (offsets, longitudes y digests BLAKE3 de chunks) y
 las firmas del consejo suministradas. El sobre ahora registra el perfil de chunker en
-la forma canónica `namespace.name@semver`; los sobres antiguos `namespace-name` siguen
-verificando por compatibilidad. La automatización downstream puede publicar el sobre en
+la forma canónica `namespace.name@semver`. La automatización downstream puede publicar el sobre en
 los logs de gobernanza o distribuirlo con los artefactos del manifiesto y CAR. Cuando
 recibas un sobre de un firmante externo, agrega `--manifest-signatures-in=<path>` para
 que la CLI confirme los digests y verifique cada firma Ed25519 contra el digest del
@@ -112,8 +111,7 @@ plan del manifiesto. Los clientes multi-fuente pueden alimentar el JSON resultan
 directamente en el orquestador de fetch de SoraFS sin volver a leer el payload de origen.
 El reporte JSON impreso por la CLI también incluye este array bajo `chunk_fetch_specs`.
 Tanto la sección `chunking` como el objeto `manifest` exponen `profile_aliases` junto al
-handle `profile` canónico para que los SDKs migren desde la forma heredada
-`namespace-name` sin perder compatibilidad.
+handle `profile` canónico.
 
 Al volver a ejecutar el stub (por ejemplo en CI o en un pipeline de release) puedes
 pasar `--plan=chunk_fetch_specs.json` o `--plan=-` para importar la especificación

@@ -64,6 +64,33 @@ fn json_encode_decode_roundtrip() {
 }
 
 #[test]
+fn json_decode_accepts_blob() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    let json = br#"{"a":1,"b":[2,3]}"#;
+    let p_blob = vm.alloc_input_tlv(&tlv(PointerType::Blob, json)).unwrap();
+    let dec_prog = common::assemble(
+        &[
+            encoding::wide::encode_sys(
+                wide::system::SCALL,
+                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+            )
+            .to_le_bytes(),
+            encoding::wide::encode_sys(wide::system::SCALL, syscalls::SYSCALL_JSON_DECODE as u8)
+                .to_le_bytes(),
+            encoding::wide::encode_halt().to_le_bytes(),
+        ]
+        .concat(),
+    );
+    vm.set_register(10, p_blob);
+    vm.load_program(&dec_prog).unwrap();
+    vm.run().unwrap();
+    let p_out = vm.register(10);
+    let tlv_j = vm.memory.validate_tlv(p_out).unwrap();
+    assert_eq!(tlv_j.type_id, PointerType::Json);
+}
+
+#[test]
 fn schema_encode_decode_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
@@ -98,6 +125,49 @@ fn schema_encode_decode_roundtrip() {
     );
     vm.set_register(10, p_schema);
     vm.set_register(11, p_blob);
+    vm.load_program(&dec).unwrap();
+    vm.run().unwrap();
+    let p_out = vm.register(10);
+    let tlv_j = vm.memory.validate_tlv(p_out).unwrap();
+    assert_eq!(tlv_j.type_id, PointerType::Json);
+}
+
+#[test]
+fn schema_decode_accepts_blob() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    let schema = b"Order";
+    let json = br#"{"qty":10, "side":"buy"}"#;
+    let p_schema = vm.alloc_input_tlv(&tlv(PointerType::Name, schema)).unwrap();
+    let p_json = vm.alloc_input_tlv(&tlv(PointerType::Json, json)).unwrap();
+    let enc = common::assemble(
+        &[
+            encoding::wide::encode_sys(wide::system::SCALL, syscalls::SYSCALL_SCHEMA_ENCODE as u8)
+                .to_le_bytes(),
+            encoding::wide::encode_halt().to_le_bytes(),
+        ]
+        .concat(),
+    );
+    vm.set_register(10, p_schema);
+    vm.set_register(11, p_json);
+    vm.load_program(&enc).unwrap();
+    vm.run().unwrap();
+    let p_blob = vm.register(10);
+    let encoded = vm.memory.validate_tlv(p_blob).unwrap();
+    let p_blob_alt = vm
+        .alloc_input_tlv(&tlv(PointerType::Blob, encoded.payload))
+        .unwrap();
+
+    let dec = common::assemble(
+        &[
+            encoding::wide::encode_sys(wide::system::SCALL, syscalls::SYSCALL_SCHEMA_DECODE as u8)
+                .to_le_bytes(),
+            encoding::wide::encode_halt().to_le_bytes(),
+        ]
+        .concat(),
+    );
+    vm.set_register(10, p_schema);
+    vm.set_register(11, p_blob_alt);
     vm.load_program(&dec).unwrap();
     vm.run().unwrap();
     let p_out = vm.register(10);

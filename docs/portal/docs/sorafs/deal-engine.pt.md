@@ -19,7 +19,7 @@ description: Visao geral do motor de acordos SF-8, integracao com Torii e superf
 ---
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/deal_engine.md`. Mantenha ambos os locais alinhados enquanto a documentacao legada permanecer ativa.
+Esta pagina espelha `docs/source/sorafs/deal_engine.md`. Mantenha ambos os locais alinhados enquanto a documentacao alternativa permanecer ativa.
 :::
 
 # Motor de acordos da SoraFS

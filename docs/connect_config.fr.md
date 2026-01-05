@@ -44,7 +44,7 @@ Notes :
   de durée dans la configuration utilisateur et sont mappés respectivement
   vers les champs effectifs `session_ttl` et `dedupe_ttl`.
 - Le mécanisme de heartbeat borne l’intervalle configuré à un minimum
-  compatible avec les navigateurs (`ping_min_interval_ms`) ; le serveur
+  pris en charge par les navigateurs (`ping_min_interval_ms`) ; le serveur
   tolère `ping_miss_tolerance` pongs consécutifs manquants avant de fermer le
   WebSocket et d’incrémenter la métrique `connect.ping_miss_total`.
 - Lorsque `connect.enabled=false`, les routes WS et de statut Connect ne sont
@@ -58,4 +58,3 @@ Voir aussi :
 `crates/iroha_config/src/parameters/{user,actual}.rs` et les valeurs par
 défaut dans `crates/iroha_config/src/parameters/defaults.rs` (module
 `connect`).
-

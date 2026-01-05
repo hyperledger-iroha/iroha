@@ -19,7 +19,7 @@ description: Checklist para propor novos perfis e fixtures de chunker da SoraFS.
 ---
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/chunker_profile_authoring.md`. Mantenha ambas as copias sincronizadas ate que o conjunto de documentacao Sphinx legado seja retirado.
+Esta pagina espelha `docs/source/sorafs/chunker_profile_authoring.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 # Guia de autoria de perfis de chunker da SoraFS
@@ -41,7 +41,7 @@ Cada perfil que entra no registro deve:
 - entregar fixtures reproduziveis (JSON Rust/Go/TS + corpora fuzz + testemunhas PoR) que
   os SDKs downstream possam verificar sem tooling sob medida;
 - incluir metadados prontos para governanca (namespace, name, semver) junto com orientacao
-  de migracao e janelas de compatibilidade; e
+  de rollout e janelas operacionais; e
 - passar pela suite de diff determinista antes da revisao do conselho.
 
 Siga a checklist abaixo para preparar uma proposta que atenda a essas regras.
@@ -53,7 +53,7 @@ Antes de redigir uma proposta, confirme que ela atende a carta do registro aplic
 
 - IDs de perfil sao inteiros positivos que aumentam de forma monotona sem lacunas.
 - O handle canonico (`namespace.name@semver`) deve aparecer na lista de alias e
-  **deve** ser a primeira entrada. Aliases legados (ex., `sorafs.sf1@1.0.0`) vem depois.
+  **deve** ser a primeira entrada. Aliases alternativos (ex., `sorafs.sf1@1.0.0`) vem depois.
 - Nenhum alias pode colidir com outro handle canonico ou aparecer mais de uma vez.
 - Aliases devem ser nao vazios e aparados de espacos em branco.
 
@@ -79,7 +79,7 @@ metadados canonicos necessarios nas discussoes de governanca.
 | `name` | Rotulo legivel para humanos. | `sf1` |
 | `semver` | Cadeia de versao semantica para o conjunto de parametros. | `1.0.0` |
 | `profile_id` | Identificador numerico monotono atribuido quando o perfil entra. Reserve o proximo id mas nao reutilize numeros existentes. | `1` |
-| `profile_aliases` | Handles adicionais opcionais (nomes legados, abreviacoes) expostos a clientes durante a negociacao. Inclua sempre o handle canonico como primeira entrada. | `["sorafs.sf1@1.0.0"]` |
+| `profile_aliases` | Handles adicionais opcionais (nomes alternativos, abreviacoes) expostos a clientes durante a negociacao. Inclua sempre o handle canonico como primeira entrada. | `["sorafs.sf1@1.0.0"]` |
 | `profile.min_size` | Comprimento minimo do chunk em bytes. | `65536` |
 | `profile.target_size` | Comprimento alvo do chunk em bytes. | `262144` |
 | `profile.max_size` | Comprimento maximo do chunk em bytes. | `524288` |
@@ -169,50 +169,6 @@ As propostas sao submetidas como registros Norito `ChunkerProfileProposalV1` reg
 `docs/source/sorafs/proposals/`. O template JSON abaixo ilustra o formato esperado
 (substitua seus valores conforme necessario):
 
-```json
-{
-  "ChunkerProfileProposalV1": {
-    "namespace": "sorafs",
-    "name": "sf2",
-    "semver": "1.0.0",
-    "reserved_profile_id": 2,
-    "profile": {
-      "min_size": 65536,
-      "target_size": 262144,
-      "max_size": 524288,
-      "break_mask": "0x0000ffff",
-      "polynomial": "0x3da3358b4dc173",
-      "gear_seed": "sorafs-v2-gear"
-    },
-    "chunk_multihash": {
-      "code": 31,
-      "digest": "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482"
-    },
-    "profile_aliases": ["sorafs.sf2", "sorafs-sf2"],
-    "fixtures_root": "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/",
-    "por_seed": "0xfeedbeefcafebabe",
-    "compatibility": {
-      "supersedes": ["sorafs.sf1@1.0.0"],
-      "grace_epochs": 2,
-      "notes": "Carry envelopes for sf1 during dual-publish window."
-    },
-    "artifacts": {
-      "chunk_boundaries": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.json",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.ts",
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/sf2_profile_v1.go"
-      ],
-      "fuzz_corpora": [
-        "fuzz/sorafs_chunker/sf2_backpressure.json"
-      ],
-      "por_witnesses": [
-        "fixtures/sorafs_chunker/sorafs.sf2@1.0.0/por_samples.json"
-      ]
-    },
-    "determinism_report": "docs/source/sorafs/reports/sf2_determinism.md"
-  }
-}
-```
 
 Forneca um relatorio Markdown correspondente (`determinism_report`) que capture a
 saida dos comandos, digests de chunk e quaisquer desvios encontrados durante a validacao.
@@ -229,13 +185,12 @@ saida dos comandos, digests de chunk e quaisquer desvios encontrados durante a v
 4. **Publicacao do registro.** O merge atualiza o registro, docs e fixtures. O CLI
    default permanece no perfil anterior ate que a governanca declare a migracao pronta.
 5. **Rastreamento de deprecacao.** Apos a janela de migracao, atualize o registro para
-   marcar perfis substituidos como deprecated e notifique operadores via o migration ledger.
 
 ## Dicas de autoria
 
 - Prefira limites pares de potencia de dois para minimizar comportamento de chunking em bordas.
 - Evite mudar o codigo multihash sem coordenar consumidores de manifest e gateway; inclua uma
-  nota de compatibilidade quando fizer isso.
+  nota operacional quando fizer isso.
 - Mantenha as seeds da tabela gear legiveis para humanos, mas globalmente unicas para simplificar auditorias.
 - Armazene artefatos de benchmarking (ex., comparacoes de throughput) em
   `docs/source/sorafs/reports/` para referencia futura.

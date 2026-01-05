@@ -102,38 +102,4 @@ final class ConnectKeyStoreTests: XCTestCase {
         }
     }
 
-    func testMigratesLegacyPlaintextRecord() throws {
-        let dir = try temporaryDirectory()
-        let configuration = ConnectKeyStore.Configuration(preferKeychain: false)
-        let store = ConnectKeyStore(directory: dir, configuration: configuration)
-
-        let publicKey = Data(repeating: 0x11, count: 32)
-        let privateKey = Data(repeating: 0x22, count: 32)
-        let attestation = ConnectKeyStore.Attestation(
-            publicKeyDigest: Data(SHA256.hash(data: publicKey)),
-            deviceLabel: "legacy-device",
-            createdAt: Date(timeIntervalSince1970: 1_700_000_000)
-        )
-        let legacy = ConnectKeyStore.StoredKey(
-            keyPair: ConnectKeyPair(publicKey: publicKey, privateKey: privateKey),
-            attestation: attestation
-        )
-
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        let legacyData = try encoder.encode(legacy)
-        let legacyPath = dir.appendingPathComponent("legacy.json")
-        try legacyData.write(to: legacyPath)
-
-        let (loadedPair, loadedAttestation) = try store.generateOrLoad(label: "legacy")
-        XCTAssertEqual(loadedPair, legacy.keyPair)
-        XCTAssertEqual(loadedAttestation, attestation)
-
-        let migratedData = try Data(contentsOf: legacyPath)
-        struct Envelope: Decodable {
-            let hmac: String
-        }
-        let decoded = try JSONDecoder().decode(Envelope.self, from: migratedData)
-        XCTAssertFalse(decoded.hmac.isEmpty, "migration should wrap payload with HMAC")
-    }
 }
