@@ -540,6 +540,7 @@ impl Actor {
     }
 
     // Prefer the roster tied to a committed block to keep signatures valid across roster changes.
+    #[allow(dead_code)]
     pub(super) fn roster_for_vote(
         &self,
         block_hash: HashOf<BlockHeader>,

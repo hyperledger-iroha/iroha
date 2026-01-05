@@ -1,9 +1,16 @@
 # Status
 
 ## Latest Updates
+- Sumeragi: reject block-sync commit certificates with mismatched epochs (apply + cache paths) and add regression coverage for epoch-mismatch drops.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p iroha_core block_sync_update_drops_qc_epoch_mismatch -- --nocapture` (timed out after 120s during compile).
+- Tests: `cargo test --workspace` (timed out after 120s waiting for build directory lock).
+- Sumeragi: reject RBC INIT messages with zero chunks and treat empty payload hydration as a layout mismatch; add regression tests.
+- Tests: not run (not requested).
 - Sumeragi: realign NPoS epoch state and seed when on-chain epoch length changes (reset stale VRF inputs), and add regression coverage for epoch-length refresh behavior.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
 - Tests: `cargo test -p iroha_core refresh_npos_seed_realigns_epoch_after_epoch_length_change -- --nocapture` (timed out after 120s during compile; warnings about unused methods in `crates/iroha_core/src/sumeragi/main_loop/pending_rbc.rs` and `crates/iroha_core/src/sumeragi/main_loop/votes.rs`).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about dead-code `Align64` in `crates/norito/src/core.rs` and unused methods in `crates/iroha_core/src/sumeragi/main_loop/pending_rbc.rs` and `crates/iroha_core/src/sumeragi/main_loop/votes.rs`).
 - Sumeragi: derive merge QC view from lane-tip view-change indices (view now part of QC digest/signatures), wire VRF epoch snapshots for NPoS scheduling/telemetry, and add regression coverage.
 - Penalties: derive censorship evidence epochs from receipt heights and attribute slashing to the leader at the receipt anchor; add unit tests.
 - Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused `dropped_counts` in `crates/iroha_core/src/sumeragi/main_loop/pending_rbc.rs`, unused `roster_for_vote` in `crates/iroha_core/src/sumeragi/main_loop/votes.rs`, and dead-code field `Align64` in `crates/norito/src/core.rs`).

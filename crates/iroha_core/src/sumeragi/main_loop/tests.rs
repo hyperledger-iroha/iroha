@@ -2372,6 +2372,137 @@ async fn block_sync_update_drops_qc_height_mismatch() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_drops_qc_epoch_mismatch() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let signers: BTreeSet<ValidatorIndex> = (0..roster.len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
+    let parsed = super::parse_signers_bitmap(&signers_bitmap, roster.len(), roster.len())
+        .expect("signers bitmap parses");
+    assert_eq!(
+        parsed.voting.len(),
+        signers.len(),
+        "parsed signers mismatch"
+    );
+    let (committed_height, committed_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(u64::MAX),
+            view.latest_block_hash(),
+        )
+    };
+    let block_height = committed_height.saturating_add(1).max(1);
+    let view = 0_u64;
+    let signature_topology =
+        super::topology_for_view(&topology, block_height, view, PERMISSIONED_TAG, None);
+    let leader_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("commit topology not empty");
+    let leader_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == leader_peer.public_key())
+        .expect("leader keypair exists in harness");
+    let tx_params = iroha_data_model::parameter::TransactionParameters::default();
+    let time_source = TimeSource::new_system();
+    let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
+        actor.common_config.chain.clone(),
+        leader_kp,
+        &tx_params,
+        block_height,
+        &time_source,
+    );
+    let header = BlockHeader::new(
+        NonZeroU64::new(block_height).expect("block height"),
+        committed_hash,
+        None,
+        None,
+        0,
+        u32::try_from(view).expect("view"),
+    );
+    let mut builder = BlockBuilder::new(header);
+    builder.push_transaction(heartbeat);
+    let default_policies =
+        crate::da::proof_policy_bundle(&iroha_config::parameters::actual::LaneConfig::default());
+    builder.set_da_proof_policies(Some(default_policies));
+    let leader_idx = signature_topology
+        .position(leader_kp.public_key())
+        .expect("leader index in topology");
+    let mut block = builder.build_with_signature(
+        u64::try_from(leader_idx).expect("leader index fits"),
+        leader_kp.private_key(),
+    );
+    let required = signature_topology.min_votes_for_commit().max(1);
+    for (idx, peer) in signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .take(required)
+    {
+        if idx == leader_idx {
+            continue;
+        }
+        let kp = harness
+            .key_pairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("signer keypair exists in harness");
+        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        block
+            .add_signature(BlockSignature::new(
+                u64::try_from(idx).expect("signer index fits u64"),
+                sig,
+            ))
+            .expect("signature added");
+    }
+    let payload_hash = Hash::prehashed([0x44; 32]);
+    let pending = PendingBlock::new(block.clone(), payload_hash, block_height, view);
+    actor.pending.pending_blocks.insert(block.hash(), pending);
+    let mut update = super::block_sync_update_with_roster(
+        &block,
+        actor.state.as_ref(),
+        actor.kura.as_ref(),
+        ConsensusMode::Permissioned,
+        actor.common_config.trusted_peers.value(),
+        actor.common_config.peer.id(),
+    );
+    let chain = actor.common_config.chain.clone();
+    let qc_epoch = 1;
+    let qc = qc_with_bitmap(
+        &chain,
+        block.hash(),
+        block_height,
+        view,
+        qc_epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    update.commit_certificate = Some(qc);
+
+    actor
+        .handle_block_sync_update(update)
+        .expect("block sync update");
+
+    assert!(actor.block_known_locally(block.hash()));
+    assert!(
+        !actor
+            .qc_cache
+            .contains_key(&(Phase::Commit, block.hash(), block_height, view, qc_epoch)),
+        "mismatched epoch QC should not be cached"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_records_commit_certificate_from_cached_qc() {
     use crate::sumeragi::status;
 
@@ -3058,6 +3189,88 @@ async fn block_sync_caches_qc_before_block_known() {
     assert!(
         actor.locked_qc.is_none(),
         "unknown block should not update locked QC"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_cache_rejects_qc_epoch_mismatch() {
+    crate::sumeragi::status::reset_precommit_signer_history_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let height = 2;
+    let view = 0;
+    let signature_topology =
+        super::topology_for_view(&topology, height, view, PERMISSIONED_TAG, None);
+    let signer_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("commit topology not empty");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair exists in harness");
+    let header = BlockHeader {
+        height: NonZeroU64::new(height).expect("block height must be non-zero"),
+        prev_block_hash: None,
+        merkle_root: None,
+        result_merkle_root: None,
+        da_proof_policies_hash: None,
+        da_commitments_hash: None,
+        da_pin_intents_hash: None,
+        creation_time_ms: 0,
+        view_change_index: u32::try_from(view).expect("view fits u32"),
+        confidential_features: None,
+    };
+    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let block_signature = BlockSignature::new(0, signature);
+    let block = SignedBlock::presigned(block_signature, header, Vec::new());
+
+    let state_view = actor.state.view();
+    let block_signers =
+        super::validated_block_signers(&block, &topology, &state_view, PERMISSIONED_TAG, None)
+            .expect("block signatures valid for block sync");
+    drop(state_view);
+
+    let qc_epoch = 1;
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block.hash(),
+        height,
+        view,
+        qc_epoch,
+        vec![0b0000_0111],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    actor.cache_block_sync_qc_for_unknown_block(
+        qc,
+        block.hash(),
+        height,
+        view,
+        &topology,
+        &block_signers,
+        false,
+        super::PERMISSIONED_TAG,
+        None,
+    );
+
+    assert!(
+        !actor
+            .qc_cache
+            .contains_key(&(Phase::Commit, block.hash(), height, view, qc_epoch)),
+        "mismatched epoch QC should not be cached"
+    );
+    assert!(
+        crate::sumeragi::status::precommit_signers_for(block.hash()).is_none(),
+        "mismatched epoch QC should not record precommit signers"
     );
 
     harness.shutdown.send();
@@ -7115,6 +7328,39 @@ async fn handle_rbc_init_rejects_epoch_mismatch() {
     assert!(
         !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
         "mismatched epoch init should be dropped"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_init_rejects_zero_chunks() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da_enabled = true;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = 3u64;
+    let view = 0u64;
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD3; 32]));
+    let key = (block_hash, height, view);
+    let epoch = actor.epoch_for_height(height);
+    let init = crate::sumeragi::consensus::RbcInit {
+        block_hash,
+        height,
+        view,
+        epoch,
+        total_chunks: 0,
+        payload_hash: Hash::prehashed([0x11; 32]),
+        chunk_root: Hash::prehashed([0x22; 32]),
+    };
+
+    actor.handle_rbc_init(init).expect("init handled");
+    assert!(
+        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
+        "zero-chunk init should be rejected"
     );
 
     harness.shutdown.send();
@@ -26319,6 +26565,22 @@ fn hydrated_payload_rejects_chunk_count_mismatch() {
     assert!(outcome.layout_mismatch);
     assert_eq!(outcome.observed_chunks, u32::try_from(observed_chunks).ok());
     assert!(!outcome.all_chunks_present);
+    assert!(session.is_invalid());
+    assert!(!session.delivered);
+}
+
+#[test]
+fn hydrated_payload_rejects_empty_payload() {
+    let payload_bytes = b"";
+    let payload_hash = Hash::new(payload_bytes);
+    let chunk_max = 4;
+    let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
+
+    let outcome =
+        super::rbc::apply_hydrated_payload(&mut session, payload_bytes, payload_hash, chunk_max);
+
+    assert!(outcome.layout_mismatch);
+    assert_eq!(outcome.observed_chunks, Some(0));
     assert!(session.is_invalid());
     assert!(!session.delivered);
 }
