@@ -384,6 +384,48 @@ impl Actor {
             }
         }
         let key = vote_key(vote);
+        if let Some(existing) = self.vote_log.get(&key) {
+            if existing.block_hash == vote.block_hash {
+                iroha_logger::debug!(
+                    phase = ?vote.phase,
+                    height = vote.height,
+                    view = vote.view,
+                    epoch = vote.epoch,
+                    signer = vote.signer,
+                    block_hash = %vote.block_hash,
+                    "dropping duplicate vote already recorded"
+                );
+                return false;
+            }
+            self.note_double_vote(Some(existing), vote, evidence_context);
+            let cross_phase = match vote.phase {
+                crate::sumeragi::consensus::Phase::Prepare => {
+                    Some(crate::sumeragi::consensus::Phase::Commit)
+                }
+                crate::sumeragi::consensus::Phase::Commit => {
+                    Some(crate::sumeragi::consensus::Phase::Prepare)
+                }
+                _ => None,
+            };
+            if let Some(phase) = cross_phase {
+                if let Some(previous) =
+                    self.vote_log.get(&(phase, vote.height, vote.view, vote.epoch, vote.signer))
+                {
+                    self.note_double_vote(Some(previous), vote, evidence_context);
+                }
+            }
+            warn!(
+                phase = ?vote.phase,
+                height = vote.height,
+                view = vote.view,
+                epoch = vote.epoch,
+                signer = vote.signer,
+                block_hash = %vote.block_hash,
+                existing_block = %existing.block_hash,
+                "dropping conflicting vote for signer"
+            );
+            return false;
+        }
         let previous = self.vote_log.insert(key, vote.clone());
         iroha_logger::debug!(
             phase = ?vote.phase,

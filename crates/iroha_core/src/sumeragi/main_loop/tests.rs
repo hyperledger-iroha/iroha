@@ -23966,6 +23966,66 @@ fn sample_proposal(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn conflicting_vote_does_not_override_first() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(1);
+    let view = 0;
+    let epoch = actor.current_epoch();
+    let chain_id = actor.chain_id.clone();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let block_hash_a =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB1; Hash::LENGTH]));
+    let block_hash_b =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB2; Hash::LENGTH]));
+
+    let mut vote_a = crate::sumeragi::consensus::Vote {
+        phase: crate::sumeragi::consensus::Phase::Commit,
+        block_hash: block_hash_a,
+        height,
+        view,
+        epoch,
+        highest_cert: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(&mut vote_a, &chain_id, &topology, &harness.key_pairs);
+    actor.handle_vote(vote_a.clone());
+
+    let mut vote_b = crate::sumeragi::consensus::Vote {
+        phase: crate::sumeragi::consensus::Phase::Commit,
+        block_hash: block_hash_b,
+        height,
+        view,
+        epoch,
+        highest_cert: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(&mut vote_b, &chain_id, &topology, &harness.key_pairs);
+    actor.handle_vote(vote_b);
+
+    let key = (
+        crate::sumeragi::consensus::Phase::Commit,
+        height,
+        view,
+        epoch,
+        0,
+    );
+    let stored = actor.vote_log.get(&key).expect("vote recorded");
+    assert_eq!(
+        stored.block_hash, block_hash_a,
+        "conflicting vote should not override the first vote"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn stale_view_accepts_precommit_vote_when_missing_block_requested() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;

@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Sumeragi: ignore conflicting same-signer votes (record evidence without overwriting the first vote) to avoid QC regression; add regression coverage.
+- Tests: not run (not requested).
 - Sumeragi: drop the DA/RBC devnet override so `sumeragi.da_enabled` is honored at runtime; update docs and runtime DA tests accordingly.
 - Tests: not run (not requested).
 - Genesis: align shipped genesis manifests to wire protocol v1 and refresh consensus_fingerprint values.
