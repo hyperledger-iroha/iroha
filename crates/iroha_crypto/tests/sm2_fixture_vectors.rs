@@ -1,4 +1,4 @@
-#![doc = "Cross-SDK SM2 fixture validation."]
+//! Cross-SDK SM2 fixture validation.
 #![cfg(feature = "sm")]
 
 use std::{fs, path::PathBuf};

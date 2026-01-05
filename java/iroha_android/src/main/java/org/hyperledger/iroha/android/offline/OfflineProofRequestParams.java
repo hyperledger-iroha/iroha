@@ -6,20 +6,21 @@ import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 
-/** Parameters accepted by the Torii `/v1/offline/transfers/proof` endpoint. */
+/** Parameters accepted by the Torii `/v1/offline/transfers/proof` endpoint; requires a transfer payload. */
 public final class OfflineProofRequestParams {
 
-  private final String bundleIdHex;
+  private final Map<String, Object> transferPayload;
   private final OfflineProofRequestKind kind;
   private final Long counterCheckpoint;
   private final String replayLogHeadHex;
   private final String replayLogTailHex;
 
   private OfflineProofRequestParams(final Builder builder) {
-    this.bundleIdHex =
-        Objects.requireNonNull(builder.bundleIdHex, "bundleIdHex must be provided").trim();
-    if (bundleIdHex.isEmpty()) {
-      throw new IllegalArgumentException("bundleIdHex must not be empty");
+    this.transferPayload =
+        new LinkedHashMap<>(
+            Objects.requireNonNull(builder.transferPayload, "transferPayload must be provided"));
+    if (transferPayload.isEmpty()) {
+      throw new IllegalArgumentException("transferPayload must not be empty");
     }
     this.kind = Objects.requireNonNull(builder.kind, "kind must be provided");
     this.counterCheckpoint = builder.counterCheckpoint;
@@ -48,7 +49,7 @@ public final class OfflineProofRequestParams {
 
   public byte[] toJsonBytes() {
     final Map<String, Object> body = new LinkedHashMap<>();
-    body.put("bundle_id_hex", bundleIdHex);
+    body.put("transfer", transferPayload);
     body.put("kind", kind.asParameter());
     if (counterCheckpoint != null) {
       body.put("counter_checkpoint", counterCheckpoint);
@@ -63,7 +64,7 @@ public final class OfflineProofRequestParams {
   }
 
   public static final class Builder {
-    private String bundleIdHex;
+    private Map<String, Object> transferPayload;
     private OfflineProofRequestKind kind;
     private Long counterCheckpoint;
     private String replayLogHeadHex;
@@ -71,8 +72,8 @@ public final class OfflineProofRequestParams {
 
     private Builder() {}
 
-    public Builder bundleIdHex(final String bundleIdHex) {
-      this.bundleIdHex = bundleIdHex;
+    public Builder transferPayload(final Map<String, Object> transferPayload) {
+      this.transferPayload = transferPayload;
       return this;
     }
 

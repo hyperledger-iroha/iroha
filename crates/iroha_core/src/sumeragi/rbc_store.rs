@@ -3,7 +3,8 @@
 
 use std::{
     collections::BTreeSet,
-    fs, io,
+    fs,
+    io::{self, Write},
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -254,8 +255,29 @@ impl ChunkStore {
         let path = Self::make_session_path(&self.dir, &persisted.key());
         let tmp = temp_session_path(&path);
         let encoded = <PersistedSession as Encode>::encode(persisted);
-        fs::write(&tmp, encoded)?;
-        fs::rename(&tmp, &path)?;
+        {
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp)?;
+            file.write_all(&encoded)?;
+            file.sync_all()?;
+        }
+        if let Err(err) = fs::rename(&tmp, &path) {
+            if err.kind() == io::ErrorKind::AlreadyExists {
+                fs::remove_file(&path)?;
+                fs::rename(&tmp, &path)?;
+            } else {
+                return Err(err);
+            }
+        }
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                let file = fs::File::open(parent)?;
+                file.sync_all()?;
+            }
+        }
         Ok(())
     }
 
@@ -267,6 +289,16 @@ impl ChunkStore {
             return false;
         };
         // Session files are `{hash}_{height}_{view}`.
+        stem.split('_').count() == 3
+    }
+
+    fn is_temp_session_file(path: &Path) -> bool {
+        let Some(name) = path.file_name().and_then(|os| os.to_str()) else {
+            return false;
+        };
+        let Some(stem) = name.strip_suffix(".norito.tmp") else {
+            return false;
+        };
         stem.split('_').count() == 3
     }
 
@@ -289,60 +321,34 @@ impl ChunkStore {
         expected_manifest: &SoftwareManifest,
     ) -> io::Result<Option<PersistedSession>> {
         let path = Self::make_session_path(dir, key);
-        let data = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(err),
-        };
-        let persisted = match Self::decode_persisted_session_guarded(&data, &path) {
-            Some(persisted) => persisted,
-            None => return Ok(None),
-        };
-        if persisted.invalid {
-            warn!(?path, "Skipping persisted RBC session marked invalid");
+        let tmp_path = temp_session_path(&path);
+        let tmp_bytes = read_session_bytes(&tmp_path)?;
+        let main_bytes = read_session_bytes(&path)?;
+        if tmp_bytes.is_none() && main_bytes.is_none() {
             return Ok(None);
         }
-        if persisted.key_mismatch_with_path(&path) {
-            warn!(?path, "RBC persisted session key mismatch; removing file");
-            let _ = ChunkStore::delete_path(&path);
-            return Ok(None);
+        for (candidate_path, bytes) in [(&tmp_path, tmp_bytes), (&path, main_bytes)] {
+            let Some(bytes) = bytes.as_deref() else {
+                continue;
+            };
+            let Some(persisted) = Self::decode_persisted_session_guarded(bytes, candidate_path)
+            else {
+                continue;
+            };
+            let Some(persisted) = Self::validate_persisted_session(
+                persisted,
+                candidate_path,
+                Some(expected_chain_hash),
+                Some(expected_manifest),
+            ) else {
+                continue;
+            };
+            if candidate_path == &tmp_path {
+                let _ = promote_temp_session(&tmp_path, &path);
+            }
+            return Ok(Some(persisted));
         }
-        if !persist_version_supported(persisted.format_version()) {
-            warn!(
-                ?path,
-                version = persisted.format_version(),
-                supported = PERSIST_VERSION,
-                "Dropping RBC persisted session with unsupported format version"
-            );
-            let _ = ChunkStore::delete_path(&path);
-            return Ok(None);
-        }
-        if &persisted.chain_hash != expected_chain_hash {
-            warn!(
-                ?path,
-                "Dropping RBC persisted session with mismatched chain hash"
-            );
-            let _ = ChunkStore::delete_path(&path);
-            return Ok(None);
-        }
-        if !persisted.software_manifest.matches(expected_manifest) {
-            warn!(
-                ?path,
-                "Dropping RBC persisted session with mismatched software manifest"
-            );
-            let _ = ChunkStore::delete_path(&path);
-            return Ok(None);
-        }
-        if let Err(reason) = validate_chunks(&persisted) {
-            warn!(
-                ?path,
-                %reason,
-                "Dropping RBC persisted session due to chunk integrity failure"
-            );
-            let _ = ChunkStore::delete_path(&path);
-            return Ok(None);
-        }
-        Ok(Some(persisted))
+        Ok(None)
     }
 
     fn scan_entries(
@@ -351,6 +357,8 @@ impl ChunkStore {
         expected_manifest: Option<&SoftwareManifest>,
     ) -> io::Result<Vec<Entry>> {
         let mut out = Vec::new();
+        let mut temp_paths = Vec::new();
+        let mut main_paths = Vec::new();
         let read_dir = match fs::read_dir(&self.dir) {
             Ok(iter) => iter,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(out),
@@ -369,63 +377,67 @@ impl ChunkStore {
                 continue;
             }
             let path = entry.path();
-            // Skip files that are not per-session snapshots. Status summaries
-            // (e.g., `sessions.norito`) share this directory but are encoded
-            // differently and would trigger decode errors if we attempted to load them.
-            if !Self::is_session_file(&path) {
+            if Self::is_temp_session_file(&path) {
+                temp_paths.push(path);
                 continue;
             }
+            if Self::is_session_file(&path) {
+                main_paths.push(path);
+            }
+        }
+        let mut seen = BTreeSet::new();
+        for path in temp_paths {
             match fs::read(&path) {
                 Ok(data) => {
                     let Some(persisted) = Self::decode_persisted_session_guarded(&data, &path)
                     else {
                         continue;
                     };
-                    if persisted.key_mismatch_with_path(&path) {
-                        warn!(?path, "RBC persisted session key mismatch; removing file");
-                        let _ = Self::delete_path(&path);
+                    let Some(persisted) = Self::validate_persisted_session(
+                        persisted,
+                        &path,
+                        expected_chain_hash,
+                        expected_manifest,
+                    ) else {
                         continue;
+                    };
+                    let key = persisted.key();
+                    let mut effective_path = path.clone();
+                    let main_path = path.with_extension("norito");
+                    if promote_temp_session(&path, &main_path) {
+                        effective_path = main_path;
                     }
-                    if !persist_version_supported(persisted.format_version()) {
-                        warn!(
-                            ?path,
-                            version = persisted.format_version(),
-                            supported = PERSIST_VERSION,
-                            "Dropping RBC persisted session with unsupported format version"
-                        );
-                        let _ = Self::delete_path(&path);
+                    if seen.insert(key) {
+                        out.push(Entry {
+                            persisted,
+                            path: effective_path,
+                        });
+                    }
+                }
+                Err(err) => {
+                    warn!(?err, ?path, "failed to read persisted RBC temp session");
+                }
+            }
+        }
+        for path in main_paths {
+            match fs::read(&path) {
+                Ok(data) => {
+                    let Some(persisted) = Self::decode_persisted_session_guarded(&data, &path)
+                    else {
                         continue;
-                    }
-                    if let Some(expected) = expected_chain_hash {
-                        if &persisted.chain_hash != expected {
-                            warn!(
-                                ?path,
-                                "Dropping RBC persisted session with mismatched chain hash"
-                            );
-                            let _ = Self::delete_path(&path);
-                            continue;
-                        }
-                    }
-                    if let Some(expected) = expected_manifest {
-                        if !persisted.software_manifest.matches(expected) {
-                            warn!(
-                                ?path,
-                                "Dropping RBC persisted session with mismatched software manifest"
-                            );
-                            let _ = Self::delete_path(&path);
-                            continue;
-                        }
-                    }
-                    if let Err(reason) = validate_chunks(&persisted) {
-                        warn!(
-                            ?path,
-                            %reason,
-                            "Dropping RBC persisted session due to chunk integrity failure"
-                        );
-                        let _ = Self::delete_path(&path);
+                    };
+                    let Some(persisted) = Self::validate_persisted_session(
+                        persisted,
+                        &path,
+                        expected_chain_hash,
+                        expected_manifest,
+                    ) else {
                         continue;
+                    };
+                    let key = persisted.key();
+                    if seen.insert(key) {
+                        out.push(Entry { persisted, path });
                     }
-                    out.push(Entry { persisted, path });
                 }
                 Err(err) => {
                     warn!(?err, ?path, "failed to read persisted RBC session");
@@ -433,6 +445,64 @@ impl ChunkStore {
             }
         }
         Ok(out)
+    }
+
+    fn validate_persisted_session(
+        persisted: PersistedSession,
+        path: &Path,
+        expected_chain_hash: Option<&Hash>,
+        expected_manifest: Option<&SoftwareManifest>,
+    ) -> Option<PersistedSession> {
+        if persisted.invalid {
+            warn!(?path, "Skipping persisted RBC session marked invalid");
+            let _ = Self::delete_path(path);
+            return None;
+        }
+        if persisted.key_mismatch_with_path(path) {
+            warn!(?path, "RBC persisted session key mismatch; removing file");
+            let _ = Self::delete_path(path);
+            return None;
+        }
+        if !persist_version_supported(persisted.format_version()) {
+            warn!(
+                ?path,
+                version = persisted.format_version(),
+                supported = PERSIST_VERSION,
+                "Dropping RBC persisted session with unsupported format version"
+            );
+            let _ = Self::delete_path(path);
+            return None;
+        }
+        if let Some(expected) = expected_chain_hash {
+            if &persisted.chain_hash != expected {
+                warn!(
+                    ?path,
+                    "Dropping RBC persisted session with mismatched chain hash"
+                );
+                let _ = Self::delete_path(path);
+                return None;
+            }
+        }
+        if let Some(expected) = expected_manifest {
+            if !persisted.software_manifest.matches(expected) {
+                warn!(
+                    ?path,
+                    "Dropping RBC persisted session with mismatched software manifest"
+                );
+                let _ = Self::delete_path(path);
+                return None;
+            }
+        }
+        if let Err(reason) = validate_chunks(&persisted) {
+            warn!(
+                ?path,
+                %reason,
+                "Dropping RBC persisted session due to chunk integrity failure"
+            );
+            let _ = Self::delete_path(path);
+            return None;
+        }
+        Some(persisted)
     }
 
     fn decode_persisted_session_guarded(data: &[u8], path: &Path) -> Option<PersistedSession> {
@@ -653,6 +723,55 @@ fn temp_session_path(path: &Path) -> PathBuf {
     path.with_added_extension("tmp")
 }
 
+fn read_session_bytes(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+fn promote_temp_session(tmp_path: &Path, main_path: &Path) -> bool {
+    let promoted = match fs::rename(tmp_path, main_path) {
+        Ok(()) => true,
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+            if let Err(remove_err) = fs::remove_file(main_path) {
+                warn!(
+                    ?remove_err,
+                    ?main_path,
+                    "failed to remove RBC session before temp promotion"
+                );
+                false
+            } else if let Err(rename_err) = fs::rename(tmp_path, main_path) {
+                warn!(
+                    ?rename_err,
+                    ?tmp_path,
+                    "failed to promote RBC temp session after removal"
+                );
+                false
+            } else {
+                true
+            }
+        }
+        Err(err) => {
+            warn!(?err, ?tmp_path, "failed to promote RBC temp session");
+            false
+        }
+    };
+
+    if promoted {
+        if let Some(parent) = main_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                if let Err(err) = fs::File::open(parent).and_then(|file| file.sync_all()) {
+                    warn!(?err, ?parent, "failed to sync RBC session directory");
+                }
+            }
+        }
+    }
+
+    promoted
+}
+
 struct EnforceOutcome {
     entries: Vec<Entry>,
     removed: Vec<SessionKey>,
@@ -869,6 +988,35 @@ mod tests {
         PeerId::new(key_pair.public_key().clone())
     }
 
+    fn sample_persisted_session(
+        key: SessionKey,
+        chain_hash: Hash,
+        manifest: SoftwareManifest,
+    ) -> PersistedSession {
+        PersistedSession {
+            format_version: PERSIST_VERSION,
+            chain_hash,
+            software_manifest: manifest,
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            epoch: 0,
+            total_chunks: 0,
+            payload_hash: None,
+            expected_chunk_root: None,
+            computed_chunk_root: None,
+            invalid: false,
+            sent_ready: false,
+            ready_signatures: Vec::new(),
+            delivered: false,
+            deliver_sender: None,
+            deliver_signature: None,
+            chunks: Vec::new(),
+            last_updated_ms: 0,
+            session_roster: Vec::new(),
+        }
+    }
+
     /// Debug helper: set `RBC_SESSION_PATH` to a persisted session file to validate it.
     /// Ignored by default so it does not run in CI.
     #[test]
@@ -980,6 +1128,51 @@ mod tests {
     }
 
     #[test]
+    fn temp_session_promotes_on_load() {
+        let dir = tempdir().unwrap();
+        let key = session_key(10);
+        let store = ChunkStore::new(dir.path().to_path_buf(), Duration::ZERO, 4, 1024, 8, 4096)
+            .expect("chunk store init");
+
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let persisted = sample_persisted_session(key, chain_hash, manifest.clone());
+        let encoded = <PersistedSession as Encode>::encode(&persisted);
+
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        let tmp_path = temp_session_path(&path);
+        fs::write(&tmp_path, &encoded).expect("write temp session");
+
+        let load = store
+            .load(&chain_hash, &manifest)
+            .expect("load persisted sessions");
+        assert_eq!(load.sessions.len(), 1, "temp session should load");
+        assert!(path.exists(), "temp session should be promoted");
+        assert!(!tmp_path.exists(), "temp session should be removed");
+    }
+
+    #[test]
+    fn load_session_from_dir_falls_back_to_main_when_temp_invalid() {
+        let dir = tempdir().unwrap();
+        let key = session_key(12);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let persisted = sample_persisted_session(key, chain_hash, manifest.clone());
+        let encoded = <PersistedSession as Encode>::encode(&persisted);
+
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        let tmp_path = temp_session_path(&path);
+        fs::write(&path, &encoded).expect("write main session");
+        fs::write(&tmp_path, b"corrupt").expect("write corrupt temp session");
+
+        let loaded = ChunkStore::load_session_from_dir(dir.path(), &key, &chain_hash, &manifest)
+            .expect("load session from dir");
+        assert!(loaded.is_some(), "main session should load");
+        assert!(path.exists(), "main session should remain");
+        assert!(!tmp_path.exists(), "corrupt temp session should be removed");
+    }
+
+    #[test]
     fn non_session_files_are_ignored() {
         let dir = tempdir().unwrap();
         let store = ChunkStore::new(
@@ -1009,6 +1202,50 @@ mod tests {
             status_file.exists(),
             "status snapshot must not be deleted by chunk store"
         );
+    }
+
+    #[test]
+    fn scan_entries_falls_back_to_main_when_temp_invalid() {
+        let dir = tempdir().unwrap();
+        let store = ChunkStore::new(dir.path().to_path_buf(), Duration::ZERO, 4, 1024, 8, 4096)
+            .expect("chunk store init");
+
+        let key = session_key(13);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let persisted = sample_persisted_session(key, chain_hash, manifest.clone());
+        let encoded = <PersistedSession as Encode>::encode(&persisted);
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        let tmp_path = temp_session_path(&path);
+        fs::write(&path, &encoded).expect("write main session");
+        fs::write(&tmp_path, b"corrupt").expect("write corrupt temp session");
+
+        let load = store
+            .load(&chain_hash, &manifest)
+            .expect("load persisted sessions");
+        assert_eq!(load.sessions.len(), 1, "main session should load");
+        assert!(path.exists(), "main session should remain");
+        assert!(!tmp_path.exists(), "corrupt temp session should be removed");
+    }
+
+    #[test]
+    fn load_session_from_dir_promotes_temp() {
+        let dir = tempdir().unwrap();
+        let key = session_key(11);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let persisted = sample_persisted_session(key, chain_hash, manifest.clone());
+        let encoded = <PersistedSession as Encode>::encode(&persisted);
+
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        let tmp_path = temp_session_path(&path);
+        fs::write(&tmp_path, &encoded).expect("write temp session");
+
+        let loaded = ChunkStore::load_session_from_dir(dir.path(), &key, &chain_hash, &manifest)
+            .expect("load session from dir");
+        assert!(loaded.is_some(), "temp session should load");
+        assert!(path.exists(), "temp session should be promoted");
+        assert!(!tmp_path.exists(), "temp session should be removed");
     }
 
     #[test]

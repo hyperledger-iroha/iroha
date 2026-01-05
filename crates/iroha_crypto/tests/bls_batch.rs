@@ -165,6 +165,30 @@ fn bls_normal_multi_message_aggregate_ok_and_fail() {
 }
 
 #[test]
+fn bls_normal_multi_message_rejects_duplicate_messages() {
+    let (pk1, sk1) = BlsNormal::keypair(KeyGenOption::Random);
+    let (pk2, sk2) = BlsNormal::keypair(KeyGenOption::Random);
+    let msg1 = b"dup-msg".to_vec();
+    let msg2 = msg1.clone();
+    let s1 = BlsNormal::sign(&msg1, &sk1);
+    let s2 = BlsNormal::sign(&msg2, &sk2);
+    let p1 = pk1.to_bytes();
+    let p2 = pk2.to_bytes();
+    let msgs: Vec<&[u8]> = vec![msg1.as_slice(), msg2.as_slice()];
+    let sigs: Vec<&[u8]> = vec![s1.as_slice(), s2.as_slice()];
+    let pk_vec_refs: Vec<&[u8]> = vec![p1.as_slice(), p2.as_slice()];
+    assert!(bls_normal_verify_aggregate_multi_message(&msgs, &sigs, &pk_vec_refs).is_err());
+}
+
+#[test]
+fn bls_normal_multi_message_rejects_empty() {
+    let msgs: Vec<&[u8]> = Vec::new();
+    let sigs: Vec<&[u8]> = Vec::new();
+    let pk_refs: Vec<&[u8]> = Vec::new();
+    assert!(bls_normal_verify_aggregate_multi_message(&msgs, &sigs, &pk_refs).is_err());
+}
+
+#[test]
 fn bls_small_multi_message_aggregate_ok_and_fail() {
     let (pk1, sk1) = BlsSmall::keypair(KeyGenOption::Random);
     let (pk2, sk2) = BlsSmall::keypair(KeyGenOption::Random);
@@ -183,4 +207,28 @@ fn bls_small_multi_message_aggregate_ok_and_fail() {
     s2b[0] ^= 0x01;
     let broken: Vec<&[u8]> = vec![s1.as_slice(), s2b.as_slice()];
     assert!(bls_small_verify_aggregate_multi_message(&msgs, &broken, &pk_vec_refs).is_err());
+}
+
+#[test]
+fn bls_small_multi_message_rejects_duplicate_messages() {
+    let (pk1, sk1) = BlsSmall::keypair(KeyGenOption::Random);
+    let (pk2, sk2) = BlsSmall::keypair(KeyGenOption::Random);
+    let msg1 = b"dup-msg-small".to_vec();
+    let msg2 = msg1.clone();
+    let s1 = BlsSmall::sign(&msg1, &sk1);
+    let s2 = BlsSmall::sign(&msg2, &sk2);
+    let p1 = pk1.to_bytes();
+    let p2 = pk2.to_bytes();
+    let msgs: Vec<&[u8]> = vec![msg1.as_slice(), msg2.as_slice()];
+    let sigs: Vec<&[u8]> = vec![s1.as_slice(), s2.as_slice()];
+    let pk_vec_refs: Vec<&[u8]> = vec![p1.as_slice(), p2.as_slice()];
+    assert!(bls_small_verify_aggregate_multi_message(&msgs, &sigs, &pk_vec_refs).is_err());
+}
+
+#[test]
+fn bls_small_multi_message_rejects_empty() {
+    let msgs: Vec<&[u8]> = Vec::new();
+    let sigs: Vec<&[u8]> = Vec::new();
+    let pk_refs: Vec<&[u8]> = Vec::new();
+    assert!(bls_small_verify_aggregate_multi_message(&msgs, &sigs, &pk_refs).is_err());
 }

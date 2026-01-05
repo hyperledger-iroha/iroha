@@ -1,4 +1,4 @@
-#![doc = "Wycheproof-derived SM2 signature regression suite."]
+//! Wycheproof-derived SM2 signature regression suite.
 #![cfg(feature = "sm")]
 
 use std::sync::LazyLock;

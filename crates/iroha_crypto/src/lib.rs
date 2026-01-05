@@ -774,15 +774,27 @@ pub fn bls_normal_verify_aggregate_multi_message(
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
+    {
+        use std::collections::BTreeSet;
+        if messages.len() != signatures.len()
+            || signatures.len() != public_keys.len()
+            || messages.is_empty()
+        {
+            return Err(Error::BadSignature);
+        }
+        let mut seen = BTreeSet::new();
+        for &msg in messages {
+            if !seen.insert(msg) {
+                return Err(Error::BadSignature);
+            }
+        }
+    }
     if let Ok(()) =
         signature::bls::verify_aggregate_multi_message_normal(messages, signatures, public_keys)
     {
         return Ok(());
     }
 
-    if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
-        return Err(Error::BadSignature);
-    }
     for ((m, s), pk) in messages
         .iter()
         .zip(signatures.iter())
@@ -807,15 +819,27 @@ pub fn bls_normal_verify_aggregate_multi_message(
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
+    {
+        use std::collections::BTreeSet;
+        if messages.len() != signatures.len()
+            || signatures.len() != public_keys.len()
+            || messages.is_empty()
+        {
+            return Err(Error::BadSignature);
+        }
+        let mut seen = BTreeSet::new();
+        for &msg in messages {
+            if !seen.insert(msg) {
+                return Err(Error::BadSignature);
+            }
+        }
+    }
     // Prefer pairing-product helper; on failure, fall back to per-signature verify
     if let Ok(()) =
         signature::bls::verify_aggregate_multi_message_normal(messages, signatures, public_keys)
     {
         Ok(())
     } else {
-        if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
-            return Err(Error::BadSignature);
-        }
         for ((m, s), pk) in messages
             .iter()
             .zip(signatures.iter())
@@ -842,8 +866,20 @@ pub fn bls_small_verify_aggregate_multi_message(
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
-    if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
-        return Err(Error::BadSignature);
+    {
+        use std::collections::BTreeSet;
+        if messages.len() != signatures.len()
+            || signatures.len() != public_keys.len()
+            || messages.is_empty()
+        {
+            return Err(Error::BadSignature);
+        }
+        let mut seen = BTreeSet::new();
+        for &msg in messages {
+            if !seen.insert(msg) {
+                return Err(Error::BadSignature);
+            }
+        }
     }
     for ((m, s), pk) in messages
         .iter()
@@ -869,14 +905,26 @@ pub fn bls_small_verify_aggregate_multi_message(
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
+    {
+        use std::collections::BTreeSet;
+        if messages.len() != signatures.len()
+            || signatures.len() != public_keys.len()
+            || messages.is_empty()
+        {
+            return Err(Error::BadSignature);
+        }
+        let mut seen = BTreeSet::new();
+        for &msg in messages {
+            if !seen.insert(msg) {
+                return Err(Error::BadSignature);
+            }
+        }
+    }
     if let Ok(()) =
         signature::bls::verify_aggregate_multi_message_small(messages, signatures, public_keys)
     {
         Ok(())
     } else {
-        if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
-            return Err(Error::BadSignature);
-        }
         for ((m, s), pk) in messages
             .iter()
             .zip(signatures.iter())

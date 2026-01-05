@@ -54,8 +54,7 @@ impl Sm2KeyPair {
 
     /// Generate a random SM2 key pair with the default distinguishing ID.
     pub fn generate() -> Self {
-        Self::generate_with_distid(Self::DEFAULT_DISTID)
-            .expect("sm2 default distid must be valid")
+        Self::generate_with_distid(Self::DEFAULT_DISTID).expect("sm2 default distid must be valid")
     }
 
     /// Generate a random SM2 key pair with a custom distinguishing ID.

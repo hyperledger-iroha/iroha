@@ -27,7 +27,7 @@
 use core::convert::TryInto;
 use std::vec::Vec;
 
-use group::Curve;
+use group::{Curve, prime::PrimeCurveAffine};
 #[allow(unused_imports)]
 use w3f_bls::SerializableToBytes as _;
 
@@ -240,11 +240,17 @@ fn to_g1(bytes: &[u8]) -> Option<blstrs::G1Affine> {
     let mut arr = [0u8; 48];
     arr.copy_from_slice(bytes);
     let ct = blstrs::G1Affine::from_compressed(&arr);
-    if ct.is_some().into() {
-        Some(ct.unwrap())
-    } else {
-        None
+    if !bool::from(ct.is_some()) {
+        return None;
     }
+    let point = ct.unwrap();
+    if point.is_identity().into() {
+        return None;
+    }
+    if point.to_compressed() != arr {
+        return None;
+    }
+    Some(point)
 }
 
 fn to_g2(bytes: &[u8]) -> Option<blstrs::G2Affine> {
@@ -254,11 +260,17 @@ fn to_g2(bytes: &[u8]) -> Option<blstrs::G2Affine> {
     let mut arr = [0u8; 96];
     arr.copy_from_slice(bytes);
     let ct = blstrs::G2Affine::from_compressed(&arr);
-    if ct.is_some().into() {
-        Some(ct.unwrap())
-    } else {
-        None
+    if !bool::from(ct.is_some()) {
+        return None;
     }
+    let point = ct.unwrap();
+    if point.is_identity().into() {
+        return None;
+    }
+    if point.to_compressed() != arr {
+        return None;
+    }
+    Some(point)
 }
 
 fn hash_msg_to_g2(msg: &[u8]) -> blstrs::G2Affine {
@@ -277,6 +289,8 @@ fn hash_msg_to_g1(msg: &[u8]) -> blstrs::G1Affine {
 mod tests {
     use super::*;
     use crate::signature::bls;
+    use blstrs::{G1Affine, G2Affine};
+    use group::prime::PrimeCurveAffine;
 
     #[test]
     fn vrf_normal_roundtrip() {
@@ -379,5 +393,39 @@ mod tests {
             out.is_none(),
             "regular BLS Small signature must not pass VRF verify"
         );
+    }
+
+    #[test]
+    fn vrf_rejects_identity_signature_normal() {
+        let (pk, _sk) = bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![1, 2, 3, 4]));
+        let identity = G2Affine::identity().to_compressed();
+        let mut sig = [0u8; 96];
+        sig.copy_from_slice(&identity);
+        let proof = VrfProof::SigInG2(sig);
+        let out = verify_normal_with_chain(&pk, b"chain", b"input", &proof);
+        assert!(out.is_none(), "identity signature must be rejected");
+    }
+
+    #[test]
+    fn vrf_rejects_identity_signature_small() {
+        let (pk, _sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![5, 6, 7, 8]));
+        let identity = G1Affine::identity().to_compressed();
+        let mut sig = [0u8; 48];
+        sig.copy_from_slice(&identity);
+        let proof = VrfProof::SigInG1(sig);
+        let out = verify_small_with_chain(&pk, b"chain", b"input", &proof);
+        assert!(out.is_none(), "identity signature must be rejected");
+    }
+
+    #[test]
+    fn vrf_to_g1_rejects_invalid_length() {
+        assert!(to_g1(&[0u8; 47]).is_none());
+        assert!(to_g1(&[0u8; 49]).is_none());
+    }
+
+    #[test]
+    fn vrf_to_g2_rejects_invalid_length() {
+        assert!(to_g2(&[0u8; 95]).is_none());
+        assert!(to_g2(&[0u8; 97]).is_none());
     }
 }

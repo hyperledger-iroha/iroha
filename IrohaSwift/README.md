@@ -388,7 +388,7 @@ let metadata: [String: ToriiJSONValue] = [
 ]
 ```
 
-Torii builds FASTPQ witness payloads from the transfer payload (pre-admission) or a settled bundle
+Torii builds FASTPQ witness payloads from the transfer payload
 (`POST /v1/offline/transfers/proof`). Use the native bridge helper to derive proof bytes:
 
 ```swift

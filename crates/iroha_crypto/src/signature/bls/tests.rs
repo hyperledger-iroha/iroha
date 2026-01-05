@@ -63,6 +63,8 @@ mod normal {
     use super::*;
     #[cfg(feature = "bls-backend-blstrs")]
     use crate::signature::bls::implementation;
+    use blstrs::{G1Affine, G2Affine};
+    use group::prime::PrimeCurveAffine;
     #[cfg(feature = "bls-backend-blstrs")]
     #[test]
     fn detect_hash_variant_normal_matches_concat() {
@@ -131,6 +133,35 @@ mod normal {
         );
     }
 
+    #[test]
+    fn parse_public_key_rejects_identity() {
+        let identity = G1Affine::identity().to_compressed();
+        assert!(BlsImpl::<NormalConfiguration>::parse_public_key(identity.as_ref()).is_err());
+    }
+
+    #[test]
+    fn parse_private_key_rejects_zero() {
+        let zero = [0u8; 32];
+        assert!(BlsImpl::<NormalConfiguration>::parse_private_key(&zero).is_err());
+    }
+
+    #[test]
+    fn aggregate_same_message_rejects_identity_inputs() {
+        let msg = b"aggregate-identity";
+        let sig = G2Affine::identity().to_compressed();
+        let pk = G1Affine::identity().to_compressed();
+        let signatures: [&[u8]; 1] = [sig.as_ref()];
+        let public_keys: [&[u8]; 1] = [pk.as_ref()];
+        assert!(
+            BlsImpl::<NormalConfiguration>::verify_aggregate_same_message(
+                msg,
+                &signatures,
+                &public_keys
+            )
+            .is_err()
+        );
+    }
+
     #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
     #[test]
     fn aggregate_multi_message_verification() {
@@ -166,12 +197,38 @@ mod normal {
         )
         .expect_err("corrupted aggregate must be rejected");
     }
+
+    #[test]
+    fn aggregate_multi_message_rejects_duplicate_messages() {
+        let (pk1, sk1) = BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random);
+        let (pk2, sk2) = BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random);
+        let msg1 = b"duplicate-msg".to_vec();
+        let msg2 = msg1.clone();
+        let sig1 = BlsImpl::<NormalConfiguration>::sign(&msg1, &sk1);
+        let sig2 = BlsImpl::<NormalConfiguration>::sign(&msg2, &sk2);
+        let messages: Vec<&[u8]> = vec![msg1.as_slice(), msg2.as_slice()];
+        let signature_refs: Vec<&[u8]> = vec![sig1.as_slice(), sig2.as_slice()];
+        let pk1_bytes = pk1.to_bytes();
+        let pk2_bytes = pk2.to_bytes();
+        let public_key_refs: Vec<&[u8]> = vec![pk1_bytes.as_slice(), pk2_bytes.as_slice()];
+        assert!(
+            BlsImpl::<NormalConfiguration>::verify_aggregate_multi_message(
+                &messages,
+                &signature_refs,
+                &public_key_refs,
+            )
+            .is_err(),
+            "duplicate messages must be rejected"
+        );
+    }
 }
 
 mod small {
     use super::*;
     #[cfg(feature = "bls-backend-blstrs")]
     use crate::signature::bls::implementation;
+    use blstrs::{G1Affine, G2Affine};
+    use group::prime::PrimeCurveAffine;
     #[cfg(feature = "bls-backend-blstrs")]
     #[test]
     fn detect_hash_variant_small_matches_concat() {
@@ -204,5 +261,58 @@ mod small {
     #[test]
     fn signature_verification_different_keys() {
         test_signature_verification_different_keys::<SmallConfiguration>();
+    }
+
+    #[test]
+    fn parse_public_key_rejects_identity() {
+        let identity = G2Affine::identity().to_compressed();
+        assert!(BlsImpl::<SmallConfiguration>::parse_public_key(identity.as_ref()).is_err());
+    }
+
+    #[test]
+    fn parse_private_key_rejects_zero() {
+        let zero = [0u8; 32];
+        assert!(BlsImpl::<SmallConfiguration>::parse_private_key(&zero).is_err());
+    }
+
+    #[test]
+    fn aggregate_same_message_rejects_identity_inputs() {
+        let msg = b"aggregate-identity-small";
+        let sig = G1Affine::identity().to_compressed();
+        let pk = G2Affine::identity().to_compressed();
+        let signatures: [&[u8]; 1] = [sig.as_ref()];
+        let public_keys: [&[u8]; 1] = [pk.as_ref()];
+        assert!(
+            BlsImpl::<SmallConfiguration>::verify_aggregate_same_message(
+                msg,
+                &signatures,
+                &public_keys
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn aggregate_multi_message_rejects_duplicate_messages() {
+        let (pk1, sk1) = BlsImpl::<SmallConfiguration>::keypair(KeyGenOption::Random);
+        let (pk2, sk2) = BlsImpl::<SmallConfiguration>::keypair(KeyGenOption::Random);
+        let msg1 = b"duplicate-msg-small".to_vec();
+        let msg2 = msg1.clone();
+        let sig1 = BlsImpl::<SmallConfiguration>::sign(&msg1, &sk1);
+        let sig2 = BlsImpl::<SmallConfiguration>::sign(&msg2, &sk2);
+        let messages: Vec<&[u8]> = vec![msg1.as_slice(), msg2.as_slice()];
+        let signature_refs: Vec<&[u8]> = vec![sig1.as_slice(), sig2.as_slice()];
+        let pk1_bytes = pk1.to_bytes();
+        let pk2_bytes = pk2.to_bytes();
+        let public_key_refs: Vec<&[u8]> = vec![pk1_bytes.as_slice(), pk2_bytes.as_slice()];
+        assert!(
+            BlsImpl::<SmallConfiguration>::verify_aggregate_multi_message(
+                &messages,
+                &signature_refs,
+                &public_key_refs,
+            )
+            .is_err(),
+            "duplicate messages must be rejected"
+        );
     }
 }

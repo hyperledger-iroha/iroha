@@ -112,10 +112,11 @@ Dependencies:
 The shared Norito structs now live in
 `crates/iroha_data_model/src/offline/mod.rs::{OfflineProofRequestHeader,OfflineProofRequestSum,OfflineProofRequestCounter,OfflineProofRequestReplay,OfflineProofBlindingSeed}`,
 giving the SDK/API layers a canonical schema as soon as the prover endpoints land. The CLI exposes
-`iroha offline transfer proof --bundle <BUNDLE> --kind <sum|counter|replay>` (e.g.,
-`iroha offline transfer proof --bundle 11F7...C0DE --kind replay --replay-log-head ... --replay-log-tail ...`)
-so builders can fetch the Norito payloads directly from a node, and Torii exposes the same data via
-`POST /v1/offline/transfers/proof` (transfer payload or bundle id + kind, optional checkpoint/log hashes).
+`iroha offline transfer proof --bundle <PATH> --kind <sum|counter|replay>` (e.g.,
+`iroha offline transfer proof --bundle ./bundle.json --kind replay --replay-log-head ... --replay-log-tail ...`)
+so builders can fetch the Norito payloads directly from a local bundle payload, and Torii exposes
+the same data via `POST /v1/offline/transfers/proof` (transfer payload + kind, optional
+checkpoint/log hashes).
 
 ### 5.2 Circuit Summaries
 

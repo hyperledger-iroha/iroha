@@ -18,7 +18,7 @@ public final class OfflineTransferPayloadsTest {
 
   private static void attachesSnapshotToMap() {
     final Map<String, Object> transfer = new LinkedHashMap<>();
-    transfer.put("bundle_id_hex", "cafebabe");
+    transfer.put("bundle_id", "cafebabe");
     final OfflineWallet.PlatformTokenSnapshot snapshot =
         new OfflineWallet.PlatformTokenSnapshot("hms_safety_detect", "deadbeef");
     final Map<String, Object> mutated =
@@ -35,7 +35,7 @@ public final class OfflineTransferPayloadsTest {
   private static void injectsSnapshotIntoJson() {
     final String json =
         """
-        {"transfer":{"bundle_id_hex":"feedface"}}
+        {"transfer":{"bundle_id":"feedface"}}
         """;
     final OfflineWallet.PlatformTokenSnapshot snapshot =
         new OfflineWallet.PlatformTokenSnapshot("play_integrity", "payload");

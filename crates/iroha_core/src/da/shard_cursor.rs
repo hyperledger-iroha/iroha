@@ -8,6 +8,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io,
     path::{Path, PathBuf},
 };
 
@@ -411,29 +412,60 @@ impl DaShardCursorJournal {
     ) -> Result<Self, ShardCursorJournalError> {
         let path = path.into();
         let mut journal = Self::new(lane_config, path.clone());
-        if !path.exists() {
-            return Ok(journal);
-        }
+        let tmp_path = Self::temp_path(&path);
+        let persisted = match Self::read_persisted(&path) {
+            Ok(Some(persisted)) => {
+                if let Ok(Some(_)) = Self::read_persisted(&tmp_path) {
+                    if let Err(err) = fs::remove_file(&tmp_path) {
+                        warn!(
+                            ?err,
+                            path = %tmp_path.display(),
+                            "failed to remove stale DA shard cursor journal temp file"
+                        );
+                    }
+                }
+                Some(persisted)
+            }
+            Ok(None) => match Self::read_persisted(&tmp_path) {
+                Ok(Some(persisted)) => {
+                    Self::promote_temp(&tmp_path, &path);
+                    Some(persisted)
+                }
+                Ok(None) => None,
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        path = %tmp_path.display(),
+                        "failed to read DA shard cursor journal temp file"
+                    );
+                    let _ = fs::remove_file(&tmp_path);
+                    None
+                }
+            },
+            Err(err) => match Self::read_persisted(&tmp_path) {
+                Ok(Some(persisted)) => {
+                    warn!(
+                        ?err,
+                        path = %path.display(),
+                        "DA shard cursor journal invalid; recovering from temp file"
+                    );
+                    Self::promote_temp(&tmp_path, &path);
+                    Some(persisted)
+                }
+                Ok(None) => return Err(err),
+                Err(tmp_err) => {
+                    warn!(
+                        ?tmp_err,
+                        path = %tmp_path.display(),
+                        "failed to read DA shard cursor journal temp file"
+                    );
+                    return Err(err);
+                }
+            },
+        };
 
-        let bytes = fs::read(&path).map_err(|source| ShardCursorJournalError::Read {
-            path: path.clone(),
-            source,
-        })?;
-
-        let persisted: PersistedShardCursors =
-            decode_from_bytes(&bytes).map_err(|source| ShardCursorJournalError::Decode {
-                path: path.clone(),
-                source,
-            })?;
-
-        if persisted.version != Self::JOURNAL_VERSION {
-            return Err(ShardCursorJournalError::UnsupportedVersion {
-                path,
-                version: persisted.version,
-            });
-        }
-
-        for entry in persisted.entries {
+        if let Some(persisted) = persisted {
+            for entry in persisted.entries {
             let Some(expected) = journal.mapping.get(&entry.lane_id).copied() else {
                 warn!(
                     lane = %entry.lane_id.as_u32(),
@@ -454,6 +486,7 @@ impl DaShardCursorJournal {
             }
 
             journal.upsert(entry);
+            }
         }
 
         Ok(journal)
@@ -543,11 +576,55 @@ impl DaShardCursorJournal {
                 source,
             })?;
         }
-
-        fs::write(&self.path, bytes).map_err(|source| ShardCursorJournalError::Write {
-            path: self.path.clone(),
-            source,
-        })
+        let tmp_path = Self::temp_path(&self.path);
+        {
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp_path)
+                .map_err(|source| ShardCursorJournalError::Write {
+                    path: tmp_path.clone(),
+                    source,
+                })?;
+            file.write_all(&bytes)
+                .map_err(|source| ShardCursorJournalError::Write {
+                    path: tmp_path.clone(),
+                    source,
+                })?;
+            file.sync_all()
+                .map_err(|source| ShardCursorJournalError::Write {
+                    path: tmp_path.clone(),
+                    source,
+                })?;
+        }
+        if let Err(err) = fs::rename(&tmp_path, &self.path) {
+            if err.kind() == io::ErrorKind::AlreadyExists {
+                fs::remove_file(&self.path).map_err(|source| ShardCursorJournalError::Write {
+                    path: self.path.clone(),
+                    source,
+                })?;
+                fs::rename(&tmp_path, &self.path)
+                    .map_err(|source| ShardCursorJournalError::Write {
+                        path: self.path.clone(),
+                        source,
+                    })?;
+            } else {
+                return Err(ShardCursorJournalError::Write {
+                    path: self.path.clone(),
+                    source: err,
+                });
+            }
+        }
+        if let Some(parent) = self.path.parent() {
+            if !parent.as_os_str().is_empty() {
+                sync_dir(parent).map_err(|source| ShardCursorJournalError::Write {
+                    path: self.path.clone(),
+                    source,
+                })?;
+            }
+        }
+        Ok(())
     }
 
     /// Build a journal populated from an in-memory cursor index.
@@ -588,6 +665,92 @@ impl DaShardCursorJournal {
     fn should_advance(current: &LaneShardCursor, candidate: &LaneShardCursor) -> bool {
         (candidate.epoch, candidate.sequence) > (current.epoch, current.sequence)
     }
+
+    fn temp_path(path: &Path) -> PathBuf {
+        path.with_extension("norito.tmp")
+    }
+
+    fn read_persisted(
+        path: &Path,
+    ) -> Result<Option<PersistedShardCursors>, ShardCursorJournalError> {
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => {
+                return Err(ShardCursorJournalError::Read {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
+        };
+
+        let persisted: PersistedShardCursors =
+            decode_from_bytes(&bytes).map_err(|source| ShardCursorJournalError::Decode {
+                path: path.to_path_buf(),
+                source,
+            })?;
+
+        if persisted.version != Self::JOURNAL_VERSION {
+            return Err(ShardCursorJournalError::UnsupportedVersion {
+                path: path.to_path_buf(),
+                version: persisted.version,
+            });
+        }
+
+        Ok(Some(persisted))
+    }
+
+    fn promote_temp(tmp_path: &Path, path: &Path) {
+        let promoted = match fs::rename(tmp_path, path) {
+            Ok(()) => true,
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                if let Err(remove_err) = fs::remove_file(path) {
+                    warn!(
+                        ?remove_err,
+                        path = %path.display(),
+                        "failed to remove DA shard cursor journal before temp promotion"
+                    );
+                    false
+                } else if let Err(rename_err) = fs::rename(tmp_path, path) {
+                    warn!(
+                        ?rename_err,
+                        path = %tmp_path.display(),
+                        "failed to promote DA shard cursor journal temp file after removal"
+                    );
+                    false
+                } else {
+                    true
+                }
+            }
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %tmp_path.display(),
+                    "failed to promote DA shard cursor journal temp file"
+                );
+                false
+            }
+        };
+
+        if promoted {
+            if let Some(parent) = path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    if let Err(err) = sync_dir(parent) {
+                        warn!(
+                            ?err,
+                            path = %parent.display(),
+                            "failed to sync DA shard cursor journal directory"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn sync_dir(path: &Path) -> std::io::Result<()> {
+    let file = fs::File::open(path)?;
+    file.sync_all()
 }
 
 #[cfg(test)]

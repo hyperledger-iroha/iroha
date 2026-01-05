@@ -66,6 +66,29 @@ async fn offline_transfer_proof_accepts_transfer_payload() {
     assert_eq!(proof.counters, vec![42]);
 }
 
+#[tokio::test]
+async fn offline_transfer_proof_rejects_missing_transfer() {
+    let app = build_harness();
+    let payload = norito::json!({
+        "kind": "sum"
+    });
+    let body = json::to_json_pretty(&payload).expect("proof request body");
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/offline/transfers/proof")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
 fn build_harness() -> Router {
     let cfg = test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());

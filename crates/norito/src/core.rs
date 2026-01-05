@@ -10,7 +10,7 @@
 
 use core::convert::TryFrom;
 use std::{
-    alloc::{Layout, alloc, handle_alloc_error},
+    alloc::{Layout, handle_alloc_error},
     any::TypeId,
     borrow::Cow,
     cell::{Cell, RefCell},
@@ -1277,7 +1277,29 @@ pub fn decode_packed_offsets_slice(
     count: usize,
 ) -> Result<(Vec<usize>, usize, usize, usize), Error> {
     if count == 0 {
-        return Ok((vec![0], 0, 0, 0));
+        if use_varint_offsets() {
+            if should_emit_varint_tail(count) {
+                if slice.len() < 8 {
+                    return Err(Error::LengthMismatch);
+                }
+                let mut buf = [0u8; 8];
+                buf.copy_from_slice(&slice[..8]);
+                if u64::from_le_bytes(buf) != 0 {
+                    return Err(Error::LengthMismatch);
+                }
+                return Ok((vec![0], 8, 0, 8));
+            }
+            return Ok((vec![0], 0, 0, 0));
+        }
+        if slice.len() < 8 {
+            return Err(Error::LengthMismatch);
+        }
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(&slice[..8]);
+        if u64::from_le_bytes(buf) != 0 {
+            return Err(Error::LengthMismatch);
+        }
+        return Ok((vec![0], 8, 0, 0));
     }
 
     if use_varint_offsets() {
@@ -1387,6 +1409,91 @@ pub fn write_varint_len_to_vec(out: &mut Vec<u8>, value: u64) {
     let mut buf = [0u8; MAX_VARINT_BYTES];
     let used = encode_varint(value, &mut buf);
     out.extend_from_slice(&buf[..used]);
+}
+
+fn write_fixed_offsets<W: Write>(writer: &mut W, lengths: &[usize]) -> Result<(), Error> {
+    let mut offset = 0u64;
+    writer.write_u64::<LittleEndian>(0)?;
+    for len in lengths {
+        let len_u64 = u64::try_from(*len).map_err(|_| Error::LengthMismatch)?;
+        offset = offset.checked_add(len_u64).ok_or(Error::LengthMismatch)?;
+        writer.write_u64::<LittleEndian>(offset)?;
+    }
+    Ok(())
+}
+
+fn encode_seq_payloads<W, I, F>(
+    writer: &mut W,
+    len: usize,
+    iter: I,
+    mut encode_elem: F,
+) -> Result<(), Error>
+where
+    W: Write,
+    I: IntoIterator,
+    F: FnMut(I::Item, &mut Vec<u8>) -> Result<(), Error>,
+{
+    write_seq_len(
+        writer,
+        u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
+    )?;
+    let packed = use_packed_seq() || use_varint_offsets();
+    if !packed {
+        let mut buf = Vec::new();
+        for item in iter {
+            buf.clear();
+            encode_elem(item, &mut buf)?;
+            write_len(
+                writer,
+                u64::try_from(buf.len()).map_err(|_| Error::LengthMismatch)?,
+            )?;
+            writer.write_all(&buf)?;
+        }
+        return Ok(());
+    }
+
+    if use_varint_offsets() {
+        note_varint_offsets_emitted();
+    } else {
+        note_fixed_offsets_emitted();
+    }
+    if len == 0 {
+        if use_varint_offsets() {
+            if should_emit_varint_tail(len) {
+                write_fixed_offsets(writer, &[])?;
+            }
+        } else {
+            write_fixed_offsets(writer, &[])?;
+        }
+        return Ok(());
+    }
+
+    let mut lengths = Vec::with_capacity(len);
+    let mut data = Vec::new();
+    let mut buf = Vec::new();
+    for item in iter {
+        buf.clear();
+        encode_elem(item, &mut buf)?;
+        lengths.push(buf.len());
+        data.extend_from_slice(&buf);
+    }
+
+    if use_varint_offsets() {
+        for len in &lengths {
+            write_varint_len(
+                writer,
+                u64::try_from(*len).map_err(|_| Error::LengthMismatch)?,
+            )?;
+        }
+        if should_emit_varint_tail(len) {
+            write_fixed_offsets(writer, &lengths)?;
+        }
+    } else {
+        write_fixed_offsets(writer, &lengths)?;
+    }
+
+    writer.write_all(&data)?;
+    Ok(())
 }
 
 /// Emit a length prefix honoring the `COMPACT_LEN` layout flag.
@@ -2009,6 +2116,172 @@ where
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (len, mut offset) = read_seq_len_slice(bytes)?;
         let mut out = BTreeMap::new();
+        if use_packed_seq() {
+            if use_varint_offsets() {
+                let mut key_sizes = Vec::with_capacity(len);
+                let mut val_sizes = Vec::with_capacity(len);
+                let mut key_total = 0usize;
+                for _ in 0..len {
+                    let (size, used) = read_varint_len_from_slice(&bytes[offset..])?;
+                    offset = offset.checked_add(used).ok_or(Error::LengthMismatch)?;
+                    key_total = key_total.checked_add(size).ok_or(Error::LengthMismatch)?;
+                    key_sizes.push(size);
+                }
+                let mut val_total = 0usize;
+                for _ in 0..len {
+                    let (size, used) = read_varint_len_from_slice(&bytes[offset..])?;
+                    offset = offset.checked_add(used).ok_or(Error::LengthMismatch)?;
+                    val_total = val_total.checked_add(size).ok_or(Error::LengthMismatch)?;
+                    val_sizes.push(size);
+                }
+
+                let key_data_start = offset;
+                let key_data_end = key_data_start
+                    .checked_add(key_total)
+                    .ok_or(Error::LengthMismatch)?;
+                let val_data_start = key_data_end;
+                let val_data_end = val_data_start
+                    .checked_add(val_total)
+                    .ok_or(Error::LengthMismatch)?;
+                if val_data_end > bytes.len() {
+                    return Err(Error::LengthMismatch);
+                }
+
+                let mut keys = Vec::with_capacity(len);
+                let mut cursor = key_data_start;
+                for size in key_sizes {
+                    let end = cursor.checked_add(size).ok_or(Error::LengthMismatch)?;
+                    let key_slice = bytes.get(cursor..end).ok_or(Error::LengthMismatch)?;
+                    record_slice_access(key_slice, size);
+                    let (key, key_used) = decode_field_canonical::<K>(key_slice)?;
+                    if key_used != size {
+                        return Err(Error::LengthMismatch);
+                    }
+                    keys.push(key);
+                    cursor = end;
+                }
+                if cursor != key_data_end {
+                    return Err(Error::LengthMismatch);
+                }
+
+                let mut cursor = val_data_start;
+                for (key, size) in keys.into_iter().zip(val_sizes) {
+                    let end = cursor.checked_add(size).ok_or(Error::LengthMismatch)?;
+                    let value_slice = bytes.get(cursor..end).ok_or(Error::LengthMismatch)?;
+                    record_slice_access(value_slice, size);
+                    let (value, value_used) = decode_field_canonical::<V>(value_slice)?;
+                    if value_used != size {
+                        return Err(Error::LengthMismatch);
+                    }
+                    if out.insert(key, value).is_some() {
+                        return Err(Error::LengthMismatch);
+                    }
+                    cursor = end;
+                }
+                if cursor != val_data_end {
+                    return Err(Error::LengthMismatch);
+                }
+                return Ok((out, val_data_end));
+            }
+
+            let entries = len.checked_add(1).ok_or(Error::LengthMismatch)?;
+            let offsets_bytes = entries.checked_mul(16).ok_or(Error::LengthMismatch)?;
+            let header_end = offset
+                .checked_add(offsets_bytes)
+                .ok_or(Error::LengthMismatch)?;
+            if header_end > bytes.len() {
+                return Err(Error::LengthMismatch);
+            }
+
+            let mut key_offsets = Vec::with_capacity(entries);
+            for idx in 0..entries {
+                let start = offset + idx * 8;
+                let mut buf = [0u8; 8];
+                buf.copy_from_slice(&bytes[start..start + 8]);
+                let off = len_u64_to_usize(u64::from_le_bytes(buf))?;
+                if idx == 0 {
+                    if off != 0 {
+                        return Err(Error::LengthMismatch);
+                    }
+                } else if off < *key_offsets.last().unwrap() {
+                    return Err(Error::LengthMismatch);
+                }
+                key_offsets.push(off);
+            }
+            let mut val_offsets = Vec::with_capacity(entries);
+            let val_base = offset + entries * 8;
+            for idx in 0..entries {
+                let start = val_base + idx * 8;
+                let mut buf = [0u8; 8];
+                buf.copy_from_slice(&bytes[start..start + 8]);
+                let off = len_u64_to_usize(u64::from_le_bytes(buf))?;
+                if idx == 0 {
+                    if off != 0 {
+                        return Err(Error::LengthMismatch);
+                    }
+                } else if off < *val_offsets.last().unwrap() {
+                    return Err(Error::LengthMismatch);
+                }
+                val_offsets.push(off);
+            }
+            offset = header_end;
+
+            let key_total = *key_offsets.last().unwrap_or(&0);
+            let val_total = *val_offsets.last().unwrap_or(&0);
+            let key_data_start = offset;
+            let key_data_end = key_data_start
+                .checked_add(key_total)
+                .ok_or(Error::LengthMismatch)?;
+            let val_data_start = key_data_end;
+            let val_data_end = val_data_start
+                .checked_add(val_total)
+                .ok_or(Error::LengthMismatch)?;
+            if val_data_end > bytes.len() {
+                return Err(Error::LengthMismatch);
+            }
+
+            let mut keys = Vec::with_capacity(len);
+            for idx in 0..len {
+                let start = key_data_start
+                    .checked_add(key_offsets[idx])
+                    .ok_or(Error::LengthMismatch)?;
+                let end = key_data_start
+                    .checked_add(key_offsets[idx + 1])
+                    .ok_or(Error::LengthMismatch)?;
+                if end > key_data_end || start > end {
+                    return Err(Error::LengthMismatch);
+                }
+                let key_slice = bytes.get(start..end).ok_or(Error::LengthMismatch)?;
+                record_slice_access(key_slice, end - start);
+                let (key, key_used) = decode_field_canonical::<K>(key_slice)?;
+                if key_used != end - start {
+                    return Err(Error::LengthMismatch);
+                }
+                keys.push(key);
+            }
+
+            for (idx, key) in keys.into_iter().enumerate() {
+                let start = val_data_start
+                    .checked_add(val_offsets[idx])
+                    .ok_or(Error::LengthMismatch)?;
+                let end = val_data_start
+                    .checked_add(val_offsets[idx + 1])
+                    .ok_or(Error::LengthMismatch)?;
+                if end > val_data_end || start > end {
+                    return Err(Error::LengthMismatch);
+                }
+                let value_slice = bytes.get(start..end).ok_or(Error::LengthMismatch)?;
+                record_slice_access(value_slice, end - start);
+                let (value, value_used) = decode_field_canonical::<V>(value_slice)?;
+                if value_used != end - start {
+                    return Err(Error::LengthMismatch);
+                }
+                if out.insert(key, value).is_some() {
+                    return Err(Error::LengthMismatch);
+                }
+            }
+            return Ok((out, val_data_end));
+        }
         for _ in 0..len {
             let (key_len, key_hdr) = read_len_dyn_slice(&bytes[offset..])?;
             offset = offset.checked_add(key_hdr).ok_or(Error::LengthMismatch)?;
@@ -2063,27 +2336,87 @@ where
     V: NoritoSerialize,
 {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        let len = u64::try_from(self.len()).map_err(|_| Error::LengthMismatch)?;
-        write_seq_len(&mut writer, len)?;
+        let len = self.len();
+        write_seq_len(
+            &mut writer,
+            u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
+        )?;
 
-        let mut buffer = Vec::new();
-        for (key, value) in self.iter() {
-            buffer.clear();
-            key.serialize(&mut buffer)?;
-            write_len(
-                &mut writer,
-                u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
-            )?;
-            writer.write_all(&buffer)?;
+        let packed = use_packed_seq() || use_varint_offsets();
+        if !packed {
+            let mut buffer = Vec::new();
+            for (key, value) in self.iter() {
+                buffer.clear();
+                key.serialize(&mut buffer)?;
+                write_len(
+                    &mut writer,
+                    u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
+                )?;
+                writer.write_all(&buffer)?;
 
-            buffer.clear();
-            value.serialize(&mut buffer)?;
-            write_len(
-                &mut writer,
-                u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
-            )?;
-            writer.write_all(&buffer)?;
+                buffer.clear();
+                value.serialize(&mut buffer)?;
+                write_len(
+                    &mut writer,
+                    u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
+                )?;
+                writer.write_all(&buffer)?;
+            }
+            return Ok(());
         }
+
+        if use_varint_offsets() {
+            note_varint_offsets_emitted();
+        } else {
+            note_fixed_offsets_emitted();
+        }
+        if len == 0 {
+            if !use_varint_offsets() {
+                write_fixed_offsets(&mut writer, &[])?;
+                write_fixed_offsets(&mut writer, &[])?;
+            }
+            return Ok(());
+        }
+
+        let mut key_sizes = Vec::with_capacity(len);
+        let mut val_sizes = Vec::with_capacity(len);
+        let mut key_data = Vec::new();
+        let mut val_data = Vec::new();
+        let mut key_buf = Vec::new();
+        let mut val_buf = Vec::new();
+
+        for (key, value) in self.iter() {
+            key_buf.clear();
+            key.serialize(&mut key_buf)?;
+            val_buf.clear();
+            value.serialize(&mut val_buf)?;
+
+            key_sizes.push(key_buf.len());
+            val_sizes.push(val_buf.len());
+            key_data.extend_from_slice(&key_buf);
+            val_data.extend_from_slice(&val_buf);
+        }
+
+        if use_varint_offsets() {
+            for size in &key_sizes {
+                write_varint_len(
+                    &mut writer,
+                    u64::try_from(*size).map_err(|_| Error::LengthMismatch)?,
+                )?;
+            }
+            for size in &val_sizes {
+                write_varint_len(
+                    &mut writer,
+                    u64::try_from(*size).map_err(|_| Error::LengthMismatch)?,
+                )?;
+            }
+        } else {
+            write_fixed_offsets(&mut writer, &key_sizes)?;
+            write_fixed_offsets(&mut writer, &val_sizes)?;
+        }
+
+        writer.write_all(&key_data)?;
+        writer.write_all(&val_data)?;
         Ok(())
     }
 }
@@ -2121,27 +2454,87 @@ where
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         let mut entries: Vec<_> = self.iter().collect();
         entries.sort_by(|(ka, _), (kb, _)| ka.cmp(kb));
-        let len = u64::try_from(entries.len()).map_err(|_| Error::LengthMismatch)?;
-        write_seq_len(&mut writer, len)?;
+        let len = entries.len();
+        write_seq_len(
+            &mut writer,
+            u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
+        )?;
 
-        let mut buffer = Vec::new();
-        for (key, value) in entries.into_iter() {
-            buffer.clear();
-            key.serialize(&mut buffer)?;
-            write_len(
-                &mut writer,
-                u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
-            )?;
-            writer.write_all(&buffer)?;
+        let packed = use_packed_seq() || use_varint_offsets();
+        if !packed {
+            let mut buffer = Vec::new();
+            for (key, value) in entries.into_iter() {
+                buffer.clear();
+                key.serialize(&mut buffer)?;
+                write_len(
+                    &mut writer,
+                    u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
+                )?;
+                writer.write_all(&buffer)?;
 
-            buffer.clear();
-            value.serialize(&mut buffer)?;
-            write_len(
-                &mut writer,
-                u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
-            )?;
-            writer.write_all(&buffer)?;
+                buffer.clear();
+                value.serialize(&mut buffer)?;
+                write_len(
+                    &mut writer,
+                    u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
+                )?;
+                writer.write_all(&buffer)?;
+            }
+            return Ok(());
         }
+
+        if use_varint_offsets() {
+            note_varint_offsets_emitted();
+        } else {
+            note_fixed_offsets_emitted();
+        }
+        if len == 0 {
+            if !use_varint_offsets() {
+                write_fixed_offsets(&mut writer, &[])?;
+                write_fixed_offsets(&mut writer, &[])?;
+            }
+            return Ok(());
+        }
+
+        let mut key_sizes = Vec::with_capacity(len);
+        let mut val_sizes = Vec::with_capacity(len);
+        let mut key_data = Vec::new();
+        let mut val_data = Vec::new();
+        let mut key_buf = Vec::new();
+        let mut val_buf = Vec::new();
+
+        for (key, value) in entries.into_iter() {
+            key_buf.clear();
+            key.serialize(&mut key_buf)?;
+            val_buf.clear();
+            value.serialize(&mut val_buf)?;
+
+            key_sizes.push(key_buf.len());
+            val_sizes.push(val_buf.len());
+            key_data.extend_from_slice(&key_buf);
+            val_data.extend_from_slice(&val_buf);
+        }
+
+        if use_varint_offsets() {
+            for size in &key_sizes {
+                write_varint_len(
+                    &mut writer,
+                    u64::try_from(*size).map_err(|_| Error::LengthMismatch)?,
+                )?;
+            }
+            for size in &val_sizes {
+                write_varint_len(
+                    &mut writer,
+                    u64::try_from(*size).map_err(|_| Error::LengthMismatch)?,
+                )?;
+            }
+        } else {
+            write_fixed_offsets(&mut writer, &key_sizes)?;
+            write_fixed_offsets(&mut writer, &val_sizes)?;
+        }
+
+        writer.write_all(&key_data)?;
+        writer.write_all(&val_data)?;
         Ok(())
     }
 }
@@ -2176,20 +2569,9 @@ where
     T: NoritoSerialize + Ord,
 {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        let len = u64::try_from(self.len()).map_err(|_| Error::LengthMismatch)?;
-        write_seq_len(&mut writer, len)?;
-
-        let mut buffer = Vec::new();
-        for item in self.iter() {
-            buffer.clear();
-            item.serialize(&mut buffer)?;
-            write_len(
-                &mut writer,
-                u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
-            )?;
-            writer.write_all(&buffer)?;
-        }
-        Ok(())
+        encode_seq_payloads(&mut writer, self.len(), self.iter(), |item, buf| {
+            item.serialize(buf)
+        })
     }
 }
 
@@ -2224,20 +2606,9 @@ where
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         let mut items: Vec<_> = self.iter().collect();
         items.sort();
-        let len = u64::try_from(items.len()).map_err(|_| Error::LengthMismatch)?;
-        write_seq_len(&mut writer, len)?;
-
-        let mut buffer = Vec::new();
-        for item in items.into_iter() {
-            buffer.clear();
-            item.serialize(&mut buffer)?;
-            write_len(
-                &mut writer,
-                u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
-            )?;
-            writer.write_all(&buffer)?;
-        }
-        Ok(())
+        encode_seq_payloads(&mut writer, items.len(), items, |item, buf| {
+            item.serialize(buf)
+        })
     }
 }
 
@@ -2986,6 +3357,90 @@ impl<'a, T: ?Sized> std::ops::Deref for ArchivedRef<'a, T> {
     #[inline]
     fn deref(&self) -> &Self::Target {
         self.as_ref_impl()
+    }
+}
+
+/// Owned archived payload backed by an aligned byte buffer.
+///
+/// This owns the payload bytes (plus any alignment padding) and guarantees the
+/// archived pointer stays valid for the lifetime of the wrapper.
+pub struct ArchivedBox<T> {
+    buffer: Vec<u8>,
+    offset: usize,
+    len: usize,
+    _marker: PhantomData<Archived<T>>,
+}
+
+impl<T> ArchivedBox<T> {
+    #[inline]
+    pub(crate) fn from_payload(payload: Vec<u8>) -> Self {
+        let len = payload.len();
+        let align = core::mem::align_of::<Archived<T>>();
+        if len == 0 || align <= 1 {
+            return Self {
+                buffer: payload,
+                offset: 0,
+                len,
+                _marker: PhantomData,
+            };
+        }
+        let base = payload.as_ptr() as usize;
+        if base.is_multiple_of(align) {
+            return Self {
+                buffer: payload,
+                offset: 0,
+                len,
+                _marker: PhantomData,
+            };
+        }
+
+        let mut buffer = vec![0u8; len + align];
+        let buf_base = buffer.as_ptr() as usize;
+        let offset = (align - (buf_base % align)) % align;
+        buffer[offset..offset + len].copy_from_slice(&payload);
+        Self {
+            buffer,
+            offset,
+            len,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Reference to the archived value.
+    #[inline]
+    pub fn archived(&self) -> &Archived<T> {
+        if self.len == 0 {
+            // SAFETY: zero-sized archived values do not require backing storage.
+            return unsafe { &*core::ptr::NonNull::<Archived<T>>::dangling().as_ptr() };
+        }
+        let ptr = unsafe { self.buffer.as_ptr().add(self.offset) as *const Archived<T> };
+        // SAFETY: `ptr` always points into `buffer` with `Archived<T>` alignment.
+        unsafe { &*ptr }
+    }
+
+    /// Underlying archived bytes.
+    #[inline]
+    pub fn bytes(&self) -> &[u8] {
+        if self.len == 0 {
+            return &[];
+        }
+        &self.buffer[self.offset..self.offset + self.len]
+    }
+}
+
+impl<T> std::convert::AsRef<Archived<T>> for ArchivedBox<T> {
+    #[inline]
+    fn as_ref(&self) -> &Archived<T> {
+        self.archived()
+    }
+}
+
+impl<T> std::ops::Deref for ArchivedBox<T> {
+    type Target = Archived<T>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.archived()
     }
 }
 
@@ -4595,17 +5050,9 @@ pub mod stream {
 
 impl<T: NoritoSerialize> NoritoSerialize for VecDeque<T> {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        let len = u64::try_from(self.len()).map_err(|_| Error::LengthMismatch)?;
-        write_seq_len(&mut writer, len)?;
-        let mut buf = Vec::new();
-        for item in self {
-            buf.clear();
-            item.serialize(&mut buf)?;
-            let elem_len = u64::try_from(buf.len()).map_err(|_| Error::LengthMismatch)?;
-            write_len(&mut writer, elem_len)?;
-            writer.write_all(&buf)?;
-        }
-        Ok(())
+        encode_seq_payloads(&mut writer, self.len(), self.iter(), |item, buf| {
+            item.serialize(buf)
+        })
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4639,17 +5086,9 @@ where
 
 impl<T: NoritoSerialize> NoritoSerialize for LinkedList<T> {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        let len = u64::try_from(self.len()).map_err(|_| Error::LengthMismatch)?;
-        write_seq_len(&mut writer, len)?;
-        let mut buf = Vec::new();
-        for item in self {
-            buf.clear();
-            item.serialize(&mut buf)?;
-            let elem_len = u64::try_from(buf.len()).map_err(|_| Error::LengthMismatch)?;
-            write_len(&mut writer, elem_len)?;
-            writer.write_all(&buf)?;
-        }
-        Ok(())
+        encode_seq_payloads(&mut writer, self.len(), self.iter(), |item, buf| {
+            item.serialize(buf)
+        })
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4692,15 +5131,9 @@ where
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         let mut items: Vec<_> = self.iter().collect();
         items.sort();
-        write_seq_len(&mut writer, items.len() as u64)?;
-        let mut buf = Vec::new();
-        for item in items {
-            buf.clear();
-            (*item).serialize(&mut buf)?;
-            write_len(&mut writer, buf.len() as u64)?;
-            writer.write_all(&buf)?;
-        }
-        Ok(())
+        encode_seq_payloads(&mut writer, items.len(), items, |item, buf| {
+            item.serialize(buf)
+        })
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         let mut items: Vec<_> = self.iter().collect();
@@ -4780,21 +5213,9 @@ where
 
 impl<T: NoritoSerialize> NoritoSerialize for Vec<T> {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        write_seq_len(
-            &mut writer,
-            u64::try_from(self.len()).map_err(|_| Error::LengthMismatch)?,
-        )?;
-        let mut buffer = Vec::new();
-        for item in self {
-            buffer.clear();
-            item.serialize(&mut buffer)?;
-            write_len(
-                &mut writer,
-                u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
-            )?;
-            writer.write_all(&buffer)?;
-        }
-        Ok(())
+        encode_seq_payloads(&mut writer, self.len(), self.iter(), |item, buf| {
+            item.serialize(buf)
+        })
     }
 }
 
@@ -5084,14 +5505,37 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
     }
     let payload = sink.into_inner();
     let varint_used = ENCODE_VARINT_USED.with(|cell| cell.get());
+    let fixed_offsets_used = fixed_offsets_used();
+    let field_bitset_used = field_bitset_used();
+    let compact_seq_len_used = compact_seq_len_used();
     let compact_len_used = compact_len_used();
     drop(encode_guard);
     let mut final_flags = flags;
-    if varint_used {
-        final_flags |= header_flags::VARINT_OFFSETS;
+    if field_bitset_used {
+        final_flags |= header_flags::FIELD_BITSET;
+    } else {
+        final_flags &= !header_flags::FIELD_BITSET;
     }
     if compact_len_used {
         final_flags |= header_flags::COMPACT_LEN;
+    } else {
+        final_flags &= !header_flags::COMPACT_LEN;
+    }
+    if compact_seq_len_used {
+        final_flags |= header_flags::COMPACT_SEQ_LEN;
+    } else {
+        final_flags &= !header_flags::COMPACT_SEQ_LEN;
+    }
+    let packed_seq_used = varint_used || fixed_offsets_used;
+    if packed_seq_used {
+        final_flags |= header_flags::PACKED_SEQ;
+    } else {
+        final_flags &= !header_flags::PACKED_SEQ;
+    }
+    if varint_used {
+        final_flags |= header_flags::VARINT_OFFSETS;
+    } else {
+        final_flags &= !header_flags::VARINT_OFFSETS;
     }
     record_last_header_flags(final_flags);
     Ok((payload, final_flags))
@@ -5484,35 +5928,16 @@ pub fn to_compressed_bytes<T: NoritoSerialize>(
     Ok(out)
 }
 
-fn into_aligned_payload_box<T>(payload: Vec<u8>) -> Result<Box<[u8]>, Error> {
-    let align = std::mem::align_of::<Archived<T>>();
-    if payload.is_empty() || align <= 1 {
-        return Ok(payload.into_boxed_slice());
-    }
-    let mask = align - 1;
-    if (payload.as_ptr() as usize & mask) == 0 {
-        return Ok(payload.into_boxed_slice());
-    }
-    let len = payload.len();
-    let layout = Layout::from_size_align(len, align).map_err(|_| Error::LengthMismatch)?;
-    unsafe {
-        let ptr = alloc(layout);
-        if ptr.is_null() {
-            handle_alloc_error(layout);
-        }
-        std::ptr::copy_nonoverlapping(payload.as_ptr(), ptr, len);
-        let slice = std::ptr::slice_from_raw_parts_mut(ptr, len);
-        Ok(Box::from_raw(slice))
-    }
-}
-
 /// Decompress bytes produced by [`to_compressed_bytes`].
 ///
 /// If the `gpu-compression` feature is enabled, decompression runs on the GPU
 /// (CUDA or Metal depending on the target). Otherwise the CPU path is used.
+///
+/// Returns an owning archive wrapper so the payload bytes remain valid for the
+/// lifetime of the returned value.
 pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
     bytes: &[u8],
-) -> Result<Box<Archived<T>>, Error> {
+) -> Result<ArchivedBox<T>, Error> {
     let mut cursor = std::io::Cursor::new(bytes);
     let header = Header::read(&mut cursor)?;
     prepare_header_decode(header.flags, header.minor, true)?;
@@ -5524,8 +5949,7 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
     let payload = match header.compression {
         Compression::None => {
             let padding = payload_alignment_padding_for::<T>();
-            let trimmed =
-                payload_without_leading_padding_exact(compressed, payload_len, padding)?;
+            let trimmed = payload_without_leading_padding_exact(compressed, payload_len, padding)?;
             trimmed.to_vec()
         }
         Compression::Zstd => {
@@ -5552,11 +5976,15 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
     if crc64(&payload) != header.checksum {
         return Err(Error::ChecksumMismatch);
     }
-    let boxed = into_aligned_payload_box::<T>(payload)?;
+    let archived = ArchivedBox::from_payload(payload);
     // Provide payload ctx so pointer-based decoders can read lengths/offsets.
-    set_payload_ctx_state(&boxed, None, Some(header.flags), Some(header.minor));
-    let ptr = Box::into_raw(boxed) as *mut Archived<T>;
-    Ok(unsafe { Box::from_raw(ptr) })
+    set_payload_ctx_state(
+        archived.bytes(),
+        Some(header.schema),
+        Some(header.flags),
+        Some(header.minor),
+    );
+    Ok(archived)
 }
 
 /// Obtain a reference to an archived value from bytes.
@@ -5589,7 +6017,12 @@ pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(bytes: &'a [u8]) -> Result<&'a A
         return Err(Error::misaligned(align, payload.as_ptr()));
     }
     // Provide payload ctx for any subsequent decoders that rely on it.
-    set_payload_ctx_state(payload, None, Some(header.flags), Some(header.minor));
+    set_payload_ctx_state(
+        payload,
+        Some(header.schema),
+        Some(header.flags),
+        Some(header.minor),
+    );
     // SAFETY: layout of Archived<T> is validated by construction in `to_bytes`.
     let ptr = payload.as_ptr() as *const Archived<T>;
     Ok(unsafe { &*ptr })
@@ -5604,6 +6037,7 @@ pub struct ArchiveView<'a> {
     bytes: &'a [u8],
     flags: u8,
     flags_hint: u8,
+    schema: [u8; 16],
 }
 
 impl<'a> ArchiveView<'a> {
@@ -5622,8 +6056,12 @@ impl<'a> ArchiveView<'a> {
         self.flags_hint
     }
 
-    /// Decode a value from the payload using the strict-safe slice-based path.
-    pub fn decode<T: DecodeFromSlice<'a>>(&self) -> Result<T, Error> {
+    /// Expose the schema hash stored in the header.
+    pub fn schema(&self) -> [u8; 16] {
+        self.schema
+    }
+
+    fn decode_inner<T: DecodeFromSlice<'a>>(&self) -> Result<T, Error> {
         let _ctx = PayloadCtxGuard::enter_with_flags_hint(self.bytes, self.flags, self.flags_hint);
         let effective = combine_flags(self.flags, self.flags_hint);
         let _flags = DecodeFlagsGuard::enter_with_hint(self.flags, effective);
@@ -5635,6 +6073,23 @@ impl<'a> ArchiveView<'a> {
             return Err(Error::LengthMismatch);
         }
         Ok(value)
+    }
+
+    /// Decode a value from the payload using the strict-safe slice-based path,
+    /// enforcing the header schema hash.
+    pub fn decode<T>(&self) -> Result<T, Error>
+    where
+        T: DecodeFromSlice<'a> + NoritoDeserialize<'a>,
+    {
+        if self.schema != T::schema_hash() {
+            return Err(Error::SchemaMismatch);
+        }
+        self.decode_inner()
+    }
+
+    /// Decode a value from the payload without enforcing the schema hash.
+    pub fn decode_unchecked<T: DecodeFromSlice<'a>>(&self) -> Result<T, Error> {
+        self.decode_inner()
     }
 }
 
@@ -5656,11 +6111,17 @@ pub fn from_bytes_view<'a>(bytes: &'a [u8]) -> Result<ArchiveView<'a>, Error> {
     if crc64(payload) != header.checksum {
         return Err(Error::ChecksumMismatch);
     }
-    set_payload_ctx_state(payload, None, Some(header.flags), Some(header.minor));
+    set_payload_ctx_state(
+        payload,
+        Some(header.schema),
+        Some(header.flags),
+        Some(header.minor),
+    );
     Ok(ArchiveView {
         bytes: payload,
         flags: header.flags,
         flags_hint: header.minor,
+        schema: header.schema,
     })
 }
 
@@ -5670,6 +6131,9 @@ where
     T: crate::NoritoDeserialize<'a> + 'a,
 {
     let view = from_bytes_view(bytes)?;
+    if view.schema() != T::schema_hash() {
+        return Err(Error::SchemaMismatch);
+    }
     let payload_src = view.as_bytes();
     let flags = view.flags;
     let flags_hint = view.flags_hint;
@@ -5943,6 +6407,14 @@ mod tests {
         let mut digest = Digest::new();
         digest.write(data);
         assert_eq!(crc64(data), digest.sum64());
+    }
+
+    #[test]
+    fn copy_from_payload_allows_zero_len() {
+        let mut out = 0u8;
+        let ptr = core::ptr::NonNull::<u8>::dangling().as_ptr();
+        let res = unsafe { copy_from_payload(ptr, &mut out as *mut u8, 0) };
+        assert!(res.is_ok());
     }
 
     #[cfg(feature = "compression")]
@@ -6271,6 +6743,17 @@ mod tests {
         let archived = from_compressed_bytes::<u64>(&bytes).expect("decode compressed payload");
         let decoded = u64::deserialize(&archived);
         assert_eq!(decoded, value);
+    }
+
+    #[repr(align(64))]
+    struct Align64(u8);
+
+    #[test]
+    fn archived_box_aligns_payload() {
+        let archived = ArchivedBox::<Align64>::from_payload(vec![0xAA]);
+        let ptr = archived.archived() as *const Archived<Align64> as usize;
+        assert_eq!(ptr % core::mem::align_of::<Archived<Align64>>(), 0);
+        assert_eq!(archived.bytes(), &[0xAA]);
     }
 
     #[test]

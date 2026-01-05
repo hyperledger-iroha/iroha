@@ -1,4 +1,4 @@
-#![doc = "Property-based tests for SM4 AEAD helpers."]
+//! Property-based tests for SM4 AEAD helpers.
 #![cfg(all(feature = "sm", feature = "sm_proptest"))]
 
 use iroha_crypto::Sm4Key;

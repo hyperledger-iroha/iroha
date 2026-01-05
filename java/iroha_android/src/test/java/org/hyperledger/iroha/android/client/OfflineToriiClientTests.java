@@ -4,6 +4,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceCommitment;
@@ -191,9 +192,10 @@ public final class OfflineToriiClientTests {
             .executor(executor)
             .baseUri(URI.create("https://example.com"))
             .build();
+    final Map<String, Object> transferPayload = Map.of("bundle_id", "deadbeef");
     final OfflineProofRequestParams params =
         OfflineProofRequestParams.builder()
-            .bundleIdHex("deadbeef")
+            .transferPayload(transferPayload)
             .kind(OfflineProofRequestKind.COUNTER)
             .counterCheckpoint(4095L)
             .build();
@@ -201,16 +203,26 @@ public final class OfflineToriiClientTests {
     assert result.kind() == OfflineProofRequestKind.COUNTER : "kind mismatch";
     assert result.json().contains("\"version\":1") : "missing version";
     assert executor.lastRequest.uri().getPath().endsWith("/proof") : "path mismatch";
-    assert executor.lastBody.contains("\"bundle_id_hex\":\"deadbeef\"")
+    assert executor.lastBody.contains("\"transfer\"") : "transfer not in body";
+    assert executor.lastBody.contains("\"bundle_id\":\"deadbeef\"")
         : "bundle id not in body";
     assert executor.lastBody.contains("\"counter_checkpoint\":4095")
         : "checkpoint missing";
   }
 
   private static void proofRequestBuilderValidation() {
+    final Map<String, Object> transferPayload = Map.of("bundle_id", "deadbeef");
     try {
       OfflineProofRequestParams.builder()
-          .bundleIdHex("deadbeef")
+          .kind(OfflineProofRequestKind.SUM)
+          .build();
+      throw new AssertionError("transfer payload is required");
+    } catch (final IllegalArgumentException expected) {
+      // expected
+    }
+    try {
+      OfflineProofRequestParams.builder()
+          .transferPayload(transferPayload)
           .kind(OfflineProofRequestKind.REPLAY)
           .build();
       throw new AssertionError("replay proofs require head/tail");
@@ -219,7 +231,7 @@ public final class OfflineToriiClientTests {
     }
     try {
       OfflineProofRequestParams.builder()
-          .bundleIdHex("deadbeef")
+          .transferPayload(transferPayload)
           .kind(OfflineProofRequestKind.SUM)
           .replayLogHeadHex("aa")
           .replayLogTailHex("bb")

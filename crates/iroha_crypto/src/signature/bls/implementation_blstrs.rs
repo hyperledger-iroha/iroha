@@ -292,6 +292,15 @@ impl<C: BlsConfiguration> BlsImpl<C> {
         {
             return Err(Error::BadSignature);
         }
+        {
+            use std::collections::BTreeSet;
+            let mut seen = BTreeSet::new();
+            for &msg in messages {
+                if !seen.insert(msg) {
+                    return Err(Error::BadSignature);
+                }
+            }
+        }
 
         if C::NORMAL {
             let mut pairs: Vec<(G1Affine, G2Prepared)> = Vec::with_capacity(messages.len() * 2);
@@ -353,6 +362,9 @@ impl<C: BlsConfiguration> BlsImpl<C> {
         if payload.len() != 32 {
             return Err(ParseError("invalid BLS secret key length".to_string()));
         }
+        if payload.iter().all(|&b| b == 0) {
+            return Err(ParseError("BLS secret key is zero".to_string()));
+        }
         // Validate via w3f backend to match compat acceptance window
         if C::NORMAL {
             w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_bytes(payload)
@@ -374,11 +386,17 @@ fn to_g1(bytes: &[u8]) -> Option<G1Affine> {
     let mut arr = [0u8; 48];
     arr.copy_from_slice(bytes);
     let ct = G1Affine::from_compressed(&arr);
-    if ct.is_some().into() {
-        Some(ct.unwrap())
-    } else {
-        None
+    if !ct.is_some().into() {
+        return None;
     }
+    let point = ct.unwrap();
+    if point.is_identity().into() {
+        return None;
+    }
+    if point.to_compressed() != arr {
+        return None;
+    }
+    Some(point)
 }
 fn to_g2(bytes: &[u8]) -> Option<G2Affine> {
     if bytes.len() != 96 {
@@ -387,11 +405,17 @@ fn to_g2(bytes: &[u8]) -> Option<G2Affine> {
     let mut arr = [0u8; 96];
     arr.copy_from_slice(bytes);
     let ct = G2Affine::from_compressed(&arr);
-    if ct.is_some().into() {
-        Some(ct.unwrap())
-    } else {
-        None
+    if !ct.is_some().into() {
+        return None;
     }
+    let point = ct.unwrap();
+    if point.is_identity().into() {
+        return None;
+    }
+    if point.to_compressed() != arr {
+        return None;
+    }
+    Some(point)
 }
 
 fn hash_msg_to_g2(msg: &[u8]) -> G2Affine {

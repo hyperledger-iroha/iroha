@@ -6,6 +6,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use std::{
     collections::BTreeMap,
     fs,
+    io::{self, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -360,18 +361,10 @@ pub fn sessions_active() -> u64 {
 pub fn read_persisted_snapshot(dir: impl AsRef<Path>) -> Vec<Summary> {
     let _suppressor = panic_hook::ScopedSuppressor::new();
     let file = dir.as_ref().join(FILE_NAME);
-    match fs::read(&file) {
-        Ok(data) => decode_entries(&data)
-            .into_iter()
-            .map(|stored| stored.summary)
-            .collect(),
-        Err(err) => {
-            if err.kind() != std::io::ErrorKind::NotFound {
-                warn!(?err, ?file, "failed to read persisted RBC snapshot");
-            }
-            Vec::new()
-        }
-    }
+    read_entries_with_fallback(&file)
+        .into_iter()
+        .map(|stored| stored.summary)
+        .collect()
 }
 
 const FILE_NAME: &str = "sessions.norito";
@@ -412,8 +405,28 @@ impl DiskStore {
         entries.sort_by_key(|stored| stored.updated_at_ms);
         let encoded = <Vec<StoredEntry> as Encode>::encode(&entries);
         let tmp = temp_store_path(&self.file);
-        fs::write(&tmp, encoded)?;
-        fs::rename(tmp, &self.file)?;
+        {
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp)?;
+            file.write_all(&encoded)?;
+            file.sync_all()?;
+        }
+        if let Err(err) = fs::rename(&tmp, &self.file) {
+            if err.kind() == io::ErrorKind::AlreadyExists {
+                fs::remove_file(&self.file)?;
+                fs::rename(&tmp, &self.file)?;
+            } else {
+                return Err(err);
+            }
+        }
+        if let Some(parent) = self.file.parent() {
+            if !parent.as_os_str().is_empty() {
+                sync_dir(parent)?;
+            }
+        }
         Ok(())
     }
 }
@@ -423,44 +436,142 @@ fn temp_store_path(path: &Path) -> PathBuf {
 }
 
 fn load_into_map(disk: &DiskStore, map: &mut BTreeMap<(HashOf<BlockHeader>, u64, u64), Entry>) {
-    match fs::read(&disk.file) {
-        Ok(buf) => {
-            let mut entries = decode_entries(&buf);
-            enforce_limits(&mut entries, disk.ttl, disk.capacity);
-            for stored in entries {
-                let updated_at = ms_to_system_time(stored.updated_at_ms);
-                let summary = stored.summary;
-                let key = (summary.block_hash, summary.height, summary.view);
-                map.insert(
-                    key,
-                    Entry {
-                        summary,
-                        updated_at,
-                    },
+    let mut entries = read_entries_with_fallback(&disk.file);
+    enforce_limits(&mut entries, disk.ttl, disk.capacity);
+    for stored in entries {
+        let updated_at = ms_to_system_time(stored.updated_at_ms);
+        let summary = stored.summary;
+        let key = (summary.block_hash, summary.height, summary.view);
+        map.insert(
+            key,
+            Entry {
+                summary,
+                updated_at,
+            },
+        );
+    }
+}
+
+fn read_entries_with_fallback(path: &Path) -> Vec<StoredEntry> {
+    let tmp_path = temp_store_path(path);
+    let tmp_bytes = match read_store_bytes(&tmp_path) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            warn!(?err, ?tmp_path, "failed to read RBC session temp store");
+            None
+        }
+    };
+    let main_bytes = match read_store_bytes(path) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            warn!(?err, ?path, "failed to read RBC session store");
+            None
+        }
+    };
+
+    if tmp_bytes.is_none() && main_bytes.is_none() {
+        return Vec::new();
+    }
+
+    let mut selected = None;
+    let mut used_tmp = false;
+    if let Some(bytes) = tmp_bytes.as_deref() {
+        match decode_entries(bytes) {
+            Ok(entries) => {
+                selected = Some(entries);
+                used_tmp = true;
+            }
+            Err(err) => {
+                warn!(?err, ?tmp_path, "failed to decode RBC session temp store");
+                let _ = fs::remove_file(&tmp_path);
+            }
+        }
+    }
+
+    if selected.is_none() {
+        if let Some(bytes) = main_bytes.as_deref() {
+            match decode_entries(bytes) {
+                Ok(entries) => {
+                    selected = Some(entries);
+                }
+                Err(err) => {
+                    warn!(?err, ?path, "failed to decode RBC session store");
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
+    }
+
+    if let Some(entries) = selected {
+        if used_tmp {
+            warn!(
+                path = %tmp_path.display(),
+                "recovered RBC session store from temp file"
+            );
+            promote_temp_store(&tmp_path, path);
+        }
+        return entries;
+    }
+
+    Vec::new()
+}
+
+fn read_store_bytes(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+fn decode_entries(buf: &[u8]) -> Result<Vec<StoredEntry>, norito::Error> {
+    let _suppressor = panic_hook::ScopedSuppressor::new();
+    let mut cursor = buf;
+    <Vec<StoredEntry> as Decode>::decode(&mut cursor)
+}
+
+fn promote_temp_store(tmp_path: &Path, main_path: &Path) {
+    let promoted = match fs::rename(tmp_path, main_path) {
+        Ok(()) => true,
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+            if let Err(remove_err) = fs::remove_file(main_path) {
+                warn!(
+                    ?remove_err,
+                    ?main_path,
+                    "failed to remove RBC session store before temp promotion"
                 );
+                false
+            } else if let Err(rename_err) = fs::rename(tmp_path, main_path) {
+                warn!(
+                    ?rename_err,
+                    ?tmp_path,
+                    "failed to promote RBC session temp store after removal"
+                );
+                false
+            } else {
+                true
             }
         }
         Err(err) => {
-            if err.kind() != std::io::ErrorKind::NotFound {
-                warn!(?err, file=?disk.file, "failed to read RBC session store");
+            warn!(?err, ?tmp_path, "failed to promote RBC session temp store");
+            false
+        }
+    };
+
+    if promoted {
+        if let Some(parent) = main_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                if let Err(err) = sync_dir(parent) {
+                    warn!(?err, ?parent, "failed to sync RBC session store directory");
+                }
             }
         }
     }
 }
 
-fn decode_entries(buf: &[u8]) -> Vec<StoredEntry> {
-    let _suppressor = panic_hook::ScopedSuppressor::new();
-    let mut cursor = buf;
-    match <Vec<StoredEntry> as Decode>::decode(&mut cursor) {
-        Ok(entries) => entries,
-        Err(err) => {
-            warn!(
-                ?err,
-                "failed to decode RBC session store; treating as empty"
-            );
-            Vec::new()
-        }
-    }
+fn sync_dir(path: &Path) -> io::Result<()> {
+    let file = fs::File::open(path)?;
+    file.sync_all()
 }
 
 fn enforce_limits(entries: &mut Vec<StoredEntry>, ttl: Duration, capacity: usize) {
@@ -533,6 +644,7 @@ mod tests {
 
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::BlockHeader;
+    use norito::codec::Encode;
     use tempfile::tempdir;
 
     use super::*;
@@ -546,6 +658,39 @@ mod tests {
         let base = Path::new("/var/lib/iroha/rbc/sessions.norito");
         let tmp = temp_store_path(base);
         assert_eq!(tmp, Path::new("/var/lib/iroha/rbc/sessions.norito.tmp"));
+    }
+
+    #[test]
+    fn persisted_snapshot_promotes_temp_file() {
+        let dir = tempdir().expect("tempdir");
+        let summary = Summary {
+            block_hash: hash(7),
+            height: 7,
+            view: 0,
+            total_chunks: 3,
+            received_chunks: 1,
+            ready_count: 0,
+            delivered: false,
+            payload_hash: None,
+            recovered_from_disk: false,
+            invalid: false,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        let entry = StoredEntry {
+            summary: summary.clone(),
+            updated_at_ms: 42,
+        };
+        let encoded = <Vec<StoredEntry> as Encode>::encode(&vec![entry]);
+        let file = dir.path().join(FILE_NAME);
+        let tmp = temp_store_path(&file);
+        fs::write(&tmp, encoded).expect("write temp store");
+
+        let snapshot = read_persisted_snapshot(dir.path());
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].block_hash, summary.block_hash);
+        assert!(file.exists(), "temp store should be promoted");
+        assert!(!tmp.exists(), "temp store should be removed");
     }
 
     #[test]
@@ -627,7 +772,7 @@ mod tests {
         let after = fs::read(&path).expect("read RBC snapshot");
         assert_ne!(before, after);
 
-        let stored = decode_entries(&after);
+        let stored = decode_entries(&after).expect("decode RBC session store");
         let entry = stored
             .iter()
             .find(|entry| entry.summary.block_hash == block_hash)

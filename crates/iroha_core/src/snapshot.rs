@@ -947,14 +947,10 @@ fn try_write_snapshot(
     merkle_file
         .sync_data()
         .map_err(|err| TryWriteError::IO(err, path_to_tmp_merkle.clone()))?;
-    std::fs::rename(path_to_tmp_file, &path_to_file)
-        .map_err(|err| TryWriteError::IO(err, path_to_file.clone()))?;
-    std::fs::rename(path_to_tmp_digest, &path_to_digest_file)
-        .map_err(|err| TryWriteError::IO(err, path_to_digest_file.clone()))?;
-    std::fs::rename(path_to_tmp_sig, &path_to_signature_file)
-        .map_err(|err| TryWriteError::IO(err, path_to_signature_file.clone()))?;
-    std::fs::rename(path_to_tmp_merkle, &path_to_merkle_file)
-        .map_err(|err| TryWriteError::IO(err, path_to_merkle_file.clone()))?;
+    promote_tmp_snapshot_file(&path_to_tmp_file, &path_to_file)?;
+    promote_tmp_snapshot_file(&path_to_tmp_digest, &path_to_digest_file)?;
+    promote_tmp_snapshot_file(&path_to_tmp_sig, &path_to_signature_file)?;
+    promote_tmp_snapshot_file(&path_to_tmp_merkle, &path_to_merkle_file)?;
     sync_dir(store_dir.as_ref())?;
     Ok(())
 }
@@ -964,6 +960,17 @@ fn sync_dir(path: &Path) -> Result<(), TryWriteError> {
         std::fs::File::open(path).map_err(|err| TryWriteError::IO(err, path.to_path_buf()))?;
     file.sync_all()
         .map_err(|err| TryWriteError::IO(err, path.to_path_buf()))
+}
+
+fn promote_tmp_snapshot_file(tmp: &Path, dest: &Path) -> Result<(), TryWriteError> {
+    match std::fs::rename(tmp, dest) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            std::fs::remove_file(dest).map_err(|err| TryWriteError::IO(err, dest.to_path_buf()))?;
+            std::fs::rename(tmp, dest).map_err(|err| TryWriteError::IO(err, dest.to_path_buf()))
+        }
+        Err(err) => Err(TryWriteError::IO(err, dest.to_path_buf())),
+    }
 }
 
 /// Error variants for snapshot reading
@@ -1351,6 +1358,33 @@ mod tests {
             assert!(
                 path.is_file(),
                 "expected snapshot artifact: {}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_write_overwrites_existing_files() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair = KeyPair::random();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE)
+            .expect("initial snapshot write");
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE)
+            .expect("snapshot overwrite");
+
+        let tmp_paths = [
+            store_dir.join(SNAPSHOT_TMP_FILE_NAME),
+            store_dir.join(SNAPSHOT_DIGEST_TMP_FILE_NAME),
+            store_dir.join(SNAPSHOT_SIGNATURE_TMP_FILE_NAME),
+            store_dir.join(SNAPSHOT_MERKLE_TMP_FILE_NAME),
+        ];
+        for path in tmp_paths {
+            assert!(
+                !path.exists(),
+                "temp snapshot artifact should be removed: {}",
                 path.display()
             );
         }

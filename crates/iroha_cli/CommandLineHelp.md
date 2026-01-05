@@ -2071,6 +2071,7 @@ Inspect pending offline-to-online transfer bundles
 
 * `list` — List all pending offline-to-online transfer bundles
 * `get` — Fetch a specific offline-to-online transfer by bundle id
+* `proof` — Generate a FASTPQ witness request for a bundle payload
 
 
 
@@ -2106,6 +2107,29 @@ Fetch a specific offline-to-online transfer bundle by id
 ###### **Options:**
 
 * `--bundle-id <BUNDLE_ID>` — Deterministic bundle identifier (hex)
+
+## `iroha offline transfer proof`
+
+Generate a FASTPQ witness request for a bundle payload
+
+**Usage:** `iroha offline transfer proof [OPTIONS]`
+
+###### **Options:**
+
+* `--bundle <PATH>` — Path to offline bundle payload (JSON or Norito)
+* `--encoding <ENCODING>` — Override the bundle encoding detection
+
+  Default value: `auto`
+
+  Possible values: `auto`, `json`, `norito`
+
+* `--kind <KIND>` — Witness type to build
+
+  Possible values: `sum`, `counter`, `replay`
+
+* `--counter-checkpoint <COUNTER_CHECKPOINT>` — Optional counter checkpoint (defaults to first counter - 1)
+* `--replay-log-head <REPLAY_LOG_HEAD>` — Replay log head hash (required for replay proofs)
+* `--replay-log-tail <REPLAY_LOG_TAIL>` — Replay log tail hash (required for replay proofs)
 
 
 

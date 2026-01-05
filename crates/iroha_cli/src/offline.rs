@@ -175,15 +175,15 @@ pub enum TransferCommand {
     List(TransferListArgs),
     /// Fetch a specific transfer bundle by id
     Get(BundleId),
-    /// Generate a FASTPQ witness request for a bundle
+    /// Generate a FASTPQ witness request for a bundle payload
     Proof(TransferProofArgs),
 }
 
 impl Run for TransferCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = context.client_from_config();
         match self {
             TransferCommand::List(args) => {
+                let client = context.client_from_config();
                 let mut applied_filters = TransferFilterFlags::default();
                 let mut entries = if let Some(controller) = args.controller.clone() {
                     applied_filters.controller = true;
@@ -238,6 +238,7 @@ impl Run for TransferCommand {
                 }
             }
             TransferCommand::Get(args) => {
+                let client = context.client_from_config();
                 let mut results = client
                     .query(FindOfflineToOnlineTransferById::new(args.bundle_id))
                     .execute_all()?;
@@ -247,13 +248,9 @@ impl Run for TransferCommand {
                 context.print_data(&transfer)
             }
             TransferCommand::Proof(args) => {
-                let mut results = client
-                    .query(FindOfflineToOnlineTransferById::new(args.bundle_id))
-                    .execute_all()?;
-                let record = results
-                    .pop()
-                    .ok_or_else(|| eyre!("Offline-to-online transfer not found"))?;
-                match build_proof_request(&record, &args)? {
+                let encoding = args.encoding.resolve_for_path(&args.bundle);
+                let transfer = load_bundle_from_path(&args.bundle, encoding)?;
+                match build_proof_request(&transfer, &args)? {
                     ProofRequestVariant::Sum(req) => context.print_data(&req),
                     ProofRequestVariant::Counter(req) => context.print_data(&req),
                     ProofRequestVariant::Replay(req) => context.print_data(&req),
@@ -289,9 +286,12 @@ impl From<ProofRequestKindArg> for OfflineProofRequestKind {
 
 #[derive(clap::Args, Debug)]
 pub struct TransferProofArgs {
-    /// Bundle identifier used to fetch the transfer record
-    #[arg(long)]
-    bundle_id: Hash,
+    /// Path to offline bundle payload (JSON or Norito)
+    #[arg(long, value_name = "PATH")]
+    bundle: PathBuf,
+    /// Override the bundle encoding detection
+    #[arg(long, value_enum, default_value_t = BundleEncoding::Auto)]
+    encoding: BundleEncoding,
     /// Witness type to build
     #[arg(long, value_enum)]
     kind: ProofRequestKindArg,
@@ -313,12 +313,12 @@ enum ProofRequestVariant {
 }
 
 fn build_proof_request(
-    record: &OfflineTransferRecord,
+    transfer: &OfflineToOnlineTransfer,
     args: &TransferProofArgs,
 ) -> Result<ProofRequestVariant> {
     let kind: OfflineProofRequestKind = args.kind.into();
     match kind {
-        OfflineProofRequestKind::Sum => record
+        OfflineProofRequestKind::Sum => transfer
             .to_proof_request_sum()
             .map(ProofRequestVariant::Sum)
             .map_err(|err| eyre!("failed to build sum request: {err}")),
@@ -326,9 +326,9 @@ fn build_proof_request(
             let checkpoint = if let Some(value) = args.counter_checkpoint {
                 value
             } else {
-                infer_counter_checkpoint(record)?
+                infer_counter_checkpoint(transfer)?
             };
-            record
+            transfer
                 .to_proof_request_counter(checkpoint)
                 .map(ProofRequestVariant::Counter)
                 .map_err(|err| eyre!("failed to build counter request: {err}"))
@@ -340,7 +340,7 @@ fn build_proof_request(
             let tail = args
                 .replay_log_tail
                 .ok_or_else(|| eyre!("--replay-log-tail is required for replay proofs"))?;
-            record
+            transfer
                 .to_proof_request_replay(head, tail)
                 .map(ProofRequestVariant::Replay)
                 .map_err(|err| eyre!("failed to build replay request: {err}"))
@@ -348,8 +348,8 @@ fn build_proof_request(
     }
 }
 
-fn infer_counter_checkpoint(record: &OfflineTransferRecord) -> Result<u64> {
-    record
+fn infer_counter_checkpoint(transfer: &OfflineToOnlineTransfer) -> Result<u64> {
+    transfer
         .counter_checkpoint_hint()
         .map_err(|err| eyre!("failed to infer counter checkpoint: {err}"))
 }
@@ -1677,7 +1677,7 @@ mod tests {
     };
     use iroha_crypto::{Hash, PublicKey, Signature};
     use norito::json::Value;
-    use std::{collections::BTreeMap, str::FromStr};
+    use std::{collections::BTreeMap, path::PathBuf, str::FromStr};
     use tempfile::tempdir;
 
     fn default_common_args() -> crate::list_support::CommonArgs {
@@ -1927,6 +1927,47 @@ mod tests {
             TransferStatusArg::Archived.as_status(),
             OfflineTransferStatus::Archived
         );
+    }
+
+    #[test]
+    fn transfer_proof_builder_uses_override_checkpoint() {
+        let transfer = sample_transfer_record(None).transfer;
+        let args = TransferProofArgs {
+            bundle: PathBuf::from("bundle.json"),
+            encoding: BundleEncoding::Auto,
+            kind: ProofRequestKindArg::Counter,
+            counter_checkpoint: Some(7),
+            replay_log_head: None,
+            replay_log_tail: None,
+        };
+        let proof = build_proof_request(&transfer, &args).expect("proof request");
+        match proof {
+            ProofRequestVariant::Counter(req) => {
+                assert_eq!(req.counter_checkpoint, 7);
+            }
+            _ => panic!("expected counter proof request"),
+        }
+    }
+
+    #[test]
+    fn transfer_proof_builder_infers_checkpoint() {
+        let transfer = sample_transfer_record(None).transfer;
+        let expected = transfer.counter_checkpoint_hint().expect("checkpoint hint");
+        let args = TransferProofArgs {
+            bundle: PathBuf::from("bundle.json"),
+            encoding: BundleEncoding::Auto,
+            kind: ProofRequestKindArg::Counter,
+            counter_checkpoint: None,
+            replay_log_head: None,
+            replay_log_tail: None,
+        };
+        let proof = build_proof_request(&transfer, &args).expect("proof request");
+        match proof {
+            ProofRequestVariant::Counter(req) => {
+                assert_eq!(req.counter_checkpoint, expected);
+            }
+            _ => panic!("expected counter proof request"),
+        }
     }
 
     #[test]

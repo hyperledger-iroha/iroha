@@ -1,6 +1,35 @@
 # Status
 
 ## Latest Updates
+- Streaming fixtures: standardize Norito streaming integration-test capability flags (explicit feature bits + bundled entropy), refresh baseline/bundled golden snapshots, and remove unused imports in streaming helpers, `norito` core, and ed25519 signatures.
+- Tests: `cargo test -p integration_tests --test norito_streaming_end_to_end baseline_snapshot_matches_golden_fixture -- --nocapture` (timed out after 120s; waiting on build directory lock); `cargo test -p integration_tests --test norito_streaming_end_to_end bundled_snapshot_matches_golden_fixture -- --nocapture` (failed before fixture update; used to capture snapshot output); `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Crypto/BLS: make `Choice` conversions explicit in BLS/VRF helpers, gate the BLS fixture test by feature, and switch SM/ML-DSA/SM2 test crates to inner doc comments; add VRF invalid-length regression tests and include `pairing` in the `bls` feature.
+- Norito: restrict `ArchivedBox` to sized payloads and remove a stray fixed-offset write in `copy_from_payload` that referenced a missing writer.
+- Tests: `cargo test -p iroha_torii --test connect_gating`; `cargo test -p iroha_crypto --features bls vrf_to_g`; `cargo test -p norito copy_from_payload_allows_zero_len`.
+- Crypto: require non-empty, distinct message sets for BLS multi-message aggregate verification and add regression coverage for wrapper + internal verifier paths.
+- Tests: not run (not requested).
+- Kura: allow commit-marker updates to overwrite existing marker files (cross-platform rename), with regression coverage.
+- Tests: not run (not requested).
+- Kura: prune sidecar rename handles existing files (cross-platform replace) when swapping pruned data/index, without dropping recovery temp files.
+- Tests: not run (not requested).
+- Snapshot/WSV: overwrite existing snapshot artifacts atomically across platforms (handle temp rename over existing files) and add regression coverage for repeat writes.
+- Tests: not run (not requested).
+- Commit roster journal: allow temp promotion/overwrite when journal file already exists (cross-platform rename), with regression coverage for overwrite.
+- Tests: not run (not requested).
+- Norito: return owning `ArchivedBox` for compressed decodes, enforce schema checks in core/ArchiveView, implement packed-seq encoding for sequences/maps (fixed/varint offsets), and add regression coverage + doc updates.
+- Tests: not run (not requested).
+- Offline proofs: standardize `/v1/offline/transfers/proof` on transfer payloads only, keep CLI proof generation local (no Torii config), and add missing-transfer rejection coverage alongside SDK/docs updates.
+- Tests: not run (not requested).
+- Crypto: reject identity BLS keys/signatures and enforce canonical compressed encodings across parse/aggregate/VRF paths; add regression coverage for identity rejection.
+- Tests: `cargo test -p iroha_crypto secp256k1` (failed: norito compile errors E0599/E0607 in `crates/norito/src/core.rs:3006`/`crates/norito/src/core.rs:3008`).
+- RBC: prefer temp session snapshots but fall back to main when temps are invalid; add regression coverage for scan/load fallback cases.
+- Tests: not run (not requested).
+- Streaming: fsync + dir sync for streaming snapshot persistence, recover/promote temp snapshots on load, and add regression coverage for temp promotion.
+- Tests: not run (not requested).
+- RBC: recover temp status snapshots and temp session files on load (with fsync + dir sync on writes); add regression coverage for temp promotion in status/store.
+- Tests: not run (not requested).
+- SM2/Bridge: rebuild `NoritoBridge.xcframework` to align SM2 public-key multihash payloads (distid + SEC1) with the canonical fixture so Swift parity tests match.
+- Tests: `swift test --filter Sm2Tests`; `cargo test -p iroha_torii --lib`.
 - Crypto: fix Algorithm discriminant stability (explicit repr u8 values aligned with TryFrom/PublicKeyCompact/SDK docs) and gate `bls_check` behind the `bls` feature; add regression assertion for discriminant values.
 - Tests: not run (not requested).
 - Sumeragi: drop the DA/RBC devnet override so `sumeragi.da_enabled` is honored at runtime; update docs and runtime DA tests accordingly.
@@ -1059,3 +1088,4 @@
 - Translated the Android device lab reservation request template across all locales in `docs/examples`.
 - Translated the Android partner SLA discovery notes template across all locales in `docs/examples`.
 - Normalized block-sync QC signer indices using peer mappings across rotated topologies (including NPoS PRF rotations) and added coverage for NPoS view-rotation QC validation.
+- Switched Ed25519 verification to strict checks (reject low-order keys/signatures), hardened batch verification for low-order points, and added a regression that demonstrates low-order key forgery is now rejected.

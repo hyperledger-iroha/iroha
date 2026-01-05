@@ -1,5 +1,5 @@
+//! Integration tests covering SM2 key pair behavior.
 #![cfg(feature = "sm")]
-#![doc = "Integration tests covering SM2 key pair behavior."]
 
 use iroha_crypto::{
     Algorithm, Error, KeyPair, Signature, Sm2PrivateKey, Sm2PublicKey, Sm2Signature,
