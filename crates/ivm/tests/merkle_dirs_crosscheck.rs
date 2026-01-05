@@ -37,6 +37,9 @@ fn memory_merkle_dirs_match_path() {
         assert_eq!(cp_mem.depth(), cp_from_path.depth());
         assert_eq!(cp_mem.dirs(), cp_from_path.dirs());
         assert_eq!(cp_mem.siblings().len(), cp_from_path.siblings().len());
+        let depth = cp_mem.depth() as usize;
+        let mask = (1u64 << depth) - 1;
+        assert_eq!(cp_mem.dirs() as u64, (leaf_index as u64) & mask);
 
         // Also verify the proof using SHA-256 semantics against the returned root
         // Already cross-checked fields; proof verification exercised elsewhere.
@@ -69,6 +72,9 @@ fn registers_merkle_dirs_match_path() {
         assert_eq!(cp_regs.depth(), cp_from_path.depth());
         assert_eq!(cp_regs.dirs(), cp_from_path.dirs());
         assert_eq!(cp_regs.siblings().len(), cp_from_path.siblings().len());
+        let depth = cp_regs.depth() as usize;
+        let mask = (1u64 << depth) - 1;
+        assert_eq!(cp_regs.dirs() as u64, (idx as u64) & mask);
 
         // Proof verification is covered by dedicated Merkle tests; here we only cross-check dirs.
     }

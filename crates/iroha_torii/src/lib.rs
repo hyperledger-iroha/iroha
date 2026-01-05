@@ -9428,21 +9428,22 @@ async fn handle_connect_ws_logic(
         .and_then(|value| value.to_str().ok())
         .and_then(|s| s.parse().ok())
         .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
-    if let Err((code, msg)) = bus.pre_ws_handshake(remote_ip).await {
-        return (code, msg).into_response();
-    }
-    let sid_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(q.sid.as_bytes())
-        .unwrap_or_default();
-    if sid_bytes.len() != 32 {
-        return (StatusCode::BAD_REQUEST, "connect: bad sid").into_response();
-    }
-    let mut sid = [0u8; 32];
-    sid.copy_from_slice(&sid_bytes);
+    let mut permit = match bus.pre_ws_handshake(remote_ip).await {
+        Ok(permit) => permit,
+        Err((code, msg)) => return (code, msg).into_response(),
+    };
+    let sid = match crate::connect::decode_sid(&q.sid) {
+        Ok(sid) => sid,
+        Err(_) => {
+            permit.release().await;
+            return (StatusCode::BAD_REQUEST, "connect: bad sid").into_response();
+        }
+    };
     let role = match q.role.as_str() {
         "app" => iroha_torii_shared::connect::Role::App,
         "wallet" => iroha_torii_shared::connect::Role::Wallet,
         other => {
+            permit.release().await;
             return (
                 StatusCode::BAD_REQUEST,
                 format!("connect: bad role {other}"),
@@ -9452,9 +9453,13 @@ async fn handle_connect_ws_logic(
     };
     let token = match resolve_connect_ws_token(&headers) {
         Ok(token) => token,
-        Err(response) => return response,
+        Err(response) => {
+            permit.release().await;
+            return response;
+        }
     };
     if let Err((code, msg)) = bus.authorize_token(sid, role, &token.token).await {
+        permit.release().await;
         return (code, msg).into_response();
     }
     let ws = if let Some(protocol) = token.protocol {
@@ -9463,7 +9468,9 @@ async fn handle_connect_ws_logic(
         ws
     };
     ws.on_upgrade(move |ws| async move {
-        if let Err(e) = connect::handle_ws(bus, q, ws, remote_ip).await {
+        let result = connect::handle_ws(bus, q, ws).await;
+        permit.release().await;
+        if let Err(e) = result {
             iroha_logger::warn!(%e, "connect ws session ended with error");
         }
     })

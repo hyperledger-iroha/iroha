@@ -7779,8 +7779,7 @@ pub mod codec {
                 ..BaselineEncoderConfig::default()
             };
             let mut encoder = BaselineEncoder::new(config);
-            let frame =
-                RawFrame::new(dims, vec![0u8; dims.pixel_count()]).expect("frame");
+            let frame = RawFrame::new(dims, vec![0u8; dims.pixel_count()]).expect("frame");
             let err = encoder
                 .encode_segment(1, 0, 0, &[frame], Some(&[]))
                 .expect_err("zero frame_samples should error");
@@ -8141,8 +8140,7 @@ pub mod codec {
             let bundles = sample_bundles();
             let stream = encode_bundle_stream_simd(tables.as_ref(), &bundles, 0);
             assert!(stream.starts_with(&SIMD_BUNDLE_MAGIC));
-            let decoded =
-                decode_bundle_stream(&stream, &bundles, tables.as_ref()).expect("decode");
+            let decoded = decode_bundle_stream(&stream, &bundles, tables.as_ref()).expect("decode");
             let expected: Vec<u8> = bundles
                 .iter()
                 .map(|record| record.bits & ((1u8 << record.bit_len) - 1))

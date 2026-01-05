@@ -60,6 +60,23 @@ pub struct Bus {
     handshake_buckets: Arc<Mutex<HashMap<IpAddr, TokenBucket>>>,
 }
 
+/// Reservation for a Connect WebSocket slot, released on failure/close.
+pub(crate) struct WsPermit {
+    bus: Bus,
+    ip: IpAddr,
+    released: bool,
+}
+
+impl WsPermit {
+    pub(crate) async fn release(&mut self) {
+        if self.released {
+            return;
+        }
+        self.released = true;
+        self.bus.session_closed(self.ip).await;
+    }
+}
+
 #[derive(Default)]
 #[allow(clippy::struct_field_names)]
 struct BusShared {
@@ -342,20 +359,17 @@ impl Bus {
     pub async fn pre_ws_handshake(
         &self,
         ip: IpAddr,
-    ) -> Result<(), (axum::http::StatusCode, String)> {
-        self.check_handshake_cap()?;
-        // Per-IP cap
-        if self.policy.ws_per_ip_max_sessions > 0 {
-            let counts = self.per_ip_counts.lock().await;
-            if counts.get(&ip).copied().unwrap_or(0) >= self.policy.ws_per_ip_max_sessions {
-                return Err((
-                    axum::http::StatusCode::TOO_MANY_REQUESTS,
-                    "connect: per-ip session cap".into(),
-                ));
-            }
+    ) -> Result<WsPermit, (axum::http::StatusCode, String)> {
+        self.reserve_ws_slot(ip).await?;
+        if let Err(err) = self.consume_handshake_token(ip).await {
+            self.session_closed(ip).await;
+            return Err(err);
         }
-        self.consume_handshake_token(ip).await?;
-        Ok(())
+        Ok(WsPermit {
+            bus: self.clone(),
+            ip,
+            released: false,
+        })
     }
 
     /// Pre-creation gate for REST session provisioning.
@@ -368,11 +382,46 @@ impl Bus {
         Ok(())
     }
 
-    fn check_handshake_cap(&self) -> Result<(), (axum::http::StatusCode, String)> {
-        if self.shared.sessions_total.load(Ordering::Relaxed) >= self.policy.ws_max_sessions {
+    async fn reserve_ws_slot(
+        &self,
+        ip: IpAddr,
+    ) -> Result<(), (axum::http::StatusCode, String)> {
+        if self.policy.ws_max_sessions == 0 {
             return Err((
                 axum::http::StatusCode::TOO_MANY_REQUESTS,
                 "connect: global session cap".into(),
+            ));
+        }
+        let prev = self
+            .shared
+            .sessions_total
+            .fetch_add(1, Ordering::AcqRel);
+        if prev >= self.policy.ws_max_sessions {
+            self.shared
+                .sessions_total
+                .fetch_sub(1, Ordering::AcqRel);
+            return Err((
+                axum::http::StatusCode::TOO_MANY_REQUESTS,
+                "connect: global session cap".into(),
+            ));
+        }
+
+        let mut counts = self.per_ip_counts.lock().await;
+        let entry = counts.entry(ip).or_insert(0);
+        *entry += 1;
+        if self.policy.ws_per_ip_max_sessions > 0
+            && *entry > self.policy.ws_per_ip_max_sessions
+        {
+            *entry -= 1;
+            if *entry == 0 {
+                counts.remove(&ip);
+            }
+            self.shared
+                .sessions_total
+                .fetch_sub(1, Ordering::AcqRel);
+            return Err((
+                axum::http::StatusCode::TOO_MANY_REQUESTS,
+                "connect: per-ip session cap".into(),
             ));
         }
         Ok(())
@@ -916,7 +965,6 @@ pub async fn handle_ws(
     bus: Bus,
     q: crate::routing::ConnectWsQuery,
     ws: WebSocket,
-    remote_ip: std::net::IpAddr,
 ) -> Result<(), String> {
     use tokio::task::JoinSet;
 
@@ -927,7 +975,6 @@ pub async fn handle_ws(
         other => return Err(format!("bad role: {other}")),
     };
 
-    bus.session_opened(remote_ip).await;
     let mut inbox = bus.attach(sid, role).await;
 
     let mut tasks = JoinSet::new();
@@ -1061,7 +1108,6 @@ pub async fn handle_ws(
     }
 
     bus.detach(sid, role).await;
-    bus.session_closed(remote_ip).await;
     // Drain writer task
     while let Some(_r) = tasks.join_next().await {}
     Ok(())

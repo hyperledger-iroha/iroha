@@ -1,6 +1,19 @@
 # Status
 
 ## Latest Updates
+- IVM/Kotodama: keep spill stack offsets in i64 to avoid truncation, make regalloc interval ordering deterministic, and clarify map-iteration bounds commentary; add unit coverage for large stack offsets and deterministic allocation ties.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Kura: validate sidecar temp index sanity before promotion to avoid replacing good indexes with partial temp writes; add regression coverage for corrupt temp index handling.
+- Tests: not run (not requested).
+- Kura: make sidecar pruning tolerate misaligned index tails and invalid entries (drop out-of-range payloads) with regression coverage.
+- Tests: not run (not requested).
+- Crypto/IVM: align compact Merkle proof `dirs` semantics with leaf-index bits (0 = left, 1 = right) across iroha_crypto + IVM compact proof generation/verification; add regression coverage for dirs derivation and syscall output.
+- Tests: not run (existing norito compile errors in `crates/norito/src/streaming.rs` still block `cargo test`).
+- Norito: fix JSON unescape to preserve UTF-8 bytes, reject leading-zero numbers in `parse_value`, and add regression coverage.
+- Tests: `cargo test --workspace` (failed: missing `AudioEncoderSampleCountMismatchInfo` in `crates/norito/src/streaming.rs:4230`; warning about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450`).
+- Crypto/SoraFS: switch proof-token Ed25519 verification to strict mode (reject weak keys/non-canonical signatures) and add low-order signature regression coverage.
+- IVM: enforce canonical/low-S secp256k1 verification, align ISO 20022 secp256k1 signing/validation with compressed SEC1 keys, and add high-S rejection coverage.
+- Tests: `cargo test -p iroha_crypto secp256k1` (failed: missing `AudioEncoderSampleCountMismatchInfo` in `crates/norito/src/streaming.rs:4230`; warning about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450`).
 - DA spool readers: skip unreadable/corrupt commitment/pin‑intent/receipt files with warnings for partial‑write tolerance; add regression coverage for corrupt entries.
 - Tests: not run (not requested).
 - Kura/WSV: sync parent directories after lane storage relabel/retire renames to harden crash consistency for lane segment moves.
@@ -1114,3 +1127,5 @@
 - Rejected duplicate public keys in BLS same-message aggregate verification (including pre-aggregated checks) with new regressions for both normal and small variants.
 - Hardened Kura block store init by clamping commit markers to data-backed counts, preserving markers during prune, and aligning hash lengths; added tests for data-backed fallback and hash misalignment.
 - Snapshot reader now falls back to temp Merkle metadata when the main metadata is corrupt, with coverage for the new behavior.
+- Kura disk-usage accounting now includes sidecar temp/debug files by summing block-store and pipeline directories, with a regression covering extra files.
+- Synced merge-ledger truncation and tiered snapshot pruning roots to harden crash consistency after pruning.

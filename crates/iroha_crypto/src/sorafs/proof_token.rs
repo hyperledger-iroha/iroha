@@ -363,7 +363,8 @@ impl ProofToken {
     ///
     /// # Errors
     ///
-    /// Returns [`VerificationError::InvalidSignature`] when verification fails.
+    /// Returns [`VerificationError::InvalidSignature`] when verification fails. Uses strict
+    /// Ed25519 verification and rejects weak public keys and non-canonical signatures.
     pub fn verify_signature(&self, verifying_key: &VerifyingKey) -> Result<(), VerificationError> {
         if verifying_key.is_weak() {
             return Err(VerificationError::InvalidSignature);
@@ -559,8 +560,8 @@ mod tests {
         edwards::EdwardsPoint,
         traits::{Identity, IsIdentity},
     };
-    use ed25519_dalek::Verifier as _;
     use ed25519_dalek::SigningKey;
+    use ed25519_dalek::Verifier as _;
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
     use sha2::{Digest, Sha512};
@@ -643,8 +644,8 @@ mod tests {
     #[test]
     fn verify_signature_rejects_low_order_public_key_signatures() {
         const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
-            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0,
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
         ];
 
         fn hash_mod_order(

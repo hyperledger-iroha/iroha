@@ -6038,6 +6038,7 @@ pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(bytes: &'a [u8]) -> Result<&'a A
 #[derive(Clone, Copy)]
 pub struct ArchiveView<'a> {
     bytes: &'a [u8],
+    padding_len: usize,
     flags: u8,
     flags_hint: u8,
     schema: [u8; 16],
@@ -6087,6 +6088,9 @@ impl<'a> ArchiveView<'a> {
         if self.schema != T::schema_hash() {
             return Err(Error::SchemaMismatch);
         }
+        if self.padding_len != payload_alignment_padding_for::<T>() {
+            return Err(Error::LengthMismatch);
+        }
         self.decode_inner()
     }
 
@@ -6111,6 +6115,7 @@ pub fn from_bytes_view<'a>(bytes: &'a [u8]) -> Result<ArchiveView<'a>, Error> {
     let slice = &bytes[pos..];
     let payload_len = payload_len_to_usize(header.length)?;
     let payload = payload_without_leading_padding(slice, payload_len, MAX_HEADER_PADDING)?;
+    let padding_len = slice.len() - payload.len();
     if crc64(payload) != header.checksum {
         return Err(Error::ChecksumMismatch);
     }
@@ -6122,6 +6127,7 @@ pub fn from_bytes_view<'a>(bytes: &'a [u8]) -> Result<ArchiveView<'a>, Error> {
     );
     Ok(ArchiveView {
         bytes: payload,
+        padding_len,
         flags: header.flags,
         flags_hint: header.minor,
         schema: header.schema,
@@ -6136,6 +6142,9 @@ where
     let view = from_bytes_view(bytes)?;
     if view.schema() != T::schema_hash() {
         return Err(Error::SchemaMismatch);
+    }
+    if view.padding_len != payload_alignment_padding_for::<T>() {
+        return Err(Error::LengthMismatch);
     }
     let payload_src = view.as_bytes();
     let flags = view.flags;
@@ -6716,6 +6725,20 @@ mod tests {
         mutated.extend_from_slice(&bytes[insert_at..]);
 
         let result = from_bytes::<u64>(&mutated);
+        assert!(matches!(result, Err(Error::LengthMismatch)));
+    }
+
+    #[test]
+    fn decode_from_bytes_rejects_excess_padding() {
+        let value: u64 = 0x1122_3344_5566_7788;
+        let bytes = to_bytes(&value).expect("encode header-framed payload");
+        let insert_at = Header::SIZE + payload_alignment_padding_for::<u64>();
+        let mut mutated = Vec::with_capacity(bytes.len() + 2);
+        mutated.extend_from_slice(&bytes[..insert_at]);
+        mutated.extend_from_slice(&[0u8; 2]); // extra padding beyond alignment
+        mutated.extend_from_slice(&bytes[insert_at..]);
+
+        let result = crate::decode_from_bytes::<u64>(&mutated);
         assert!(matches!(result, Err(Error::LengthMismatch)));
     }
 

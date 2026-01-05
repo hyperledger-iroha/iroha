@@ -65,7 +65,7 @@ pub fn allocate(func: &Function) -> Allocation {
     }
 
     let mut interval_list: Vec<Interval> = intervals.values().copied().collect();
-    interval_list.sort_by_key(|iv| iv.start);
+    interval_list.sort_by_key(|iv| (iv.start, iv.temp.0));
     let debug_intervals = interval_list.clone();
 
     let mut allocation = Allocation {
@@ -710,5 +710,32 @@ mod tests {
         );
         assert!(alloc.frame_size > 0);
         assert_eq!(alloc.frame_size % 16, 0);
+    }
+
+    #[test]
+    fn deterministic_allocation_for_equal_start_intervals() {
+        let dest0 = Temp(0);
+        let dest1 = Temp(1);
+        let instrs = vec![Instr::CallMulti {
+            callee: "f".into(),
+            args: Vec::new(),
+            dests: vec![dest0, dest1],
+        }];
+        let block = BasicBlock {
+            label: ir::Label(0),
+            instrs,
+            terminator: Terminator::Return(None),
+        };
+        let func = Function {
+            name: "f".into(),
+            params: vec![],
+            blocks: vec![block],
+            entry: ir::Label(0),
+        };
+        let alloc = allocate(&func);
+        let expected_first = *ALLOC_POOL.last().expect("alloc pool");
+        let expected_second = ALLOC_POOL[ALLOC_POOL.len() - 2];
+        assert_eq!(alloc.regs.get(&dest0), Some(&expected_first));
+        assert_eq!(alloc.regs.get(&dest1), Some(&expected_second));
     }
 }

@@ -22,7 +22,7 @@ use std::{
 #[cfg(feature = "ed25519")]
 use ed25519_dalek::{Signer as _, SigningKey};
 #[cfg(feature = "secp256k1")]
-use k256::ecdsa::{SigningKey as Secp256k1SigningKey, signature::Signer as _};
+use iroha_crypto::EcdsaSecp256k1Sha256;
 
 #[cfg(any(feature = "ed25519", feature = "ml-dsa", feature = "secp256k1"))]
 use crate::signature::{SignatureScheme, verify_signature};
@@ -3859,9 +3859,8 @@ pub fn msg_sign(key: &[u8]) -> Vec<u8> {
     #[cfg(feature = "secp256k1")]
     {
         if let Ok(sk_bytes) = <[u8; 32]>::try_from(key) {
-            if let Ok(sk) = Secp256k1SigningKey::from_bytes(&sk_bytes.into()) {
-                let sig: k256::ecdsa::Signature = sk.sign(&msg);
-                return sig.to_vec();
+            if let Ok(sk) = EcdsaSecp256k1Sha256::parse_private_key(&sk_bytes) {
+                return EcdsaSecp256k1Sha256::sign(&msg, &sk);
             }
         }
     }
@@ -3872,7 +3871,8 @@ pub fn msg_sign(key: &[u8]) -> Vec<u8> {
 ///
 /// Uses the [`verify_signature`] helper with Ed25519, secp256k1, or ML-DSA
 /// depending on the key length and enabled features. The serialized message
-/// bytes are used as the signing payload.
+/// bytes are used as the signing payload. Secp256k1 expects a 33-byte
+/// compressed SEC1 public key.
 #[allow(unused_variables)]
 pub fn msg_verify_sig(sig: &[u8], key: &[u8]) -> bool {
     #[cfg(any(feature = "ed25519", feature = "ml-dsa", feature = "secp256k1"))]
@@ -3895,7 +3895,7 @@ pub fn msg_verify_sig(sig: &[u8], key: &[u8]) -> bool {
     }
     #[cfg(feature = "secp256k1")]
     {
-        if (key.len() == 33 || key.len() == 65) && sig.len() == 64 {
+        if key.len() == 33 && sig.len() == 64 {
             return verify_signature(SignatureScheme::Secp256k1, &msg, sig, key);
         }
     }

@@ -62,17 +62,12 @@ pub fn make_compact_from_path_bytes(
     depth_cap: Option<usize>,
 ) -> CompactMerkleProof<[u8; 32]> {
     let depth = depth_cap.map_or_else(|| path.len().min(32), |cap| path.len().min(cap).min(32));
-    // Mirror the direction derivation used by `Memory::merkle_compact` / `Registers::merkle_compact`
-    // (BFS index at full height, then truncate to `depth` bits). This keeps compact proofs stable
-    // when callers cap depth, matching the syscall output.
-    let mut dirs: u32 = 0;
-    let total = path.len();
-    let mut idx = ((1usize << total) - 1).saturating_add(leaf_index as usize);
-    for i in 0..depth {
-        let bit = (idx & 1) as u32;
-        dirs |= bit << i;
-        idx = idx.saturating_sub(1) >> 1;
-    }
+    // Direction bits follow leaf-index semantics; depth caps use low bits.
+    let dirs = if depth == 32 {
+        leaf_index
+    } else {
+        leaf_index & ((1u32 << depth) - 1)
+    };
     let siblings = path
         .iter()
         .take(depth)
