@@ -11,7 +11,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 
 :::note Канонический источник
-Эта страница отражает `docs/source/sorafs/developer/deployment.md`. Держите обе версии синхронизированными, пока legacy документация не будет выведена из эксплуатации.
 :::
 
 # Заметки по развертыванию

@@ -6,7 +6,6 @@ description: Operational guide for promoting the SoraNet hybrid X25519+ML-KEM ha
 ---
 
 :::note Canonical Source
-This page mirrors `docs/source/soranet/pq_rollout_plan.md`. Keep both copies aligned until the legacy documentation set is retired.
 :::
 
 SNNet-16G finishes the post-quantum rollout for the SoraNet transport. The `rollout_phase` knobs let operators coordinate a deterministic promotion from the existing Stage A guard requirement to Stage B majority coverage and the Stage C strict PQ posture without editing raw JSON/TOML for every surface.

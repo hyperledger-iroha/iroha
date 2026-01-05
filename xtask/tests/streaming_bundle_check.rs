@@ -56,43 +56,6 @@ fn assert_tables_path(summary: &Value) {
 }
 
 #[test]
-fn streaming_bundle_check_reports_legacy_entropy_settings() {
-    let summary = run_bundle_check("crates/iroha_config/tests/fixtures/streaming_legacy.toml");
-    assert!(
-        !summary["bundle_required"]
-            .as_bool()
-            .expect("bundle_required should be boolean"),
-        "legacy config should not require bundled entropy"
-    );
-    assert_eq!(
-        summary["entropy_mode"].as_str(),
-        Some("rans"),
-        "legacy config should advertise legacy entropy"
-    );
-    assert_eq!(
-        summary["bundle_accel"].as_str(),
-        Some("none"),
-        "legacy config should keep bundle acceleration disabled"
-    );
-    assert_eq!(
-        summary["bundle_width"].as_i64(),
-        Some(1),
-        "legacy config should stick to width=1"
-    );
-    assert_eq!(
-        summary["gpu_build_available"].as_bool(),
-        Some(norito::streaming::BUNDLED_RANS_GPU_BUILD_AVAILABLE),
-        "gpu_build_available should mirror the compiled Norito features"
-    );
-    assert_eq!(
-        summary["bundle_accel_allowed"].as_bool(),
-        Some(true),
-        "legacy configs should always mark bundle acceleration as allowed"
-    );
-    assert_tables_path(&summary);
-}
-
-#[test]
 fn streaming_bundle_check_reports_bundled_requirements() {
     if !BUNDLED_RANS_BUILD_AVAILABLE {
         eprintln!("skipping bundled entropy test (ENABLE_RANS_BUNDLES not enabled)");

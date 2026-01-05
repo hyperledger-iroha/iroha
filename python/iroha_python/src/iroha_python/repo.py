@@ -110,11 +110,6 @@ class RepoAgreementRecord:
                 raise KeyError(f"repo agreement payload missing `{name}` field")
             return payload[name]
 
-        def optional_alias(name: str, alias: str) -> Any:
-            if name in payload:
-                return payload[name]
-            return payload.get(alias)
-
         cash_payload = require("cash_leg")
         collateral_payload = require("collateral_leg")
         governance_payload = require("governance")
@@ -139,21 +134,21 @@ class RepoAgreementRecord:
                 governance_payload.get("margin_frequency_secs"), "repo governance.margin_frequency_secs", allow_zero=True
             ),
         )
-        custodian = optional_alias("custodian", "custodian_id")
+        custodian = payload.get("custodian")
         if custodian is not None:
             custodian = _require_non_empty_string(custodian, "repo custodian")
 
         initiated_timestamp_ms = _coerce_int_field(
-            optional_alias("initiated_timestamp_ms", "initiatedTimestampMs"),
+            payload.get("initiated_timestamp_ms"),
             "repo initiated_timestamp_ms",
             allow_zero=True,
         )
         maturity_timestamp_ms = _coerce_int_field(
-            optional_alias("maturity_timestamp_ms", "maturityTimestampMs"),
+            payload.get("maturity_timestamp_ms"),
             "repo maturity_timestamp_ms",
             allow_zero=True,
         )
-        last_margin_literal = optional_alias("last_margin_check_timestamp_ms", "lastMarginCheckTimestampMs")
+        last_margin_literal = payload.get("last_margin_check_timestamp_ms")
         if last_margin_literal is None:
             last_margin_check_timestamp_ms = initiated_timestamp_ms
         else:

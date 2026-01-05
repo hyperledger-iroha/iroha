@@ -7,7 +7,6 @@ This runbook captures the branching, build, validation, and publication flow req
 ## Scope & Roles
 - **Release Manager** — coordinates the schedule, drives the checklist, owns branching/tagging.
 - **Core Engineering Lead** — approves code freeze, validates consensus/perf gates, signs binaries.
-- **SDK Leads (Rust, Python, JS, Swift, Android)** — confirm compatibility and publish SDK artefacts.
 - **Ops / DevRel** — verify packaging, update operator docs, announce availability.
 - **Security Review** — sign-off on manifest hashes and signing key custody.
 
@@ -31,7 +30,6 @@ This runbook captures the branching, build, validation, and publication flow req
 | D‑7 | Code freeze + release planning call | Release Manager | Outstanding PR triage, roadmap review. |
 | D‑6 | Branch cut (see above) | Release Manager | CI green on `main`, feature flags documented. |
 | D‑5 | Profile build smoke (`ci/dual_profile_smoke.sh`) | Core Lead | Build logs archived in `artifacts/smoke/`. |
-| D‑4 | SDK compatibility window opens | SDK Leads | `cargo xtask sdk-smoke`, Python/JS/Swift pipeline dry run. |
 | D‑3 | Chaos/perf deltas (NPoS, Nexus) | SRE / Core | Attach metrics to release ticket. |
 | D‑2 | Final validation matrix (see below) | Release Manager | All rows pass; blockers escalated. |
 | D‑1 | Sign binaries, stage images | Security / Core | Hash/sign manifests generated. |
@@ -105,7 +103,6 @@ Record the outcome of each review in the release tracker and refuse promotion to
 | Config | `scripts/select_release_profile.py --network self-hosted --emit-manifest artifacts/network_profiles.json` | `scripts/select_release_profile.py --network sora-nexus --emit-manifest artifacts/network_profiles_nexus.json`. |
 | SDK Parity | Rust/Python/JS CLI smoke against bundle (`scripts/sdk_release_smoke.sh --profile iroha2`). | Same script with `--profile iroha3` and Nexus config. |
 | Telemetry | Verify `/metrics` and `/status` endpoints using `ci/release_metrics_check.sh`. | Ensure Nexus-specific gauges (lane counts, Nexus DA) present. |
-| Governance | Governance ballots/plain ISI e2e; ensure legacy features not enabled. | ZK referendum flow with Torii ISO bridge harness. |
 
 Record pass/fail in the release ticket. Any ❌ requires engineering sign-off before release proceeds.
 
@@ -120,7 +117,6 @@ Record pass/fail in the release ticket. Any ❌ requires engineering sign-off be
 |------|-------------------|----------|
 | Freeze Confirmation | Release Manager + Core Lead | Meeting notes in tracker ticket. |
 | Validation Matrix | Release Manager + relevant domain owners | Checklist in release PR/checklist. |
-| SDK Compatibility | Each SDK lead | SDK smoke logs attached. |
 | Security/Signing | Security Review + Core Lead | Signed hash manifests, key custody log. |
 | Publication | Release Manager + Ops | Bucket upload log, GitHub release draft. |
 

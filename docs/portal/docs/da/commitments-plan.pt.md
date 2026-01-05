@@ -11,7 +11,6 @@ translation_last_reviewed: 2026-01-01
 
 :::note Fonte canonica
 Espelha `docs/source/da/commitments_plan.md`. Mantenha as duas versoes em
-sincronia ate que os docs legacy sejam aposentados.
 :::
 
 # Plano de compromissos de Data Availability da Sora Nexus (DA-3)
@@ -99,7 +98,6 @@ pub struct DaCommitmentBundle {
 
 O hash do bundle entra tanto no hash do bloco quanto na metadata de
 `SignedBlockWire`. Quando um bloco nao carrega dados DA, o campo fica `None` para
-que lanes legacy evitem o overhead.
 
 Nota de implementacao: `BlockPayload` e o `BlockBuilder` transparente agora
 expoem setters/getters `da_commitments` (ver `BlockBuilder::set_da_commitments`

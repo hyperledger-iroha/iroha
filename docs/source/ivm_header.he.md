@@ -48,7 +48,7 @@ translator: manual
 - CoreHost מחבר את STATE_{GET,SET,DEL} למצב חוזים עמיד מגובה־WSV; מארחי dev/בדיקה יכולים להשתמש ב־overlays או בהתמדה מקומית אך חייבים לשמור על אותה התנהגות נצפית.
 
 ## ולידציה
-- קבלה לנוד מאפשרת רק כותרות עם `version_major = 1`; ערכים אחרים נדחים.
+- קבלה לנוד מאפשרת רק כותרות עם `version_major = 1` ו־`version_minor = 0`.
 - `mode` חייב להכיל רק ביטים מוכרים: ‏`ZK`, ‏`VECTOR`, ‏`HTM` (ביטים לא מוכרים נדחים).
 - ‏`vector_length` הוא שדה ייעוץ ויכול להיות לא־אפס גם אם ביט `VECTOR` אינו מוגדר; הקבלה אוכפת חסם עליון בלבד.
 - ערכי `abi_version` נתמכים: גרסת השחרור הראשונה תומכת ב־`1` בלבד (V1); ערכים אחרים נדחים בקבלה.
@@ -60,7 +60,7 @@ translator: manual
 | שדה | מדיניות |
 |---|---|
 | version_major | 1 |
-| version_minor | כל ערך |
+| version_minor | 0 |
 | mode (known bits) | ‎0x07 (‏ZK=0x01, VECTOR=0x02, HTM=0x04) |
 | abi_version | 1 |
 | vector_length | 0 או 1..=64 (ייעוצי; לא תלוי בביט VECTOR) |

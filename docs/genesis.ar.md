@@ -24,13 +24,15 @@ Iroha. الملف عبارة عن كائن JSON يحتوي الحقول التا
   غيابه، لا يتم إجراء upgrade ويُستخدم الـ executor المدمج.
 - `ivm_dir`: دليل يحتوي على مكتبات bytecode الخاص بـ IVM. القيمة
   الافتراضية `"."` إذا لم يُذكر.
+- `consensus_mode`: وضع الإجماع المُعلن في الـ manifest. مطلوب؛ استخدم `"Npos"` لـ Iroha3 (افتراضيًا) و `"Permissioned"` لـ Iroha2.
 - `transactions`: قائمة بمعاملات genesis تُنفَّذ تسلسليًا. يمكن أن تحتوي
   كلّ واحدة على:
   - `parameters`: معاملات الشبكة الابتدائية.
   - `instructions`: تعليمات مشفَّرة باستخدام Norito.
   - `ivm_triggers`: triggers مع ملفات تنفيذية لـ IVM.
-  - `topology`: طوبولوجيا الـ peers الابتدائية. يمكن أن يتضمن كل إدخال
-    `pop_hex` (اختياري) لإثبات الحيازة، لكنه يجب أن يكون موجودًا قبل التوقيع.
+  - `topology`: طوبولوجيا الـ peers الابتدائية. كل إدخال يستخدم `peer`
+    (PeerId كسلسلة نصية، أي المفتاح العام) و`pop_hex`؛ يمكن حذف `pop_hex`
+    أثناء الإعداد، لكنه يجب أن يكون موجودًا قبل التوقيع.
 - `crypto`: لقطة (snapshot) لإعدادات التشفير، تعكس
   `iroha_config.crypto` (`default_hash`, `allowed_signing`,
   `allowed_curve_ids`, `sm2_distid_default`, `sm_openssl_preview`).
@@ -41,7 +43,7 @@ Iroha. الملف عبارة عن كائن JSON يحتوي الحقول التا
   الـ hash إلى `sm3-256`، في حين أن الـ builds التي تُجمَّع بدون
   feature `sm` ترفض `sm2` تمامًا.
 
-مثال (خروج الأمر `kagami genesis generate default`، مع اختصار جزء
+مثال (خروج الأمر `kagami genesis generate default --consensus-mode npos`، مع اختصار جزء
 التعليمات):
 
 ```json
@@ -56,6 +58,7 @@ Iroha. الملف عبارة عن كائن JSON يحتوي الحقول التا
       "topology": []
     }
   ],
+  "consensus_mode": "Npos",
   "crypto": {
     "default_hash": "blake2b-256",
     "allowed_signing": ["ed25519"],
@@ -148,6 +151,7 @@ cargo run -p iroha_cli --features sm -- \
    ```bash
    cargo run -p iroha_kagami -- genesis generate \
      [--executor <path/to/executor.to>] \
+     --consensus-mode npos \
      [--genesis-public-key <public-key>] \
      > genesis.json
    ```
@@ -158,6 +162,7 @@ cargo run -p iroha_cli --features sm -- \
      genesis block؛ يجب أن يكون multihash مدعومًا في
      `iroha_crypto::Algorithm` (بما في ذلك متغيّرات GOST TC26 عند
      تفعيل الـ feature المناسب).
+   - في Iroha3، `--consensus-mode npos` مطلوب ولا يوجد دعم للقطع المرحلي؛ في Iroha2 الوضع الافتراضي هو `permissioned`.
 
 2. التحقق أثناء التحرير:
 
@@ -191,6 +196,9 @@ cargo run -p iroha_cli --features sm -- \
 تحتج إلى تحديث الـ executor في genesis، يمكنك حذف الحقل `executor` وعدم
 توفير ملف `.to`.
 
+عند توقيع مانيفستات NPoS (`--consensus-mode npos` أو قطع مرحلي في Iroha2 فقط)، تتطلب `kagami genesis sign` حمولة `sumeragi_npos_parameters`؛ أنشئها عبر `kagami genesis generate --consensus-mode npos` أو أضف المعامل يدويًا.
+افتراضيًا، تستخدم `kagami genesis sign` قيمة `consensus_mode` من الـ manifest؛ مرّر `--consensus-mode` للتجاوز.
+
 ## ما الذي يمكن لـ Genesis فعله؟
 
 يدعم genesis العمليات التالية. يقوم Kagami بتجميعها في معاملات وفق
@@ -212,8 +220,9 @@ cargo run -p iroha_cli --features sm -- \
   `ivm_triggers`). تتمّ معالجة executables الخاصة بالـ triggers بشكل نسبي
   إلى `ivm_dir`.
 - **الطوبولوجيا (Topology)**: توفير المجموعة الابتدائية من الـ peers عبر
-  مصفوفة `topology` (قائمة من `PeerId`) داخل أي معاملة (عادةً الأولى أو
-  الأخيرة).
+  مصفوفة `topology` داخل أي معاملة (عادةً الأولى أو الأخيرة). كل إدخال هو
+  `{ "peer": "<public_key>", "pop_hex": "<hex>" }`؛ يمكن حذف `pop_hex` أثناء
+  الإعداد، لكنه يجب أن يكون موجودًا قبل التوقيع.
 - **تحديث executor (اختياري)**: إذا كان `executor` موجودًا، يُدرِج genesis
   تعليمة `Upgrade` واحدة كأول معاملة؛ وإلا يبدأ genesis مباشرةً من
   المعلمات/التعليمات.
@@ -236,7 +245,7 @@ cargo run -p iroha_cli --features sm -- \
 
 - البدء من قالب يُولّده Kagami:
   - ISI مدمجة فقط:  
-    `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> [--consensus-mode npos] > genesis.json`
+    `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (افتراضي Iroha3؛ استخدم `--consensus-mode permissioned` لـ Iroha2)
   - مع upgrade اختياري للـ executor: إضافة `--executor <path/to/executor.to>`
 - `<PK>` هو أي multihash مدعوم في `iroha_crypto::Algorithm`، بما في ذلك
   متغيرات GOST TC26 عندما يُبنى Kagami مع `--features gost` (مثل

@@ -148,7 +148,7 @@ Key behaviours:
 
 ## Keyless Signing Workflow
 
-`manifest sign` can mint Sigstore-compatible signatures from multiple token
+`manifest sign` can mint Sigstore-verifiable signatures from multiple token
 sources. Provide a credential inline, via an explicit environment variable, or
 from a file when running locally. Inside GitHub Actions, pass
 `--identity-token-provider=github-actions` **and**
@@ -274,7 +274,9 @@ cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
 `proof stream` replays each proof item as NDJSON (unless suppressed with
 `--emit-events=false`) and emits an aggregate summary that tracks success,
 failure, latency, and—when `--por-root-hex` is provided—local verification
-results. The summary JSON mirrors the Torii Prometheus metrics that the gateway
+results. Requests address manifests by `manifest_digest_hex` (BLAKE3-256 of the
+canonical manifest) so proof streams remain deterministic across gateways. The
+summary JSON mirrors the Torii Prometheus metrics that the gateway
 exports (`torii_sorafs_proof_stream_events_total`,
 `torii_sorafs_proof_stream_latency_ms`, and
 `torii_sorafs_proof_stream_inflight`) and feeds the example Grafana dashboard in
@@ -515,17 +517,6 @@ iroha sorafs gateway merkle proof \
 Use `gateway update-denylist` to apply additions/removals and emit artefacts in
 one run:
 
-```bash
-iroha sorafs gateway update-denylist \
-  --base artifacts/ministry/denylist_registry/2026-05-20/denylist.json \
-  --add artifacts/ministry/denylist_registry/2026-05-20/additions.json \
-  --remove-descriptor account_alias:legacy@sora \
-  --out artifacts/ministry/denylist_registry/2026-05-20/denylist_updated.json \
-  --snapshot-out artifacts/ministry/denylist_registry/2026-05-20/denylist_merkle_snapshot.json \
-  --snapshot-norito-out artifacts/ministry/denylist_registry/2026-05-20/denylist_merkle_snapshot.to \
-  --evidence-out artifacts/ministry/denylist_registry/2026-05-20/denylist_evidence.json \
-  --label 2026-05-rollup
-```
 
 - Records are revalidated, descriptors are canonicalised (provider/manifest
   digests are upper-cased), duplicates are rejected unless

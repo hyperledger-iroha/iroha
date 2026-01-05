@@ -58,7 +58,6 @@ covers every route group.
 
 Projects embedding Torii should migrate any direct `Router` manipulations to
 `RouterBuilder` helpers. The historical pattern of returning a modified router from
-`add_*_routes` is deprecated and no longer supported inside the crate.
 
 ## Further Reading
 

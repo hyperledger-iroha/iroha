@@ -168,7 +168,7 @@ async fn prover_reports_zk1_tags_present_for_norito() {
             }),
         );
 
-    // Create a Norito attachment with minimal ZK1 envelope and one TLV: PROF (0 bytes)
+    // Create a ZK1 attachment with minimal envelope and one TLV: PROF (0 bytes)
     iroha_torii::zk_attachments::init_persistence();
     let mut body = b"ZK1\0".to_vec();
     body.extend_from_slice(b"PROF");
@@ -177,7 +177,7 @@ async fn prover_reports_zk1_tags_present_for_norito() {
         let mut h = axum::http::HeaderMap::new();
         h.insert(
             axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_static("application/x-norito"),
+            axum::http::HeaderValue::from_static("application/x-zk1"),
         );
         h
     };
@@ -262,7 +262,7 @@ async fn prover_reports_zk1_tags_order_prof_ipak() {
             }),
         );
 
-    // Create a Norito attachment with ZK1 envelope containing two TLVs: PROF (0), IPAK (4 -> k=5)
+    // Create a ZK1 attachment with envelope containing two TLVs: PROF (0), IPAK (4 -> k=5)
     iroha_torii::zk_attachments::init_persistence();
     let mut body = b"ZK1\0".to_vec();
     // PROF TLV
@@ -276,7 +276,7 @@ async fn prover_reports_zk1_tags_order_prof_ipak() {
         let mut h = axum::http::HeaderMap::new();
         h.insert(
             axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_static("application/x-norito"),
+            axum::http::HeaderValue::from_static("application/x-zk1"),
         );
         h
     };
@@ -373,7 +373,7 @@ async fn prover_reports_error_for_truncated_tlv() {
             }),
         );
 
-    // Create a Norito attachment with ZK1 envelope and truncated TLV payload
+    // Create a ZK1 attachment with truncated TLV payload
     iroha_torii::zk_attachments::init_persistence();
     let mut body = b"ZK1\0".to_vec();
     // TLV header present: PROF + len=10, but payload missing
@@ -383,7 +383,7 @@ async fn prover_reports_error_for_truncated_tlv() {
         let mut h = axum::http::HeaderMap::new();
         h.insert(
             axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_static("application/x-norito"),
+            axum::http::HeaderValue::from_static("application/x-zk1"),
         );
         h
     };
@@ -494,13 +494,21 @@ async fn prover_reports_server_side_filters() {
         ),
     );
 
-    // Create two attachments: proof (ok) and ZK1 Norito (unsupported but tagged)
+    // Create two attachments: proof (ok) and ZK1 (unsupported but tagged)
     iroha_torii::zk_attachments::init_persistence();
     let headers_norito = {
         let mut h = axum::http::HeaderMap::new();
         h.insert(
             axum::http::header::CONTENT_TYPE,
             axum::http::HeaderValue::from_static("application/x-norito"),
+        );
+        h
+    };
+    let headers_zk1 = {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/x-zk1"),
         );
         h
     };
@@ -512,12 +520,12 @@ async fn prover_reports_server_side_filters() {
     .await
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::CREATED);
-    // Norito ZK1 with PROF
+    // ZK1 with PROF
     let mut body = b"ZK1\0".to_vec();
     body.extend_from_slice(b"PROF");
     body.extend_from_slice(&0u32.to_le_bytes());
     let resp2 = iroha_torii::zk_attachments::handle_post_attachment(
-        headers_norito,
+        headers_zk1,
         axum::body::Bytes::from(body),
     )
     .await
@@ -527,27 +535,27 @@ async fn prover_reports_server_side_filters() {
     // Scan
     let _ = iroha_torii::zk_prover::scan_once();
 
-    // Filter: content_type application/x-norito and has_tag=PROF
+    // Filter: content_type application/x-zk1 and has_tag=PROF
     let req = http::Request::builder()
         .method("GET")
-        .uri("/v1/zk/prover/reports?content_type=application/x-norito&has_tag=PROF")
+        .uri("/v1/zk/prover/reports?content_type=application/x-zk1&has_tag=PROF")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let arr: Vec<norito::json::Value> = norito::json::from_slice(&bytes).unwrap();
-    assert_eq!(arr.len(), 1, "should return only the norito report");
+    assert_eq!(arr.len(), 1, "should return only the ZK1 report");
     let ct = arr[0]
         .get("content_type")
         .and_then(|x| x.as_str())
         .unwrap_or("");
-    assert!(ct.contains("application/x-norito"));
+    assert!(ct.contains("application/x-zk1"));
 
     // Filter ids_only
     let req_ids = http::Request::builder()
         .method("GET")
-        .uri("/v1/zk/prover/reports?content_type=application/x-norito&ids_only=true")
+        .uri("/v1/zk/prover/reports?content_type=application/x-zk1&ids_only=true")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_ids = app.clone().oneshot(req_ids).await.unwrap();
@@ -736,7 +744,7 @@ async fn prover_reports_server_side_count_matches_filtered_list() {
             ),
         );
 
-    // Create attachments: one JSON and two Norito (PROF and IPAK)
+    // Create attachments: one JSON and two ZK1 (PROF and IPAK)
     iroha_torii::zk_attachments::init_persistence();
     // JSON
     let headers_json = {
@@ -754,12 +762,12 @@ async fn prover_reports_server_side_count_matches_filtered_list() {
     .await
     .into_response();
 
-    // Norito with PROF
-    let headers_norito = {
+    // ZK1 with PROF
+    let headers_zk1 = {
         let mut h = axum::http::HeaderMap::new();
         h.insert(
             axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_static("application/x-norito"),
+            axum::http::HeaderValue::from_static("application/x-zk1"),
         );
         h
     };
@@ -767,18 +775,18 @@ async fn prover_reports_server_side_count_matches_filtered_list() {
     body.extend_from_slice(b"PROF");
     body.extend_from_slice(&0u32.to_le_bytes());
     let _ = iroha_torii::zk_attachments::handle_post_attachment(
-        headers_norito.clone(),
+        headers_zk1.clone(),
         axum::body::Bytes::from(body),
     )
     .await
     .into_response();
-    // Norito with IPAK
+    // ZK1 with IPAK
     let mut body2 = b"ZK1\0".to_vec();
     body2.extend_from_slice(b"IPAK");
     body2.extend_from_slice(&4u32.to_le_bytes());
     body2.extend_from_slice(&5u32.to_le_bytes());
     let _ = iroha_torii::zk_attachments::handle_post_attachment(
-        headers_norito,
+        headers_zk1,
         axum::body::Bytes::from(body2),
     )
     .await
@@ -788,7 +796,7 @@ async fn prover_reports_server_side_count_matches_filtered_list() {
     let _ = iroha_torii::zk_prover::scan_once();
 
     // List with has_tag=PROF and count with same filter should match length
-    let uri_list = "/v1/zk/prover/reports?content_type=application/x-norito&has_tag=PROF";
+    let uri_list = "/v1/zk/prover/reports?content_type=application/x-zk1&has_tag=PROF";
     let req_list = http::Request::builder()
         .method("GET")
         .uri(uri_list)
@@ -800,7 +808,7 @@ async fn prover_reports_server_side_count_matches_filtered_list() {
     let arr: Vec<norito::json::Value> = norito::json::from_slice(&bytes).unwrap();
     let expected_len = arr.len() as u64;
 
-    let uri_count = "/v1/zk/prover/reports/count?content_type=application/x-norito&has_tag=PROF";
+    let uri_count = "/v1/zk/prover/reports/count?content_type=application/x-zk1&has_tag=PROF";
     let req_count = http::Request::builder()
         .method("GET")
         .uri(uri_count)
@@ -841,7 +849,7 @@ async fn prover_reports_server_side_bulk_delete() {
             ),
         );
 
-    // Create attachments: one JSON and one Norito
+    // Create attachments: one JSON and one ZK1
     iroha_torii::zk_attachments::init_persistence();
     // JSON
     let headers_json = {
@@ -858,12 +866,12 @@ async fn prover_reports_server_side_bulk_delete() {
     )
     .await
     .into_response();
-    // Norito ZK1
-    let headers_norito = {
+    // ZK1
+    let headers_zk1 = {
         let mut h = axum::http::HeaderMap::new();
         h.insert(
             axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_static("application/x-norito"),
+            axum::http::HeaderValue::from_static("application/x-zk1"),
         );
         h
     };
@@ -871,7 +879,7 @@ async fn prover_reports_server_side_bulk_delete() {
     body.extend_from_slice(b"PROF");
     body.extend_from_slice(&0u32.to_le_bytes());
     let _ = iroha_torii::zk_attachments::handle_post_attachment(
-        headers_norito,
+        headers_zk1,
         axum::body::Bytes::from(body),
     )
     .await
@@ -926,7 +934,7 @@ async fn prover_reports_error_for_oversized_tlv() {
             }),
         );
 
-    // Create a Norito attachment with ZK1 envelope and oversized TLV payload length (> 8 MiB)
+    // Create a ZK1 attachment with oversized TLV payload length (> 8 MiB)
     iroha_torii::zk_attachments::init_persistence();
     let mut body = b"ZK1\0".to_vec();
     body.extend_from_slice(b"PROF");
@@ -936,7 +944,7 @@ async fn prover_reports_error_for_oversized_tlv() {
         let mut h = axum::http::HeaderMap::new();
         h.insert(
             axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_static("application/x-norito"),
+            axum::http::HeaderValue::from_static("application/x-zk1"),
         );
         h
     };

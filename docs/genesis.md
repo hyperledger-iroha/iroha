@@ -7,14 +7,15 @@ A `genesis.json` file defines the first transactions that run when an Iroha netw
   genesis includes an Upgrade instruction as the first transaction. If omitted,
   no upgrade is performed and the built‑in executor is used.
 - `ivm_dir` – directory containing IVM bytecode libraries. Defaults to `"."` if omitted.
+- `consensus_mode` – consensus mode advertised in the manifest. Required; use `"Npos"` for Iroha3 (default) and `"Permissioned"` for Iroha2.
 - `transactions` – list of genesis transactions executed sequentially. Every entry may contain:
   - `parameters` – initial network parameters.
   - `instructions` – structured Norito instructions (e.g., `{ "Register": { "Domain": { "id": "wonderland" }}}`). Raw byte arrays are not accepted, and `SetParameter` instructions are rejected here—seed parameters via the `parameters` block and let normalization/signing inject the instructions.
   - `ivm_triggers` – triggers with IVM bytecode executables.
-  - `topology` – initial peer topology. Each entry keeps the peer and its PoP together: `{ "peer": <PeerId>, "pop_hex": "<hex>" }`. `pop_hex` may be omitted while composing, but must be present before signing.
+  - `topology` – initial peer topology. Each entry keeps the peer id and PoP together: `{ "peer": "<public_key>", "pop_hex": "<hex>" }`. `pop_hex` may be omitted while composing, but must be present before signing.
 - `crypto` – cryptography snapshot mirrored from `iroha_config.crypto` (`default_hash`, `allowed_signing`, `allowed_curve_ids`, `sm2_distid_default`, `sm_openssl_preview`). `allowed_curve_ids` mirrors `crypto.curves.allowed_curve_ids` so manifests can advertise which controller curves the cluster accepts. Tooling enforces SM combinations: manifests that list `sm2` must also switch the hash to `sm3-256`, while builds compiled without the `sm` feature reject `sm2` entirely. Normalization injects a `crypto_manifest_meta` custom parameter into the signed genesis; nodes refuse to start if the injected payload disagrees with the advertised snapshot.
 
-Example (`kagami genesis generate default` output, instructions trimmed):
+Example (`kagami genesis generate default --consensus-mode npos` output, instructions trimmed):
 
 ```json
 {
@@ -29,15 +30,13 @@ Example (`kagami genesis generate default` output, instructions trimmed):
       "ivm_triggers": [],
       "topology": [
         {
-          "peer": {
-            "address": "127.0.0.1:8080",
-            "public_key": "ed25519:..."
-          },
+          "peer": "ed25519:...",
           "pop_hex": "ab12cd..."
         }
       ]
     }
   ],
+  "consensus_mode": "Npos",
   "crypto": {
     "default_hash": "blake2b-256",
     "allowed_signing": ["ed25519", "secp256k1"],
@@ -119,11 +118,11 @@ cargo run -p iroha_cli --features sm -- \
    ```bash
    cargo run -p iroha_kagami -- genesis generate \
      [--executor <path/to/executor.to>] \
-     [--consensus-mode {permissioned|npos}] \
+     --consensus-mode npos \
      --ivm-dir <ivm/dir> \
      --genesis-public-key <PUBLIC_KEY> > genesis.json
    ```
-The optional `--consensus-mode` flag controls which consensus parameters Kagami seeds into the `parameters` block. Use `permissioned` (default) for permissioned deployments, or `npos` to seed `Sumeragi::NextMode` and the `sumeragi_npos_parameters` payload used by the NPoS pacemaker; normalization/signing turns these into `SetParameter` instructions in the signed block.
+`--consensus-mode` controls which consensus parameters Kagami seeds into the `parameters` block. Iroha3 requires `npos` and does not support staged cutovers; Iroha2 defaults to `permissioned` and may stage `npos` via `--next-consensus-mode`/`--mode-activation-height`. When `npos` is selected, Kagami seeds the `sumeragi_npos_parameters` payload used by the NPoS pacemaker; normalization/signing turns these into `SetParameter` instructions in the signed block.
 2. Optionally edit `genesis.json`, then validate and sign it:
    ```bash
    cargo run -p iroha_kagami -- genesis sign genesis.json \
@@ -144,6 +143,9 @@ The optional `--consensus-mode` flag controls which consensus parameters Kagami 
 
 `kagami genesis sign` checks that the JSON is valid and produces a Norito‑encoded block ready to use via `genesis.file` in the node configuration. The resulting `genesis.signed.nrt` is already in canonical wire form: a version byte followed by a Norito header describing the payload layout. Always distribute this framed output. Prefer the `.nrt` suffix for signed payloads; if you don't need to upgrade the executor at genesis, you can omit the `executor` field and skip providing a `.to` file.
 
+When signing NPoS manifests (`--consensus-mode npos` or Iroha2-only staged cutovers), `kagami genesis sign` requires the `sumeragi_npos_parameters` payload; generate it with `kagami genesis generate --consensus-mode npos` or add the parameter manually.
+By default, `kagami genesis sign` uses the manifest's `consensus_mode`; pass `--consensus-mode` to override it.
+
 ## What Genesis Can Do
 
 Genesis supports the following operations. Kagami assembles them into transactions in a well‑defined order so peers deterministically execute the same sequence.
@@ -151,7 +153,7 @@ Genesis supports the following operations. Kagami assembles them into transactio
 - Parameters: Set initial values for Sumeragi (block/commit times, drift), Block (max txs), Transaction (max instructions, bytecode size), Executor and Smart Contract limits (fuel, memory, depth), and custom parameters. Kagami seeds `Sumeragi::NextMode` and the `sumeragi_npos_parameters` payload via the `parameters` block so startup can apply consensus knobs from on-chain state; the signed block carries the generated `SetParameter` instructions.
 - Native Instructions: Register/Unregister Domain, Account, Asset Definition; Mint/Burn/Transfer assets; Transfer domain and asset definition ownership; Modify metadata; Grant permissions and roles.
 - IVM Triggers: Register triggers that execute IVM bytecode (see `ivm_triggers`). Triggers’ executables resolve relative to `ivm_dir`.
-- Topology: Provide the initial set of peers via the `topology` array (PeerId list) inside any transaction (commonly the first or last one).
+- Topology: Provide the initial set of peers via the `topology` array inside any transaction (commonly the first or last one). Each entry is `{ "peer": "<public_key>", "pop_hex": "<hex>" }`; `pop_hex` may be omitted while composing but must be present before signing.
 - Executor Upgrade (optional): If `executor` is present, genesis inserts a single Upgrade instruction as the first transaction; otherwise, genesis starts directly with parameters/instructions.
 
 ### Transaction Ordering
@@ -170,9 +172,9 @@ Kagami and the node code ensure this ordering so that, for example, parameters a
 ## Recommended Workflow
 
 - Start from a template with Kagami:
-  - Built‑in ISI only: `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> [--consensus-mode npos] > genesis.json`
+  - Built‑in ISI only: `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (Iroha3 default; use `--consensus-mode permissioned` for Iroha2).
   - With custom executor upgrade (optional): add `--executor <path/to/executor.to>`
-  - To stage a future cutover to NPoS, pass `--consensus-mode npos --mode-activation-height <HEIGHT>` so genesis carries both parameters in one transaction.
+  - Iroha2-only: to stage a future cutover to NPoS, pass `--next-consensus-mode npos --mode-activation-height <HEIGHT>` (keep `--consensus-mode permissioned` for the current mode).
 - `<PK>` is any multihash recognised by `iroha_crypto::Algorithm`, including the TC26 GOST variants when Kagami is built with `--features gost` (for example `gost3410-2012-256-paramset-a:...`).
 - Validate while editing: `kagami genesis validate genesis.json`
 - Sign for deployment: `kagami genesis sign genesis.json --public-key <PK> --private-key <SK> --out-file genesis.signed.nrt`

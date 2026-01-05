@@ -28,6 +28,11 @@ pub struct DurationMs(pub Duration);
 #[error("failed to parse duration in milliseconds")]
 pub struct ParseDurationMsError;
 
+/// Error produced when parsing a [`Bytes`] value from a string fails.
+#[derive(Debug, Copy, Clone, thiserror::Error)]
+#[error("failed to parse byte count")]
+pub struct ParseBytesError;
+
 impl DurationMs {
     /// Access the wrapped [`Duration`].
     #[inline]
@@ -119,6 +124,21 @@ impl<T: num_traits::int::PrimInt> Bytes<T> {
 impl<T: num_traits::int::PrimInt> From<T> for Bytes<T> {
     fn from(value: T) -> Self {
         Self(value)
+    }
+}
+
+impl<T> core::str::FromStr for Bytes<T>
+where
+    T: num_traits::int::PrimInt + FromPrimitive,
+{
+    type Err = ParseBytesError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let value = s.parse::<u64>().map_err(|_| ParseBytesError)?;
+        let Some(inner) = T::from_u64(value) else {
+            return Err(ParseBytesError);
+        };
+        Ok(Self(inner))
     }
 }
 
@@ -398,5 +418,17 @@ mod tests {
         assert_eq!(json, "1024");
         let parsed: Bytes<u64> = json::from_json(&json).expect("deserialize");
         assert_eq!(parsed.get(), 1024);
+    }
+
+    #[test]
+    fn bytes_from_str_parses_numeric() {
+        let parsed: Bytes<u64> = "2048".parse().expect("parse bytes");
+        assert_eq!(parsed.get(), 2048);
+    }
+
+    #[test]
+    fn bytes_from_str_rejects_invalid_input() {
+        let parsed = "nope".parse::<Bytes<u64>>();
+        assert!(parsed.is_err());
     }
 }

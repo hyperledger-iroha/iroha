@@ -115,7 +115,10 @@ fn emit_addi_inplace(code: &mut Vec<u8>, reg: u8, mut value: i64) {
 
 fn emit_addi(code: &mut Vec<u8>, rd: u8, rs1: u8, value: i64) {
     if rd != rs1 {
-        push_word(code, encode_add(rd, rs1, 0));
+        push_word(
+            code,
+            encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, rd, rs1, 0),
+        );
     }
     if value != 0 {
         emit_addi_inplace(code, rd, value);
@@ -135,7 +138,7 @@ fn emit_load64(code: &mut Vec<u8>, rd: u8, base: u8, offset: i64, scratch: Optio
         rd
     };
     if addr_reg != base {
-        push_word(code, encode_add(addr_reg, base, 0));
+        push_word(code, encode_addi(addr_reg, base, 0));
     }
     emit_addi_inplace(code, addr_reg, offset);
     push_word(code, encode_load64_rv(rd, addr_reg, 0));
@@ -149,7 +152,7 @@ fn emit_store64(code: &mut Vec<u8>, base: u8, rs: u8, offset: i64, scratch: u8) 
     if scratch == base {
         panic!("emit_store64 scratch must differ from base");
     }
-    push_word(code, encode_add(scratch, base, 0));
+    push_word(code, encode_addi(scratch, base, 0));
     emit_addi_inplace(code, scratch, offset);
     push_word(code, encode_store64_rv(scratch, rs, 0));
 }
@@ -178,17 +181,17 @@ fn patch_pointer_literal_stub(code: &mut [u8], start: usize, rd: u8, value: u64)
     }
     digits.reverse();
 
-    let mut words = [encode_add(rd, rd, 0); POINTER_STUB_LEN];
+    let mut words = [encode_addi(rd, rd, 0); POINTER_STUB_LEN];
     let mut idx = 0usize;
 
     // Ensure rd starts from zero.
     if idx < POINTER_STUB_LEN {
-        words[idx] = encode_add(rd, 0, 0);
+        words[idx] = encode_addi(rd, 0, 0);
         idx += 1;
     }
     // Load BASE_SHIFT into the reserved literal scratch register once.
     if idx < POINTER_STUB_LEN {
-        words[idx] = encode_add(LITERAL_SHIFT_REG, 0, 0);
+        words[idx] = encode_addi(LITERAL_SHIFT_REG, 0, 0);
         idx += 1;
     }
     if idx < POINTER_STUB_LEN {
@@ -219,7 +222,7 @@ fn patch_pointer_literal_stub(code: &mut [u8], start: usize, rd: u8, value: u64)
             words[idx] = if digit != 0 {
                 encode_addi(rd, rd, digit)
             } else {
-                encode_add(rd, rd, 0)
+                encode_addi(rd, rd, 0)
             };
             idx += 1;
             if idx >= POINTER_STUB_LEN {
@@ -382,8 +385,12 @@ impl Default for CompilerOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::{Compiler, CompilerOptions, DEFAULT_MAX_CYCLES, pointer_type_for_kind};
-    use crate::{IVM, pointer_abi::PointerType};
+    use super::{
+        Compiler, CompilerOptions, DEFAULT_MAX_CYCLES, WIDE_IMM_MAX, emit_addi, emit_load64,
+        emit_store64, patch_pointer_literal_stub, pointer_type_for_kind,
+        reserve_pointer_literal_stub,
+    };
+    use crate::{IVM, ProgramMetadata, encoding, instruction, pointer_abi::PointerType};
 
     #[test]
     fn pointer_types_cover_all_data_ref_kinds() {
@@ -418,6 +425,123 @@ mod tests {
         let opts = CompilerOptions::default();
         assert_eq!(opts.max_cycles, DEFAULT_MAX_CYCLES);
         assert!(opts.max_cycles > 0);
+    }
+
+    #[test]
+    fn emit_addi_zero_uses_addi_copy() {
+        let mut code = Vec::new();
+        emit_addi(&mut code, 5, 7, 0);
+        assert_eq!(code.len(), 4);
+        let word = u32::from_le_bytes(code[..4].try_into().unwrap());
+        assert_eq!(
+            word,
+            encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 5, 7, 0)
+        );
+    }
+
+    #[test]
+    fn emit_load64_uses_addi_for_copy() {
+        let mut code = Vec::new();
+        let offset = WIDE_IMM_MAX as i64 + 1;
+        emit_load64(&mut code, 5, 6, offset, None);
+        let word = u32::from_le_bytes(code[..4].try_into().unwrap());
+        assert_eq!(
+            word,
+            encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 5, 6, 0)
+        );
+    }
+
+    #[test]
+    fn emit_store64_uses_addi_for_copy() {
+        let mut code = Vec::new();
+        let offset = WIDE_IMM_MAX as i64 + 1;
+        emit_store64(&mut code, 6, 5, offset, 7);
+        let word = u32::from_le_bytes(code[..4].try_into().unwrap());
+        assert_eq!(
+            word,
+            encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 7, 6, 0)
+        );
+    }
+
+    #[test]
+    fn pointer_literal_stub_uses_addi_for_zeroing() {
+        let mut code = Vec::new();
+        let start = reserve_pointer_literal_stub(&mut code);
+        patch_pointer_literal_stub(&mut code, start, 5, 0);
+        let word = u32::from_le_bytes(code[start..start + 4].try_into().unwrap());
+        assert_eq!(
+            instruction::wide::opcode(word),
+            instruction::wide::arithmetic::ADDI
+        );
+    }
+
+    #[test]
+    fn decode_hex_or_raw_bytes_accepts_hex_prefix() {
+        let bytes = super::decode_hex_or_raw_bytes("0x0a0b").expect("hex literal");
+        assert_eq!(bytes, vec![0x0a, 0x0b]);
+    }
+
+    #[test]
+    fn decode_hex_or_raw_bytes_preserves_raw_text() {
+        let bytes = super::decode_hex_or_raw_bytes("raw").expect("raw literal");
+        assert_eq!(bytes, b"raw".to_vec());
+    }
+
+    #[test]
+    fn unary_neg_emits_neg_opcode() {
+        let src = r#"
+seiyaku NegTest {
+  kotoage fn neg(x: int) -> int {
+    return -x;
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let bytes = compiler.compile_source(src).expect("compile neg");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let mut found = false;
+        for chunk in bytes[parsed.code_offset..].chunks_exact(4) {
+            let word = u32::from_le_bytes(chunk.try_into().unwrap());
+            if instruction::wide::opcode(word) == instruction::wide::arithmetic::NEG {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "expected NEG opcode in compiled code");
+    }
+
+    #[test]
+    fn detect_vector_usage_includes_vector_gated_crypto_ops() {
+        let ops = [
+            instruction::wide::crypto::SHA256BLOCK,
+            instruction::wide::crypto::AESENC,
+            instruction::wide::crypto::AESDEC,
+        ];
+        for op in ops {
+            let word = encoding::wide::encode_rr(op, 0, 0, 0);
+            let code = word.to_le_bytes();
+            assert!(
+                super::detect_vector_usage(&code),
+                "expected vector usage for opcode {op:#04x}"
+            );
+        }
+    }
+
+    #[test]
+    fn detect_zk_usage_includes_zk_ops() {
+        let ops = [
+            instruction::wide::zk::ASSERT,
+            instruction::wide::zk::ASSERT_EQ,
+            instruction::wide::zk::FADD,
+        ];
+        for op in ops {
+            let word = encoding::wide::encode_rr(op, 0, 0, 0);
+            let code = word.to_le_bytes();
+            assert!(
+                super::detect_zk_usage(&code),
+                "expected zk usage for opcode {op:#04x}"
+            );
+        }
     }
 
     #[test]
@@ -693,6 +817,7 @@ impl Compiler {
                     if let ir::Instr::StringConst { dest, value } = instr {
                         string_map.insert((func_idx, *dest), value.clone());
                         string_literal_temps.insert((func_idx, *dest));
+                        dataref_kind_map.insert((func_idx, *dest), DRK::Blob);
                     }
                     if let ir::Instr::PointerFromString { dest, kind, src } = instr
                         && let Some(s) = string_map.get(&(func_idx, *src)).cloned()
@@ -1044,6 +1169,13 @@ impl Compiler {
                                     emit_literal_stub(&mut code, &mut fixups, rd, key);
                                     spill_back(dest, rd, spilled, imm, &mut code);
                                     continue;
+                                } else if left_zero || right_zero {
+                                    let (rd, spilled, imm) = dst_reg(dest);
+                                    let src = if left_zero { right } else { left };
+                                    let rs = src_reg(src, scratch1, &mut code);
+                                    code.extend_from_slice(&encode_addi(rd, rs, 0).to_le_bytes());
+                                    spill_back(dest, rd, spilled, imm, &mut code);
+                                    continue;
                                 }
                             }
                             let (rd, spilled, imm) = dst_reg(dest);
@@ -1193,7 +1325,15 @@ impl Compiler {
                             let rs = src_reg(operand, scratch1, &mut code);
                             match op {
                                 UnaryOp::Neg => {
-                                    code.extend_from_slice(&encode_sub(rd, 0, rs).to_le_bytes());
+                                    push_word(
+                                        &mut code,
+                                        encoding::wide::encode_rr(
+                                            instruction::wide::arithmetic::NEG,
+                                            rd,
+                                            rs,
+                                            0,
+                                        ),
+                                    );
                                 }
                                 UnaryOp::Not => {
                                     // boolean not (0/1) via XORI with 1
@@ -1309,7 +1449,7 @@ impl Compiler {
                             } else {
                                 let rs = src_reg(src, scratch1, &mut code);
                                 if rd != rs {
-                                    let word = encode_add(rd, rs, 0);
+                                    let word = encode_addi(rd, rs, 0);
                                     code.extend_from_slice(&word.to_le_bytes());
                                 }
                             }
@@ -1330,8 +1470,8 @@ impl Compiler {
                                 ));
                             }
                             let src = ARG_REGS[idx] as u8;
-                            // RV-compatible move: ADD rd, src, x0
-                            let word = encode_add(rd, src, 0);
+                            // RV-compatible move: ADDI rd, src, 0
+                            let word = encode_addi(rd, src, 0);
                             code.extend_from_slice(&word.to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
                         }
@@ -1351,8 +1491,8 @@ impl Compiler {
                         }
                         Instr::Pubkgen { dest, src } => {
                             uses_zk = true;
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
-                            let rs = *alloc.regs.get(src).unwrap() as u8;
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            let rs = src_reg(src, scratch1, &mut code);
                             let word = encoding::wide::encode_rr(
                                 instruction::wide::crypto::PUBKGEN,
                                 rd,
@@ -1360,12 +1500,13 @@ impl Compiler {
                                 0,
                             );
                             push_word(&mut code, word);
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::Valcom { dest, value, blind } => {
                             uses_zk = true;
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
-                            let rs1 = *alloc.regs.get(value).unwrap() as u8;
-                            let rs2 = *alloc.regs.get(blind).unwrap() as u8;
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            let rs1 = src_reg(value, scratch1, &mut code);
+                            let rs2 = src_reg(blind, scratch2, &mut code);
                             let word = encoding::wide::encode_rr(
                                 instruction::wide::crypto::VALCOM,
                                 rd,
@@ -1373,6 +1514,7 @@ impl Compiler {
                                 rs2,
                             );
                             push_word(&mut code, word);
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::MintAsset {
                             account,
@@ -1387,7 +1529,7 @@ impl Compiler {
                                 let r_amt = src_reg(amount, scratch1, &mut code);
                                 emit_addi(&mut code, 10, 0, 0);
                                 emit_addi(&mut code, 11, 0, 0);
-                                code.extend_from_slice(&encode_add(12, r_amt, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(12, r_amt, 0).to_le_bytes());
                             } else {
                                 if int_const_map.contains_key(&(func_idx, *account))
                                     || int_const_map.contains_key(&(func_idx, *asset))
@@ -1407,7 +1549,9 @@ impl Compiler {
                                     emit_literal_stub(&mut code, &mut fixups, 10, k_acc);
                                 } else {
                                     let r_acc = src_reg(account, scratch1, &mut code);
-                                    code.extend_from_slice(&encode_add(10, r_acc, 0).to_le_bytes());
+                                    code.extend_from_slice(
+                                        &encode_addi(10, r_acc, 0).to_le_bytes(),
+                                    );
                                 }
                                 // r11 = &AssetDefinitionId
                                 if let Some(k_asset) = string_map
@@ -1418,12 +1562,12 @@ impl Compiler {
                                 } else {
                                     let r_asset = src_reg(asset, scratch2, &mut code);
                                     code.extend_from_slice(
-                                        &encode_add(11, r_asset, 0).to_le_bytes(),
+                                        &encode_addi(11, r_asset, 0).to_le_bytes(),
                                     );
                                 }
                                 // r12 = amount
                                 let r_amt = src_reg(amount, scratch1, &mut code);
-                                code.extend_from_slice(&encode_add(12, r_amt, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(12, r_amt, 0).to_le_bytes());
 
                                 // Mirror TLVs for r10 and r11 into INPUT to satisfy pointer‑ABI validation.
                                 let pub_word = encoding::wide::encode_sys(
@@ -1432,13 +1576,13 @@ impl Compiler {
                                 );
                                 // Publish r10 and preserve it in x13.
                                 code.extend_from_slice(&pub_word.to_le_bytes());
-                                code.extend_from_slice(&encode_add(13, 10, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(13, 10, 0).to_le_bytes());
                                 // Publish r11: x10 <- x11; publish; x11 <- x10.
-                                code.extend_from_slice(&encode_add(10, 11, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(10, 11, 0).to_le_bytes());
                                 code.extend_from_slice(&pub_word.to_le_bytes());
-                                code.extend_from_slice(&encode_add(11, 10, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
                                 // Restore account pointer: x10 <- x13.
-                                code.extend_from_slice(&encode_add(10, 13, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(10, 13, 0).to_le_bytes());
                             }
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -1460,7 +1604,7 @@ impl Compiler {
                                 emit_literal_stub(&mut code, &mut fixups, 10, k_acc);
                             } else {
                                 let r_acc = src_reg(account, scratch2, &mut code);
-                                code.extend_from_slice(&encode_add(10, r_acc, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(10, r_acc, 0).to_le_bytes());
                             }
                             // r11 = &AssetDefinitionId
                             if let Some(k_asset) = string_map
@@ -1470,9 +1614,9 @@ impl Compiler {
                                 emit_literal_stub(&mut code, &mut fixups, 11, k_asset);
                             } else {
                                 let r_asset = src_reg(asset, scratch2, &mut code);
-                                code.extend_from_slice(&encode_add(11, r_asset, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(11, r_asset, 0).to_le_bytes());
                             }
-                            code.extend_from_slice(&encode_add(12, r_amt, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(12, r_amt, 0).to_le_bytes());
                             // Mirror TLVs for r10 and r11 into INPUT to satisfy pointer‑ABI validation.
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -1480,13 +1624,13 @@ impl Compiler {
                             );
                             // Publish r10 and preserve it in x13.
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            code.extend_from_slice(&encode_add(13, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(13, 10, 0).to_le_bytes());
                             // Publish r11: x10 <- x11; publish; x11 <- x10.
-                            code.extend_from_slice(&encode_add(10, 11, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 11, 0).to_le_bytes());
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            code.extend_from_slice(&encode_add(11, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
                             // Restore account pointer: x10 <- x13.
-                            code.extend_from_slice(&encode_add(10, 13, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 13, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_BURN_ASSET as u8,
@@ -1499,8 +1643,8 @@ impl Compiler {
                                 let key_dom = DataKey(DataKind::Domain, dom_str.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key_dom);
                             } else {
-                                let r_dom = *alloc.regs.get(domain).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r_dom, 0).to_le_bytes());
+                                let r_dom = src_reg(domain, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r_dom, 0).to_le_bytes());
                             }
                             // Mirror TLV into INPUT to satisfy pointer‑ABI validation in hosts.
                             let pub_word = encoding::wide::encode_sys(
@@ -1519,8 +1663,8 @@ impl Compiler {
                                 let key_dom = DataKey(DataKind::Domain, dom_str.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key_dom);
                             } else {
-                                let r_dom = *alloc.regs.get(domain).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r_dom, 0).to_le_bytes());
+                                let r_dom = src_reg(domain, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r_dom, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -1538,8 +1682,8 @@ impl Compiler {
                                 let key_acc = DataKey(DataKind::Account, acc_str.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key_acc);
                             } else {
-                                let r = *alloc.regs.get(account).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(account, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -1557,8 +1701,8 @@ impl Compiler {
                                 let key_acc = DataKey(DataKind::Account, acc_str.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key_acc);
                             } else {
-                                let r = *alloc.regs.get(account).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(account, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -1576,8 +1720,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::AssetDef, ad_str.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(asset).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(asset, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -1596,30 +1740,30 @@ impl Compiler {
                                 let key_dom = DataKey(DataKind::Domain, dom_str.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key_dom);
                             } else {
-                                let r_dom = *alloc.regs.get(domain).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r_dom, 0).to_le_bytes());
+                                let r_dom = src_reg(domain, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r_dom, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            code.extend_from_slice(&encode_add(12, 10, 0).to_le_bytes()); // x12 = x10
+                            code.extend_from_slice(&encode_addi(12, 10, 0).to_le_bytes()); // x12 = x10
 
                             // Load 'to' AccountId into x11
                             if let Some(to_str) = string_map.get(&(func_idx, *to)) {
                                 let key_to = DataKey(DataKind::Account, to_str.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 11, key_to);
                             } else {
-                                let r_to = *alloc.regs.get(to).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(11, r_to, 0).to_le_bytes());
+                                let r_to = src_reg(to, scratch2, &mut code);
+                                code.extend_from_slice(&encode_addi(11, r_to, 0).to_le_bytes());
                             }
                             // Publish 'to' TLV: x10 <- x11; publish; x11 <- x10
-                            code.extend_from_slice(&encode_add(10, 11, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 11, 0).to_le_bytes());
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            code.extend_from_slice(&encode_add(11, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
                             // Restore domain pointer: x10 <- x12
-                            code.extend_from_slice(&encode_add(10, 12, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 12, 0).to_le_bytes());
 
                             // SCALL transfer
                             let word = encoding::wide::encode_sys(
@@ -1634,8 +1778,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::Json, j.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(json).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(json, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -1653,8 +1797,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::Json, j.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(json).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(json, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -1672,8 +1816,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::Json, j.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(json).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(json, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -1691,8 +1835,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::Name, nm.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(name).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(name, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -1710,12 +1854,12 @@ impl Compiler {
                                 let key = DataKey(DataKind::Name, nm.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(name).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(name, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             // enabled value to r11
-                            let r_en = *alloc.regs.get(enabled).unwrap() as u8;
-                            code.extend_from_slice(&encode_add(11, r_en, 0).to_le_bytes());
+                            let r_en = src_reg(enabled, scratch2, &mut code);
+                            code.extend_from_slice(&encode_addi(11, r_en, 0).to_le_bytes());
                             // Mirror name TLV
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -1734,26 +1878,26 @@ impl Compiler {
                                 let key = DataKey(DataKind::Name, nm.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(name).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(name, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             if let Some(js) = string_map.get(&(func_idx, *json)) {
                                 let key = DataKey(DataKind::Json, js.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 11, key);
                             } else {
-                                let r = *alloc.regs.get(json).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(11, r, 0).to_le_bytes());
+                                let r = src_reg(json, scratch2, &mut code);
+                                code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes()); // r10
-                            code.extend_from_slice(&encode_add(12, 10, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(10, 11, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(12, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 11, 0).to_le_bytes());
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            code.extend_from_slice(&encode_add(11, 10, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(10, 12, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 12, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_CREATE_ROLE as u8,
@@ -1765,8 +1909,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::Name, nm.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(name).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(name, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -1786,26 +1930,26 @@ impl Compiler {
                                 let key = DataKey(DataKind::Account, a.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(account).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(account, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             if let Some(nm) = string_map.get(&(func_idx, *name)) {
                                 let key = DataKey(DataKind::Name, nm.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 11, key);
                             } else {
-                                let r = *alloc.regs.get(name).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(11, r, 0).to_le_bytes());
+                                let r = src_reg(name, scratch2, &mut code);
+                                code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes()); // r10
-                            code.extend_from_slice(&encode_add(12, 10, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(10, 11, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(12, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 11, 0).to_le_bytes());
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            code.extend_from_slice(&encode_add(11, 10, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(10, 12, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 12, 0).to_le_bytes());
                             let num = match instr {
                                 Instr::GrantRole { .. } => syscalls::SYSCALL_GRANT_ROLE,
                                 _ => syscalls::SYSCALL_REVOKE_ROLE,
@@ -1823,8 +1967,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::Account, a.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(account).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(account, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             // token pointer
                             if let Some(nm) = string_map.get(&(func_idx, *token)) {
@@ -1836,8 +1980,8 @@ impl Compiler {
                                 };
                                 emit_literal_stub(&mut code, &mut fixups, 11, dk);
                             } else {
-                                let r = *alloc.regs.get(token).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(11, r, 0).to_le_bytes());
+                                let r = src_reg(token, scratch2, &mut code);
+                                code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             // Mirror both
                             let pub_word = encoding::wide::encode_sys(
@@ -1845,11 +1989,11 @@ impl Compiler {
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes()); // r10
-                            code.extend_from_slice(&encode_add(12, 10, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(10, 11, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(12, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 11, 0).to_le_bytes());
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            code.extend_from_slice(&encode_add(11, 10, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(10, 12, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 12, 0).to_le_bytes());
                             let num = match instr {
                                 Instr::GrantPermission { .. } => syscalls::SYSCALL_GRANT_PERMISSION,
                                 _ => syscalls::SYSCALL_REVOKE_PERMISSION,
@@ -1866,8 +2010,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::NoritoBytes, pstr.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(payload).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(payload, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             // Mirror into INPUT to satisfy pointer‑ABI validation
                             let pub_word = encoding::wide::encode_sys(
@@ -1887,8 +2031,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::NoritoBytes, pstr.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(payload).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(payload, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             // Mirror into INPUT to satisfy pointer‑ABI validation
                             let pub_word = encoding::wide::encode_sys(
@@ -1915,35 +2059,52 @@ impl Compiler {
                                 isi::zk as DMZk,
                                 proof::{ProofAttachment, ProofBox, VerifyingKeyBox},
                             };
-                            // Gather inputs from literals/datarefs
-                            let eid = string_map
-                                .get(&(func_idx, *election_id))
-                                .expect("election_id literal")
-                                .clone();
-                            let backend_str = string_map
-                                .get(&(func_idx, *backend))
-                                .expect("backend literal")
-                                .clone();
-                            let ct_bytes = string_map
-                                .get(&(func_idx, *ciphertext))
-                                .map(|s| s.as_bytes().to_vec())
-                                .unwrap_or_default();
-                            let nf_bytes = string_map
-                                .get(&(func_idx, *nullifier))
-                                .map(|s| s.as_bytes().to_vec())
-                                .unwrap_or_default();
-                            let mut null32 = [0u8; 32];
-                            for (i, b) in nf_bytes.iter().take(32).enumerate() {
-                                null32[i] = *b;
+                            let require_literal =
+                                |label: &str, temp: &ir::Temp| -> Result<String, String> {
+                                    if let Some(value) = string_map.get(&(func_idx, *temp)) {
+                                        return Ok(value.clone());
+                                    }
+                                    let err = format!(
+                                        "build_submit_ballot_inline requires literal {label}"
+                                    );
+                                    Err(i18n::translate(self.lang, Message::SemanticError(&err)))
+                                };
+                            let eid = require_literal("election_id", election_id)?;
+                            let backend_str = require_literal("backend", backend)?;
+                            let ct_literal = require_literal("ciphertext", ciphertext)?;
+                            let ct_bytes = decode_hex_or_raw_bytes(&ct_literal).map_err(|e| {
+                                let err =
+                                    format!("build_submit_ballot_inline ciphertext literal {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?;
+                            let nf_literal = require_literal("nullifier", nullifier)?;
+                            let nf_bytes = decode_hex_or_raw_bytes(&nf_literal).map_err(|e| {
+                                let err =
+                                    format!("build_submit_ballot_inline nullifier literal {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?;
+                            if nf_bytes.len() != 32 {
+                                let err = "build_submit_ballot_inline nullifier must be 32 bytes"
+                                    .to_string();
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::SemanticError(&err),
+                                ));
                             }
-                            let proof_bytes = string_map
-                                .get(&(func_idx, *proof))
-                                .map(|s| s.as_bytes().to_vec())
-                                .unwrap_or_default();
-                            let vk_bytes = string_map
-                                .get(&(func_idx, *vk))
-                                .map(|s| s.as_bytes().to_vec())
-                                .unwrap_or_default();
+                            let mut null32 = [0u8; 32];
+                            null32.copy_from_slice(&nf_bytes);
+                            let proof_literal = require_literal("proof", proof)?;
+                            let proof_bytes =
+                                decode_hex_or_raw_bytes(&proof_literal).map_err(|e| {
+                                    let err =
+                                        format!("build_submit_ballot_inline proof literal {e}");
+                                    i18n::translate(self.lang, Message::SemanticError(&err))
+                                })?;
+                            let vk_literal = require_literal("vk", vk)?;
+                            let vk_bytes = decode_hex_or_raw_bytes(&vk_literal).map_err(|e| {
+                                let err = format!("build_submit_ballot_inline vk literal {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?;
                             let pa = ProofAttachment::new_inline(
                                 backend_str.clone(),
                                 ProofBox::new(backend_str.clone(), proof_bytes),
@@ -1959,8 +2120,9 @@ impl Compiler {
                             // Store as NoritoBytes in data and emit load into dest
                             let hex_payload = hex::encode(bytes);
                             let key = DataKey(DataKind::NoritoBytes, hex_payload);
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
+                            let (rd, spilled, imm) = dst_reg(dest);
                             emit_literal_stub(&mut code, &mut fixups, rd, key);
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::BuildUnshieldInline {
                             dest,
@@ -1977,41 +2139,76 @@ impl Compiler {
                                 prelude::*,
                                 proof::{ProofAttachment, ProofBox, VerifyingKeyBox},
                             };
-                            // Parse typed ids from literals
-                            let asset_id_str = string_map
-                                .get(&(func_idx, *asset))
-                                .expect("asset literal")
-                                .clone();
-                            let to_str = string_map
-                                .get(&(func_idx, *to))
-                                .expect("to literal")
-                                .clone();
-                            let ad: AssetDefinitionId =
-                                asset_id_str.parse().expect("AssetDefinitionId");
-                            let acct: AccountId = to_str.parse().expect("AccountId");
-                            let amt = *int_const_map.get(&(func_idx, *amount)).unwrap_or(&0);
-                            // inputs: take one 32-byte chunk from blob string
-                            let in_bytes = string_map
-                                .get(&(func_idx, *inputs))
-                                .map(|s| s.as_bytes().to_vec())
-                                .unwrap_or_default();
-                            let mut one = [0u8; 32];
-                            for (i, b) in in_bytes.iter().take(32).enumerate() {
-                                one[i] = *b;
+                            let require_literal =
+                                |label: &str, temp: &ir::Temp| -> Result<String, String> {
+                                    if let Some(value) = string_map.get(&(func_idx, *temp)) {
+                                        return Ok(value.clone());
+                                    }
+                                    let err =
+                                        format!("build_unshield_inline requires literal {label}");
+                                    Err(i18n::translate(self.lang, Message::SemanticError(&err)))
+                                };
+                            let require_amount = |temp: &ir::Temp| -> Result<i64, String> {
+                                if let Some(value) = int_const_map.get(&(func_idx, *temp)) {
+                                    return Ok(*value);
+                                }
+                                let err =
+                                    "build_unshield_inline requires literal amount".to_string();
+                                Err(i18n::translate(self.lang, Message::SemanticError(&err)))
+                            };
+                            let asset_id_str = require_literal("asset", asset)?;
+                            let to_str = require_literal("to", to)?;
+                            let amt = require_amount(amount)?;
+                            if amt < 0 {
+                                let err = "build_unshield_inline requires non-negative amount"
+                                    .to_string();
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::SemanticError(&err),
+                                ));
                             }
+                            let ad: AssetDefinitionId = asset_id_str.parse().map_err(|e| {
+                                let err = format!(
+                                    "build_unshield_inline invalid AssetDefinitionId literal `{asset_id_str}`: {e}"
+                                );
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?;
+                            let acct: AccountId = to_str.parse().map_err(|e| {
+                                let err = format!(
+                                    "build_unshield_inline invalid AccountId literal `{to_str}`: {e}"
+                                );
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?;
+                            // inputs: require exactly one 32-byte chunk
+                            let inputs_literal = require_literal("inputs", inputs)?;
+                            let in_bytes =
+                                decode_hex_or_raw_bytes(&inputs_literal).map_err(|e| {
+                                    let err = format!("build_unshield_inline inputs literal {e}");
+                                    i18n::translate(self.lang, Message::SemanticError(&err))
+                                })?;
+                            if in_bytes.len() != 32 {
+                                let err =
+                                    "build_unshield_inline inputs must be 32 bytes".to_string();
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::SemanticError(&err),
+                                ));
+                            }
+                            let mut one = [0u8; 32];
+                            one.copy_from_slice(&in_bytes);
                             let ins = vec![one];
-                            let backend_str = string_map
-                                .get(&(func_idx, *backend))
-                                .expect("backend literal")
-                                .clone();
-                            let proof_bytes = string_map
-                                .get(&(func_idx, *proof))
-                                .map(|s| s.as_bytes().to_vec())
-                                .unwrap_or_default();
-                            let vk_bytes = string_map
-                                .get(&(func_idx, *vk))
-                                .map(|s| s.as_bytes().to_vec())
-                                .unwrap_or_default();
+                            let backend_str = require_literal("backend", backend)?;
+                            let proof_literal = require_literal("proof", proof)?;
+                            let proof_bytes =
+                                decode_hex_or_raw_bytes(&proof_literal).map_err(|e| {
+                                    let err = format!("build_unshield_inline proof literal {e}");
+                                    i18n::translate(self.lang, Message::SemanticError(&err))
+                                })?;
+                            let vk_literal = require_literal("vk", vk)?;
+                            let vk_bytes = decode_hex_or_raw_bytes(&vk_literal).map_err(|e| {
+                                let err = format!("build_unshield_inline vk literal {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?;
                             let pa = ProofAttachment::new_inline(
                                 backend_str.clone(),
                                 ProofBox::new(backend_str.clone(), proof_bytes),
@@ -2028,8 +2225,9 @@ impl Compiler {
                             let bytes = uz.encode_as_instruction_box();
                             let hex_payload = hex::encode(bytes);
                             let key = DataKey(DataKind::NoritoBytes, hex_payload);
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
+                            let (rd, spilled, imm) = dst_reg(dest);
                             emit_literal_stub(&mut code, &mut fixups, rd, key);
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::RegisterAsset {
                             name,
@@ -2045,16 +2243,16 @@ impl Compiler {
                                 let key_name = DataKey(DataKind::Name, name_str.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key_name);
                             } else {
-                                let r_name = *alloc.regs.get(name).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r_name, 0).to_le_bytes());
+                                let r_name = src_reg(name, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r_name, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            let r_symbol = *alloc.regs.get(symbol).unwrap() as u8;
-                            let r_qty = *alloc.regs.get(quantity).unwrap() as u8;
-                            let r_mint = *alloc.regs.get(mintable).unwrap() as u8;
-                            code.extend_from_slice(&encode_add(11, r_symbol, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(12, r_qty, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(13, r_mint, 0).to_le_bytes());
+                            let r_symbol = src_reg(symbol, scratch1, &mut code);
+                            let r_qty = src_reg(quantity, scratch2, &mut code);
+                            let r_mint = src_reg(mintable, scratchd, &mut code);
+                            code.extend_from_slice(&encode_addi(11, r_symbol, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(12, r_qty, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(13, r_mint, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_REGISTER_ASSET as u8,
@@ -2068,23 +2266,25 @@ impl Compiler {
                             account,
                             mintable,
                         } => {
-                            let r_name = *alloc.regs.get(name).unwrap() as u8;
-                            let r_symbol = *alloc.regs.get(symbol).unwrap() as u8;
-                            let r_qty = *alloc.regs.get(quantity).unwrap() as u8;
-                            let r_acc = *alloc.regs.get(account).unwrap() as u8;
-                            let r_mint = *alloc.regs.get(mintable).unwrap() as u8;
-                            code.extend_from_slice(&encode_add(10, r_name, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(11, r_symbol, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(12, r_qty, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(13, r_mint, 0).to_le_bytes());
+                            let r_name = src_reg(name, scratch1, &mut code);
+                            let r_symbol = src_reg(symbol, scratch2, &mut code);
+                            let r_qty = src_reg(quantity, scratchd, &mut code);
+                            let r_mint = src_reg(mintable, scratch1, &mut code);
+                            code.extend_from_slice(&encode_addi(10, r_name, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, r_symbol, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(12, r_qty, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(13, r_mint, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_REGISTER_ASSET as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-                            code.extend_from_slice(&encode_add(10, r_acc, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(11, r_name, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(12, r_qty, 0).to_le_bytes());
+                            let r_acc = src_reg(account, scratch1, &mut code);
+                            let r_name = src_reg(name, scratch2, &mut code);
+                            let r_qty = src_reg(quantity, scratchd, &mut code);
+                            code.extend_from_slice(&encode_addi(10, r_acc, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, r_name, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(12, r_qty, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_MINT_ASSET as u8,
@@ -2106,7 +2306,7 @@ impl Compiler {
                                 emit_literal_stub(&mut code, &mut fixups, 10, from_str);
                             } else {
                                 let r_from = src_reg(from, scratch2, &mut code);
-                                code.extend_from_slice(&encode_add(10, r_from, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(10, r_from, 0).to_le_bytes());
                             }
                             if let Some(to_str) = string_map
                                 .get(&(func_idx, *to))
@@ -2115,7 +2315,7 @@ impl Compiler {
                                 emit_literal_stub(&mut code, &mut fixups, 11, to_str);
                             } else {
                                 let r_to = src_reg(to, scratch2, &mut code);
-                                code.extend_from_slice(&encode_add(11, r_to, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(11, r_to, 0).to_le_bytes());
                             }
                             if let Some(asset_str) = string_map
                                 .get(&(func_idx, *asset))
@@ -2124,9 +2324,9 @@ impl Compiler {
                                 emit_literal_stub(&mut code, &mut fixups, 12, asset_str);
                             } else {
                                 let r_asset = src_reg(asset, scratch2, &mut code);
-                                code.extend_from_slice(&encode_add(12, r_asset, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(12, r_asset, 0).to_le_bytes());
                             }
-                            code.extend_from_slice(&encode_add(13, r_amt, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(13, r_amt, 0).to_le_bytes());
                             // Mirror TLVs for r10, r11, r12 into INPUT
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -2135,17 +2335,17 @@ impl Compiler {
                             // r10
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             // Preserve the `from` account TLV pointer (x14) before it gets reused
-                            code.extend_from_slice(&encode_add(14, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(14, 10, 0).to_le_bytes());
                             // r11
-                            code.extend_from_slice(&encode_add(10, 11, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 11, 0).to_le_bytes());
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            code.extend_from_slice(&encode_add(11, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
                             // r12
-                            code.extend_from_slice(&encode_add(10, 12, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 12, 0).to_le_bytes());
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            code.extend_from_slice(&encode_add(12, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(12, 10, 0).to_le_bytes());
                             // Restore `from` pointer into r10 before issuing the syscall
-                            code.extend_from_slice(&encode_add(10, 14, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 14, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_TRANSFER_ASSET as u8,
@@ -2175,7 +2375,7 @@ impl Compiler {
                         }
                         Instr::SetExecutionDepth { value } => {
                             let r_val = src_reg(value, scratch1, &mut code);
-                            code.extend_from_slice(&encode_add(10, r_val, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, r_val, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH as u8,
@@ -2200,7 +2400,7 @@ impl Compiler {
                                 emit_literal_stub(&mut code, &mut fixups, 10, k_acc);
                             } else {
                                 let r_acc = src_reg(account, scratch1, &mut code);
-                                code.extend_from_slice(&encode_add(10, r_acc, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(10, r_acc, 0).to_le_bytes());
                             }
                             // r11 = &Name
                             if let Some(k_name) = string_map
@@ -2210,7 +2410,7 @@ impl Compiler {
                                 emit_literal_stub(&mut code, &mut fixups, 11, k_name);
                             } else {
                                 let r_key = src_reg(key, scratch2, &mut code);
-                                code.extend_from_slice(&encode_add(11, r_key, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(11, r_key, 0).to_le_bytes());
                             }
                             // r12 = &Json
                             if let Some(k_json) = string_map
@@ -2220,7 +2420,7 @@ impl Compiler {
                                 emit_literal_stub(&mut code, &mut fixups, 12, k_json);
                             } else {
                                 let r_val = src_reg(value, scratch1, &mut code);
-                                code.extend_from_slice(&encode_add(12, r_val, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(12, r_val, 0).to_le_bytes());
                             }
                             // Mirror all three TLVs into INPUT to satisfy pointer‑ABI validation; preserve registers.
                             let pub_word = encoding::wide::encode_sys(
@@ -2230,17 +2430,17 @@ impl Compiler {
                             // Publish r10
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             // Preserve the account TLV pointer in x13 for the final syscall
-                            code.extend_from_slice(&encode_add(13, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(13, 10, 0).to_le_bytes());
                             // Publish r11: x10 <- x11; publish; x11 <- x10
-                            code.extend_from_slice(&encode_add(10, 11, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 11, 0).to_le_bytes());
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            code.extend_from_slice(&encode_add(11, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
                             // Publish r12: x10 <- x12; publish; x12 <- x10
-                            code.extend_from_slice(&encode_add(10, 12, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 12, 0).to_le_bytes());
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            code.extend_from_slice(&encode_add(12, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(12, 10, 0).to_le_bytes());
                             // Restore account pointer into x10 before issuing the syscall
-                            code.extend_from_slice(&encode_add(10, 13, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 13, 0).to_le_bytes());
 
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -2249,27 +2449,35 @@ impl Compiler {
                             code.extend_from_slice(&word.to_le_bytes());
                         }
                         Instr::CreateNft { nft, owner } => {
-                            let k_nft = string_map
+                            if let Some(k_nft) = string_map
                                 .get(&(func_idx, *nft))
                                 .map(|s| DataKey(DataKind::NftId, s.clone()))
-                                .expect("nft_id literal");
-                            let k_owner = string_map
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 10, k_nft);
+                            } else {
+                                let r = src_reg(nft, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
+                            }
+                            if let Some(k_owner) = string_map
                                 .get(&(func_idx, *owner))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
-                                .expect("owner literal");
-                            emit_literal_stub(&mut code, &mut fixups, 10, k_nft);
-                            emit_literal_stub(&mut code, &mut fixups, 11, k_owner);
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 11, k_owner);
+                            } else {
+                                let r = src_reg(owner, scratch2, &mut code);
+                                code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
+                            }
                             // Mirror TLVs into INPUT for r10 and r11
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes()); // r10
-                            code.extend_from_slice(&encode_add(12, 10, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(10, 11, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(12, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 11, 0).to_le_bytes());
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            code.extend_from_slice(&encode_add(11, 10, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(10, 12, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 12, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_NFT_MINT_ASSET as u8,
@@ -2287,14 +2495,14 @@ impl Compiler {
                             if let Some(kn) = k_nft {
                                 emit_literal_stub(&mut code, &mut fixups, 10, kn);
                             } else {
-                                let r = *alloc.regs.get(nft).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(nft, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             if let Some(kj) = k_json {
                                 emit_literal_stub(&mut code, &mut fixups, 11, kj);
                             } else {
-                                let r = *alloc.regs.get(json).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(11, r, 0).to_le_bytes());
+                                let r = src_reg(json, scratch2, &mut code);
+                                code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             // Mirror both into INPUT
                             let pub_word = encoding::wide::encode_sys(
@@ -2302,11 +2510,11 @@ impl Compiler {
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes()); // r10
-                            code.extend_from_slice(&encode_add(12, 10, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(10, 11, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(12, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 11, 0).to_le_bytes());
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            code.extend_from_slice(&encode_add(11, 10, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(10, 12, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 12, 0).to_le_bytes());
                             // SCALL
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -2321,8 +2529,8 @@ impl Compiler {
                             {
                                 emit_literal_stub(&mut code, &mut fixups, 10, kn);
                             } else {
-                                let r = *alloc.regs.get(nft).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(nft, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             // Mirror into INPUT
                             let pub_word = encoding::wide::encode_sys(
@@ -2338,33 +2546,47 @@ impl Compiler {
                             code.extend_from_slice(&word.to_le_bytes());
                         }
                         Instr::TransferNft { from, nft, to } => {
-                            let k_from = string_map
+                            if let Some(k_from) = string_map
                                 .get(&(func_idx, *from))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
-                                .expect("from literal");
-                            let k_nft = string_map
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 10, k_from);
+                            } else {
+                                let r = src_reg(from, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
+                            }
+                            if let Some(k_nft) = string_map
                                 .get(&(func_idx, *nft))
                                 .map(|s| DataKey(DataKind::NftId, s.clone()))
-                                .expect("nft literal");
-                            let k_to = string_map
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 11, k_nft);
+                            } else {
+                                let r = src_reg(nft, scratch2, &mut code);
+                                code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
+                            }
+                            if let Some(k_to) = string_map
                                 .get(&(func_idx, *to))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
-                                .expect("to literal");
-                            emit_literal_stub(&mut code, &mut fixups, 10, k_from);
-                            emit_literal_stub(&mut code, &mut fixups, 11, k_nft);
-                            emit_literal_stub(&mut code, &mut fixups, 12, k_to);
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 12, k_to);
+                            } else {
+                                let r = src_reg(to, scratchd, &mut code);
+                                code.extend_from_slice(&encode_addi(12, r, 0).to_le_bytes());
+                            }
                             // Mirror TLVs into INPUT for r10, r11, r12
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes()); // r10
-                            code.extend_from_slice(&encode_add(10, 11, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(13, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 11, 0).to_le_bytes());
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            code.extend_from_slice(&encode_add(11, 10, 0).to_le_bytes());
-                            code.extend_from_slice(&encode_add(10, 12, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 12, 0).to_le_bytes());
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            code.extend_from_slice(&encode_add(12, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(12, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 13, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_NFT_TRANSFER_ASSET as u8,
@@ -2382,7 +2604,7 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::Call { callee, args, dest } => {
@@ -2391,9 +2613,16 @@ impl Compiler {
                                 if i >= regalloc::ARG_REGS.len() {
                                     break;
                                 }
-                                let rs = src_reg(a, scratch1, &mut code);
                                 let rd = regalloc::ARG_REGS[i] as u8;
-                                code.extend_from_slice(&encode_add(rd, rs, 0).to_le_bytes());
+                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *a)).copied()
+                                    && let Some(value) = string_map.get(&(func_idx, *a)).cloned()
+                                {
+                                    let key = data_key_for_pointer(kind, &value);
+                                    emit_literal_stub(&mut code, &mut fixups, rd, key);
+                                } else {
+                                    let rs = src_reg(a, scratch1, &mut code);
+                                    code.extend_from_slice(&encode_addi(rd, rs, 0).to_le_bytes());
+                                }
                             }
                             // Emit placeholder JAL to be patched later
                             let at = code.len();
@@ -2404,7 +2633,7 @@ impl Compiler {
                             if let Some(d) = dest {
                                 let (rd, spilled, imm) = dst_reg(d);
                                 // Move return value in x10 into rd
-                                code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                                 spill_back(d, rd, spilled, imm, &mut code);
                             }
                         }
@@ -2426,9 +2655,16 @@ impl Compiler {
                                 if i >= regalloc::ARG_REGS.len() {
                                     break;
                                 }
-                                let rs = src_reg(a, scratch1, &mut code);
                                 let rd = regalloc::ARG_REGS[i] as u8;
-                                code.extend_from_slice(&encode_add(rd, rs, 0).to_le_bytes());
+                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *a)).copied()
+                                    && let Some(value) = string_map.get(&(func_idx, *a)).cloned()
+                                {
+                                    let key = data_key_for_pointer(kind, &value);
+                                    emit_literal_stub(&mut code, &mut fixups, rd, key);
+                                } else {
+                                    let rs = src_reg(a, scratch1, &mut code);
+                                    code.extend_from_slice(&encode_addi(rd, rs, 0).to_le_bytes());
+                                }
                             }
                             // Emit JAL (placeholder) and record fixup
                             let at = code.len();
@@ -2439,7 +2675,7 @@ impl Compiler {
                             for (i, d) in dests.iter().enumerate() {
                                 let (rd, spilled, imm) = dst_reg(d);
                                 let rs = (regalloc::RET_REG + i) as u8;
-                                code.extend_from_slice(&encode_add(rd, rs, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(rd, rs, 0).to_le_bytes());
                                 spill_back(d, rd, spilled, imm, &mut code);
                             }
                         }
@@ -2452,7 +2688,7 @@ impl Compiler {
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
                                 let rs = src_reg(message, scratch1, &mut code);
-                                code.extend_from_slice(&encode_add(10, rs, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(10, rs, 0).to_le_bytes());
                             }
                             let publish = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -2465,7 +2701,7 @@ impl Compiler {
                             );
                             code.extend_from_slice(&call.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::Sm2Verify {
@@ -2489,20 +2725,20 @@ impl Compiler {
                                     } else {
                                         let rs = src_reg(temp, scratch1, code);
                                         code.extend_from_slice(
-                                            &encode_add(10, rs, 0).to_le_bytes(),
+                                            &encode_addi(10, rs, 0).to_le_bytes(),
                                         );
                                     }
                                     code.extend_from_slice(&publish.to_le_bytes());
                                 };
                             load_blob_into_x10(&mut code, &mut fixups, signature);
-                            code.extend_from_slice(&encode_add(11, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
                             load_blob_into_x10(&mut code, &mut fixups, public_key);
-                            code.extend_from_slice(&encode_add(12, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(12, 10, 0).to_le_bytes());
                             if let Some(dist) = distid {
                                 load_blob_into_x10(&mut code, &mut fixups, dist);
-                                code.extend_from_slice(&encode_add(13, 10, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(13, 10, 0).to_le_bytes());
                             } else {
-                                code.extend_from_slice(&encode_add(13, 0, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(13, 0, 0).to_le_bytes());
                             }
                             load_blob_into_x10(&mut code, &mut fixups, message);
                             let call = encoding::wide::encode_sys(
@@ -2511,7 +2747,7 @@ impl Compiler {
                             );
                             code.extend_from_slice(&call.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::Sm4GcmSeal {
@@ -2532,11 +2768,11 @@ impl Compiler {
                                     emit_literal_stub(&mut code, &mut fixups, 10, key);
                                 } else {
                                     let rs = src_reg(temp, scratch1, &mut code);
-                                    code.extend_from_slice(&encode_add(10, rs, 0).to_le_bytes());
+                                    code.extend_from_slice(&encode_addi(10, rs, 0).to_le_bytes());
                                 }
                                 code.extend_from_slice(&publish_bytes);
                                 if let Some(rd) = target {
-                                    code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                                    code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                                 }
                             };
                             load_blob(plaintext, Some(13));
@@ -2549,7 +2785,7 @@ impl Compiler {
                             );
                             code.extend_from_slice(&call.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::Sm4GcmOpen {
@@ -2570,11 +2806,11 @@ impl Compiler {
                                     emit_literal_stub(&mut code, &mut fixups, 10, key);
                                 } else {
                                     let rs = src_reg(temp, scratch1, &mut code);
-                                    code.extend_from_slice(&encode_add(10, rs, 0).to_le_bytes());
+                                    code.extend_from_slice(&encode_addi(10, rs, 0).to_le_bytes());
                                 }
                                 code.extend_from_slice(&publish_bytes);
                                 if let Some(rd) = target {
-                                    code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                                    code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                                 }
                             };
                             load_blob(ciphertext_and_tag, Some(13));
@@ -2587,7 +2823,7 @@ impl Compiler {
                             );
                             code.extend_from_slice(&call.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::Sm4CcmSeal {
@@ -2609,11 +2845,11 @@ impl Compiler {
                                     emit_literal_stub(&mut code, &mut fixups, 10, key);
                                 } else {
                                     let rs = src_reg(temp, scratch1, &mut code);
-                                    code.extend_from_slice(&encode_add(10, rs, 0).to_le_bytes());
+                                    code.extend_from_slice(&encode_addi(10, rs, 0).to_le_bytes());
                                 }
                                 code.extend_from_slice(&publish_bytes);
                                 if let Some(rd) = target {
-                                    code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                                    code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                                 }
                             };
                             load_blob(plaintext, Some(13));
@@ -2622,9 +2858,9 @@ impl Compiler {
                             load_blob(key, None);
                             if let Some(tlen) = tag_len {
                                 let rs = src_reg(tlen, scratch1, &mut code);
-                                code.extend_from_slice(&encode_add(14, rs, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(14, rs, 0).to_le_bytes());
                             } else {
-                                code.extend_from_slice(&encode_add(14, 0, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(14, 0, 0).to_le_bytes());
                             }
                             let call = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -2632,7 +2868,7 @@ impl Compiler {
                             );
                             code.extend_from_slice(&call.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::Sm4CcmOpen {
@@ -2654,11 +2890,11 @@ impl Compiler {
                                     emit_literal_stub(&mut code, &mut fixups, 10, key);
                                 } else {
                                     let rs = src_reg(temp, scratch1, &mut code);
-                                    code.extend_from_slice(&encode_add(10, rs, 0).to_le_bytes());
+                                    code.extend_from_slice(&encode_addi(10, rs, 0).to_le_bytes());
                                 }
                                 code.extend_from_slice(&publish_bytes);
                                 if let Some(rd) = target {
-                                    code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                                    code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                                 }
                             };
                             load_blob(ciphertext_and_tag, Some(13));
@@ -2667,9 +2903,9 @@ impl Compiler {
                             load_blob(key, None);
                             if let Some(tlen) = tag_len {
                                 let rs = src_reg(tlen, scratch1, &mut code);
-                                code.extend_from_slice(&encode_add(14, rs, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(14, rs, 0).to_le_bytes());
                             } else {
-                                code.extend_from_slice(&encode_add(14, 0, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(14, 0, 0).to_le_bytes());
                             }
                             let call = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -2677,7 +2913,7 @@ impl Compiler {
                             );
                             code.extend_from_slice(&call.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::AssertEq { left, right } => {
@@ -2701,8 +2937,8 @@ impl Compiler {
                         }
                         Instr::Info { msg } => {
                             let r_msg = src_reg(msg, scratch1, &mut code);
-                            // Move message to x10 and issue debug log syscall (RV-compat ADD)
-                            code.extend_from_slice(&encode_add(10, r_msg, 0).to_le_bytes());
+                            // Move message to x10 and issue debug log syscall (RV-compat ADDI)
+                            code.extend_from_slice(&encode_addi(10, r_msg, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_DEBUG_LOG as u8,
@@ -2729,8 +2965,12 @@ impl Compiler {
                                 -8,
                             );
                             code.extend_from_slice(&andi.to_le_bytes());
+                            // Zero-initialize the single key/value pair to keep Map::new deterministic.
+                            emit_addi(&mut code, scratch1, 0, 0);
+                            emit_store64(&mut code, 10, scratch1, 0, scratch2);
+                            emit_store64(&mut code, 10, scratch1, 8, scratch2);
                             // dest = x10
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::PointerFromString { .. } => {
@@ -2761,12 +3001,12 @@ impl Compiler {
                                     ));
                                 }
                                 let rs = src_reg(value, scratch1, &mut code);
-                                code.extend_from_slice(&encode_add(10, rs, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(10, rs, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&publish_tlv);
                             code.extend_from_slice(&pointer_to_bytes);
                             let (rd, spilled, imm) = dst_reg(dest);
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::PointerFromNorito { dest, blob, kind } => {
@@ -2789,13 +3029,13 @@ impl Compiler {
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
                                 let rs = src_reg(blob, scratch1, &mut code);
-                                code.extend_from_slice(&encode_add(10, rs, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(10, rs, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&publish_tlv);
                             emit_addi(&mut code, 11, 0, type_id as i64);
                             code.extend_from_slice(&pointer_from_bytes);
                             let (rd, spilled, imm) = dst_reg(dest);
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::PointerEq { dest, left, right } => {
@@ -2818,13 +3058,13 @@ impl Compiler {
                                     } else {
                                         let rs = src_reg(temp, scratch, code);
                                         code.extend_from_slice(
-                                            &encode_add(target, rs, 0).to_le_bytes(),
+                                            &encode_addi(target, rs, 0).to_le_bytes(),
                                         );
                                     }
                                 };
                             load_ptr(left, 10, scratch1, &mut code);
                             code.extend_from_slice(&publish_tlv);
-                            code.extend_from_slice(&encode_add(11, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
                             load_ptr(right, 10, scratch2, &mut code);
                             code.extend_from_slice(&publish_tlv);
 
@@ -2835,94 +3075,90 @@ impl Compiler {
                             code.extend_from_slice(&word.to_le_bytes());
 
                             let (rd, spilled, imm) = dst_reg(dest);
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::MapGet { dest, map, key } => {
                             // Minimal map layout: [0..8) key (u64), [8..16) value (u64)
                             // Branchless compare/select via flag multiply:
-                            //   k_loaded := LOAD64 [map + 0]
-                            //   tmp_xor := k_loaded XOR key
-                            //   flag := SLTIU tmp_xor, 1  // 1 if equal else 0
+                            //   flag := SEQ(LOAD64 [map + 0], key)
                             //   dest := LOAD64 [map + 8]
                             //   dest := dest * flag
 
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
-                            let rmap = *alloc.regs.get(map).unwrap() as u8;
-                            let rkey = *alloc.regs.get(key).unwrap() as u8;
+                            let rmap = src_reg(map, scratch1, &mut code);
+                            let rkey = src_reg(key, scratch2, &mut code);
+                            let (rd, spilled, imm) = dst_reg(dest);
 
-                            // Choose scratch registers distinct from rd/rmap/rkey
-                            let mut s1 = 12u8;
-                            while s1 == rd || s1 == rmap || s1 == rkey {
-                                s1 += 1;
-                            }
-                            let mut sflag = s1 + 1;
-                            while sflag == rd || sflag == rmap || sflag == rkey {
-                                sflag += 1;
-                            }
-                            let mut sconst = sflag + 1;
-                            while sconst == rd || sconst == rmap || sconst == rkey {
-                                sconst += 1;
-                            }
-
-                            // Load stored key into s1 (s1 chosen distinct from rmap)
-                            emit_load64(&mut code, s1, rmap, 0, None);
-                            // s1 = s1 XOR rkey
-                            push_word(
-                                &mut code,
-                                encoding::wide::encode_rr(
-                                    instruction::wide::arithmetic::XOR,
-                                    s1,
-                                    s1,
-                                    rkey,
-                                ),
-                            );
-                            // sflag = SLTU(s1, 1)
-                            emit_addi(&mut code, sconst, 0, 1);
-                            let cmp = encoding::wide::encode_rr(
-                                instruction::wide::arithmetic::SLTU,
-                                sflag,
-                                s1,
-                                sconst,
-                            );
-                            push_word(&mut code, cmp);
-                            // dest = LOAD64 [map+8]
-                            let scratch_val = if rd == rmap {
-                                if s1 != rd {
-                                    Some(s1)
-                                } else if sflag != rd {
-                                    Some(sflag)
-                                } else {
-                                    Some(sconst)
+                            let mut flag_reg = None;
+                            for cand in [scratch1, scratch2, scratchd] {
+                                if cand != rmap && cand != rkey && cand != rd {
+                                    flag_reg = Some(cand);
+                                    break;
                                 }
+                            }
+
+                            if let Some(rflag) = flag_reg {
+                                emit_load64(&mut code, rflag, rmap, 0, None);
+                                let eq = encoding::wide::encode_rr(
+                                    instruction::wide::arithmetic::SEQ,
+                                    rflag,
+                                    rflag,
+                                    rkey,
+                                );
+                                push_word(&mut code, eq);
+
+                                let value_scratch = if rd == rmap {
+                                    Some(if rflag != scratch1 {
+                                        scratch1
+                                    } else {
+                                        scratch2
+                                    })
+                                } else {
+                                    None
+                                };
+                                emit_load64(&mut code, rd, rmap, 8, value_scratch);
+                                push_word(
+                                    &mut code,
+                                    encoding::wide::encode_rr(
+                                        instruction::wide::arithmetic::MUL,
+                                        rd,
+                                        rd,
+                                        rflag,
+                                    ),
+                                );
                             } else {
-                                None
-                            };
-                            emit_load64(&mut code, rd, rmap, 8, scratch_val);
-                            // dest = dest * sflag (MUL)
-                            push_word(
-                                &mut code,
-                                encoding::wide::encode_rr(
-                                    instruction::wide::arithmetic::MUL,
+                                // Fall back to using rd for the flag and reuse rkey (spilled) for value.
+                                emit_load64(&mut code, rd, rmap, 0, None);
+                                let eq = encoding::wide::encode_rr(
+                                    instruction::wide::arithmetic::SEQ,
                                     rd,
                                     rd,
-                                    sflag,
-                                ),
-                            );
+                                    rkey,
+                                );
+                                push_word(&mut code, eq);
+                                emit_load64(&mut code, rkey, rmap, 8, None);
+                                push_word(
+                                    &mut code,
+                                    encoding::wide::encode_rr(
+                                        instruction::wide::arithmetic::MUL,
+                                        rd,
+                                        rkey,
+                                        rd,
+                                    ),
+                                );
+                            }
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::Load64Imm { dest, base, imm } => {
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
-                            let rbase = *alloc.regs.get(base).unwrap() as u8;
+                            let rbase = src_reg(base, scratch1, &mut code);
+                            let (rd, spilled, imm_spill) = dst_reg(dest);
                             let scratch = if rd == rbase {
-                                if scratch1 != rd {
-                                    Some(scratch1)
-                                } else {
-                                    Some(scratch2)
-                                }
+                                Some(if rd != scratch1 { scratch1 } else { scratch2 })
                             } else {
                                 None
                             };
                             emit_load64(&mut code, rd, rbase, *imm as i64, scratch);
+                            spill_back(dest, rd, spilled, imm_spill, &mut code);
                         }
                         Instr::MapSet { map, key, value } => {
                             // Minimal map layout: [0..8) key, [8..16) value
@@ -2942,40 +3178,26 @@ impl Compiler {
                             offset,
                         } => {
                             // Load key at offset 0, value at offset 8
-                            let rmap = *alloc.regs.get(map).unwrap() as u8;
-                            let rd_k = *alloc.regs.get(dest_key).unwrap() as u8;
-                            let rd_v = *alloc.regs.get(dest_val).unwrap() as u8;
-                            let base_off = *offset; // in bytes
-                            // IVM LOAD uses 4-byte units in the immediate field
-                            let key_temp = if rd_k == rmap {
-                                if scratch1 != rmap { scratch1 } else { scratch2 }
+                            let rmap = src_reg(map, scratch1, &mut code);
+                            let (rd_k, spilled_k, imm_k) = dst_reg(dest_key);
+                            let (rd_v, spilled_v, imm_v) = dst_reg(dest_val);
+                            let base_off = *offset as i64; // in bytes
+
+                            let key_scratch = if rd_k == rmap {
+                                Some(if rmap != scratch1 { scratch1 } else { scratch2 })
                             } else {
-                                rd_k
+                                None
                             };
-                            emit_load64(&mut code, key_temp, rmap, base_off as i64, None);
+                            emit_load64(&mut code, rd_k, rmap, base_off, key_scratch);
+                            spill_back(dest_key, rd_k, spilled_k, imm_k, &mut code);
 
-                            if rd_v != rd_k {
-                                let val_temp = if rd_v == rmap {
-                                    if scratch2 != rmap && scratch2 != key_temp {
-                                        scratch2
-                                    } else if scratch1 != rmap && scratch1 != key_temp {
-                                        scratch1
-                                    } else {
-                                        panic!("no scratch available for MapLoadPair value load")
-                                    }
-                                } else {
-                                    rd_v
-                                };
-                                let imm_v = base_off + 8; // +8 bytes
-                                emit_load64(&mut code, val_temp, rmap, imm_v as i64, None);
-
-                                if rd_v != val_temp {
-                                    push_word(&mut code, encode_add(rd_v, val_temp, 0));
-                                }
-                            }
-                            if rd_k != key_temp {
-                                push_word(&mut code, encode_add(rd_k, key_temp, 0));
-                            }
+                            let val_scratch = if rd_v == rmap {
+                                Some(if rmap != scratch1 { scratch1 } else { scratch2 })
+                            } else {
+                                None
+                            };
+                            emit_load64(&mut code, rd_v, rmap, base_off + 8, val_scratch);
+                            spill_back(dest_val, rd_v, spilled_v, imm_v, &mut code);
                         }
                         Instr::StateGet { dest, path } => {
                             if !durable_enabled {
@@ -2992,7 +3214,7 @@ impl Compiler {
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
                                 let r = src_reg(path, scratch1, &mut code);
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -3005,7 +3227,7 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::StateSet { path, value } => {
@@ -3023,7 +3245,7 @@ impl Compiler {
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
                                 let r = src_reg(path, scratch1, &mut code);
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             // Load value into r11
                             if let Some(s) = string_map.get(&(func_idx, *value)) {
@@ -3031,7 +3253,7 @@ impl Compiler {
                                 emit_literal_stub(&mut code, &mut fixups, 11, key);
                             } else {
                                 let r = src_reg(value, scratch1, &mut code);
-                                code.extend_from_slice(&encode_add(11, r, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             // Publish both
                             let pub_word = encoding::wide::encode_sys(
@@ -3039,12 +3261,12 @@ impl Compiler {
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes()); // r10
-                            code.extend_from_slice(&encode_add(10, 11, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, 11, 0).to_le_bytes());
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            code.extend_from_slice(&encode_add(11, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
                             // Restore path pointer (kept in `path` register) into r10
                             let r_path = src_reg(path, scratch1, &mut code);
-                            code.extend_from_slice(&encode_add(10, r_path, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, r_path, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_STATE_SET as u8,
@@ -3065,8 +3287,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::Name, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(path).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(path, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -3088,13 +3310,13 @@ impl Compiler {
                                     ),
                                 ));
                             }
-                            // r10=&NoritoBytes; publish; SCALL; move to dest
+                            // r10=&NoritoBytes or &Blob; publish; SCALL; move to dest
                             if let Some(s) = string_map.get(&(func_idx, *blob)) {
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
                                 let r = src_reg(blob, scratch1, &mut code);
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -3107,7 +3329,7 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::PathMapKey { dest, base, key } => {
@@ -3125,7 +3347,7 @@ impl Compiler {
                                 emit_literal_stub(&mut code, &mut fixups, 10, key_b);
                             } else {
                                 let r = src_reg(base, scratch1, &mut code);
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             // publish base name
                             let pub_word = encoding::wide::encode_sys(
@@ -3135,7 +3357,7 @@ impl Compiler {
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             // move key (int) into r11
                             let rkey = src_reg(key, scratch1, &mut code);
-                            code.extend_from_slice(&encode_add(11, rkey, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(11, rkey, 0).to_le_bytes());
                             // build path
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -3144,7 +3366,7 @@ impl Compiler {
                             code.extend_from_slice(&word.to_le_bytes());
                             // move r10 to dest
                             let (rd, spilled, imm) = dst_reg(dest);
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::EncodeInt { dest, value } => {
@@ -3157,14 +3379,14 @@ impl Compiler {
                                 ));
                             }
                             let rv = src_reg(value, scratch1, &mut code);
-                            code.extend_from_slice(&encode_add(10, rv, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, rv, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_ENCODE_INT as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::PathMapKeyNorito {
@@ -3186,7 +3408,7 @@ impl Compiler {
                                 emit_literal_stub(&mut code, &mut fixups, 10, kb);
                             } else {
                                 let r = src_reg(base, scratch1, &mut code);
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -3198,7 +3420,7 @@ impl Compiler {
                                 emit_literal_stub(&mut code, &mut fixups, 11, kb);
                             } else {
                                 let r = src_reg(key_blob, scratch1, &mut code);
-                                code.extend_from_slice(&encode_add(11, r, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes()); // publish r11
                             let word = encoding::wide::encode_sys(
@@ -3207,7 +3429,7 @@ impl Compiler {
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
                             spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::JsonEncode { dest, json } => {
@@ -3224,8 +3446,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::Json, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(json).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(json, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -3237,8 +3459,9 @@ impl Compiler {
                                 syscalls::SYSCALL_JSON_ENCODE as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::JsonDecode { dest, blob } => {
                             if !durable_enabled {
@@ -3249,13 +3472,13 @@ impl Compiler {
                                     ),
                                 ));
                             }
-                            // r10=&NoritoBytes; publish; SCALL JSON_DECODE; move
+                            // r10=&NoritoBytes or &Blob; publish; SCALL JSON_DECODE; move
                             if let Some(s) = string_map.get(&(func_idx, *blob)) {
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(blob).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(blob, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -3267,8 +3490,9 @@ impl Compiler {
                                 syscalls::SYSCALL_JSON_DECODE as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::NameDecode { dest, blob } => {
                             // r10=&NoritoBytes; publish; SCALL NAME_DECODE; move
@@ -3276,8 +3500,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(blob).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(blob, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -3289,8 +3513,9 @@ impl Compiler {
                                 syscalls::SYSCALL_NAME_DECODE as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::SchemaEncode { dest, schema, json } => {
                             if !durable_enabled {
@@ -3306,8 +3531,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::Name, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(schema).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(schema, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -3318,8 +3543,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::Json, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 11, key);
                             } else {
-                                let r = *alloc.regs.get(json).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(11, r, 0).to_le_bytes());
+                                let r = src_reg(json, scratch2, &mut code);
+                                code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             let word = encoding::wide::encode_sys(
@@ -3327,8 +3552,9 @@ impl Compiler {
                                 syscalls::SYSCALL_SCHEMA_ENCODE as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::SchemaDecode { dest, schema, blob } => {
                             if !durable_enabled {
@@ -3339,13 +3565,13 @@ impl Compiler {
                                     ),
                                 ));
                             }
-                            // r10=&Name; publish; r11=&NoritoBytes; publish; SCALL
+                            // r10=&Name; publish; r11=&NoritoBytes or &Blob; publish; SCALL
                             if let Some(s) = string_map.get(&(func_idx, *schema)) {
                                 let key = DataKey(DataKind::Name, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(schema).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(schema, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -3356,8 +3582,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 11, key);
                             } else {
-                                let r = *alloc.regs.get(blob).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(11, r, 0).to_le_bytes());
+                                let r = src_reg(blob, scratch2, &mut code);
+                                code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             let word = encoding::wide::encode_sys(
@@ -3365,8 +3591,9 @@ impl Compiler {
                                 syscalls::SYSCALL_SCHEMA_DECODE as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::SchemaInfo { dest, schema } => {
                             if !durable_enabled {
@@ -3379,8 +3606,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::Name, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(schema).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(schema, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -3392,8 +3619,9 @@ impl Compiler {
                                 syscalls::SYSCALL_SCHEMA_INFO as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::VrfVerify {
                             dest,
@@ -3416,35 +3644,36 @@ impl Compiler {
                                 let key = DataKey(DataKind::Blob, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(input).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(input, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             if let Some(s) = string_map.get(&(func_idx, *public_key)) {
                                 let key = DataKey(DataKind::Blob, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 11, key);
                             } else {
-                                let r = *alloc.regs.get(public_key).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(11, r, 0).to_le_bytes());
+                                let r = src_reg(public_key, scratch2, &mut code);
+                                code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             if let Some(s) = string_map.get(&(func_idx, *proof)) {
                                 let key = DataKey(DataKind::Blob, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 12, key);
                             } else {
-                                let r = *alloc.regs.get(proof).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(12, r, 0).to_le_bytes());
+                                let r = src_reg(proof, scratchd, &mut code);
+                                code.extend_from_slice(&encode_addi(12, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             let rvar = src_reg(variant, scratch1, &mut code);
-                            code.extend_from_slice(&encode_add(13, rvar, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(13, rvar, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_VRF_VERIFY as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::VrfVerifyBatch { dest, batch } => {
                             if !durable_enabled {
@@ -3457,8 +3686,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::Blob, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(batch).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(batch, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -3470,8 +3699,9 @@ impl Compiler {
                                 syscalls::SYSCALL_VRF_VERIFY_BATCH as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
-                            let rd = *alloc.regs.get(dest).unwrap() as u8;
-                            code.extend_from_slice(&encode_add(rd, 10, 0).to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            code.extend_from_slice(&encode_addi(rd, 10, 0).to_le_bytes());
+                            spill_back(dest, rd, spilled, imm, &mut code);
                         }
                         Instr::AxtBegin { descriptor } => {
                             if !durable_enabled {
@@ -3484,8 +3714,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::AxtDescriptor, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(descriptor).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(descriptor, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -3513,8 +3743,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::DataSpaceId, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(dsid).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(dsid, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             if let Some(m) = manifest {
@@ -3522,12 +3752,12 @@ impl Compiler {
                                     let key = DataKey(DataKind::NoritoBytes, s.clone());
                                     emit_literal_stub(&mut code, &mut fixups, 11, key);
                                 } else {
-                                    let r = *alloc.regs.get(m).unwrap() as u8;
-                                    code.extend_from_slice(&encode_add(11, r, 0).to_le_bytes());
+                                    let r = src_reg(m, scratch2, &mut code);
+                                    code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                                 }
                                 code.extend_from_slice(&pub_word.to_le_bytes());
                             } else {
-                                code.extend_from_slice(&encode_add(11, 0, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(11, 0, 0).to_le_bytes());
                             }
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -3550,8 +3780,8 @@ impl Compiler {
                                 let key = DataKey(DataKind::DataSpaceId, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(dsid).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(dsid, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             if let Some(p) = proof {
@@ -3559,12 +3789,12 @@ impl Compiler {
                                     let key = DataKey(DataKind::ProofBlob, s.clone());
                                     emit_literal_stub(&mut code, &mut fixups, 11, key);
                                 } else {
-                                    let r = *alloc.regs.get(p).unwrap() as u8;
-                                    code.extend_from_slice(&encode_add(11, r, 0).to_le_bytes());
+                                    let r = src_reg(p, scratch2, &mut code);
+                                    code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                                 }
                                 code.extend_from_slice(&pub_word.to_le_bytes());
                             } else {
-                                code.extend_from_slice(&encode_add(11, 0, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(11, 0, 0).to_le_bytes());
                             }
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -3591,16 +3821,16 @@ impl Compiler {
                                 let key = DataKey(DataKind::AssetHandle, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 10, key);
                             } else {
-                                let r = *alloc.regs.get(handle).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(10, r, 0).to_le_bytes());
+                                let r = src_reg(handle, scratch1, &mut code);
+                                code.extend_from_slice(&encode_addi(10, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             if let Some(s) = string_map.get(&(func_idx, *intent)) {
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
                                 emit_literal_stub(&mut code, &mut fixups, 11, key);
                             } else {
-                                let r = *alloc.regs.get(intent).unwrap() as u8;
-                                code.extend_from_slice(&encode_add(11, r, 0).to_le_bytes());
+                                let r = src_reg(intent, scratch2, &mut code);
+                                code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             if let Some(p) = proof {
@@ -3608,12 +3838,12 @@ impl Compiler {
                                     let key = DataKey(DataKind::ProofBlob, s.clone());
                                     emit_literal_stub(&mut code, &mut fixups, 12, key);
                                 } else {
-                                    let r = *alloc.regs.get(p).unwrap() as u8;
-                                    code.extend_from_slice(&encode_add(12, r, 0).to_le_bytes());
+                                    let r = src_reg(p, scratchd, &mut code);
+                                    code.extend_from_slice(&encode_addi(12, r, 0).to_le_bytes());
                                 }
                                 code.extend_from_slice(&pub_word.to_le_bytes());
                             } else {
-                                code.extend_from_slice(&encode_add(12, 0, 0).to_le_bytes());
+                                code.extend_from_slice(&encode_addi(12, 0, 0).to_le_bytes());
                             }
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -3642,7 +3872,7 @@ impl Compiler {
                         if let Some(tmp) = ret {
                             let rd = super::regalloc::RET_REG as u8;
                             let rs = src_reg(tmp, scratch1, &mut code);
-                            let mv = encode_add(rd, rs, 0);
+                            let mv = encode_addi(rd, rs, 0);
                             push_word(&mut code, mv);
                         }
                         if is_entry {
@@ -3674,8 +3904,8 @@ impl Compiler {
                         // r10 <- first, r11 <- second, then return/halts
                         let rs0 = src_reg(t0, scratch1, &mut code);
                         let rs1 = src_reg(t1, scratch2, &mut code);
-                        push_word(&mut code, encode_add(10, rs0, 0));
-                        push_word(&mut code, encode_add(11, rs1, 0));
+                        push_word(&mut code, encode_addi(10, rs0, 0));
+                        push_word(&mut code, encode_addi(11, rs1, 0));
                         if is_entry {
                             push_word(&mut code, encoding::wide::encode_halt());
                         } else {
@@ -3709,7 +3939,7 @@ impl Compiler {
                         for (i, t) in vals.iter().enumerate() {
                             let rs = src_reg(t, scratch1, &mut code);
                             let rd = (regalloc::RET_REG + i) as u8;
-                            push_word(&mut code, encode_add(rd, rs, 0));
+                            push_word(&mut code, encode_addi(rd, rs, 0));
                         }
                         if is_entry {
                             push_word(&mut code, encoding::wide::encode_halt());
@@ -3846,6 +4076,7 @@ impl Compiler {
         }
 
         uses_vector_global |= detect_vector_usage(&code);
+        uses_zk_global |= detect_zk_usage(&code);
 
         // Build metadata and finalize program (with data appended).
         // Resolve mode bits: program usage OR forced by options OR contract meta
@@ -4602,13 +4833,16 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
 }
 
 fn detect_vector_usage(code: &[u8]) -> bool {
-    const VECTOR_OPS: [u8; 11] = [
+    const VECTOR_OPS: [u8; 14] = [
         instruction::wide::crypto::VADD32,
         instruction::wide::crypto::VADD64,
         instruction::wide::crypto::VAND,
         instruction::wide::crypto::VXOR,
         instruction::wide::crypto::VOR,
         instruction::wide::crypto::VROT32,
+        instruction::wide::crypto::SHA256BLOCK,
+        instruction::wide::crypto::AESENC,
+        instruction::wide::crypto::AESDEC,
         instruction::wide::crypto::SETVL,
         instruction::wide::crypto::PARBEGIN,
         instruction::wide::crypto::PAREND,
@@ -4619,6 +4853,23 @@ fn detect_vector_usage(code: &[u8]) -> bool {
         let word = u32::from_le_bytes(chunk.try_into().expect("word chunk"));
         let opcode = instruction::wide::opcode(word);
         VECTOR_OPS.contains(&opcode)
+    })
+}
+
+fn detect_zk_usage(code: &[u8]) -> bool {
+    const ZK_OPS: [u8; 7] = [
+        instruction::wide::zk::ASSERT,
+        instruction::wide::zk::ASSERT_EQ,
+        instruction::wide::zk::FADD,
+        instruction::wide::zk::FSUB,
+        instruction::wide::zk::FMUL,
+        instruction::wide::zk::FINV,
+        instruction::wide::zk::ASSERT_RANGE,
+    ];
+    code.chunks_exact(4).any(|chunk| {
+        let word = u32::from_le_bytes(chunk.try_into().expect("word chunk"));
+        let opcode = instruction::wide::opcode(word);
+        ZK_OPS.contains(&opcode)
     })
 }
 

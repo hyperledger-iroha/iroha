@@ -1246,7 +1246,7 @@ const summary = generateDaProofSummary(
   session.gatewayResult.payload,
   { sampleCount: 4, leafIndexes: [0, 5] },
 );
-console.log(`sample seed=${summary.sampleSeed} proofCount=${summary.proofCount}`);
+console.log(`sample seed=${summary.sample_seed} proofCount=${summary.proof_count}`);
 
 const artifact = buildDaProofSummaryArtifact(summary, {
   manifestPath: "./artifacts/manifest.to",
@@ -1854,7 +1854,7 @@ const removeBytesTx = buildRemoveSmartContractBytesTransaction({
   chainId: "test-chain",
   authority,
   codeHash: Buffer.alloc(32, 0xaa),
-  reason: "retire legacy artifact",
+  reason: "retire archived artifact",
   privateKey,
 });
 ```
@@ -3316,8 +3316,8 @@ if (!trigger) {
   }
 }
 
-await torii.deleteTrigger("apps::legacy");
-await torii.deleteTriggerTyped("apps::legacy");
+await torii.deleteTrigger("apps::archived");
+await torii.deleteTriggerTyped("apps::archived");
 const pending = await torii.queryTriggers({
   filter: { Eq: ["namespace", "apps"] },
   sort: [{ key: "created_at", order: "desc" }],

@@ -42,7 +42,6 @@ SDKs). Elle impose les invariants d'alias et de handle vérifiés par
 
 - Les ID de profil sont des entiers positifs qui augmentent de façon monotone.
 - Le handle canonique `namespace.name@semver` **doit** apparaître en première
-  entrée dans `profile_aliases`. Les alias legacy suivent.
 - Les chaînes d'alias sont trimées, uniques et ne collisionnent pas avec les handles
   canoniques d'autres entrées.
 

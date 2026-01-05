@@ -9,7 +9,6 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.Optional;
 import java.util.List;
@@ -47,7 +46,6 @@ public final class NoritoRpcClientTests {
     nonSuccessStatusRaisesException();
     observersReceiveCallbacks();
     flowControllerGuardsLifecycle();
-    fallbackHandlerProvidesResponse();
     telemetrySignalsEmitForRpcCalls();
     callTransactionUsesCodecAdapter();
     System.out.println("[IrohaAndroid] Norito RPC client tests passed.");
@@ -173,37 +171,6 @@ public final class NoritoRpcClientTests {
     }
   }
 
-  private static void fallbackHandlerProvidesResponse() throws Exception {
-    final RecordingHandler handler =
-        new RecordingHandler(503, "nope".getBytes(StandardCharsets.UTF_8));
-    try (SimpleHttpServer server = SimpleHttpServer.start("/rpc/fallback", handler)) {
-      final RecordingObserver observer = new RecordingObserver();
-      final AtomicInteger fallbackCount = new AtomicInteger();
-      final byte[] fallbackBody = "legacy".getBytes(StandardCharsets.UTF_8);
-      final NoritoRpcClient client =
-          NoritoRpcClient.builder()
-              .setBaseUri(server.baseUri())
-              .setTransportExecutor(new UrlConnectionTransportExecutor())
-              .addObserver(observer)
-              .setFallbackHandler(
-                  (context, error) -> {
-                    fallbackCount.incrementAndGet();
-                    assert "/rpc/fallback".equals(context.path())
-                        : "Context should preserve original path";
-                    return fallbackBody.clone();
-                  })
-              .build();
-      final byte[] response = client.call("/rpc/fallback", new byte[] {0x66});
-      assert Arrays.equals(response, fallbackBody) : "Fallback response should be returned";
-      assert fallbackCount.get() == 1 : "Fallback handler must run for failing calls";
-      assert observer.responseCount() == 1
-          : "Fallback path should still emit response callbacks";
-      assert observer.lastStatusCode() == 299
-          : "Fallback path reports synthetic status 299";
-      assert observer.failureCount() == 1 : "Observers must see the original failure";
-    }
-  }
-
   private static void telemetrySignalsEmitForRpcCalls() throws Exception {
     final RecordingHandler handler =
         new RecordingHandler(200, "telemetry".getBytes(StandardCharsets.UTF_8));
@@ -274,8 +241,8 @@ public final class NoritoRpcClientTests {
           : "RPC telemetry should capture route";
       assert "POST".equals(rpcSignal.fields().get("method"))
           : "RPC telemetry should capture method";
-      assert Boolean.FALSE.equals(rpcSignal.fields().get("fallback"))
-          : "RPC telemetry should flag fallback usage";
+      assert !rpcSignal.fields().containsKey("fallback")
+          : "RPC telemetry should not emit fallback field";
       final Object status = rpcSignal.fields().get("status_code");
       assert status instanceof Number && ((Number) status).intValue() == 200
           : "RPC telemetry should record status";

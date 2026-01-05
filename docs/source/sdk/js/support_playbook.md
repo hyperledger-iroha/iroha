@@ -49,7 +49,6 @@ handling incidents or rehearsing rollback drills.
 |-------|--------|---------------|---------------|
 | Pilot | Q4 FY2025 preview customers | 9×5 coverage, manual telemetry reviews, ad-hoc bridges | Pilot validation packet + parity digest filed in `status.md`. |
 | General Availability | Target Q2 2026 | 24×5 SLA, PagerDuty rotation, automated dashboards + exporter snapshots | GA bundle (support playbook, release manifest, verification evidence) archived under `artifacts/js-release/<tag>/`. |
-| LTS | First cut ≤90 days after GA, then every 6 months | ABI compatibility, security fixes, dual-branch CI | LTS addendum appended to this playbook and linked from `status.md`. |
 | Hotfix | Any time | Sev 1 regression/security fix, dedicated bridge | Hotfix advisory in README/status, provenance + verification evidence refreshed. |
 
 ### 3.1 Severity Matrix

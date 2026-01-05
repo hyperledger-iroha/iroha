@@ -418,76 +418,64 @@ fileprivate enum ToriiConnectJSON {
     }
 
     static func optionalString(_ record: [String: ToriiJSONValue],
-                               keys: [String]) -> String? {
-        for key in keys {
-            if let value = normalizedString(record[key]) {
-                return value
-            }
-        }
-        return nil
+                               key: String) -> String? {
+        normalizedString(record[key])
     }
 
     static func requireString(_ record: [String: ToriiJSONValue],
-                              keys: [String],
+                              key: String,
                               field: String) throws -> String {
-        if let value = optionalString(record, keys: keys) {
+        if let value = optionalString(record, key: key) {
             return value
         }
         throw ToriiClientError.invalidPayload("\(field) field was missing or empty")
     }
 
     static func optionalBool(_ record: [String: ToriiJSONValue],
-                             keys: [String]) -> Bool? {
-        for key in keys {
-            guard let value = record[key] else { continue }
-            switch value {
-            case .bool(let bool):
-                return bool
-            case .string(let string):
-                let lowercased = string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                if lowercased == "true" { return true }
-                if lowercased == "false" { return false }
-            default:
-                continue
-            }
+                             key: String) -> Bool? {
+        guard let value = record[key] else { return nil }
+        switch value {
+        case .bool(let bool):
+            return bool
+        case .string(let string):
+            let lowercased = string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if lowercased == "true" { return true }
+            if lowercased == "false" { return false }
+        default:
+            break
         }
         return nil
     }
 
     static func optionalUInt64(_ record: [String: ToriiJSONValue],
-                               keys: [String]) -> UInt64? {
-        for key in keys {
-            guard let value = record[key] else { continue }
-            switch value {
-            case .number(let number):
-                guard number.isFinite, number >= 0 else { continue }
-                return UInt64(number)
-            case .string(let string):
-                let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let parsed = UInt64(trimmed) {
-                    return parsed
-                }
-            default:
-                continue
-            }
+                               key: String) -> UInt64? {
+        guard let value = record[key] else { return nil }
+        switch value {
+        case .number(let number):
+            guard number.isFinite, number >= 0 else { return nil }
+            return UInt64(number)
+        case .string(let string):
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            return UInt64(trimmed)
+        default:
+            return nil
         }
-        return nil
     }
 
     static func requireUInt64(_ record: [String: ToriiJSONValue],
-                              keys: [String],
+                              key: String,
                               field: String) throws -> UInt64 {
-        if let value = optionalUInt64(record, keys: keys) {
+        if let value = optionalUInt64(record, key: key) {
             return value
         }
         throw ToriiClientError.invalidPayload("\(field) field was missing or invalid")
     }
 
     static func requireUInt64(_ record: [String: ToriiJSONValue],
-                              keys: [String],
+                              key: String,
                               field: String,
                               allowZero: Bool) throws -> UInt64 {
-        let value = try requireUInt64(record, keys: keys, field: field)
+        let value = try requireUInt64(record, key: key, field: field)
         if !allowZero && value == 0 {
             throw ToriiClientError.invalidPayload("\(field) must be greater than zero")
         }
@@ -495,65 +483,52 @@ fileprivate enum ToriiConnectJSON {
     }
 
     static func optionalInt(_ record: [String: ToriiJSONValue],
-                            keys: [String]) -> Int? {
-        for key in keys {
-            guard let value = record[key] else { continue }
-            switch value {
-            case .number(let number):
-                guard number.isFinite else { continue }
-                return Int(number)
-            case .string(let string):
-                let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let parsed = Int(trimmed) {
-                    return parsed
-                }
-            default:
-                continue
-            }
+                            key: String) -> Int? {
+        guard let value = record[key] else { return nil }
+        switch value {
+        case .number(let number):
+            guard number.isFinite else { return nil }
+            return Int(number)
+        case .string(let string):
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            return Int(trimmed)
+        default:
+            return nil
         }
-        return nil
     }
 
     static func objectsArray(_ record: [String: ToriiJSONValue],
-                             keys: [String],
+                             key: String,
                              field: String) throws -> [[String: ToriiJSONValue]] {
-        for key in keys {
-            if let value = record[key] {
-                guard case .array(let array) = value else {
-                    throw ToriiClientError.invalidPayload("\(field) must be an array")
-                }
-                return try array.map { value in
-                    guard case .object(let object) = value else {
-                        throw ToriiClientError.invalidPayload("\(field) entries must be objects")
-                    }
-                    return object
-                }
-            }
+        guard let value = record[key] else { return [] }
+        guard case .array(let array) = value else {
+            throw ToriiClientError.invalidPayload("\(field) must be an array")
         }
-        return []
+        return try array.map { value in
+            guard case .object(let object) = value else {
+                throw ToriiClientError.invalidPayload("\(field) entries must be objects")
+            }
+            return object
+        }
     }
 
     static func requireObject(_ record: [String: ToriiJSONValue],
-                              keys: [String],
+                              key: String,
                               field: String) throws -> [String: ToriiJSONValue] {
-        for key in keys {
-            if let value = record[key] {
-                if case .object(let object) = value {
-                    return object
-                }
-                throw ToriiClientError.invalidPayload("\(field) must be an object")
-            }
+        guard let value = record[key] else {
+            throw ToriiClientError.invalidPayload("\(field) field was missing or invalid")
         }
-        throw ToriiClientError.invalidPayload("\(field) field was missing or invalid")
+        if case .object(let object) = value {
+            return object
+        }
+        throw ToriiClientError.invalidPayload("\(field) must be an object")
     }
 
     static func optionalObject(_ record: [String: ToriiJSONValue],
-                               keys: [String]) -> [String: ToriiJSONValue]? {
-        for key in keys {
-            if let value = record[key],
-               case .object(let object) = value {
-                return object
-            }
+                               key: String) -> [String: ToriiJSONValue]? {
+        guard let value = record[key] else { return nil }
+        if case .object(let object) = value {
+            return object
         }
         return nil
     }
@@ -613,12 +588,8 @@ public struct ToriiConnectPerIpSessions: Decodable, Sendable, Equatable {
 
     public init(raw: [String: ToriiJSONValue]) throws {
         self.raw = raw
-        self.ip = try ToriiConnectJSON.requireString(raw,
-                                                     keys: ["ip", "address", "remote_ip"],
-                                                     field: "ip")
-        self.sessions = try ToriiConnectJSON.requireUInt64(raw,
-                                                           keys: ["sessions", "count"],
-                                                           field: "sessions")
+        self.ip = try ToriiConnectJSON.requireString(raw, key: "ip", field: "ip")
+        self.sessions = try ToriiConnectJSON.requireUInt64(raw, key: "sessions", field: "sessions")
     }
 
     public init(from decoder: Decoder) throws {
@@ -643,27 +614,27 @@ public struct ToriiConnectStatusPolicySnapshot: Decodable, Sendable, Equatable {
 
     public init(raw: [String: ToriiJSONValue]) {
         self.raw = raw
-        wsMaxSessions = ToriiConnectJSON.optionalUInt64(raw, keys: ["ws_max_sessions", "wsMaxSessions"])
-        wsPerIpMaxSessions = ToriiConnectJSON.optionalUInt64(raw, keys: ["ws_per_ip_max_sessions", "wsPerIpMaxSessions"])
-        wsRatePerIpPerMin = ToriiConnectJSON.optionalUInt64(raw, keys: ["ws_rate_per_ip_per_min", "wsRatePerIpPerMin"])
-        sessionTtlMs = ToriiConnectJSON.optionalUInt64(raw, keys: ["session_ttl_ms", "sessionTtlMs"])
-        frameMaxBytes = ToriiConnectJSON.optionalUInt64(raw, keys: ["frame_max_bytes", "frameMaxBytes"])
-        sessionBufferMaxBytes = ToriiConnectJSON.optionalUInt64(raw, keys: ["session_buffer_max_bytes", "sessionBufferMaxBytes"])
-        relayEnabled = ToriiConnectJSON.optionalBool(raw, keys: ["relay_enabled", "relayEnabled"])
-        heartbeatIntervalMs = ToriiConnectJSON.optionalUInt64(raw, keys: ["heartbeat_interval_ms", "heartbeatIntervalMs"])
-        heartbeatMissTolerance = ToriiConnectJSON.optionalUInt64(raw, keys: ["heartbeat_miss_tolerance", "heartbeatMissTolerance"])
-        heartbeatMinIntervalMs = ToriiConnectJSON.optionalUInt64(raw, keys: ["heartbeat_min_interval_ms", "heartbeatMinIntervalMs"])
+        wsMaxSessions = ToriiConnectJSON.optionalUInt64(raw, key: "ws_max_sessions")
+        wsPerIpMaxSessions = ToriiConnectJSON.optionalUInt64(raw, key: "ws_per_ip_max_sessions")
+        wsRatePerIpPerMin = ToriiConnectJSON.optionalUInt64(raw, key: "ws_rate_per_ip_per_min")
+        sessionTtlMs = ToriiConnectJSON.optionalUInt64(raw, key: "session_ttl_ms")
+        frameMaxBytes = ToriiConnectJSON.optionalUInt64(raw, key: "frame_max_bytes")
+        sessionBufferMaxBytes = ToriiConnectJSON.optionalUInt64(raw, key: "session_buffer_max_bytes")
+        relayEnabled = ToriiConnectJSON.optionalBool(raw, key: "relay_enabled")
+        heartbeatIntervalMs = ToriiConnectJSON.optionalUInt64(raw, key: "heartbeat_interval_ms")
+        heartbeatMissTolerance = ToriiConnectJSON.optionalUInt64(raw, key: "heartbeat_miss_tolerance")
+        heartbeatMinIntervalMs = ToriiConnectJSON.optionalUInt64(raw, key: "heartbeat_min_interval_ms")
         let known: Set<String> = [
-            "ws_max_sessions", "wsMaxSessions",
-            "ws_per_ip_max_sessions", "wsPerIpMaxSessions",
-            "ws_rate_per_ip_per_min", "wsRatePerIpPerMin",
-            "session_ttl_ms", "sessionTtlMs",
-            "frame_max_bytes", "frameMaxBytes",
-            "session_buffer_max_bytes", "sessionBufferMaxBytes",
-            "relay_enabled", "relayEnabled",
-            "heartbeat_interval_ms", "heartbeatIntervalMs",
-            "heartbeat_miss_tolerance", "heartbeatMissTolerance",
-            "heartbeat_min_interval_ms", "heartbeatMinIntervalMs"
+            "ws_max_sessions",
+            "ws_per_ip_max_sessions",
+            "ws_rate_per_ip_per_min",
+            "session_ttl_ms",
+            "frame_max_bytes",
+            "session_buffer_max_bytes",
+            "relay_enabled",
+            "heartbeat_interval_ms",
+            "heartbeat_miss_tolerance",
+            "heartbeat_min_interval_ms"
         ]
         extra = ToriiConnectJSON.mergeExtra(record: raw, knownKeys: known)
     }
@@ -695,25 +666,25 @@ public struct ToriiConnectStatusSnapshot: Decodable, Sendable, Equatable {
 
     public init(raw: [String: ToriiJSONValue]) throws {
         self.raw = raw
-        enabled = ToriiConnectJSON.optionalBool(raw, keys: ["enabled"]) ?? false
-        sessionsTotal = try ToriiConnectJSON.requireUInt64(raw, keys: ["sessions_total", "sessionsTotal"], field: "sessions_total")
-        sessionsActive = try ToriiConnectJSON.requireUInt64(raw, keys: ["sessions_active", "sessionsActive"], field: "sessions_active")
-        bufferedSessions = try ToriiConnectJSON.requireUInt64(raw, keys: ["buffered_sessions", "bufferedSessions"], field: "buffered_sessions")
-        totalBufferBytes = try ToriiConnectJSON.requireUInt64(raw, keys: ["total_buffer_bytes", "totalBufferBytes"], field: "total_buffer_bytes")
-        dedupeSize = try ToriiConnectJSON.requireUInt64(raw, keys: ["dedupe_size", "dedupeSize"], field: "dedupe_size")
-        framesInTotal = try ToriiConnectJSON.requireUInt64(raw, keys: ["frames_in_total", "framesInTotal"], field: "frames_in_total")
-        framesOutTotal = try ToriiConnectJSON.requireUInt64(raw, keys: ["frames_out_total", "framesOutTotal"], field: "frames_out_total")
-        ciphertextTotal = try ToriiConnectJSON.requireUInt64(raw, keys: ["ciphertext_total", "ciphertextTotal"], field: "ciphertext_total")
-        dedupeDropsTotal = try ToriiConnectJSON.requireUInt64(raw, keys: ["dedupe_drops_total", "dedupeDropsTotal"], field: "dedupe_drops_total")
-        bufferDropsTotal = try ToriiConnectJSON.requireUInt64(raw, keys: ["buffer_drops_total", "bufferDropsTotal"], field: "buffer_drops_total")
-        plaintextControlDropsTotal = try ToriiConnectJSON.requireUInt64(raw, keys: ["plaintext_control_drops_total", "plaintextControlDropsTotal"], field: "plaintext_control_drops_total")
-        monotonicDropsTotal = try ToriiConnectJSON.requireUInt64(raw, keys: ["monotonic_drops_total", "monotonicDropsTotal"], field: "monotonic_drops_total")
-        pingMissTotal = try ToriiConnectJSON.requireUInt64(raw, keys: ["ping_miss_total", "pingMissTotal"], field: "ping_miss_total")
+        enabled = ToriiConnectJSON.optionalBool(raw, key: "enabled") ?? false
+        sessionsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "sessions_total", field: "sessions_total")
+        sessionsActive = try ToriiConnectJSON.requireUInt64(raw, key: "sessions_active", field: "sessions_active")
+        bufferedSessions = try ToriiConnectJSON.requireUInt64(raw, key: "buffered_sessions", field: "buffered_sessions")
+        totalBufferBytes = try ToriiConnectJSON.requireUInt64(raw, key: "total_buffer_bytes", field: "total_buffer_bytes")
+        dedupeSize = try ToriiConnectJSON.requireUInt64(raw, key: "dedupe_size", field: "dedupe_size")
+        framesInTotal = try ToriiConnectJSON.requireUInt64(raw, key: "frames_in_total", field: "frames_in_total")
+        framesOutTotal = try ToriiConnectJSON.requireUInt64(raw, key: "frames_out_total", field: "frames_out_total")
+        ciphertextTotal = try ToriiConnectJSON.requireUInt64(raw, key: "ciphertext_total", field: "ciphertext_total")
+        dedupeDropsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "dedupe_drops_total", field: "dedupe_drops_total")
+        bufferDropsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "buffer_drops_total", field: "buffer_drops_total")
+        plaintextControlDropsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "plaintext_control_drops_total", field: "plaintext_control_drops_total")
+        monotonicDropsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "monotonic_drops_total", field: "monotonic_drops_total")
+        pingMissTotal = try ToriiConnectJSON.requireUInt64(raw, key: "ping_miss_total", field: "ping_miss_total")
         let perIpRaw = try ToriiConnectJSON.objectsArray(raw,
-                                                         keys: ["per_ip_sessions", "perIpSessions"],
+                                                         key: "per_ip_sessions",
                                                          field: "per_ip_sessions")
         perIpSessions = try perIpRaw.map { try ToriiConnectPerIpSessions(raw: $0) }
-        if let policyObject = ToriiConnectJSON.optionalObject(raw, keys: ["policy"]) {
+        if let policyObject = ToriiConnectJSON.optionalObject(raw, key: "policy") {
             policy = ToriiConnectStatusPolicySnapshot(raw: policyObject)
         } else {
             policy = nil
@@ -737,18 +708,18 @@ public struct ToriiConnectSessionResponse: Decodable, Sendable, Equatable {
 
     public init(raw: [String: ToriiJSONValue]) throws {
         self.raw = raw
-        sid = try ToriiConnectJSON.requireString(raw,
-                                                 keys: ["sid", "SID", "session_id", "sessionId"],
-                                                 field: "sid")
-        walletURI = try ToriiConnectJSON.requireString(raw, keys: ["wallet_uri", "walletUri"], field: "wallet_uri")
-        appURI = try ToriiConnectJSON.requireString(raw, keys: ["app_uri", "appUri"], field: "app_uri")
-        tokenApp = try ToriiConnectJSON.requireString(raw, keys: ["token_app", "tokenApp"], field: "token_app")
-        tokenWallet = try ToriiConnectJSON.requireString(raw, keys: ["token_wallet", "tokenWallet"], field: "token_wallet")
-        let known: Set<String> = ["sid", "SID", "session_id", "sessionId",
-                                  "wallet_uri", "walletUri",
-                                  "app_uri", "appUri",
-                                  "token_app", "tokenApp",
-                                  "token_wallet", "tokenWallet"]
+        sid = try ToriiConnectJSON.requireString(raw, key: "sid", field: "sid")
+        walletURI = try ToriiConnectJSON.requireString(raw, key: "wallet_uri", field: "wallet_uri")
+        appURI = try ToriiConnectJSON.requireString(raw, key: "app_uri", field: "app_uri")
+        tokenApp = try ToriiConnectJSON.requireString(raw, key: "token_app", field: "token_app")
+        tokenWallet = try ToriiConnectJSON.requireString(raw, key: "token_wallet", field: "token_wallet")
+        let known: Set<String> = [
+            "sid",
+            "wallet_uri",
+            "app_uri",
+            "token_app",
+            "token_wallet"
+        ]
         extra = ToriiConnectJSON.mergeExtra(record: raw, knownKeys: known)
     }
 
@@ -771,13 +742,11 @@ public struct ToriiConnectAppRecord: Decodable, Sendable, Equatable {
 
     public init(raw: [String: ToriiJSONValue]) throws {
         self.raw = raw
-        appId = try ToriiConnectJSON.requireString(raw,
-                                                   keys: ["app_id", "id", "appId", "ID", "identifier"],
-                                                   field: "app_id")
-        displayName = ToriiConnectJSON.optionalString(raw, keys: ["display_name", "displayName"])
-        description = ToriiConnectJSON.optionalString(raw, keys: ["description"])
-        iconURL = ToriiConnectJSON.optionalString(raw, keys: ["icon_url", "iconUrl"])
-        if let namespaceValue = raw["namespaces"] ?? raw["allowed_namespaces"] ?? raw["allowedNamespaces"] {
+        appId = try ToriiConnectJSON.requireString(raw, key: "app_id", field: "app_id")
+        displayName = ToriiConnectJSON.optionalString(raw, key: "display_name")
+        description = ToriiConnectJSON.optionalString(raw, key: "description")
+        iconURL = ToriiConnectJSON.optionalString(raw, key: "icon_url")
+        if let namespaceValue = raw["namespaces"] {
             namespaces = try ToriiConnectJSON.stringArray(namespaceValue, field: "namespaces")
         } else {
             namespaces = []
@@ -793,11 +762,11 @@ public struct ToriiConnectAppRecord: Decodable, Sendable, Equatable {
             policy = [:]
         }
         let known: Set<String> = [
-            "app_id", "id", "appId", "ID", "identifier",
-            "display_name", "displayName",
+            "app_id",
+            "display_name",
             "description",
-            "icon_url", "iconUrl",
-            "namespaces", "allowed_namespaces", "allowedNamespaces",
+            "icon_url",
+            "namespaces",
             "metadata",
             "policy"
         ]
@@ -819,13 +788,11 @@ public struct ToriiConnectAppRegistryPage: Decodable, Sendable, Equatable {
 
     public init(raw: [String: ToriiJSONValue]) throws {
         self.raw = raw
-        let itemsArray = try ToriiConnectJSON.objectsArray(raw,
-                                                           keys: ["items", "apps"],
-                                                           field: "items")
+        let itemsArray = try ToriiConnectJSON.objectsArray(raw, key: "items", field: "items")
         items = try itemsArray.map { try ToriiConnectAppRecord(raw: $0) }
-        total = ToriiConnectJSON.optionalUInt64(raw, keys: ["total"])
-        nextCursor = ToriiConnectJSON.optionalString(raw, keys: ["next_cursor", "cursor", "next"])
-        let known: Set<String> = ["items", "apps", "total", "next_cursor", "cursor", "next"]
+        total = ToriiConnectJSON.optionalUInt64(raw, key: "total")
+        nextCursor = ToriiConnectJSON.optionalString(raw, key: "next_cursor")
+        let known: Set<String> = ["items", "total", "next_cursor"]
         extra = ToriiConnectJSON.mergeExtra(record: raw, knownKeys: known)
     }
 
@@ -850,32 +817,32 @@ public struct ToriiConnectAppPolicyControls: Decodable, Sendable, Equatable {
     public let raw: [String: ToriiJSONValue]
 
     public init(raw: [String: ToriiJSONValue]) {
-        if let policy = ToriiConnectJSON.optionalObject(raw, keys: ["policy"]) {
+        if let policy = ToriiConnectJSON.optionalObject(raw, key: "policy") {
             self.raw = policy
         } else {
             self.raw = raw
         }
-        relayEnabled = ToriiConnectJSON.optionalBool(self.raw, keys: ["relay_enabled", "relayEnabled"])
-        wsMaxSessions = ToriiConnectJSON.optionalUInt64(self.raw, keys: ["ws_max_sessions", "wsMaxSessions"])
-        wsPerIpMaxSessions = ToriiConnectJSON.optionalUInt64(self.raw, keys: ["ws_per_ip_max_sessions", "wsPerIpMaxSessions"])
-        wsRatePerIpPerMin = ToriiConnectJSON.optionalUInt64(self.raw, keys: ["ws_rate_per_ip_per_min", "wsRatePerIpPerMin"])
-        sessionTtlMs = ToriiConnectJSON.optionalUInt64(self.raw, keys: ["session_ttl_ms", "sessionTtlMs"])
-        frameMaxBytes = ToriiConnectJSON.optionalUInt64(self.raw, keys: ["frame_max_bytes", "frameMaxBytes"])
-        sessionBufferMaxBytes = ToriiConnectJSON.optionalUInt64(self.raw, keys: ["session_buffer_max_bytes", "sessionBufferMaxBytes"])
-        pingIntervalMs = ToriiConnectJSON.optionalUInt64(self.raw, keys: ["ping_interval_ms", "pingIntervalMs"])
-        pingMissTolerance = ToriiConnectJSON.optionalUInt64(self.raw, keys: ["ping_miss_tolerance", "pingMissTolerance"])
-        pingMinIntervalMs = ToriiConnectJSON.optionalUInt64(self.raw, keys: ["ping_min_interval_ms", "pingMinIntervalMs"])
+        relayEnabled = ToriiConnectJSON.optionalBool(self.raw, key: "relay_enabled")
+        wsMaxSessions = ToriiConnectJSON.optionalUInt64(self.raw, key: "ws_max_sessions")
+        wsPerIpMaxSessions = ToriiConnectJSON.optionalUInt64(self.raw, key: "ws_per_ip_max_sessions")
+        wsRatePerIpPerMin = ToriiConnectJSON.optionalUInt64(self.raw, key: "ws_rate_per_ip_per_min")
+        sessionTtlMs = ToriiConnectJSON.optionalUInt64(self.raw, key: "session_ttl_ms")
+        frameMaxBytes = ToriiConnectJSON.optionalUInt64(self.raw, key: "frame_max_bytes")
+        sessionBufferMaxBytes = ToriiConnectJSON.optionalUInt64(self.raw, key: "session_buffer_max_bytes")
+        pingIntervalMs = ToriiConnectJSON.optionalUInt64(self.raw, key: "ping_interval_ms")
+        pingMissTolerance = ToriiConnectJSON.optionalUInt64(self.raw, key: "ping_miss_tolerance")
+        pingMinIntervalMs = ToriiConnectJSON.optionalUInt64(self.raw, key: "ping_min_interval_ms")
         let known: Set<String> = [
-            "relay_enabled", "relayEnabled",
-            "ws_max_sessions", "wsMaxSessions",
-            "ws_per_ip_max_sessions", "wsPerIpMaxSessions",
-            "ws_rate_per_ip_per_min", "wsRatePerIpPerMin",
-            "session_ttl_ms", "sessionTtlMs",
-            "frame_max_bytes", "frameMaxBytes",
-            "session_buffer_max_bytes", "sessionBufferMaxBytes",
-            "ping_interval_ms", "pingIntervalMs",
-            "ping_miss_tolerance", "pingMissTolerance",
-            "ping_min_interval_ms", "pingMinIntervalMs"
+            "relay_enabled",
+            "ws_max_sessions",
+            "ws_per_ip_max_sessions",
+            "ws_rate_per_ip_per_min",
+            "session_ttl_ms",
+            "frame_max_bytes",
+            "session_buffer_max_bytes",
+            "ping_interval_ms",
+            "ping_miss_tolerance",
+            "ping_min_interval_ms"
         ]
         extra = ToriiConnectJSON.mergeExtra(record: self.raw, knownKeys: known)
     }
@@ -896,9 +863,7 @@ public struct ToriiConnectAdmissionManifestEntry: Decodable, Sendable, Equatable
 
     public init(raw: [String: ToriiJSONValue]) throws {
         self.raw = raw
-        appId = try ToriiConnectJSON.requireString(raw,
-                                                   keys: ["app_id", "appId", "id"],
-                                                   field: "app_id")
+        appId = try ToriiConnectJSON.requireString(raw, key: "app_id", field: "app_id")
         if let namespaceValue = raw["namespaces"] {
             namespaces = try ToriiConnectJSON.stringArray(namespaceValue, field: "namespaces")
         } else {
@@ -914,7 +879,7 @@ public struct ToriiConnectAdmissionManifestEntry: Decodable, Sendable, Equatable
         } else {
             policy = [:]
         }
-        let known: Set<String> = ["app_id", "appId", "id", "namespaces", "metadata", "policy"]
+        let known: Set<String> = ["app_id", "namespaces", "metadata", "policy"]
         extra = ToriiConnectJSON.mergeExtra(record: raw, knownKeys: known)
     }
 
@@ -959,16 +924,14 @@ public struct ToriiConnectAdmissionManifest: Decodable, Sendable, Equatable {
     public let raw: [String: ToriiJSONValue]
 
     public init(raw: [String: ToriiJSONValue]) throws {
-        let manifest = ToriiConnectJSON.optionalObject(raw, keys: ["manifest"]) ?? raw
+        let manifest = ToriiConnectJSON.optionalObject(raw, key: "manifest") ?? raw
         self.raw = manifest
-        version = ToriiConnectJSON.optionalInt(manifest, keys: ["version"])
-        manifestHash = ToriiConnectJSON.optionalString(manifest, keys: ["manifest_hash", "manifestHash"])
-        updatedAt = ToriiConnectJSON.optionalString(manifest, keys: ["updated_at", "updatedAt"])
-        let entriesRaw = try ToriiConnectJSON.objectsArray(manifest,
-                                                           keys: ["entries", "apps"],
-                                                           field: "entries")
+        version = ToriiConnectJSON.optionalInt(manifest, key: "version")
+        manifestHash = ToriiConnectJSON.optionalString(manifest, key: "manifest_hash")
+        updatedAt = ToriiConnectJSON.optionalString(manifest, key: "updated_at")
+        let entriesRaw = try ToriiConnectJSON.objectsArray(manifest, key: "entries", field: "entries")
         entries = try entriesRaw.map { try ToriiConnectAdmissionManifestEntry(raw: $0) }
-        let known: Set<String> = ["entries", "apps", "version", "manifest_hash", "manifestHash", "updated_at", "updatedAt"]
+        let known: Set<String> = ["entries", "version", "manifest_hash", "updated_at"]
         extra = ToriiConnectJSON.mergeExtra(record: manifest, knownKeys: known)
     }
 
@@ -1224,13 +1187,8 @@ public struct ToriiOfflineAllowanceItem: Decodable, Sendable {
             )
         }
 
-        func value(_ keys: [String]) -> ToriiJSONValue? {
-            for key in keys {
-                if let value = object[key] {
-                    return value
-                }
-            }
-            return nil
+        func value(_ key: String) -> ToriiJSONValue? {
+            object[key]
         }
 
         guard let recordValue = object["record"] else {
@@ -1247,8 +1205,8 @@ public struct ToriiOfflineAllowanceItem: Decodable, Sendable {
             recordObject = [:]
         }
 
-        func string(_ keys: [String], field: String) throws -> String {
-            if let string = ToriiOfflineAllowanceItem.normalizedString(value(keys)) {
+        func string(_ key: String, field: String) throws -> String {
+            if let string = ToriiOfflineAllowanceItem.normalizedString(value(key)) {
                 return string
             }
             throw DecodingError.dataCorrupted(
@@ -1256,12 +1214,12 @@ public struct ToriiOfflineAllowanceItem: Decodable, Sendable {
             )
         }
 
-        func optionalString(_ keys: [String]) -> String? {
-            ToriiOfflineAllowanceItem.normalizedString(value(keys))
+        func optionalString(_ key: String) -> String? {
+            ToriiOfflineAllowanceItem.normalizedString(value(key))
         }
 
-        func uint64(_ keys: [String], field: String, defaultValue: UInt64? = nil) throws -> UInt64 {
-            if let number = ToriiOfflineAllowanceItem.normalizedUInt64(value(keys)) {
+        func uint64(_ key: String, field: String, defaultValue: UInt64? = nil) throws -> UInt64 {
+            if let number = ToriiOfflineAllowanceItem.normalizedUInt64(value(key)) {
                 return number
             }
             if let fallback = defaultValue {
@@ -1273,23 +1231,23 @@ public struct ToriiOfflineAllowanceItem: Decodable, Sendable {
             )
         }
 
-        func optionalUInt64(_ keys: [String]) -> UInt64? {
-            ToriiOfflineAllowanceItem.normalizedUInt64(value(keys))
+        func optionalUInt64(_ key: String) -> UInt64? {
+            ToriiOfflineAllowanceItem.normalizedUInt64(value(key))
         }
 
-        func optionalInt64(_ keys: [String]) -> Int64? {
-            ToriiOfflineAllowanceItem.normalizedInt64(value(keys))
+        func optionalInt64(_ key: String) -> Int64? {
+            ToriiOfflineAllowanceItem.normalizedInt64(value(key))
         }
 
         func remainingAmountValue() -> String {
             if let topLevel = ToriiOfflineAllowanceItem.normalizedString(
-                value(["remaining_amount", "remainingAmount"])
+                value("remaining_amount")
             ) {
                 return topLevel
             }
             if let nested = ToriiOfflineAllowanceItem.normalizedString(
                 ToriiOfflineAllowanceItem.lookup(
-                    keys: ["remaining_amount", "remainingAmount"],
+                    key: "remaining_amount",
                     in: recordObject
                 )
             ) {
@@ -1298,50 +1256,36 @@ public struct ToriiOfflineAllowanceItem: Decodable, Sendable {
             return "0"
         }
 
-        self.certificateIdHex = try string(
-            ["certificate_id_hex", "certificateIdHex"], field: "certificate_id_hex"
-        )
-        self.controllerId = try string(
-            ["controller_id", "controllerId"], field: "controller_id"
-        )
-        self.controllerDisplay = try string(
-            ["controller_display", "controllerDisplay"], field: "controller_display"
-        )
-        self.assetId = try string(["asset_id", "assetId"], field: "asset_id")
-        self.registeredAtMs = try uint64(
-            ["registered_at_ms", "registeredAtMs"],
-            field: "registered_at_ms"
-        )
+        self.certificateIdHex = try string("certificate_id_hex", field: "certificate_id_hex")
+        self.controllerId = try string("controller_id", field: "controller_id")
+        self.controllerDisplay = try string("controller_display", field: "controller_display")
+        self.assetId = try string("asset_id", field: "asset_id")
+        self.registeredAtMs = try uint64("registered_at_ms", field: "registered_at_ms")
         let expires = try uint64(
-            ["expires_at_ms", "expiresAtMs", "certificate_expires_at_ms", "certificateExpiresAtMs"],
+            "expires_at_ms",
             field: "expires_at_ms",
             defaultValue: 0
         )
         self.expiresAtMs = expires
         self.policyExpiresAtMs = try uint64(
-            ["policy_expires_at_ms", "policyExpiresAtMs"],
+            "policy_expires_at_ms",
             field: "policy_expires_at_ms",
             defaultValue: expires
         )
-        self.refreshAtMs = optionalUInt64(["refresh_at_ms", "refreshAtMs"])
-        self.verdictIdHex = optionalString(["verdict_id_hex", "verdictIdHex"])
-        self.attestationNonceHex = optionalString(["attestation_nonce_hex", "attestationNonceHex"])
+        self.refreshAtMs = optionalUInt64("refresh_at_ms")
+        self.verdictIdHex = optionalString("verdict_id_hex")
+        self.attestationNonceHex = optionalString("attestation_nonce_hex")
         self.remainingAmount = remainingAmountValue()
-        self.deadlineKind = optionalString(["deadline_kind", "deadlineKind"])
-        self.deadlineState = optionalString(["deadline_state", "deadlineState"])
-        self.deadlineMs = optionalUInt64(["deadline_ms", "deadlineMs"])
-        self.deadlineMsRemaining = optionalInt64(["deadline_ms_remaining", "deadlineMsRemaining"])
+        self.deadlineKind = optionalString("deadline_kind")
+        self.deadlineState = optionalString("deadline_state")
+        self.deadlineMs = optionalUInt64("deadline_ms")
+        self.deadlineMsRemaining = optionalInt64("deadline_ms_remaining")
         self.record = recordValue
     }
 
-    private static func lookup(keys: [String],
+    private static func lookup(key: String,
                                in object: [String: ToriiJSONValue]) -> ToriiJSONValue? {
-        for key in keys {
-            if let value = object[key] {
-                return value
-            }
-        }
-        return nil
+        object[key]
     }
 
     private static func normalizedString(_ value: ToriiJSONValue?) -> String? {
@@ -2081,22 +2025,18 @@ public struct ToriiDaManifestBundle: Decodable, Sendable, Equatable {
     }
 
     public init(raw: [String: ToriiJSONValue]) throws {
-        storageTicketHex = try Self.requireHex(raw, keys: ["storage_ticket", "storageTicket"], field: "storage_ticket")
-        clientBlobIdHex = try Self.requireHex(raw, keys: ["client_blob_id", "clientBlobId"], field: "client_blob_id")
-        blobHashHex = try Self.requireHex(raw, keys: ["blob_hash", "blobHash"], field: "blob_hash")
-        manifestHashHex = try Self.requireHex(
-            raw,
-            keys: ["manifest_hash", "manifestHash", "manifest_id_hex", "manifestIdHex", "blob_hash", "blobHash"],
-            field: "manifest_hash"
-        )
-        chunkRootHex = try Self.requireHex(raw, keys: ["chunk_root", "chunkRoot"], field: "chunk_root")
-        laneId = try Self.requireUInt64(raw, keys: ["lane_id", "laneId"], field: "lane_id")
-        epoch = try Self.requireUInt64(raw, keys: ["epoch"], field: "epoch")
-        manifestLength = Self.optionalUInt64(raw, keys: ["manifest_len", "manifestLen"], field: "manifest_len") ?? 0
+        storageTicketHex = try Self.requireHex(raw, key: "storage_ticket", field: "storage_ticket")
+        clientBlobIdHex = try Self.requireHex(raw, key: "client_blob_id", field: "client_blob_id")
+        blobHashHex = try Self.requireHex(raw, key: "blob_hash", field: "blob_hash")
+        manifestHashHex = try Self.requireHex(raw, key: "manifest_hash", field: "manifest_hash")
+        chunkRootHex = try Self.requireHex(raw, key: "chunk_root", field: "chunk_root")
+        laneId = try Self.requireUInt64(raw, key: "lane_id", field: "lane_id")
+        epoch = try Self.requireUInt64(raw, key: "epoch", field: "epoch")
+        manifestLength = Self.optionalUInt64(raw, key: "manifest_len", field: "manifest_len") ?? 0
         manifestBytes = try Self.requireManifestBytes(raw)
-        manifestJson = Self.optionalValue(raw, keys: ["manifest", "manifest_json", "manifestJson"])
-        chunkPlan = try Self.requireValue(raw, keys: ["chunk_plan", "chunkPlan"], field: "chunk_plan")
-        samplingPlan = try ToriiDaSamplingPlan.parse(raw["sampling_plan"] ?? raw["samplingPlan"])
+        manifestJson = Self.optionalValue(raw, key: "manifest")
+        chunkPlan = try Self.requireValue(raw, key: "chunk_plan", field: "chunk_plan")
+        samplingPlan = try ToriiDaSamplingPlan.parse(raw["sampling_plan"])
     }
 
     /// Render the chunk plan as a JSON string (sorted keys).
@@ -2116,30 +2056,14 @@ public struct ToriiDaManifestBundle: Decodable, Sendable, Equatable {
         if let explicit = ToriiDaManifestBundle.trimmedString(record["chunker_handle"]) {
             return explicit
         }
-        if let explicit = ToriiDaManifestBundle.trimmedString(record["chunk_profile_handle"]) {
-            return explicit
-        }
         let chunkingValue = record["chunking"]
-            ?? record["chunk_profile"]
-            ?? record["chunkProfile"]
         guard case .object(let chunking) = chunkingValue else {
             return nil
         }
         guard
-            let namespace = ToriiDaManifestBundle.trimmedString(chunking["namespace"])
-                ?? ToriiDaManifestBundle.trimmedString(chunking["ns"])
-                ?? ToriiDaManifestBundle.trimmedString(chunking["profile_namespace"])
-                ?? ToriiDaManifestBundle.trimmedString(chunking["profileNamespace"]),
-            let name = ToriiDaManifestBundle.trimmedString(chunking["name"])
-                ?? ToriiDaManifestBundle.trimmedString(chunking["profile"])
-                ?? ToriiDaManifestBundle.trimmedString(chunking["handle"])
-                ?? ToriiDaManifestBundle.trimmedString(chunking["chunker"])
-                ?? ToriiDaManifestBundle.trimmedString(chunking["id"]),
+            let namespace = ToriiDaManifestBundle.trimmedString(chunking["namespace"]),
+            let name = ToriiDaManifestBundle.trimmedString(chunking["name"]),
             let version = ToriiDaManifestBundle.trimmedString(chunking["semver"])
-                ?? ToriiDaManifestBundle.trimmedString(chunking["version"])
-                ?? ToriiDaManifestBundle.trimmedString(chunking["profile_version"])
-                ?? ToriiDaManifestBundle.trimmedString(chunking["rev"])
-                ?? ToriiDaManifestBundle.trimmedString(chunking["release"])
         else {
             return nil
         }
@@ -2147,8 +2071,7 @@ public struct ToriiDaManifestBundle: Decodable, Sendable, Equatable {
     }
 
     private static func requireManifestBytes(_ record: [String: ToriiJSONValue]) throws -> Data {
-        let value = try requireString(record, keys: ["manifest_norito", "manifestNorito", "manifest_b64", "manifestB64"],
-                                      field: "manifest_norito")
+        let value = try requireString(record, key: "manifest_norito", field: "manifest_norito")
         guard let data = Data(base64Encoded: value) else {
             throw ToriiClientError.invalidPayload("manifest_norito field was not valid base64")
         }
@@ -2156,9 +2079,9 @@ public struct ToriiDaManifestBundle: Decodable, Sendable, Equatable {
     }
 
     private static func requireHex(_ record: [String: ToriiJSONValue],
-                                   keys: [String],
+                                   key: String,
                                    field: String) throws -> String {
-        let value = try requireString(record, keys: keys, field: field)
+        let value = try requireString(record, key: key, field: field)
         var trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
             trimmed = String(trimmed.dropFirst(2))
@@ -2170,18 +2093,18 @@ public struct ToriiDaManifestBundle: Decodable, Sendable, Equatable {
     }
 
     private static func requireUInt64(_ record: [String: ToriiJSONValue],
-                                      keys: [String],
+                                      key: String,
                                       field: String) throws -> UInt64 {
-        if let value = optionalUInt64(record, keys: keys, field: field) {
+        if let value = optionalUInt64(record, key: key, field: field) {
             return value
         }
         throw ToriiClientError.invalidPayload("\(field) field was missing or invalid")
     }
 
     private static func optionalUInt64(_ record: [String: ToriiJSONValue],
-                                       keys: [String],
+                                       key: String,
                                        field: String) -> UInt64? {
-        guard let raw = firstValue(record, keys: keys) else {
+        guard let raw = record[key] else {
             return nil
         }
         if let number = numberValue(raw), number >= 0 {
@@ -2194,9 +2117,9 @@ public struct ToriiDaManifestBundle: Decodable, Sendable, Equatable {
     }
 
     private static func requireString(_ record: [String: ToriiJSONValue],
-                                      keys: [String],
+                                      key: String,
                                       field: String) throws -> String {
-        guard let raw = firstValue(record, keys: keys),
+        guard let raw = record[key],
               let string = trimmedString(raw),
               !string.isEmpty
         else {
@@ -2206,27 +2129,17 @@ public struct ToriiDaManifestBundle: Decodable, Sendable, Equatable {
     }
 
     private static func requireValue(_ record: [String: ToriiJSONValue],
-                                     keys: [String],
+                                     key: String,
                                      field: String) throws -> ToriiJSONValue {
-        guard let value = firstValue(record, keys: keys), value != .null else {
+        guard let value = record[key], value != .null else {
             throw ToriiClientError.invalidPayload("\(field) field was missing")
         }
         return value
     }
 
     private static func optionalValue(_ record: [String: ToriiJSONValue],
-                                      keys: [String]) -> ToriiJSONValue? {
-        firstValue(record, keys: keys)
-    }
-
-    private static func firstValue(_ record: [String: ToriiJSONValue],
-                                   keys: [String]) -> ToriiJSONValue? {
-        for key in keys {
-            if let value = record[key] {
-                return value
-            }
-        }
-        return nil
+                                      key: String) -> ToriiJSONValue? {
+        record[key]
     }
 
     private static func trimmedString(_ value: ToriiJSONValue?) -> String? {
@@ -2301,13 +2214,13 @@ public struct ToriiDaSamplingPlan: Sendable, Equatable {
             throw ToriiClientError.invalidPayload("sampling_plan must be an object")
         }
         let assignment = try requireString(record,
-                                           keys: ["assignment_hash", "assignmentHash"],
+                                           key: "assignment_hash",
                                            field: "sampling_plan.assignment_hash")
         guard let assignmentData = Data(hexString: assignment), assignmentData.count == 32 else {
             throw ToriiClientError.invalidPayload("sampling_plan.assignment_hash must be a 32-byte hex string")
         }
         let sampleWindowRaw = try requireUInt64(record,
-                                                keys: ["sample_window", "sampleWindow"],
+                                                key: "sample_window",
                                                 field: "sampling_plan.sample_window",
                                                 allowZero: true)
         guard sampleWindowRaw <= UInt16.max else {
@@ -2324,11 +2237,11 @@ public struct ToriiDaSamplingPlan: Sendable, Equatable {
                 throw ToriiClientError.invalidPayload("sampling_plan.samples[\(idx)] must be an object")
             }
             let indexRaw = try requireUInt64(obj,
-                                             keys: ["index"],
+                                             key: "index",
                                              field: "sampling_plan.samples[\(idx)].index",
                                              allowZero: true)
             let groupRaw = try requireUInt64(obj,
-                                             keys: ["group", "group_id", "groupId"],
+                                             key: "group",
                                              field: "sampling_plan.samples[\(idx)].group",
                                              allowZero: true)
             guard indexRaw <= UInt32.max else {
@@ -2338,7 +2251,7 @@ public struct ToriiDaSamplingPlan: Sendable, Equatable {
                 throw ToriiClientError.invalidPayload("sampling_plan.samples[\(idx)].group exceeds UInt32 range")
             }
             let role = try requireString(obj,
-                                         keys: ["role", "chunk_role", "chunkRole"],
+                                         key: "role",
                                          field: "sampling_plan.samples[\(idx)].role")
             samples.append(Sample(index: UInt32(indexRaw),
                                   role: role,
@@ -2351,9 +2264,9 @@ public struct ToriiDaSamplingPlan: Sendable, Equatable {
     }
 
     private static func requireString(_ record: [String: ToriiJSONValue],
-                                      keys: [String],
+                                      key: String,
                                       field: String) throws -> String {
-        guard let raw = firstValue(record, keys: keys),
+        guard let raw = record[key],
               let string = trimmedString(raw),
               !string.isEmpty
         else {
@@ -2363,19 +2276,19 @@ public struct ToriiDaSamplingPlan: Sendable, Equatable {
     }
 
     private static func requireUInt64(_ record: [String: ToriiJSONValue],
-                                      keys: [String],
+                                      key: String,
                                       field: String,
                                       allowZero: Bool = false) throws -> UInt64 {
-        if let value = optionalUInt64(record, keys: keys, allowZero: allowZero) {
+        if let value = optionalUInt64(record, key: key, allowZero: allowZero) {
             return value
         }
         throw ToriiClientError.invalidPayload("\(field) field was missing or invalid")
     }
 
     private static func optionalUInt64(_ record: [String: ToriiJSONValue],
-                                       keys: [String],
+                                       key: String,
                                        allowZero: Bool) -> UInt64? {
-        guard let raw = firstValue(record, keys: keys) else {
+        guard let raw = record[key] else {
             return nil
         }
         if let number = numberValue(raw), number >= 0 {
@@ -2424,15 +2337,6 @@ public struct ToriiDaSamplingPlan: Sendable, Equatable {
         }
     }
 
-    private static func firstValue(_ record: [String: ToriiJSONValue],
-                                   keys: [String]) -> ToriiJSONValue? {
-        for key in keys {
-            if let value = record[key] {
-                return value
-            }
-        }
-        return nil
-    }
 }
 
 public struct ToriiDaIngestPersistedPaths: Sendable, Equatable {
@@ -3718,7 +3622,6 @@ private struct ToriiRuntimeUpgradeManifestEnvelope: Encodable {
 public enum ToriiVerifyingKeyStatus: String, Codable, Sendable {
     case proposed = "Proposed"
     case active = "Active"
-    case deprecated = "Deprecated"
     case withdrawn = "Withdrawn"
 }
 
@@ -3757,7 +3660,6 @@ public struct ToriiVerifyingKeyRecord: Decodable, Sendable {
     public let metadataUriCid: String?
     public let verifyingKeyBytesCid: String?
     public let activationHeight: UInt64?
-    public let deprecationHeight: UInt64?
     public let withdrawHeight: UInt64?
     public let status: ToriiVerifyingKeyStatus
     public let inlineKey: ToriiVerifyingKeyInline?
@@ -3775,7 +3677,6 @@ public struct ToriiVerifyingKeyRecord: Decodable, Sendable {
         case metadataUriCid = "metadata_uri_cid"
         case verifyingKeyBytesCid = "vk_bytes_cid"
         case activationHeight = "activation_height"
-        case deprecationHeight = "deprecation_height"
         case withdrawHeight = "withdraw_height"
         case status
         case inlineKey = "key"
@@ -3795,7 +3696,6 @@ public struct ToriiVerifyingKeyRecord: Decodable, Sendable {
         metadataUriCid = try container.decodeIfPresent(String.self, forKey: .metadataUriCid)
         verifyingKeyBytesCid = try container.decodeIfPresent(String.self, forKey: .verifyingKeyBytesCid)
         activationHeight = try container.decodeIfPresent(UInt64.self, forKey: .activationHeight)
-        deprecationHeight = try container.decodeIfPresent(UInt64.self, forKey: .deprecationHeight)
         withdrawHeight = try container.decodeIfPresent(UInt64.self, forKey: .withdrawHeight)
         status = try container.decode(ToriiVerifyingKeyStatus.self, forKey: .status)
         inlineKey = try container.decodeIfPresent(ToriiVerifyingKeyInline.self, forKey: .inlineKey)
@@ -3875,12 +3775,7 @@ public struct ToriiVerifyingKeyListQuery: Sendable {
             items.append(URLQueryItem(name: "backend", value: backend))
         }
         if let status {
-            switch status {
-            case .active, .deprecated:
-                items.append(URLQueryItem(name: "status", value: status.rawValue))
-            case .proposed, .withdrawn:
-                items.append(URLQueryItem(name: "status", value: status.rawValue))
-            }
+            items.append(URLQueryItem(name: "status", value: status.rawValue))
         }
         if let nameContains {
             items.append(URLQueryItem(name: "name_contains", value: nameContains))
@@ -3916,7 +3811,6 @@ public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
     public var metadataUriCid: String?
     public var verifyingKeyBytesCid: String?
     public var activationHeight: UInt64?
-    public var deprecationHeight: UInt64?
     public var withdrawHeight: UInt64?
     public var commitmentHex: String?
     public var verifyingKeyBytes: Data?
@@ -3947,7 +3841,6 @@ public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
         self.metadataUriCid = nil
         self.verifyingKeyBytesCid = nil
         self.activationHeight = nil
-        self.deprecationHeight = nil
         self.withdrawHeight = nil
         self.commitmentHex = nil
         self.verifyingKeyBytes = verifyingKeyBytes
@@ -3969,7 +3862,6 @@ public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
         case metadataUriCid = "metadata_uri_cid"
         case verifyingKeyBytesCid = "vk_bytes_cid"
         case activationHeight = "activation_height"
-        case deprecationHeight = "deprecation_height"
         case withdrawHeight = "withdraw_height"
         case commitmentHex = "commitment_hex"
         case verifyingKeyBytes = "vk_bytes"
@@ -4001,7 +3893,6 @@ public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
         try container.encodeIfPresent(metadataUriCid, forKey: .metadataUriCid)
         try container.encodeIfPresent(verifyingKeyBytesCid, forKey: .verifyingKeyBytesCid)
         try container.encodeIfPresent(activationHeight, forKey: .activationHeight)
-        try container.encodeIfPresent(deprecationHeight, forKey: .deprecationHeight)
         try container.encodeIfPresent(withdrawHeight, forKey: .withdrawHeight)
         try container.encodeIfPresent(commitmentHex, forKey: .commitmentHex)
         if let status {
@@ -4026,7 +3917,6 @@ public struct ToriiVerifyingKeyUpdateRequest: Encodable, Sendable {
     public var metadataUriCid: String?
     public var verifyingKeyBytesCid: String?
     public var activationHeight: UInt64?
-    public var deprecationHeight: UInt64?
     public var withdrawHeight: UInt64?
     public var verifyingKeyBytes: Data?
     public var status: ToriiVerifyingKeyStatus?
@@ -4063,7 +3953,6 @@ public struct ToriiVerifyingKeyUpdateRequest: Encodable, Sendable {
         case metadataUriCid = "metadata_uri_cid"
         case verifyingKeyBytesCid = "vk_bytes_cid"
         case activationHeight = "activation_height"
-        case deprecationHeight = "deprecation_height"
         case withdrawHeight = "withdraw_height"
         case verifyingKeyBytes = "vk_bytes"
         case status
@@ -4095,7 +3984,6 @@ public struct ToriiVerifyingKeyUpdateRequest: Encodable, Sendable {
         try container.encodeIfPresent(metadataUriCid, forKey: .metadataUriCid)
         try container.encodeIfPresent(verifyingKeyBytesCid, forKey: .verifyingKeyBytesCid)
         try container.encodeIfPresent(activationHeight, forKey: .activationHeight)
-        try container.encodeIfPresent(deprecationHeight, forKey: .deprecationHeight)
         try container.encodeIfPresent(withdrawHeight, forKey: .withdrawHeight)
         if let status {
             try container.encode(status.rawValue, forKey: .status)
@@ -4103,34 +3991,9 @@ public struct ToriiVerifyingKeyUpdateRequest: Encodable, Sendable {
     }
 }
 
-public struct ToriiVerifyingKeyDeprecateRequest: Encodable, Sendable {
-    public var authority: String
-    public var privateKey: String
-    public var backend: String
-    public var name: String
-
-    public init(authority: String,
-                privateKey: String,
-                backend: String,
-                name: String) {
-        self.authority = authority
-        self.privateKey = privateKey
-        self.backend = backend
-        self.name = name
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case authority
-        case privateKey = "private_key"
-        case backend
-        case name
-    }
-}
-
 public enum ToriiVerifyingKeyEvent: Sendable {
     case registered(id: ToriiVerifyingKeyId, record: ToriiVerifyingKeyRecord)
     case updated(id: ToriiVerifyingKeyId, record: ToriiVerifyingKeyRecord)
-    case deprecated(id: ToriiVerifyingKeyId)
 }
 
 public struct ToriiVerifyingKeyEventMessage: Sendable {
@@ -4146,29 +4009,25 @@ public struct ToriiVerifyingKeyEventFilter: Sendable {
     public var name: String?
     public var includeRegistered: Bool
     public var includeUpdated: Bool
-    public var includeDeprecated: Bool
 
     public init(backend: String? = nil,
                 name: String? = nil,
                 includeRegistered: Bool = true,
-                includeUpdated: Bool = true,
-                includeDeprecated: Bool = true) {
+                includeUpdated: Bool = true) {
         self.backend = backend
         self.name = name
         self.includeRegistered = includeRegistered
         self.includeUpdated = includeUpdated
-        self.includeDeprecated = includeDeprecated
     }
 
     public func queryItems() throws -> [URLQueryItem]? {
-        guard includeRegistered || includeUpdated || includeDeprecated else {
+        guard includeRegistered || includeUpdated else {
             throw ToriiClientError.invalidPayload("Enable at least one verifying key event type.")
         }
         var body: [String: Any] = [
             "event_set": [
                 "Registered": includeRegistered,
                 "Updated": includeUpdated,
-                "Deprecated": includeDeprecated,
             ],
         ]
 
@@ -4201,36 +4060,14 @@ public struct ToriiProofId: Decodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case backend
-        case hashHex = "hash_hex"
         case proofHashHex = "proof_hash_hex"
-        case proofHash = "proof_hash"
     }
 
     public init(from decoder: Decoder) throws {
-        if let container = try? decoder.container(keyedBy: CodingKeys.self) {
-            let backend = try container.decode(String.self, forKey: .backend)
-            if let hashHex = try container.decodeIfPresent(String.self, forKey: .hashHex) ??
-                container.decodeIfPresent(String.self, forKey: .proofHashHex) {
-                self.init(backend: backend, proofHashHex: hashHex)
-                return
-            }
-            if let proofHashBytes = try container.decodeIfPresent([UInt8].self, forKey: .proofHash) {
-                self.init(backend: backend, proofHashHex: proofHashBytes.map { String(format: "%02x", $0) }.joined())
-                return
-            }
-            throw DecodingError.keyNotFound(CodingKeys.hashHex,
-                                            DecodingError.Context(codingPath: container.codingPath,
-                                                                  debugDescription: "Missing proof hash field"))
-        }
-
-        let single = try decoder.singleValueContainer()
-        let stringValue = try single.decode(String.self)
-        let parts = stringValue.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
-        guard parts.count == 2 else {
-            throw DecodingError.dataCorruptedError(in: single,
-                                                   debugDescription: "Invalid proof id format")
-        }
-        self.init(backend: String(parts[0]), proofHashHex: String(parts[1]))
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let backend = try container.decode(String.self, forKey: .backend)
+        let hashHex = try container.decode(String.self, forKey: .proofHashHex)
+        self.init(backend: backend, proofHashHex: hashHex)
     }
 }
 
@@ -6211,15 +6048,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     @discardableResult
-    public func deprecateVerifyingKey(_ requestBody: ToriiVerifyingKeyDeprecateRequest,
-                                      completion: @escaping (Result<Void, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.deprecateVerifyingKey(requestBody)
-            return ()
-        }
-    }
-
-    @discardableResult
     public func listProverReports(filter: ToriiProverReportsFilter? = nil, completion: @escaping (Result<[ToriiProverReport], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.listProverReports(filter: filter) }
     }
@@ -7388,17 +7216,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         try ensureStatus(response, equals: 202)
     }
 
-    public func deprecateVerifyingKey(_ requestBody: ToriiVerifyingKeyDeprecateRequest) async throws {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/zk/vk/deprecate",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let (_, response) = try await send(request)
-        try ensureStatus(response, equals: 202)
-    }
-
     @available(iOS 15.0, macOS 12.0, *)
     public func streamVerifyingKeyEvents(filter: ToriiVerifyingKeyEventFilter = ToriiVerifyingKeyEventFilter(),
                                          lastEventId: String? = nil) -> AsyncThrowingStream<ToriiVerifyingKeyEventMessage, Error> {
@@ -7998,13 +7815,13 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         }
         let lowered = trimmed.lowercased()
         switch lowered {
-        case "ih58", "ih-b32", "canonical":
+        case "ih58":
             return "ih58"
-        case "compressed", "snx1":
+        case "compressed":
             return "compressed"
         default:
             throw ToriiClientError.invalidPayload(
-                "\(context) must be one of ih58 or compressed (aliases: ih-b32, canonical, snx1)."
+                "\(context) must be one of ih58 or compressed."
             )
         }
     }
@@ -8034,11 +7851,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
     private func decodeAssetBalances(from data: Data) throws -> [ToriiAssetBalance] {
         let decoder = JSONDecoder()
-        if let direct = try? decoder.decode([ToriiAssetBalance].self, from: data) {
-            return direct
-        }
-        let fallback = try decoder.decode([String: [ToriiAssetBalance]].self, from: data)
-        return fallback["balances"] ?? []
+        return try decoder.decode([ToriiAssetBalance].self, from: data)
     }
 
     private func parseVerifyingKeyEvent(from lines: [String]) throws -> ToriiVerifyingKeyEventMessage? {
@@ -8128,12 +7941,10 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     private enum ToriiVerifyingKeyEventWrapper: Decodable {
         case registered(ToriiVerifyingKeyEventRecordPayload)
         case updated(ToriiVerifyingKeyEventRecordPayload)
-        case deprecated(ToriiVerifyingKeyEventDeprecatedPayload)
 
         enum CodingKeys: String, CodingKey {
             case registered = "Registered"
             case updated = "Updated"
-            case deprecated = "Deprecated"
         }
 
         init(from decoder: Decoder) throws {
@@ -8146,14 +7957,10 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                 self = .updated(payload)
                 return
             }
-        if let payload = try container.decodeIfPresent(ToriiVerifyingKeyEventDeprecatedPayload.self, forKey: .deprecated) {
-            self = .deprecated(payload)
-            return
+            throw DecodingError.dataCorruptedError(forKey: .registered,
+                                                   in: container,
+                                                   debugDescription: "Unknown verifying key event payload.")
         }
-        throw DecodingError.dataCorruptedError(forKey: .registered,
-                                               in: container,
-                                               debugDescription: "Unknown verifying key event payload.")
-    }
 
         func toEvent() -> ToriiVerifyingKeyEvent {
             switch self {
@@ -8161,8 +7968,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                 return .registered(id: payload.id, record: payload.record)
             case .updated(let payload):
                 return .updated(id: payload.id, record: payload.record)
-            case .deprecated(let payload):
-                return .deprecated(id: payload.id)
             }
         }
     }
@@ -8170,10 +7975,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     private struct ToriiVerifyingKeyEventRecordPayload: Decodable {
         let id: ToriiVerifyingKeyId
         let record: ToriiVerifyingKeyRecord
-    }
-
-    private struct ToriiVerifyingKeyEventDeprecatedPayload: Decodable {
-        let id: ToriiVerifyingKeyId
     }
 
     private func parseTriggerEvent(from lines: [String]) throws -> ToriiTriggerEventMessage? {

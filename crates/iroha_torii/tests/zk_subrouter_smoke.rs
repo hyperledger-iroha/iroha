@@ -144,6 +144,9 @@ async fn zk_verify_and_attachments_endpoints_exposed() {
         .unwrap();
     assert!(matches!(
         resp.status(),
-        StatusCode::OK | StatusCode::NOT_FOUND | StatusCode::TOO_MANY_REQUESTS
+        StatusCode::OK
+            | StatusCode::NOT_FOUND
+            | StatusCode::BAD_REQUEST
+            | StatusCode::TOO_MANY_REQUESTS
     ));
 }

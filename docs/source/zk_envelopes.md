@@ -286,7 +286,6 @@ Example (JSON-like, annotated)
 }
 ```
 
-Compatibility and evolution
 - All structs carry `version` fields to enable evolution.
 - Future updates may add fields or new composition profiles; keep existing
   behavior stable for existing versions.

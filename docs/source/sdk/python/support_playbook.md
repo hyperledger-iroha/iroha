@@ -45,7 +45,6 @@ of truth when triaging incidents or approving PyPI drops.
 |-------|--------|---------------|---------------|
 | Pilot | Q1 2026 partners | 9×5 coverage, manual telemetry reviews, direct Slack bridges | Pilot validation report + parity dashboard snapshot filed in `status.md`. |
 | General Availability | Target Q2 2026 | 24×5 SLA, PagerDuty rotation, automated dashboards + exporter snapshots | GA packet (support playbook, release manifest, parity digest) archived under `artifacts/python_release/<tag>/`. |
-| LTS | First cut ≤90 days after GA, then every 6 months | ABI compatibility, security fixes, dual-branch CI | LTS checklist appended to this playbook and linked from `status.md`. |
 | Hotfix | Any time | Sev 1 regression/security fix, dedicated bridge | Hotfix advisory in README/status, provenance + smoke evidence refreshed. |
 
 ### 3.1 Severity Matrix

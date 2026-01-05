@@ -11,7 +11,6 @@ translation_last_reviewed: 2026-01-01
 
 :::note Fuente canonica
 Refleja `docs/source/da/ingest_plan.md`. Mantenga ambas versiones en
-sincronia hasta que los docs legacy se retiren.
 :::
 
 # Plan de ingesta de Data Availability de Sora Nexus

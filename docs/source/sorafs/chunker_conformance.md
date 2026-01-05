@@ -1,7 +1,7 @@
 # SoraFS Chunker Conformance Guide
 
 This guide codifies the requirements every implementation must follow to stay
-compatible with the SoraFS deterministic chunker profile (SF1). It also
+aligned with the SoraFS deterministic chunker profile (SF1). It also
 documents the regeneration workflow, signing policy, and verification steps so
 fixture consumers across SDKs remain in sync.
 

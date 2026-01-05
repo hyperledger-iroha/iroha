@@ -20,7 +20,7 @@ scripts/android_sbom_provenance.sh <sdk-version>
 
 The script performs the following:
 
-1. Executes `java/iroha_android/run_tests.sh` and `scripts/check_android_samples.sh`.
+1. Executes `ci/run_android_tests.sh` and `scripts/check_android_samples.sh`.
 2. Invokes the Gradle wrapper under `examples/android/` to build CycloneDX SBOMs for
    `:android-sdk`, `:operator-console`, and `:retail-wallet` with the supplied
    `-PversionName`.

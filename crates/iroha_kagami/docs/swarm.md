@@ -64,7 +64,9 @@ kagami swarm [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-f
 
 - `    --consensus-mode <MODE>`: Stamp the target consensus mode (`permissioned` or `npos`) into the generated Compose env so the signing sidecar passes it to `kagami genesis sign`.
 
-- `    --mode-activation-height <HEIGHT>`: Stage an NPoS cutover at the given height; requires `--consensus-mode npos` and forwards the height to the signing sidecar.
+- `    --next-consensus-mode <MODE>`: Stage a future consensus mode behind `--mode-activation-height` (Iroha2 only; Iroha3 disallows staged cutovers).
+
+- `    --mode-activation-height <HEIGHT>`: Activation height for `--next-consensus-mode`; requires `--next-consensus-mode` and forwards the height to the signing sidecar.
 
 ## Examples
 
@@ -96,7 +98,7 @@ kagami swarm \
 
 ### NPoS devnet (Docker)
 
-1. Build or reuse an NPoS genesis manifest (for example with `kagami genesis generate --consensus-mode npos --mode-activation-height 5 --ivm-dir <ivm> --genesis-public-key <pk>` or `kagami localnet --consensus-mode npos --mode-activation-height 5 ...`).
+1. Build or reuse an NPoS genesis manifest. For Iroha3, omit staged cutover flags (for example `kagami genesis generate --consensus-mode npos --ivm-dir <ivm> --genesis-public-key <pk>` or `kagami localnet --consensus-mode npos ...`). For Iroha2 cutovers, add `--consensus-mode permissioned --next-consensus-mode npos --mode-activation-height 5`.
 2. Place `genesis.json` and peer configs in `--config-dir` (PoPs/topology can be injected at sign time with `--topology`/`--peer-pop` as described in the README).
 3. Run:
 
@@ -106,20 +108,23 @@ kagami swarm \
     --seed Iroha \
     --config-dir ./peer_config \
     --image hyperledger/iroha:dev \
-    --consensus-mode npos \
+    --consensus-mode permissioned \
+    --next-consensus-mode npos \
     --mode-activation-height 5 \
     --out-file ./my-configs/docker-compose.npos.yml
 ```
 
-The generated Compose file forwards the consensus mode and activation height to the signing sidecar so the final signed genesis carries both `next_mode` and `mode_activation_height`. Use a fixed `--seed` and set `sumeragi_npos_parameters.epoch_seed` in `genesis.json` if you need deterministic VRF schedules for testing.
+The generated Compose file forwards the consensus mode, next mode, and activation height to the signing sidecar so the final signed genesis carries both `next_mode` and `mode_activation_height`. Use a fixed `--seed` and set `sumeragi_npos_parameters.epoch_seed` in `genesis.json` if you need deterministic VRF schedules for testing.
+For Iroha3, drop `--next-consensus-mode`/`--mode-activation-height` and keep `--consensus-mode npos`.
 
 ## NPoS devnet workflow
 
-1. Produce an NPoS-ready genesis manifest (includes `sumeragi_npos_parameters`) with a staged cutover height:
+1. Iroha2-only staged cutover: produce an NPoS-ready genesis manifest (includes `sumeragi_npos_parameters`) with a staged cutover height. For Iroha3, omit the cutover flags and use `--consensus-mode npos`.
 
    ```bash
    kagami genesis generate \
-       --consensus-mode npos \
+       --consensus-mode permissioned \
+       --next-consensus-mode npos \
        --mode-activation-height 5 \
        --ivm-dir ./ivm_libs \
        --genesis-public-key <GENESIS_PK> \
@@ -133,7 +138,8 @@ The generated Compose file forwards the consensus mode and activation height to 
    ```bash
    TOPOLOGY='["bls_normal:pk1","bls_normal:pk2","bls_normal:pk3"]'
    kagami genesis sign ./cfg/genesis.json \
-       --consensus-mode npos \
+       --consensus-mode permissioned \
+       --next-consensus-mode npos \
        --mode-activation-height 5 \
        --topology "$TOPOLOGY" \
        --peer-pop "bls_normal:pk1=pop_hex1" \
@@ -148,7 +154,8 @@ The generated Compose file forwards the consensus mode and activation height to 
    ```bash
    kagami swarm \
        --peers 4 \
-       --consensus-mode npos \
+       --consensus-mode permissioned \
+       --next-consensus-mode npos \
        --mode-activation-height 5 \
        --config-dir ./cfg \
        --image hyperledger/iroha:dev \

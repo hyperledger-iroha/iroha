@@ -1,6 +1,6 @@
 {
   "client_nonce_hex": "1f2e3d4c5b6a79888796a5b4c3d2e1f00112233445566778899aabbccddeeff0",
-  "client_vector_hex": "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe020300028101",
+  "client_vector_hex": "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe020300020101",
   "description": "Client requires snnet.constant_rate; relay lacking TLV triggers downgrade",
   "descriptor_commit_hex": "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
   "expected_alarm": null,
@@ -12,7 +12,7 @@
   "relay_vector_hex": "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f12000412345678",
   "resume_hash_hex": null,
   "sig_id": 1,
-  "transcript_hash_hex": "0e5e72c676a20704b992e94df59a7f07f00c81f8c84a20a7b06f6913c6c97b4c",
+  "transcript_hash_hex": "78e0c7782b4cfa1a6c0ffe750562776b986be13514ff7b7b42ac5a17936ff680",
   "warnings": [
     "relay missing required capability type=0x0203 (snnet.constant_rate)"
   ]

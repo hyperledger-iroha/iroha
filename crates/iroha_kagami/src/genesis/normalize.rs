@@ -114,6 +114,7 @@ mod tests {
             "chain": "test-chain",
             "executor": null,
             "ivm_dir": ".",
+            "consensus_mode": "Permissioned",
             "transactions": [
                 {}
             ]

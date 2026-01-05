@@ -52,6 +52,7 @@ use iroha_data_model::{
 use iroha_primitives::time::TimeSource;
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
 use nonzero_ext::nonzero;
+use norito::to_bytes;
 
 use super::{
     super::rbc_store::{SessionKey, SoftwareManifest},
@@ -6994,9 +6995,11 @@ fn validate_da_bundle_caps_enforces_limits() {
 fn manifest_guard_rejects_missing_manifest() {
     let record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
     let dir = tempfile::tempdir().expect("tempdir");
+    let mut cache = super::ManifestSpoolCache::default();
 
-    let err = super::enforce_manifest_available_for_commitment(dir.path(), &record)
-        .expect_err("manifest guard should reject missing manifests");
+    let (_, result) =
+        super::enforce_manifest_available_for_commitment(&mut cache, dir.path(), &record);
+    let err = result.expect_err("manifest guard should reject missing manifests");
     match err {
         super::ManifestGuardError::Missing {
             lane,
@@ -7016,6 +7019,7 @@ fn manifest_guard_rejects_missing_manifest() {
 fn manifest_guard_rejects_hash_mismatch() {
     let mut record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
     let dir = tempfile::tempdir().expect("tempdir");
+    let mut cache = super::ManifestSpoolCache::default();
     let expected_digest = ManifestDigest::new(*blake3_hash(b"expected-manifest").as_bytes());
     record.manifest_hash = expected_digest;
 
@@ -7029,8 +7033,9 @@ fn manifest_guard_rejects_hash_mismatch() {
     let path = dir.path().join(file_name);
     fs::write(&path, b"mismatched-manifest").expect("write manifest to spool");
 
-    let err = super::enforce_manifest_available_for_commitment(dir.path(), &record)
-        .expect_err("manifest guard should reject mismatched hash");
+    let (_, result) =
+        super::enforce_manifest_available_for_commitment(&mut cache, dir.path(), &record);
+    let err = result.expect_err("manifest guard should reject mismatched hash");
     match err {
         super::ManifestGuardError::HashMismatch {
             expected_hex,
@@ -7048,6 +7053,7 @@ fn manifest_guard_rejects_hash_mismatch() {
 fn manifest_guard_accepts_matching_manifest() {
     let mut record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
     let dir = tempfile::tempdir().expect("tempdir");
+    let mut cache = super::ManifestSpoolCache::default();
     let content = b"manifest-bytes-for-guard";
     let digest = ManifestDigest::new(*blake3_hash(content).as_bytes());
     record.manifest_hash = digest;
@@ -7061,10 +7067,95 @@ fn manifest_guard_accepts_matching_manifest() {
     let path = dir.path().join(file_name);
     fs::write(&path, content).expect("write manifest to spool");
 
+    let (_, result) =
+        super::enforce_manifest_available_for_commitment(&mut cache, dir.path(), &record);
     assert!(
-        super::enforce_manifest_available_for_commitment(dir.path(), &record).is_ok(),
+        result.is_ok(),
         "manifest guard should accept matching manifest hash"
     );
+}
+
+#[test]
+fn manifest_guard_prefers_matching_manifest() {
+    let mut record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut cache = super::ManifestSpoolCache::default();
+    let lane = record.lane_id.as_u32();
+    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
+    let prefix = format!(
+        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-",
+        epoch = record.epoch,
+        sequence = record.sequence
+    );
+    let first_path = dir.path().join(format!("{prefix}aaa.norito"));
+    let second_path = dir.path().join(format!("{prefix}zzz.norito"));
+    let first_content = b"manifest-lex-first";
+    let second_content = b"manifest-lex-second";
+
+    fs::write(&second_path, second_content).expect("write manifest second");
+    fs::write(&first_path, first_content).expect("write manifest first");
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(second_content).as_bytes());
+
+    let (_, result) =
+        super::enforce_manifest_available_for_commitment(&mut cache, dir.path(), &record);
+    assert!(
+        result.is_ok(),
+        "manifest guard should prefer the matching manifest"
+    );
+}
+
+#[test]
+fn manifest_cache_hits_on_repeated_lookup() {
+    let mut record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut cache = super::ManifestSpoolCache::default();
+    let content = b"manifest-cache-hit";
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(content).as_bytes());
+
+    let lane = record.lane_id.as_u32();
+    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
+    let file_name = format!(
+        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-cache.norito",
+        epoch = record.epoch,
+        sequence = record.sequence
+    );
+    let path = dir.path().join(file_name);
+    fs::write(&path, content).expect("write manifest to spool");
+
+    let (outcome, result) =
+        super::enforce_manifest_available_for_commitment(&mut cache, dir.path(), &record);
+    assert!(result.is_ok(), "manifest should be accepted");
+    assert_eq!(outcome, super::CacheOutcome::Miss);
+
+    let (outcome, result) =
+        super::enforce_manifest_available_for_commitment(&mut cache, dir.path(), &record);
+    assert!(result.is_ok(), "manifest should be accepted");
+    assert_eq!(outcome, super::CacheOutcome::Hit);
+}
+
+#[test]
+fn da_spool_cache_hits_on_repeated_load() {
+    let record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut cache = super::DaSpoolCache::default();
+
+    let bytes = to_bytes(&record).expect("encode commitment");
+    let path = dir
+        .path()
+        .join("da-commitment-00000001-0000000000000001-0000000000000001-cache.norito");
+    fs::write(&path, bytes).expect("write commitment");
+
+    let (bundle, outcome) = cache
+        .load_commitment_bundle(dir.path())
+        .expect("load bundle");
+    assert!(bundle.is_some(), "bundle should be loaded");
+    assert_eq!(outcome, super::CacheOutcome::Miss);
+
+    let (bundle, outcome) = cache
+        .load_commitment_bundle(dir.path())
+        .expect("load bundle");
+    assert!(bundle.is_some(), "bundle should be loaded from cache");
+    assert_eq!(outcome, super::CacheOutcome::Hit);
 }
 
 #[test]
@@ -7098,9 +7189,17 @@ fn manifest_block_guard_warns_for_audit_lane_missing_manifest() {
     let block = block_with_da_commitment(digest);
     let dir = tempfile::tempdir().expect("tempdir");
     let lane_config = lane_config_with_manifest_policy(DaManifestPolicy::AuditOnly);
+    let mut cache = super::ManifestSpoolCache::default();
 
-    let warnings = super::manifests_available_for_block(dir.path(), &lane_config, &block)
-        .expect("audit-only lane should not block missing manifest");
+    let mut cache_outcome = super::CacheOutcome::Hit;
+    let warnings = super::manifests_available_for_block(
+        &mut cache,
+        dir.path(),
+        &lane_config,
+        &block,
+        &mut cache_outcome,
+    )
+    .expect("audit-only lane should not block missing manifest");
     assert_eq!(warnings.len(), 1, "expected a single manifest warning");
     assert!(
         matches!(
@@ -7137,6 +7236,7 @@ fn manifest_block_guard_rejects_hash_mismatch_on_audit_lane() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let lane_config = lane_config_with_manifest_policy(DaManifestPolicy::AuditOnly);
+    let mut cache = super::ManifestSpoolCache::default();
     let lane = record.lane_id.as_u32();
     let ticket_hex = hex::encode(record.storage_ticket.as_ref());
     let path = dir.path().join(format!(
@@ -7146,8 +7246,15 @@ fn manifest_block_guard_rejects_hash_mismatch_on_audit_lane() {
     ));
     fs::write(&path, b"mismatched-audit-manifest").expect("write mismatched manifest");
 
-    let err = super::manifests_available_for_block(dir.path(), &lane_config, &block)
-        .expect_err("hash mismatch must remain fatal on audit lanes");
+    let mut cache_outcome = super::CacheOutcome::Hit;
+    let err = super::manifests_available_for_block(
+        &mut cache,
+        dir.path(),
+        &lane_config,
+        &block,
+        &mut cache_outcome,
+    )
+    .expect_err("hash mismatch must remain fatal on audit lanes");
     assert!(matches!(
         err,
         super::ManifestGuardError::HashMismatch { .. }
@@ -7160,9 +7267,17 @@ fn manifest_block_guard_rejects_missing_manifest() {
     let block = block_with_da_commitment(digest);
     let dir = tempfile::tempdir().expect("tempdir");
     let lane_config = LaneConfigSnapshot::default();
+    let mut cache = super::ManifestSpoolCache::default();
 
-    let err = super::manifests_available_for_block(dir.path(), &lane_config, &block)
-        .expect_err("block manifest guard should reject missing manifests");
+    let mut cache_outcome = super::CacheOutcome::Hit;
+    let err = super::manifests_available_for_block(
+        &mut cache,
+        dir.path(),
+        &lane_config,
+        &block,
+        &mut cache_outcome,
+    )
+    .expect_err("block manifest guard should reject missing manifests");
     match err {
         super::ManifestGuardError::Missing { .. } => {}
         other => panic!("expected Missing error, got {other:?}"),
@@ -7181,6 +7296,7 @@ fn manifest_block_guard_accepts_matching_manifest() {
         .cloned()
         .expect("commitment present in block");
     let lane_config = LaneConfigSnapshot::default();
+    let mut cache = super::ManifestSpoolCache::default();
 
     let lane = record.lane_id.as_u32();
     let ticket_hex = hex::encode(record.storage_ticket.as_ref());
@@ -7191,9 +7307,152 @@ fn manifest_block_guard_accepts_matching_manifest() {
     ));
     fs::write(&path, content).expect("write manifest to spool");
 
+    let mut cache_outcome = super::CacheOutcome::Hit;
     assert!(
-        super::manifests_available_for_block(dir.path(), &lane_config, &block).is_ok(),
+        super::manifests_available_for_block(
+            &mut cache,
+            dir.path(),
+            &lane_config,
+            &block,
+            &mut cache_outcome,
+        )
+        .is_ok(),
         "block manifest guard should accept matching manifest hash"
+    );
+}
+
+#[test]
+fn manifest_gate_clears_after_manifest_arrives() {
+    let content = b"manifest-gate-release";
+    let digest = ManifestDigest::new(*blake3_hash(content).as_bytes());
+    let block = block_with_da_commitment(digest);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let lane_config = LaneConfigSnapshot::default();
+    let mut cache = super::ManifestSpoolCache::default();
+
+    let payload_hash = Hash::new(block.encode());
+    let mut pending = PendingBlock::new(
+        block.clone(),
+        payload_hash,
+        block.header().height().get(),
+        u64::from(block.header().view_change_index()),
+    );
+    pending.mark_availability_qc(u64::from(block.header().view_change_index()));
+
+    let gate = Actor::compute_da_gate_status(
+        &mut pending,
+        true,
+        &mut cache,
+        dir.path(),
+        &lane_config,
+        None,
+    );
+    assert!(
+        matches!(
+            gate.reason,
+            Some(GateReason::ManifestGuard {
+                kind: ManifestGateKind::Missing,
+                ..
+            })
+        ),
+        "expected gate to report missing manifest"
+    );
+
+    let record = block
+        .da_commitments()
+        .and_then(|bundle| bundle.commitments.first())
+        .cloned()
+        .expect("commitment present");
+    let lane = record.lane_id.as_u32();
+    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
+    let path = dir.path().join(format!(
+        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-ok.norito",
+        epoch = record.epoch,
+        sequence = record.sequence
+    ));
+    fs::write(&path, content).expect("write manifest");
+
+    let gate = Actor::compute_da_gate_status(
+        &mut pending,
+        true,
+        &mut cache,
+        dir.path(),
+        &lane_config,
+        None,
+    );
+    assert!(
+        gate.reason.is_none(),
+        "gate should clear once manifest is present and matches the hash"
+    );
+    assert!(pending.last_gate.is_none());
+}
+
+#[test]
+fn manifest_gate_recovers_after_spool_error() {
+    let content = b"manifest-gate-spool-recovery";
+    let digest = ManifestDigest::new(*blake3_hash(content).as_bytes());
+    let block = block_with_da_commitment(digest);
+    let lane_config = LaneConfigSnapshot::default();
+    let mut cache = super::ManifestSpoolCache::default();
+
+    let payload_hash = Hash::new(block.encode());
+    let mut pending = PendingBlock::new(
+        block.clone(),
+        payload_hash,
+        block.header().height().get(),
+        u64::from(block.header().view_change_index()),
+    );
+    pending.mark_availability_qc(u64::from(block.header().view_change_index()));
+
+    let broken_spool = tempfile::tempdir().expect("tempdir");
+    let broken_spool_path = broken_spool.path().join("file-spool");
+    fs::write(&broken_spool_path, b"not-a-dir").expect("write placeholder file");
+
+    let gate = Actor::compute_da_gate_status(
+        &mut pending,
+        true,
+        &mut cache,
+        &broken_spool_path,
+        &lane_config,
+        None,
+    );
+    assert!(
+        matches!(
+            gate.reason,
+            Some(GateReason::ManifestGuard {
+                kind: ManifestGateKind::SpoolScan,
+                ..
+            })
+        ),
+        "spool scan errors should report manifest guard"
+    );
+
+    let spool_dir = tempfile::tempdir().expect("tempdir");
+    let record = block
+        .da_commitments()
+        .and_then(|bundle| bundle.commitments.first())
+        .cloned()
+        .expect("commitment present");
+    let lane = record.lane_id.as_u32();
+    let ticket_hex = hex::encode(record.storage_ticket.as_ref());
+    let path = spool_dir.path().join(format!(
+        "manifest-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-ok.norito",
+        epoch = record.epoch,
+        sequence = record.sequence
+    ));
+    fs::write(&path, content).expect("write manifest");
+
+    let gate = Actor::compute_da_gate_status(
+        &mut pending,
+        true,
+        &mut cache,
+        spool_dir.path(),
+        &lane_config,
+        None,
+    );
+    assert!(
+        gate.reason.is_none(),
+        "gate should clear after spool recovers and manifest is present"
     );
 }
 
@@ -7204,9 +7463,17 @@ fn manifest_block_guard_allows_after_manifest_arrives() {
     let block = block_with_da_commitment(digest);
     let dir = tempfile::tempdir().expect("tempdir");
     let lane_config = LaneConfigSnapshot::default();
+    let mut cache = super::ManifestSpoolCache::default();
 
-    let first = super::manifests_available_for_block(dir.path(), &lane_config, &block)
-        .expect_err("missing manifest should be reported");
+    let mut cache_outcome = super::CacheOutcome::Hit;
+    let first = super::manifests_available_for_block(
+        &mut cache,
+        dir.path(),
+        &lane_config,
+        &block,
+        &mut cache_outcome,
+    )
+    .expect_err("missing manifest should be reported");
     assert!(matches!(first, super::ManifestGuardError::Missing { .. }));
 
     let record = block
@@ -7223,7 +7490,14 @@ fn manifest_block_guard_allows_after_manifest_arrives() {
     ));
     std::fs::write(&path, content).expect("write late manifest");
 
-    let warnings = super::manifests_available_for_block(dir.path(), &lane_config, &block).unwrap();
+    let warnings = super::manifests_available_for_block(
+        &mut cache,
+        dir.path(),
+        &lane_config,
+        &block,
+        &mut cache_outcome,
+    )
+    .unwrap();
     assert!(
         warnings.is_empty(),
         "manifest should clear guard once it arrives"
@@ -8063,6 +8337,7 @@ fn persistent_kura_for_tests() -> (Arc<Kura>, tempfile::TempDir) {
     let kura_cfg = iroha_config::parameters::actual::Kura {
         init_mode: iroha_config::kura::InitMode::Strict,
         store_dir: iroha_config::base::WithOrigin::inline(dir.path().to_path_buf()),
+        max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
         debug_output_new_blocks: false,
         merge_ledger_cache_capacity:
@@ -9485,6 +9760,7 @@ fn block_sync_roster_recovers_from_roster_sidecar_after_cache_reset() {
         block_hash,
         Some(commit_certificate.clone()),
         Some(checkpoint.clone()),
+        None,
     );
     kura.write_roster_metadata(&sidecar);
 
@@ -9591,6 +9867,7 @@ fn block_sync_update_includes_persisted_roster_artifacts() {
         block_hash,
         Some(commit_certificate.clone()),
         Some(checkpoint.clone()),
+        None,
     );
     kura.write_roster_metadata(&sidecar);
 

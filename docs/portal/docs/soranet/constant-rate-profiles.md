@@ -6,7 +6,6 @@ description: SNNet-17B1 preset catalogue for core/home production relays plus th
 ---
 
 :::note Canonical Source
-This page mirrors `docs/source/soranet/constant_rate_profiles.md`. Keep both copies in sync until the legacy documentation set is retired.
 :::
 
 SNNet-17B introduces fixed-rate transport lanes so relays move traffic in 1,024 B cells regardless

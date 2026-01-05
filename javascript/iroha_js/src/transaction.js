@@ -178,9 +178,8 @@ export function buildRegisterDomainTransaction(input) {
     nonce,
     toBuffer(privateKey),
   );
-  const signed =
-    result?.signed_transaction ?? result?.signedTransaction ?? result?.signedTx ?? null;
-  const hashBytes = result?.hash ?? result?.transaction_hash ?? result?.hashBytes ?? null;
+  const signed = result?.signed_transaction ?? null;
+  const hashBytes = result?.hash ?? null;
   if (!signed || !hashBytes) {
     throw new Error(
       "native binding 'build_register_domain_transaction' returned missing fields",
@@ -243,9 +242,8 @@ export function buildTransaction(input) {
     toBuffer(privateKey),
   );
 
-  const signed =
-    result?.signed_transaction ?? result?.signedTransaction ?? result?.signedTx ?? null;
-  const hashBytes = result?.hash ?? result?.transaction_hash ?? result?.hashBytes ?? null;
+  const signed = result?.signed_transaction ?? null;
+  const hashBytes = result?.hash ?? null;
   if (!signed || !hashBytes) {
     throw new Error("native binding 'build_transaction' returned missing fields");
   }
@@ -1824,7 +1822,7 @@ function isTerminalStatus(status) {
   if (!status || typeof status !== "object") {
     return false;
   }
-  const value = status.status ?? status.state;
+  const value = status.status;
   if (typeof value !== "string") {
     return false;
   }

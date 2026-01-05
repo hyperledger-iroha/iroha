@@ -113,7 +113,6 @@ errors کے ساتھ reject کرتا ہے؛ anchors کے بغیر یہ پہلی 
   `CommitCertificateHashMismatch` کے ساتھ reject کیا جاتا ہے؛ clients کو signature verification
   سے پہلے وہی tuple check کرنا چاہیے اور mismatched payloads کو discard کرنا چاہیے۔
 - مستقبل میں MMR/authority-set commitment chains شامل کر کے بہت طویل histories کیلئے proof size
-  کم کیا جا سکتا ہے۔ فارمیٹ backward-compatible رہتا ہے کیونکہ commit certificate کو زیادہ بھرپور
   commitment envelopes میں wrap کیا جاتا ہے۔
 
 </div>

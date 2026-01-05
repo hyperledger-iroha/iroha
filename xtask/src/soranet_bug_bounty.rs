@@ -592,7 +592,7 @@ mod tests {
                     area: "control-plane".to_string(),
                     cadence: "quarterly".to_string(),
                     targets: vec!["api".to_string()],
-                    exclusions: vec!["legacy beta".to_string()],
+                    exclusions: vec!["beta".to_string()],
                     notes: None,
                 },
                 ScopeEntry {

@@ -1,8 +1,6 @@
 package org.hyperledger.iroha.android.model.instructions;
 
-import java.util.HashMap;
 import java.util.Locale;
-import java.util.Map;
 
 /** Matches the discriminants exposed by `iroha_data_model::isi::InstructionType`. */
 public enum InstructionKind {
@@ -29,8 +27,6 @@ public enum InstructionKind {
     this.discriminant = discriminant;
   }
 
-  private static final Map<String, InstructionKind> LEGACY_ALIASES = buildLegacyAliasMap();
-
   public String displayName() {
     return displayName;
   }
@@ -46,10 +42,6 @@ public enum InstructionKind {
         return kind;
       }
     }
-    final InstructionKind aliased = LEGACY_ALIASES.get(normalized);
-    if (aliased != null) {
-      return aliased;
-    }
     throw new IllegalArgumentException("Unknown instruction kind: " + name);
   }
 
@@ -62,12 +54,4 @@ public enum InstructionKind {
     throw new IllegalArgumentException("Unknown instruction discriminant: " + value);
   }
 
-  private static Map<String, InstructionKind> buildLegacyAliasMap() {
-    final Map<String, InstructionKind> aliases = new HashMap<>();
-    aliases.put("iroha.set_key_value", InstructionKind.SET_KEY_VALUE);
-    aliases.put("iroha.remove_key_value", InstructionKind.REMOVE_KEY_VALUE);
-    aliases.put("iroha.grant", InstructionKind.GRANT);
-    aliases.put("iroha.revoke", InstructionKind.REVOKE);
-    return aliases;
-  }
 }

@@ -32,7 +32,7 @@ pub enum TokenKind {
     Arrow,
     This,
     Ident(String),
-    Number(i64),
+    Number(u64),
     String(String),
     Plus,
     PlusPlus,
@@ -537,7 +537,7 @@ impl<'a> Lexer<'a> {
         let line = self.line;
         let col = self.col;
         // Support 0x.. (hex), 0b.. (binary), and underscores in literals
-        let mut num = 0i64;
+        let mut num = 0u64;
         // Lookahead for 0x/0b prefixes
         if self.peek() == Some('0') {
             if self.src.get(self.pos + 1) == Some(&'x') || self.src.get(self.pos + 1) == Some(&'X')
@@ -545,13 +545,13 @@ impl<'a> Lexer<'a> {
                 // consume 0x
                 self.bump();
                 self.bump();
-                let base = 16i64;
+                let base = 16u64;
                 let mut saw_digit = false;
                 while let Some(c) = self.peek() {
                     let v = match c {
-                        '0'..='9' => Some((c as u8 - b'0') as i64),
-                        'a'..='f' => Some((c as u8 - b'a' + 10) as i64),
-                        'A'..='F' => Some((c as u8 - b'A' + 10) as i64),
+                        '0'..='9' => Some((c as u8 - b'0') as u64),
+                        'a'..='f' => Some((c as u8 - b'a' + 10) as u64),
+                        'A'..='F' => Some((c as u8 - b'A' + 10) as u64),
                         '_' => {
                             self.bump();
                             continue;
@@ -585,13 +585,13 @@ impl<'a> Lexer<'a> {
                 // consume 0b
                 self.bump();
                 self.bump();
-                let base = 2i64;
+                let base = 2u64;
                 let mut saw_digit = false;
                 while let Some(c) = self.peek() {
                     match c {
                         '0' | '1' => {
                             saw_digit = true;
-                            let bit = if c == '1' { 1 } else { 0 };
+                            let bit = if c == '1' { 1u64 } else { 0u64 };
                             num = num
                                 .checked_mul(base)
                                 .and_then(|n| n.checked_add(bit))
@@ -621,7 +621,7 @@ impl<'a> Lexer<'a> {
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() {
                 saw_digit = true;
-                let digit = (c as u8 - b'0') as i64;
+                let digit = (c as u8 - b'0') as u64;
                 num = num
                     .checked_mul(10)
                     .and_then(|n| n.checked_add(digit))
@@ -710,12 +710,22 @@ impl<'a> Lexer<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::lex;
+    use super::{TokenKind, lex};
 
     #[test]
     fn decimal_literal_overflow_is_reported() {
         let err = lex("18446744073709551616").unwrap_err();
         assert!(err.contains("overflow"));
+    }
+
+    #[test]
+    fn decimal_literal_max_plus_one_is_tokenized() {
+        let tokens = lex("9223372036854775808").expect("lex");
+        assert!(
+            matches!(tokens[0].kind, TokenKind::Number(n) if n == 9_223_372_036_854_775_808),
+            "expected u64 literal token, got {:?}",
+            tokens[0].kind
+        );
     }
 
     #[test]

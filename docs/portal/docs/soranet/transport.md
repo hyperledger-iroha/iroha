@@ -6,7 +6,6 @@ description: Handshake, salt rotation, and capability guidance for the SoraNet a
 ---
 
 :::note Canonical Source
-This page mirrors the SNNet-1 transport specification in `docs/source/soranet/spec.md`. Keep the two copies aligned until the legacy documentation set is retired.
 :::
 
 SoraNet is the anonymity overlay that backs SoraFS range fetches, Norito RPC streaming, and future Nexus data lanes. The transport program (roadmap items **SNNet-1**, **SNNet-1a**, and **SNNet-1b**) defined a deterministic handshake, post-quantum (PQ) capability negotiation, and salt rotation plan so every relay, client, and gateway observes the same security posture.

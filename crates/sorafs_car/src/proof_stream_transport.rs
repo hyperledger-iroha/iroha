@@ -180,7 +180,7 @@ mod tests {
     fn sample_items() -> Vec<ProofStreamItem> {
         vec![
             ProofStreamItem {
-                manifest_id_hex: Some("abc123".into()),
+                manifest_digest_hex: Some("abc123".into()),
                 provider_id_hex: Some("feedbeef".into()),
                 proof_kind: ProofKind::Por,
                 status: VerificationStatus::Success,
@@ -197,7 +197,7 @@ mod tests {
                 recorded_at_ms: Some(1_701_000_000),
             },
             ProofStreamItem {
-                manifest_id_hex: None,
+                manifest_digest_hex: None,
                 provider_id_hex: None,
                 proof_kind: ProofKind::Potr,
                 status: VerificationStatus::Failure,

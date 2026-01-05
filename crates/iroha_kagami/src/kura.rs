@@ -409,6 +409,8 @@ mod tests {
             &KuraConfig {
                 init_mode: InitMode::Strict,
                 store_dir: WithOrigin::inline(temp.path().to_owned()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: BLOCKS_IN_MEMORY,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
@@ -425,7 +427,7 @@ mod tests {
         let mut fingerprint = [0u8; 32];
         fingerprint[..4].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32]));
-        let sidecar = PipelineRecoverySidecar::new_v2(
+        let sidecar = PipelineRecoverySidecar::new_v1(
             7,
             block_hash,
             PipelineDagSnapshot {
@@ -449,7 +451,7 @@ mod tests {
         args.run(&mut sink).expect("sidecar ok");
 
         let read = std::fs::read_to_string(out_path).unwrap();
-        assert!(read.contains("\"pipeline.recovery.v2\""));
+        assert!(read.contains("\"pipeline.recovery.v1\""));
         assert!(read.contains("\"height\": 7"));
         assert!(read.contains(&block_hash.to_string()));
     }

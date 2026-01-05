@@ -52,7 +52,6 @@ engineers share a single source of truth.
 |-------|--------|---------------|---------------|
 | Pilot (IOS8 P0) | Q3 2026 targeted partners | 9×5 support, manual telemetry reviews, direct Slack bridges. | Pilot validation report and parity dashboard snapshot uploaded to `status.md`. |
 | General Availability | Target Q4 2026 | 24×5 SLA, PagerDuty rotation live, automated dashboards + exporter in CI. | Signed GA packet (reproducibility checklist + parity digest + release notes) stored in `artifacts/swift_release/<tag>/`. |
-| LTS Cadence | First cut ≤90 days after GA, then every 6 months | ABI compatibility + security fixes, dual-branch CI, partner cutover coordination. | LTS checklist appended to this playbook and linked in `status.md`. |
 | Hotfix | Any time | Sev 1 regression/security fix, dedicated bridge with Release + Compliance. | Hotfix advisory in README/status, provenance reissued, telemetry report filed. |
 
 Release calendars must be published at least **60 days** ahead of GA/LTS windows
@@ -96,7 +95,6 @@ or `ci/check_swift_fixtures.sh` fail; rerun only after the root cause is fixed.
 
 - Redaction policy lives in `docs/source/sdk/swift/telemetry_redaction.md`;
   overrides must be recorded via
-  `python3 scripts/swift_status_export.py telemetry-override …` (or the legacy
   helper) and logged in the parity digest.
 - Quarterly chaos drills follow
   `docs/source/sdk/swift/telemetry_chaos_checklist.md` (salt rotation,

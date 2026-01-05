@@ -514,6 +514,7 @@ mod tests {
     #[test]
     fn shield_gas_charges_commitment() {
         use iroha_data_model::{
+            confidential::ConfidentialEncryptedPayload,
             isi::zk::Shield,
             prelude::{AccountId, AssetDefinitionId},
         };
@@ -522,7 +523,13 @@ mod tests {
         super::configure_confidential_gas(super::ConfidentialGasSchedule::default());
         let asset: AssetDefinitionId = "shield#domain".parse().unwrap();
         let account: AccountId = "alice@domain".parse().unwrap();
-        let shield = Shield::new(asset, account, 42, [0x11; 32], Vec::new());
+        let shield = Shield::new(
+            asset,
+            account,
+            42,
+            [0x11; 32],
+            ConfidentialEncryptedPayload::default(),
+        );
         let shield_instr = InstructionBox::from(shield);
         let gas = meter_instruction(&shield_instr);
         assert_eq!(gas, super::DEFAULT_ZK_GAS_PER_COMMITMENT);

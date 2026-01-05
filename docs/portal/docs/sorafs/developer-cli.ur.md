@@ -19,7 +19,6 @@ description: Consolidated `sorafs_cli` surface کا task-focused walkthrough۔
 ---
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/developer/cli.md` کی عکاسی کرتا ہے۔ جب تک legacy Sphinx set ریٹائر نہ ہو دونوں کاپیوں کو ہم آہنگ رکھیں۔
 :::
 
 Consolidated `sorafs_cli` surface (جو `sorafs_car` crate کے ذریعے `cli` feature کے ساتھ فراہم ہوتا ہے) SoraFS artifacts تیار کرنے کے لیے درکار ہر قدم expose کرتا ہے۔ اس cookbook کو عام workflows پر سیدھا جانے کے لیے استعمال کریں؛ operational context کے لیے اسے manifest pipeline اور orchestrator runbooks کے ساتھ pair کریں۔

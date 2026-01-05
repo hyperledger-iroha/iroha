@@ -10,7 +10,6 @@ translation_last_reviewed: 2026-01-01
 ---
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/da/ingest_plan.md` کی عکاسی کرتا ہے۔ legacy docs ریٹائر
 ہونے تک دونوں ورژنز کو sync رکھیں۔
 :::
 

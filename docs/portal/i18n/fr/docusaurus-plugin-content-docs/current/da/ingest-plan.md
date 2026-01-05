@@ -8,7 +8,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 :::note Source canonique
 Reflete `docs/source/da/ingest_plan.md`. Gardez les deux versions en sync tant
-que les docs legacy ne sont pas retires.
 :::
 
 # Plan d'ingest Data Availability Sora Nexus

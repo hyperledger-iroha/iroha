@@ -10,7 +10,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/runbooks/staging_manifest_playbook.md` کی عکاسی کرتا ہے۔ جب تک Sphinx سیٹ مکمل طور پر ریٹائر نہ ہو جائے Docusaurus copy اور legacy Markdown کو ہم آہنگ رکھیں۔
 :::
 
 ## Overview

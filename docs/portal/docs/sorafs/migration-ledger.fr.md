@@ -29,11 +29,7 @@ alignes.
 
 | Jalon | Fenetre effective | Resume du changement | Equipes impactees | Actions | Statut |
 |-------|-------------------|---------------------|------------------|---------|--------|
-| M0 | Semaines 1–6 | Fixtures de chunker publiees; les pipelines emettent des bundles CAR + manifest aux cotes des artefacts legacy; entrees du registre creees. | Docs, DevRel, SDKs | Adopter `sorafs_manifest_stub` avec des flags d'attente, consigner des entrees dans ce registre, maintenir le CDN legacy. | ✅ Actif |
 | M1 | Semaines 7–12 | Le CI impose des fixtures deterministes; les preuves d'alias sont disponibles en staging; le tooling expose des flags d'attente explicites. | Docs, Storage, Governance | S'assurer que les fixtures restent signees, enregistrer les alias dans le registry de staging, mettre a jour les checklists de release avec l'exigence `--car-digest/--root-cid`. | ⏳ En attente |
-| M2 | Semaines 13–20 | Le pinning base sur le registry devient le chemin principal; les artefacts legacy passent en lecture seule; les gateways priorisent les preuves du registry. | Storage, Ops, Governance | Router le pinning via le registry, geler les hosts legacy, publier des avis de migration pour les operateurs. | ⏳ En attente |
-| M3 | Semaine 21+ | Acces uniquement par alias impose; observabilite alerte sur la parite du registry; CDN legacy retire. | Ops, Networking, SDKs | Supprimer le DNS legacy, faire tourner les URL mises en cache, surveiller les dashboards de parite, mettre a jour les defaults SDK. | ⏳ En attente |
-| R0–R3 | 2025-03-31 → 2025-07-01 | Phases d'application des provider adverts: R0 observer, R1 avertir, R2 appliquer handles/capacites canoniques, R3 purger les payloads legacy. | Observability, Ops, SDKs, DevRel | Importer `grafana_sorafs_admission.json`, suivre la checklist operateur dans `provider_advert_rollout.md`, preparer les renouvellements d'adverts 30+ jours avant la barriere R2. | ⏳ En attente |
 
 Les minutes du plan de controle de gouvernance qui referencent ces jalons vivent sous
 `docs/source/sorafs/`. Les equipes doivent ajouter des puces datees sous chaque ligne

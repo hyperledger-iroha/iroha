@@ -8,10 +8,6 @@ fn unknown_syscalls_rejected_by_policy_function() {
         SyscallPolicy::AbiV1,
         unknown
     ));
-    assert!(!ivm::syscalls::is_syscall_allowed(
-        SyscallPolicy::Experimental(2),
-        unknown
-    ));
 }
 
 #[test]

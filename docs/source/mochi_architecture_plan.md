@@ -5,7 +5,6 @@ description: High-level design for the MOCHI local-network GUI supervisor.
 
 # MOCHI Architecture Plan
 
-MOCHI is a Rust-native developer tool that supervises local Hyperledger Iroha v2 test networks. It mirrors the workflow of legacy Ethereum Ganache tooling while adhering to the Iroha 2 execution, consensus, and API surface.
 
 ## Goals
 
@@ -62,7 +61,6 @@ Additional front ends (for example a Tauri shell) can hook into `mochi-core` lat
 
 ## Packaging and Distribution
 
-- Built from the same workspace revision as `irohad` to guarantee binary compatibility.
 - MOCHI bundles (or discovers on `PATH`) the `irohad`, `iroha_cli`, and `kagami` binaries.
 - Uses `rustls` for outbound HTTPS to avoid OpenSSL dependencies.
 - Stores all generated artifacts in a dedicated application data root (e.g., `~/.local/share/mochi` or platform equivalent) with per-network subdirectories. GUI provides “reveal in Finder/Explorer” helpers.

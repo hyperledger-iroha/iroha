@@ -19,7 +19,7 @@ description: Handshake, rotacion de salts y guia de capacidades para el overlay 
 ---
 
 :::note Fuente canonica
-Esta pagina refleja la especificacion de transporte SNNet-1 en `docs/source/soranet/spec.md`. Mantengan ambas copias alineadas hasta que se retire el conjunto legado de documentacion.
+Esta pagina refleja la especificacion de transporte SNNet-1 en `docs/source/soranet/spec.md`. Manten ambas copias sincronizadas.
 :::
 
 SoraNet es el overlay de anonimato que respalda los range fetches de SoraFS, el streaming de Norito RPC y los futuros data lanes de Nexus. El programa de transporte (items del roadmap **SNNet-1**, **SNNet-1a** y **SNNet-1b**) definio un handshake determinista, negociacion de capacidades post-quantum (PQ) y un plan de rotacion de salts para que cada relay, client y gateway observe la misma postura de seguridad.

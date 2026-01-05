@@ -154,22 +154,24 @@ impl<'a> Parser<'a> {
 
     fn parse_json_macro_value(&mut self, ident_token: &Token) -> ParseResult<String> {
         let tok = self.bump();
-        match tok.kind {
+        match tok.kind.clone() {
             TokenKind::LBrace => self.parse_json_object(ident_token),
             TokenKind::LBracket => self.parse_json_array(ident_token),
             TokenKind::String(s) => Ok(format!("\"{}\"", escape_json_string(&s))),
             TokenKind::Minus => {
                 let next = self.bump();
-                if let TokenKind::Number(n) = next.kind {
+                if let TokenKind::Number(n) = next.kind.clone() {
                     self.consume_integer_suffix()?;
-                    Ok(format!("-{n}"))
+                    let value = self.number_to_i64_neg(&next, n)?;
+                    Ok(value.to_string())
                 } else {
                     Err(self.error(next, "expected number after '-' in json! literal"))
                 }
             }
             TokenKind::Number(n) => {
                 self.consume_integer_suffix()?;
-                Ok(n.to_string())
+                let value = self.number_to_i64(&tok, n)?;
+                Ok(value.to_string())
             }
             TokenKind::True => Ok("true".to_string()),
             TokenKind::False => Ok("false".to_string()),
@@ -402,17 +404,19 @@ impl<'a> Parser<'a> {
                 FeatureList(Vec<String>, Token),
             }
             let tok = self.bump();
-            let value = match tok.kind {
+            let value = match tok.kind.clone() {
                 TokenKind::Number(n) => {
                     self.consume_integer_suffix()?;
-                    MetaValue::Number(n, tok.clone())
+                    let value = self.number_to_i64(&tok, n)?;
+                    MetaValue::Number(value, tok.clone())
                 }
                 TokenKind::Minus => {
                     let next = self.bump();
-                    match next.kind {
+                    match next.kind.clone() {
                         TokenKind::Number(n) => {
                             self.consume_integer_suffix()?;
-                            MetaValue::Number(-n, next.clone())
+                            let value = self.number_to_i64_neg(&next, n)?;
+                            MetaValue::Number(value, next.clone())
                         }
                         _ => return Err(self.error(next, "number")),
                     }
@@ -1204,6 +1208,15 @@ impl<'a> Parser<'a> {
     fn parse_unary(&mut self) -> ParseResult<Expr> {
         if self.peek(TokenKind::Minus) {
             self.bump();
+            if let Some(token) = self.tokens.get(self.pos).cloned()
+                && let TokenKind::Number(n) = token.kind.clone()
+                && n > i64::MAX as u64
+            {
+                self.bump();
+                self.consume_integer_suffix()?;
+                let value = self.number_to_i64_neg(&token, n)?;
+                return Ok(Expr::Number(value));
+            }
             let expr = self.parse_unary()?;
             Ok(Expr::Unary {
                 op: UnaryOp::Neg,
@@ -1235,14 +1248,12 @@ impl<'a> Parser<'a> {
                     let s = s.clone();
                     self.bump();
                     s
-                } else if let Some(Token {
-                    kind: TokenKind::Number(n),
-                    ..
-                }) = self.tokens.get(self.pos)
+                } else if let Some(token) = self.tokens.get(self.pos).cloned()
+                    && let TokenKind::Number(n) = token.kind.clone()
                 {
-                    let n = *n;
                     self.bump();
-                    n.to_string()
+                    let index = self.number_to_usize(&token, n, "tuple index")?;
+                    index.to_string()
                 } else {
                     // Avoid borrowing self immutably and mutably in a single expression
                     let tok = self.bump();
@@ -1299,7 +1310,8 @@ impl<'a> Parser<'a> {
             TokenKind::False => Ok(Expr::Bool(false)),
             TokenKind::Number(n) => {
                 self.consume_integer_suffix()?;
-                Ok(Expr::Number(*n))
+                let value = self.number_to_i64(&tok, *n)?;
+                Ok(Expr::Number(value))
             }
             TokenKind::String(s) => Ok(Expr::String(s.clone())),
             TokenKind::Ident(name0) => {
@@ -1495,8 +1507,10 @@ impl<'a> Parser<'a> {
         }
         self.expect(TokenKind::LParen)?;
         let value_tok = self.bump();
-        let bound = match value_tok.kind {
-            TokenKind::Number(n) if n >= 0 => n as usize,
+        let bound = match value_tok.kind.clone() {
+            TokenKind::Number(n) => {
+                self.number_to_usize(&value_tok, n, "`bounded(n)` expects a non-negative")?
+            }
             _ => {
                 return Err(self.error(
                     value_tok,
@@ -1568,6 +1582,54 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(())
+    }
+
+    fn number_to_i64(&self, token: &Token, value: u64) -> ParseResult<i64> {
+        if value <= i64::MAX as u64 {
+            Ok(value as i64)
+        } else {
+            Err(self.range_error(
+                token,
+                format!("integer literal out of range (max {})", i64::MAX),
+            ))
+        }
+    }
+
+    fn number_to_i64_neg(&self, token: &Token, value: u64) -> ParseResult<i64> {
+        let max_plus_one = i64::MAX as u64 + 1;
+        if value <= i64::MAX as u64 {
+            Ok(-(value as i64))
+        } else if value == max_plus_one {
+            Ok(i64::MIN)
+        } else {
+            Err(self.range_error(
+                token,
+                format!("integer literal out of range (min {})", i64::MIN),
+            ))
+        }
+    }
+
+    fn number_to_usize(&self, token: &Token, value: u64, context: &str) -> ParseResult<usize> {
+        if value <= i64::MAX as u64 && value <= usize::MAX as u64 {
+            Ok(value as usize)
+        } else {
+            Err(self.range_error(token, format!("{context} integer literal out of range")))
+        }
+    }
+
+    fn range_error(&self, token: &Token, message: String) -> ParseError {
+        let line_text = self
+            .source
+            .lines()
+            .nth(token.line.saturating_sub(1))
+            .unwrap_or("");
+        let caret = " ".repeat(token.column.saturating_sub(1)) + "^";
+        ParseError {
+            message,
+            line: token.line,
+            column: token.column,
+            snippet: format!("{line_text}\n{caret}"),
+        }
     }
 
     fn peek(&self, kind: TokenKind) -> bool {
@@ -1788,5 +1850,47 @@ mod tests {
         let src = "fn main() { let x = 1i128; }";
         let err = parse(src).unwrap_err();
         assert!(err.contains("unknown integer literal suffix `i128`"));
+    }
+
+    #[test]
+    fn parse_negative_i64_min_literal() {
+        let src = "fn main() { let x = -9223372036854775808; }";
+        parse(src).expect("parse i64::MIN literal");
+    }
+
+    #[test]
+    fn parse_positive_i64_overflow_literal_errors() {
+        let src = "fn main() { let x = 9223372036854775808; }";
+        let err = parse(src).unwrap_err();
+        assert!(err.contains("integer literal out of range"));
+    }
+
+    #[test]
+    fn parse_json_macro_allows_i64_min_literal() {
+        let src = r#"fn main() { let x = json!{ v: -9223372036854775808 }; }"#;
+        parse(src).expect("parse json min literal");
+    }
+
+    #[test]
+    fn parse_contract_meta_rejects_integer_overflow_literal() {
+        let src = r#"
+        seiyaku C {
+            meta { abi_version: 9223372036854775808; }
+        }
+        "#;
+        let err = parse(src).unwrap_err();
+        assert!(err.contains("integer literal out of range"));
+    }
+
+    #[test]
+    fn parse_tuple_index_literal() {
+        let src = "fn main() { let t = (1, 2); let x = t.1; }";
+        parse(src).expect("parse tuple index");
+    }
+
+    #[test]
+    fn parse_bounded_attribute_literal() {
+        let src = "fn f(m: Map<int, int>) { for (k, v) in m #[bounded(1)] { let z = k; } }";
+        parse(src).expect("parse bounded attribute");
     }
 }

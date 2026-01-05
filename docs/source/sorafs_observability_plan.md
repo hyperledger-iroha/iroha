@@ -26,7 +26,6 @@ summary: SF-7 telemetry schema, dashboards, and SLO enforcement for gateways and
 | `sorafs_gateway_proof_verifications_total` | Counter | `profile_version`, `result`, `error_code` | Proof verification outcomes captured at request time (`result` ∈ {`success`,`failure`}). |
 | `sorafs_gateway_proof_duration_ms_bucket` | Histogram | `profile_version`, `result`, `error_code` | Verification latency distribution for PoR receipts. |
 | `telemetry::sorafs.gateway.request` | Structured event | `endpoint`, `method`, `variant`, `result`, `status`, `error_code`, `duration_ms` | Structured log emitted on every request completion for Loki/Tempo correlation. |
-| `torii_sorafs_chunk_range_requests_total`, `torii_sorafs_gateway_refusals_total` | Counter | Legacy label sets | Prometheus metrics retained for historical dashboards; still emitted alongside the new OTLP series. |
 
 `telemetry::sorafs.gateway.request` events mirror the OTEL counters with structured payloads, surfacing `endpoint`, `method`, `variant`, `status`, `error_code`, and `duration_ms` for Loki/Tempo correlation while dashboards consume the OTLP series for SLO tracking.
 
@@ -185,7 +184,7 @@ Example lifecycle payload (redacted fields follow standard `iroha_logger` rules)
   `telemetry::sorafs.fetch.*` events provide lightweight JSON payloads for log/metric backends that
   prefer structured events over scrapes.
 - Collectors: run OTEL collectors alongside Prometheus/Loki/Tempo. Operators can forward to Tempo
-  (preferred) or Jaeger-compatible backends.
+  (preferred) or Jaeger API backends.
 - For high-cardinality operations, attach sampling rules (10% for success, 100% for failures).
 
 ## TLS Telemetry Coordination (SF-5b)

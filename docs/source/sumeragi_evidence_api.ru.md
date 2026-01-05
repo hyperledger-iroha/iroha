@@ -32,7 +32,7 @@ translation_last_reviewed: 2026-01-01
   расследовать устаревшие отправки.
 - POST `/v1/sumeragi/evidence`
   - Отправляет hex-кодированное Norito evidence в actor Sumeragi (`ControlFlow::Evidence`).
-  - Тело запроса (JSON): `{ "evidence_hex": "<hex string>" }`; пробелы в hex строке игнорируются.
+  - Тело запроса (JSON): `{ "evidence_hex": "<hex string>" }`; hex-строка представляет Norito-фреймированные байты `ConsensusEvidence`, пробелы игнорируются.
   - Ответ (JSON): `{ "status": "accepted", "kind": "<variant>" }` при успехе.
   - Валидация проверяет равенство signer/height/view/epoch для double-vote payloads, требует непустые payloads с одним подписантом, применяет receipt кворум для evidence `Censorship` (подписанные payloads `TransactionSubmissionReceipt`), и отклоняет записи `InvalidProposal`, которые не продвигают height/view или чьи parent hash расходятся с вложенным commit certificate.
   - CLI helper: `iroha sumeragi evidence submit --evidence-hex <hex>` или `--evidence-hex-file <path>`.

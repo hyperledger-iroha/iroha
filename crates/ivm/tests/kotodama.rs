@@ -117,6 +117,15 @@ fn bytes_type_is_accepted_and_roundtrips_through_semantics() {
 }
 
 #[test]
+fn string_equality_compiles() {
+    let src = "fn f() { let _x = \"hi\" == \"hi\"; }";
+    let code = Compiler::new()
+        .compile_source(src)
+        .expect("string equality should compile");
+    assert!(!code.is_empty());
+}
+
+#[test]
 fn irohaswap_sample_compiles() {
     let src = include_str!("../src/kotodama/samples/irohaswap.ko");
     let code = Compiler::new()
@@ -592,6 +601,20 @@ fn compile_and_run_add() {
     vm.load_program(&code).unwrap();
     vm.run().expect("execution failed");
     assert_eq!(vm.register(10), 11);
+}
+
+#[test]
+fn state_allocations_do_not_clobber_params() {
+    let src = r#"
+        state Map<int,int> m;
+        fn id(x: int) -> int { return x; }
+    "#;
+    let code = Compiler::new().compile_source(src).expect("compile failed");
+    let mut vm = ivm::IVM::new(u64::MAX);
+    vm.set_register(10, 42);
+    vm.load_program(&code).unwrap();
+    vm.run().expect("execution failed");
+    assert_eq!(vm.register(10), 42);
 }
 
 #[test]
@@ -1521,6 +1544,186 @@ fn compile_and_run_map_set() {
 }
 
 #[test]
+fn map_get_handles_spills() {
+    use ivm::kotodama::ir::Instr;
+    use ivm::kotodama::regalloc;
+
+    let count = 20usize;
+    let mut src = String::from("fn main(m: Map<int,int>, k: int) -> int {\n");
+    for i in 0..count {
+        let value = (i + 1) as i64;
+        src.push_str(&format!("  let a{i} = {value};\n"));
+    }
+    src.push_str("  let v = m[k];\n");
+    src.push_str("  let sum = ");
+    for i in 0..count {
+        if i > 0 {
+            src.push_str(" + ");
+        }
+        src.push_str(&format!("a{i}"));
+    }
+    src.push_str(";\n");
+    src.push_str("  let hit = std::map::has(m, k);\n");
+    src.push_str("  return sum + v + hit;\n}\n");
+
+    let prog = parse(&src).expect("parse spill map-get");
+    let typed = analyze(&prog).expect("analyze spill map-get");
+    let ir = ivm::kotodama::ir::lower(&typed);
+    let func = ir
+        .functions
+        .iter()
+        .find(|f| f.name == "main")
+        .expect("main lowered");
+    let alloc = regalloc::allocate(func);
+    let is_spilled = |t: &ivm::kotodama::ir::Temp| alloc.stack.contains_key(t);
+    let mut saw_map_get_spill = false;
+    for bb in &func.blocks {
+        for ins in &bb.instrs {
+            if let Instr::MapGet { dest, map, key } = ins {
+                if is_spilled(dest) || is_spilled(map) || is_spilled(key) {
+                    saw_map_get_spill = true;
+                }
+            }
+        }
+    }
+    assert!(
+        saw_map_get_spill,
+        "expected MapGet operand spill under register pressure"
+    );
+
+    let code = Compiler::new()
+        .compile_source(&src)
+        .expect("compile spill map-get");
+    let mut vm = ivm::IVM::new(u64::MAX);
+    vm.load_program(&code).unwrap();
+    let base = vm.alloc_heap(16).expect("alloc map");
+    vm.store_u64(base, 7).expect("store key");
+    vm.store_u64(base + 8, 100).expect("store val");
+    vm.set_register(10, base);
+    vm.set_register(11, 7);
+    vm.run().expect("execute spill map-get");
+    let expected = (count as u64 * (count as u64 + 1) / 2) + 100 + 1;
+    assert_eq!(vm.register(10), expected);
+}
+
+#[test]
+fn keys_take2_load64imm_executes() {
+    use ivm::kotodama::ir::Instr;
+
+    let count = 20usize;
+    let mut src = String::from("fn main(m: Map<int,int>) -> int {\n");
+    for i in 0..count {
+        let value = (i + 1) as i64;
+        src.push_str(&format!("  let a{i} = {value};\n"));
+    }
+    src.push_str("  let pick = std::map::keys_take2(m, 0, 0);\n");
+    src.push_str("  let sum = 0;\n");
+    for i in 0..count {
+        src.push_str(&format!("  sum = sum + a{i};\n"));
+    }
+    src.push_str("  return sum + pick;\n}\n");
+
+    let prog = parse(&src).expect("parse load64");
+    let typed = analyze(&prog).expect("analyze load64");
+    let ir = ivm::kotodama::ir::lower(&typed);
+    let func = ir
+        .functions
+        .iter()
+        .find(|f| f.name == "main")
+        .expect("main lowered");
+    let mut saw_load64imm = false;
+    for bb in &func.blocks {
+        for ins in &bb.instrs {
+            if let Instr::Load64Imm { .. } = ins {
+                saw_load64imm = true;
+                break;
+            }
+        }
+    }
+    assert!(saw_load64imm, "expected Load64Imm in keys_take2 lowering");
+
+    let code = Compiler::new()
+        .compile_source(&src)
+        .expect("compile load64");
+    let mut vm = ivm::IVM::new(u64::MAX);
+    vm.load_program(&code).unwrap();
+    let base = vm.alloc_heap(16).expect("alloc map");
+    vm.store_u64(base, 7).expect("store key");
+    vm.store_u64(base + 8, 100).expect("store val");
+    vm.set_register(10, base);
+    vm.run().expect("execute load64");
+    let expected = (count as u64 * (count as u64 + 1) / 2) + 7;
+    assert_eq!(vm.register(10), expected);
+}
+
+#[test]
+fn map_load_pair_handles_spilled_map_base() {
+    use ivm::kotodama::ir::Instr;
+    use ivm::kotodama::regalloc;
+
+    let count = 20usize;
+    let mut src = String::from("fn main(m: Map<int,int>) -> int {\n");
+    for i in 0..count {
+        let value = (i + 1) as i64;
+        src.push_str(&format!("  let a{i} = {value};\n"));
+    }
+    src.push_str("  let sum = ");
+    for i in 0..count {
+        if i > 0 {
+            src.push_str(" + ");
+        }
+        src.push_str(&format!("a{i}"));
+    }
+    src.push_str(";\n");
+    src.push_str("  let hit = std::map::has(m, 7);\n");
+    src.push_str("  return sum + hit;\n}\n");
+
+    let prog = parse(&src).expect("parse spill map-load");
+    let typed = analyze(&prog).expect("analyze spill map-load");
+    let ir = ivm::kotodama::ir::lower(&typed);
+    let func = ir
+        .functions
+        .iter()
+        .find(|f| f.name == "main")
+        .expect("main lowered");
+    let alloc = regalloc::allocate(func);
+    let is_spilled = |t: &ivm::kotodama::ir::Temp| alloc.stack.contains_key(t);
+    let mut saw_map_load_pair_spill = false;
+    for bb in &func.blocks {
+        for ins in &bb.instrs {
+            if let Instr::MapLoadPair {
+                dest_key,
+                dest_val,
+                map,
+                ..
+            } = ins
+            {
+                if is_spilled(map) || is_spilled(dest_key) || is_spilled(dest_val) {
+                    saw_map_load_pair_spill = true;
+                }
+            }
+        }
+    }
+    assert!(
+        saw_map_load_pair_spill,
+        "expected MapLoadPair operand spill under register pressure"
+    );
+
+    let code = Compiler::new()
+        .compile_source(&src)
+        .expect("compile spill map-load");
+    let mut vm = ivm::IVM::new(u64::MAX);
+    vm.load_program(&code).unwrap();
+    let base = vm.alloc_heap(16).expect("alloc map");
+    vm.store_u64(base, 7).expect("store key");
+    vm.store_u64(base + 8, 1).expect("store val");
+    vm.set_register(10, base);
+    vm.run().expect("execute spill map-load");
+    let expected = (count as u64 * (count as u64 + 1) / 2) + 1;
+    assert_eq!(vm.register(10), expected);
+}
+
+#[test]
 fn compile_and_run_modulo() {
     // Return a % b
     let src = "fn r(a, b) -> int { return a % b; }";
@@ -1559,7 +1762,7 @@ fn compile_emits_manifest_hashes() {
     assert_eq!(manifest.code_hash, Some(expected_code_hash));
     let policy = match meta.abi_version {
         1 => SyscallPolicy::AbiV1,
-        v => SyscallPolicy::Experimental(v),
+        _ => unreachable!("compiler emits ABI v1 only"),
     };
     let expected_abi = iroha_crypto::Hash::prehashed(compute_abi_hash(policy));
     assert_eq!(manifest.abi_hash, Some(expected_abi));
@@ -2023,6 +2226,139 @@ fn compile_pubkgen_and_valcom() {
 }
 
 #[test]
+fn pubkgen_valcom_spills_are_handled() {
+    use ivm::kotodama::ir::Instr;
+    use ivm::kotodama::regalloc;
+
+    let build_src = |count: usize| {
+        let mut src = String::from("fn main(a: int, b: int) -> int {\n");
+        for i in 0..count {
+            let value = (i + 1) as i64;
+            src.push_str(&format!("  let v{i} = {value};\n"));
+        }
+        src.push_str("  let c = valcom(a, b);\n");
+        src.push_str("  let p = pubkgen(c);\n");
+        src.push_str("  let sum = 0;\n");
+        for i in 0..count {
+            src.push_str(&format!("  sum = sum + v{i};\n"));
+        }
+        src.push_str("  return sum + p + c;\n}\n");
+        src
+    };
+
+    let mut chosen = None;
+    let mut count = 20usize;
+    while count <= 80 {
+        let src = build_src(count);
+        let prog = parse(&src).expect("parse valcom spill");
+        let typed = analyze(&prog).expect("analyze valcom spill");
+        let ir = ivm::kotodama::ir::lower(&typed);
+        let func = ir
+            .functions
+            .iter()
+            .find(|f| f.name == "main")
+            .expect("main lowered");
+        let alloc = regalloc::allocate(func);
+        let is_spilled = |t: &ivm::kotodama::ir::Temp| alloc.stack.contains_key(t);
+        let mut saw_spill = false;
+        for bb in &func.blocks {
+            for ins in &bb.instrs {
+                match ins {
+                    Instr::Valcom { dest, value, blind } => {
+                        if is_spilled(dest) || is_spilled(value) || is_spilled(blind) {
+                            saw_spill = true;
+                        }
+                    }
+                    Instr::Pubkgen { dest, src } => {
+                        if is_spilled(dest) || is_spilled(src) {
+                            saw_spill = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if saw_spill {
+            chosen = Some(src);
+            break;
+        }
+        count += 4;
+    }
+
+    let src = chosen.expect("expected valcom/pubkgen spill; adjust pressure if needed");
+    Compiler::new()
+        .compile_source(&src)
+        .expect("compile valcom/pubkgen spill");
+}
+
+#[test]
+fn json_encode_decode_spills_are_handled() {
+    use ivm::kotodama::ir::Instr;
+    use ivm::kotodama::regalloc;
+
+    let build_src = |count: usize| {
+        let mut src = String::from("fn main(b: bytes) -> int {\n");
+        for i in 0..count {
+            let value = (i + 1) as i64;
+            src.push_str(&format!("  let v{i} = {value};\n"));
+        }
+        src.push_str("  let j = decode_json(b);\n");
+        src.push_str("  let sum = 0;\n");
+        for i in 0..count {
+            src.push_str(&format!("  sum = sum + v{i};\n"));
+        }
+        src.push_str("  let encoded = encode_json(j);\n");
+        src.push_str("  let val = decode_int(encoded);\n");
+        src.push_str("  return sum + val;\n}\n");
+        src
+    };
+
+    let mut chosen = None;
+    let mut count = 20usize;
+    while count <= 80 {
+        let src = build_src(count);
+        let prog = parse(&src).expect("parse json spill");
+        let typed = analyze(&prog).expect("analyze json spill");
+        let ir = ivm::kotodama::ir::lower(&typed);
+        let func = ir
+            .functions
+            .iter()
+            .find(|f| f.name == "main")
+            .expect("main lowered");
+        let alloc = regalloc::allocate(func);
+        let is_spilled = |t: &ivm::kotodama::ir::Temp| alloc.stack.contains_key(t);
+        let mut saw_spill = false;
+        for bb in &func.blocks {
+            for ins in &bb.instrs {
+                match ins {
+                    Instr::JsonDecode { dest, blob } => {
+                        if is_spilled(dest) || is_spilled(blob) {
+                            saw_spill = true;
+                        }
+                    }
+                    Instr::JsonEncode { dest, json } => {
+                        if is_spilled(dest) || is_spilled(json) {
+                            saw_spill = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if saw_spill {
+            chosen = Some(src);
+            break;
+        }
+        count += 4;
+    }
+
+    let src = chosen.expect("expected json encode/decode spill; adjust pressure if needed");
+    Compiler::new()
+        .compile_source(&src)
+        .expect("compile json spill");
+}
+
+#[test]
 fn compile_poseidon6_error() {
     let src = "fn g(a,b,c,d,e,f) { let h = poseidon6(a,b,c,d,e,f); }";
     let err = Compiler::new().compile_source(src).unwrap_err();
@@ -2074,7 +2410,17 @@ fn map_new_allocates() {
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&code).unwrap();
     vm.run().expect("execution failed");
-    assert_ne!(vm.register(10), 0);
+    let map_ptr = vm.register(10);
+    assert_ne!(map_ptr, 0);
+    let mut buf = [0u8; 8];
+    vm.load_bytes(map_ptr, &mut buf)
+        .expect("load Map::new key bytes");
+    let key = u64::from_le_bytes(buf);
+    vm.load_bytes(map_ptr + 8, &mut buf)
+        .expect("load Map::new value bytes");
+    let value = u64::from_le_bytes(buf);
+    assert_eq!(key, 0);
+    assert_eq!(value, 0);
 }
 
 #[test]

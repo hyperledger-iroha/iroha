@@ -370,7 +370,7 @@ Configuracion y determinismo
 - **TODO:** Rebalanceo por lane de scheduler/DA/RBC, propagacion de sets de validadores y limpieza de almacenamiento estan pendientes; mantener solicitudes de ciclo de vida infrecuentes hasta que esos hooks lleguen.
 
 Ruta de migracion (Iroha 2 -> Iroha 3)
-1) Introducir IDs calificados por dataspace y composicion de bloque nexus/estado global en el data model; agregar feature flags para mantener modos compatibles con Iroha 2 durante la transicion.
+1) Introducir IDs calificados por dataspace y composicion de bloque nexus/estado global en el data model; agregar feature flags para mantener modos heredados de Iroha 2 durante la transicion.
 2) Implementar backends de erasure coding Kura/WSV tras feature flags, preservando backends actuales como default durante fases tempranas.
 3) Agregar syscalls y tipos pointer para operaciones AMX (atomicas multi-DS); extender pruebas y docs; mantener ABI v1.
 4) Entregar una cadena nexus minima con un solo DS publico y bloques de 1 s; luego agregar el primer piloto de DS privado exportando solo pruebas/compromisos.

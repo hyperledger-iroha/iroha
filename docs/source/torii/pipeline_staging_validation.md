@@ -6,7 +6,6 @@ summary: Checklist for Torii owners to prove the pipeline endpoints, telemetry, 
 # 1. Scope & Owners
 
 - **Roadmap items:** IOS2-WB2 (Swift `/v1/pipeline` adoption) and NRPC-2 (Torii rollout plan) both gate on Torii providing evidence that the staging cluster exercises the pipeline routes with the same behaviour exposed to SDKs.【roadmap.md:1268】【docs/source/torii/norito_rpc_rollout_plan.md:1】
-- **Surfaces covered:** `/v1/pipeline/transactions`, `/v1/pipeline/transactions/status`, `/v1/pipeline/recovery/{height}`, and the SSE bridge that mirrors pipeline events for legacy watchers alongside the SNNet-11 Norito streaming transport.【crates/iroha_torii/src/lib.rs:8580】【docs/source/torii/norito_rpc_pipeline_sse_bridge.md:1】
 - **Owners:** Torii Platform TL (primary), SDK Program Lead (witness), Swift/Android parity reps (consumers), Observability TL (telemetry capture).
 
 # 2. Pre-flight Requirements
@@ -53,11 +52,10 @@ curl -sS "$TORII_BASE/v1/pipeline/recovery/$HEIGHT" \
   -H "Authorization: Bearer $API_TOKEN" | jq .
 ```
 
-3. The response must advertise `format = "pipeline.recovery.v2"` as enforced by `handler_pipeline_recovery`. Missing heights must return `404` exactly as covered by `crates/iroha_torii/tests/pipeline_recovery_endpoint.rs`. Capture both the populated and missing responses in the evidence bundle.
+3. The response must advertise `format = "pipeline.recovery.v1"` as enforced by `handler_pipeline_recovery`. Missing heights must return `404` exactly as covered by `crates/iroha_torii/tests/pipeline_recovery_endpoint.rs`. Capture both the populated and missing responses in the evidence bundle.
 
 ## 3.3 SSE Bridge (`/v1/events/sse`)
 
-SNNet-11 enables Norito streaming by default; this SSE bridge remains as a compatibility path. Validate it when legacy watchers still depend on SSE or when exercising the fallback alongside streaming:
 
 ```bash
 curl -sS -N "$TORII_BASE/v1/events/sse?topic=pipeline&status=queued,applied" \

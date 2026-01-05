@@ -12,8 +12,8 @@ the full RFC is authored.
 - **Signatures:** Dual Dilithium3 (primary) and Ed25519 (witness) signatures are
   required on salt announcements, relay descriptors, and consensus bundles.
 - **Capability TLV registry:** Type codes finalised: `0x0101 snnet.pqkem`,
-  `0x0102 snnet.pqsig`, `0x0103 snnet.descriptor_commit`, `0x0201 snnet.role`,
-  `0x0202 snnet.padding_profile`. GREASE space `0x7F00–0x7FFF` reserved for
+  `0x0102 snnet.pqsig`, `0x0103 snnet.transcript_commit`, `0x0201 snnet.role`,
+  `0x0202 snnet.padding`. GREASE space `0x7F00–0x7FFF` reserved for
   ossification resistance.
 - **Salt governance:** Daily SaltAnnouncementV1 rotations signed by the Salt
   Council (3-of-5 Dilithium3 multisig plus Ed25519 witness). Emergency rotations
@@ -165,7 +165,6 @@ population.
 
 ### Argon2 Puzzle Service (SNNet-6a)
 
-SNNet-6a introduced a memory-hard alternative to the legacy hashcash gate. As of
 SNNet-16D the Argon2 path ships enabled-by-default; deployments only fall back to
 hashcash if they explicitly disable the puzzle (`pow.puzzle.enabled = false`). The
 relay verifies the incoming ticket by hashing the client solution against the
@@ -176,7 +175,6 @@ of which policy a relay enforces.
 - **Parameters.** Operators control the Argon2 cost factors via
   `pow.puzzle.memory_kib` (RAM in KiB), `pow.puzzle.time_cost` (iterations), and
   `pow.puzzle.lanes` (parallelism). The adaptive difficulty controller drives the
-  leading-zero predicate exactly as in the legacy PoW path, so difficulty ratchets
   continue to operate without special cases.
 - **TTL enforcement.** Puzzle tickets reuse the existing `pow` `min_ticket_ttl_secs`
   and `max_future_skew_secs` bounds. Verification rejects expired tickets, TTLs that
@@ -186,9 +184,7 @@ of which policy a relay enforces.
   ticket minting. Config responses surface the active difficulty and TTL bounds, while
   mint requests accept an optional `ttl_secs` override and return a base64-encoded ticket
   with expiry metadata. A `/healthz` endpoint publishes readiness for relay supervisors.
-- **Compatibility.** Relays emit the same compliance log entries and hand the result
   to the adaptive pipeline, so brownout telemetry and quota throttles require no
-  additional wiring. Legacy hashcash validation is now considered a downgrade path
   and is only executed when the puzzle gate is explicitly disabled for brownout or
   debugging scenarios.
 - **Telemetry.** The relay exports Prometheus counters for negotiated handshakes
@@ -264,7 +260,6 @@ tokens whose revocation digest appears in either inline configuration or the
 external revocation list loaded from disk.
 
 - **Minting.** The `soranet-admission-token` binary (new in SNNet-16D) replaces the
-  legacy `iroha sorafs handshake` helpers. Example:
 
   ```bash
   cargo run -p soranet-relay --bin soranet_admission_token -- mint \
@@ -425,7 +420,7 @@ struct SaltAnnouncementV1 {
   the directory service to fetch intervening announcements.
 - Relays cache at least two epochs and reject circuits using stale salts.
 - Emergency rotations set `emergency_rotation=true`; clients must refresh
-  immediately and drop existing circuits when the new salt is incompatible.
+  immediately and drop existing circuits when the new salt no longer matches.
 
 ### Schema Versioning & Signed Test Vectors
 
@@ -443,7 +438,6 @@ struct SaltAnnouncementV1 {
   `docs/assets/soranet/salt_vectors/v1/`. Each vector includes: Norito binary
   (`.to`), JSON projection, Dilithium3 signature, Ed25519 witness signature, and
   a README describing the validation procedure. CI jobs use these artefacts to
-  assert decoder compatibility and signature verification.
 - **Validation tooling.** `tools/soranet-handshake-harness` exposes a
   `salt-verify --vector <path>` command that deserialises the payload, enforces
   the version policy above, and checks both signatures against the manifest.
@@ -526,6 +520,11 @@ automatically. Negotiation proceeds as follows:
 4. Abort the handshake when the TLV is missing or no overlap exists; the
    transcript hash still incorporates the advertised suite so mismatch
    manifests as a different key schedule.
+
+Relays MUST reject `ClientHello` frames whose `kem_id` or `sig_id` do not appear
+in the negotiated capability intersection. When a relay is configured with a
+certificate bundle it advertises the suite order from the certificate;
+otherwise it defaults to `[nk2.hybrid, nk3.pq_forward_secure]`.
 
 Supported suite identifiers are:
 

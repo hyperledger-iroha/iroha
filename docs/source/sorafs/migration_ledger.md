@@ -8,11 +8,7 @@ downstream consumers aligned.
 
 | Milestone | Effective Window | Change Summary | Impacted Teams | Action Items | Status |
 |-----------|------------------|----------------|----------------|--------------|--------|
-| M0 | Weeks 1–6 | Chunker fixtures published; pipelines emit CAR + manifest bundles alongside legacy artefacts; migration ledger entries created. | Docs, DevRel, SDKs | Adopt `sorafs_manifest_stub` with expectation flags, record entries in this ledger, maintain legacy CDN. | ✅ Active |
 | M1 | Weeks 7–12 | CI enforces deterministic fixtures; alias proofs available in staging; tooling exposes explicit expectation flags. | Docs, Storage, Governance | Ensure fixtures stay signed, register aliases in staging registry, update release checklists with `--car-digest/--root-cid` enforcement. | ⏳ Pending |
-| M2 | Weeks 13–20 | Registry-backed pinning becomes primary path; legacy artefacts switch to read-only; gateways prioritise registry proofs. | Storage, Ops, Governance | Route pinning through the registry, freeze legacy hosts, publish operator migration notices. | ⏳ Pending |
-| M3 | Week 21+ | Alias-only access enforced; observability alerts on registry parity; legacy CDN decommissioned. | Ops, Networking, SDKs | Remove legacy DNS, rotate cached URLs, monitor parity dashboards, update SDK defaults. | ⏳ Pending |
-| R0-R3 | 2025-03-31 → 2025-07-01 | Provider advert enforcement phases: R0 observe, R1 warn, R2 enforce canonical handles/capabilities, R3 purge legacy payloads. | Observability, Ops, SDKs, DevRel | Import `grafana_sorafs_admission.json`, follow the operator checklist in `provider_advert_rollout.md`, stage advert renewals 30+ days ahead of R2 gate. | ⏳ Pending |
 
 Governance control plane minutes referencing these milestones are stored under
 `docs/source/sorafs/`. Teams should add dated bullet points beneath each row

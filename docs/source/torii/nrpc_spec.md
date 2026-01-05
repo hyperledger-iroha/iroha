@@ -17,7 +17,7 @@ Related roadmap items: NRPC-1 (spec), NRPC-2 (rollout), NRPC-3 (SDK adoption)
 |----------|-------------|
 | Endpoint | Same host/port as `/v1/pipeline`; HTTPS/TLS mandatory. |
 | HTTP versions | 1.1 and 2.0 supported; ALPN `h2` preferred when available. |
-| Media Type | Requests *must* set `Content-Type: application/x-norito`; responses honour `Accept` negotiation (`crates/iroha_torii/src/utils.rs:36`). |
+| Media Type | Requests *must* set `Content-Type: application/x-norito`; responses honour `Accept` negotiation (`crates/iroha_torii/src/utils.rs:63`). |
 | Auth | Standard `Authorization: Bearer …` or Torii `X-API-Token`; mTLS optional per rollout stage (see NRPC-2A). |
 | Connection tagging | Requests with the Norito content-type are tracked under `ConnScheme::NoritoRpc` for rate limits and telemetry (`crates/iroha_torii/src/lib.rs:714`). |
 | Routes | No new endpoints. Every existing Torii handler accepts Norito payloads identical to the JSON DTOs enumerated in `docs/source/torii/app_api_parity_audit.md`. |
@@ -71,9 +71,14 @@ All DTO hashes are catalogued under `fixtures/norito_rpc/schema_hashes.json`
 Clients must surface both HTTP status and `X-Iroha-Error-Code` to the caller. SDKs SHOULD retry idempotent requests on 429/503 with backoff.
 
 ### 5. Negotiation, Compression & Streaming
-- Set `Accept: application/x-norito` to request binary responses; otherwise Torii falls back to Norito JSON to maintain compatibility.  
+- Set `Accept: application/x-norito` to request binary responses. Torii treats
+  `application/json`, `text/json`, and `application/*+json` as JSON and ignores
+  media-type parameters. JSON fallback remains available for clients without
+  binary support.  
+- When a handler emits a dynamic JSON value, the `application/x-norito` payload
+  is a Norito-framed UTF-8 JSON string (schema hash for `String`); decode the
+  string, then parse JSON.  
 - Requests may omit compression (`Compression = 0`). If compression is enabled, the payload MUST be zstd framed with content length equal to the *uncompressed* size; Torii recomputes the checksum after decompression.  
-- Streaming (SSE/WebSocket) now rides the SNNet-11 Norito bridge by default; the JSON/SSE path remains for compatibility. This spec still covers synchronous HTTP exchange only.  
 - Clients may pipeline requests over HTTP/2; each frame is self-contained and independent.
 
 ### 6. Client Behaviour Requirements
@@ -100,7 +105,6 @@ Clients must surface both HTTP status and `X-Iroha-Error-Code` to the caller. SD
   2. When `stage = "canary"`, include an `X-API-Token` that appears in `torii.transport.norito_rpc.allowed_clients`. Missing or stale tokens MUST downgrade the connection and emit a warning.
   3. Honour the `require_mtls` flag. If Torii advertises mTLS but the client cannot supply certificates, stay on JSON.
   4. Even after switching to Norito, keep the JSON `/v1/pipeline` path hot for retries. Any `415 unsupported_layout`, `norito_rpc_disabled`, or TLS failure requires downgrading the affected request and recording the failure for operators (the rollout plan and canary runbook describe the evidence bundle: `docs/source/torii/norito_rpc_rollout_plan.md`, `docs/source/runbooks/torii_norito_rpc_canary.md`).
-  5. `/v1/pipeline` remains available as the legacy streaming surface; SNNet-11 Norito streaming is the default path, but clients should retain the JSON/SSE fallback when configured for regulated or legacy environments.
 
 ### 9. Dual-Stack Rollout Review (Scheduled)
 - **Review slot**: 2025-06-19 15:00 UTC (Torii Platform weekly sync).  

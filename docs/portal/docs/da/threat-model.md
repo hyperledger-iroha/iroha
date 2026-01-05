@@ -4,7 +4,6 @@ description: Threat analysis, mitigations, and residual risks for Sora Nexus dat
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/da/threat_model.md`. Keep both versions in sync until the legacy docs retire.
 :::
 
 # Sora Nexus Data Availability Threat Model

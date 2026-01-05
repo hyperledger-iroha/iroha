@@ -340,8 +340,8 @@ final class OfflineVerdictJournalTests: XCTestCase {
                 "apple_key_counters": [:],
                 "android_series_counters": [:]
             ],
-            "verdict_id": verdictLiteral,
-            "attestation_nonce": verdictLiteral,
+            "verdict_id_hex": verdictLiteral,
+            "attestation_nonce_hex": verdictLiteral,
             "refresh_at_ms": NSNumber(value: 777)
         ]
         let data = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])

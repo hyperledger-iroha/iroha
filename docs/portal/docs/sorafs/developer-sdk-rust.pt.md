@@ -19,7 +19,7 @@ description: Exemplos Rust minimos para consumir proof streams e manifests.
 ---
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/developer/sdk/rust.md`. Mantenha ambas as copias sincronizadas ate que o conjunto Sphinx legado seja retirado.
+Esta pagina espelha `docs/source/sorafs/developer/sdk/rust.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 Os crates Rust neste repositorio alimentam o CLI e podem ser embutidos em

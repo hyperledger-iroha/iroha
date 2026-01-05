@@ -21,7 +21,7 @@ fn render_header_policy_markdown() -> String {
     md.push_str("| Field | Policy |\n");
     md.push_str("|---|---|\n");
     md.push_str(&format!("| version_major | {accepted_major} |\n"));
-    md.push_str("| version_minor | any |\n");
+    md.push_str("| version_minor | 0 |\n");
     md.push_str(&format!(
         "| mode (known bits) | 0x{known_bits:02x} (ZK=0x{zk:02x}, VECTOR=0x{vec:02x}, HTM=0x{htm:02x}) |\n"
     ));

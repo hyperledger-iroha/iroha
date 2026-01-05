@@ -3,6 +3,17 @@
 
 use norito::core::Error;
 
+fn corrupt_first_id_delta(body: &mut [u8]) {
+    let mut off = 5usize;
+    let mis = off & 7;
+    if mis != 0 {
+        off += 8 - mis;
+    }
+    off += 8; // base id
+    assert!(off < body.len());
+    body[off] = 3; // zigzag(-2)
+}
+
 #[test]
 fn str_bool_invalid_descriptor_and_short() {
     // Too short
@@ -381,6 +392,63 @@ fn enum_invalid_descriptor_and_tag_and_dict_code_oob() {
 }
 
 #[test]
+fn str_bool_dict_codes_out_of_range() {
+    let rows: Vec<(u64, &str, bool)> =
+        vec![(1, "alpha", true), (2, "beta", false), (3, "alpha", true)];
+    let mut body = norito::columnar::encode_ncb_u64_str_bool_force_dict(&rows);
+    let n = u32::from_le_bytes(body[0..4].try_into().unwrap()) as usize;
+    assert_eq!(n, rows.len());
+    let mut off = 5usize;
+    let mis = off & 7;
+    if mis != 0 {
+        off += 8 - mis;
+    }
+    off += 8 * n;
+    let mis4 = off & 3;
+    if mis4 != 0 {
+        off += 4 - mis4;
+    }
+    let dict_len = u32::from_le_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+    off += 4;
+    let offs_start = off;
+    let offs_len = 4 * (dict_len + 1);
+    let last = u32::from_le_bytes(
+        body[offs_start + 4 * dict_len..offs_start + 4 * dict_len + 4]
+            .try_into()
+            .unwrap(),
+    ) as usize;
+    off += offs_len;
+    off += last;
+    let mis4_codes = off & 3;
+    if mis4_codes != 0 {
+        off += 4 - mis4_codes;
+    }
+    body[off..off + 4].copy_from_slice(&(dict_len as u32).to_le_bytes());
+    let res = norito::columnar::view_ncb_u64_str_bool(&body);
+    assert!(res.is_err());
+}
+
+#[test]
+fn str_bool_id_delta_underflow() {
+    let rows: Vec<(u64, &str, bool)> = vec![(1, "a", true), (2, "b", false)];
+    let mut body = norito::columnar::encode_ncb_u64_str_bool_delta(&rows);
+    assert_eq!(body[4], 0x53);
+    corrupt_first_id_delta(&mut body);
+    let res = norito::columnar::view_ncb_u64_str_bool(&body);
+    assert!(res.is_err());
+}
+
+#[test]
+fn bytes_bool_id_delta_underflow() {
+    let rows: Vec<(u64, &[u8], bool)> = vec![(1, b"aa", true), (2, b"bb", false)];
+    let mut body = norito::columnar::encode_ncb_u64_bytes_bool(&rows);
+    assert_eq!(body[4], 0x54);
+    corrupt_first_id_delta(&mut body);
+    let res = norito::columnar::view_ncb_u64_bytes_bool(&body);
+    assert!(res.is_err());
+}
+
+#[test]
 fn str_u32_bool_names_offsets_len_not_multiple_of_4() {
     // Non-dict names: break offsets slice length so it's not 4*(n_name+1)
     let rows: Vec<(u64, &str, u32, bool)> = vec![(1, "aa", 3, true), (2, "b", 1, false)];
@@ -403,6 +471,16 @@ fn str_u32_bool_names_offsets_len_not_multiple_of_4() {
     // Remove one byte inside offsets slice
     body.remove(off);
     let res = norito::columnar::view_ncb_u64_str_u32_bool(&body);
+    assert!(res.is_err());
+}
+
+#[test]
+fn u64_u32_bool_id_delta_underflow() {
+    let rows: Vec<(u64, u32, bool)> = vec![(1, 10, true), (2, 11, false)];
+    let mut body = norito::columnar::encode_ncb_u64_u32_bool(&rows, true, false);
+    assert_eq!(body[4], 0x23);
+    corrupt_first_id_delta(&mut body);
+    let res = norito::columnar::view_ncb_u64_u32_bool(&body);
     assert!(res.is_err());
 }
 
@@ -432,9 +510,22 @@ fn str_u32_bool_names_offsets_non_monotonic() {
     body[off..off + 4].copy_from_slice(&0u32.to_le_bytes());
     body[off + 4..off + 8].copy_from_slice(&3u32.to_le_bytes());
     body[off + 8..off + 12].copy_from_slice(&2u32.to_le_bytes());
-    let view = norito::columnar::view_ncb_u64_str_u32_bool(&body).expect("view builds");
-    // Depending on implementation, name monotonicity may not be validated; accept either behavior.
-    let _ = view.id(0);
+    let res = norito::columnar::view_ncb_u64_str_u32_bool(&body);
+    assert!(res.is_err());
+}
+
+#[test]
+fn str_u32_bool_id_delta_underflow() {
+    let rows: Vec<(u64, &str, u32, bool)> = vec![(1, "a", 10, true), (2, "b", 11, false)];
+    let policy = norito::columnar::ComboPolicy::default()
+        .with_id_delta(true)
+        .with_dictionary(false)
+        .with_u32_delta(false);
+    let mut body = norito::columnar::encode_ncb_u64_str_u32_bool_with_policy(&rows, policy);
+    assert_eq!(body[4], 0x73);
+    corrupt_first_id_delta(&mut body);
+    let res = norito::columnar::view_ncb_u64_str_u32_bool(&body);
+    assert!(res.is_err());
 }
 
 #[test]
@@ -464,12 +555,18 @@ fn bytes_u32_bool_offsets_non_monotonic() {
     body[off..off + 4].copy_from_slice(&0u32.to_le_bytes());
     body[off + 4..off + 8].copy_from_slice(&3u32.to_le_bytes());
     body[off + 8..off + 12].copy_from_slice(&2u32.to_le_bytes());
-    let view = norito::columnar::view_ncb_u64_bytes_u32_bool(&body).expect("view builds");
-    // For bytes view, data() returns &[u8]; monotonicity is validated only indirectly by bounds; emulate s>e via len check
-    // Attempt to slice row 1 should panic internally; instead, rely on invalid length behavior via a helper: name path is not available.
-    // We compare id/val still fine; ensure that offsets inconsistency doesn't cause UB; for safety, we check data length is 0 when offsets are inverted.
-    // Since code does not currently error on non-monotonic offsets at view creation, we skip strict assertion here.
-    let _ = view.id(0);
+    let res = norito::columnar::view_ncb_u64_bytes_u32_bool(&body);
+    assert!(res.is_err());
+}
+
+#[test]
+fn bytes_u32_bool_id_delta_underflow() {
+    let rows: Vec<(u64, &[u8], u32, bool)> = vec![(1, b"aa", 10, true), (2, b"bb", 11, false)];
+    let mut body = norito::columnar::encode_ncb_u64_bytes_u32_bool(&rows);
+    assert_eq!(body[4] & 0x40, 0x40);
+    corrupt_first_id_delta(&mut body);
+    let res = norito::columnar::view_ncb_u64_bytes_u32_bool(&body);
+    assert!(res.is_err());
 }
 
 #[test]
@@ -892,5 +989,43 @@ fn bytes_u32_bool_non_monotonic_offsets() {
     // Set offs[1] to last + 1 (non-monotonic)
     body[off + 4..off + 8].copy_from_slice(&(last + 1).to_le_bytes());
     let res = norito::columnar::view_ncb_u64_bytes_u32_bool(&body);
+    assert!(res.is_err());
+}
+
+#[test]
+fn enum_bool_id_delta_underflow() {
+    let rows: Vec<(u64, norito::columnar::EnumBorrow<'_>, bool)> = vec![
+        (1, norito::columnar::EnumBorrow::Name("alpha"), true),
+        (2, norito::columnar::EnumBorrow::Code(7), false),
+    ];
+    let mut body = norito::columnar::encode_ncb_u64_enum_bool(
+        &rows, /*id-delta*/ true, /*dict*/ false, /*code-delta*/ false,
+    );
+    assert_eq!(body[4], 0x63);
+    corrupt_first_id_delta(&mut body);
+    let res = norito::columnar::view_ncb_u64_enum_bool(&body);
+    assert!(res.is_err());
+}
+
+#[test]
+fn u64_u32_bool_delta_underflow_rejected() {
+    let rows: Vec<(u64, u32, bool)> = vec![(10, 0, true), (20, 1, false)];
+    let mut body = norito::columnar::encode_ncb_u64_u32_bool(&rows, false, true);
+    let n = u32::from_le_bytes(body[0..4].try_into().unwrap()) as usize;
+    assert_eq!(n, rows.len());
+    let mut off = 5usize;
+    let mis = off & 7;
+    if mis != 0 {
+        off += 8 - mis;
+    }
+    off += 8 * n; // ids
+    let mis4 = off & 3;
+    if mis4 != 0 {
+        off += 4 - mis4;
+    }
+    off += 4; // base u32
+    // Set delta to zigzag(-1) => 1, which should underflow.
+    body[off] = 1;
+    let res = norito::columnar::view_ncb_u64_u32_bool(&body);
     assert!(res.is_err());
 }

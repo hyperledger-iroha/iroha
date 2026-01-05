@@ -36,7 +36,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::{
     isi::multisig::MultisigInstructionBox, permission as executor_permission,
 };
-use iroha_logger::{debug, info, trace, warn};
+use iroha_logger::{debug, trace, warn};
 use iroha_primitives::numeric::Numeric;
 use ivm::{IVM, Memory, VMError};
 use mv::storage::StorageReadOnly;
@@ -594,21 +594,13 @@ impl Executor {
             ValidationFail::from(err)
         })?;
 
-        sumeragi_status::record_nexus_fee_event(NexusFeeEvent::Charged {
+        // Stage the charged event so rejected transactions don't report successful debits.
+        state_transaction.stage_nexus_fee_event(NexusFeeEvent::Charged {
             payer_kind,
             payer_id,
             amount: fee_u128,
-            asset_id: asset_label.clone(),
+            asset_id: asset_label,
         });
-        info!(
-            target: "economics",
-            payer_kind = payer_kind_label,
-            payer = %payer.to_string(),
-            fee_amount = fee_u128,
-            asset = %asset_label,
-            sink = %sink_label,
-            "nexus fee charged"
-        );
         Ok(())
     }
 
@@ -977,14 +969,6 @@ impl Executor {
 
                 // 4) Record gas used for block-level budget enforcement.
                 state_transaction.last_tx_gas_used = used;
-                #[cfg(feature = "telemetry")]
-                {
-                    // Update telemetry gauge with cumulative gas (so far + this tx)
-                    let cumulative = state_transaction
-                        .gas_used_in_block_so_far
-                        .saturating_add(used);
-                    state_transaction.telemetry.set_block_gas_used(cumulative);
-                }
 
                 // 5) Charge gas fees when configured and the transaction specified a gas asset.
                 if let Some(gas_asset_id_str) = gas_asset_opt {
@@ -1058,6 +1042,12 @@ impl Executor {
                                 );
                                 ValidationFail::from(err)
                             })?;
+                            #[cfg(feature = "telemetry")]
+                            {
+                                let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX)))
+                                    .unwrap_or(u64::MAX);
+                                state_transaction.stage_block_fee_units(delta);
+                            }
 
                             // Capture deterministic settlement receipt once the transfer succeeds.
                             let source_id = settlement_source_id;
@@ -1190,13 +1180,6 @@ impl Executor {
                     .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
                 let gas_used = effective_limit.saturating_sub(runtime.vm.remaining_gas());
                 state_transaction.last_tx_gas_used = gas_used;
-                #[cfg(feature = "telemetry")]
-                {
-                    let cumulative = state_transaction
-                        .gas_used_in_block_so_far
-                        .saturating_add(gas_used);
-                    state_transaction.telemetry.set_block_gas_used(cumulative);
-                }
 
                 // Drain and apply queued ISIs deterministically via executor.
                 if let Some(host_any) = runtime.vm.host_mut_any()
@@ -1208,18 +1191,25 @@ impl Executor {
                 // Charge gas fees: if a gas asset was provided and accepted by policy.
                 if let Some(gas_asset_id_str) = gas_asset_opt {
                     // Determine rate; require explicit mapping for determinism
-                    let rate = state_transaction
+                    let gas_rate = state_transaction
                         .pipeline
                         .gas
                         .units_per_gas
                         .iter()
                         .find(|r| r.asset == gas_asset_id_str)
-                        .map(|r| r.units_per_gas)
                         .ok_or_else(|| {
                             ValidationFail::NotPermitted(format!(
                                 "missing units_per_gas mapping for `{gas_asset_id_str}`"
                             ))
                         })?;
+                    let rate = gas_rate.units_per_gas;
+                    let twap_local_per_xor = gas_rate.twap_local_per_xor;
+                    let volatility_bucket = convert_volatility_bucket(gas_rate.volatility);
+                    let liquidity_profile = match gas_rate.liquidity {
+                        GasLiquidity::Tier1 => LiquidityProfile::Tier1,
+                        GasLiquidity::Tier2 => LiquidityProfile::Tier2,
+                        GasLiquidity::Tier3 => LiquidityProfile::Tier3,
+                    };
                     // Parse tech account id
                     let tech_account: AccountId = state_transaction
                         .pipeline
@@ -1242,33 +1232,92 @@ impl Executor {
                     if gas_used > 0 && rate > 0 {
                         let fee_u128 = u128::from(gas_used).saturating_mul(u128::from(rate));
                         // Build payer asset id and transfer instruction, guarding Numeric bounds
-                        let payer_asset = AssetId::new(asset_def, authority.clone());
-                        let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
-                            ValidationFail::NotPermitted(
-                                "fee amount exceeds supported numeric bounds".to_owned(),
-                            )
-                        })?;
-                        let transfer = iroha_data_model::isi::Transfer::<
-                            Asset,
-                            Numeric,
-                            iroha_data_model::account::Account,
-                        >::asset_numeric(
-                            payer_asset, qty, tech_account
-                        );
-                        let instr: DMInstructionBox = transfer.into();
-                        instr.execute(authority, state_transaction).map_err(|err| {
-                            iroha_logger::debug!(
-                                ?err,
-                                authority = %authority,
-                                "gas fee transfer failed to apply"
+                        if fee_u128 > 0 {
+                            let payer_asset = AssetId::new(asset_def.clone(), authority.clone());
+                            let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
+                                ValidationFail::NotPermitted(
+                                    "fee amount exceeds supported numeric bounds".to_owned(),
+                                )
+                            })?;
+                            let transfer = iroha_data_model::isi::Transfer::<
+                                Asset,
+                                Numeric,
+                                iroha_data_model::account::Account,
+                            >::asset_numeric(
+                                payer_asset, qty, tech_account
                             );
-                            ValidationFail::from(err)
-                        })?;
-                        #[cfg(feature = "telemetry")]
-                        {
-                            let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX)))
-                                .unwrap_or(u64::MAX);
-                            state_transaction.telemetry.add_block_fee_units(delta);
+                            let instr: DMInstructionBox = transfer.into();
+                            instr.execute(authority, state_transaction).map_err(|err| {
+                                iroha_logger::debug!(
+                                    ?err,
+                                    authority = %authority,
+                                    "gas fee transfer failed to apply"
+                                );
+                                ValidationFail::from(err)
+                            })?;
+                            #[cfg(feature = "telemetry")]
+                            {
+                                let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX)))
+                                    .unwrap_or(u64::MAX);
+                                state_transaction.stage_block_fee_units(delta);
+                            }
+
+                            let source_id = settlement_source_id;
+                            let block_timestamp_ms_u128 =
+                                state_transaction._curr_block.creation_time().as_millis();
+                            let block_timestamp_ms =
+                                u64::try_from(block_timestamp_ms_u128).unwrap_or(u64::MAX);
+                            let quote = state_transaction
+                                .settlement_engine()
+                                .quote(
+                                    source_id,
+                                    fee_u128,
+                                    twap_local_per_xor,
+                                    liquidity_profile,
+                                    volatility_bucket,
+                                    block_timestamp_ms,
+                                )
+                                .map_err(|err| match err {
+                                    QuoteError::LocalAmountOverflow(amount) => {
+                                        ValidationFail::NotPermitted(format!(
+                                            "local gas amount {amount} exceeds Decimal range"
+                                        ))
+                                    }
+                                    QuoteError::ZeroTwap => ValidationFail::NotPermitted(
+                                        "gas TWAP must be non-zero".to_owned(),
+                                    ),
+                                })?;
+                            let config_snapshot = state_transaction.settlement_engine().config();
+                            let twap_window_seconds =
+                                config_snapshot.twap_window.whole_seconds().max(0);
+                            let twap_window_seconds =
+                                u32::try_from(twap_window_seconds).unwrap_or(u32::MAX);
+                            let xor_due_micro = Self::decimal_to_micro_u128(
+                                *quote.receipt.xor_due,
+                                "xor_due amount",
+                            )?;
+                            let xor_after_haircut_micro = Self::decimal_to_micro_u128(
+                                *quote.receipt.xor_with_haircut,
+                                "xor_after_haircut amount",
+                            )?;
+                            let xor_variance_micro =
+                                xor_due_micro.saturating_sub(xor_after_haircut_micro);
+                            let pending = PendingSettlement {
+                                source_id,
+                                asset_definition_id: asset_def,
+                                local_amount_micro: quote.receipt.local_amount_micro,
+                                xor_due_micro,
+                                xor_after_haircut_micro,
+                                xor_variance_micro,
+                                timestamp_ms: block_timestamp_ms,
+                                liquidity_profile,
+                                volatility_bucket,
+                                twap_local_per_xor,
+                                epsilon_bps: quote.effective_epsilon_bps,
+                                twap_window_seconds,
+                                oracle_timestamp_ms: block_timestamp_ms,
+                            };
+                            state_transaction.record_settlement_receipt(tx_hash, pending);
                         }
                     }
                 }
@@ -2239,6 +2288,8 @@ pub mod executor_norito {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "telemetry")]
+    use iroha_config::parameters::actual::{GasLiquidity, GasRate, GasVolatility};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         executor::{self as data_model_executor, ExecutorDataModel},
@@ -2250,13 +2301,19 @@ mod tests {
     };
     use iroha_executor_data_model::isi::multisig::{DEFAULT_MULTISIG_TTL_MS, MultisigSpec};
     use iroha_primitives::json::Json;
-    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID};
+    #[cfg(feature = "telemetry")]
+    use iroha_telemetry::metrics::Metrics;
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
     #[allow(unused_imports)]
     use ivm::instruction;
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
+    #[cfg(feature = "telemetry")]
+    use rust_decimal::Decimal;
 
     use super::*;
+    #[cfg(feature = "telemetry")]
+    use crate::telemetry::StateTelemetry;
     use crate::{
         kura::Kura,
         query,
@@ -2457,6 +2514,10 @@ mod tests {
 
     #[test]
     fn nexus_fee_sponsor_rejected_when_disabled() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
         let world = World::new();
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -2489,6 +2550,145 @@ mod tests {
             matches!(res, Err(ValidationFail::NotPermitted(_))),
             "sponsorship should be rejected when disabled"
         );
+    }
+
+    #[test]
+    fn nexus_fee_charged_event_is_recorded_on_apply() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (alice_id, alice_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let dom: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice_id);
+        let alice: Account = Account::new(alice_id.clone()).build(&alice_id);
+        let sink: Account = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
+        let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
+        let payer_balance = Asset::new(payer_asset, Numeric::new(10_000, 0));
+        let world = World::with_assets([dom], [alice, sink], [ad], [payer_balance], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = 1;
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+        }
+
+        let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
+            alice_id.clone(),
+            "k".parse().unwrap(),
+            iroha_primitives::json::Json::new("v"),
+        )
+        .into();
+        let exec = Executable::from(core::iter::once(instruction));
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let tx = iroha_data_model::transaction::TransactionBuilder::new(chain, alice_id.clone())
+            .with_executable(exec)
+            .sign(alice_kp.private_key());
+
+        let executor = super::Executor::default();
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut stx = block.transaction();
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        executor
+            .execute_transaction(&mut stx, &alice_id, tx, &mut ivm_cache)
+            .expect("execution");
+
+        let snap = crate::sumeragi::status::nexus_fee_snapshot();
+        assert_eq!(snap.charged_total, 0);
+        assert!(snap.last_payer.is_none());
+
+        stx.apply();
+
+        let snap = crate::sumeragi::status::nexus_fee_snapshot();
+        assert_eq!(snap.charged_total, 1);
+        assert_eq!(
+            snap.last_payer,
+            Some(crate::sumeragi::status::NexusFeePayer::Payer)
+        );
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn block_fee_units_recorded_on_apply() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics.clone(), true);
+        let (payer_id, payer_kp) = gen_account_in("wonderland");
+        let (tech_id, _tech_kp) = gen_account_in("wonderland");
+        let dom: Domain = Domain::new("wonderland".parse().unwrap()).build(&payer_id);
+        let payer: Account = Account::new(payer_id.clone()).build(&payer_id);
+        let tech: Account = Account::new(tech_id.clone()).build(&tech_id);
+        let asset_def_id: AssetDefinitionId = "gas#wonderland".parse().unwrap();
+        let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&payer_id);
+        let payer_asset = AssetId::of(asset_def_id.clone(), payer_id.clone());
+        let payer_balance = Asset::new(payer_asset, Numeric::new(10_000, 0));
+        let world = World::with_assets([dom], [payer, tech], [ad], [payer_balance], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
+
+        {
+            let gas_cfg = &mut state.pipeline.gas;
+            gas_cfg.tech_account_id = tech_id.to_string();
+            gas_cfg.accepted_assets = vec![asset_def_id.to_string()];
+            gas_cfg.units_per_gas = vec![GasRate {
+                asset: asset_def_id.to_string(),
+                units_per_gas: 2,
+                twap_local_per_xor: Decimal::ONE,
+                liquidity: GasLiquidity::Tier1,
+                volatility: GasVolatility::Stable,
+            }];
+        }
+        state.nexus.get_mut().enabled = false;
+
+        let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
+            payer_id.clone(),
+            "k".parse().unwrap(),
+            Json::new("v"),
+        )
+        .into();
+        let instructions = vec![instruction];
+        let used = crate::gas::meter_instructions(&instructions);
+        assert!(used > 0, "expected non-zero gas usage");
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("gas_asset_id").expect("static name"),
+            Json::new(asset_def_id.to_string()),
+        );
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, payer_id.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::Instructions(instructions.into()))
+            .sign(payer_kp.private_key());
+
+        let executor = super::Executor::default();
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut stx = block.transaction();
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        executor
+            .execute_transaction(&mut stx, &payer_id, tx, &mut ivm_cache)
+            .expect("execution");
+
+        assert_eq!(metrics.block_fee_total_units.get(), 0);
+        assert_eq!(metrics.block_gas_used.get(), 0);
+
+        stx.apply();
+
+        let expected_fee =
+            u64::try_from(u128::from(used).saturating_mul(2).min(u128::from(u64::MAX)))
+                .unwrap_or(u64::MAX);
+        assert_eq!(metrics.block_fee_total_units.get(), expected_fee);
+        assert_eq!(metrics.block_gas_used.get(), used);
     }
 
     #[test]

@@ -224,7 +224,7 @@ sorafs_cli manifest verify-signature \
   observability gate is satisfied alongside the publishing steps. The helper
   now accepts multiple `bindings` entries (site, OpenAPI, portal SBOM, OpenAPI
   SBOM) and enforces `Sora-Name`/`Sora-Proof`/`Sora-Content-CID` on the target
-  host via the optional `expectHost` guard. The invocation below writes both a
+  host via the optional `hostname` guard. The invocation below writes both a
   single JSON summary and the evidence bundle (`portal.json`, `tryit.json`,
   `binding.json`, and `checksums.sha256`) under the release directory:
 
@@ -465,7 +465,7 @@ gateway-content-binding requirement:
   scraping shell output.
 
 They are generated automatically via
-`cargo xtask soradns-binding-template` (which replaced the older Node helper)
+`cargo xtask soradns-binding-template`
 and capture the alias, manifest digest, and gateway hostname that were supplied
 to `sorafs-pin-release.sh`. To regenerate or customise the header block, run:
 
@@ -488,26 +488,24 @@ Attach the header snippet to the CDN change request and feed the JSON document
 into the gateway automation pipeline so the actual host promotion matches the
 release evidence.
 
-The release script still ships the Node script for backwards compatibility, but
-the xtask helper is the canonical path going forward. The release script runs the
-verification helper automatically so DG-3 tickets always
-include recent evidence. Re-run it manually whenever you tweak the binding JSON by
-hand:
+The release script runs the verification helper automatically so DG-3 tickets
+always include recent evidence. Re-run it manually whenever you tweak the
+binding JSON by hand:
 
 ```bash
 cargo xtask soradns-verify-binding \
   --binding artifacts/sorafs/portal.gateway.binding.json \
   --alias docs.sora.link \
-  --content-cid "$(jq -r '.contentCid' artifacts/sorafs/portal.gateway.binding.json)" \
   --hostname docs.sora.link \
-  --proof-status ok
+  --proof-status ok \
+  --manifest-json artifacts/sorafs/portal.manifest.json
 ```
 
-The command decodes the stapled `Sora-Proof` payload, ensures the `Sora-Route-Binding`
-metadata matches the manifest CID + hostname, and fails fast if any header drifts.
-Archive the console output next to the other deployment artefacts whenever you run the
-command outside CI so DG-3 reviewers have proof that the binding was validated prior
-to cutover.
+The command validates the `Sora-Proof` payload captured in the binding bundle,
+ensures the `Sora-Route-Binding` metadata matches the manifest CID + hostname,
+and fails fast if any header drifts. Archive the console output next to the
+other deployment artefacts whenever you run the command outside CI so DG-3
+reviewers have proof that the binding was validated prior to cutover.
 
 > **DNS descriptor integration:** `portal.dns-cutover.json` now embeds a
 > `gateway_binding` section pointing at these artefacts (paths, content CID,
@@ -536,9 +534,9 @@ npm run monitor:publishing -- \
   `docs/portal/docs/devportal/publishing-monitoring.md` for the schema) and
   executes three checks: portal path probes + CSP/Permissions-Policy validation,
   Try it proxy probes (optionally hitting its `/metrics` endpoint), and the
-  gateway binding verifier (`scripts/verify-sorafs-binding.mjs`) which now
-  enforces Sora-Content-CID presence + expected value alongside alias/manifest
-  checks.
+  gateway binding verifier (`cargo xtask soradns-verify-binding`) which checks
+  the captured binding bundle against the expected alias, host, proof status,
+  and manifest JSON.
 - The command exits non-zero whenever any probe fails so CI, cron jobs, or
   runbook operators can halt a release before promoting aliases.
 - Passing `--json-out` writes a single summary JSON payload with per-target
@@ -719,12 +717,10 @@ gateways staple fresh proofs:
    `docs/source/sorafs_alias_policy.md` and fails when the manifest digest,
    TTLs, or GAR bindings drift.
 
-   For lightweight spot checks (for example, when only the alias/manifest tuple
-   changed), run `node scripts/verify-sorafs-binding.mjs --alias "<alias>" --manifest "<digest>" --url "<gateway-url>"`.
-   The helper fetches the gateway endpoint, decodes the stapled `Sora-Proof`
-   header, and optionally writes a JSON evidence blob via `--json-out`, which is
-   handy for release tickets that only need binding confirmation instead of a
-   full probe drill.
+   For lightweight spot checks (for example, when only the binding bundle
+   changed), run `cargo xtask soradns-verify-binding --binding <portal.gateway.binding.json> --alias "<alias>" --hostname "<gateway-host>" --proof-status ok --manifest-json <portal.manifest.json>`.
+   The helper validates the captured binding bundle and is handy for release
+   tickets that only need binding confirmation instead of a full probe drill.
 
 2. **Capture drill evidence.** For operator drills or PagerDuty dry runs, wrap
    the probe with `scripts/telemetry/run_sorafs_gateway_probe.sh --scenario

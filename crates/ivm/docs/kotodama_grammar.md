@@ -31,7 +31,7 @@ Legend: ✅ Implemented, 🟨 Parsed, 💤 Planned
 | Ternary conditional `cond ? then : else`     |  ✅    | lowered to branches/jumps |
 | Range sugar `for i in range(N)`              |  ✅    | lowered to C‑style init/cond/step |
 | For‑each `for (k, v) in map`                 |  ✅    | deterministic 2‑iteration lowering |
-| `Map::new()`                                 |  ✅    | heap alloc via SYSCALL_ALLOC |
+| `Map::new()`                                 |  ✅    | heap alloc via SYSCALL_ALLOC (zero-initializes key/value) |
 | Map indexing `m[i]` get/set                  |  ✅    | minimal layout at offsets 0/8 |
 | Field access (tuple index)                   |  ✅    | `t.0`/`t.1` lowered |
 | Field access (named)                         |  ✅    | basic: struct literal or bound var (1-level) |

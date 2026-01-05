@@ -61,7 +61,6 @@ async fn sumeragi_qc_endpoint_supports_norito_payload() {
     use axum::{Router, routing::get};
     use iroha_core::sumeragi::status;
     use iroha_data_model::block::consensus::SumeragiQcSnapshot;
-    use norito::codec::DecodeAll;
     use tower::ServiceExt;
 
     status::set_highest_qc(6, 2);
@@ -94,8 +93,8 @@ async fn sumeragi_qc_endpoint_supports_norito_payload() {
         .await
         .unwrap()
         .to_bytes();
-    let mut slice: &[u8] = bytes.as_ref();
-    let snapshot = SumeragiQcSnapshot::decode_all(&mut slice).expect("QC Norito payload decodes");
+    let snapshot: SumeragiQcSnapshot =
+        norito::decode_from_bytes(&bytes).expect("QC Norito payload decodes");
     assert_eq!(snapshot.highest_qc.height, 6);
     assert_eq!(snapshot.highest_qc.view, 2);
     assert_eq!(snapshot.locked_qc.height, 5);

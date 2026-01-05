@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs, path::PathBuf, sync::OnceLock};
+use std::{collections::HashMap, fs, io::Write, path::PathBuf, sync::OnceLock};
 
 use axum::{
     Router as AxumRouter, body,
@@ -17,7 +17,7 @@ use sorafs_node::{
     config::StorageConfig,
     gateway::{self, GatewayDataset, GatewayState, TokenPolicy},
 };
-use tempfile::TempDir;
+use tempfile::{NamedTempFile, TempDir};
 use tower::ServiceExt;
 
 fn fixture_dir() -> PathBuf {
@@ -30,13 +30,27 @@ fn chunk_profile_for_manifest(manifest: &ManifestV1) -> ChunkProfile {
     if let Some(descriptor) = chunker_registry::lookup(manifest.chunking.profile_id) {
         descriptor.profile
     } else {
+        let min_size = usize::try_from(manifest.chunking.min_size).expect("min_size fits usize");
+        let target_size =
+            usize::try_from(manifest.chunking.target_size).expect("target_size fits usize");
+        let max_size = usize::try_from(manifest.chunking.max_size).expect("max_size fits usize");
+        assert!(
+            min_size <= target_size && target_size <= max_size,
+            "manifest chunk sizes must satisfy min <= target <= max"
+        );
         ChunkProfile {
-            min_size: manifest.chunking.min_size as usize,
-            target_size: manifest.chunking.target_size as usize,
-            max_size: manifest.chunking.max_size as usize,
-            break_mask: manifest.chunking.break_mask as u64,
+            min_size,
+            target_size,
+            max_size,
+            break_mask: u64::from(manifest.chunking.break_mask),
         }
     }
+}
+
+fn signing_key_file() -> NamedTempFile {
+    let mut file = NamedTempFile::new().expect("temp signing key");
+    file.write_all(&[0x11u8; 32]).expect("write signing key");
+    file
 }
 
 fn gateway_dataset_from_fixtures() -> GatewayDataset {
@@ -47,9 +61,11 @@ fn gateway_dataset_from_fixtures() -> GatewayDataset {
     let profile = chunk_profile_for_manifest(&manifest);
     let plan = CarBuildPlan::single_file_with_profile(&payload, profile).expect("build plan");
     let temp_dir = TempDir::new().expect("temp storage");
+    let signing_key = signing_key_file();
     let config = StorageConfig::builder()
         .enabled(true)
         .data_dir(temp_dir.path().join("storage"))
+        .stream_token_signing_key_path(Some(signing_key.path().to_path_buf()))
         .build();
     let node = NodeHandle::new(config);
     let mut reader = &payload[..];
@@ -57,7 +73,8 @@ fn gateway_dataset_from_fixtures() -> GatewayDataset {
         .expect("ingest manifest");
     let manifest_digest = manifest.digest().expect("manifest digest");
     let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-    GatewayDataset::load_from_storage(&node, &manifest_digest_hex)
+    let provider_id = [0xAB; 32];
+    GatewayDataset::load_from_storage_with_provider(&node, &manifest_digest_hex, provider_id)
         .expect("load storage-backed dataset")
 }
 

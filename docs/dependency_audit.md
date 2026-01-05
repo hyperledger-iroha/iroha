@@ -12,7 +12,6 @@ Security advisories found (now 0 vulns; 2 warnings):
 - crossbeam-channel — RUSTSEC-2025-0024
   - Fixed: bumped to `0.5.15` in `crates/ivm/Cargo.toml`.
 
-- pprof deprecated codec — RUSTSEC-2024-0437
   - Fixed: flipped `pprof` to `prost-codec` in `crates/iroha_torii/Cargo.toml`.
 
 - ring — RUSTSEC-2025-0009
@@ -30,7 +29,6 @@ Legitimacy and “main crate” assessment (spotlight):
 - Noise: `snow` — canonical implementation.
 - Serialization: `parity-scale-codec` is canonical for SCALE. Serde has been removed from production dependencies across the workspace; Norito derives/writers cover every runtime path. Any residual Serde references live in historical documentation, guardrail scripts, or test-only allowlists.
 - FFI/libs: `libsodium-sys-stable`, `openssl` — legitimate; prefer Rustls over OpenSSL in production paths (current code already does).
-- pprof 0.13.0 (crates.io) — upstream fix merged; use the official release with `prost-codec` + frame-pointer to avoid the deprecated codec.
 
 Recommendations:
 - Address warnings:
@@ -43,10 +41,7 @@ Notes:
 - `cargo tree -d` shows expected duplicate major versions (`bitflags` 1/2, multiple `ring`), not by itself a security risk but increases build surface.
 - No typosquat-like crates were observed; all names and sources resolve to well-known ecosystem crates or internal workspace members.
 - Experimental: added `iroha_crypto` feature `bls-backend-blstrs` to begin migrating BLS to a blstrs‑only backend (removes dependence on arkworks when enabled). Default remains `w3f-bls` to avoid behavior/encoding changes. Alignment plan:
-  - Normalize secret-key serialization to the canonical 32-byte little-endian output that both `w3f-bls` and `blstrs` understand (`Scalar::to_bytes_le`), dropping the legacy mixed-endian helper.
-  - Expose an explicit wrapper for public-key compression that reuses the `blstrs::G1Affine::to_compressed` routine and adds a compatibility check against the w3f encoding to guarantee identical wire bytes.
   - Add round-trip fixtures in `crates/iroha_crypto/tests/bls_backend_compat.rs` that derive keys once and assert equality across both backends, covering `SecretKey`, `PublicKey`, and signature aggregation.
-  - Gate the new backend behind `bls-backend-blstrs` in CI, but keep the compatibility tests running for the default backend so regressions are caught before flipping the switch.
 
 Follow-ups (proposed work items):
 - Keep the Serde guardrails in CI (`scripts/check_no_direct_serde.sh`, `scripts/deny_serde_json.sh`) so new production usages cannot be introduced.

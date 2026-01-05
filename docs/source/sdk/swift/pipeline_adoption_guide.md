@@ -5,7 +5,6 @@ summary: Checklist and runbook for enabling the Torii pipeline endpoints inside 
 
 # 1. Scope & Status
 
-- **Roadmap link:** IOS2-WB2 (`/v1/pipeline` adoption) tracks the migration of all Swift submissions from the legacy `/v1/transactions*` routes to the pipeline surface plus the retry/idempotency guardrails. This note describes the SDK knobs that already ship in `IrohaSwift` and the evidence operators must capture before IOS2 can close.
 - **Prerequisites:** `IrohaSwift` 0.9+ (supports `PipelineEndpointMode`, offline queues, and telemetry hooks); Torii nodes exposing `/v1/pipeline/transactions`, `/v1/pipeline/transactions/status`, and `/v1/pipeline/recovery/{height}`; Norito encoders wired through `SwiftTransactionEncoder`.
 - **References:** `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`, `IrohaSwift/Sources/IrohaSwift/TxBuilder.swift`, `docs/source/sdk/swift/index.md` (landing page).
 - **Server validation:** Torii owners record `/v1/pipeline` staging evidence with the runbook in [`docs/source/torii/pipeline_staging_validation.md`](../../torii/pipeline_staging_validation.md) so SDK proofs reference the same artefacts.
@@ -17,17 +16,7 @@ summary: Checklist and runbook for enabling the Torii pipeline endpoints inside 
 | Mode | Submit path | Status path | When to use |
 |------|-------------|-------------|-------------|
 | `.pipeline` (default) | `/v1/pipeline/transactions` | `/v1/pipeline/transactions/status` | All production/staging Torii clusters. Required for IOS2 readiness. |
-| `.legacy` | `/v1/transactions` | `/v1/transactions/status` | Temporary escape hatch when interacting with prerelease Torii nodes that have not yet enabled the pipeline stack. Record overrides in the incident log. |
 
-```swift
-let sdk = IrohaSDK(
-    baseURL: torii.baseURL,
-    pipelineEndpointMode: .pipeline   // always default to the pipeline surface
-)
-
-// Only flip to .legacy for regressions:
-sdk.pipelineEndpointMode = .legacy
-```
 
 ✅ Acceptance criteria: every shipping build must leave the mode at `.pipeline`, log any temporary downgrades, and restore the default immediately after Torii recovers.
 

@@ -215,6 +215,9 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             api_high_load_subscription_threshold: None,
             events_buffer_capacity: iroha_config::parameters::defaults::torii::events_buffer_capacity(
             ),
+            ws_message_timeout: std::time::Duration::from_millis(
+                iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
+            ),
             app_api: iroha_config::parameters::actual::AppApi {
                 default_list_limit: std::num::NonZeroU32::new(
                     iroha_config::parameters::defaults::torii::APP_API_DEFAULT_LIST_LIMIT.max(1),
@@ -291,6 +294,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
         kura: A::Kura {
             init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: WithOrigin::inline(std::env::temp_dir()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: nonzero!(10usize),
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -531,8 +535,12 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
         tiered_state: iroha_config::parameters::actual::TieredState {
             enabled: false,
             hot_retained_keys: 0,
+            hot_retained_bytes: iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
+            hot_retained_grace_snapshots:
+                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
             cold_store_root: None,
             max_snapshots: 0,
+            max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
         },
         compute: iroha_config::parameters::actual::Compute {
             enabled: iroha_config::parameters::defaults::compute::ENABLED,

@@ -728,6 +728,9 @@ mod tests {
                     iroha_config::parameters::defaults::torii::EVENTS_BUFFER_CAPACITY,
                 )
                 .expect("non-zero events buffer capacity"),
+                ws_message_timeout: Duration::from_millis(
+                    iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
+                ),
                 attachments_ttl_secs: 3600,
                 attachments_max_bytes: 4 * 1024 * 1024,
                 attachments_per_tenant_max_count:
@@ -887,6 +890,8 @@ mod tests {
             kura: Kura {
                 init_mode: iroha_config::kura::InitMode::Strict,
                 store_dir: WithOrigin::inline(std::env::temp_dir()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
                 blocks_in_memory: NonZeroUsize::new(10).unwrap(),
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
@@ -1200,8 +1205,12 @@ mod tests {
             tiered_state: TieredState {
                 enabled: false,
                 hot_retained_keys: 0,
+                hot_retained_bytes: iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
+                hot_retained_grace_snapshots:
+                    iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
                 cold_store_root: None,
                 max_snapshots: 2,
+                max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
             },
             compute: iroha_config::parameters::actual::Compute {
                 enabled: iroha_config::parameters::defaults::compute::ENABLED,

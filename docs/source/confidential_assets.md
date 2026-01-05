@@ -5,7 +5,6 @@ SPDX-License-Identifier: Apache-2.0
 
 ## Motivation
 - Deliver opt-in shielded asset flows so domains can preserve transactional privacy without altering transparent circulation.
-- Keep deterministic execution across heterogeneous validator hardware and retain Norito/Kotodama ABI v1 compatibility.
 - Provide auditors and operators with lifecycle controls (activation, rotation, revocation) for circuits and cryptographic parameters.
 
 ## Threat Model
@@ -42,8 +41,7 @@ layout described below so wallets stay in lock-step with Rust.
 - Block headers expose `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`; the digest participates in the consensus hash and must equal the local registry view for block acceptance.
 - Governance can stage upgrades by programming `next_conf_features` with a future `activation_height`; until that height, block producers must continue to emit the previous digest.
 - Validator nodes MUST operate with `confidential.enabled = true` and `assume_valid = false`. Startup checks refuse to join the validator set if either condition fails or if local `conf_features` diverge.
-- P2P handshake metadata now includes `{ enabled, assume_valid, conf_features }`. Peers advertising incompatible features are rejected with `HandshakeConfidentialMismatch` and never enter consensus rotation.
-- Compatibility outcomes between validators, observers, and outdated peers are captured in the handshake matrix under [Node Capability Negotiation](#node-capability-negotiation). Handshake failures surface `HandshakeConfidentialMismatch` and keep the peer out of consensus rotation until their digest matches.
+- P2P handshake metadata now includes `{ enabled, assume_valid, conf_features }`. Peers advertising unsupported features are rejected with `HandshakeConfidentialMismatch` and never enter consensus rotation.
 - Non-validator observers may set `assume_valid = true`; they blindly apply confidential deltas but do not influence consensus safety.
 
 ## Asset Policies
@@ -121,7 +119,6 @@ Transitions not listed above are rejected during governance submission. Runtime 
 
 ### Migration sequencing
 
-1. **Prepare registries:** Activate all verifier and parameter entries referenced by the target policy. Nodes advertise the resulting `conf_features` so peers can verify compatibility.
 2. **Stage the transition:** Submit `ScheduleConfidentialPolicyTransition` with an `effective_height` that respects `policy_transition_delay_blocks`. When moving toward `ShieldedOnly`, specify a conversion window (`window ≥ policy_transition_window_blocks`).
 3. **Publish operator guidance:** Record the returned `transition_id` and circulate an on/off-ramp runbook. Wallets and auditors subscribe to `/v1/confidential/assets/{id}/transitions` to learn the window open height.
 4. **Window enforcement:** When the window opens, the runtime switches the policy to `Convertible`, emits `PolicyTransitionWindowOpened { transition_id }`, and begins rejecting conflicting governance requests.
@@ -144,7 +141,6 @@ New networks that start with confidentiality enabled encode the desired policy d
 ## Verifier & Parameter Lifecycle
 ### ZK Registry
 - Ledger stores `ZkVerifierEntry { vk_id, circuit_id, version, proving_system, curve, public_inputs_schema_hash, vk_hash, vk_len, max_proof_bytes, gas_schedule_id, activation_height, deprecation_height, withdraw_height, status, metadata_uri_cid, vk_bytes_cid }` where `proving_system` is currently fixed to `Halo2`.
-- Registry lifecycle follows `Proposed → Active → Deprecated → Withdrawn`. Only `Active` entries may validate proofs; `Deprecated` entries remain usable until `deprecation_height`; `Withdrawn` entries reject proofs deterministically.
 - `(circuit_id, version)` pairs are globally unique; the registry maintains a secondary index for lookups by circuit metadata. Attempts to register a duplicate pair are rejected during admission.
 - `circuit_id` must be non-empty and `public_inputs_schema_hash` must be provided (typically a Blake2b-32 hash of the verifier’s canonical public-input encoding). Admission rejects records that omit these fields.
 - Governance instructions include:
@@ -161,8 +157,6 @@ New networks that start with confidentiality enabled encode the desired policy d
 
 ### Pedersen & Poseidon Parameters
 - Separate registries (`PedersenParams`, `PoseidonParams`) mirror verifier lifecycle controls, each with `params_id`, hashes of generators/constants, activation, deprecation, and withdraw heights.
-- Commitments and hashes domain-separate `params_id` so parameter rotation never reuses bit patterns from deprecated sets; the ID is embedded in note commitments and nullifier domain tags.
-- Circuits support multi-parameter selection at verification time; deprecated parameter sets remain spendable until their `deprecation_height`, and withdrawn sets are rejected exactly at their `withdraw_height`.
 
 ## Deterministic Ordering & Nullifiers
 - Each asset maintains a `CommitmentTree` with `next_leaf_index`; blocks append commitments in deterministic order: iterate transactions in block order; within each transaction iterate shielded outputs by ascending serialized `output_idx`.
@@ -202,18 +196,7 @@ New networks that start with confidentiality enabled encode the desired policy d
 ## Node Capability Negotiation
 - Handshake advertises `feature_bits.confidential` together with a `ConfidentialFeatureDigest { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`. Validator participation requires `confidential.enabled=true`, `assume_valid=false`, identical verifier backend identifiers, and matching digests; mismatches fail the handshake with `HandshakeConfidentialMismatch`.
 - Config supports `assume_valid` for observer nodes only: when disabled, encountering confidential instructions yields deterministic `UnsupportedInstruction` without panic; when enabled, observers apply declared state deltas without verifying proofs.
-- Mempool rejects confidential transactions if local capability is disabled. Gossip filters avoid sending shielded transactions to incompatible peers while blind-forwarding unknown verifier IDs within size limits.
-
-### Handshake Compatibility Matrix
-
-| Remote advertisement | Outcome for validator nodes | Operator notes |
-|----------------------|-----------------------------|----------------|
-| `enabled=true`, `assume_valid=false`, backend matches, digest matches | Accepted | Peer reaches `Ready` state and participates in proposal, vote, and RBC fan-out. No manual action required. |
-| `enabled=true`, `assume_valid=false`, backend matches, digest stale or missing | Rejected (`HandshakeConfidentialMismatch`) | Remote must apply pending registry / parameter activations or wait for the scheduled `activation_height`. Until corrected, the node remains discoverable but never enters consensus rotation. |
-| `enabled=true`, `assume_valid=true` | Rejected (`HandshakeConfidentialMismatch`) | Validators require proof verification; configure the remote as an observer with Torii-only ingress or flip `assume_valid=false` after enabling full verification. |
-| `enabled=false`, handshake fields omitted (out-of-date build), or verifier backend differs | Rejected (`HandshakeConfidentialMismatch`) | Out-of-date or partially upgraded peers cannot join the consensus network. Upgrade them to the current release and ensure the backend + digest tuple matches before reconnecting. |
-
-Observer nodes that intentionally skip proof verification must not open consensus connections against validators running with capability gates. They can still ingest blocks via Torii or archival APIs, but the consensus network rejects them until they advertise compatible capabilities.
+- Mempool rejects confidential transactions if local capability is disabled. Gossip filters avoid sending shielded transactions to peers without matching capability while blind-forwarding unknown verifier IDs within size limits.
 
 ### Reveal Pruning & Nullifier Retention Policy
 
@@ -356,13 +339,6 @@ lockstep.
 - State equivalence: validator/full/observer nodes produce identical state roots on the canonical chain.
 - Negative fuzzing: malformed proofs, oversized payloads, and nullifier collisions reject deterministically.
 
-## Migration & Compatibility
-- Feature-gated rollout: until Phase C3 completes, `enabled` defaults to `false`; nodes advertise capabilities before joining validator set.
-- Transparent assets unaffected; confidential instructions require registry entries and capability negotiation.
-- Nodes compiled without confidential support reject relevant blocks deterministically; they cannot join validator set but may operate as observers with `assume_valid=true`.
-- Genesis manifests include initial registry entries, parameter sets, confidential policies for assets, and optional auditor keys.
-- Operators follow published runbooks for registry rotation, policy transitions, and emergency withdrawal to maintain deterministic upgrades (see `docs/source/confidential_assets_rotation.md`).
-
 ## Outstanding Work
 - Benchmark Halo2 parameter sets (circuit size, lookup strategy) and record the results in the calibration playbook so gas/timeout defaults can be updated alongside the next `confidential_assets_calibration.md` refresh.
 - Finalize auditor disclosure policies and associated selective-viewing APIs, wiring the approved workflow into Torii once the governance draft is signed off.
@@ -375,13 +351,12 @@ lockstep.
    - ✅ Nullifier derivation now follows the Poseidon PRF design (`nk`, `rho`, `asset_id`, `chain_id`) with deterministic commitment ordering enforced in ledger updates.
    - ✅ Execution enforces proof size caps and per-transaction/per-block confidential quotas, rejecting over-budget transactions with deterministic errors.
    - ✅ P2P handshake advertises `ConfidentialFeatureDigest` (backend digest + registry fingerprints) and fails mismatches deterministically via `HandshakeConfidentialMismatch`.
-   - ✅ Remove panics in confidential execution paths and add role gating for incompatible nodes.
+   - ✅ Remove panics in confidential execution paths and add role gating for nodes without matching capability.
    - ⚪ Enforce verifier timeout budgets and reorg depth bounds for frontier checkpoints.
      - ✅ Verification timeout budgets enforced; proofs exceeding `verify_timeout_ms` now fail deterministically.
      - ✅ Frontier checkpoints now respect `reorg_depth_bound`, pruning checkpoints older than the configured window while keeping deterministic snapshots.
    - Introduce `AssetConfidentialPolicy`, policy FSM, and enforcement gates for mint/transfer/reveal instructions.
    - Commit `conf_features` in block headers and refuse validator participation when registry/parameter digests diverge.
-   - Implement registry FSM (Proposed/Active/Deprecated/Withdrawn) with activation/deprecation/withdraw heights and emergency withdrawal handling.
 2. **Phase M1 — Registries & Parameters**
    - Land `ZkVerifierEntry`, `PedersenParams`, and `PoseidonParams` registries with governance ops, genesis anchoring, and cache management.
    - Wire syscall to require registry lookups, gas schedule IDs, schema hashing, and size checks.

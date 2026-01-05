@@ -72,7 +72,6 @@ fixtures) to exercise range scheduling and failure handling.
 
 Log the publication in `docs/source/sorafs/migration_ledger.md`, capturing:
 
-- `source_path` of the legacy payload (if any).
 - Manifest CID, CAR digest, and council signature hash.
 - Status (`Draft`, `Staging`, `Pinned`).
 - Links to CI runs or governance tickets.

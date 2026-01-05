@@ -108,13 +108,15 @@ def _encode_sort_arg(sort_value: Optional[Any]) -> Optional[str]:
     return str(sort_value)
 
 
-_ADDRESS_FORMAT_ALIASES = {
-    "ih58": "ih58",
-    "ih-b32": "ih58",
-    "canonical": "ih58",
-    "compressed": "compressed",
-    "snx1": "compressed",
-}
+def _reject_alias_keys(source: Mapping[str, Any],
+                       aliases: Mapping[str, str],
+                       *,
+                       context: str) -> None:
+    for alias_key, canonical_key in aliases.items():
+        if alias_key in source:
+            raise TypeError(
+                f"{context} does not accept {alias_key}; use {canonical_key}"
+            )
 
 
 _ISO_STATUS_VALUES = {
@@ -138,17 +140,14 @@ def _normalize_address_format(value: Optional[str]) -> Optional[str]:
     trimmed = value.strip().lower()
     if not trimmed:
         return None
-    normalized = _ADDRESS_FORMAT_ALIASES.get(trimmed)
-    if normalized is None:
-        allowed = ", ".join(["ih58", "compressed"])
-        raise ValueError(
-            f"address_format must be one of {allowed} (aliases: ih-b32, canonical, snx1)"
-        )
-    return normalized
+    if trimmed in ("ih58", "compressed"):
+        return trimmed
+    allowed = ", ".join(["ih58", "compressed"])
+    raise ValueError(f"address_format must be one of {allowed}")
 
 
 def _apply_address_format_alias(params: Dict[str, Any], key: str = "address_format") -> None:
-    """Normalize ``address_format`` aliases in parameter dictionaries."""
+    """Normalize ``address_format`` values in parameter dictionaries."""
 
     if key not in params:
         return
@@ -369,12 +368,27 @@ def _normalize_space_directory_manifest_payload(
 ) -> Dict[str, Any]:
     if not isinstance(manifest, Mapping):
         raise TypeError(f"{context} must be an object")
+    _reject_alias_keys(
+        manifest,
+        {
+            "Version": "version",
+            "uaid_literal": "uaid",
+            "uaidLiteral": "uaid",
+            "dataspace_id": "dataspace",
+            "dataspaceId": "dataspace",
+            "issuedMs": "issued_ms",
+            "activationEpoch": "activation_epoch",
+            "expiryEpoch": "expiry_epoch",
+            "Entries": "entries",
+        },
+        context=context,
+    )
     result: Dict[str, Any] = {}
-    version_raw = manifest.get("version") or manifest.get("Version")
+    version_raw = manifest.get("version")
     result["version"] = _require_non_empty_string(version_raw, f"{context}.version")
-    uaid_literal = manifest.get("uaid") or manifest.get("uaid_literal") or manifest.get("uaidLiteral")
+    uaid_literal = manifest.get("uaid")
     result["uaid"] = _normalize_uaid_literal(uaid_literal, context=f"{context}.uaid")
-    dataspace_raw = manifest.get("dataspace") or manifest.get("dataspace_id") or manifest.get("dataspaceId")
+    dataspace_raw = manifest.get("dataspace")
     if dataspace_raw is None:
         raise TypeError(f"{context}.dataspace is required")
     result["dataspace"] = _normalize_positive_int(
@@ -383,19 +397,19 @@ def _normalize_space_directory_manifest_payload(
         allow_zero=True,
     )
     issued_ms = _normalize_optional_int_field(
-        manifest.get("issued_ms") or manifest.get("issuedMs"),
+        manifest.get("issued_ms"),
         f"{context}.issued_ms",
     )
     if issued_ms is not None:
         result["issued_ms"] = issued_ms
     activation_epoch = _normalize_optional_int_field(
-        manifest.get("activation_epoch") or manifest.get("activationEpoch"),
+        manifest.get("activation_epoch"),
         f"{context}.activation_epoch",
     )
     if activation_epoch is not None:
         result["activation_epoch"] = activation_epoch
     expiry_epoch = _normalize_optional_int_field(
-        manifest.get("expiry_epoch") or manifest.get("expiryEpoch"),
+        manifest.get("expiry_epoch"),
         f"{context}.expiry_epoch",
     )
     if expiry_epoch is not None:
@@ -403,7 +417,7 @@ def _normalize_space_directory_manifest_payload(
     accounts = manifest.get("accounts")
     if accounts is not None:
         result["accounts"] = _normalize_string_list(accounts, f"{context}.accounts")
-    entries_raw = manifest.get("entries") or manifest.get("Entries")
+    entries_raw = manifest.get("entries")
     if not isinstance(entries_raw, Sequence) or not entries_raw:
         raise TypeError(f"{context}.entries must be a non-empty array")
     normalized_entries: List[Dict[str, Any]] = []
@@ -436,23 +450,31 @@ def _normalize_authority_credentials(
 ) -> Dict[str, str]:
     if not isinstance(payload, Mapping):
         raise TypeError(f"{context} must be an object")
-    authority_raw = payload.get("authority") or payload.get("account")
+    _reject_alias_keys(
+        payload,
+        {
+            "account": "authority",
+            "privateKey": "private_key",
+            "privateKeyMultihash": "private_key_multihash",
+            "privateKeyHex": "private_key_hex",
+            "privateKeyBytes": "private_key_bytes",
+            "privateKeySeed": "private_key_seed",
+            "privateKeyAlgorithm": "private_key_algorithm",
+        },
+        context=context,
+    )
+    authority_raw = payload.get("authority")
     authority = _require_non_empty_string(authority_raw, f"{context}.authority")
-    private_key_literal = payload.get("private_key") or payload.get("privateKey")
+    private_key_literal = payload.get("private_key")
     if private_key_literal is not None:
         private_key = _require_non_empty_string(private_key_literal, f"{context}.private_key")
     else:
-        multihash = payload.get("private_key_multihash") or payload.get("privateKeyMultihash")
+        multihash = payload.get("private_key_multihash")
         if multihash is not None:
             private_key = _require_non_empty_string(multihash, f"{context}.private_key_multihash")
         else:
-            hex_literal = payload.get("private_key_hex") or payload.get("privateKeyHex")
-            bytes_literal = (
-                payload.get("private_key_bytes")
-                or payload.get("privateKeyBytes")
-                or payload.get("private_key_seed")
-                or payload.get("privateKeySeed")
-            )
+            hex_literal = payload.get("private_key_hex")
+            bytes_literal = payload.get("private_key_bytes") or payload.get("private_key_seed")
             if hex_literal is None and bytes_literal is None:
                 raise TypeError(f"{context}.private_key is required")
             if hex_literal is not None:
@@ -468,11 +490,7 @@ def _normalize_authority_credentials(
                 )
                 if len(hex_value) != 64:
                     raise ValueError(f"{context}.private_key_bytes must contain 32 bytes")
-            algorithm = (
-                payload.get("private_key_algorithm")
-                or payload.get("privateKeyAlgorithm")
-                or "ed25519"
-            )
+            algorithm = payload.get("private_key_algorithm") or "ed25519"
             algorithm_literal = _require_non_empty_string(
                 algorithm,
                 f"{context}.private_key_algorithm",
@@ -511,20 +529,23 @@ def _normalize_revoke_space_directory_manifest_request(
         request,
         context="revoke_space_directory_manifest",
     )
-    uaid_literal = (
-        request.get("uaid")
-        or request.get("uaid_literal")
-        or request.get("uaidLiteral")
+    _reject_alias_keys(
+        request,
+        {
+            "uaid_literal": "uaid",
+            "uaidLiteral": "uaid",
+            "dataspace_id": "dataspace",
+            "dataspaceId": "dataspace",
+            "revokedEpoch": "revoked_epoch",
+        },
+        context="revoke_space_directory_manifest",
     )
+    uaid_literal = request.get("uaid")
     uaid = _normalize_uaid_literal(
         uaid_literal,
         context="revoke_space_directory_manifest.uaid",
     )
-    dataspace_raw = (
-        request.get("dataspace")
-        or request.get("dataspace_id")
-        or request.get("dataspaceId")
-    )
+    dataspace_raw = request.get("dataspace")
     if dataspace_raw is None:
         raise TypeError("revoke_space_directory_manifest.dataspace is required")
     dataspace = _normalize_positive_int(
@@ -532,7 +553,7 @@ def _normalize_revoke_space_directory_manifest_request(
         "revoke_space_directory_manifest.dataspace",
         allow_zero=True,
     )
-    revoked_epoch_raw = request.get("revoked_epoch") or request.get("revokedEpoch")
+    revoked_epoch_raw = request.get("revoked_epoch")
     if revoked_epoch_raw is None:
         raise TypeError("revoke_space_directory_manifest.revoked_epoch is required")
     revoked_epoch = _normalize_positive_int(
@@ -766,7 +787,7 @@ class SorafsPorIngestionProviderStatus:
     def from_payload(cls, payload: Mapping[str, Any]) -> "SorafsPorIngestionProviderStatus":
         if not isinstance(payload, Mapping):
             raise TypeError("por ingestion provider entry must be an object")
-        provider_literal = _first_present(payload, ("provider_id_hex", "providerIdHex"))
+        provider_literal = payload.get("provider_id_hex")
         if not isinstance(provider_literal, str) or not provider_literal:
             raise TypeError("por ingestion provider entry missing string `provider_id_hex` field")
         provider_id_hex = _normalize_hex_string(
@@ -775,41 +796,41 @@ class SorafsPorIngestionProviderStatus:
             expected_length=64,
         )
         pending = _coerce_int(
-            _first_present(payload, ("pending_challenges", "pendingChallenges")),
+            payload.get("pending_challenges"),
             "por ingestion provider pending_challenges",
             allow_zero=True,
         )
         if pending is None:
             raise TypeError("por ingestion provider entry missing numeric `pending_challenges` field")
         oldest_epoch = _coerce_int(
-            _first_present(payload, ("oldest_epoch_id", "oldestEpochId")),
+            payload.get("oldest_epoch_id"),
             "por ingestion provider oldest_epoch_id",
             allow_zero=True,
         )
         oldest_deadline = _coerce_int(
-            _first_present(payload, ("oldest_response_deadline_unix", "oldestResponseDeadlineUnix")),
+            payload.get("oldest_response_deadline_unix"),
             "por ingestion provider oldest_response_deadline_unix",
             allow_zero=True,
         )
         last_success = _coerce_int(
-            _first_present(payload, ("last_success_unix", "lastSuccessUnix")),
+            payload.get("last_success_unix"),
             "por ingestion provider last_success_unix",
             allow_zero=True,
         )
         last_failure = _coerce_int(
-            _first_present(payload, ("last_failure_unix", "lastFailureUnix")),
+            payload.get("last_failure_unix"),
             "por ingestion provider last_failure_unix",
             allow_zero=True,
         )
         failures_total = _coerce_int(
-            _first_present(payload, ("failures_total", "failuresTotal")),
+            payload.get("failures_total"),
             "por ingestion provider failures_total",
             allow_zero=True,
         )
         if failures_total is None:
             raise TypeError("por ingestion provider entry missing numeric `failures_total` field")
         consecutive_failures = _coerce_int(
-            _first_present(payload, ("consecutive_failures", "consecutiveFailures")),
+            payload.get("consecutive_failures"),
             "por ingestion provider consecutive_failures",
             allow_zero=True,
         )
@@ -838,7 +859,7 @@ class SorafsPorIngestionStatus:
     def from_payload(cls, payload: Mapping[str, Any]) -> "SorafsPorIngestionStatus":
         if not isinstance(payload, Mapping):
             raise TypeError("por ingestion response must be an object")
-        manifest_literal = payload.get("manifest_digest_hex") or payload.get("manifestDigestHex")
+        manifest_literal = payload.get("manifest_digest_hex")
         if not isinstance(manifest_literal, str) or not manifest_literal:
             raise TypeError("por ingestion response missing string `manifest_digest_hex` field")
         manifest_digest_hex = _normalize_hex_string(
@@ -878,13 +899,13 @@ class ExplorerMetricsSnapshot:
         if not isinstance(payload, Mapping):
             raise TypeError("explorer metrics payload must be an object")
 
-        def _resolve_int(keys: Sequence[str], label: str) -> int:
-            raw = _first_present(payload, keys)
+        def _resolve_int(key: str, label: str) -> int:
+            raw = payload.get(key)
             parsed = _coerce_int(raw, label, allow_zero=True)
             return 0 if parsed is None else parsed
 
-        def _resolve_optional_string(keys: Sequence[str], label: str) -> Optional[str]:
-            raw = _first_present(payload, keys)
+        def _resolve_optional_string(key: str, label: str) -> Optional[str]:
+            raw = payload.get(key)
             if raw is None:
                 return None
             if not isinstance(raw, str):
@@ -893,43 +914,43 @@ class ExplorerMetricsSnapshot:
             return trimmed or None
 
         def _resolve_optional_duration(
-            keys: Sequence[str],
+            key: str,
             label: str,
         ) -> Optional[int]:
-            raw = _first_present(payload, keys)
+            raw = payload.get(key)
             return _parse_optional_duration_ms_field(raw, label)
 
         return cls(
-            peers=_resolve_int(("peers",), "explorer_metrics.peers"),
-            domains=_resolve_int(("domains",), "explorer_metrics.domains"),
-            accounts=_resolve_int(("accounts",), "explorer_metrics.accounts"),
-            assets=_resolve_int(("assets",), "explorer_metrics.assets"),
+            peers=_resolve_int("peers", "explorer_metrics.peers"),
+            domains=_resolve_int("domains", "explorer_metrics.domains"),
+            accounts=_resolve_int("accounts", "explorer_metrics.accounts"),
+            assets=_resolve_int("assets", "explorer_metrics.assets"),
             transactions_accepted=_resolve_int(
-                ("transactions_accepted", "transactionsAccepted"),
+                "transactions_accepted",
                 "explorer_metrics.transactions_accepted",
             ),
             transactions_rejected=_resolve_int(
-                ("transactions_rejected", "transactionsRejected"),
+                "transactions_rejected",
                 "explorer_metrics.transactions_rejected",
             ),
             block_height=_resolve_int(
-                ("block", "block_height"),
-                "explorer_metrics.block_height",
+                "block",
+                "explorer_metrics.block",
             ),
             block_created_at=_resolve_optional_string(
-                ("block_created_at", "blockCreatedAt"),
+                "block_created_at",
                 "explorer_metrics.block_created_at",
             ),
             finalized_block_height=_resolve_int(
-                ("finalized_block", "finalizedBlock"),
+                "finalized_block",
                 "explorer_metrics.finalized_block",
             ),
             average_commit_time_ms=_resolve_optional_duration(
-                ("avg_commit_time", "avgCommitTime"),
+                "avg_commit_time",
                 "explorer_metrics.avg_commit_time",
             ),
             average_block_time_ms=_resolve_optional_duration(
-                ("avg_block_time", "avgBlockTime"),
+                "avg_block_time",
                 "explorer_metrics.avg_block_time",
             ),
         )
@@ -953,40 +974,40 @@ class ExplorerAccountQrSnapshot:
         if not isinstance(payload, Mapping):
             raise TypeError("explorer account qr payload must be an object")
 
-        def _require_string(keys: Sequence[str], label: str) -> str:
-            raw = _first_present(payload, keys)
+        def _require_string(key: str, label: str) -> str:
+            raw = payload.get(key)
             if not isinstance(raw, str) or not raw.strip():
                 raise TypeError(f"{label} must be a non-empty string")
             return raw.strip()
 
-        def _require_positive_int(keys: Sequence[str], label: str) -> int:
-            value = _coerce_int(_first_present(payload, keys), label, allow_zero=False)
+        def _require_positive_int(key: str, label: str) -> int:
+            value = _coerce_int(payload.get(key), label, allow_zero=False)
             if value is None:
                 raise TypeError(f"{label} must be provided")
             return value
 
         canonical_id = _require_string(
-            ("canonical_id", "canonicalId"),
+            "canonical_id",
             "explorer_account_qr.canonical_id",
         )
-        literal = _require_string(("literal",), "explorer_account_qr.literal")
+        literal = _require_string("literal", "explorer_account_qr.literal")
         error_correction = _require_string(
-            ("error_correction", "errorCorrection"),
+            "error_correction",
             "explorer_account_qr.error_correction",
         )
-        svg = _require_string(("svg",), "explorer_account_qr.svg")
+        svg = _require_string("svg", "explorer_account_qr.svg")
 
         network_prefix = _require_positive_int(
-            ("network_prefix", "networkPrefix"),
+            "network_prefix",
             "explorer_account_qr.network_prefix",
         )
-        modules = _require_positive_int(("modules",), "explorer_account_qr.modules")
+        modules = _require_positive_int("modules", "explorer_account_qr.modules")
         qr_version = _require_positive_int(
-            ("qr_version", "qrVersion"),
+            "qr_version",
             "explorer_account_qr.qr_version",
         )
 
-        address_raw = _first_present(payload, ("address_format", "addressFormat"))
+        address_raw = payload.get("address_format")
         if address_raw is None:
             address_format = "ih58"
         else:
@@ -1146,15 +1167,12 @@ class KaigiRelaySummary:
     def from_payload(cls, payload: Mapping[str, Any]) -> "KaigiRelaySummary":
         if not isinstance(payload, Mapping):
             raise TypeError("kaigi relay summary payload must be an object")
-        relay_literal = _first_present(payload, ("relay_id", "relayId"))
-        domain_literal = _first_present(payload, ("domain", "domain_id", "domainId"))
-        bandwidth_literal = _first_present(payload, ("bandwidth_class", "bandwidthClass"))
-        fingerprint_literal = _first_present(
-            payload,
-            ("hpke_fingerprint_hex", "hpkeFingerprintHex"),
-        )
+        relay_literal = payload.get("relay_id")
+        domain_literal = payload.get("domain")
+        bandwidth_literal = payload.get("bandwidth_class")
+        fingerprint_literal = payload.get("hpke_fingerprint_hex")
         status_literal = payload.get("status")
-        reported_literal = _first_present(payload, ("reported_at_ms", "reportedAtMs"))
+        reported_literal = payload.get("reported_at_ms")
 
         relay_id = _require_non_empty_string(relay_literal, "kaigi_relay_summary.relay_id")
         domain = _require_non_empty_string(domain_literal, "kaigi_relay_summary.domain")
@@ -1244,8 +1262,8 @@ class KaigiRelayReportedCall:
     def from_payload(cls, payload: Mapping[str, Any]) -> "KaigiRelayReportedCall":
         if not isinstance(payload, Mapping):
             raise TypeError("kaigi relay call payload must be an object")
-        domain_literal = _first_present(payload, ("domain_id", "domain", "domainId"))
-        name_literal = _first_present(payload, ("call_name", "name", "callName"))
+        domain_literal = payload.get("domain_id")
+        name_literal = payload.get("call_name")
         return cls(
             domain_id=_require_non_empty_string(
                 domain_literal,
@@ -1272,7 +1290,7 @@ class KaigiRelayDomainMetrics:
     def from_payload(cls, payload: Mapping[str, Any]) -> "KaigiRelayDomainMetrics":
         if not isinstance(payload, Mapping):
             raise TypeError("kaigi relay domain metrics payload must be an object")
-        domain_literal = _first_present(payload, ("domain", "domain_id", "domainId"))
+        domain_literal = payload.get("domain")
 
         def _resolve_counter(name: str) -> int:
             value = _coerce_int(payload.get(name), f"kaigi_relay_domain_metrics.{name}", allow_zero=True)
@@ -1305,10 +1323,10 @@ class KaigiRelayDetail:
         relay_payload = payload.get("relay")
         if not isinstance(relay_payload, Mapping):
             raise TypeError("kaigi relay detail payload missing object `relay` field")
-        hpke_literal = _first_present(payload, ("hpke_public_key_b64", "hpkePublicKeyB64"))
+        hpke_literal = payload.get("hpke_public_key_b64")
         reported_call_payload = payload.get("reported_call")
         metrics_payload = payload.get("metrics")
-        reported_by_literal = _first_present(payload, ("reported_by", "reportedBy"))
+        reported_by_literal = payload.get("reported_by")
         notes_literal = payload.get("notes")
 
         reported_by: Optional[str] = None
@@ -1899,30 +1917,30 @@ class PeerTelemetryConfig:
     def from_payload(cls, payload: Mapping[str, Any]) -> "PeerTelemetryConfig":
         if not isinstance(payload, Mapping):
             raise TypeError("telemetry peer config must be an object")
-        public_key = payload.get("public_key") or payload.get("publicKey")
+        public_key = payload.get("public_key")
         if not isinstance(public_key, str) or not public_key:
             raise TypeError("telemetry peer config missing string `public_key` field")
         queue_capacity = _coerce_int(
-            _first_present(payload, ("queue_capacity", "queueCapacity")),
+            payload.get("queue_capacity"),
             "telemetry peer config queue_capacity",
             allow_zero=True,
         )
         block_size = _coerce_int(
-            _first_present(payload, ("network_block_gossip_size", "networkBlockGossipSize")),
+            payload.get("network_block_gossip_size"),
             "telemetry peer config network_block_gossip_size",
             allow_zero=True,
         )
         tx_size = _coerce_int(
-            _first_present(payload, ("network_tx_gossip_size", "networkTxGossipSize")),
+            payload.get("network_tx_gossip_size"),
             "telemetry peer config network_tx_gossip_size",
             allow_zero=True,
         )
         block_period = _parse_optional_duration_ms_field(
-            _first_present(payload, ("network_block_gossip_period", "networkBlockGossipPeriod")),
+            payload.get("network_block_gossip_period"),
             "telemetry peer config network_block_gossip_period",
         )
         tx_period = _parse_optional_duration_ms_field(
-            _first_present(payload, ("network_tx_gossip_period", "networkTxGossipPeriod")),
+            payload.get("network_tx_gossip_period"),
             "telemetry peer config network_tx_gossip_period",
         )
         return cls(
@@ -1978,10 +1996,7 @@ class PeerTelemetryInfo:
         if not isinstance(url, str) or not url:
             raise TypeError("telemetry peer payload missing string `url` field")
         connected = _coerce_bool_flag(payload.get("connected"), "telemetry peer connected")
-        telemetry_flag = _first_present(
-            payload,
-            ("telemetry_unsupported", "telemetryUnsupported"),
-        )
+        telemetry_flag = payload.get("telemetry_unsupported")
         telemetry_unsupported = _coerce_bool_flag(
             telemetry_flag if telemetry_flag is not None else False,
             "telemetry peer telemetry_unsupported",
@@ -1993,8 +2008,6 @@ class PeerTelemetryInfo:
         if location_payload is not None and not isinstance(location_payload, Mapping):
             raise TypeError("telemetry peer location must be an object when provided")
         peers_value = payload.get("connected_peers")
-        if peers_value is None:
-            peers_value = payload.get("connectedPeers")
         connected_peers = None
         if peers_value is not None:
             if not isinstance(peers_value, list):
@@ -2657,8 +2670,8 @@ class UaidPortfolioAsset:
     def from_payload(cls, payload: Mapping[str, Any]) -> "UaidPortfolioAsset":
         if not isinstance(payload, Mapping):
             raise TypeError("portfolio asset must be an object")
-        asset_id = payload.get("asset_id") or payload.get("assetId")
-        definition_id = payload.get("asset_definition_id") or payload.get("assetDefinitionId")
+        asset_id = payload.get("asset_id")
+        definition_id = payload.get("asset_definition_id")
         quantity = payload.get("quantity")
         if not isinstance(asset_id, str) or not asset_id:
             raise TypeError("portfolio asset missing `asset_id` string")
@@ -2683,7 +2696,7 @@ class UaidPortfolioAccount:
     def from_payload(cls, payload: Mapping[str, Any]) -> "UaidPortfolioAccount":
         if not isinstance(payload, Mapping):
             raise TypeError("portfolio account must be an object")
-        account_id = payload.get("account_id") or payload.get("accountId")
+        account_id = payload.get("account_id")
         label = payload.get("label")
         if not isinstance(account_id, str) or not account_id:
             raise TypeError("portfolio account missing `account_id` string")
@@ -2709,7 +2722,7 @@ class UaidPortfolioDataspace:
         dataspace_id = _coerce_int(payload.get("dataspace_id"), "dataspace_id", allow_zero=True)
         if dataspace_id is None:
             raise TypeError("portfolio dataspace missing `dataspace_id` integer")
-        alias = payload.get("dataspace_alias") or payload.get("dataspaceAlias")
+        alias = payload.get("dataspace_alias")
         if alias is not None and not isinstance(alias, str):
             raise TypeError("portfolio dataspace `dataspace_alias` must be a string when present")
         accounts_payload = payload.get("accounts", [])
@@ -2765,7 +2778,7 @@ class UaidBindingsSlice:
         dataspace_id = _coerce_int(payload.get("dataspace_id"), "dataspace_id", allow_zero=True)
         if dataspace_id is None:
             raise TypeError("bindings slice missing `dataspace_id` integer")
-        alias = payload.get("dataspace_alias") or payload.get("dataspaceAlias")
+        alias = payload.get("dataspace_alias")
         if alias is not None and not isinstance(alias, str):
             raise TypeError("bindings slice `dataspace_alias` must be a string when present")
         accounts_value = payload.get("accounts", [])
@@ -2847,10 +2860,10 @@ class SpaceDirectoryManifestRecord:
         dataspace_id = _coerce_int(payload.get("dataspace_id"), "dataspace_id", allow_zero=True)
         if dataspace_id is None:
             raise TypeError("manifest record missing `dataspace_id` integer")
-        alias = payload.get("dataspace_alias") or payload.get("dataspaceAlias")
+        alias = payload.get("dataspace_alias")
         if alias is not None and not isinstance(alias, str):
             raise TypeError("manifest record `dataspace_alias` must be a string when present")
-        manifest_hash = payload.get("manifest_hash") or payload.get("manifestHash")
+        manifest_hash = payload.get("manifest_hash")
         if not isinstance(manifest_hash, str) or not manifest_hash:
             raise TypeError("manifest record missing `manifest_hash` string")
         status = payload.get("status")
@@ -2983,8 +2996,6 @@ class TriggerMutationResponse:
             raise TypeError("trigger mutation response missing boolean `ok` field")
         trigger_id_field = payload.get("trigger_id")
         if trigger_id_field is None:
-            trigger_id_field = payload.get("triggerId")
-        if trigger_id_field is None:
             trigger_id: Optional[str] = None
         else:
             trigger_id = _require_non_empty_string(
@@ -2992,16 +3003,12 @@ class TriggerMutationResponse:
             )
         proposal_field = payload.get("proposal_id")
         if proposal_field is None:
-            proposal_field = payload.get("proposalId")
-        if proposal_field is None:
             proposal_id: Optional[str] = None
         else:
             proposal_id = _require_non_empty_string(
                 proposal_field, "trigger mutation response `proposal_id`"
             )
         instructions_payload = payload.get("tx_instructions")
-        if instructions_payload is None:
-            instructions_payload = payload.get("txInstructions")
         if instructions_payload is None:
             instructions_payload = []
         if not isinstance(instructions_payload, list):
@@ -5841,58 +5848,78 @@ def resolve_torii_client_config(
     def apply_source(source: Optional[Mapping[str, Any]]) -> None:
         if not source:
             return
+        _reject_alias_keys(
+            source,
+            {
+                "timeoutMs": "timeout_ms",
+                "timeoutSeconds": "timeout",
+                "maxRetries": "max_retries",
+                "backoffInitialMs": "backoff_initial_ms",
+                "backoffInitial": "backoff_initial",
+                "backoffMultiplier": "backoff_multiplier",
+                "maxBackoffMs": "max_backoff_ms",
+                "maxBackoff": "max_backoff",
+                "retryStatuses": "retry_statuses",
+                "retryMethods": "retry_methods",
+                "defaultHeaders": "default_headers",
+                "authToken": "auth_token",
+                "apiToken": "api_token",
+                "sorafsAliasPolicy": "sorafs_alias_policy",
+            },
+            context="torii_client config",
+        )
         timeout = _coerce_timeout_seconds(
-            _first_present(source, ("timeout_ms", "timeoutMs")),
-            fallback=_first_present(source, ("timeout", "timeoutSeconds")),
+            source.get("timeout_ms"),
+            fallback=source.get("timeout"),
         )
         if timeout is not None:
             state["timeout"] = timeout
         max_retries = _coerce_int(
-            _first_present(source, ("max_retries", "maxRetries")),
+            source.get("max_retries"),
             "max_retries",
             allow_zero=True,
         )
         if max_retries is not None:
             state["max_retries"] = max_retries
         backoff_initial = _coerce_duration_seconds(
-            _first_present(source, ("backoff_initial_ms", "backoffInitialMs")),
-            fallback=_first_present(source, ("backoff_initial", "backoffInitial")),
+            source.get("backoff_initial_ms"),
+            fallback=source.get("backoff_initial"),
         )
         if backoff_initial is not None:
             state["backoff_initial"] = backoff_initial
         backoff_multiplier = _coerce_float(
-            _first_present(source, ("backoff_multiplier", "backoffMultiplier")),
+            source.get("backoff_multiplier"),
             "backoff_multiplier",
             allow_zero=False,
         )
         if backoff_multiplier is not None:
             state["backoff_multiplier"] = max(backoff_multiplier, 1.0)
         max_backoff = _coerce_duration_seconds(
-            _first_present(source, ("max_backoff_ms", "maxBackoffMs")),
-            fallback=_first_present(source, ("max_backoff", "maxBackoff")),
+            source.get("max_backoff_ms"),
+            fallback=source.get("max_backoff"),
         )
         if max_backoff is not None:
             state["max_backoff"] = max_backoff
         statuses = _parse_retry_statuses(
-            _first_present(source, ("retry_statuses", "retryStatuses"))
+            source.get("retry_statuses")
         )
         if statuses is not None:
             state["retry_statuses"] = statuses
         methods = _parse_retry_methods(
-            _first_present(source, ("retry_methods", "retryMethods"))
+            source.get("retry_methods")
         )
         if methods is not None:
             state["retry_methods"] = methods
-        headers = _normalize_headers(source.get("default_headers") or source.get("defaultHeaders"))
+        headers = _normalize_headers(source.get("default_headers"))
         if headers:
             state["default_headers"].update(headers)
-        auth_token = _first_present(source, ("auth_token", "authToken"))
+        auth_token = source.get("auth_token")
         if auth_token is not None:
             state["auth_token"] = str(auth_token)
-        api_token = _first_present(source, ("api_token", "apiToken"))
+        api_token = source.get("api_token")
         if api_token is not None:
             state["api_token"] = str(api_token)
-        policy_override = _first_present(source, ("sorafs_alias_policy", "sorafsAliasPolicy"))
+        policy_override = source.get("sorafs_alias_policy")
         if policy_override is not None:
             state["sorafs_alias_policy"] = _coerce_sorafs_policy_value(
                 policy_override, "sorafs_alias_policy"
@@ -5901,7 +5928,9 @@ def resolve_torii_client_config(
     apply_source(_extract_torii_client_section(config))
 
     if isinstance(config, Mapping):
-        torii_section = config.get("torii") or config.get("toriiConfig")
+        if "toriiConfig" in config:
+            raise TypeError("toriiConfig is not supported; use torii")
+        torii_section = config.get("torii")
         token = _pick_api_token(torii_section)
         if token and not state["api_token"]:
             state["api_token"] = token
@@ -5950,10 +5979,11 @@ def _extract_torii_client_section(config: Optional[Mapping[str, Any]]) -> Mappin
     if not config:
         return {}
     if isinstance(config, Mapping):
-        for key in ("torii_client", "toriiClient"):
-            nested = config.get(key)
-            if isinstance(nested, Mapping):
-                return nested
+        if "toriiClient" in config:
+            raise TypeError("toriiClient is not supported; use torii_client")
+        nested = config.get("torii_client")
+        if isinstance(nested, Mapping):
+            return nested
     return config
 
 
@@ -5986,18 +6016,13 @@ def _extract_pipeline_status_kind(payload: Any) -> Optional[str]:
 def _pick_api_token(torii_section: Optional[Mapping[str, Any]]) -> Optional[str]:
     if not isinstance(torii_section, Mapping):
         return None
-    tokens = torii_section.get("api_tokens") or torii_section.get("apiTokens")
+    if "apiTokens" in torii_section:
+        raise TypeError("apiTokens is not supported; use api_tokens")
+    tokens = torii_section.get("api_tokens")
     if isinstance(tokens, (list, tuple)) and tokens:
         return str(tokens[0])
     if isinstance(tokens, str):
         return tokens
-    return None
-
-
-def _first_present(source: Mapping[str, Any], keys: Sequence[str]) -> Optional[Any]:
-    for key in keys:
-        if key in source:
-            return source[key]
     return None
 
 
@@ -9194,7 +9219,7 @@ class ConnectAppRecord:
         if not isinstance(payload, Mapping):
             raise TypeError("connect app entry must be an object")
         data = dict(payload)
-        app_id = data.get("app_id") or data.get("id")
+        app_id = data.get("app_id")
         if not isinstance(app_id, str) or not app_id:
             raise TypeError("connect app entry requires string `app_id` field")
 
@@ -9206,7 +9231,7 @@ class ConnectAppRecord:
                 return value
             raise TypeError(f"connect app entry `{name}` must be a string when present")
 
-        namespaces_raw = data.get("namespaces") or data.get("allowed_namespaces") or []
+        namespaces_raw = data.get("namespaces") or []
         if namespaces_raw is None:
             namespaces_raw = []
         if not isinstance(namespaces_raw, list):
@@ -9231,12 +9256,10 @@ class ConnectAppRecord:
 
         recognized = {
             "app_id",
-            "id",
             "display_name",
             "description",
             "icon_url",
             "namespaces",
-            "allowed_namespaces",
             "metadata",
             "policy",
         }
@@ -9284,7 +9307,7 @@ class ConnectAppRegistryPage:
         if not isinstance(payload, Mapping):
             raise TypeError("connect app registry payload must be an object")
         data = dict(payload)
-        items_raw = data.get("items") or data.get("apps") or []
+        items_raw = data.get("items") or []
         if items_raw is None:
             items_raw = []
         if not isinstance(items_raw, list):
@@ -9301,11 +9324,11 @@ class ConnectAppRegistryPage:
             except (TypeError, ValueError) as exc:
                 raise TypeError("connect app registry `total` must be numeric when present") from exc
 
-        cursor_raw = data.get("next_cursor") or data.get("cursor") or data.get("next")
+        cursor_raw = data.get("next_cursor")
         if cursor_raw is not None and not isinstance(cursor_raw, str):
             raise TypeError("connect app registry cursor must be a string when present")
 
-        recognized = {"items", "apps", "total", "next_cursor", "cursor", "next"}
+        recognized = {"items", "total", "next_cursor"}
         extra = {k: v for k, v in data.items() if k not in recognized}
         return cls(items=tuple(items), total=total, next_cursor=cursor_raw, extra=extra)
 
@@ -9325,7 +9348,7 @@ class ConnectAdmissionManifestEntry:
         if not isinstance(payload, Mapping):
             raise TypeError("connect admission entry must be an object")
         data = dict(payload)
-        app_id = data.get("app_id") or data.get("id")
+        app_id = data.get("app_id")
         if not isinstance(app_id, str) or not app_id:
             raise TypeError("connect admission entry requires string `app_id` field")
 
@@ -9352,7 +9375,7 @@ class ConnectAdmissionManifestEntry:
         if not isinstance(policy_raw, Mapping):
             raise TypeError("connect admission entry `policy` must be an object")
 
-        recognized = {"app_id", "id", "namespaces", "metadata", "policy"}
+        recognized = {"app_id", "namespaces", "metadata", "policy"}
         extra = {k: v for k, v in data.items() if k not in recognized}
         return cls(
             app_id=app_id,
@@ -9378,13 +9401,7 @@ class ConnectAdmissionManifest:
         if not isinstance(payload, Mapping):
             raise TypeError("connect admission manifest payload must be an object")
         data = dict(payload)
-        manifest_obj = data.get("manifest")
-        if isinstance(manifest_obj, Mapping):
-            manifest_dict = dict(manifest_obj)
-            if any(key in manifest_dict for key in ("entries", "apps")):
-                data = manifest_dict
-
-        entries_raw = data.get("entries") or data.get("apps") or []
+        entries_raw = data.get("entries") or []
         if entries_raw is None:
             entries_raw = []
         if not isinstance(entries_raw, list):
@@ -9407,7 +9424,7 @@ class ConnectAdmissionManifest:
         if updated_at is not None and not isinstance(updated_at, str):
             raise TypeError("connect admission manifest `updated_at` must be a string when present")
 
-        recognized = {"entries", "apps", "version", "manifest_hash", "updated_at"}
+        recognized = {"entries", "version", "manifest_hash", "updated_at"}
         extra = {k: v for k, v in data.items() if k not in recognized}
         return cls(
             version=version,
@@ -10060,34 +10077,6 @@ class ConnectAdmissionManifest:
             return GovernanceLocksResult(found=False, referendum_id=referendum_id, locks={})
         return GovernanceLocksResult.from_payload(payload)
 
-    def get_governance_lock_stats(
-        self,
-        *,
-        height: Optional[int] = None,
-        referendum_id: Optional[str] = None,
-    ) -> Optional[Any]:
-        """Deprecated alias for :meth:`get_governance_unlock_stats`.
-
-        The Torii API exposes `/v1/gov/unlocks/stats`; the historical
-        `/v1/gov/locks/stats` route never shipped. Callers should migrate to
-        :meth:`get_governance_unlock_stats` (or the typed variant).
-        """
-
-        import warnings
-
-        warnings.warn(
-            "get_governance_lock_stats is deprecated; use get_governance_unlock_stats instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        # The unlock stats endpoint ignores query parameters; we silently drop
-        # the optional height/referendum hints to match Torii's behaviour.
-        return self.request_json(
-            "GET",
-            "/v1/gov/unlocks/stats",
-            expected_status=(200,),
-        )
-
     def get_governance_unlock_stats(self) -> Optional[Any]:
         """GET `/v1/gov/unlocks/stats`."""
 
@@ -10104,18 +10093,6 @@ class ConnectAdmissionManifest:
         if payload is None:
             raise RuntimeError("governance unlock stats endpoint returned no payload")
         return GovernanceUnlockStats.from_payload(payload)
-
-    def get_governance_lock_stats_typed(self) -> GovernanceUnlockStats:
-        """Deprecated alias for :meth:`get_governance_unlock_stats_typed`."""
-
-        import warnings
-
-        warnings.warn(
-            "get_governance_lock_stats_typed is deprecated; use get_governance_unlock_stats_typed",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.get_governance_unlock_stats_typed()
 
     def stream_events(
         self,
@@ -10261,7 +10238,6 @@ class ConnectAdmissionManifest:
         name: Optional[str] = None,
         registered: bool = True,
         updated: bool = True,
-        deprecated: bool = True,
         timeout: Optional[float] = None,
         max_retries: int = 3,
         backoff_base: float = 0.5,
@@ -10279,7 +10255,6 @@ class ConnectAdmissionManifest:
             name=name,
             registered=registered,
             updated=updated,
-            deprecated=deprecated,
         )
         return self.stream_events(
             filter=filter_obj,

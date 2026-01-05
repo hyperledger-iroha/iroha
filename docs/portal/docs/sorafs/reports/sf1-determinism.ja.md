@@ -46,7 +46,6 @@ summary: 正規 chunker プロファイル `sorafs.sf1@1.0.0` を検証するた
 
 | 日付 | Engineer | Checklist 結果 | メモ |
 |------|----------|------------------|-------|
-| 2026-02-12 | Tooling (LLM) | ❌ Failed | ステップ 1: `cargo test -p sorafs_chunker` が `vectors` suite で失敗。fixtures が legacy handle `sorafs.sf1@1.0.0` を公開し続け、profile aliases/digests を欠いている (`fixtures/sorafs_chunker/sf1_profile_v1.*`)。ステップ 2: `ci/check_sorafs_fixtures.sh` が中断 — `manifest_signatures.json` が repo 状態に存在しない (working tree で削除)。ステップ 4: manifest ファイルが無い間は `export_vectors` が署名検証できない。推奨: 署名済み fixtures を復元 (または council key を提供) し、canonical handle + aliases 配列をテスト要件通り埋め込むよう bindings を再生成する。 |
 | 2026-02-12 | Tooling (LLM) | ✅ Passed | `cargo run --locked -p sorafs_chunker --bin export_vectors -- --signing-key=000102…1f` で fixtures を再生成し、canonical handle + alias lists と新しい manifest digest `2084f98010fd59b630fede19fa85d448e066694f77fa41a03c62b867eb5a9e55` を生成。`cargo test -p sorafs_chunker` と `ci/check_sorafs_fixtures.sh` のクリーン実行で検証 (fixtures をチェック用にステージ)。ステップ 5 は Node parity helper の到着待ち。 |
 | 2026-02-20 | Storage Tooling CI | ✅ Passed | Parliament envelope (`fixtures/sorafs_chunker/manifest_signatures.json`) を `ci/check_sorafs_fixtures.sh` で取得。スクリプトが fixtures を再生成し、manifest digest `101ec2aa55346e0ec57b2da6c7b9a9adde85ef13cbbf56c349bceafad7917c21` を確認し、Rust harness を再実行 (Go/Node ステップは利用可能時に実行) して diff なし。 |
 

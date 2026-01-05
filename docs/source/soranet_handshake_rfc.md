@@ -59,7 +59,7 @@ epoch pointer.
 |------|--------|---------|-------|
 | 1 | Client | `ClientHello` carrying Noise ephemeral key `e`, ML-KEM-768 share, capability TLVs (with required flags), GREASE entries | Padded to 1024 bytes |
 | 2 | Relay  | `ServerHello` carrying Noise key `re`, ML-KEM-768 response, Dilithium3 signature over transcript-so-far, capability echo | Padded |
-| 3 | Client | `ClientFinish` with ML-KEM confirmation, Dilithium3 signature, transcript hash `T` commitment | Must include `snnet.descriptor_commit` TLV |
+| 3 | Client | `ClientFinish` with ML-KEM confirmation, Dilithium3 signature, transcript hash `T` commitment | Must include `snnet.transcript_commit` TLV |
 | 4 | Relay  | `RelayConfirm` delivering entry ticket, current salt epoch, retry token encrypted under derived traffic keys | |
 
 Transcript hash `T` MUST be computed as described in `docs/source/soranet_handshake.md`
@@ -79,9 +79,9 @@ Capability TLVs MUST conform to the registry:
 |------|------|-------------|
 | 0x0101 | `snnet.pqkem` | MUST appear in both ClientHello and ServerHello |
 | 0x0102 | `snnet.pqsig` | MUST appear with Dilithium3 + Ed25519 IDs |
-| 0x0103 | `snnet.descriptor_commit` | Relay MUST include commitment hash |
+| 0x0103 | `snnet.transcript_commit` | Relay MUST include commitment hash |
 | 0x0201 | `snnet.role` | Relay MUST declare role bitfield |
-| 0x0202 | `snnet.padding_profile` | MUST be `0x0400` (1024-byte cells) |
+| 0x0202 | `snnet.padding` | MUST be `0x0400` (1024-byte cells) |
 | 0x7F00–0x7FFF | GREASE | Clients MUST send ≥2 entries |
 
 Relays MUST abort if clients mark a capability `required` and the relay cannot

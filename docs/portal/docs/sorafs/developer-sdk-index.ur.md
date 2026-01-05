@@ -19,7 +19,6 @@ description: SoraFS artifacts integrate کرنے کے لیے زبان مخصوص
 ---
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/developer/sdk/index.md` کی عکاسی کرتا ہے۔ جب تک legacy Sphinx set ریٹائر نہ ہو دونوں کاپیاں ہم آہنگ رکھیں۔
 :::
 
 اس hub کو استعمال کریں تاکہ SoraFS toolchain کے ساتھ آنے والے language helpers track ہو سکیں۔

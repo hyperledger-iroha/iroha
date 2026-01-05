@@ -41,7 +41,6 @@ public final class NoritoRpcClient {
 
   static final String DEFAULT_ACCEPT = "application/x-norito";
   private static final String DEFAULT_CONTENT_TYPE = "application/x-norito";
-  private static final int FALLBACK_STATUS_CODE = 299;
   private static final String RPC_CALL_SIGNAL = "android.norito_rpc.call";
   private static final String REDACTION_FAILURE_SIGNAL = "android.telemetry.redaction.failure";
 
@@ -55,7 +54,6 @@ public final class NoritoRpcClient {
   private final HttpTransportExecutor transportExecutor;
   private final List<ClientObserver> observers;
   private final NoritoRpcFlowController flowController;
-  private final NoritoRpcFallbackHandler fallbackHandler;
   private final AtomicBoolean deviceProfileEmitted = new AtomicBoolean(false);
 
   private NoritoRpcClient(final Builder builder) {
@@ -90,7 +88,6 @@ public final class NoritoRpcClient {
         builder.flowController != null
             ? builder.flowController
             : NoritoRpcFlowController.unlimited();
-    this.fallbackHandler = builder.fallbackHandler;
   }
 
   /** Creates a new builder for {@link NoritoRpcClient}. */
@@ -125,8 +122,6 @@ public final class NoritoRpcClient {
     final byte[] requestPayload = payload == null ? null : payload.clone();
     builder.setBody(requestPayload);
     final TransportRequest request = builder.build();
-    final NoritoRpcCallContext context =
-        new NoritoRpcCallContext(baseUri, target, path, requestPayload, resolved, request);
     final long startNano = System.nanoTime();
     emitDeviceProfileTelemetry();
     emitNetworkContextTelemetry();
@@ -150,15 +145,14 @@ public final class NoritoRpcClient {
               response.statusCode(),
               "failure",
               error.getClass().getSimpleName(),
-              elapsedMillis,
-              false);
-          return handleFallback(context, error, request, startNano);
+              elapsedMillis);
+          throw error;
         }
         final ClientResponse clientResponse =
             new ClientResponse(response.statusCode(), response.body());
         notifyResponse(request, clientResponse);
         emitRpcCallTelemetry(
-            request, response.statusCode(), "success", null, elapsedMillis, false);
+            request, response.statusCode(), "success", null, elapsedMillis);
         return response.body();
       } finally {
         flowController.release();
@@ -173,9 +167,8 @@ public final class NoritoRpcClient {
           null,
           "failure",
           error.getClass().getSimpleName(),
-          elapsedMillis(startNano),
-          false);
-      return handleFallback(context, error, request, startNano);
+          elapsedMillis(startNano));
+      throw error;
     } catch (final IOException ex) {
       final NoritoRpcException error = new NoritoRpcException("Norito RPC request failed", ex);
       notifyFailure(request, error);
@@ -184,9 +177,8 @@ public final class NoritoRpcClient {
           null,
           "failure",
           error.getClass().getSimpleName(),
-          elapsedMillis(startNano),
-          false);
-      return handleFallback(context, error, request, startNano);
+          elapsedMillis(startNano));
+      throw error;
     }
   }
 
@@ -245,8 +237,7 @@ public final class NoritoRpcClient {
       final Integer statusCode,
       final String outcome,
       final String errorKind,
-      final long latencyMillis,
-      final boolean fallback) {
+      final long latencyMillis) {
     if (!telemetryOptions.enabled() || telemetrySink == null) {
       return;
     }
@@ -262,7 +253,6 @@ public final class NoritoRpcClient {
       fields.put("error_kind", errorKind);
     }
     fields.put("latency_ms", latencyMillis);
-    fields.put("fallback", fallback);
     telemetrySink.emitSignal(RPC_CALL_SIGNAL, fields);
   }
 
@@ -467,44 +457,6 @@ public final class NoritoRpcClient {
     }
   }
 
-  private byte[] handleFallback(
-      final NoritoRpcCallContext context,
-      final NoritoRpcException error,
-      final TransportRequest request,
-      final long startNano) {
-    final byte[] fallbackResponse = attemptFallback(context, error);
-    emitRpcCallTelemetry(
-        request,
-        FALLBACK_STATUS_CODE,
-        "fallback",
-        error.getClass().getSimpleName(),
-        elapsedMillis(startNano),
-        true);
-    return fallbackResponse;
-  }
-
-  private byte[] attemptFallback(
-      final NoritoRpcCallContext context, final NoritoRpcException error) {
-    if (fallbackHandler == null) {
-      throw error;
-    }
-    final byte[] fallbackResponse;
-    try {
-      fallbackResponse = fallbackHandler.handle(context, error);
-    } catch (final RuntimeException runtime) {
-      throw runtime;
-    } catch (final Exception ex) {
-      throw new NoritoRpcException("Norito RPC fallback handler failed", ex);
-    }
-    if (fallbackResponse == null) {
-      throw error;
-    }
-    final ClientResponse clientResponse =
-        new ClientResponse(FALLBACK_STATUS_CODE, fallbackResponse);
-    notifyResponse(context.request(), clientResponse);
-    return fallbackResponse;
-  }
-
   /** Builder for {@link NoritoRpcClient}. */
   public static final class Builder {
     private URI baseUri = URI.create("http://localhost:8080");
@@ -517,7 +469,6 @@ public final class NoritoRpcClient {
     private HttpTransportExecutor transportExecutor;
     private final List<ClientObserver> observers = new ArrayList<>();
     private NoritoRpcFlowController flowController = NoritoRpcFlowController.unlimited();
-    private NoritoRpcFallbackHandler fallbackHandler;
 
     private Builder() {}
 
@@ -594,11 +545,6 @@ public final class NoritoRpcClient {
 
     public Builder setMaxConcurrentRequests(final int maxConcurrentRequests) {
       this.flowController = NoritoRpcFlowController.semaphore(maxConcurrentRequests);
-      return this;
-    }
-
-    public Builder setFallbackHandler(final NoritoRpcFallbackHandler fallbackHandler) {
-      this.fallbackHandler = fallbackHandler;
       return this;
     }
 

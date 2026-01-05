@@ -4,7 +4,10 @@
 
 use iroha_data_model::events::prelude::*;
 
-use crate::stream::{self, WebSocketNorito};
+use crate::{
+    proof_filters,
+    stream::{self, WebSocketNorito},
+};
 
 /// Type of error for `Consumer`
 #[derive(thiserror::Error, Debug)]
@@ -31,6 +34,7 @@ pub struct Consumer<'ws> {
     filters: Vec<EventFilterBox>,
     proof_backend: Option<Vec<String>>,
     proof_call_hash: Option<Vec<[u8; 32]>>,
+    proof_envelope_hash: Option<Vec<[u8; 32]>>,
 }
 
 impl<'ws> Consumer<'ws> {
@@ -40,25 +44,20 @@ impl<'ws> Consumer<'ws> {
     /// Can fail due to timeout or without message at websocket or during decoding request
     #[iroha_futures::telemetry_future]
     pub async fn new(stream: &'ws mut WebSocketNorito) -> Result<Self> {
-        let EventSubscriptionRequest(filters) = stream.recv::<EventSubscriptionRequest>().await?;
-        // Optional proof-specific filters message; read with a short timeout if present
-        let mut consumer = Consumer {
+        let request = stream.recv::<EventSubscriptionRequest>().await?;
+        let (proof_backend, proof_call_hash, proof_envelope_hash) =
+            proof_filters::normalize_proof_filters(
+                request.proof_backend,
+                request.proof_call_hash,
+                request.proof_envelope_hash,
+            );
+        Ok(Consumer {
             stream,
-            filters,
-            proof_backend: None,
-            proof_call_hash: None,
-        };
-        if let Ok(proof) = consumer
-            .stream
-            .recv_with_timeout::<EventSubscriptionProofFilter>(core::time::Duration::from_millis(
-                50,
-            ))
-            .await
-        {
-            consumer.proof_backend = proof.proof_backend;
-            consumer.proof_call_hash = proof.proof_call_hash;
-        }
-        Ok(consumer)
+            filters: request.filters,
+            proof_backend,
+            proof_call_hash,
+            proof_envelope_hash,
+        })
     }
 
     /// Forwards the `event` over the `stream` if it matches the `filter`.
@@ -70,49 +69,18 @@ impl<'ws> Consumer<'ws> {
         if !self.filters.iter().any(|filter| filter.matches(&event)) {
             return Ok(());
         }
-        // Apply optional proof-specific filters even when streaming via WebSocket.
-        if let EventBox::Data(ev) = &event {
-            if let iroha_data_model::prelude::DataEvent::Proof(pe) = ev.as_ref() {
-                let mut drop = false;
-                match pe {
-                    iroha_data_model::events::data::proof::ProofEvent::Verified(v) => {
-                        if let Some(bs) = &self.proof_backend {
-                            let backend = v.id.backend.clone();
-                            if !bs.contains(&backend) {
-                                drop = true;
-                            }
-                        }
-                        if let Some(hs) = &self.proof_call_hash {
-                            if !v.call_hash.as_ref().is_some_and(|hash| hs.contains(hash)) {
-                                drop = true;
-                            }
-                        }
-                    }
-                    iroha_data_model::events::data::proof::ProofEvent::Rejected(r) => {
-                        if let Some(bs) = &self.proof_backend {
-                            let backend = r.id.backend.clone();
-                            if !bs.contains(&backend) {
-                                drop = true;
-                            }
-                        }
-                        if let Some(hs) = &self.proof_call_hash {
-                            if !r.call_hash.as_ref().is_some_and(|hash| hs.contains(hash)) {
-                                drop = true;
-                            }
-                        }
-                    }
-                    iroha_data_model::events::data::proof::ProofEvent::Pruned(p) => {
-                        if let Some(bs) = &self.proof_backend {
-                            if !bs.contains(&p.backend) {
-                                drop = true;
-                            }
-                        }
-                    }
-                }
-                if drop {
-                    return Ok(());
-                }
-            }
+        if proof_filters::has_any_proof_filters(
+            &self.proof_backend,
+            &self.proof_call_hash,
+            &self.proof_envelope_hash,
+        ) && !proof_filters::event_matches_proof_filters(
+            &event,
+            &self.proof_backend,
+            &self.proof_call_hash,
+            &self.proof_envelope_hash,
+            false,
+        ) {
+            return Ok(());
         }
 
         self.stream

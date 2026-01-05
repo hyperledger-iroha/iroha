@@ -75,8 +75,7 @@ Lorsque `--manifest-signatures-out` est fourni (avec au moins un flag `--council
 l'outil écrit également une enveloppe `manifest_signatures.json` contenant le digest BLAKE3 du
 manifeste, le digest SHA3-256 agrégé du plan de chunks (offsets, longueurs et digests BLAKE3 de
 chunks) et les signatures du conseil fournies. L'enveloppe enregistre désormais le profil de
-chunker sous la forme canonique `namespace.name@semver` ; les enveloppes anciennes `namespace-name`
-restent valides pour compatibilité. L'automatisation downstream peut publier l'enveloppe dans les
+chunker sous la forme canonique `namespace.name@semver`. L'automatisation downstream peut publier l'enveloppe dans les
 journaux de gouvernance ou la distribuer avec les artefacts manifeste/CAR. Lorsque vous recevez
 une enveloppe d'un signataire externe, ajoutez `--manifest-signatures-in=<path>` afin que la CLI
 confirme les digests et vérifie chaque signature Ed25519 par rapport au digest du manifeste
@@ -108,7 +107,6 @@ Les clients multi-sources peuvent alimenter le JSON résultant directement dans 
 de fetch SoraFS sans relire le payload source. Le rapport JSON imprimé par la CLI inclut également
 ce tableau sous `chunk_fetch_specs`. La section `chunking` et l'objet `manifest` exposent
 `profile_aliases` aux côtés du handle `profile` canonique afin que les SDK migrent depuis la forme
-legacy `namespace-name` sans perdre de compatibilité.
 
 Lors d'une ré-exécution du stub (par exemple en CI ou dans un pipeline de release), vous pouvez
 passer `--plan=chunk_fetch_specs.json` ou `--plan=-` pour importer la spécification précédemment
@@ -146,7 +144,6 @@ le rapport comme preuve de rollout (voir le handbook de déploiement pour le flu
 Si vous passez `--provider-advert=name=/path/to/advert.to`, la CLI décode désormais l'enveloppe
 Norito, vérifie la signature Ed25519 et impose que le fournisseur annonce la capacité
 `chunk_range_fetch`. Cela maintient la simulation de fetch multi-sources alignée sur la politique
-d'admission de gouvernance et évite l'utilisation accidentelle de fournisseurs legacy incapables de
 satisfaire des requêtes de chunk par plage.
 
 Le suffixe `#N` augmente la limite de concurrence du fournisseur, tandis que `@W` définit le poids

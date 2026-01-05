@@ -19,10 +19,10 @@
   sync checks.
 - Revalidated parity after the Rust Norito panic payload copy cleanup; Python
   bindings required no code changes beyond rerunning the parity suite.
-- Recorded the Rust Norito compatibility cleanup (legacy length readers and lenient
-  instruction deframing removed; bundled-only streaming defaults). Python bindings
-  continue to use the canonical encoder/decoder paths and require no API changes,
-  but the parity check was rerun to mirror the stricter framing.
+- Recorded the Rust Norito cleanup (old length readers and lenient instruction
+  deframing removed; bundled-only streaming defaults). Python bindings continue
+  to use the canonical encoder/decoder paths and require no API changes, but
+  the parity check was rerun to mirror the stricter framing.
 - Added `from_bytes_view`/`ArchiveView.decode` so callers can deframe archives and
   inspect header flags/minor hints, matching the new Rust `ArchiveView::flags*`
   accessors.

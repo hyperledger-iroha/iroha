@@ -4,7 +4,6 @@ This section describes the peer-to-peer (P2P) queue capacities and the metrics e
 
 ### Queue Capacities ([network] settings)
 
-Iroha's networking layer always uses bounded channels to keep memory usage predictable and surface backpressure. The historical `p2p_bounded_queues` feature flag is retained for compatibility but no longer changes behaviour. Configure the capacities under `[network]`:
 
 - `p2p_queue_cap_high` (usize, default: 8192)
   - Capacity of the high-priority network message queue (consensus/control messages).
@@ -256,7 +255,6 @@ cargo build --workspace -F iroha_p2p/handshake_chain_id
 
 Notes
 - Enable `handshake_chain_id` when you want inbound and outbound peers to bind the signed handshake to a specific chain.
-- Leaving the feature disabled keeps the signed handshake payload backwards compatible.
 
 ### ACL: Allow/Deny (Keys and CIDRs)
 
@@ -291,7 +289,6 @@ Notes
 - Build-time: enable `iroha_p2p/quic` to include QUIC support.
 - Runtime: set `[network].quic_enabled = true` to turn on the QUIC listener and allow outbound try‑QUIC dials. When a QUIC attempt fails, the dialer falls back to TCP automatically.
 - Current status: inbound QUIC listener is implemented and spawns peers for accepted bidirectional streams. Outbound dialing can attempt QUIC to hostnames (with TCP fallback).
-- Compatibility: authentication remains at the application layer (the same signed handshake binds identity to the advertised address and optionally the `chain_id`).
 
 ### TLS-over-TCP (camouflage)
 
@@ -304,7 +301,6 @@ Notes
 
 - Build-time: enable `iroha_p2p/noise_handshake` to derive the session key from a Noise XX exchange.
 - Behavior: peers still perform the SoraNet handshake (PoW + capability negotiation). After that, they run a Noise XX handshake over the same framing and derive a 32-byte session key from the handshake hash for message encryption.
-- Compatibility: identity is still authenticated by the signed handshake payload (address + optional `chain_id`). Both peers must be built with the feature enabled; mixed builds will fail the handshake.
 
 ### WebSocket Fallback (p2p_ws)
 

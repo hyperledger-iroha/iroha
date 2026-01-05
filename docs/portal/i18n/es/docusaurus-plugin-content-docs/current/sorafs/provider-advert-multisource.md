@@ -75,7 +75,7 @@ La cobertura de regresión vive en
   sus artefactos JSON para que los dashboards sigan la adopción de la feature.
 - Los fixtures bajo `fixtures/sorafs_manifest/provider_admission/` ahora incluyen:
   - adverts multi-origen canónicos,
-  - una variante legada sin rango para pruebas de downgrade, y
+  - una variante alternativa sin rango para pruebas de downgrade, y
   - `multi_fetch_plan.json` para que las suites de SDK reproduzcan un plan de fetch
     multi-peer determinista.
 

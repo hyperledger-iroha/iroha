@@ -18,14 +18,30 @@ fast transaction validation.
   spills entries beyond the configured hot capacity to the on-disk cold tier.
   Cold payloads are written using Norito encoding alongside a snapshot manifest
   (`manifest.json`) that records key hashes, value fingerprints, and relative
-  spill paths.
+  spill paths. The manifest is written atomically (temp file + fsync) before the
+  snapshot directory is promoted.
 - Runtime configuration lives under `iroha_config.parameters.tiered_state`
-  (`enabled`, `hot_retained_keys`, `cold_store_root`, `max_snapshots`). The node
-  applies these knobs at startup via `State::set_tiered_backend`, and the default
-  build keeps the feature disabled until operators opt in.
+  (`enabled`, `hot_retained_keys`, `hot_retained_bytes`, `hot_retained_grace_snapshots`,
+  `cold_store_root`, `max_snapshots`, `max_cold_bytes`). The node applies these
+  knobs at startup via `State::set_tiered_backend`, and the default build keeps
+  the feature disabled until operators opt in.
+- `hot_retained_bytes` enforces a hot-tier byte budget derived from the exact
+  serialized payload size (Norito JSON). Grace retention may temporarily exceed
+  this budget; the overflow is reported via telemetry.
+- `hot_retained_grace_snapshots` keeps newly hot entries pinned for a short
+  window to reduce hot/cold churn when rankings fluctuate.
+- Cold payloads reuse the last persisted shard when the value hash is unchanged,
+  avoiding redundant re-encoding work across snapshots.
+- `max_cold_bytes` prunes the oldest snapshot directories once total cold storage
+  exceeds the configured budget (always retaining the newest snapshot).
+- Changing `cold_store_root` resets the in-memory tiering metadata and snapshot
+  counter so new roots start with a clean hot/cold ordering.
 - `StateBlock::commit` records a fresh snapshot under the configured cold root
   (pruning older directories according to `max_snapshots`) while holding the
   world-state write lock, guaranteeing deterministic manifests across peers.
+- Snapshot directories use a zero-padded 20-digit index (e.g., `00000000000000000001`);
+  pruning only targets those canonical snapshot directories so auxiliary folders
+  such as `lanes/` and `retired/` remain intact.
 
 ## Snapshot authenticity & recovery
 
@@ -38,8 +54,8 @@ fast transaction validation.
 - `snapshot.signing_private_key` can override the key used to sign snapshots if you want to separate signing from the node identity key.
 - Operational flow:
   1. Ensure the node identity key is available when `snapshot.mode = "read_write"`.
-  2. On creation, the node writes `snapshot.data`, `snapshot.sha256`, and `snapshot.sig` atomically (temp files renamed in place).
-  3. On startup, restore loads `snapshot.data`, verifies the Merkle metadata (`snapshot.merkle.json`), recomputes the digest, verifies the signature, then checks block hashes against Kura.
+  2. On creation, the node writes `snapshot.data`, `snapshot.sha256`, `snapshot.sig`, and `snapshot.merkle.json` atomically (temp files renamed in place) and fsyncs the snapshot directory.
+  3. On startup, restore loads `snapshot.data`, verifies the Merkle metadata (`snapshot.merkle.json`), recomputes the digest, verifies the signature, confirms the snapshot `chain_id` matches the configured chain, then checks block hashes against Kura.
   4. If any check fails, the node falls back to building state from genesis.
 
 ### Operator checklist

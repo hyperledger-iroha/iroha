@@ -12,8 +12,7 @@ import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
 /**
- * Gradle harness that runs the existing main-based tests under the Gradle {@code test} task so the
- * legacy {@code run_tests.sh} script can be retired.
+ * Gradle harness that runs the existing main-based tests under the Gradle {@code test} task.
  */
 @RunWith(Parameterized.class)
 public final class GradleHarnessTests {
@@ -55,7 +54,6 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.connect.ConnectRetryPolicyTests",
         "org.hyperledger.iroha.android.crypto.Blake2sTests",
         "org.hyperledger.iroha.android.crypto.SoftwareKeyProviderFallbackTests",
-        "org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporterGoldenVectorTests",
         "org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporterTests",
         "org.hyperledger.iroha.android.crypto.keystore.AndroidKeystoreBackendDetectionTests",
         "org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProviderTests",
@@ -65,7 +63,6 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.gpu.CudaAcceleratorsKotlinFacadeTests",
         "org.hyperledger.iroha.android.gpu.CudaAcceleratorsNativeSmokeTests",
         "org.hyperledger.iroha.android.gpu.CudaAcceleratorsTests",
-        "org.hyperledger.iroha.android.model.instructions.InstructionKindAliasTests",
         "org.hyperledger.iroha.android.model.instructions.InstructionSchemaManifestTests",
         "org.hyperledger.iroha.android.nexus.SpaceDirectoryInstructionBuilderTests",
         "org.hyperledger.iroha.android.norito.NoritoCodecAdapterTests",

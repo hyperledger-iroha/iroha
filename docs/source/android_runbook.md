@@ -71,7 +71,7 @@ sections below:
   operators.
 - If the watcher continues to emit errors, run the targeted harness to reproduce
   the parse failure with the suspect manifest:
-  `java/iroha_android/run_tests.sh org.hyperledger.iroha.android.client.ConfigWatcherTests`.
+  `ci/run_android_tests.sh org.hyperledger.iroha.android.client.ConfigWatcherTests`.
   Attach the test output and the failing manifest to the incident bundle so SRE
   can diff it against the baked configuration schema.
 - When reload telemetry is missing, confirm the active `ClientConfig` carries a
@@ -85,12 +85,10 @@ sections below:
   PBKDF2-HMAC-SHA256 with a 350 k iteration floor when Argon2id is unavailable on the device. Bundle
   AAD still binds to the alias; passphrases must be at least 12 characters for v3 exports and the
   importer rejects all-zero salt/nonce seeds.
-- Legacy v0/v1/v2 bundles remain decodable for recovery. Inspect version/kdf metadata via
   `KeyExportBundle.decode(Base64|bytes)`, import with the original passphrase, and re-export to v3 to
   move to the memory-hard format. The importer rejects all-zero or reused salt/nonce pairs; always
   rotate bundles instead of reusing old exports between devices.
-- Negative-path tests in `java/iroha_android/run_tests.sh --tests org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporterTests`
-  cover wrong passphrases, tampered salt/nonce/ciphertext, legacy v0 decode/import, and zero-seed
+- Negative-path tests in `ci/run_android_tests.sh --tests org.hyperledger.iroha.android.crypto.export.DeterministicKeyExporterTests`
   rejection. Clear passphrase char arrays after use and capture both the bundle version and `kdf_kind`
   in incident notes when recovery fails.
 
@@ -216,7 +214,7 @@ sections below:
   governance packet is circulated. Include the refreshed JSON in
   `docs/source/sdk/android/readiness/schema_diffs/` and link it from the
   incident, chaos lab, or enablement report that triggered the rerun.
-- **CI/unit coverage:** `java/iroha_android/run_tests.sh` must pass before
+- **CI/unit coverage:** `ci/run_android_tests.sh` must pass before
   publishing builds; the suite enforces hashing/override behaviour by exercising
   the telemetry exporters with sample payloads.
 - **Injector sanity checks:** Use
@@ -236,7 +234,7 @@ schema diff introduces or removes fields.
 | Category | Android exporters | Rust services | Validation hook |
 |----------|-------------------|---------------|-----------------|
 | Authority / route context | Hash `authority`/`alias` via Blake2b-256 and drop raw Torii hostnames before export; emit `android.telemetry.redaction.salt_version` to prove salt rotation. | Emit full Torii hostnames and peer IDs for correlation. | Compare `android.torii.http.request` vs `torii.http.request` entries in the latest schema diff under `readiness/schema_diffs/`, then confirm `android.telemetry.redaction.salt_version` matches the cluster salt by running `scripts/telemetry/check_redaction_status.py`. |
-| Device & signer identity | Bucket `hardware_tier`/`device_profile`, hash controller aliases, and never export serial numbers. | No device metadata; nodes emit validator `peer_id` and controller `public_key` verbatim. | Mirror the mappings in `docs/source/sdk/mobile_device_profile_alignment.md`, audit `PendingQueueInspector` outputs during labs, and ensure the alias hashing tests inside `java/iroha_android/run_tests.sh` remain green. |
+| Device & signer identity | Bucket `hardware_tier`/`device_profile`, hash controller aliases, and never export serial numbers. | No device metadata; nodes emit validator `peer_id` and controller `public_key` verbatim. | Mirror the mappings in `docs/source/sdk/mobile_device_profile_alignment.md`, audit `PendingQueueInspector` outputs during labs, and ensure the alias hashing tests inside `ci/run_android_tests.sh` remain green. |
 | Network metadata | Export only `network_type` + `roaming` booleans; `carrier_name` is dropped. | Rust retains peer hostnames plus full TLS endpoint metadata. | Store the latest diff JSON in `readiness/schema_diffs/` and confirm that the Android side still omits `carrier_name`. Alert if Grafana’s “Network Context” widget shows any carrier strings. |
 | Override / chaos evidence | Emit `android.telemetry.redaction.override` and `android.telemetry.chaos.scenario` events with masked actor roles. | Rust services emit override approvals without role masking and no chaos-specific spans. | Cross-check `docs/source/sdk/android/readiness/and7_operator_enablement.md` after every drill to ensure override tokens and chaos artefacts are archived alongside the unmasked Rust events. |
 
@@ -507,9 +505,9 @@ quickly each responder is expected to join the bridge.
    `examples/android/operator-console`, toggle airplane mode, submit the demo
    transfers, then disable airplane mode and watch queue depth metrics.
 4. Pull each pending queue (`adb shell run-as <app-id> cat files/pending.queue >
-   /tmp/<serial>.queue`), compile the inspector (`cd java/iroha_android &&
-   ./run_tests.sh >/dev/null`), and run
-   `java -cp build/classes org.hyperledger.iroha.android.tools.PendingQueueInspector --file
+   /tmp/<serial>.queue`), compile the inspector (`gradle -p java/iroha_android
+   :core:classes >/dev/null`), and run `java -cp build/classes
+   org.hyperledger.iroha.android.tools.PendingQueueInspector --file
    /tmp/<serial>.queue --json > queue-replay-<serial>.json`. Attach decoded
    envelopes plus replay hashes to the lab log.
 5. Update the chaos report with exporter outage duration, queue depth before/after,
@@ -539,7 +537,7 @@ artefacts are captured for governance.
   -n android-telemetry-stg` output to establish the baseline state, then store
   both under `docs/source/sdk/android/readiness/labs/reports/<date>/`.
 - Confirm device coverage (Pixel + emulator) and ensure
-  `java/iroha_android/run_tests.sh` compiled the tools used during the lab
+  `ci/run_android_tests.sh` compiled the tools used during the lab
   (`PendingQueueInspector`, telemetry injectors).
 
 **Execution checkpoints**
@@ -569,7 +567,7 @@ artefacts are captured for governance.
 | T−30 min | Verify `android-telemetry-stg` health: `kubectl --context staging get pods -n android-telemetry-stg`, confirm no pending upgrades, and note collector versions. | Haruka | `docs/source/sdk/android/readiness/screenshots/<date>/cluster-health.png` |
 | T−20 min | Seed baseline load (`scripts/telemetry/generate_android_load.sh --cluster android-telemetry-stg --duration 20m`) and capture stdout. | Liam | `readiness/labs/reports/<date>/load-generator.log` |
 | T−15 min | Copy `docs/source/sdk/android/readiness/incident/telemetry_chaos_template.md` to `docs/source/sdk/android/readiness/incident/<date>-telemetry-chaos.md`, list scenarios to run (C1–C7), and assign scribes. | Priya Deshpande (Support) | Incident markdown committed before rehearsal starts. |
-| T−10 min | Confirm Pixel + emulator online, latest SDK installed, and `java/iroha_android/run_tests.sh` compiled the `PendingQueueInspector`. | Haruka, Liam | `readiness/screenshots/<date>/device-checklist.png` |
+| T−10 min | Confirm Pixel + emulator online, latest SDK installed, and `ci/run_android_tests.sh` compiled the `PendingQueueInspector`. | Haruka, Liam | `readiness/screenshots/<date>/device-checklist.png` |
 | T−5 min | Start Zoom bridge, begin screen recording, and announce “chaos start” in `#android-sdk-support`. | IC / Docs/Support | Recording saved under `readiness/archive/<month>/`. |
 | +0 min | Execute the selected scenario from `docs/source/sdk/android/readiness/labs/telemetry_lab_01.md` (typically C2 + C6). Keep the lab guide visible and call out command invocations as they happen. | Haruka drives, Liam mirrors results | Logs attached to the incident file in real time. |
 | +15 min | Pause to collect metrics (`scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status`) and grab Grafana screenshots. | Haruka | `readiness/screenshots/<date>/status-<scenario>.png` |
@@ -635,7 +633,7 @@ artefacts are captured for governance.
   `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md` with the attestation date.
 - **Mock rehearsal:** When hardware is unavailable, run `scripts/android_generate_mock_attestation_bundles.sh`
   (which uses `scripts/android_mock_attestation_der.py`) to mint deterministic test bundles plus a shared mock root so CI and docs can exercise the harness end-to-end.
-- **In-code guardrails:** `java/iroha_android/run_tests.sh --tests
+- **In-code guardrails:** `ci/run_android_tests.sh --tests
   org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProviderTests` covers empty vs challenged
   attestation regeneration (StrongBox/TEE metadata) and emits `android.keystore.attestation.failure`
   on challenge mismatch so cache/telemetry regressions are caught before shipping new bundles.
@@ -684,8 +682,7 @@ Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
   to capture canonical hashes/aliases for the incident artefacts:
 
   ```bash
-  cd java/iroha_android
-  ./run_tests.sh >/dev/null  # compiles classes if needed
+  gradle -p java/iroha_android :core:classes >/dev/null  # compiles classes if needed
   java -cp build/classes org.hyperledger.iroha.android.tools.PendingQueueInspector \
     --file /tmp/pending.queue --json > queue-inspector.json
   ```
@@ -693,7 +690,7 @@ Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
   Attach `queue-inspector.json` and the pretty-printed stdout to the incident
   and link it from the AND7 lab report for Scenario D.
 - **Torii connectivity:** Run the HTTP transport harness locally to rule out SDK
-  regressions: `java/iroha_android/run_tests.sh` exercises
+  regressions: `ci/run_android_tests.sh` exercises
   `HttpClientTransportTests`, `HttpClientTransportHarnessTests`, and
   `ToriiMockServerTests`. Failures here indicate a client bug rather than a
   Torii outage.
@@ -747,7 +744,6 @@ Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
   misconfiguration or a policy change. Attach the generated `result.json`.
 - **Challenge regen:** Challenges are not cached. Each challenge request regenerates a fresh
   attestation and caches by `(alias, challenge)`; challenge-less calls reuse the cache. Unsupported
-  challenge APIs surface telemetry and errors so clients can fall back to legacy flows.
 - **CI sweep:** Execute `scripts/android_strongbox_attestation_ci.sh` so every
   stored bundle is revalidated; this guards against systemic issues introduced
   by new trust anchors.
@@ -756,7 +752,7 @@ Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
   the telemetry exporter emits the `android.keystore.attestation.failure` event
   with the expected reason. Repeat on a StrongBox-capable Pixel to ensure the
   happy path stays green.
-- **SDK regression check:** Run `java/iroha_android/run_tests.sh` and pay
+- **SDK regression check:** Run `ci/run_android_tests.sh` and pay
   attention to the attestation-focused suites (`AndroidKeystoreBackendDetectionTests`,
   `AttestationVerifierTests`, `IrohaKeyManagerDeterministicExportTests`,
   `KeystoreKeyProviderTests` for cache/challenge separation). Failures here
@@ -775,14 +771,12 @@ Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
 ### 9.2a Deterministic Export Recovery
 
 - **Formats:** Current exports are v3 (per-export salt/nonce + Argon2id, recorded as
-  `kdf_kind`/`kdf_work_factor`). Legacy v0/v1 bundles remain decodable for recovery.
 - **Passphrase policy:** v3 enforces ≥12 character passphrases. If users supply shorter
   passphrases, instruct them to re-export with a compliant passphrase; v0/v1 imports are
   exempt but should be rewrapped as v3 immediately after import.
 - **Tamper/reuse guards:** Decoders reject zero/short salt or nonce lengths and repeated
   salt/nonce pairs surface as `salt/nonce reuse` errors. Regenerate the export to clear
   the guard; do not attempt to force reuse.
-- **Upgrade workflow:** When handed a legacy bundle, call
   `SoftwareKeyProvider.importDeterministic(...)` to rehydrate the key, then
   `exportDeterministic(...)` to emit a v3 bundle so desktop tooling records the new KDF
   parameters.
@@ -813,7 +807,7 @@ Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
   audit command) to retrieve the node’s advertised crypto/ABI hashes and ensure
   they match the mobile manifest. A mismatch confirms the node was rolled back
   without reissuing the Android manifest.
-- **SDK regression check:** `java/iroha_android/run_tests.sh` covers
+- **SDK regression check:** `ci/run_android_tests.sh` covers
   `ClientConfigNoritoRpcTests`, `ClientConfig.ValidationTests`, and
   `HttpClientTransportStatusTests`. Failures signal that the shipped SDK cannot
   parse the manifest format currently deployed.

@@ -165,7 +165,7 @@ sorafs_cli manifest verify-signature \
 - راقب `torii_sorafs_gateway_refusals_total` و `torii_sorafs_replication_sla_total{outcome="missed"}` لاكتشاف الشذوذ.
 - شغّل `npm run probe:portal` لاختبار وكيل Try-It وروابط التحقق على المحتوى المثبت.
 - اجمع ادلة المراقبة المذكورة في
-  [Publishing & Monitoring](./publishing-monitoring.md) لتلبية بوابة الملاحظة DOCS-3c. يدعم المساعد الان عدة `bindings` (الموقع، OpenAPI، SBOM للبوابة، SBOM لـ OpenAPI) ويفرض `Sora-Name`/`Sora-Proof`/`Sora-Content-CID` على المضيف المستهدف عبر حارس `expectHost`. الاستدعاء ادناه يكتب ملخص JSON واحدا وحزمة الادلة (`portal.json`، `tryit.json`، `binding.json`، `checksums.sha256`) تحت مجلد الاصدار:
+  [Publishing & Monitoring](./publishing-monitoring.md) لتلبية بوابة الملاحظة DOCS-3c. يدعم المساعد الان عدة `bindings` (الموقع، OpenAPI، SBOM للبوابة، SBOM لـ OpenAPI) ويفرض `Sora-Name`/`Sora-Proof`/`Sora-Content-CID` على المضيف المستهدف عبر حارس `hostname`. الاستدعاء ادناه يكتب ملخص JSON واحدا وحزمة الادلة (`portal.json`، `tryit.json`، `binding.json`، `checksums.sha256`) تحت مجلد الاصدار:
 
   ```bash
   npm run monitor:publishing -- \
@@ -338,7 +338,7 @@ node scripts/generate-dns-cutover-plan.mjs \
 - يحتوي `portal.gateway.headers.txt` على كتلة رؤوس HTTP كاملة (بما في ذلك `Sora-Name` و`Sora-Content-CID` و`Sora-Proof` وCSP وHSTS و`Sora-Route-Binding`) والتي يجب على بوابات الحافة لصقها في كل رد.
 - يسجل `portal.gateway.binding.json` المعلومات نفسها بشكل مقروء آليا حتى تتمكن تذاكر التغيير والاتمتة من مقارنة host/cid دون كشط مخرجات shell.
 
-يتم توليدها تلقائيا عبر `cargo xtask soradns-binding-template` (الذي استبدل مساعد Node القديم) وتلتقط alias وبصمة المانيفست وhostname الخاص بالبوابة الممرر الى `sorafs-pin-release.sh`. لاعادة التوليد او التخصيص:
+يتم توليدها تلقائيا عبر `cargo xtask soradns-binding-template` وتلتقط alias وبصمة المانيفست وhostname الخاص بالبوابة الممرر الى `sorafs-pin-release.sh`. لاعادة التوليد او التخصيص:
 
 ```bash
 cargo xtask soradns-binding-template \
@@ -354,15 +354,15 @@ cargo xtask soradns-binding-template \
 
 ارفق مقطع الرؤوس بطلب تغيير CDN وادفع وثيقة JSON الى خط الالة الخاص بالبوابة حتى تتطابق ترقية المضيف مع ادلة الاصدار.
 
-يستمر سكربت الاصدار في شحن سكربت Node للتوافق الخلفي، لكن مسار xtask هو الاساسي. يشغّل سكربت الاصدار مساعد التحقق تلقائيا حتى تحتوي تذاكر DG-3 على ادلة حديثة. اعد تشغيله يدويا عند تعديل JSON الربط:
+يشغّل سكربت الاصدار مساعد التحقق تلقائيا حتى تحتوي تذاكر DG-3 على ادلة حديثة. اعد تشغيله يدويا عند تعديل JSON الربط:
 
 ```bash
 cargo xtask soradns-verify-binding \
   --binding artifacts/sorafs/portal.gateway.binding.json \
   --alias docs.sora.link \
-  --content-cid "$(jq -r '.contentCid' artifacts/sorafs/portal.gateway.binding.json)" \
   --hostname docs.sora.link \
-  --proof-status ok
+  --proof-status ok \
+  --manifest-json artifacts/sorafs/portal.manifest.json
 ```
 
 تفك هذه الاوامر حمولة `Sora-Proof` المدبسة وتتاكد من ان بيانات `Sora-Route-Binding` تطابق CID المانيفست والـ hostname وتفشل اذا انحرف اي رأس. احتفظ بمخرجات الكونسول مع باقي artefacts عند تشغيل الامر خارج CI.
@@ -381,7 +381,7 @@ npm run monitor:publishing -- \
   --evidence-dir ../../artifacts/sorafs/${RELEASE_TAG}/monitoring
 ```
 
-- يقوم `scripts/monitor-publishing.mjs` بتحميل ملف الاعداد (راجع `docs/portal/docs/devportal/publishing-monitoring.md` للمخطط) وتنفيذ ثلاث فحوصات: مسارات البوابة مع تحقق CSP/Permissions-Policy، مسبارات وكيل Try it (اختياريا `/metrics`)، ومحقق ربط البوابة (`scripts/verify-sorafs-binding.mjs`) الذي يفرض وجود قيمة Sora-Content-CID المتوقعة مع فحص alias/manifest.
+- يقوم `scripts/monitor-publishing.mjs` بتحميل ملف الاعداد (راجع `docs/portal/docs/devportal/publishing-monitoring.md` للمخطط) وتنفيذ ثلاث فحوصات: مسارات البوابة مع تحقق CSP/Permissions-Policy، مسبارات وكيل Try it (اختياريا `/metrics`)، ومحقق ربط البوابة (`cargo xtask soradns-verify-binding`) الذي يفرض وجود قيمة Sora-Content-CID المتوقعة مع فحص alias/manifest.
 - ينهي الامر بخروج غير صفري عند فشل اي probe حتى تتمكن CI/cron/فرق التشغيل من ايقاف الترقية.
 - تمرير `--json-out` يكتب ملخص JSON واحد للحالات؛ و`--evidence-dir` يصدر `summary.json` و`portal.json` و`tryit.json` و`binding.json` و`checksums.sha256` حتى يتمكن مراجعو الحوكمة من مقارنة النتائج دون اعادة التشغيل. احفظ هذا الدليل تحت `artifacts/sorafs/<tag>/monitoring/` مع Sigstore bundle و DNS cutover descriptor.
 - ارفق مخرجات المراقبة وتصدير Grafana (`dashboards/grafana/docs_portal.json`) ومعرف Alertmanager drill بتذكرة الاصدار ليكون SLO الخاص بـ DOCS-3c قابلا للتدقيق لاحقا. كتيب المراقبة مذكور في `docs/portal/docs/devportal/publishing-monitoring.md`.
@@ -496,7 +496,10 @@ npm run monitor:publishing -- \
 
    يفك probe رؤوس `Sora-Name` و`Sora-Proof` و`Sora-Proof-Status` وفق `docs/source/sorafs_alias_policy.md` ويفشل عند انحراف بصمة المانيفست او TTLs او GAR bindings.
 
-   للفحوصات الخفيفة، شغّل `node scripts/verify-sorafs-binding.mjs --alias "<alias>" --manifest "<digest>" --url "<gateway-url>"`.
+   For lightweight spot checks (for example, when only the binding bundle
+   changed), run `cargo xtask soradns-verify-binding --binding <portal.gateway.binding.json> --alias "<alias>" --hostname "<gateway-host>" --proof-status ok --manifest-json <portal.manifest.json>`.
+   The helper validates the captured binding bundle and is handy for release
+   tickets that only need binding confirmation instead of a full probe drill.
 
 2. **جمع ادلة drills.** استخدم `scripts/telemetry/run_sorafs_gateway_probe.sh --scenario devportal-rollout -- ...` لتجميع الرؤوس والسجلات في `artifacts/sorafs_gateway_probe/<stamp>/` وتحديث `ops/drill-log.md`، مع امكانية تشغيل rollback hooks او PagerDuty. اضبط `--host docs.sora` للتحقق من مسار SoraDNS.
 

@@ -648,6 +648,34 @@ fn pointer_kind_for_type(ty: &Type) -> Option<DataRefKind> {
     }
 }
 
+fn is_pointer_eq_type(ty: &Type) -> bool {
+    matches!(
+        semantic::resolve_struct_type(ty),
+        Type::String | Type::Blob | Type::Bytes | Type::Json
+    ) || semantic::is_pointer_type(ty)
+}
+
+fn lower_map_key_eq(ctx: &mut LowerCtx, key_ty: &Type, left: Temp, right: Temp) -> Temp {
+    if is_pointer_eq_type(key_ty) {
+        let t = ctx.new_temp();
+        ctx.current_instr(Instr::PointerEq {
+            dest: t,
+            left,
+            right,
+        });
+        t
+    } else {
+        let t = ctx.new_temp();
+        ctx.current_instr(Instr::Binary {
+            dest: t,
+            op: BinaryOp::Eq,
+            left,
+            right,
+        });
+        t
+    }
+}
+
 fn key_codec_for_type(ty: &Type) -> Option<KeyCodec> {
     match semantic::resolve_struct_type(ty) {
         Type::Int => Some(KeyCodec::Int),
@@ -707,17 +735,21 @@ fn lower_function(func: &TypedFunction, dyn_iter_cap: usize) -> Function {
     ctx.start_block(entry);
     // Ephemeral state allocation for contract-level `state` declarations.
     let mut vars = HashMap::new();
-    let state_env = state_env_snapshot();
-    for (name, ty) in state_env.iter() {
-        allocate_state_value(&mut ctx, &mut vars, name, ty, name);
-    }
+    let mut param_temps = Vec::new();
     for param in &func.params {
         let tmp = ctx.new_temp();
+        param_temps.push((param.clone(), tmp));
         ctx.current_instr(Instr::LoadVar {
             dest: tmp,
             name: param.clone(),
         });
-        vars.insert(param.clone(), tmp);
+    }
+    let state_env = state_env_snapshot();
+    for (name, ty) in state_env.iter() {
+        allocate_state_value(&mut ctx, &mut vars, name, ty, name);
+    }
+    for (name, tmp) in param_temps {
+        vars.insert(name, tmp);
     }
 
     lower_block(&mut ctx, &func.body, &mut vars);
@@ -1452,8 +1484,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             let l = lower_expr(ctx, left, vars);
             let r = lower_expr(ctx, right, vars);
             if matches!(op, BinaryOp::Eq | BinaryOp::Ne)
-                && semantic::is_pointer_type(&left.ty)
-                && semantic::is_pointer_type(&right.ty)
+                && is_pointer_eq_type(&left.ty)
+                && is_pointer_eq_type(&right.ty)
             {
                 let t = ctx.new_temp();
                 ctx.current_instr(Instr::PointerEq {
@@ -1729,7 +1761,17 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     u
                 }
                 "info" => {
-                    let msg = lower_expr(ctx, &args[0], vars);
+                    let msg = if args[0].ty == Type::Int {
+                        let value = lower_expr(ctx, &args[0], vars);
+                        let encoded = ctx.new_temp();
+                        ctx.current_instr(Instr::EncodeInt {
+                            dest: encoded,
+                            value,
+                        });
+                        encoded
+                    } else {
+                        lower_expr(ctx, &args[0], vars)
+                    };
                     ctx.current_instr(Instr::Info { msg });
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
@@ -2007,13 +2049,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         map: m,
                         offset: 0,
                     });
-                    let out = ctx.new_temp();
-                    ctx.current_instr(Instr::Binary {
-                        dest: out,
-                        op: BinaryOp::Eq,
-                        left: sk,
-                        right: key_tmp,
-                    });
+                    let out = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
                     out
                 }
                 "has" => {
@@ -2056,13 +2092,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         map: m,
                         offset: 0,
                     });
-                    let out = ctx.new_temp();
-                    ctx.current_instr(Instr::Binary {
-                        dest: out,
-                        op: BinaryOp::Eq,
-                        left: sk,
-                        right: key_tmp,
-                    });
+                    let out = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
                     out
                 }
                 "get_or_default" => {
@@ -2148,13 +2178,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         value: 0,
                     });
                     let result = ctx.new_temp();
-                    let cond = ctx.new_temp();
-                    ctx.current_instr(Instr::Binary {
-                        dest: cond,
-                        op: BinaryOp::Eq,
-                        left: sk,
-                        right: key_tmp,
-                    });
+                    let cond = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
                     let then_bb = ctx.new_label();
                     let else_bb = ctx.new_label();
                     let end_bb = ctx.new_label();
@@ -2271,13 +2295,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         value: 0,
                     });
                     let result = ctx.new_temp();
-                    let cond = ctx.new_temp();
-                    ctx.current_instr(Instr::Binary {
-                        dest: cond,
-                        op: BinaryOp::Eq,
-                        left: sk,
-                        right: key_tmp,
-                    });
+                    let cond = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
                     let then_bb = ctx.new_label();
                     let else_bb = ctx.new_label();
                     let end_bb = ctx.new_label();
@@ -2966,13 +2984,33 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             }
             // Fallback to ephemeral map get
             let m = lower_expr(ctx, target, vars);
-            let d = ctx.new_temp();
-            ctx.current_instr(Instr::MapGet {
-                dest: d,
-                map: m,
-                key: key_tmp,
-            });
-            d
+            if is_pointer_eq_type(&index.ty) {
+                let sk = ctx.new_temp();
+                let sv = ctx.new_temp();
+                ctx.current_instr(Instr::MapLoadPair {
+                    dest_key: sk,
+                    dest_val: sv,
+                    map: m,
+                    offset: 0,
+                });
+                let flag = lower_map_key_eq(ctx, &index.ty, sk, key_tmp);
+                let out = ctx.new_temp();
+                ctx.current_instr(Instr::Binary {
+                    dest: out,
+                    op: BinaryOp::Mul,
+                    left: sv,
+                    right: flag,
+                });
+                out
+            } else {
+                let d = ctx.new_temp();
+                ctx.current_instr(Instr::MapGet {
+                    dest: d,
+                    map: m,
+                    key: key_tmp,
+                });
+                d
+            }
         }
         semantic::ExprKind::Member { object, field } => {
             // Support nested struct field access via flattened variables: base#i#j
@@ -3448,6 +3486,80 @@ mod tests {
             }
         }
         assert!(saw_transfer, "expected TransferDomain in lowered IR");
+    }
+
+    #[test]
+    fn lower_info_int_encodes_to_norito() {
+        let src = "fn f() { info(7); }";
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed);
+        let f = &ir.functions[0];
+        let mut saw_encode = false;
+        let mut saw_info = false;
+        for bb in &f.blocks {
+            for instr in &bb.instrs {
+                match instr {
+                    Instr::EncodeInt { .. } => saw_encode = true,
+                    Instr::Info { .. } => saw_info = true,
+                    _ => {}
+                }
+            }
+        }
+        assert!(saw_encode, "expected EncodeInt before Info");
+        assert!(saw_info, "expected Info instruction");
+    }
+
+    #[test]
+    fn lower_blob_equality_uses_pointer_eq() {
+        let src = "fn f() { let a = blob(\"hi\"); let b = blob(\"hi\"); let _x = a == b; }";
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed);
+        let f = &ir.functions[0];
+        let mut saw_pointer_eq = false;
+        let mut saw_binary_eq = false;
+        for bb in &f.blocks {
+            for instr in &bb.instrs {
+                match instr {
+                    Instr::PointerEq { .. } => saw_pointer_eq = true,
+                    Instr::Binary {
+                        op: BinaryOp::Eq, ..
+                    } => saw_binary_eq = true,
+                    _ => {}
+                }
+            }
+        }
+        assert!(saw_pointer_eq, "expected PointerEq for blob comparison");
+        assert!(
+            !saw_binary_eq,
+            "blob equality should not lower to integer compare"
+        );
+    }
+
+    #[test]
+    fn lower_map_get_pointer_key_uses_pointer_eq() {
+        let src = "fn f() { let m: Map<Name, int> = Map::new(); let k = name(\"alice\"); let _v = m[k]; }";
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed);
+        let f = &ir.functions[0];
+        let mut saw_pointer_eq = false;
+        let mut saw_map_get = false;
+        for bb in &f.blocks {
+            for instr in &bb.instrs {
+                match instr {
+                    Instr::PointerEq { .. } => saw_pointer_eq = true,
+                    Instr::MapGet { .. } => saw_map_get = true,
+                    _ => {}
+                }
+            }
+        }
+        assert!(saw_pointer_eq, "expected PointerEq for pointer map key");
+        assert!(
+            !saw_map_get,
+            "pointer-key map lookup should not use integer MapGet"
+        );
     }
 
     #[test]

@@ -50,7 +50,6 @@ import org.hyperledger.iroha.android.model.instructions.TransferAssetDefinitionI
 import org.hyperledger.iroha.android.model.instructions.TransferAssetInstruction;
 import org.hyperledger.iroha.android.model.instructions.TransferDomainInstruction;
 import org.hyperledger.iroha.android.model.instructions.TransferNftInstruction;
-import org.hyperledger.iroha.android.model.instructions.DeprecateVerifyingKeyInstruction;
 import org.hyperledger.iroha.android.model.instructions.RegisterVerifyingKeyInstruction;
 import org.hyperledger.iroha.android.model.instructions.UpdateVerifyingKeyInstruction;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
@@ -500,7 +499,7 @@ public final class NoritoCodecAdapterTests {
     final InstructionBox removeAsset =
         InstructionBuilders.removeAssetKeyValue("token#enterprise#alice@enterprise", "obsolete");
     final InstructionBox removeAccount =
-        InstructionBuilders.removeAccountKeyValue("alice@enterprise", "deprecated_key");
+        InstructionBuilders.removeAccountKeyValue("alice@enterprise", "archived_key");
     final InstructionBox removeTrigger =
         InstructionBuilders.removeTriggerKeyValue("daily-report", "last_run");
 
@@ -566,7 +565,7 @@ public final class NoritoCodecAdapterTests {
     assert removeAccountInstruction.target() == RemoveKeyValueInstruction.Target.ACCOUNT
         : "Remove account key value target";
     assert "alice@enterprise".equals(removeAccountInstruction.objectId()) : "Remove account id";
-    assert "deprecated_key".equals(removeAccountInstruction.key()) : "Remove account key";
+    assert "archived_key".equals(removeAccountInstruction.key()) : "Remove account key";
 
     final RemoveKeyValueInstruction removeTriggerInstruction =
         (RemoveKeyValueInstruction) instructions.get(6).payload();
@@ -1135,8 +1134,7 @@ public final class NoritoCodecAdapterTests {
             .setInlineKeyBytes(updateVkBytes)
             .setGasScheduleId("halo2_patch_1")
             .setMaxProofBytes(5000)
-            .setDeprecationHeight(200L)
-            .setStatus(VerifyingKeyStatus.DEPRECATED)
+            .setStatus(VerifyingKeyStatus.WITHDRAWN)
             .build("halo2/ipa");
 
     final UpdateVerifyingKeyInstruction updateInstruction =
@@ -1144,12 +1142,6 @@ public final class NoritoCodecAdapterTests {
             .setBackend("halo2/ipa")
             .setName("vk_main")
             .setRecord(updateRecord)
-            .build();
-
-    final DeprecateVerifyingKeyInstruction deprecateInstruction =
-        DeprecateVerifyingKeyInstruction.builder()
-            .setBackend("halo2/ipa")
-            .setName("vk_legacy")
             .build();
 
     final TransactionPayload payload =
@@ -1160,8 +1152,7 @@ public final class NoritoCodecAdapterTests {
                 Executable.instructions(
                     List.of(
                         InstructionBox.of(registerInstruction),
-                        InstructionBox.of(updateInstruction),
-                        InstructionBox.of(deprecateInstruction))))
+                        InstructionBox.of(updateInstruction))))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
@@ -1169,7 +1160,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
 
     final List<InstructionBox> instructions = decoded.executable().instructions();
-    assert instructions.size() == 3 : "Expected verifying key instruction trio";
+    assert instructions.size() == 2 : "Expected verifying key instruction pair";
 
     final InstructionBox registerBox = instructions.get(0);
     assert registerBox.payload() instanceof RegisterVerifyingKeyInstruction
@@ -1187,13 +1178,6 @@ public final class NoritoCodecAdapterTests {
     assert updateInstruction.equals(decodedUpdate)
         : "UpdateVerifyingKey fields must round-trip";
 
-    final InstructionBox deprecateBox = instructions.get(2);
-    assert deprecateBox.payload() instanceof DeprecateVerifyingKeyInstruction
-        : "DeprecateVerifyingKey should hydrate";
-    final DeprecateVerifyingKeyInstruction decodedDeprecate =
-        (DeprecateVerifyingKeyInstruction) deprecateBox.payload();
-    assert deprecateInstruction.equals(decodedDeprecate)
-        : "DeprecateVerifyingKey fields must round-trip";
   }
 
   private static byte[] emitFixtureMetadata(

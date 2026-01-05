@@ -166,7 +166,6 @@ expect کرتا ہے۔ binary snapshot میں شامل ہے:
   dual signatures رکھتا ہے۔
 
 CLI ہر bundle کو declared issuer keys کے خلاف verify کرتی ہے اور پھر directory کو
-guard cache کے ساتھ merge کرتی ہے۔ legacy JSON sketches اب قبول نہیں؛ SRCv2
 snapshots لازمی ہیں۔
 
 `--guard-directory` کے ساتھ CLI چلائیں تاکہ تازہ ترین consensus کو موجودہ cache
@@ -193,7 +192,6 @@ Guard directories اب `certificate_base64` کے ذریعے مکمل SRCv2 bundl
 re-validate کرتا ہے، اور parsed certificate کو guard cache کے ساتھ محفوظ رکھتا
 ہے۔ جب certificate موجود ہو تو وہ PQ keys، handshake preferences، اور weighting
 کا canonical source بن جاتا ہے؛ expired certificates discard کر دیے جاتے ہیں اور
-selector legacy descriptor fields پر واپس جاتا ہے۔ certificates circuit lifecycle
 management کے ذریعے propagate ہوتے ہیں اور `telemetry::sorafs.guard` اور
 `telemetry::sorafs.circuit` کے ذریعے surface ہوتے ہیں، جو validity window،
 handshake suites، اور dual signatures کے مشاہدے کو ریکارڈ کرتے ہیں۔
@@ -348,7 +346,6 @@ proxy کے emit کردہ transport events کو `sorafs_orchestrator_transport_ev
   `x-sorafs-cache-tag` header میں mirror کرتے ہیں تاکہ cached guard selections
   rest میں encrypted رہیں۔
 
-یہ فیلڈز backward compatible ہیں — پرانے کلائنٹس نئی keys کو ignore کر سکتے ہیں
 اور v1 subset پر انحصار جاری رکھ سکتے ہیں۔
 
 ## 2. Failure semantics

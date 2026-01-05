@@ -30,7 +30,6 @@ translation_last_reviewed: 2025-11-14
 - globally unique domain identifiers متعارف کرائے جائیں، جو ایسے رجسٹری
   سے مدد یافتہ ہوں جسے Nexus کے ذریعے cross‑chain routing کیلئے query کیا
   جا سکے۔
-- ایسی compatibility layers فراہم کی جائیں جو `alias@domain` routing
   aliases کو برقرار رکھیں، جبکہ ہم wallets، APIs اور contracts کو نئے
   فارمیٹ میں migrate کرتے ہیں۔
 
@@ -62,7 +61,6 @@ mapping بھی دے۔
 - یہ بیان کرنا کہ global domain registry کو موجودہ deployments کو توڑے
   بغیر کیسے introduce کیا جا سکتا ہے، اور normalization/anti‑spoofing
   rules کیا ہوں گے۔
-- compatibility expectations، migration steps اور open questions کو
   دستاویزی شکل دینا۔
 
 ## غیر مقاصد (Non‑goals)
@@ -501,7 +499,6 @@ endpoints پر mirror کرتے وقت ساتھ رکھیں تاکہ auditors veri
 | Type | Purpose | Required fields |
 |------|---------|-----------------|
 | `global_domain` | ظاہر کرتا ہے کہ domain عالمی طور پر register ہے اور اسے chain discriminant اور IH58 prefix سے map ہونا چاہیے۔ | `{ "domain": "<label>", "chain": "sora:nexus:global", "ih58_prefix": 753, "selector": "global" }` |
-| `local_alias` | legacy selectors (`Local-12`) کو track کرتا ہے جو اب بھی مقامی طور پر route ہوتے ہیں؛ 12‑بائٹ digest اور اختیاری `alias_label` شامل کرتا ہے۔ | `{ "domain": "<label>", "selector": { "kind": "local", "digest_hex": "<12-byte-hex>" }, "alias_label": "<optional>" }` |
 | `tombstone` | کسی alias/selector کو مستقل طور پر retire کرتا ہے؛ Local‑8 digests delete کرنے یا domain remove کرنے پر لازم ہے۔ | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
 
 `global_domain` entries میں اختیاری طور پر `manifest_url` یا `sorafs_cid`
@@ -529,11 +526,9 @@ reconstruct کیا جا سکے۔
    converted encoding کو `<ih58>@wonderland` کی صورت میں replay کر کے
    manifests اپ ڈیٹ کرنے میں مدد دیتا ہے۔  
    newline‑oriented exports کیلئے  
-   `iroha address normalize --input legacy.txt --only-local --append-domain --network-prefix 753 --format ih58 --output normalized.txt`
    استعمال کریں تاکہ Local selectors کو mass‑convert کر کے canonical IH58
    (یا compressed/hex/JSON) forms میں لایا جا سکے، جبکہ non‑local rows skip
    ہوتی رہیں۔ auditors کو spreadsheet‑friendly evidence دینے کیلئے  
-   `iroha address audit --input legacy.txt --allow-errors --network-prefix 753 --format csv`
    چلائیں، جو CSV (`input,status,format,domain_kind,…`) تیار کرے گا جس میں
    Local selectors، canonical encodings اور parse failures ایک ہی فائل میں
    نمایاں رہیں۔

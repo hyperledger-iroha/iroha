@@ -2,7 +2,7 @@
 # Copyright 2024 Hyperledger Iroha Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-# Thin compatibility wrapper that delegates to the cross-platform Python helper.
+# Thin wrapper that delegates to the cross-platform Python helper.
 
 set -eu
 

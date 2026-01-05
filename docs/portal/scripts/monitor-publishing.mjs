@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {readFile, writeFile, mkdir} from 'node:fs/promises';
+import {execFile} from 'node:child_process';
 import {Resolver} from 'node:dns/promises';
 import {createHash} from 'node:crypto';
 import {parseArgs} from 'node:util';
@@ -17,9 +18,10 @@ import {
   formatPrometheusLabels,
   verifyMetricsEndpoint,
 } from './tryit-proxy-probe.mjs';
-import {verifySorafsBinding} from './verify-sorafs-binding.mjs';
 
 const defaultDnsResolver = new Resolver();
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const DEFAULT_BINDING_TIMEOUT_MS = 30_000;
 
 /**
  * Load the monitor configuration from a JSON file.
@@ -261,6 +263,151 @@ function normaliseBindingConfigs(bindingConfig) {
   return [bindingConfig];
 }
 
+function resolveLocalPath(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  const trimmed = value.trim();
+  if (trimmed === '') {
+    return '';
+  }
+  if (path.isAbsolute(trimmed)) {
+    return trimmed;
+  }
+  return path.resolve(process.cwd(), trimmed);
+}
+
+function quoteArg(value) {
+  if (value === '') {
+    return "''";
+  }
+  if (/[\s"'`$\\]/.test(value)) {
+    return `"${value.replace(/(["\\$`])/g, '\\$1')}"`;
+  }
+  return value;
+}
+
+function formatCommand(binary, args) {
+  return [binary, ...args.map(quoteArg)].join(' ');
+}
+
+async function execCommand(
+  binary,
+  args,
+  {cwd, timeoutMs = DEFAULT_BINDING_TIMEOUT_MS, execFileImpl = execFile} = {},
+) {
+  return new Promise((resolve, reject) => {
+    execFileImpl(
+      binary,
+      args,
+      {
+        cwd,
+        timeout: timeoutMs,
+        maxBuffer: 10 * 1024 * 1024,
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          const message = error.killed
+            ? `command timed out after ${timeoutMs} ms`
+            : error.message;
+          const wrapped = new Error(message);
+          wrapped.code = error.code;
+          wrapped.signal = error.signal;
+          wrapped.stdout = stdout;
+          wrapped.stderr = stderr;
+          reject(wrapped);
+          return;
+        }
+        resolve({stdout, stderr});
+      },
+    );
+  });
+}
+
+/**
+ * Build the soradns binding verification command.
+ *
+ * @param {object} options
+ * @returns {{command: string, args: string[], bindingPath: string, manifestJson: string | null}}
+ */
+export function buildBindingCommand({
+  bindingPath,
+  alias,
+  contentCid,
+  hostname,
+  proofStatus,
+  manifestJson,
+} = {}) {
+  const resolvedBinding = resolveLocalPath(bindingPath);
+  if (!resolvedBinding) {
+    throw new Error('binding path is required');
+  }
+  const resolvedManifest = resolveLocalPath(manifestJson);
+  const args = ['xtask', 'soradns-verify-binding', '--binding', resolvedBinding];
+  if (alias) {
+    args.push('--alias', alias);
+  }
+  if (contentCid) {
+    args.push('--content-cid', contentCid);
+  }
+  if (hostname) {
+    args.push('--hostname', hostname);
+  }
+  if (proofStatus) {
+    args.push('--proof-status', proofStatus);
+  }
+  if (resolvedManifest) {
+    args.push('--manifest-json', resolvedManifest);
+  }
+  return {
+    command: formatCommand('cargo', args),
+    args,
+    bindingPath: resolvedBinding,
+    manifestJson: resolvedManifest || null,
+  };
+}
+
+/**
+ * Verify a gateway binding using cargo xtask.
+ *
+ * @param {object} options
+ * @returns {Promise<{command: string, stdout: string, stderr: string}>}
+ */
+export async function verifyBindingViaXtask({
+  bindingPath,
+  alias,
+  contentCid,
+  hostname,
+  proofStatus,
+  manifestJson,
+  timeoutMs = DEFAULT_BINDING_TIMEOUT_MS,
+  execFileImpl = execFile,
+} = {}) {
+  const {command, args} = buildBindingCommand({
+    bindingPath,
+    alias,
+    contentCid,
+    hostname,
+    proofStatus,
+    manifestJson,
+  });
+  try {
+    const result = await execCommand('cargo', args, {
+      cwd: REPO_ROOT,
+      timeoutMs,
+      execFileImpl,
+    });
+    return {
+      command,
+      stdout: result.stdout?.trim() ?? '',
+      stderr: result.stderr?.trim() ?? '',
+    };
+  } catch (error) {
+    error.command = command;
+    throw error;
+  }
+}
+
 function normaliseDnsRecordsConfig(dnsConfig) {
   if (!dnsConfig) {
     return [];
@@ -351,7 +498,7 @@ function normaliseExpectedDnsValues(recordType, values) {
 export async function monitorBinding(
   bindingConfig,
   {
-    verifyBindingImpl = verifySorafsBinding,
+    verifyBindingImpl = verifyBindingViaXtask,
   } = {},
 ) {
   const payloads = normaliseBindingConfigs(bindingConfig);
@@ -359,7 +506,7 @@ export async function monitorBinding(
     return {
       target: 'sorafs-binding',
       skipped: true,
-      reason: 'binding url not provided',
+      reason: 'binding path not provided',
     };
   }
 
@@ -368,78 +515,68 @@ export async function monitorBinding(
 
   for (let index = 0; index < payloads.length; index += 1) {
     const item = payloads[index] ?? {};
+    const bindingPath = resolveLocalPath(item.bindingPath);
+    const manifestJson = resolveLocalPath(item.manifestJson);
     const label =
       item.label ??
       item.alias ??
-      item.manifest ??
-      item.url ??
+      item.hostname ??
+      (bindingPath ? path.basename(bindingPath) : null) ??
       `binding-${index + 1}`;
 
-    if (!item.url) {
+    if (!bindingPath) {
       ok = false;
       entries.push({
         label,
         ok: false,
-        error: 'binding url not provided',
+        error: 'binding path not provided',
       });
       continue;
     }
 
-    let host = '';
-    try {
-      host = new URL(item.url).hostname;
-    } catch (error) {
-      ok = false;
-      entries.push({
-        label,
-        url: item.url,
-        ok: false,
-        error: `invalid binding url: ${error.message}`,
-      });
-      continue;
-    }
-
-    const expectedHost = item.expectHost ?? item.expectedHost ?? '';
-    if (expectedHost && host !== expectedHost) {
-      ok = false;
-      entries.push({
-        label,
-        url: item.url,
-        ok: false,
-        error: `host mismatch: expected ${expectedHost}, saw ${host}`,
-      });
-      continue;
-    }
+    const commandInfo = buildBindingCommand({
+      bindingPath,
+      alias: item.alias,
+      contentCid: item.contentCid,
+      hostname: item.hostname,
+      proofStatus: item.proofStatus,
+      manifestJson,
+    });
 
     try {
       const summary = await verifyBindingImpl({
-        url: item.url,
-        expectedAlias: item.alias,
-        expectedManifest: item.manifest,
-        expectedProofStatus: item.status,
-        expectedContentCid: item.contentCid,
-        expectedHttpStatus: item.expectedHttpStatus ?? 200,
-        timeoutMs: item.timeoutMs ?? 10_000,
+        bindingPath,
+        alias: item.alias,
+        contentCid: item.contentCid,
+        hostname: item.hostname,
+        proofStatus: item.proofStatus,
+        manifestJson,
+        timeoutMs: item.timeoutMs ?? DEFAULT_BINDING_TIMEOUT_MS,
       });
       entries.push({
         label,
-        url: item.url,
-        host,
+        bindingPath,
         ok: true,
-        alias: summary.headers['sora-name'],
-        manifest: summary.proof?.manifest ?? null,
-        proofStatus: summary.headers['sora-proof-status'],
-        contentCid: summary.headers['sora-content-cid'],
+        alias: item.alias ?? null,
+        contentCid: item.contentCid ?? null,
+        hostname: item.hostname ?? null,
+        proofStatus: item.proofStatus ?? null,
+        manifestJson: manifestJson || null,
+        command: summary?.command ?? commandInfo.command,
+        stdout: summary?.stdout ?? null,
+        stderr: summary?.stderr ?? null,
         summary,
       });
     } catch (error) {
       ok = false;
       entries.push({
         label,
-        url: item.url,
-        host,
+        bindingPath,
         ok: false,
         error: error.message ?? String(error),
+        command: error.command ?? commandInfo.command,
+        stdout: error.stdout?.trim() ?? null,
+        stderr: error.stderr?.trim() ?? null,
       });
     }
   }
@@ -747,8 +884,8 @@ function renderBindingMetrics(section, baseLabels, lines) {
     if (entry.alias) {
       labels.alias = entry.alias;
     }
-    if (entry.expectHost) {
-      labels.expect_host = entry.expectHost;
+    if (entry.hostname) {
+      labels.hostname = entry.hostname;
     }
     lines.push(
       `docs_monitor_entry_ok${formatPrometheusLabels(labels)} ${gauge(entry.ok)}`,
@@ -836,7 +973,7 @@ function reportSection(section) {
         continue;
       }
       console.error(
-        `  target=${entry.path ?? entry.label ?? entry.url ?? 'n/a'} ${entry.failures?.join('; ') ?? entry.error ?? 'unknown error'}`,
+        `  target=${entry.path ?? entry.label ?? entry.bindingPath ?? entry.url ?? 'n/a'} ${entry.failures?.join('; ') ?? entry.error ?? 'unknown error'}`,
       );
     }
   } else if (section.error) {

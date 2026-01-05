@@ -14,7 +14,7 @@ Norito Streaming definit le format on-wire, les frames de controle et le codec d
 
 - **Manifests et frames.** `ManifestV1` et `PrivacyRoute*` decrivent la chronologie des segments, les descripteurs de chunks et les indices de route. Les frames de controle (`KeyUpdate`, `ContentKeyUpdate` et le feedback de cadence) vivent a cote du manifest afin que les viewers puissent valider les commitments avant de decoder.
 - **Codec de base.** `BaselineEncoder`/`BaselineDecoder` imposent des ids de chunk monotones, l'arithmetique des timestamps et la verification des commitments. Les hotes doivent appeler `EncodedSegment::verify_manifest` avant de servir des viewers ou des relays.
-- **Bits de feature.** La negociation de capacites annonce `streaming.feature_bits` (par defaut `0b11` = feedback baseline + privacy route provider) afin que relays et clients rejettent les peers incompatibles de facon deterministe.
+- **Bits de feature.** La negociation de capacites annonce `streaming.feature_bits` (par defaut `0b11` = feedback baseline + privacy route provider) afin que relays et clients rejettent les peers sans capacites correspondantes de facon deterministe.
 
 ## Cles, suites et cadence
 
@@ -26,7 +26,6 @@ Norito Streaming definit le format on-wire, les frames de controle et le codec d
 ## Configuration runtime
 
 - **Materiau de cle.** Fournissez des cles dediees via `streaming.identity_public_key`/`streaming.identity_private_key` (multihash Ed25519) et du materiel Kyber optionnel via `streaming.kyber_public_key`/`streaming.kyber_secret_key`. Les quatre doivent etre presentes lors d'un override ; `streaming.kyber_suite` accepte `mlkem512|mlkem768|mlkem1024` (aliases `kyber512/768/1024`, par defaut `mlkem768`).
-- **Garde-fous du codec.** CABAC reste desactive a moins que le build ne l'active ; rANS package necessite `ENABLE_RANS_BUNDLES=1`. Enforce via `streaming.codec.{entropy_mode,bundle_width,bundle_accel}` et l'option `streaming.codec.rans_tables_path` lorsque vous fournissez des tables personnalisees. Le `bundle_width` package doit etre entre 2 et 3 (inclus) ; la largeur 1 est legacy-only.
 - **Routes SoraNet.** `streaming.soranet.*` controle le transport anonyme : `exit_multiaddr` (par defaut `/dns/torii/udp/9443/quic`), `padding_budget_ms` (par defaut 25 ms), `access_kind` (`authenticated` vs `read-only`), `channel_salt` optionnel, et `provision_spool_dir` (par defaut `./storage/streaming/soranet_routes`).
 - **Gate de synchronisation.** `streaming.sync` active le controle de derive pour les flux audiovisuels : `enabled`, `observe_only`, `ewma_threshold_ms` et `hard_cap_ms` gouvernent quand des segments sont rejetes pour derive temporelle.
 

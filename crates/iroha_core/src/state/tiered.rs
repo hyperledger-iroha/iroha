@@ -17,7 +17,6 @@ use eyre::{Context, Result};
 use hex::ToHex as _;
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
 use iroha_data_model::prelude::Name;
-use itoa::Buffer as ItoaBuffer;
 use mv::storage::StorageReadOnly;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
@@ -34,12 +33,20 @@ pub struct TieredStateBackend {
     enabled: bool,
     /// Maximum number of keys to keep hot (0 = unlimited).
     hot_retained_keys: usize,
+    /// Hot-tier byte budget based on serialized payload bytes (0 = unlimited).
+    hot_retained_bytes: u64,
+    /// Minimum snapshots to retain newly hot entries before demotion (0 = disabled).
+    hot_retained_grace_snapshots: u64,
     /// Optional on-disk spill root for cold shards.
     cold_store_root: Option<PathBuf>,
     /// Number of snapshot directories to retain (0 = keep all).
     max_snapshots: usize,
+    /// Optional cold-tier byte budget across snapshots (0 = unlimited).
+    max_cold_bytes: u64,
     /// Monotonically increasing snapshot counter.
     snapshot_counter: u64,
+    /// Whether the snapshot counter has been seeded from disk.
+    snapshot_counter_seeded: bool,
     /// Per-entry metadata tracking heat and payload hashes.
     entries: BTreeMap<TieredEntryId, EntryMetadata>,
     /// Cached manifest of the latest snapshot for diagnostics.
@@ -51,6 +58,7 @@ struct ColdEntryPlan {
     rel_path: PathBuf,
     entry: EntryScore,
     manifest_index: usize,
+    reuse_source: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -73,20 +81,28 @@ impl TieredStateBackend {
     pub fn new(
         enabled: bool,
         hot_retained_keys: usize,
+        hot_retained_bytes: u64,
+        hot_retained_grace_snapshots: u64,
         cold_store_root: Option<PathBuf>,
         max_snapshots: usize,
+        max_cold_bytes: u64,
     ) -> Self {
-        let backend = Self {
+        let mut backend = Self {
             enabled,
             hot_retained_keys,
+            hot_retained_bytes,
+            hot_retained_grace_snapshots,
             cold_store_root,
             max_snapshots,
+            max_cold_bytes,
             snapshot_counter: 0,
+            snapshot_counter_seeded: false,
             entries: BTreeMap::new(),
             last_manifest: None,
         };
         if backend.enabled {
             backend.ensure_cold_root().ok();
+            let _ = backend.seed_snapshot_counter_if_needed();
         }
         backend
     }
@@ -99,17 +115,55 @@ impl TieredStateBackend {
         Ok(())
     }
 
+    fn seed_snapshot_counter_if_needed(&mut self) -> Result<()> {
+        if self.snapshot_counter_seeded {
+            return Ok(());
+        }
+
+        let Some(root) = self.cold_store_root.clone() else {
+            self.snapshot_counter_seeded = true;
+            return Ok(());
+        };
+
+        self.ensure_cold_root()
+            .wrap_err("failed to prepare cold tier root directory")?;
+
+        let mut max_idx = 0u64;
+        for entry in fs::read_dir(&root).wrap_err_with(|| {
+            format!(
+                "failed to read cold tier root {path}",
+                path = root.display()
+            )
+        })? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if !file_type.is_dir() {
+                continue;
+            }
+            if let Some(idx) = Self::parse_snapshot_dir_name(&entry.file_name()) {
+                max_idx = max_idx.max(idx);
+            }
+        }
+
+        self.snapshot_counter = max_idx;
+        self.snapshot_counter_seeded = true;
+        Ok(())
+    }
+
     fn plan_world_snapshot(&mut self, world: &World) -> Result<Option<TieredSnapshotPlan>> {
         if !self.enabled {
             return Ok(None);
         }
 
-        if self.hot_retained_keys == 0 && self.cold_store_root.is_none() {
+        if self.hot_retained_keys == 0
+            && self.hot_retained_bytes == 0
+            && self.cold_store_root.is_none()
+        {
             return Ok(None);
         }
 
         let Some(root) = self.cold_store_root.clone() else {
-            if self.hot_retained_keys > 0 {
+            if self.hot_retained_keys > 0 || self.hot_retained_bytes > 0 {
                 iroha_logger::warn!(
                     "tiered-state: hot tier limit set but cold_store_root missing; skipping snapshot"
                 );
@@ -117,6 +171,7 @@ impl TieredStateBackend {
             return Ok(None);
         };
 
+        self.seed_snapshot_counter_if_needed()?;
         self.snapshot_counter = self.snapshot_counter.saturating_add(1);
         let snapshot_idx = self.snapshot_counter;
         let snapshot_dir = root.join(format!("{snapshot_idx:020}"));
@@ -134,6 +189,12 @@ impl TieredStateBackend {
                 hot_entries: Vec::new(),
                 cold_entries: Vec::new(),
                 cold_bytes_total: 0,
+                cold_reused_entries: 0,
+                cold_reused_bytes: 0,
+                hot_promotions: 0,
+                hot_demotions: 0,
+                hot_grace_overflow_keys: 0,
+                hot_grace_overflow_bytes: 0,
             };
             return Ok(Some(TieredSnapshotPlan {
                 root,
@@ -149,34 +210,144 @@ impl TieredStateBackend {
             meta_b.cmp(meta_a).then_with(|| a.id.cmp(&b.id))
         });
 
-        let hot_limit = if self.hot_retained_keys == 0 {
-            scores.len()
+        let max_keys = if self.hot_retained_keys == 0 {
+            usize::MAX
         } else {
-            self.hot_retained_keys.min(scores.len())
+            self.hot_retained_keys
         };
+        let max_bytes = self.hot_retained_bytes;
 
-        let (hot_scores, cold_scores) = scores.split_at(hot_limit);
-        let mut hot_manifest_entries = Vec::with_capacity(hot_scores.len());
-        let mut cold_manifest_entries = Vec::with_capacity(cold_scores.len());
-        let mut cold_plans = Vec::with_capacity(cold_scores.len());
-
-        for entry in hot_scores {
-            let meta = self.entries.get(&entry.id).expect("metadata populated");
-            hot_manifest_entries.push(entry.manifest_entry(meta, None));
+        fn try_select_entry(
+            entry: &EntryScore,
+            entries: &BTreeMap<TieredEntryId, EntryMetadata>,
+            hot_ids: &mut BTreeSet<TieredEntryId>,
+            hot_list: &mut Vec<TieredEntryId>,
+            retained_bytes: &mut u64,
+            enforce_budget: bool,
+            max_keys: usize,
+            max_bytes: u64,
+        ) {
+            let meta = entries.get(&entry.id).expect("metadata populated");
+            let entry_bytes = meta.value_size_bytes as u64;
+            if enforce_budget {
+                if hot_ids.len() >= max_keys {
+                    return;
+                }
+                if max_bytes != 0 && retained_bytes.saturating_add(entry_bytes) > max_bytes {
+                    return;
+                }
+            }
+            if hot_ids.insert(entry.id) {
+                *retained_bytes = retained_bytes.saturating_add(entry_bytes);
+                hot_list.push(entry.id);
+            }
         }
 
-        for entry in cold_scores {
+        let mut hot_ids = BTreeSet::new();
+        let mut hot_list = Vec::new();
+        let mut retained_bytes = 0u64;
+
+        if self.hot_retained_grace_snapshots > 0 {
+            for entry in &scores {
+                let meta = self.entries.get(&entry.id).expect("metadata populated");
+                if meta.hot_until_snapshot >= snapshot_idx && meta.hot_until_snapshot > 0 {
+                    try_select_entry(
+                        entry,
+                        &self.entries,
+                        &mut hot_ids,
+                        &mut hot_list,
+                        &mut retained_bytes,
+                        false,
+                        max_keys,
+                        max_bytes,
+                    );
+                }
+            }
+        }
+
+        for entry in &scores {
+            if !hot_ids.contains(&entry.id) {
+                try_select_entry(
+                    entry,
+                    &self.entries,
+                    &mut hot_ids,
+                    &mut hot_list,
+                    &mut retained_bytes,
+                    true,
+                    max_keys,
+                    max_bytes,
+                );
+            }
+        }
+
+        let mut hot_promotions = 0usize;
+        let mut hot_demotions = 0usize;
+        for entry in &scores {
             let meta = self.entries.get(&entry.id).expect("metadata populated");
-            let rel_path = entry.relative_payload_path(snapshot_idx);
-            let manifest_index = cold_manifest_entries.len();
-            let mut manifest_entry = entry.manifest_entry(meta, Some((rel_path.clone(), 0)));
-            manifest_entry.spill_bytes = None;
-            cold_manifest_entries.push(manifest_entry);
-            cold_plans.push(ColdEntryPlan {
-                rel_path,
-                entry: entry.clone(),
-                manifest_index,
-            });
+            let was_hot_last = meta.last_hot_snapshot == snapshot_idx.saturating_sub(1);
+            let is_hot_now = hot_ids.contains(&entry.id);
+            if was_hot_last && !is_hot_now {
+                hot_demotions = hot_demotions.saturating_add(1);
+            } else if !was_hot_last && is_hot_now {
+                hot_promotions = hot_promotions.saturating_add(1);
+            }
+        }
+
+        for id in &hot_list {
+            if let Some(meta) = self.entries.get_mut(id) {
+                let was_hot_last = meta.last_hot_snapshot == snapshot_idx.saturating_sub(1);
+                if self.hot_retained_grace_snapshots > 0 && !was_hot_last {
+                    meta.hot_until_snapshot =
+                        snapshot_idx.saturating_add(self.hot_retained_grace_snapshots);
+                }
+                meta.last_hot_snapshot = snapshot_idx;
+            }
+        }
+
+        let hot_grace_overflow_keys = if self.hot_retained_keys == 0 {
+            0
+        } else {
+            hot_ids.len().saturating_sub(self.hot_retained_keys)
+        };
+        let hot_grace_overflow_bytes = if self.hot_retained_bytes == 0 {
+            0
+        } else {
+            retained_bytes.saturating_sub(self.hot_retained_bytes)
+        };
+
+        let mut hot_manifest_entries = Vec::with_capacity(hot_list.len());
+        let mut cold_manifest_entries = Vec::with_capacity(scores.len());
+        let mut cold_plans = Vec::with_capacity(scores.len());
+
+        for entry in &scores {
+            let meta = self.entries.get(&entry.id).expect("metadata populated");
+            if hot_ids.contains(&entry.id) {
+                hot_manifest_entries.push(entry.manifest_entry(meta, None));
+            } else {
+                let rel_path = entry.relative_payload_path(snapshot_idx);
+                let reuse_source = if meta.last_cold_snapshot > 0
+                    && meta.last_cold_snapshot >= meta.last_mutated_snapshot
+                {
+                    meta.last_cold_rel_path.as_ref().and_then(|rel_path| {
+                        let candidate = root
+                            .join(format!("{index:020}", index = meta.last_cold_snapshot))
+                            .join(rel_path);
+                        candidate.exists().then_some(candidate)
+                    })
+                } else {
+                    None
+                };
+                let manifest_index = cold_manifest_entries.len();
+                let mut manifest_entry = entry.manifest_entry(meta, Some((rel_path.clone(), 0)));
+                manifest_entry.spill_bytes = None;
+                cold_manifest_entries.push(manifest_entry);
+                cold_plans.push(ColdEntryPlan {
+                    rel_path,
+                    entry: entry.clone(),
+                    manifest_index,
+                    reuse_source,
+                });
+            }
         }
 
         let manifest = TieredSnapshotManifest {
@@ -185,6 +356,12 @@ impl TieredStateBackend {
             hot_entries: hot_manifest_entries,
             cold_entries: cold_manifest_entries,
             cold_bytes_total: 0,
+            cold_reused_entries: 0,
+            cold_reused_bytes: 0,
+            hot_promotions,
+            hot_demotions,
+            hot_grace_overflow_keys,
+            hot_grace_overflow_bytes,
         };
 
         Ok(Some(TieredSnapshotPlan {
@@ -217,6 +394,8 @@ impl TieredStateBackend {
         })?;
 
         let mut cold_bytes_total: u64 = 0;
+        let mut cold_reused_entries: usize = 0;
+        let mut cold_reused_bytes: u64 = 0;
         for cold in &plan.cold_entries {
             let abs_path = staging_dir.join(&cold.rel_path);
             if let Some(parent) = abs_path.parent() {
@@ -227,45 +406,80 @@ impl TieredStateBackend {
                     )
                 })?;
             }
-            let payload = cold.entry.encode_value(world).with_context(|| {
-                format!(
-                    "failed to encode value for cold shard {path}",
-                    path = abs_path.display()
-                )
-            })?;
-            let mut file = BufWriter::new(fs::File::create(&abs_path).wrap_err_with(|| {
-                format!(
-                    "failed to open cold shard {path} for writing",
-                    path = abs_path.display()
-                )
-            })?);
-            file.write_all(&payload).wrap_err_with(|| {
-                format!(
-                    "failed to persist cold shard {path}",
-                    path = abs_path.display()
-                )
-            })?;
-            file.flush().wrap_err_with(|| {
-                format!(
-                    "failed to flush cold shard {path}",
-                    path = abs_path.display()
-                )
-            })?;
-            file.get_ref().sync_all().wrap_err_with(|| {
-                format!(
-                    "failed to sync cold shard {path}",
-                    path = abs_path.display()
-                )
-            })?;
+            let mut payload_len = None;
+            let mut reused = false;
+            if let Some(source) = cold.reuse_source.as_ref() {
+                match Self::try_reuse_cold_payload(source, &abs_path) {
+                    Ok(Some(bytes)) => {
+                        payload_len = Some(bytes);
+                        reused = true;
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        iroha_logger::warn!(
+                            ?err,
+                            source = %source.display(),
+                            target = %abs_path.display(),
+                            "tiered-state: failed to reuse cold shard payload"
+                        );
+                    }
+                }
+            }
 
-            let payload_len = payload.len() as u64;
+            let payload_len = match payload_len {
+                Some(bytes) => bytes,
+                None => {
+                    let payload = cold.entry.encode_value(world).with_context(|| {
+                        format!(
+                            "failed to encode value for cold shard {path}",
+                            path = abs_path.display()
+                        )
+                    })?;
+                    let mut file =
+                        BufWriter::new(fs::File::create(&abs_path).wrap_err_with(|| {
+                            format!(
+                                "failed to open cold shard {path} for writing",
+                                path = abs_path.display()
+                            )
+                        })?);
+                    file.write_all(&payload).wrap_err_with(|| {
+                        format!(
+                            "failed to persist cold shard {path}",
+                            path = abs_path.display()
+                        )
+                    })?;
+                    file.flush().wrap_err_with(|| {
+                        format!(
+                            "failed to flush cold shard {path}",
+                            path = abs_path.display()
+                        )
+                    })?;
+                    file.get_ref().sync_all().wrap_err_with(|| {
+                        format!(
+                            "failed to sync cold shard {path}",
+                            path = abs_path.display()
+                        )
+                    })?;
+                    payload.len() as u64
+                }
+            };
             cold_bytes_total = cold_bytes_total.saturating_add(payload_len);
+            if reused {
+                cold_reused_entries = cold_reused_entries.saturating_add(1);
+                cold_reused_bytes = cold_reused_bytes.saturating_add(payload_len);
+            }
             if let Some(entry) = plan.manifest.cold_entries.get_mut(cold.manifest_index) {
                 entry.spill_bytes = Some(payload_len);
+            }
+            if let Some(meta) = self.entries.get_mut(&cold.entry.id) {
+                meta.last_cold_snapshot = plan.manifest.snapshot_index;
+                meta.last_cold_rel_path = Some(cold.rel_path.clone());
             }
         }
 
         plan.manifest.cold_bytes_total = cold_bytes_total;
+        plan.manifest.cold_reused_entries = cold_reused_entries;
+        plan.manifest.cold_reused_bytes = cold_reused_bytes;
 
         Self::write_manifest(&staging_dir, &plan.manifest)?;
         Self::sync_dir(&staging_dir).wrap_err_with(|| {
@@ -329,6 +543,7 @@ impl TieredStateBackend {
 
         self.last_manifest = Some(plan.manifest);
         self.prune_old_snapshots(&plan.root)?;
+        self.prune_to_cold_bytes(&plan.root)?;
 
         Ok(())
     }
@@ -362,20 +577,36 @@ impl TieredStateBackend {
         &mut self,
         enabled: bool,
         hot_retained_keys: usize,
+        hot_retained_bytes: u64,
+        hot_retained_grace_snapshots: u64,
         cold_store_root: Option<PathBuf>,
         max_snapshots: usize,
+        max_cold_bytes: u64,
     ) {
         let cold_root_changed = self.cold_store_root != cold_store_root;
+        let grace_changed = self.hot_retained_grace_snapshots != hot_retained_grace_snapshots;
         self.enabled = enabled;
         self.hot_retained_keys = hot_retained_keys;
+        self.hot_retained_bytes = hot_retained_bytes;
+        self.hot_retained_grace_snapshots = hot_retained_grace_snapshots;
         self.cold_store_root = cold_store_root;
         self.max_snapshots = max_snapshots;
+        self.max_cold_bytes = max_cold_bytes;
+        if grace_changed {
+            for meta in self.entries.values_mut() {
+                meta.hot_until_snapshot = 0;
+            }
+        }
+        if cold_root_changed {
+            self.entries.clear();
+            self.snapshot_counter = 0;
+            self.snapshot_counter_seeded = false;
+            self.last_manifest = None;
+        }
         if !self.enabled {
             return;
         }
         if cold_root_changed {
-            self.snapshot_counter = 0;
-            self.last_manifest = None;
             if let Err(err) = self.ensure_cold_root() {
                 iroha_logger::warn!(
                     ?err,
@@ -766,19 +997,19 @@ impl TieredStateBackend {
         let key_hash = sha256(&key_encoded);
         let id = TieredEntryId::new(segment, key_hash);
 
-        let (value_hash, approx_size) =
+        let (value_hash, value_size_bytes) =
             compute_json_hash(value).wrap_err("failed to encode value for tiered snapshot")?;
 
         let meta = self
             .entries
             .entry(id)
-            .or_insert_with(|| EntryMetadata::new(ctx.snapshot_idx, value_hash, approx_size));
+            .or_insert_with(|| EntryMetadata::new(ctx.snapshot_idx, value_hash, value_size_bytes));
         if meta.last_value_hash != value_hash {
             meta.last_value_hash = value_hash;
             meta.last_mutated_snapshot = ctx.snapshot_idx;
         }
         meta.last_present_snapshot = ctx.snapshot_idx;
-        meta.approx_size = approx_size;
+        meta.value_size_bytes = value_size_bytes;
         ctx.seen.insert(id);
 
         ctx.scores.push(EntryScore {
@@ -795,9 +1026,39 @@ impl TieredStateBackend {
         let manifest_bytes = norito::json::to_vec_pretty(manifest)
             .wrap_err("failed to serialize tiered state manifest")?;
         let manifest_path = snapshot_dir.join("manifest.json");
-        fs::write(&manifest_path, manifest_bytes).wrap_err_with(|| {
+        let temp_path = snapshot_dir.join("manifest.json.tmp");
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&temp_path)
+            .wrap_err_with(|| {
+                format!(
+                    "failed to open manifest temp file {path}",
+                    path = temp_path.display()
+                )
+            })?;
+        file.write_all(&manifest_bytes).wrap_err_with(|| {
             format!(
-                "failed to persist manifest {path}",
+                "failed to write manifest temp file {path}",
+                path = temp_path.display()
+            )
+        })?;
+        file.flush().wrap_err_with(|| {
+            format!(
+                "failed to flush manifest temp file {path}",
+                path = temp_path.display()
+            )
+        })?;
+        file.sync_data().wrap_err_with(|| {
+            format!(
+                "failed to sync manifest temp file {path}",
+                path = temp_path.display()
+            )
+        })?;
+        fs::rename(&temp_path, &manifest_path).wrap_err_with(|| {
+            format!(
+                "failed to promote manifest file {path}",
                 path = manifest_path.display()
             )
         })
@@ -806,13 +1067,6 @@ impl TieredStateBackend {
     fn prune_old_snapshots(&self, root: &Path) -> Result<()> {
         if self.max_snapshots == 0 {
             return Ok(());
-        }
-        fn parse_snapshot_dir_name(name: &std::ffi::OsStr) -> Option<u64> {
-            let name = name.to_str()?;
-            if name.len() != 20 || !name.as_bytes().iter().all(|b| b.is_ascii_digit()) {
-                return None;
-            }
-            name.parse::<u64>().ok()
         }
 
         let mut entries = fs::read_dir(root)
@@ -828,7 +1082,7 @@ impl TieredStateBackend {
                     .file_type()
                     .ok()
                     .filter(|ft| ft.is_dir())
-                    .and_then(|_| parse_snapshot_dir_name(&entry.file_name()))
+                    .and_then(|_| Self::parse_snapshot_dir_name(&entry.file_name()))
                     .map(|idx| (idx, entry))
             })
             .collect::<Vec<_>>();
@@ -845,6 +1099,136 @@ impl TieredStateBackend {
             entries.remove(0);
         }
         Ok(())
+    }
+
+    fn prune_to_cold_bytes(&self, root: &Path) -> Result<()> {
+        if self.max_cold_bytes == 0 {
+            return Ok(());
+        }
+
+        let mut entries = Vec::new();
+        for entry in fs::read_dir(root).wrap_err_with(|| {
+            format!(
+                "failed to read tiered snapshot root {path}",
+                path = root.display()
+            )
+        })? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if !file_type.is_dir() {
+                continue;
+            }
+            if let Some(idx) = Self::parse_snapshot_dir_name(&entry.file_name()) {
+                entries.push((idx, entry.path()));
+            }
+        }
+
+        entries.sort_by_key(|(idx, _)| *idx);
+
+        let mut total_bytes = 0u64;
+        let mut sizes = Vec::with_capacity(entries.len());
+        for (idx, path) in entries {
+            let size = Self::snapshot_dir_size(&path)?;
+            total_bytes = total_bytes.saturating_add(size);
+            sizes.push((idx, path, size));
+        }
+
+        while total_bytes > self.max_cold_bytes && sizes.len() > 1 {
+            let (_, path, size) = sizes.remove(0);
+            fs::remove_dir_all(&path).wrap_err_with(|| {
+                format!(
+                    "failed to prune tiered snapshot directory {path}",
+                    path = path.display()
+                )
+            })?;
+            total_bytes = total_bytes.saturating_sub(size);
+        }
+
+        if total_bytes > self.max_cold_bytes && sizes.len() == 1 {
+            let (_, path, size) = &sizes[0];
+            iroha_logger::warn!(
+                budget = self.max_cold_bytes,
+                remaining = *size,
+                path = %path.display(),
+                "tiered-state: cold snapshot exceeds configured byte budget"
+            );
+        }
+
+        Ok(())
+    }
+
+    fn snapshot_dir_size(path: &Path) -> Result<u64> {
+        let mut total = 0u64;
+        for entry in fs::read_dir(path).wrap_err_with(|| {
+            format!(
+                "failed to read snapshot directory {path}",
+                path = path.display()
+            )
+        })? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let entry_path = entry.path();
+            if file_type.is_dir() {
+                total = total.saturating_add(Self::snapshot_dir_size(&entry_path)?);
+            } else if file_type.is_file() {
+                total = total.saturating_add(entry.metadata()?.len());
+            }
+        }
+        Ok(total)
+    }
+
+    fn try_reuse_cold_payload(source: &Path, dest: &Path) -> Result<Option<u64>> {
+        let metadata = match fs::metadata(source) {
+            Ok(meta) => meta,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => {
+                return Err(err).wrap_err_with(|| {
+                    format!(
+                        "failed to read cold shard metadata from {path}",
+                        path = source.display()
+                    )
+                });
+            }
+        };
+        if !metadata.is_file() {
+            return Ok(None);
+        }
+        if dest.exists() {
+            fs::remove_file(dest).wrap_err_with(|| {
+                format!(
+                    "failed to remove existing cold shard at {path}",
+                    path = dest.display()
+                )
+            })?;
+        }
+        let bytes = fs::copy(source, dest).wrap_err_with(|| {
+            format!(
+                "failed to copy cold shard from {source} to {dest}",
+                source = source.display(),
+                dest = dest.display()
+            )
+        })?;
+        let file = fs::File::open(dest).wrap_err_with(|| {
+            format!(
+                "failed to open copied cold shard {path} for syncing",
+                path = dest.display()
+            )
+        })?;
+        file.sync_all().wrap_err_with(|| {
+            format!(
+                "failed to sync copied cold shard {path}",
+                path = dest.display()
+            )
+        })?;
+        Ok(Some(bytes))
+    }
+
+    fn parse_snapshot_dir_name(name: &std::ffi::OsStr) -> Option<u64> {
+        let name = name.to_str()?;
+        if name.len() != 20 || !name.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        name.parse::<u64>().ok()
     }
 
     fn sync_dir(path: &Path) -> Result<()> {
@@ -866,127 +1250,8 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
 }
 
 fn compute_json_hash(value: &impl json::JsonSerialize) -> Result<([u8; 32], usize)> {
-    let json_value = json::to_value(value)
-        .wrap_err("failed to convert snapshot value into Norito JSON value")?;
-    let mut state = JsonStreamHasher::default();
-    stream_json_value(&json_value, &mut state);
-    Ok(state.finalize())
-}
-
-#[derive(Default)]
-struct JsonStreamHasher {
-    hasher: Sha256,
-    len: usize,
-}
-
-impl JsonStreamHasher {
-    fn write(&mut self, bytes: &[u8]) {
-        if bytes.is_empty() {
-            return;
-        }
-        self.hasher.update(bytes);
-        self.len += bytes.len();
-    }
-
-    fn finalize(self) -> ([u8; 32], usize) {
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&self.hasher.finalize());
-        (out, self.len)
-    }
-}
-
-fn stream_json_value(value: &json::Value, state: &mut JsonStreamHasher) {
-    match value {
-        json::Value::Null => state.write(b"null"),
-        json::Value::Bool(true) => state.write(b"true"),
-        json::Value::Bool(false) => state.write(b"false"),
-        json::Value::Number(number) => write_number_bytes(number, state),
-        json::Value::String(s) => write_json_string_bytes(s, state),
-        json::Value::Array(items) => {
-            state.write(b"[");
-            for (idx, item) in items.iter().enumerate() {
-                if idx > 0 {
-                    state.write(b",");
-                }
-                stream_json_value(item, state);
-            }
-            state.write(b"]");
-        }
-        json::Value::Object(map) => {
-            state.write(b"{");
-            for (idx, (key, value)) in map.iter().enumerate() {
-                if idx > 0 {
-                    state.write(b",");
-                }
-                write_json_string_bytes(key, state);
-                state.write(b":");
-                stream_json_value(value, state);
-            }
-            state.write(b"}");
-        }
-    }
-}
-
-fn write_number_bytes(number: &json::Number, state: &mut JsonStreamHasher) {
-    match number {
-        json::Number::I64(value) => {
-            let mut buf = ItoaBuffer::new();
-            state.write(buf.format(*value).as_bytes());
-        }
-        json::Number::U64(value) => {
-            let mut buf = ItoaBuffer::new();
-            state.write(buf.format(*value).as_bytes());
-        }
-        json::Number::F64(value) => {
-            const F64_SAFE_INT: f64 = 9_007_199_254_740_992.0; // 2^53
-            let rendered =
-                if value.is_finite() && value.fract() == 0.0 && value.abs() <= F64_SAFE_INT {
-                    format!("{value:.1}")
-                } else {
-                    format!("{value:?}")
-                };
-            state.write(rendered.as_bytes());
-        }
-    }
-}
-
-fn write_json_string_bytes(value: &str, state: &mut JsonStreamHasher) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    state.write(b"\"");
-    let bytes = value.as_bytes();
-    let mut start = 0usize;
-    for (idx, &byte) in bytes.iter().enumerate() {
-        let escape = match byte {
-            b'"' => Some(br#"\""#.as_ref()),
-            b'\\' => Some(br"\\".as_ref()),
-            b'\n' => Some(br"\n".as_ref()),
-            b'\r' => Some(br"\r".as_ref()),
-            b'\t' => Some(br"\t".as_ref()),
-            0x08 => Some(br"\b".as_ref()),
-            0x0C => Some(br"\f".as_ref()),
-            _ => None,
-        };
-        if let Some(seq) = escape {
-            if start < idx {
-                state.write(&bytes[start..idx]);
-            }
-            state.write(seq);
-            start = idx + 1;
-        } else if byte < 0x20 {
-            if start < idx {
-                state.write(&bytes[start..idx]);
-            }
-            let mut buf = [b'\\', b'u', b'0', b'0', 0, 0];
-            buf[4] = HEX[(byte >> 4) as usize];
-            buf[5] = HEX[(byte & 0x0F) as usize];
-            state.write(&buf);
-            start = idx + 1;
-        }
-    }
-    if start < bytes.len() {
-        state.write(&bytes[start..]);
-    }
-    state.write(b"\"");
+    let encoded = json::to_vec(value).wrap_err("failed to encode snapshot value as JSON")?;
+    Ok((sha256(&encoded), encoded.len()))
 }
 
 fn lane_snapshot_dir(root: &Path, entry: &LaneConfigEntry) -> PathBuf {
@@ -1173,17 +1438,25 @@ impl fmt::Display for TieredEntryId {
 struct EntryMetadata {
     last_present_snapshot: u64,
     last_mutated_snapshot: u64,
+    last_hot_snapshot: u64,
+    hot_until_snapshot: u64,
+    last_cold_snapshot: u64,
+    last_cold_rel_path: Option<PathBuf>,
     last_value_hash: [u8; 32],
-    approx_size: usize,
+    value_size_bytes: usize,
 }
 
 impl EntryMetadata {
-    fn new(snapshot_idx: u64, value_hash: [u8; 32], approx_size: usize) -> Self {
+    fn new(snapshot_idx: u64, value_hash: [u8; 32], value_size_bytes: usize) -> Self {
         Self {
             last_present_snapshot: snapshot_idx,
             last_mutated_snapshot: snapshot_idx,
+            last_hot_snapshot: 0,
+            hot_until_snapshot: 0,
+            last_cold_snapshot: 0,
+            last_cold_rel_path: None,
             last_value_hash: value_hash,
-            approx_size,
+            value_size_bytes,
         }
     }
 }
@@ -1192,8 +1465,12 @@ impl PartialEq for EntryMetadata {
     fn eq(&self, other: &Self) -> bool {
         self.last_present_snapshot == other.last_present_snapshot
             && self.last_mutated_snapshot == other.last_mutated_snapshot
+            && self.last_hot_snapshot == other.last_hot_snapshot
+            && self.hot_until_snapshot == other.hot_until_snapshot
+            && self.last_cold_snapshot == other.last_cold_snapshot
+            && self.last_cold_rel_path == other.last_cold_rel_path
             && self.last_value_hash == other.last_value_hash
-            && self.approx_size == other.approx_size
+            && self.value_size_bytes == other.value_size_bytes
     }
 }
 
@@ -1210,7 +1487,9 @@ impl Ord for EntryMetadata {
         self.last_mutated_snapshot
             .cmp(&other.last_mutated_snapshot)
             .then_with(|| self.last_present_snapshot.cmp(&other.last_present_snapshot))
-            .then_with(|| other.approx_size.cmp(&self.approx_size))
+            .then_with(|| self.last_hot_snapshot.cmp(&other.last_hot_snapshot))
+            .then_with(|| self.hot_until_snapshot.cmp(&other.hot_until_snapshot))
+            .then_with(|| other.value_size_bytes.cmp(&self.value_size_bytes))
     }
 }
 
@@ -1236,7 +1515,7 @@ impl EntryScore {
             segment: self.segment,
             key_hash_hex: self.id.key_hash.encode_hex::<String>(),
             key_payload: self.key_encoded.clone(),
-            approx_value_size: meta.approx_size,
+            value_size_bytes: meta.value_size_bytes,
             last_present_snapshot: meta.last_present_snapshot,
             last_mutated_snapshot: meta.last_mutated_snapshot,
             value_hash_hex: meta.last_value_hash.encode_hex::<String>(),
@@ -1407,6 +1686,18 @@ pub struct TieredSnapshotManifest {
     pub cold_entries: Vec<TieredManifestEntry>,
     /// Total bytes written to the cold tier in the latest snapshot.
     pub cold_bytes_total: u64,
+    /// Entries reused from a previous cold snapshot without re-encoding.
+    pub cold_reused_entries: usize,
+    /// Total bytes reused from a previous cold snapshot.
+    pub cold_reused_bytes: u64,
+    /// Entries promoted into the hot tier since the previous snapshot.
+    pub hot_promotions: usize,
+    /// Entries demoted into the cold tier since the previous snapshot.
+    pub hot_demotions: usize,
+    /// Hot-tier key budget overflow caused by grace retention.
+    pub hot_grace_overflow_keys: usize,
+    /// Hot-tier byte budget overflow caused by grace retention.
+    pub hot_grace_overflow_bytes: u64,
 }
 
 /// Per-entry metadata persisted in manifests.
@@ -1415,7 +1706,7 @@ pub struct TieredManifestEntry {
     segment: TieredSegment,
     key_hash_hex: String,
     key_payload: Vec<u8>,
-    approx_value_size: usize,
+    value_size_bytes: usize,
     last_present_snapshot: u64,
     last_mutated_snapshot: u64,
     value_hash_hex: String,
@@ -1482,7 +1773,7 @@ mod tests {
     fn snapshot_failure_leaves_existing_snapshot_intact() {
         let temp = tempdir().expect("tmpdir");
         let root = temp.path().to_path_buf();
-        let mut backend = TieredStateBackend::new(true, 0, Some(root.clone()), 0);
+        let mut backend = TieredStateBackend::new(true, 0, 0, 0, Some(root.clone()), 0, 0);
 
         let existing_dir = root.join(format!("{:020}", 1_u64));
         fs::create_dir_all(&existing_dir).expect("create existing snapshot");
@@ -1498,6 +1789,12 @@ mod tests {
                 hot_entries: Vec::new(),
                 cold_entries: Vec::new(),
                 cold_bytes_total: 0,
+                cold_reused_entries: 0,
+                cold_reused_bytes: 0,
+                hot_promotions: 0,
+                hot_demotions: 0,
+                hot_grace_overflow_keys: 0,
+                hot_grace_overflow_bytes: 0,
             },
             cold_entries: Vec::new(),
         };
@@ -1519,7 +1816,8 @@ mod tests {
     #[test]
     fn persists_cold_entries_and_prunes_old_snapshots() {
         let temp = tempdir().expect("tmpdir");
-        let mut backend = TieredStateBackend::new(true, 1, Some(temp.path().to_path_buf()), 1);
+        let mut backend =
+            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), 1, 0);
         let mut world = World::default();
 
         let qc1 = dummy_qc(1);
@@ -1541,6 +1839,13 @@ mod tests {
         let snapshot_dir = temp
             .path()
             .join(format!("{index:020}", index = manifest.snapshot_index));
+        let manifest_path = snapshot_dir.join("manifest.json");
+        let manifest_tmp = snapshot_dir.join("manifest.json.tmp");
+        assert!(manifest_path.exists(), "manifest should be persisted");
+        assert!(
+            !manifest_tmp.exists(),
+            "manifest temp file should be removed after snapshot"
+        );
         let spill_path = cold_entry
             .spill_path
             .as_ref()
@@ -1574,9 +1879,209 @@ mod tests {
     }
 
     #[test]
+    fn hot_byte_budget_demotes_entries_to_cold() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 0, 1, 0, Some(temp.path().to_path_buf()), 0, 0);
+        let mut world = World::default();
+
+        let qc1 = dummy_qc(1);
+        let qc2 = dummy_qc(2);
+        world.exec_qcs.insert(qc1.subject_block_hash, qc1);
+        world.exec_qcs.insert(qc2.subject_block_hash, qc2);
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("snapshot recorded");
+        let manifest = backend.last_manifest().expect("manifest recorded");
+        assert!(manifest.cold_entries.len() > 0);
+        assert!(
+            manifest.hot_entries.len() < manifest.total_entries,
+            "byte budget should force some entries into cold tier"
+        );
+    }
+
+    #[test]
+    fn hot_grace_snapshots_keep_recent_hot_entry() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 1, 0, 1, Some(temp.path().to_path_buf()), 0, 0);
+        let mut world = World::default();
+
+        let qc1 = dummy_qc(1);
+        let qc2 = dummy_qc(2);
+        world.exec_qcs.insert(qc1.subject_block_hash, qc1.clone());
+        world.exec_qcs.insert(qc2.subject_block_hash, qc2.clone());
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("first snapshot");
+        let manifest = backend.last_manifest().expect("manifest recorded");
+        assert_eq!(manifest.hot_entries.len(), 1);
+
+        let qc1_hash = hex::encode(sha256(&norito::codec::Encode::encode(
+            &qc1.subject_block_hash,
+        )));
+        let qc2_hash = hex::encode(sha256(&norito::codec::Encode::encode(
+            &qc2.subject_block_hash,
+        )));
+        let hot_hash = manifest.hot_entries[0].key_hash_hex.clone();
+
+        let mutate = if hot_hash == qc1_hash { qc2 } else { qc1 };
+        let mut updated = mutate.clone();
+        updated.view = 99;
+        world.exec_qcs.insert(updated.subject_block_hash, updated);
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("second snapshot");
+        let manifest2 = backend.last_manifest().expect("manifest recorded");
+        let hot_hash2 = manifest2.hot_entries[0].key_hash_hex.clone();
+
+        assert_eq!(hot_hash2, hot_hash, "hot grace should preserve hot entry");
+    }
+
+    #[test]
+    fn hot_grace_allows_budget_overflow_for_previous_hot_entries() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 2, 0, 1, Some(temp.path().to_path_buf()), 0, 0);
+        let mut world = World::default();
+
+        let qc1 = dummy_qc(1);
+        let qc2 = dummy_qc(2);
+        world.exec_qcs.insert(qc1.subject_block_hash, qc1);
+        world.exec_qcs.insert(qc2.subject_block_hash, qc2);
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("first snapshot");
+
+        backend.reconfigure(true, 1, 0, 1, Some(temp.path().to_path_buf()), 0, 0);
+        backend
+            .record_world_snapshot(&world)
+            .expect("second snapshot");
+
+        let manifest = backend.last_manifest().expect("manifest recorded");
+        assert_eq!(manifest.hot_entries.len(), 2);
+        assert_eq!(manifest.hot_grace_overflow_keys, 1);
+    }
+
+    #[test]
+    fn cold_payload_reuse_is_recorded_for_unchanged_entries() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), 0, 0);
+        let mut world = World::default();
+
+        let qc1 = dummy_qc(1);
+        let qc2 = dummy_qc(2);
+        world.exec_qcs.insert(qc1.subject_block_hash, qc1);
+        world.exec_qcs.insert(qc2.subject_block_hash, qc2);
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("first snapshot");
+        let manifest = backend.last_manifest().expect("manifest recorded");
+        assert_eq!(manifest.cold_reused_entries, 0);
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("second snapshot");
+        let manifest2 = backend.last_manifest().expect("manifest recorded");
+        assert_eq!(manifest2.cold_reused_entries, 1);
+        assert!(manifest2.cold_reused_bytes > 0);
+    }
+
+    #[test]
+    fn prune_snapshots_to_cold_byte_budget() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), 0, 1);
+        let mut world = World::default();
+
+        let qc1 = dummy_qc(1);
+        let qc2 = dummy_qc(2);
+        world.exec_qcs.insert(qc1.subject_block_hash, qc1.clone());
+        world.exec_qcs.insert(qc2.subject_block_hash, qc2.clone());
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("first snapshot");
+        let first_index = backend
+            .last_manifest()
+            .expect("manifest recorded")
+            .snapshot_index;
+
+        let mut updated = qc2;
+        updated.view = 99;
+        world.exec_qcs.insert(updated.subject_block_hash, updated);
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("second snapshot");
+        let second_index = backend
+            .last_manifest()
+            .expect("manifest recorded")
+            .snapshot_index;
+
+        let mut snapshots = fs::read_dir(temp.path())
+            .unwrap()
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                TieredStateBackend::parse_snapshot_dir_name(&entry.file_name()).map(|idx| idx)
+            })
+            .collect::<Vec<_>>();
+        snapshots.sort_unstable();
+        assert_eq!(snapshots, vec![second_index]);
+        assert_ne!(first_index, second_index);
+    }
+
+    #[test]
+    fn snapshot_counter_seeds_from_existing_dirs() {
+        let temp = tempdir().expect("tmpdir");
+        let root = temp.path().to_path_buf();
+        let snapshot_dir = root.join(format!("{:020}", 7_u64));
+        fs::create_dir_all(&snapshot_dir).expect("seed snapshot");
+        fs::create_dir_all(root.join("lanes")).expect("lanes dir");
+        fs::create_dir_all(root.join("retired")).expect("retired dir");
+
+        let mut backend = TieredStateBackend::new(true, 0, 0, 0, Some(root.clone()), 0, 0);
+        let world = World::default();
+
+        backend.record_world_snapshot(&world).expect("snapshot");
+        let manifest = backend.last_manifest().expect("manifest recorded");
+        assert_eq!(manifest.snapshot_index, 8);
+        let new_dir = root.join(format!("{:020}", manifest.snapshot_index));
+        assert!(new_dir.exists(), "expected seeded snapshot directory");
+    }
+
+    #[test]
+    fn reconfigure_clears_entries_on_cold_root_change() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), 0, 0);
+        let mut world = World::default();
+        let qc = dummy_qc(1);
+        world.exec_qcs.insert(qc.subject_block_hash, qc);
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("snapshot recorded");
+        assert!(!backend.entries.is_empty());
+
+        let new_root = tempdir().expect("tmpdir");
+        backend.reconfigure(true, 1, 0, 0, Some(new_root.path().to_path_buf()), 0, 0);
+
+        assert!(backend.entries.is_empty());
+        assert_eq!(backend.snapshot_counter, 0);
+        assert!(backend.last_manifest().is_none());
+    }
+
+    #[test]
     fn prune_old_snapshots_ignores_lane_and_retired_dirs() {
         let temp = tempdir().expect("tmpdir");
-        let backend = TieredStateBackend::new(true, 0, Some(temp.path().to_path_buf()), 1);
+        let backend = TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), 1, 0);
 
         let snapshot1 = temp.path().join(format!("{:020}", 1_u64));
         let snapshot2 = temp.path().join(format!("{:020}", 2_u64));
@@ -1607,7 +2112,8 @@ mod tests {
     #[test]
     fn reconcile_lane_geometry_manages_lane_directories() {
         let temp = tempdir().expect("tmpdir");
-        let mut backend = TieredStateBackend::new(true, 1, Some(temp.path().to_path_buf()), 4);
+        let mut backend =
+            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), 4, 0);
 
         let lane_count = NonZeroU32::new(4).expect("lane count");
         let lane0 = LaneConfig::default();
@@ -1666,7 +2172,8 @@ mod tests {
     #[test]
     fn lane_snapshot_dirs_relabel_on_alias_change() {
         let temp = tempdir().expect("tmpdir");
-        let mut backend = TieredStateBackend::new(true, 0, Some(temp.path().to_path_buf()), 1);
+        let mut backend =
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), 1, 0);
 
         let initial_catalog = LaneCatalog::new(
             nonzero!(1_u32),

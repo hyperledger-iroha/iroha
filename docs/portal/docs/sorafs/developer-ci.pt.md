@@ -19,7 +19,7 @@ description: Execute o CLI da SoraFS em pipelines do GitHub e GitLab com assinat
 ---
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/developer/ci.md`. Mantenha ambas as versoes sincronizadas ate que os docs legados sejam retirados.
+Esta pagina espelha `docs/source/sorafs/developer/ci.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 # Receitas de CI

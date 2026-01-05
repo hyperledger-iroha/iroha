@@ -394,18 +394,11 @@ public final class OfflineVerdictJournal {
         guard !certificateIdHex.isEmpty else { return nil }
         let controllerId = certificate.controller
         let controllerDisplay = object["controller_display"]?.normalizedString ?? controllerId
-        let verdictIdHex = parseHashHex(in: object,
-                                        keys: ["verdict_id", "verdictId", "verdict_id_hex", "verdictIdHex"])
-        let attestationNonceHex = parseHashHex(in: object,
-                                               keys: ["attestation_nonce",
-                                                      "attestationNonce",
-                                                      "attestation_nonce_hex",
-                                                      "attestationNonceHex"])
+        let verdictIdHex = parseHashHex(in: object, key: "verdict_id_hex")
+        let attestationNonceHex = parseHashHex(in: object, key: "attestation_nonce_hex")
         let remainingAmount = object["remaining_amount"]?.normalizedString
-            ?? object["remainingAmount"]?.normalizedString
             ?? certificate.allowance.amount
         let refreshAtMs = object["refresh_at_ms"]?.normalizedUInt64
-            ?? object["refreshAtMs"]?.normalizedUInt64
         let snapshot = parseIntegritySnapshot(from: value)
         return OfflineVerdictMetadata(
             certificateIdHex: certificateIdHex,
@@ -426,13 +419,9 @@ public final class OfflineVerdictJournal {
     }
 
     private static func parseHashHex(in object: [String: ToriiJSONValue],
-                                     keys: [String]) -> String? {
-        for key in keys {
-            if let value = object[key], let parsed = parseHashHex(value) {
-                return parsed
-            }
-        }
-        return nil
+                                     key: String) -> String? {
+        guard let value = object[key] else { return nil }
+        return parseHashHex(value)
     }
 
     private static func parseHashHex(_ value: ToriiJSONValue) -> String? {

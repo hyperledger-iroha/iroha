@@ -95,7 +95,7 @@ Norito types implemented in `crates/iroha_data_model::fraud`:
   `DecisionAggregate` histogram.
 
 Round-trip tests in `crates/iroha_data_model/src/fraud/types.rs` ensure these
-schemas remain binary-compatible with the Norito codec, and
+schemas remain binary-conformant with the Norito codec, and
 `integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs` exercises
 the full intake/decision pipeline end-to-end.
 

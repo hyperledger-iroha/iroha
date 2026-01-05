@@ -149,8 +149,8 @@ fn dump_file(path: &Path, ctx: &mut DumpContext) -> Result<(), Box<dyn std::erro
     }
 
     // Final attempt: interpret the payload as a pipeline recovery sidecar so that
-    // test artifacts under `<store>/blocks/.../pipeline/block_X.norito` can be
-    // inspected without a custom tool.
+    // extracted entries from `pipeline/sidecars.norito` can be inspected without a
+    // custom tool.
     if let Ok(sidecar) = decode_from_bytes::<PipelineRecoverySidecar>(&bytes) {
         dump_pipeline(path, &sidecar);
         return Ok(());

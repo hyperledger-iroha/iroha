@@ -114,10 +114,15 @@
           46
         ]
       ],
+      "group_id": 0,
       "index": 0,
       "length": 7,
       "offset": 0,
-      "parity": false
+      "parity": false,
+      "role": {
+        "role": "Data",
+        "value": null
+      }
     },
     {
       "commitment": [
@@ -156,10 +161,15 @@
           6
         ]
       ],
+      "group_id": 0,
       "index": 1,
       "length": 1024,
       "offset": 7,
-      "parity": true
+      "parity": true,
+      "role": {
+        "role": "GlobalParity",
+        "value": null
+      }
     },
     {
       "commitment": [
@@ -198,10 +208,15 @@
           36
         ]
       ],
+      "group_id": 0,
       "index": 2,
       "length": 1024,
       "offset": 1031,
-      "parity": true
+      "parity": true,
+      "role": {
+        "role": "GlobalParity",
+        "value": null
+      }
     },
     {
       "commitment": [
@@ -240,10 +255,15 @@
           164
         ]
       ],
+      "group_id": 0,
       "index": 3,
       "length": 1024,
       "offset": 2055,
-      "parity": true
+      "parity": true,
+      "role": {
+        "role": "GlobalParity",
+        "value": null
+      }
     },
     {
       "commitment": [
@@ -282,10 +302,15 @@
           218
         ]
       ],
+      "group_id": 0,
       "index": 4,
       "length": 1024,
       "offset": 3079,
-      "parity": true
+      "parity": true,
+      "role": {
+        "role": "GlobalParity",
+        "value": null
+      }
     }
   ],
   "client_blob_id": [

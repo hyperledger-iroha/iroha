@@ -35,6 +35,7 @@ translator: manual
 - `[torii]`: 公開 API サーバの設定（listen アドレス、リクエストサイズ上限、クエリストアなど）。
 - `torii.data_dir`（デフォルト: `./storage/torii`）: Torii の保存場所（添付、webhook レジストリ、DA キャッシュ）。旧 `IROHA_TORII_DATA_DIR` を置き換えます。テストでは `data_dir::OverrideGuard` で一時上書きできます。
 - `torii.events_buffer_capacity`（デフォルト: `10000`）: `/v1/events/sse` と webhook キューの broadcast チャネル容量。遅延がある場合は低く設定してメモリを制御します。
+- `torii.ws_message_timeout_ms`（デフォルト: `10000`）: Torii のイベント/ブロック WebSocket ストリームに適用するメッセージ read/write タイムアウト（ミリ秒）。遅いクライアントや高遅延リンクでは増やしてください。
 - `torii.app_api.*`: JSON 便利 API のページング/バックプレッシャ設定。`default_list_limit` は `limit` の初期値、`max_list_limit` と `max_fetch_size` が上限、`rate_limit_cost_per_row` が行コストです。
 - `torii.webhook.*`: webhook 配信の backoff 設定。`queue_capacity`（デフォルト 10000）でオンディスク待ち数、`max_attempts`（デフォルト 12）でリトライ数、`backoff_initial_ms`/`backoff_max_ms`（デフォルト 1000/60000）で指数バックオフ、`{connect,write,read}_timeout_ms` が HTTP タイムアウトです。
 - `torii.push.*`（feature stub）: Push 通知ブリッジ。`enabled` で有効化し、`rate_per_minute`/`burst` でトークンバケット、`max_topics_per_device` で購読上限、`connect_timeout_ms`/`request_timeout_ms` で HTTP 制限。`fcm_api_key` または APNS `apns_endpoint` + `apns_auth_token` を設定します。

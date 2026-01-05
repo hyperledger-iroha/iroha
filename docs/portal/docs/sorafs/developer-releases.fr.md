@@ -70,8 +70,8 @@ Tous les crates CLI/SDK SoraFS utilisent SemVer :
 
 - `MAJOR` : Introduit pour la première release 1.0. Avant 1.0, le bump mineur `0.y`
   **indique des changements cassants** dans la surface du CLI ou les schémas Norito.
-- `MINOR` : Fonctionnalités rétro-compatibles (nouveaux commandes/flags, nouveaux champs
-  Norito derrière une politique optionnelle, ajouts de télémétrie).
+- `MINOR` : Nouvelles fonctionnalités (nouveaux commandes/flags, nouveaux champs Norito
+  derrière une politique optionnelle, ajouts de télémétrie).
 - `PATCH` : Corrections de bugs, releases uniquement documentation et mises à jour de
   dépendances qui ne modifient pas le comportement observable.
 
@@ -188,7 +188,6 @@ Après le passage des checks et la fin des hooks :
 - Assurez-vous que la documentation pointant vers la nouvelle version (quickstarts, templates CI)
   est à jour ou confirmez qu'aucun changement n'est requis.
 - Créez des entrées de roadmap si un travail de suivi est nécessaire (par ex. flags de migration,
-  dépréciation des manifests legacy).
 - Archivez les logs de sortie du gate de release pour les auditeurs : stockez-les à côté des
   artefacts signés.
 

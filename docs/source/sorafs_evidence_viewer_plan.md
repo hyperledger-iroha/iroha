@@ -101,7 +101,6 @@ This specification completes **SFM-4b3 — Secure evidence viewer tooling**.
 
 ## Testing & Rollout
 - Unit tests for watermark overlay, encryption/decryption, audit logging.
-- Browser compatibility tests (Chrome, Firefox, Edge, Safari).
 - Automated screenshot/capture attempts in CI to test detection and logging.
 - Load test streaming performance (target: 1080p video with <5% CPU overhead on juror laptops).
 - Security assessments: penetration tests, red-team simulation, watermark removal attempts.

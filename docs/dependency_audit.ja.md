@@ -22,7 +22,6 @@ translator: manual
 - crossbeam-channel — RUSTSEC-2025-0024
   - 対応: `crates/ivm/Cargo.toml` でバージョンを `0.5.15` に更新。
 
-- pprof deprecated codec — RUSTSEC-2024-0437
   - 対応: `crates/iroha_torii/Cargo.toml` で `pprof` を `prost-codec` に切り替え。
 
 - ring — RUSTSEC-2025-0009

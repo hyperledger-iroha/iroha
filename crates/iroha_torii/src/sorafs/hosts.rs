@@ -41,8 +41,11 @@ impl HostMappingInput<'_> {
     }
 
     /// Produce direct-CAR endpoints for the supplied manifest digest.
-    #[must_use]
-    pub fn direct_car_locator(&self, scheme: &str, manifest_digest_hex: &str) -> DirectCarLocator {
+    pub fn direct_car_locator(
+        &self,
+        scheme: &str,
+        manifest_digest_hex: &str,
+    ) -> Result<DirectCarLocator, HostMappingError> {
         self.as_manifest_input()
             .direct_car_locator(scheme, manifest_digest_hex)
     }
@@ -50,6 +53,7 @@ impl HostMappingInput<'_> {
 
 /// Helper structure used when serialising host mapping results.
 pub type HostMappingSummary = ManifestSummary;
+pub use sorafs_manifest::hosts::HostMappingError;
 
 #[cfg(test)]
 mod tests {
@@ -80,7 +84,9 @@ mod tests {
             chain_id: &chain_id,
             provider_id: &provider,
         };
-        let locator = input.direct_car_locator("https", "feedface");
+        let locator = input
+            .direct_car_locator("https", "feedface")
+            .expect("locator");
         assert!(
             locator
                 .canonical_url

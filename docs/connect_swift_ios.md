@@ -76,23 +76,6 @@ key that matches the frame’s direction.
 > the XCFramework), the SDK automatically falls back to a JSON shim. Encryption helpers
 > (`ConnectCrypto.*`) require the bridge, so link the XCFramework in production apps.
 
-## Manual CryptoKit Reference (Legacy / Fallback)
-
-If the Norito bridge is unavailable or you need to prototype without the SDK helpers,
-the following reference shows how to wire X25519 + ChaChaPoly manually. This aligns with
-the Norito spec but lacks the deterministic bridging/parity guarantees that the SDK
-offers out of the box.
-
-This section shows how to:
-- Compute sid and salt (BLAKE2b-256; here using a third-party BLAKE2b package or precomputed values).
-- Perform X25519 key agreement (Curve25519.KeyAgreement).
-- Derive direction key via HKDF-SHA256 with salt and info.
-- Build AAD from ("connect:v1", sid, dir, seq, kind=Ciphertext) and nonce from seq.
-- Seal and open payloads via ChaChaPoly with AAD.
-- Join WS with token.
-
-Requires iOS 13+ (CryptoKit). For BLAKE2b, use a small Swift package (e.g., https://github.com/Frizlab/SwiftBLAKE2) or compute salt/sid server-side; below assumes you have `blake2b(data: Data) -> Data`.
-
 ```swift
 import Foundation
 import CryptoKit
@@ -212,25 +195,6 @@ func joinWs(node: String, sid: String, role: String, token: String, onMessage: @
 // let frameBinary = noritoEncodeConnectFrameV1(... Ciphertext { aead: sealEnvelopeV1(key: kApp, ...) })
 // task.send(.data(frameBinary))
 ```
-
-Notes:
-- Compute `sid` client-side, then POST `/v1/connect/session` with that `sid` to obtain per-role tokens; join WS with token.
-- After Approve, send Close/Reject as encrypted payloads.
-- Norito framing is needed to wrap `aead` into `ConnectFrameV1` as binary; implement with your Norito bindings.
-
-### Norito Framing Demo (Placeholder)
-
-The following is a minimal, non‑canonical framing sufficient for local demos. It is NOT Norito‑compatible and should be replaced by a proper Norito encoder/decoder when available. It simply concatenates fields in a stable little‑endian order so you can test end‑to‑end WS transport without pulling a full codec into iOS.
-
-Layout (demo only):
-- 32 bytes: sid
-- 1 byte: dir (0 = AppToWallet, 1 = WalletToApp)
-- 8 bytes: seq (LE)
-- 1 byte: kind (1 = Ciphertext)
-- 1 byte: repeat dir inside ciphertext (kept for parity with shared type)
-- 4 bytes: ct_len (LE)
-- ct_len bytes: aead (ChaChaPoly combined)
-
 ```swift
 func le64(_ x: UInt64) -> Data { var v = x.littleEndian; return withUnsafeBytes(of: &v) { Data($0) } }
 func le32(_ x: UInt32) -> Data { var v = x.littleEndian; return withUnsafeBytes(of: &v) { Data($0) } }
@@ -278,11 +242,6 @@ func parseCiphertextV1Demo(_ data: Data) -> ParsedCiphertextV1Demo? {
 // Example usage: receive
 // case .data(let d): if let f = parseCiphertextV1Demo(d) { let pt = openEnvelopeV1(key: kWallet, sid: f.sid, dir: f.dir, seq: f.seq, combined: f.aead) }
 ```
-
-### Encrypted Close/Reject Demo (Placeholder framing)
-
-Assuming you already derived `kWallet` (wallet→app direction key), have `sid` (32 bytes), and a connected `URLSessionWebSocketTask` named `ws`:
-
 ```swift
 // Send encrypted Close (wallet → app) at seq=1
 let closePayload = try! JSONSerialization.data(withJSONObject: [
@@ -313,9 +272,6 @@ let ctReject = sealEnvelopeV1(key: kWallet, sid: sid, dir: 1, seq: 2, payload: r
 let frameReject = frameCiphertextV1Demo(sid: sid, dir: 1, seq: 2, aead: ctReject)
 ws.send(.data(frameReject)) { err in if let err = err { print("ws send reject:", err) } }
 ```
-
-On receive, use `parseCiphertextV1Demo` and `openEnvelopeV1` to get the plaintext JSON, then decode into your app‑side types. Replace this demo framing with proper Norito encoding when integrating.
-
 ## CI validation
 
 - Before making Connect or bridge integration changes, run:

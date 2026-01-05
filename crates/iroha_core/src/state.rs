@@ -4462,6 +4462,14 @@ pub struct StateTransaction<'block, 'state> {
     pub chain_id: iroha_data_model::ChainId,
     /// Accumulator used to record settlement receipts for this block.
     settlement_accumulator: &'block mut crate::settlement::SettlementAccumulator,
+    /// Settlement receipts staged during this transaction execution.
+    pending_settlement_records:
+        BTreeMap<HashOf<SignedTransaction>, crate::settlement::PendingSettlement>,
+    /// Charged Nexus fee event staged until the transaction is committed.
+    pending_nexus_fee_event: Option<crate::sumeragi::status::NexusFeeEvent>,
+    /// Block fee units staged until the transaction is committed.
+    #[cfg(feature = "telemetry")]
+    pending_block_fee_units: u64,
     /// Confidential operations executed so far within this transaction.
     pub zk_confidential_ops_in_tx: u32,
     /// Confidential proof verifications executed so far within this transaction.
@@ -4610,15 +4618,40 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         tx_hash: HashOf<SignedTransaction>,
         record: crate::settlement::PendingSettlement,
     ) {
-        self.settlement_accumulator.record(tx_hash, record);
+        self.pending_settlement_records.insert(tx_hash, record);
     }
 
-    /// Drain settlement receipts recorded while executing this block.
+    /// Drain settlement receipts staged while executing this transaction.
     pub fn drain_settlement_records(
         &mut self,
     ) -> std::collections::BTreeMap<HashOf<SignedTransaction>, crate::settlement::PendingSettlement>
     {
-        self.settlement_accumulator.drain()
+        core::mem::take(&mut self.pending_settlement_records)
+    }
+
+    /// Stage a Nexus fee event so it is recorded only after the transaction commits.
+    pub(crate) fn stage_nexus_fee_event(&mut self, event: crate::sumeragi::status::NexusFeeEvent) {
+        debug_assert!(
+            matches!(
+                event,
+                crate::sumeragi::status::NexusFeeEvent::Charged { .. }
+            ),
+            "only charged fee events should be staged"
+        );
+        debug_assert!(
+            self.pending_nexus_fee_event.is_none(),
+            "each transaction should stage at most one Nexus fee event"
+        );
+        self.pending_nexus_fee_event = Some(event);
+    }
+
+    /// Stage block fee units so telemetry only reflects committed transactions.
+    #[cfg(feature = "telemetry")]
+    pub(crate) fn stage_block_fee_units(&mut self, delta_units: u64) {
+        if delta_units == 0 {
+            return;
+        }
+        self.pending_block_fee_units = self.pending_block_fee_units.saturating_add(delta_units);
     }
 }
 
@@ -10254,22 +10287,13 @@ impl State {
         status::record_validator_checkpoint(checkpoint.clone());
         let sidecar_snapshot = stake_snapshot.clone();
         self.persist_commit_roster_journal(commit_certificate, checkpoint, stake_snapshot);
-        let sidecar = if sidecar_snapshot.is_some() {
-            crate::kura::RosterSidecar::new_v2(
-                commit_certificate.height,
-                commit_certificate.subject_block_hash,
-                Some(commit_certificate.clone()),
-                Some(checkpoint.clone()),
-                sidecar_snapshot,
-            )
-        } else {
-            crate::kura::RosterSidecar::new_v1(
-                commit_certificate.height,
-                commit_certificate.subject_block_hash,
-                Some(commit_certificate.clone()),
-                Some(checkpoint.clone()),
-            )
-        };
+        let sidecar = crate::kura::RosterSidecar::new_v1(
+            commit_certificate.height,
+            commit_certificate.subject_block_hash,
+            Some(commit_certificate.clone()),
+            Some(checkpoint.clone()),
+            sidecar_snapshot,
+        );
         self.kura.write_roster_metadata(&sidecar);
     }
 
@@ -11566,6 +11590,11 @@ impl State {
             );
             (gas_limit_per_block, pre_block_npos_seed)
         };
+        #[cfg(feature = "telemetry")]
+        {
+            self.telemetry.set_block_gas_used(0);
+            self.telemetry.reset_block_fee_units();
+        }
         let mut sb = StateBlock {
             state_ref: self,
             world: self.world.block(),
@@ -12959,8 +12988,11 @@ impl State {
         backend.reconfigure(
             cfg.enabled,
             cfg.hot_retained_keys,
+            cfg.hot_retained_bytes.get(),
+            cfg.hot_retained_grace_snapshots,
             cfg.cold_store_root.clone(),
             cfg.max_snapshots,
+            cfg.max_cold_bytes.get(),
         );
     }
 
@@ -14112,6 +14144,10 @@ impl<'state> StateBlock<'state> {
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             settlement_accumulator: &mut self.settlement_accumulator,
+            pending_settlement_records: BTreeMap::new(),
+            pending_nexus_fee_event: None,
+            #[cfg(feature = "telemetry")]
+            pending_block_fee_units: 0,
             zk_confidential_ops_in_tx: 0,
             zk_verify_calls_in_tx: 0,
             zk_proof_bytes_in_tx: 0,
@@ -14196,6 +14232,12 @@ impl<'state> StateBlock<'state> {
                     manifest.hot_entries.len(),
                     manifest.cold_entries.len(),
                     manifest.cold_bytes_total,
+                    manifest.hot_promotions,
+                    manifest.hot_demotions,
+                    manifest.hot_grace_overflow_keys,
+                    manifest.hot_grace_overflow_bytes,
+                    manifest.cold_reused_entries,
+                    manifest.cold_reused_bytes,
                 );
             }
         }
@@ -14970,7 +15012,6 @@ fn replay_roster_for_block(
 ///
 /// # Errors
 /// Returns an error if block retrieval or application fails.
-#[allow(clippy::too_many_lines)]
 pub fn replay_blocks_from_kura(
     kura: &std::sync::Arc<Kura>,
     state: &mut State,
@@ -14978,10 +15019,41 @@ pub fn replay_blocks_from_kura(
     block_count: usize,
     fallback_consensus_mode: iroha_config::parameters::actual::ConsensusMode,
 ) -> Result<()> {
+    replay_blocks_from_kura_range(
+        kura,
+        state,
+        topology,
+        1,
+        block_count,
+        fallback_consensus_mode,
+    )
+}
+
+/// Replay blocks from the local Kura store into the provided [`State`], starting at `start_height`
+/// and continuing through `block_count` (inclusive). Use this to catch up from a snapshot.
+/// Uses the configured consensus mode as a fallback when resolving topology rotation.
+///
+/// # Errors
+/// Returns an error if block retrieval or application fails.
+#[allow(clippy::too_many_lines)]
+pub fn replay_blocks_from_kura_range(
+    kura: &std::sync::Arc<Kura>,
+    state: &mut State,
+    topology: &crate::sumeragi::network_topology::Topology,
+    start_height: usize,
+    block_count: usize,
+    fallback_consensus_mode: iroha_config::parameters::actual::ConsensusMode,
+) -> Result<()> {
     use iroha_config::parameters::actual::ConsensusMode;
     use std::num::NonZeroUsize;
 
     if block_count == 0 {
+        return Ok(());
+    }
+    if start_height == 0 {
+        return Err(eyre!("invalid start height during replay: {start_height}"));
+    }
+    if start_height > block_count {
         return Ok(());
     }
 
@@ -14998,7 +15070,7 @@ pub fn replay_blocks_from_kura(
     };
     let time_source = TimeSource::new_system();
 
-    for height in 1..=block_count {
+    for height in start_height..=block_count {
         let nz = NonZeroUsize::new(height)
             .ok_or_else(|| eyre!("invalid block height during replay: {height}"))?;
         let block_arc = kura
@@ -15127,7 +15199,7 @@ mod replay_validation_tests {
         prelude::{Account, Domain},
         transaction::TransactionBuilder,
     };
-    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
+    use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 
     use super::*;
 
@@ -15171,6 +15243,96 @@ mod replay_validation_tests {
             result.is_err(),
             "corrupted genesis should be rejected during replay"
         );
+    }
+
+    #[test]
+    fn replay_from_height_catches_up_state() {
+        use std::borrow::Cow;
+
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::peer::PeerId;
+        use iroha_genesis::GENESIS_DOMAIN_ID;
+
+        let chain_id = ChainId::from("iroha:test:partial-replay");
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
+            leader.public_key().clone(),
+        )]);
+
+        let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let genesis_block = SignedBlock::genesis(
+            vec![tx_genesis],
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+            None,
+            None,
+        );
+
+        let tx_block2 = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions([Log::new(iroha_logger::Level::INFO, "block2".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let accepted_block2 =
+            crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block2));
+        let block2 = crate::block::BlockBuilder::new(vec![accepted_block2])
+            .chain(0, Some(&genesis_block))
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let signed_block2: SignedBlock = block2.into();
+
+        let tx_block3 = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions([Log::new(iroha_logger::Level::INFO, "block3".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let accepted_block3 =
+            crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block3));
+        let block3 = crate::block::BlockBuilder::new(vec![accepted_block3])
+            .chain(0, Some(&signed_block2))
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let signed_block3: SignedBlock = block3.into();
+
+        let kura = Kura::blank_kura_for_testing();
+        kura.store_block(Arc::new(genesis_block))
+            .expect("store genesis");
+        kura.store_block(Arc::new(signed_block2.clone()))
+            .expect("store block2");
+        kura.store_block(Arc::new(signed_block3.clone()))
+            .expect("store block3");
+
+        let world = World::with(
+            [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
+            [Account::new(genesis_id.clone()).build(&genesis_id)],
+            [],
+        );
+        let mut state = State::new_with_chain(
+            world,
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id,
+        );
+        {
+            let mut params_block = state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        replay_blocks_from_kura(&kura, &mut state, &topology, 2, ConsensusMode::Permissioned)
+            .expect("replay first two blocks");
+        assert_eq!(state.view().height(), 2);
+
+        replay_blocks_from_kura_range(
+            &kura,
+            &mut state,
+            &topology,
+            3,
+            3,
+            ConsensusMode::Permissioned,
+        )
+        .expect("replay remaining block");
+        let view = state.view();
+        assert_eq!(view.height(), 3);
+        assert_eq!(view.latest_block_hash(), Some(signed_block3.hash()));
     }
 
     #[test]
@@ -15312,6 +15474,7 @@ mod replay_validation_tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().join("kura")),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -15925,6 +16088,7 @@ mod permission_cache_tests {
         let make_config = |dir: &tempfile::TempDir| Config {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -16919,7 +17083,21 @@ impl StateTransaction<'_, '_> {
             block_hashes,
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
+            nexus,
             tx_call_hash,
+            #[cfg(feature = "telemetry")]
+            gas_used_in_block_so_far,
+            #[cfg(not(feature = "telemetry"))]
+                gas_used_in_block_so_far: _,
+            #[cfg(feature = "telemetry")]
+            last_tx_gas_used,
+            #[cfg(not(feature = "telemetry"))]
+                last_tx_gas_used: _,
+            settlement_accumulator,
+            pending_settlement_records,
+            pending_nexus_fee_event,
+            #[cfg(feature = "telemetry")]
+            pending_block_fee_units,
             fastpq_transcripts,
             mut pending_transfer_transcripts,
             block_axt_envelopes,
@@ -16927,10 +17105,60 @@ impl StateTransaction<'_, '_> {
             implicit_account_creations_in_block,
             implicit_account_creations_in_tx,
             current_lane_id,
+            #[cfg(feature = "telemetry")]
+            telemetry,
             ..
         } = self;
         if let Some(lane_id) = current_lane_id {
             touched_lanes.insert(lane_id);
+        }
+        if !pending_settlement_records.is_empty() {
+            for (tx_hash, record) in pending_settlement_records {
+                settlement_accumulator.record(tx_hash, record);
+            }
+        }
+        if let Some(event) = pending_nexus_fee_event {
+            match event {
+                crate::sumeragi::status::NexusFeeEvent::Charged {
+                    payer_kind,
+                    payer_id,
+                    amount,
+                    asset_id,
+                } => {
+                    let payer_kind_label = match payer_kind {
+                        crate::sumeragi::status::NexusFeePayer::Payer => "payer",
+                        crate::sumeragi::status::NexusFeePayer::Sponsor => "sponsor",
+                    };
+                    info!(
+                        target: "economics",
+                        payer_kind = payer_kind_label,
+                        payer = %payer_id,
+                        fee_amount = amount,
+                        asset = %asset_id,
+                        sink = %nexus.fees.fee_sink_account_id,
+                        "nexus fee charged"
+                    );
+                    crate::sumeragi::status::record_nexus_fee_event(
+                        crate::sumeragi::status::NexusFeeEvent::Charged {
+                            payer_kind,
+                            payer_id,
+                            amount,
+                            asset_id,
+                        },
+                    );
+                }
+                other => {
+                    crate::sumeragi::status::record_nexus_fee_event(other);
+                }
+            }
+        }
+        #[cfg(feature = "telemetry")]
+        {
+            let cumulative = gas_used_in_block_so_far.saturating_add(last_tx_gas_used);
+            telemetry.set_block_gas_used(cumulative);
+            if pending_block_fee_units > 0 {
+                telemetry.add_block_fee_units(pending_block_fee_units);
+            }
         }
         if !pending_transfer_transcripts.is_empty() {
             if let Some(hash) = tx_call_hash {
@@ -17830,6 +18058,7 @@ pub(crate) mod deserialize {
             };
             let world = parse_world(world_value, &ivm_seed)?;
 
+            let chain_id: ChainId = take_required(&mut map, "chain_id")?;
             let block_hashes_vec: Vec<HashOf<BlockHeader>> =
                 take_required(&mut map, "block_hashes")?;
             let transactions: TransactionsStorage = take_required(&mut map, "transactions")?;
@@ -17838,7 +18067,7 @@ pub(crate) mod deserialize {
 
             drain_unknown(&map, "state");
 
-            Ok(build_state(BuildStateInputs {
+            let mut state = build_state(BuildStateInputs {
                 world,
                 block_hashes: BlockHashes::new(block_hashes_vec),
                 transactions,
@@ -17849,7 +18078,9 @@ pub(crate) mod deserialize {
                 query_handle: self.query_handle,
                 #[cfg(feature = "telemetry")]
                 telemetry: self.telemetry,
-            }))
+            });
+            state.chain_id = chain_id;
+            Ok(state)
         }
     }
 
@@ -18942,6 +19173,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root.clone()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -19109,7 +19341,7 @@ mod tests {
         let cold_root = temp_dir.path().join("cold");
         std::fs::write(&cold_root, b"blocker file").expect("blocker file");
         *state.tiered_backend.get_mut() =
-            TieredStateBackend::new(true, 0, Some(cold_root.clone()), 1);
+            TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), 1, 0);
 
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
             additions: vec![LaneConfig {
@@ -19167,8 +19399,13 @@ mod tests {
         state.set_tiered_backend(&iroha_config::parameters::actual::TieredState {
             enabled: true,
             hot_retained_keys: 1,
+            hot_retained_bytes:
+                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
+            hot_retained_grace_snapshots:
+                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
             cold_store_root: Some(temp_file.path().to_path_buf()),
             max_snapshots: 1,
+            max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
         });
         let initial_catalog = state.nexus_snapshot().lane_catalog.clone();
 
@@ -20490,6 +20727,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -20952,6 +21190,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -21267,6 +21506,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -21361,6 +21601,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -21573,6 +21814,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -21644,6 +21886,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -21730,6 +21973,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -21911,6 +22155,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().join("kura")),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -22013,6 +22258,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -22578,6 +22824,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:

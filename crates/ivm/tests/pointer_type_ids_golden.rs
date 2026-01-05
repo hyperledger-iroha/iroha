@@ -20,7 +20,7 @@ fn pointer_type_ids_match_golden() {
 }
 
 #[test]
-fn pointer_policy_allows_expected_types_per_abi() {
+fn pointer_policy_allows_expected_types_for_v1() {
     use ivm::{PointerType as P, SyscallPolicy, is_type_allowed_for_policy};
     for ty in [
         P::AccountId,
@@ -38,9 +38,5 @@ fn pointer_policy_allows_expected_types_per_abi() {
         P::ProofBlob,
     ] {
         assert!(is_type_allowed_for_policy(SyscallPolicy::AbiV1, ty));
-        assert!(!is_type_allowed_for_policy(
-            SyscallPolicy::Experimental(1),
-            ty
-        ));
     }
 }

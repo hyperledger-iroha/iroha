@@ -30,7 +30,7 @@ Sumeragi エビデンス用の一時的な監査エンドポイント。
 
 - POST `/v1/sumeragi/evidence`
   - 16 進 Norito エンコードのエビデンスを Sumeragi アクター（`ControlFlow::Evidence`）に送信。
-  - リクエストボディ（JSON）: `{ "evidence_hex": "<hex string>" }`（空白は無視）。
+  - リクエストボディ（JSON）: `{ "evidence_hex": "<hex string>" }`（hex は Norito-framed `ConsensusEvidence` バイト列、空白は無視）。
   - レスポンス（JSON）: `{ "status": "accepted", "kind": "<variant>" }`
   - バリデーションは二重投票ペイロードの署名者／高さ／ビュー／エポック一致を確認し、単一署名ペイロードは空でないことを要求。`Censorship` は署名済み `TransactionSubmissionReceipt` のレシート・クォラムを要求し、`InvalidProposal` は高さ／ビューを前進させないものや埋め込み commit certificate と親ハッシュが一致しないものを拒否。
   - CLI ヘルパー: `iroha sumeragi evidence submit --evidence-hex <hex>` または `--evidence-hex-file <path>`

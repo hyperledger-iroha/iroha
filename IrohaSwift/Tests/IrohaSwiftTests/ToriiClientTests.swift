@@ -1407,12 +1407,13 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(response.manifests.first?.accounts.first, "holder@cbdc")
     }
 
-    func testUaidBindingsQueryNormalizesAddressFormatAlias() throws {
+    func testUaidBindingsQueryRejectsAddressFormatAlias() {
         let query = ToriiUaidBindingsQuery(addressFormat: "IH-b32")
-        let items = try XCTUnwrap(query.queryItems())
-        XCTAssertEqual(items.count, 1)
-        XCTAssertEqual(items.first?.name, "address_format")
-        XCTAssertEqual(items.first?.value, "ih58")
+        XCTAssertThrowsError(try query.queryItems()) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload, got \(error)")
+            }
+        }
     }
 
     func testUaidBindingsQueryRejectsInvalidAddressFormat() {
@@ -1424,11 +1425,13 @@ final class ToriiClientTests: XCTestCase {
         }
     }
 
-    func testUaidManifestQueryNormalizesAddressFormatAlias() throws {
+    func testUaidManifestQueryRejectsAddressFormatAlias() {
         let query = ToriiUaidManifestQuery(addressFormat: "  canonical ")
-        let items = try XCTUnwrap(query.queryItems())
-        let map = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value ?? "") })
-        XCTAssertEqual(map["address_format"], "ih58")
+        XCTAssertThrowsError(try query.queryItems()) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload, got \(error)")
+            }
+        }
     }
 
     func testUaidManifestQueryRejectsInvalidAddressFormat() {
@@ -2250,35 +2253,6 @@ final class ToriiClientHeaderTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testDeprecateVerifyingKeyEncodesBody() async throws {
-        let requestBody = ToriiVerifyingKeyDeprecateRequest(
-            authority: "alice@wonderland",
-            privateKey: "ed0120...",
-            backend: "halo2/ipa",
-            name: "vk_main"
-        )
-
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.url?.path, "/v1/zk/vk/deprecate")
-            let json = self.bodyJSON(from: request)
-            XCTAssertEqual(json["authority"] as? String, "alice@wonderland")
-            XCTAssertEqual(json["private_key"] as? String, "ed0120...")
-            XCTAssertEqual(json["backend"] as? String, "halo2/ipa")
-            XCTAssertEqual(json["name"] as? String, "vk_main")
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 202,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "application/json"]
-            )!
-            return (response, Data())
-        }
-
-        try await makeClient().deprecateVerifyingKey(requestBody)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
     func testStreamVerifyingKeyEventsAsync() async throws {
         let ssePayload = """
 id: 15
@@ -2286,7 +2260,7 @@ event: message
 data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
 
 id: 16
-data: {"VerifyingKey":{"Deprecated":{"id":{"backend":"halo2/ipa","name":"vk_main"}}}}
+data: {"VerifyingKey":{"Updated":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":3,"circuit_id":"halo2/ipa::transfer_v3","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
 
 """
             .data(using: .utf8)!
@@ -2317,12 +2291,13 @@ data: {"VerifyingKey":{"Deprecated":{"id":{"backend":"halo2/ipa","name":"vk_main
         XCTAssertEqual(first?.rawEvent.contains("Registered"), true)
 
         let second = try await iterator.next()
-        guard case let .deprecated(deprecatedId)? = second?.event else {
-            return XCTFail("Expected deprecated event")
+        guard case let .updated(updatedId, updatedRecord)? = second?.event else {
+            return XCTFail("Expected updated event")
         }
         XCTAssertEqual(second?.eventId, "16")
-        XCTAssertEqual(deprecatedId.backend, "halo2/ipa")
-        XCTAssertEqual(deprecatedId.name, "vk_main")
+        XCTAssertEqual(updatedId.backend, "halo2/ipa")
+        XCTAssertEqual(updatedId.name, "vk_main")
+        XCTAssertEqual(updatedRecord.version, 3)
 
         let third = try await iterator.next()
         XCTAssertNil(third)
@@ -2332,7 +2307,7 @@ data: {"VerifyingKey":{"Deprecated":{"id":{"backend":"halo2/ipa","name":"vk_main
     func testStreamVerifyingKeyEventsIncludesLastEventIdHeader() async throws {
         let ssePayload = """
 id: 21
-data: {"VerifyingKey":{"Deprecated":{"id":{"backend":"halo2/ipa","name":"vk_main"}}}}
+data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":1,"circuit_id":"halo2/ipa::transfer_v1","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
 
 """
             .data(using: .utf8)!
@@ -2353,8 +2328,8 @@ data: {"VerifyingKey":{"Deprecated":{"id":{"backend":"halo2/ipa","name":"vk_main
         let stream = makeClient().streamVerifyingKeyEvents(lastEventId: "99")
         var iterator = stream.makeAsyncIterator()
         let event = try await iterator.next()
-        guard case .deprecated? = event?.event else {
-            return XCTFail("Expected deprecated event")
+        guard case .registered? = event?.event else {
+            return XCTFail("Expected registered event")
         }
         let finished = try await iterator.next()
         XCTAssertNil(finished)
@@ -2416,7 +2391,7 @@ event: message
 data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
 
 id: 16
-data: {"VerifyingKey":{"Deprecated":{"id":{"backend":"halo2/ipa","name":"vk_main"}}}}
+data: {"VerifyingKey":{"Updated":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":3,"circuit_id":"halo2/ipa::transfer_v3","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
 
 """
             .data(using: .utf8)!
@@ -2463,12 +2438,13 @@ data: {"VerifyingKey":{"Deprecated":{"id":{"backend":"halo2/ipa","name":"vk_main
         XCTAssertEqual(id.name, "vk_main")
         XCTAssertEqual(record.status, .active)
 
-        guard case let .deprecated(deprecatedId) = events[1].event else {
-            return XCTFail("Expected deprecated event")
+        guard case let .updated(updatedId, updatedRecord) = events[1].event else {
+            return XCTFail("Expected updated event")
         }
         XCTAssertEqual(events[1].eventId, "16")
-        XCTAssertEqual(deprecatedId.backend, "halo2/ipa")
-        XCTAssertEqual(deprecatedId.name, "vk_main")
+        XCTAssertEqual(updatedId.backend, "halo2/ipa")
+        XCTAssertEqual(updatedId.name, "vk_main")
+        XCTAssertEqual(updatedRecord.version, 3)
     }
 #endif
 

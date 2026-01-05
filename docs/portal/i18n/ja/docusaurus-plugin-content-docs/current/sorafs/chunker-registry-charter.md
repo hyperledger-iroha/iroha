@@ -32,7 +32,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 - プロファイル ID は正の整数で、単調に増加します。
 - 正規ハンドル `namespace.name@semver` は `profile_aliases` の先頭エントリに
-  **必ず** 含まれます。legacy alias はその後に続きます。
 - alias 文字列は trim され、ユニークで、他エントリの正規ハンドルと衝突しません。
 
 ## 役割
@@ -80,7 +79,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 5. **廃止 / サンセット**
    - 既存プロファイルを置き換える提案は、二重公開ウィンドウ（猶予期間）と upgrade 計画を含める必要があります。
-   - 猶予期間が終了したら、置き換え対象のプロファイルをレジストリで deprecated としてマークし、
      移行レジャーを更新します。
 
 6. **緊急変更**

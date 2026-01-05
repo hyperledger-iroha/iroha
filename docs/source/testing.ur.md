@@ -42,7 +42,7 @@ translation_last_reviewed: 2026-01-01
 ### Python کلائنٹ ٹیسٹس (`pytests` directory)
 
 1. Python requirements کو virtual environment میں `pip install -r pytests/requirements.txt` سے انسٹال کریں۔
-2. اوپر بنائے گئے Norito-compatible fixtures کو کسی shared path یا environment variable کے ذریعے export کریں۔
+2. اوپر بنائے گئے Norito format fixtures کو کسی shared path یا environment variable کے ذریعے export کریں۔
 3. verbose output کے ساتھ سوٹ چلائیں: `pytest -vv pytests`.
 4. targeted debugging کے لیے `pytest -k "Query" pytests/tests/test_queries.py --log-cli-level=INFO` چلائیں۔
 

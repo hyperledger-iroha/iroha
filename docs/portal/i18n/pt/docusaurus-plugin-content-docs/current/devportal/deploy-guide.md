@@ -218,7 +218,7 @@ sorafs_cli manifest verify-signature \
  [Publishing & Monitoring](./publishing-monitoring.md) para que a gate de observabilidad DOCS-3c
  se satisfaga junto a os etapas de publicacao. O helper ahora acepta multiples entradas
  `bindings` (sitio, OpenAPI, SBOM del portal, SBOM de OpenAPI) e aplica `Sora-Name`/`Sora-Proof`/`Sora-Content-CID`
- em o host objetivo via o guard opcional `expectHost`. A invocacao de abajo escribe tanto um
+ em o host objetivo via o guard opcional `hostname`. A invocacao de abajo escribe tanto um
  resumo JSON unico como o bundle de evidencia (`portal.json`, `tryit.json`, `binding.json` e
  `checksums.sha256`) bajo o directorio de release:
 
@@ -452,7 +452,7 @@ gateway-content-binding:
  raspar a salida de shell.
 
 Se generan automaticamente via
-`cargo xtask soradns-binding-template` (que reemplazo al helper Node anterior)
+`cargo xtask soradns-binding-template`
 e capturan o alias, o digest del manifesto e o hostname de gatewae que se
 pasaron a `sorafs-pin-release.sh`. Para regenerar o personalizar o bloque de headers,
 execute:
@@ -475,18 +475,17 @@ Anexe o snippet de headers al request de cambio de CDN e alimenta o documento JS
 al pipeline de automacao de gatewae para que a promocao real de host coincida com a
 evidencia de release.
 
-O script de release aun incluye o script Node por compatibilidad, pero o helper xtask
-es a ruta canonica de ahora em adelante. O script de release execute automaticamente o
-helper de verificacao para que os tickets DG-3 siempre incluyan evidencia reciente.
-Vuelve a ejecutarlo manualmente quando edites o binding JSON a mano:
+O script de release execute automaticamente o helper de verificacao para que os
+tickets DG-3 siempre incluyan evidencia reciente. Vuelve a ejecutarlo manualmente
+quando edites o binding JSON a mano:
 
 ```bash
 cargo xtask soradns-verify-binding \
- --binding artifacts/sorafs/portal.gateway.binding.json \
- --alias docs.sora.link \
- --content-cid "$(jq -r '.contentCid' artifacts/sorafs/portal.gateway.binding.json)" \
- --hostname docs.sora.link \
- --proof-status ok
+  --binding artifacts/sorafs/portal.gateway.binding.json \
+  --alias docs.sora.link \
+  --hostname docs.sora.link \
+  --proof-status ok \
+  --manifest-json artifacts/sorafs/portal.manifest.json
 ```
 
 O comando decodifica o payload `Sora-Proof` engrapado, asegura que o metadata `Sora-Route-Binding`
@@ -521,7 +520,7 @@ npm run monitor:publishing -- \
  `docs/portal/docs/devportal/publishing-monitoring.md` para o esquema) e
  execute tres checks: probes de paths del portal + validacion de CSP/Permissions-Policy,
  probes del proxe Tre it (opcionalmente golpeando su endpoint `/metrics`), e o verificador
- de binding de gatewae (`scripts/verify-sorafs-binding.mjs`) que ahora exige a presencia e
+ de binding de gatewae (`cargo xtask soradns-verify-binding`) que ahora exige a presencia e
  o valor esperado de Sora-Content-CID junto com as verificaciones de alias/manifesto.
 - O comando termina com non-zero quando falla algun probe para que CI, cron jobs, o operadores
  de runbook possam detener um release antes de promover alias.
@@ -698,11 +697,10 @@ engrapan provas frescas:
  `docs/source/sorafs_alias_policy.md` e falla quando o digest del manifesto,
  os TTLs o os bindings GAR se desvian.
 
- Para spot checks ligeros (por exemplo, quando apenas cambiaste o tuple alias/manifesto),
- execute `node scripts/verify-sorafs-binding.mjs --alias "<alias>" --manifest "<digest>" --url "<gateway-url>"`.
- O helper obtiene o endpoint del gateway, decodifica o header `Sora-Proof` engrapado, e
- opcionalmente escribe um blob JSON de evidencia via `--json-out`, lo cual es util para tickets
- de release que apenas necesitan confirmacion de binding em lugar de um drill completo.
+   For lightweight spot checks (for example, when only the binding bundle
+   changed), run `cargo xtask soradns-verify-binding --binding <portal.gateway.binding.json> --alias "<alias>" --hostname "<gateway-host>" --proof-status ok --manifest-json <portal.manifest.json>`.
+   The helper validates the captured binding bundle and is handy for release
+   tickets that only need binding confirmation instead of a full probe drill.
 
 2. **Captura evidencia de drill.** Para drills de operador o simulacros de PagerDuty, envuelve
  o probe com `scripts/telemetry/run_sorafs_gateway_probe.sh --scenario

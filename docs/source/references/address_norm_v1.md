@@ -30,7 +30,6 @@ below must be rejected deterministically at the boundary where it is provided.
 | UTS‑46 ASCII folding | `canonicalize_domain_label` (same module) calling `Uts46::to_ascii` | `AsciiDenyList::EMPTY`, `Hyphens::Check`, `DnsLength::Verify`, and the default non-transitional behaviour of `Uts46::new()`. Output is lowered before validation. | `ParseError(ERR_DOMAIN_NORMALISATION)` mapped to `AccountAddressError::InvalidDomainLabel`. |
 | Character & label policy | Post-processing inside `canonicalize_domain_label` | Enforce ASCII `[a-z0-9-_]`, forbid empty labels, ensure at least one label when splitting on `'.'`, and reject Latin Extended Additional letters (`U+1E00`–`U+1EFF`). | `AccountAddressError::InvalidDomainLabel`. |
 | Length limits | Same helper | Each label 1–63 bytes, FQDN ≤ 255 bytes after UTS‑46 output. | `AccountAddressError::InvalidDomainLabel`. |
-| Local digest | `AccountAddress::compute_local_digest` (see below) | Blake2s MAC with ASCII key `SORA-LOCAL-K:v1`, truncate to 12 bytes. | `AccountAddressError::LocalDigestTooShort` when legacy Local‑8 inputs surface. |
 
 Downstream consumers (`iroha_cli`, Torii, SDKs) MUST reuse these helpers instead
 of implementing ad-hoc pipelines; this guarantees fixtures, telemetry, and
@@ -127,7 +126,6 @@ addresses that do not decode on other peers.
 | UTS‑46 processing | `ERR_INVALID_DOMAIN_LABEL` | `Uts46::to_ascii` rejects the label (illegal hyphen placement, DNS-length violation, invalid ASCII). |
 | Character policy | `ERR_INVALID_DOMAIN_LABEL` | Post-UTS scan finds a character outside `[a-z0-9-_]` or an empty label. |
 | Length enforcement | `ERR_INVALID_DOMAIN_LABEL` | Label length <1 or >63 bytes, or total payload >255 bytes. |
-| Legacy Local digest | `ERR_LOCAL8_DEPRECATED` | Callers attempt to encode a selector shorter than the Norm v1 12-byte digest. |
 
 ## Local digest procedure
 

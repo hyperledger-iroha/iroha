@@ -6,7 +6,7 @@ slug: /sdks/recipes/javascript-ledger-flow
 
 import SampleDownload from '@site/src/components/SampleDownload';
 
-This recipe uses the Node-compatible `@iroha2/torii-client` and
+This recipe uses the Node.js `@iroha2/torii-client` and
 `@iroha2/crypto-target-node` packages to reproduce the CLI ledger walkthrough.
 
 <SampleDownload

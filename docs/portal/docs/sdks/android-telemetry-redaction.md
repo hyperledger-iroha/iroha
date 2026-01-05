@@ -5,7 +5,6 @@ slug: /sdks/android-telemetry
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/sdk/android/telemetry_redaction.md`. Keep both versions in sync until the legacy docs retire.
 :::
 
 <!--

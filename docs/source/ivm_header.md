@@ -1,6 +1,5 @@
 # IVM Bytecode Header
 
-This page defines the IVM bytecode header fields and compatibility policy. It complements the architecture overview in `ivm.md` and is referenced by the pipeline and examples docs.
 
 Magic
 - 4 bytes: ASCII `IVM\0` at offset 0.
@@ -19,7 +18,6 @@ Mode bits
 - `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (reserved/feature‑gated).
 
 Fields (meaning)
-- `version`: semantic version of the bytecode format (`version_major.version_minor`). Used for decoder compatibility and gas schedule selection.
 - `abi_version`: syscall table and pointer‑ABI schema version.
 - `mode`: feature bits for ZK tracing/VECTOR/HTM.
 - `vector_length`: logical vector length for vector ops (0 → unset).
@@ -39,7 +37,7 @@ Durable state helpers and ABI surface
 - CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may use overlays or local persistence but must preserve the same observable behavior.
 
 Validation
-- Node admission accepts only `version_major = 1` headers; other majors are rejected.
+- Node admission accepts only `version_major = 1` and `version_minor = 0` headers.
 - `mode` must only contain known bits: `ZK`, `VECTOR`, `HTM` (unknown bits are rejected).
 - `vector_length` is advisory and may be non‑zero even if the `VECTOR` bit is not set; admission enforces an upper bound only.
 - Supported `abi_version` values: first release accepts only `1` (V1); other values are rejected at admission.
@@ -51,7 +49,7 @@ The following policy summary is generated from the implementation and should not
 | Field | Policy |
 |---|---|
 | version_major | 1 |
-| version_minor | any |
+| version_minor | 0 |
 | mode (known bits) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
 | abi_version | 1 |
 | vector_length | 0 or 1..=64 (advisory; independent of VECTOR bit) |
@@ -66,7 +64,6 @@ The following table is generated from the implementation and lists canonical `ab
 | ABI v1 | 377f7125a0f20d40f65ed5e3a179bc5e04d68a385570b54d67d961861e8d9f83 |
 <!-- END GENERATED ABI HASHES -->
 
-Compatibility policy
 - Minor updates may add instructions behind `feature_bits` and reserved opcode space; major updates may change encodings or remove/repurpose only together with a protocol upgrade.
 - Syscall ranges are stable; unknown for the active `abi_version` yields `E_SCALL_UNKNOWN`.
 - Gas schedules are bound to the `version` and require golden vectors on change.

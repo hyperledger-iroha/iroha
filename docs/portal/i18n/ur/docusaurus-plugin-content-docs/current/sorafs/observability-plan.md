@@ -30,7 +30,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | `sorafs_gateway_proof_verifications_total` | Counter | `profile_version`, `result`, `error_code` | request time پر proof verification outcomes capture کیے جاتے ہیں (`result` ∈ {`success`,`failure`}). |
 | `sorafs_gateway_proof_duration_ms_bucket` | Histogram | `profile_version`, `result`, `error_code` | PoR receipts کے لیے verification latency distribution۔ |
 | `telemetry::sorafs.gateway.request` | Structured event | `endpoint`, `method`, `variant`, `result`, `status`, `error_code`, `duration_ms` | ہر request completion پر structured log emit ہوتا ہے تاکہ Loki/Tempo correlation ہو سکے۔ |
-| `torii_sorafs_chunk_range_requests_total`, `torii_sorafs_gateway_refusals_total` | Counter | Legacy label sets | تاریخی dashboards کے لیے محفوظ Prometheus metrics؛ نئی OTLP series کے ساتھ emit ہوتے ہیں۔ |
 
 `telemetry::sorafs.gateway.request` events OTEL counters کو structured payloads کے ساتھ mirror کرتے ہیں، Loki/Tempo correlation کے لیے `endpoint`, `method`, `variant`, `status`, `error_code` اور `duration_ms` دکھاتے ہیں جبکہ dashboards SLO tracking کے لیے OTLP series استعمال کرتے ہیں۔
 
@@ -121,7 +120,7 @@ Alert bundles:
   - orchestrator `tracing` + `opentelemetry` استعمال کر کے fetch attempts کے spans export کرتا ہے۔
   - Embedded SoraFS nodes PoR challenges اور storage operations کے spans export کرتے ہیں۔ تمام components `x-sorafs-trace` کے ذریعے propagate ہونے والا common trace ID share کرتے ہیں۔
 - `SorafsFetchOtel` orchestrator metrics کو OTLP histograms میں bridge کرتا ہے جبکہ `telemetry::sorafs.fetch.*` events log-centric backends کے لیے lightweight JSON payloads فراہم کرتے ہیں۔
-- Collectors: OTEL collectors کو Prometheus/Loki/Tempo کے ساتھ چلائیں (Tempo preferred). Jaeger-compatible exporters اختیاری رہتے ہیں۔
+- Collectors: OTEL collectors کو Prometheus/Loki/Tempo کے ساتھ چلائیں (Tempo preferred). Jaeger API exporters اختیاری رہتے ہیں۔
 - High-cardinality operations کو sample کریں (success paths کے لیے 10%، failures کے لیے 100%).
 
 ## TLS Telemetry Coordination (SF-5b)

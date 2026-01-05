@@ -49,26 +49,36 @@ mod tests {
 
     use super::*;
 
-    fn manifest_with_params(params: Parameter) -> RawGenesisTransaction {
+    fn manifest_with_params(
+        params: Parameter,
+        consensus_mode: SumeragiConsensusMode,
+    ) -> RawGenesisTransaction {
         let builder =
             GenesisBuilder::new_without_executor(ChainId::from("npos-genesis"), PathBuf::from("."));
-        builder.append_parameter(params).build_raw()
+        builder
+            .append_parameter(params)
+            .build_raw()
+            .with_consensus_mode(consensus_mode)
     }
 
     #[test]
     fn detects_present_npos_parameters() {
-        let manifest = roundtrip_manifest(&manifest_with_params(Parameter::Custom(
-            SumeragiNposParameters::default().into_custom_parameter(),
-        )));
+        let manifest = roundtrip_manifest(&manifest_with_params(
+            Parameter::Custom(SumeragiNposParameters::default().into_custom_parameter()),
+            SumeragiConsensusMode::Npos,
+        ));
         assert!(has_npos_parameters(&manifest));
         assert!(ensure_npos_parameters(&manifest).is_ok());
     }
 
     #[test]
     fn rejects_manifest_without_npos_parameters() {
-        let manifest = roundtrip_manifest(&manifest_with_params(Parameter::Sumeragi(
-            SumeragiParameter::NextMode(SumeragiConsensusMode::Permissioned),
-        )));
+        let manifest = roundtrip_manifest(&manifest_with_params(
+            Parameter::Sumeragi(SumeragiParameter::NextMode(
+                SumeragiConsensusMode::Permissioned,
+            )),
+            SumeragiConsensusMode::Permissioned,
+        ));
         assert!(!has_npos_parameters(&manifest));
         let err = ensure_npos_parameters(&manifest).expect_err("missing params should fail");
         assert!(
@@ -86,7 +96,11 @@ mod tests {
             ALICE_ID.clone(),
         );
         builder = builder.append_instruction(grant);
-        let manifest = roundtrip_manifest(&builder.build_raw());
+        let manifest = roundtrip_manifest(
+            &builder
+                .build_raw()
+                .with_consensus_mode(SumeragiConsensusMode::Permissioned),
+        );
         assert!(!has_npos_parameters(&manifest));
     }
 

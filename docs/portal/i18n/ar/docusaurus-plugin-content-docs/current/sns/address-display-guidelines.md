@@ -188,9 +188,7 @@ payload bit: │version  │ class  │  norm  │ext │
    `--allow-errors` عند تدقيق dumps القديمة التي تحتوي صفوفا مهملة، واضبط
    الاتمتة عبر `--fail-on-warning` حين يصبح المشغلون مستعدين لحظر محددات Local في CI.
 6. عندما تحتاج لاعادة كتابة سطر بسطر، استخدم
-  `iroha address normalize --input legacy.txt --only-local --append-domain --network-prefix 753 --format ih58 --output normalized.txt`.
   لملفات الجداول الخاصة بمعالجة محددات Local، استخدم
-  `iroha address audit --input legacy.txt --allow-errors --network-prefix 753 --format csv`
   لتصدير CSV `input,status,format,...` يبرز الترميزات القانونية والتحذيرات
   واخفاقات التحليل في مرور واحد. يتخطى المساعد الصفوف غير المحلية افتراضيا،
   ويحول كل ادخال متبق الى الترميز المطلوب (IH58/مضغوط/hex/JSON)، ويحافظ على

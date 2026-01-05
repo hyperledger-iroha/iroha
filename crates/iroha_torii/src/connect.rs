@@ -280,25 +280,43 @@ impl Bus {
             loop {
                 tokio::time::sleep(interval).await;
                 let now = Instant::now();
-                let ttl = me.policy.session_ttl;
-                let mut remove_keys = Vec::new();
-                {
-                    let map_read = me.inner.read().await;
-                    for (k, sess) in map_read.iter() {
-                        let ts = *sess.last_activity.lock().await;
-                        if now.saturating_duration_since(ts) > ttl {
-                            remove_keys.push(k.clone());
-                        }
-                    }
-                }
-                if !remove_keys.is_empty() {
-                    let mut map_write = me.inner.write().await;
-                    for k in remove_keys {
-                        map_write.remove(&k);
+                let _ = me.prune_expired_sessions(now).await;
+            }
+        });
+    }
+
+    async fn session_expired(&self, sid: &Sid, now: Instant) -> bool {
+        let map_read = self.inner.read().await;
+        let Some(sess) = map_read.get(&sid.to_vec()) else {
+            return true;
+        };
+        let last = *sess.last_activity.lock().await;
+        now.saturating_duration_since(last) > self.policy.session_ttl
+    }
+
+    async fn prune_expired_sessions(&self, now: Instant) -> usize {
+        let ttl = self.policy.session_ttl;
+        let mut remove_keys = Vec::new();
+        {
+            let map_read = self.inner.read().await;
+            for (k, sess) in map_read.iter() {
+                let ts = *sess.last_activity.lock().await;
+                if now.saturating_duration_since(ts) > ttl {
+                    let app_active = sess.app_tx.lock().await.is_some();
+                    let wallet_active = sess.wallet_tx.lock().await.is_some();
+                    if !app_active && !wallet_active {
+                        remove_keys.push(k.clone());
                     }
                 }
             }
-        });
+        }
+        if !remove_keys.is_empty() {
+            let mut map_write = self.inner.write().await;
+            for k in &remove_keys {
+                map_write.remove(k);
+            }
+        }
+        remove_keys.len()
     }
 
     /// Pre-handshake gate: enforce global/per-IP session caps and handshake rate.
@@ -446,7 +464,7 @@ impl Bus {
                 "connect: authorize_token rejected unknown sid"
             );
             return Err((
-                axum::http::StatusCode::BAD_REQUEST,
+                axum::http::StatusCode::UNAUTHORIZED,
                 "connect: unknown sid".into(),
             ));
         };
@@ -936,15 +954,9 @@ pub async fn handle_ws(
                 }
                 _ = ticker.tick() => {
                     // TTL check
-                    let expired = {
-                        let key = sid_for_writer.to_vec();
-                        if let Some(sess) = bus_for_writer.inner.read().await.get(&key) {
-                            let last = *sess.last_activity.lock().await;
-                            last.elapsed() > bus_for_writer.policy.session_ttl
-                        } else {
-                            false
-                        }
-                    };
+                    let expired = bus_for_writer
+                        .session_expired(&sid_for_writer, Instant::now())
+                        .await;
                     if expired {
                         // Best-effort Close
                         let _ = ws_sender
@@ -1281,6 +1293,39 @@ mod tests {
 
         // Once closed, the clone should permit another handshake.
         assert!(bus_clone.pre_ws_handshake(ip).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn session_expired_returns_true_when_missing() {
+        let bus = Bus::new();
+        let sid = [0x10u8; 32];
+        let expired = bus.session_expired(&sid, Instant::now()).await;
+        assert!(expired, "missing sessions should be treated as expired");
+    }
+
+    #[tokio::test]
+    async fn prune_expired_sessions_skips_active_endpoints() {
+        let bus = Bus::new();
+        let sid = [0x21u8; 32];
+        let _app_inbox = bus.attach(sid, proto::Role::App).await;
+        let sess = bus.get_or_create(&sid).await;
+        *sess.last_activity.lock().await = Instant::now() - Duration::from_mins(10);
+
+        let removed = bus.prune_expired_sessions(Instant::now()).await;
+        assert_eq!(removed, 0);
+        assert!(bus.inner.read().await.contains_key(&sid.to_vec()));
+    }
+
+    #[tokio::test]
+    async fn prune_expired_sessions_removes_inactive_sessions() {
+        let bus = Bus::new();
+        let sid = [0x22u8; 32];
+        let sess = bus.get_or_create(&sid).await;
+        *sess.last_activity.lock().await = Instant::now() - Duration::from_mins(10);
+
+        let removed = bus.prune_expired_sessions(Instant::now()).await;
+        assert_eq!(removed, 1);
+        assert!(!bus.inner.read().await.contains_key(&sid.to_vec()));
     }
 
     #[tokio::test]

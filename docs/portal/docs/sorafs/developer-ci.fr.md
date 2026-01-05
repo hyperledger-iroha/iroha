@@ -19,7 +19,6 @@ description: Exécuter le CLI SoraFS dans des pipelines GitHub et GitLab avec si
 ---
 
 :::note Source canonique
-Cette page reflète `docs/source/sorafs/developer/ci.md`. Gardez les deux versions synchronisées jusqu'à la retraite des docs legacy.
 :::
 
 # Recettes CI

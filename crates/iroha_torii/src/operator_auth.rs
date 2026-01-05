@@ -7,7 +7,7 @@ use std::{
     net::IpAddr,
     num::NonZeroU32,
     path::{Path, PathBuf},
-    sync::{Arc, RwLock},
+    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -523,12 +523,28 @@ impl OperatorAuth {
             .ok_or_else(OperatorAuthError::webauthn_disabled)
     }
 
+    fn credentials_read(&self) -> RwLockReadGuard<'_, Vec<StoredCredential>> {
+        match self.credentials.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                iroha_logger::warn!("operator credentials lock poisoned; using last known values");
+                poisoned.into_inner()
+            }
+        }
+    }
+
+    fn credentials_write(&self) -> RwLockWriteGuard<'_, Vec<StoredCredential>> {
+        match self.credentials.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                iroha_logger::warn!("operator credentials lock poisoned; using last known values");
+                poisoned.into_inner()
+            }
+        }
+    }
+
     fn has_credentials(&self) -> bool {
-        !self
-            .credentials
-            .read()
-            .expect("operator credentials lock poisoned")
-            .is_empty()
+        !self.credentials_read().is_empty()
     }
 
     fn token_allowed_for_operator(&self) -> bool {
@@ -695,12 +711,7 @@ impl OperatorAuth {
             ]));
         }
         let mut exclude_credentials = Vec::new();
-        for credential in self
-            .credentials
-            .read()
-            .expect("operator credentials lock poisoned")
-            .iter()
-        {
+        for credential in self.credentials_read().iter() {
             exclude_credentials.push(json_object(vec![
                 json_entry("type", "public-key"),
                 json_entry("id", encode_b64url(&credential.id)),
@@ -816,10 +827,7 @@ impl OperatorAuth {
             self.record_failure(ctx, ACTION_LOGIN_OPTIONS, err.metric_label());
         })?;
         self.prune_challenges();
-        let credentials = self
-            .credentials
-            .read()
-            .expect("operator credentials lock poisoned");
+        let credentials = self.credentials_read();
         if credentials.is_empty() {
             let err = OperatorAuthError::no_credentials();
             self.record_failure(ctx, ACTION_LOGIN_OPTIONS, err.metric_label());
@@ -892,10 +900,7 @@ impl OperatorAuth {
             parse_auth_data_assertion(&input.authenticator_data, policy).inspect_err(|err| {
                 self.record_failure(ctx, ACTION_LOGIN_VERIFY, err.metric_label());
             })?;
-        let mut credentials = self
-            .credentials
-            .write()
-            .expect("operator credentials lock poisoned");
+        let mut credentials = self.credentials_write();
         let Some(pos) = credentials
             .iter()
             .position(|entry| entry.id == input.raw_id)
@@ -958,10 +963,7 @@ impl OperatorAuth {
     }
 
     fn upsert_credential(&self, credential: StoredCredential) -> Result<usize, OperatorAuthError> {
-        let mut credentials = self
-            .credentials
-            .write()
-            .expect("operator credentials lock poisoned");
+        let mut credentials = self.credentials_write();
         let mut updated = credentials.clone();
         if let Some(pos) = updated.iter().position(|entry| entry.id == credential.id) {
             updated[pos] = credential;
@@ -1239,7 +1241,13 @@ fn origin_allowed(origin: &str, allowed: &[Url]) -> bool {
     let Ok(parsed) = Url::parse(origin) else {
         return false;
     };
-    allowed.contains(&parsed)
+    let parsed_origin = parsed.origin();
+    if matches!(parsed_origin, url::Origin::Opaque(_)) {
+        return false;
+    }
+    allowed
+        .iter()
+        .any(|candidate| candidate.origin() == parsed_origin)
 }
 
 fn load_credentials(path: &Path) -> Result<Vec<StoredCredential>, String> {
@@ -1821,6 +1829,46 @@ mod tests {
             HeaderValue::from_static("127.0.0.1"),
         );
         headers
+    }
+
+    #[test]
+    fn origin_allows_default_port_and_trailing_slash() {
+        let allowed = vec![Url::parse("https://example.com").expect("origin")];
+        assert!(origin_allowed("https://example.com/", &allowed));
+        assert!(origin_allowed("https://example.com:443", &allowed));
+        assert!(!origin_allowed("https://example.com:444", &allowed));
+    }
+
+    #[test]
+    fn credentials_lock_recovers_from_poison() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            OperatorTokenFallback::Always,
+            OperatorTokenSource::OperatorTokens,
+            Vec::new(),
+            OperatorAuthLockout {
+                failures: None,
+                window: Duration::from_secs(0),
+                duration: Duration::from_secs(0),
+            },
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+        {
+            let mut creds = auth.credentials_write();
+            creds.push(StoredCredential {
+                id: vec![1, 2, 3],
+                public_key: vec![4, 5, 6],
+                alg: OperatorWebAuthnAlgorithm::Es256,
+                sign_count: 0,
+                created_at_ms: 0,
+            });
+        }
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = auth.credentials.write().expect("lock");
+            panic!("poison");
+        }));
+        assert!(auth.has_credentials());
     }
 
     #[test]

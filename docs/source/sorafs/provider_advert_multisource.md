@@ -3,8 +3,6 @@
 This note records the schema work, validations, and tooling changes needed for
 multi-source chunk scheduling in SoraFS. The Norito payloads now surface range
 fetch metadata, throughput budgets, and transport preferences so clients can
-negotiate deterministic, multi-peer retrieval while remaining backward
-compatible with legacy providers.
 
 ## Norito Schema
 
@@ -87,7 +85,6 @@ Test coverage highlights:
   budgets clamp concurrency, with unit tests covering chunk-too-large,
   length/offset mismatches, capability absence, and single-stream throttling.【crates/sorafs_car/src/multi_fetch.rs:190-262】【crates/sorafs_car/src/multi_fetch.rs:456-520】【crates/sorafs_car/src/multi_fetch.rs:1341-1501】
 - Fixtures in `fixtures/sorafs_manifest/provider_admission/` include both modern
-  adverts and a legacy variant without range metadata, plus a deterministic
   multi-fetch plan for SDK integration tests (`multi_fetch_plan.json`).【fixtures/sorafs_manifest/provider_admission/README.md:1】
 - Torii now exports range fetch observability metrics —
   `torii_sorafs_provider_range_capability_total` (feature-labelled gauge),

@@ -121,7 +121,7 @@ LaneConfigEntry {
 
 ## Configuration и Norito types
 
-- `LaneCatalog`, `LaneConfig` и `DataSpaceCatalog` живут в `iroha_data_model::nexus` и предоставляют Norito-compatible структуры для manifests и SDKs.
+- `LaneCatalog`, `LaneConfig` и `DataSpaceCatalog` живут в `iroha_data_model::nexus` и предоставляют структуры в формате Norito для manifests и SDKs.
 - `LaneConfig` живет в `iroha_config::parameters::actual::Nexus` и автоматически выводится из каталога; Norito encoding не требуется, потому что это внутренний runtime helper.
 - Пользовательская конфигурация (`iroha_config::parameters::user::Nexus`) продолжает принимать декларативные описания lanes и dataspaces; парсинг теперь выводит геометрию и отклоняет invalid aliases или дублирующиеся lane ids.
 - `DataSpaceMetadata.fault_tolerance` управляет размером lane-relay committee; membership выбирается детерминированно по эпохе из dataspace validator pool, используя VRF epoch seed, привязанный к `(dataspace_id, lane_id)`.

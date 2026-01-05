@@ -115,8 +115,8 @@ impl VerificationStatus {
 /// Request payload for `/v1/sorafs/proof/stream`.
 #[derive(Clone, Debug)]
 pub struct ProofStreamRequest {
-    /// Manifest identifier encoded as lowercase hex.
-    pub manifest_id_hex: String,
+    /// Manifest digest (BLAKE3-256) encoded as lowercase hex.
+    pub manifest_digest_hex: String,
     /// Provider identifier encoded as lowercase hex (optional).
     pub provider_id_hex: Option<String>,
     /// Proof kind to request.
@@ -141,8 +141,8 @@ impl ProofStreamRequest {
     pub fn to_json(&self) -> Value {
         let mut map = Map::new();
         map.insert(
-            "manifest_id_hex".into(),
-            Value::from(self.manifest_id_hex.clone()),
+            "manifest_digest_hex".into(),
+            Value::from(self.manifest_digest_hex.clone()),
         );
         if let Some(provider) = &self.provider_id_hex {
             map.insert("provider_id_hex".into(), Value::from(provider.clone()));
@@ -183,8 +183,8 @@ impl ProofStreamRequest {
 /// Streaming item reported by the gateway.
 #[derive(Clone, Debug)]
 pub struct ProofStreamItem {
-    /// Manifest identifier (hex).
-    pub manifest_id_hex: Option<String>,
+    /// Manifest digest (hex).
+    pub manifest_digest_hex: Option<String>,
     /// Provider identifier (hex).
     pub provider_id_hex: Option<String>,
     /// Proof kind.
@@ -264,8 +264,8 @@ impl ProofStreamItem {
             .map_err(|err| format!("failed to decode proof payload: {err}"))?;
 
         Ok(Self {
-            manifest_id_hex: obj
-                .get("manifest_id_hex")
+            manifest_digest_hex: obj
+                .get("manifest_digest_hex")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
             provider_id_hex: obj
@@ -316,8 +316,8 @@ impl ProofStreamItem {
     #[must_use]
     pub fn to_json(&self) -> Value {
         let mut map = Map::new();
-        if let Some(digest) = &self.manifest_id_hex {
-            map.insert("manifest_id_hex".into(), Value::from(digest.clone()));
+        if let Some(digest) = &self.manifest_digest_hex {
+            map.insert("manifest_digest_hex".into(), Value::from(digest.clone()));
         }
         if let Some(provider) = &self.provider_id_hex {
             map.insert("provider_id_hex".into(), Value::from(provider.clone()));
@@ -530,7 +530,7 @@ mod tests {
     #[test]
     fn request_serialises_to_expected_shape() {
         let request = ProofStreamRequest {
-            manifest_id_hex: "deadbeef".into(),
+            manifest_digest_hex: "deadbeef".into(),
             provider_id_hex: Some("abcd".into()),
             proof_kind: ProofKind::Por,
             sample_count: Some(8),
@@ -543,7 +543,7 @@ mod tests {
         let value = request.to_json();
         let obj = value.as_object().expect("json object");
         assert_eq!(
-            obj.get("manifest_id_hex").and_then(Value::as_str),
+            obj.get("manifest_digest_hex").and_then(Value::as_str),
             Some("deadbeef")
         );
         assert_eq!(
@@ -589,7 +589,7 @@ mod tests {
             "chunk_roots_hex": [digest_02],
         });
         let map = norito::json!({
-            "manifest_id_hex": "aa",
+            "manifest_digest_hex": "aa",
             "provider_id_hex": "bb",
             "proof_kind": "por",
             "result": "success",
@@ -604,7 +604,7 @@ mod tests {
         });
         let line = norito::json::to_string(&map).expect("serialize map");
         let item = ProofStreamItem::from_ndjson(line.as_bytes()).expect("parse item");
-        assert_eq!(item.manifest_id_hex.as_deref(), Some("aa"));
+        assert_eq!(item.manifest_digest_hex.as_deref(), Some("aa"));
         assert_eq!(item.provider_id_hex.as_deref(), Some("bb"));
         assert_eq!(item.sample_index, Some(1));
         assert!(matches!(item.status, VerificationStatus::Success));
@@ -617,7 +617,7 @@ mod tests {
     fn metrics_collect_failure_breakdown() {
         let mut metrics = ProofStreamMetrics::default();
         metrics.record(&ProofStreamItem {
-            manifest_id_hex: None,
+            manifest_digest_hex: None,
             provider_id_hex: None,
             proof_kind: ProofKind::Por,
             status: VerificationStatus::Success,
@@ -634,7 +634,7 @@ mod tests {
             recorded_at_ms: None,
         });
         metrics.record(&ProofStreamItem {
-            manifest_id_hex: None,
+            manifest_digest_hex: None,
             provider_id_hex: None,
             proof_kind: ProofKind::Por,
             status: VerificationStatus::Failure,

@@ -144,7 +144,7 @@ fn sample_evidence_hex() -> String {
         kind: EvidenceKind::DoublePrepare,
         payload: EvidencePayload::DoubleVote { v1, v2 },
     };
-    hex::encode(norito::codec::Encode::encode(&evidence))
+    hex::encode(norito::to_bytes(&evidence).expect("encode evidence"))
 }
 
 #[allow(clippy::too_many_lines)]

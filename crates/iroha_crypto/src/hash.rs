@@ -145,13 +145,18 @@ impl norito::core::NoritoSerialize for Hash {
 
 impl<'de> norito::core::NoritoDeserialize<'de> for Hash {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("Hash decode")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
         #[allow(unsafe_code)]
         let bytes = unsafe { &*core::ptr::from_ref(archived).cast::<[u8; Hash::LENGTH]>() };
-        assert!(
-            Self::is_lsb_1(bytes),
-            "expect least significant bit of hash to be 1"
-        );
-        Hash::prehashed(*bytes)
+        if !Self::is_lsb_1(bytes) {
+            return Err(norito::core::Error::Message("invalid hash lsb".into()));
+        }
+        Ok(Hash::prehashed(*bytes))
     }
 }
 
@@ -422,6 +427,16 @@ mod tests {
         let invalid_hex = "BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B0";
 
         assert!(Hash::from_str(invalid_hex).is_err());
+    }
+
+    #[test]
+    fn hash_try_deserialize_rejects_invalid_lsb() {
+        let bytes = [0u8; Hash::LENGTH];
+        let framed = norito::core::frame_bare_with_header_flags::<Hash>(&bytes, 0).expect("frame");
+        let archived = norito::from_bytes::<Hash>(&framed).expect("archive");
+        let err = <Hash as norito::core::NoritoDeserialize>::try_deserialize(archived)
+            .expect_err("invalid lsb");
+        assert!(matches!(err, norito::core::Error::Message(_)));
     }
 }
 

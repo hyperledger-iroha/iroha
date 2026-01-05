@@ -4,7 +4,6 @@ description: Block, RPC, and proof plumbing for embedding DA commitments in Nexu
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/da/commitments_plan.md`. Keep both versions in sync until the legacy docs retire.
 :::
 
 # Sora Nexus Data Availability Commitments Plan (DA-3)
@@ -91,7 +90,6 @@ pub struct DaCommitmentBundle {
 ```
 
 The bundle hash feeds into both the block hash and `SignedBlockWire` metadata.
-When a block carries no DA data the field stays `None` so legacy lanes avoid the
 overhead.
 
 Implementation note: `BlockPayload` and the transparent `BlockBuilder` now expose

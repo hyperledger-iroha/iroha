@@ -195,7 +195,7 @@ SignedTransaction tx = builder.encodeAndSign(payload, "governance-primary",
 
 | Scenario | Checklist |
 |----------|-----------|
-| Emulator / Desktop regression | Run `make android-tests && java/iroha_android/run_tests.sh`. Ensure `hasHardwareBackedProvider()` returns `false` and `SOFTWARE_ONLY` paths pass. |
+| Emulator / Desktop regression | Run `make android-tests && ci/run_android_tests.sh`. Ensure `hasHardwareBackedProvider()` returns `false` and `SOFTWARE_ONLY` paths pass. |
 | Device lab StrongBox sweep | Execute `scripts/android_strongbox_attestation_bundle.sh` across the device matrix, update `android_strongbox_device_matrix.md`, and archive outputs per device. |
 | Override / telemetry chaos | Follow `docs/source/sdk/android/telemetry_chaos_checklist.md` Scenario 2 to confirm attestation-dependent overrides propagate correctly. |
 | Sample app smoke | Once AND5 samples land, gate CI via `ci/check_android_samples.sh` so Managed Device runs fail when aliases or preferences regress. |

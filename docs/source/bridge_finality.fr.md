@@ -111,5 +111,5 @@ erreurs deterministes pour signatures dupliquees/hors plage/insuffisantes.
   verification de tuple avant la verification des signatures et rejeter les payloads
   mismatch.
 - Le travail futur peut ajouter des chains de commitment MMR/authority-set pour reduire la
-  taille des preuves pour de tres longues histories. Le format reste retro-compatible en
-  enveloppant le commit certificate dans des enveloppes de commitment plus riches.
+  taille des preuves pour de tres longues histories. Le commit certificate est enveloppe
+  dans des enveloppes de commitment plus riches.

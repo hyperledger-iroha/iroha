@@ -27,7 +27,6 @@ surface پر cut-over کو کوآرڈی نیٹ کرتا ہے جو multi-source c
   سے پہلے مکمل کرنا ہیں۔
 - **Telemetry coverage.** dashboards اور alerts جنہیں Observability اور Ops استعمال
   کرتے ہیں تاکہ نیٹ ورک صرف compliant adverts قبول کرے۔
-- **Compatibility timeline.** legacy envelopes کو reject کرنے کی واضح تاریخیں تاکہ
   SDKs اور tooling ٹیمیں اپنی releases پلان کر سکیں۔
 
 یہ rollout [SoraFS migration roadmap](./migration-roadmap) کی SF-2b/2c milestones
@@ -38,10 +37,6 @@ surface پر cut-over کو کوآرڈی نیٹ کرتا ہے جو multi-source c
 
 | Phase | Window (target) | Behaviour | Operator Actions | Observability Focus |
 |-------|-----------------|-----------|------------------|-------------------|
-| **R0 – Baseline observation** | Through **2025-03-31** | Torii دونوں governance-approved adverts اور legacy payloads (جو `ProviderAdvertV1` سے پہلے کے ہوں) قبول کرتا ہے۔ جب adverts میں `chunk_range_fetch` یا canonical `profile_aliases` نہ ہوں تو ingestion logs warning دیتے ہیں۔ | - provider advert publishing pipeline (ProviderAdvertV1 + governance envelope) کے ذریعے adverts دوبارہ generate کریں، `profile_id=sorafs.sf1@1.0.0`, canonical `profile_aliases` اور `signature_strict=true` یقینی بنائیں۔ <br />- نئے `sorafs_fetch` tests لوکل چلائیں؛ unknown capabilities کی warnings کو triage کریں۔ | عارضی Grafana panels شائع کریں (نیچے دیکھیں) اور alert thresholds set کریں مگر انہیں warning-only موڈ میں رکھیں۔ |
-| **R1 – Warning gate** | **2025-04-01 → 2025-05-15** | Torii legacy adverts قبول کرتا رہتا ہے مگر جب payload میں `chunk_range_fetch` موجود نہ ہو یا `allow_unknown_capabilities=true` کے بغیر unknown capabilities ہوں تو `torii_sorafs_admission_total{result="warn"}` بڑھاتا ہے۔ CLI tooling اب canonical handle کے بغیر regeneration پر fail کرتا ہے۔ | - staging اور production میں adverts rotate کریں تاکہ `CapabilityType::ChunkRangeFetch` payloads شامل ہوں، اور GREASE testing پر `allow_unknown_capabilities=true` سیٹ کریں۔ <br />- operations runbooks میں نئی telemetry queries نوٹ کریں۔ | dashboards کو on-call rotation میں promote کریں؛ جب `warn` events 15 منٹ میں 5% سے اوپر جائیں تو warnings configure کریں۔ |
-| **R2 – Enforcement** | **2025-05-16 → 2025-06-30** | Torii ایسے adverts reject کرتا ہے جن میں governance envelopes، canonical profile handle یا `chunk_range_fetch` capability نہ ہو۔ legacy `namespace-name` handles اب parse نہیں ہوتے۔ GREASE opt-in کے بغیر unknown capabilities اب `reason="unknown_capability"` کے ساتھ fail کرتی ہیں۔ | - تصدیق کریں کہ production envelopes `torii.sorafs.admission_envelopes_dir` کے تحت موجود ہیں اور باقی legacy adverts rotate کریں۔ <br />- SDKs کی تصدیق کریں کہ وہ صرف canonical handles اور optional aliases emit کرتے ہیں۔ | pager alerts فعال کریں: `torii_sorafs_admission_total{result="reject"}` > 0 اگر 5 منٹ رہے تو operator action ضروری ہے۔ acceptance ratio اور admission reason histograms ٹریک کریں۔ |
-| **R3 – Legacy shutdown** | **2025-07-01 onwards** | Discovery ایسے binary adverts کی سپورٹ ختم کرتا ہے جو `signature_strict=true` سیٹ نہ کریں یا `profile_aliases` چھوڑ دیں۔ Torii discovery cache ایسے stale entries پاک کرتا ہے جن کی refresh deadline renewal کے بغیر گزر جائے۔ | - legacy provider stacks کے لیے آخری decommission window شیڈول کریں۔ <br />- `--allow-unknown` GREASE runs صرف controlled drills میں کریں اور log کریں۔ <br />- incident playbooks اپڈیٹ کریں تاکہ `sorafs_fetch` warning output کو releases سے پہلے blocker سمجھا جائے۔ | alerts سخت کریں: کوئی بھی `warn` on-call کو alert کرے۔ synthetic checks شامل کریں جو discovery JSON fetch کریں اور provider capability lists validate کریں۔ |
 
 ## Operator Checklist
 
@@ -171,24 +166,6 @@ groups:
 
 `scripts/check_prometheus_rules.sh observability/prometheus/sorafs_admission.rules.yml`
 چلا کر تصدیق کریں کہ syntax `promtool check rules` پاس کر رہا ہے۔
-
-## Compatibility Matrix
-
-| Advert Characteristics | R0 | R1 | R2 | R3 |
-|------------------------|----|----|----|----|
-| `profile_id = sorafs.sf1@1.0.0`, `chunk_range_fetch` present, canonical aliases, `signature_strict=true` | ✅ | ✅ | ✅ | ✅ |
-| `chunk_range_fetch` capability غائب | ⚠️ Warn (ingest + telemetry) | ⚠️ Warn | ❌ Reject (`reason="missing_capability"`) | ❌ Reject |
-| `allow_unknown_capabilities=true` کے بغیر unknown capability TLVs | ✅ | ⚠️ Warn (`reason="unknown_capability"`) | ❌ Reject | ❌ Reject |
-| Legacy handle فقط (`profile_id = sorafs.sf1@1.0.0`) | ⚠️ Warn | ❌ Reject | ❌ Reject | ❌ Reject |
-| `refresh_deadline` ختم | ❌ Reject | ❌ Reject | ❌ Reject | ❌ Reject |
-| `signature_strict=false` (diagnostic fixtures) | ✅ (صرف development) | ⚠️ Warn | ⚠️ Warn | ❌ Reject |
-
-تمام اوقات UTC میں ہیں۔ enforcement کی تاریخیں migration ledger میں mirror ہیں اور council
-ووٹ کے بغیر تبدیل نہیں ہوں گی؛ کسی بھی تبدیلی کے لیے اسی PR میں یہ فائل اور ledger اپڈیٹ کرنا ہوگا۔
-
-> **Implementation note:** R1 `torii_sorafs_admission_total` میں `result="warn"`
-> series متعارف کراتا ہے۔ Torii ingestion patch جو یہ label شامل کرتا ہے SF-2 telemetry
-> tasks کے ساتھ track ہوتا ہے؛ اس کے آنے تک legacy adverts کی نگرانی کے لیے log sampling استعمال کریں۔
 
 ## Communication & Incident Handling
 

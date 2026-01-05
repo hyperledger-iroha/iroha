@@ -5933,6 +5933,18 @@ pub struct Metrics {
     pub state_tiered_cold_entries: GenericGauge<AtomicU64>,
     /// Tiered state: total bytes written to the cold tier in the latest snapshot.
     pub state_tiered_cold_bytes: GenericGauge<AtomicU64>,
+    /// Tiered state: cold entries reused without re-encoding in the latest snapshot.
+    pub state_tiered_cold_reused_entries: GenericGauge<AtomicU64>,
+    /// Tiered state: total bytes reused from cold payloads in the latest snapshot.
+    pub state_tiered_cold_reused_bytes: GenericGauge<AtomicU64>,
+    /// Tiered state: entries promoted into the hot tier in the latest snapshot.
+    pub state_tiered_hot_promotions: GenericGauge<AtomicU64>,
+    /// Tiered state: entries demoted into the cold tier in the latest snapshot.
+    pub state_tiered_hot_demotions: GenericGauge<AtomicU64>,
+    /// Tiered state: hot-tier key budget overflow caused by grace retention.
+    pub state_tiered_hot_grace_overflow_keys: GenericGauge<AtomicU64>,
+    /// Tiered state: hot-tier byte budget overflow caused by grace retention.
+    pub state_tiered_hot_grace_overflow_bytes: GenericGauge<AtomicU64>,
     /// Tiered state: last recorded snapshot index.
     pub state_tiered_last_snapshot_index: GenericGauge<AtomicU64>,
     /// Governance: proposal counts grouped by status
@@ -6278,6 +6290,10 @@ pub struct Metrics {
     pub sumeragi_da_gate_satisfied_total: IntCounterVec,
     /// Sumeragi DA manifest guard: outcomes labeled by result/reason.
     pub sumeragi_da_manifest_guard_total: IntCounterVec,
+    /// Sumeragi DA manifest cache: outcomes labeled by result.
+    pub sumeragi_da_manifest_cache_total: IntCounterVec,
+    /// Sumeragi DA spool cache: outcomes labeled by kind/result.
+    pub sumeragi_da_spool_cache_total: IntCounterVec,
     /// Sumeragi DA pin intent spool: outcomes labeled by result/reason.
     pub sumeragi_da_pin_intent_spool_total: IntCounterVec,
     /// Sumeragi RBC: active sessions (gauge)
@@ -8006,6 +8022,36 @@ impl Default for Metrics {
             "Total bytes written to the tiered-state cold tier in the latest snapshot",
         )
         .expect("Infallible");
+        let state_tiered_cold_reused_entries = GenericGauge::new(
+            "state_tiered_cold_reused_entries",
+            "Cold entries reused without re-encoding in the latest tiered-state snapshot",
+        )
+        .expect("Infallible");
+        let state_tiered_cold_reused_bytes = GenericGauge::new(
+            "state_tiered_cold_reused_bytes",
+            "Total bytes reused from cold payloads in the latest tiered-state snapshot",
+        )
+        .expect("Infallible");
+        let state_tiered_hot_promotions = GenericGauge::new(
+            "state_tiered_hot_promotions",
+            "Entries promoted into the tiered-state hot tier in the latest snapshot",
+        )
+        .expect("Infallible");
+        let state_tiered_hot_demotions = GenericGauge::new(
+            "state_tiered_hot_demotions",
+            "Entries demoted into the tiered-state cold tier in the latest snapshot",
+        )
+        .expect("Infallible");
+        let state_tiered_hot_grace_overflow_keys = GenericGauge::new(
+            "state_tiered_hot_grace_overflow_keys",
+            "Hot-tier key budget overflow caused by grace retention in the latest snapshot",
+        )
+        .expect("Infallible");
+        let state_tiered_hot_grace_overflow_bytes = GenericGauge::new(
+            "state_tiered_hot_grace_overflow_bytes",
+            "Hot-tier byte budget overflow caused by grace retention in the latest snapshot",
+        )
+        .expect("Infallible");
         let state_tiered_last_snapshot_index = GenericGauge::new(
             "state_tiered_last_snapshot_index",
             "Latest tiered-state snapshot index recorded by this peer",
@@ -9073,6 +9119,22 @@ impl Default for Metrics {
                 "Sumeragi DA manifest guard outcomes (allowed|rejected by reason)",
             ),
             &["result", "reason"],
+        )
+        .expect("Infallible");
+        let sumeragi_da_manifest_cache_total = IntCounterVec::new(
+            Opts::new(
+                "sumeragi_da_manifest_cache_total",
+                "Sumeragi DA manifest cache outcomes (hit|miss)",
+            ),
+            &["result"],
+        )
+        .expect("Infallible");
+        let sumeragi_da_spool_cache_total = IntCounterVec::new(
+            Opts::new(
+                "sumeragi_da_spool_cache_total",
+                "Sumeragi DA spool cache outcomes (hit|miss by kind)",
+            ),
+            &["kind", "result"],
         )
         .expect("Infallible");
         let sumeragi_da_pin_intent_spool_total = IntCounterVec::new(
@@ -12337,6 +12399,12 @@ impl Default for Metrics {
             state_tiered_hot_entries,
             state_tiered_cold_entries,
             state_tiered_cold_bytes,
+            state_tiered_cold_reused_entries,
+            state_tiered_cold_reused_bytes,
+            state_tiered_hot_promotions,
+            state_tiered_hot_demotions,
+            state_tiered_hot_grace_overflow_keys,
+            state_tiered_hot_grace_overflow_bytes,
             state_tiered_last_snapshot_index,
             alias_usage_total,
             iso_reference_status,
@@ -12457,6 +12525,8 @@ impl Default for Metrics {
             sumeragi_da_gate_last_satisfied,
             sumeragi_da_gate_satisfied_total,
             sumeragi_da_manifest_guard_total,
+            sumeragi_da_manifest_cache_total,
+            sumeragi_da_spool_cache_total,
             sumeragi_da_pin_intent_spool_total,
             sumeragi_post_to_peer_total,
             sumeragi_bg_post_enqueued_total,
@@ -12802,6 +12872,12 @@ impl Default for Metrics {
             state_tiered_hot_entries,
             state_tiered_cold_entries,
             state_tiered_cold_bytes,
+            state_tiered_cold_reused_entries,
+            state_tiered_cold_reused_bytes,
+            state_tiered_hot_promotions,
+            state_tiered_hot_demotions,
+            state_tiered_hot_grace_overflow_keys,
+            state_tiered_hot_grace_overflow_bytes,
             state_tiered_last_snapshot_index,
             governance_proposals_status,
             governance_council_members,
@@ -13014,6 +13090,8 @@ impl Default for Metrics {
             sumeragi_da_gate_last_satisfied,
             sumeragi_da_gate_satisfied_total,
             sumeragi_da_manifest_guard_total,
+            sumeragi_da_manifest_cache_total,
+            sumeragi_da_spool_cache_total,
             sumeragi_da_pin_intent_spool_total,
             sumeragi_rbc_sessions_active,
             sumeragi_rbc_sessions_pruned_total,
@@ -16639,87 +16717,5 @@ mod test {
               }
             }"#]];
         expected.assert_eq(&actual);
-    }
-
-    #[test]
-    fn serialize_status_scale() {
-        use norito::codec::DecodeAll;
-
-        let value = sample_status();
-        let bytes = value.encode();
-
-        // Bare Norito payload (no header), SCALE-compatible; ensure it decodes back
-        let mut slice: &[u8] = &bytes;
-        let decoded = Status::decode_all(&mut slice).expect("decode back");
-        assert_eq!(decoded.peers, value.peers);
-        assert_eq!(decoded.blocks, value.blocks);
-        assert_eq!(decoded.blocks_non_empty, value.blocks_non_empty);
-        assert_eq!(decoded.commit_time_ms, value.commit_time_ms);
-        assert_eq!(decoded.txs_approved, value.txs_approved);
-        assert_eq!(decoded.txs_rejected, value.txs_rejected);
-        assert_eq!(decoded.view_changes, value.view_changes);
-        assert_eq!(decoded.queue_size, value.queue_size);
-        assert_eq!(decoded.uptime.0, value.uptime.0);
-        let decoded_sumeragi = decoded.sumeragi.expect("sumeragi status present");
-        let value_sumeragi = value.sumeragi.expect("value sumeragi status present");
-        assert_eq!(decoded_sumeragi.leader_index, value_sumeragi.leader_index);
-        assert_eq!(
-            decoded_sumeragi.highest_qc_height,
-            value_sumeragi.highest_qc_height
-        );
-        assert_eq!(
-            decoded_sumeragi.locked_qc_height,
-            value_sumeragi.locked_qc_height
-        );
-        assert_eq!(
-            decoded_sumeragi.locked_qc_view,
-            value_sumeragi.locked_qc_view
-        );
-        assert_eq!(
-            decoded_sumeragi.gossip_fallback_total,
-            value_sumeragi.gossip_fallback_total
-        );
-        assert_eq!(
-            decoded_sumeragi.block_created_dropped_by_lock_total,
-            value_sumeragi.block_created_dropped_by_lock_total
-        );
-        assert_eq!(
-            decoded_sumeragi.block_created_hint_mismatch_total,
-            value_sumeragi.block_created_hint_mismatch_total
-        );
-        assert_eq!(
-            decoded_sumeragi.block_created_proposal_mismatch_total,
-            value_sumeragi.block_created_proposal_mismatch_total
-        );
-        assert_eq!(
-            decoded_sumeragi.tx_queue_depth,
-            value_sumeragi.tx_queue_depth
-        );
-        assert_eq!(
-            decoded_sumeragi.tx_queue_capacity,
-            value_sumeragi.tx_queue_capacity
-        );
-        assert_eq!(
-            decoded_sumeragi.tx_queue_saturated,
-            value_sumeragi.tx_queue_saturated
-        );
-        assert_eq!(
-            decoded_sumeragi.prf_epoch_seed,
-            value_sumeragi.prf_epoch_seed
-        );
-        assert_eq!(decoded_sumeragi.prf_height, value_sumeragi.prf_height);
-        assert_eq!(decoded_sumeragi.prf_view, value_sumeragi.prf_view);
-        assert_eq!(
-            decoded.governance.proposals.proposed,
-            value.governance.proposals.proposed
-        );
-        assert_eq!(
-            decoded.governance.protected_namespace.total_checks,
-            value.governance.protected_namespace.total_checks
-        );
-        assert_eq!(
-            decoded.governance.recent_manifest_activations.len(),
-            value.governance.recent_manifest_activations.len()
-        );
     }
 }

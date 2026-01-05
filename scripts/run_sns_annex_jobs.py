@@ -88,7 +88,7 @@ def ensure_exists(path: Path, description: str) -> None:
 
 
 def sanitize_suffix_for_path(suffix: str) -> str:
-    # Keep leading dot for compatibility with existing directory layout.
+    # Preserve leading dots to keep path layout stable.
     return suffix
 
 

@@ -110,7 +110,7 @@ dashboards and alerts remain portable across deployments.
 - Provide typed error enums mirroring the catalogue above and ensure retries
   treat `4xx` refusals as deterministic (no exponential backoff).
 - When SDKs expose automatic fallback, only retry against a different provider
-  if the refusal reason is `unsupported_chunker` and a compatible profile exists.
+  if the refusal reason is `unsupported_chunker` and a matching profile exists.
 - Client libraries MUST log refusal events with the same telemetry labels so
   operators can correlate gateway and client trends.
 - Integration tests SHOULD import the canonical fixtures referenced in the

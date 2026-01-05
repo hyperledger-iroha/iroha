@@ -3376,7 +3376,8 @@ fn derive_connect_direction_keys_py(
     let local_sk = fixed_array::<32>(local_private_key, "local_private_key")?;
     let peer_pk = fixed_array::<32>(peer_public_key, "peer_public_key")?;
     let sid_arr = fixed_array::<32>(sid, "sid")?;
-    let (k_app, k_wallet) = connect_sdk::x25519_derive_keys(&local_sk, &peer_pk, &sid_arr);
+    let (k_app, k_wallet) = connect_sdk::x25519_derive_keys(&local_sk, &peer_pk, &sid_arr)
+        .map_err(|err| PyValueError::new_err(format!("x25519 derive keys failed: {err}")))?;
     let app_bytes = Py::from(PyBytes::new(py, &k_app));
     let wallet_bytes = Py::from(PyBytes::new(py, &k_wallet));
     Ok((app_bytes, wallet_bytes))

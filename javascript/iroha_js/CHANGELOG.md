@@ -4,7 +4,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
-- Removed legacy compatibility shims in the JS SDK: Connect WebSocket URLs no longer accept token
+- Constrained the JS SDK to the first-release surface: Connect WebSocket URLs no longer accept token
   query parameters, Torii health snapshots now only parse JSON responses, the `X-Iroha-API-Token`
   alias is no longer emitted, offline summary counter aliases are dropped, and account address
   decoding rejects extension-flag headers. Tests and docs now reflect the first-release surface.

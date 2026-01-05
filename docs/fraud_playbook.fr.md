@@ -130,7 +130,7 @@ correspondance un‑à‑un avec les types Norito implémentés dans
   le digest de politique et l’histogramme `DecisionAggregate`.
 
 Des tests de round‑trip dans `crates/iroha_data_model/src/fraud/types.rs`
-garantissent que ces schémas restent binaires‑compatibles avec le codec
+garantissent que ces schémas restent alignés sur le format binaire du codec
 Norito, et `integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs`
 exerce le pipeline d’entrée/décision de bout en bout.
 
@@ -155,4 +155,3 @@ Les stubs de langage suivants suivent les exemples d’intégration côté PSP :
 Ces références sont maintenues synchronisées avec la gateway de micro‑services,
 de sorte que les implémenteurs PSP disposent toujours d’un schéma et d’un
 chemin d’exemple à jour pour chaque langage pris en charge.
-

@@ -17,7 +17,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 1. **البناء والتوقيع** - اتبع [دليل النشر](./deploy-guide.md) لتشغيل
    `npm run build` و `scripts/preview_wave_preflight.sh` وخطوات ارسال Sigstore + manifest.
    يصدر سكربت preflight ملف `preflight-summary.json` حتى تحمل كل معاينة بيانات build/link/probe.
-2. **التثبيت والتحقق** - `sorafs_cli manifest submit` و `verify-sorafs-binding.mjs`
+2. **التثبيت والتحقق** - `sorafs_cli manifest submit` و `cargo xtask soradns-verify-binding`
    وخطة تحويل DNS توفر artefacts حتمية للحوكمة.
 3. **ارشفة الادلة** - احفظ ملخص CAR وحزمة Sigstore ودليل alias ومخرجات probe ولقطات لوحة
    `docs_portal.json` تحت `artifacts/sorafs/<tag>/`.
@@ -70,32 +70,30 @@ npm run monitor:publishing -- \
   "bindings": [
     {
       "label": "portal",
-      "url": "https://docs-preview.sora.link/.well-known/sorafs/manifest",
+      "bindingPath": "../../artifacts/sorafs/portal.gateway.binding.json",
       "alias": "docs-preview.sora.link",
-      "contentCid": "bafybeiaff84aef0aaaf6a7c246c8ca1889e62d69c8d9b20d94933cb7b09902f3",
-      "manifest": "8b8f3d2a4a7e92abdb17e5fafd4f9d67c6c7a8547ff985bb0d71f87209c1444d",
-      "status": "ok",
-      "expectHost": "docs-preview.sora.link"
+      "hostname": "docs-preview.sora.link",
+      "proofStatus": "ok",
+      "manifestJson": "../../artifacts/sorafs/portal.manifest.json"
     },
     {
       "label": "openapi",
-      "url": "https://docs-preview.sora.link/.well-known/sorafs/openapi",
+      "bindingPath": "../../artifacts/sorafs/openapi.gateway.binding.json",
       "alias": "docs-preview.sora.link",
-      "contentCid": "bafybeidevopenapi",
-      "manifest": "dad4b9fd48e35297c7fd71cd15b52c4ff0bb62dd8a1da4c5c2c1536ae2732b55",
-      "status": "ok",
-      "expectHost": "docs-preview.sora.link"
+      "hostname": "docs-preview.sora.link",
+      "proofStatus": "ok",
+      "manifestJson": "../../artifacts/sorafs/openapi.manifest.json"
     },
     {
       "label": "portal-sbom",
-      "url": "https://docs-preview.sora.link/.well-known/sorafs/portal-sbom",
+      "bindingPath": "../../artifacts/sorafs/portal-sbom.gateway.binding.json",
       "alias": "docs-preview.sora.link",
-      "contentCid": "bafybeiportalssbom",
-      "manifest": "e2b2790f9f4c1ecbc8f1bdb9f8ba3fd65fd687e9e5e4de3c3d67c3d3192b79c8",
-      "status": "ok",
-      "expectHost": "docs-preview.sora.link"
+      "hostname": "docs-preview.sora.link",
+      "proofStatus": "ok",
+      "manifestJson": "../../artifacts/sorafs/portal-sbom.manifest.json"
     }
   ],
+
   "dns": [
     {
       "label": "docs-preview CNAME",
@@ -123,12 +121,13 @@ npm run monitor:publishing -- \
 > `allowInsecureHttp: true` في config. ابق اختبارات production/staging على HTTPS؛
 > هذا الخيار موجود فقط للمعاينات المحلية.
 
-كل ادخال binding يفرض `Sora-Name` و`Sora-Proof` و`Sora-Content-CID`
-(الرؤوس والمحتوى) اضافة الى حارس `expectHost` حتى لا ينحرف ترويج DNS
-(`docs.sora` مقابل `docs-preview.sora.link`) عن alias المسجل في pin registry.
-تفشل الفحوصات بسرعة اذا توقف gateway عن تثبيت رؤوس `Sora-Content-CID`/`Sora-Proof`،
-او ظهر base64 غير صالح في الدليل، او اختلف manifest/CID المعلن عن payloads المثبتة
-(الموقع وOpenAPI وSBOM).
+Each binding entry runs `cargo xtask soradns-verify-binding` against the captured
+`portal.gateway.binding.json` bundle (and optional `manifestJson`) so alias,
+proof status, and content CID stay aligned with the published evidence. The
+optional `hostname` guard confirms the alias-derived canonical host matches the
+gateway host you intend to promote, preventing DNS cutovers that drift from the
+recorded binding.
+
 
 كتلة `dns` الاختيارية توصل rollout SoraDNS في DOCS-7 الى نفس المراقب. كل ادخال
 يحل زوج hostname/record-type (مثلا CNAME `docs-preview.sora.link` ->
@@ -176,7 +175,7 @@ npm run check:openapi-versions
   `tryit_proxy_requests_total{status="error"}`.
 - **Gateway SLO** - `DocsPortal/GatewayRefusals` يضمن ان bindings alias تستمر
   في اعلان digest الـ manifest المثبت؛ عمليات التصعيد ترتبط بنص CLI
-  `verify-sorafs-binding.mjs` الملتقط اثناء النشر.
+  `cargo xtask soradns-verify-binding` الملتقط اثناء النشر.
 
 ### 3. مسار الادلة
 
@@ -185,7 +184,7 @@ npm run check:openapi-versions
 - حزمة ادلة `monitor-publishing` (`summary.json`، ملفات الاقسام، و`checksums.sha256`).
 - لقطات Grafana للوحة `docs_portal` خلال نافذة الاصدار.
 - سجلات تغيير/تراجع وكيل Try it (سجلات `npm run manage:tryit-proxy`).
-- مخرجات تحقق alias من `scripts/verify-sorafs-binding.mjs`.
+- مخرجات تحقق alias من `cargo xtask soradns-verify-binding`.
 
 احفظ هذه العناصر تحت `artifacts/sorafs/<tag>/monitoring/` واربطها في تذكرة الاصدار
 حتى يبقى مسار التدقيق بعد انتهاء صلاحية سجلات CI.

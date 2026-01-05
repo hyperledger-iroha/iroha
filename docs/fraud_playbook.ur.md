@@ -134,7 +134,7 @@ one‑to‑one map ہوتے ہیں:
   policy digest، اور `DecisionAggregate` histogram شامل ہوتے ہیں۔
 
 `crates/iroha_data_model/src/fraud/types.rs` میں موجود round‑trip tests:
-یہ ensure کرتے ہیں کہ یہ schemas، Norito codec کے ساتھ binary‑compatible
+یہ ensure کرتے ہیں کہ یہ schemas، Norito codec کے binary format کے مطابق
 رہیں، اور `integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs`
 end‑to‑end پورے intake/decision pipeline کو exercise کرتا ہے۔
 
@@ -163,4 +163,3 @@ implementers کے پاس ہر سپورٹڈ زبان کے لیے ہمہ وقت ت
 نمونہ code path موجود رہے۔
 
 </div>
-

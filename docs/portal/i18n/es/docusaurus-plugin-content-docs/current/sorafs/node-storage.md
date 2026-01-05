@@ -190,7 +190,6 @@ APIs de Torii.【crates/sorafs_node/tests/cli.rs:1】
    - Generar documentos `ProviderAdvertV1` usando la capacidad/salud actual,
      firmarlos con la clave aprobada por el consejo y publicarlos vía discovery.
      Usa la nueva lista `profile_aliases` para que los handles canónicos y
-     legacy sigan disponibles.
 3. **Flujo de pin**:
    - El gateway recibe un manifest firmado (incluyendo plan de chunk, raíz PoR,
      firmas del consejo). Valida la lista de alias (`sorafs.sf1@1.0.0` requerido)

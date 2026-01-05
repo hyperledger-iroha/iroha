@@ -16,7 +16,7 @@ Ce playbook definit les drills de chaos repetables qui satisfont l'action roadma
 ## Objectifs et criteres de succes
 - Exercer la politique partagee de retry/back-off Connect, les limites de file offline et les exporters de telemetrie sous des pannes controlees sans modifier le code de production.
 - Capturer des artefacts deterministes (sortie `iroha connect queue inspect`, snapshots de metriques `connect.*`, logs des SDK Swift/Android/JS) afin que la gouvernance puisse auditer chaque drill.
-- Prouver que wallets et dApps respectent les changements de config (manifest drift, rotation de sel, echecs d'attestation) en exposant la categorie canonique `ConnectError` et des evenements de telemetrie compatibles redaction.
+- Prouver que wallets et dApps respectent les changements de config (manifest drift, rotation de sel, echecs d'attestation) en exposant la categorie canonique `ConnectError` et des evenements de telemetrie conformes a la redaction.
 
 ## Prerequis
 1. **Bootstrap d'environnement**

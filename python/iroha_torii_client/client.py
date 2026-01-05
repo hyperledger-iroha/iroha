@@ -702,24 +702,6 @@ class ConnectStatusPolicy:
     heartbeat_min_interval_ms: Optional[int]
     extra: Dict[str, Any]
 
-    @property
-    def ping_interval_ms(self) -> Optional[int]:
-        """Legacy alias for heartbeat interval."""
-
-        return self.heartbeat_interval_ms
-
-    @property
-    def ping_miss_tolerance(self) -> Optional[int]:
-        """Legacy alias for heartbeat miss tolerance."""
-
-        return self.heartbeat_miss_tolerance
-
-    @property
-    def ping_min_interval_ms(self) -> Optional[int]:
-        """Legacy alias for heartbeat minimum interval."""
-
-        return self.heartbeat_min_interval_ms
-
 
 @dataclass(frozen=True)
 class ConnectStatusSnapshot:
@@ -794,18 +776,6 @@ class ConnectAppPolicyControls:
     heartbeat_miss_tolerance: Optional[int]
     heartbeat_min_interval_ms: Optional[int]
     extra: Dict[str, Any]
-
-    @property
-    def ping_interval_ms(self) -> Optional[int]:
-        return self.heartbeat_interval_ms
-
-    @property
-    def ping_miss_tolerance(self) -> Optional[int]:
-        return self.heartbeat_miss_tolerance
-
-    @property
-    def ping_min_interval_ms(self) -> Optional[int]:
-        return self.heartbeat_min_interval_ms
 
 
 @dataclass(frozen=True)
@@ -3752,14 +3722,14 @@ class ToriiClient:
     ) -> ExplorerAccountQr:
         record = ToriiClient._ensure_mapping(value, context)
         canonical = ToriiClient._require_non_empty_string(
-            record.get("canonical_id") or record.get("canonicalId"),
+            record.get("canonical_id"),
             f"{context}.canonical_id",
         )
         literal = ToriiClient._require_non_empty_string(
             record.get("literal"),
             f"{context}.literal",
         )
-        fmt_raw = record.get("address_format") or record.get("addressFormat")
+        fmt_raw = record.get("address_format")
         fmt = ToriiClient._normalize_address_format_option(
             fmt_raw,
             context=f"{context}.address_format",
@@ -3767,16 +3737,16 @@ class ToriiClient:
         if fmt is None:
             fmt = "ih58"
         network_prefix = ToriiClient._coerce_int(
-            record.get("network_prefix") or record.get("networkPrefix"),
+            record.get("network_prefix"),
             f"{context}.network_prefix",
         )
         error_correction = ToriiClient._require_non_empty_string(
-            record.get("error_correction") or record.get("errorCorrection"),
+            record.get("error_correction"),
             f"{context}.error_correction",
         )
         modules = ToriiClient._coerce_int(record.get("modules"), f"{context}.modules")
         qr_version = ToriiClient._coerce_int(
-            record.get("qr_version") or record.get("qrVersion"),
+            record.get("qr_version"),
             f"{context}.qr_version",
         )
         svg = ToriiClient._require_non_empty_string(
@@ -4392,21 +4362,15 @@ class ToriiClient:
     @staticmethod
     def _parse_connect_per_ip(payload: Any, *, context: str) -> ConnectPerIpSessions:
         record = ToriiClient._ensure_mapping(payload, context)
-        ip_value = record.get("ip") or record.get("address") or record.get("remote_ip")
+        ip_value = record.get("ip")
         if not isinstance(ip_value, str) or not ip_value:
             raise RuntimeError(f"{context} missing `ip`")
-        sessions = ToriiClient._coerce_unsigned(record.get("sessions") or record.get("count"), f"{context}.sessions")
+        sessions = ToriiClient._coerce_unsigned(record.get("sessions"), f"{context}.sessions")
         return ConnectPerIpSessions(ip=ip_value, sessions=sessions)
 
     @staticmethod
     def _parse_connect_status_policy(payload: Mapping[str, Any], *, context: str) -> ConnectStatusPolicy:
         record = ToriiClient._ensure_mapping(payload, context)
-
-        def _pick(*names: str) -> Any:
-            for name in names:
-                if name in record and record[name] is not None:
-                    return record[name]
-            return None
 
         return ConnectStatusPolicy(
             relay_enabled=ToriiClient._optional_bool(record.get("relay_enabled"), f"{context}.relay_enabled"),
@@ -4435,15 +4399,15 @@ class ToriiClient:
                 context=f"{context}.session_buffer_max_bytes",
             ),
             heartbeat_interval_ms=ToriiClient._coerce_optional_unsigned(
-                _pick("heartbeat_interval_ms", "ping_interval_ms"),
+                record.get("heartbeat_interval_ms"),
                 context=f"{context}.heartbeat_interval_ms",
             ),
             heartbeat_miss_tolerance=ToriiClient._coerce_optional_unsigned(
-                _pick("heartbeat_miss_tolerance", "ping_miss_tolerance"),
+                record.get("heartbeat_miss_tolerance"),
                 context=f"{context}.heartbeat_miss_tolerance",
             ),
             heartbeat_min_interval_ms=ToriiClient._coerce_optional_unsigned(
-                _pick("heartbeat_min_interval_ms", "ping_min_interval_ms"),
+                record.get("heartbeat_min_interval_ms"),
                 context=f"{context}.heartbeat_min_interval_ms",
             ),
             extra={
@@ -4458,9 +4422,6 @@ class ToriiClient:
                     "session_ttl_ms",
                     "frame_max_bytes",
                     "session_buffer_max_bytes",
-                    "ping_interval_ms",
-                    "ping_miss_tolerance",
-                    "ping_min_interval_ms",
                     "heartbeat_interval_ms",
                     "heartbeat_miss_tolerance",
                     "heartbeat_min_interval_ms",
@@ -4471,42 +4432,17 @@ class ToriiClient:
     @staticmethod
     def _parse_connect_session(payload: Mapping[str, Any], *, context: str) -> ConnectSessionInfo:
         record = ToriiClient._ensure_mapping(payload, context)
-        sid_value = (
-            record.get("sid")
-            or record.get("session_id")
-            or record.get("sessionId")
-            or record.get("SID")
-        )
-        sid = ToriiClient._require_string(sid_value, f"{context}.sid")
-        wallet_uri = ToriiClient._require_string(
-            record.get("wallet_uri") or record.get("walletUri"),
-            f"{context}.wallet_uri",
-        )
-        app_uri = ToriiClient._require_string(
-            record.get("app_uri") or record.get("appUri"),
-            f"{context}.app_uri",
-        )
-        token_app = ToriiClient._require_string(
-            record.get("token_app") or record.get("tokenApp"),
-            f"{context}.token_app",
-        )
-        token_wallet = ToriiClient._require_string(
-            record.get("token_wallet") or record.get("tokenWallet"),
-            f"{context}.token_wallet",
-        )
+        sid = ToriiClient._require_string(record.get("sid"), f"{context}.sid")
+        wallet_uri = ToriiClient._require_string(record.get("wallet_uri"), f"{context}.wallet_uri")
+        app_uri = ToriiClient._require_string(record.get("app_uri"), f"{context}.app_uri")
+        token_app = ToriiClient._require_string(record.get("token_app"), f"{context}.token_app")
+        token_wallet = ToriiClient._require_string(record.get("token_wallet"), f"{context}.token_wallet")
         known = {
             "sid",
-            "SID",
-            "session_id",
-            "sessionId",
             "wallet_uri",
-            "walletUri",
             "app_uri",
-            "appUri",
             "token_app",
-            "tokenApp",
             "token_wallet",
-            "tokenWallet",
         }
         extra = {key: value for key, value in record.items() if key not in known}
         return ConnectSessionInfo(
@@ -4521,43 +4457,23 @@ class ToriiClient:
     @staticmethod
     def _parse_connect_app_record(payload: Mapping[str, Any], *, context: str) -> ConnectAppRecord:
         record = ToriiClient._ensure_mapping(payload, context)
-        app_id_value = (
-            record.get("app_id")
-            or record.get("id")
-            or record.get("appId")
-            or record.get("ID")
-            or record.get("identifier")
-        )
-        app_id = ToriiClient._require_string(app_id_value, f"{context}.app_id")
+        app_id = ToriiClient._require_string(record.get("app_id"), f"{context}.app_id")
         display_name = ToriiClient._optional_string(
-            record.get("display_name") or record.get("displayName"),
+            record.get("display_name"),
             f"{context}.display_name",
         )
         description = ToriiClient._optional_string(record.get("description"), f"{context}.description")
-        icon_url = ToriiClient._optional_string(record.get("icon_url") or record.get("iconUrl"), f"{context}.icon_url")
-        namespace_source = (
-            record.get("namespaces")
-            or record.get("allowed_namespaces")
-            or record.get("allowedNamespaces")
-            or []
-        )
+        icon_url = ToriiClient._optional_string(record.get("icon_url"), f"{context}.icon_url")
+        namespace_source = record.get("namespaces") or []
         namespaces = ToriiClient._parse_string_list(namespace_source, context=f"{context}.namespaces")
         metadata = ToriiClient._require_plain_object(record.get("metadata", {}), f"{context}.metadata")
         policy = ToriiClient._require_plain_object(record.get("policy", {}), f"{context}.policy")
         known = {
             "app_id",
-            "id",
-            "appId",
-            "ID",
-            "identifier",
             "display_name",
-            "displayName",
             "description",
             "icon_url",
-            "iconUrl",
             "namespaces",
-            "allowed_namespaces",
-            "allowedNamespaces",
             "metadata",
             "policy",
         }
@@ -4576,7 +4492,7 @@ class ToriiClient:
     @staticmethod
     def _parse_connect_app_page(payload: Mapping[str, Any], *, context: str) -> ConnectAppRegistryPage:
         record = ToriiClient._ensure_mapping(payload, context)
-        items_value = record.get("items") or record.get("apps") or []
+        items_value = record.get("items")
         if not isinstance(items_value, list):
             raise RuntimeError(f"{context}.items must be a list")
         items = [
@@ -4587,9 +4503,8 @@ class ToriiClient:
         total = None
         if total_value is not None:
             total = ToriiClient._coerce_unsigned(total_value, f"{context}.total")
-        cursor_value = record.get("next_cursor") or record.get("cursor") or record.get("next")
-        cursor = ToriiClient._optional_string(cursor_value, f"{context}.next_cursor")
-        known = {"items", "apps", "total", "next_cursor", "cursor", "next"}
+        cursor = ToriiClient._optional_string(record.get("next_cursor"), f"{context}.next_cursor")
+        known = {"items", "total", "next_cursor"}
         extra = {key: value for key, value in record.items() if key not in known}
         return ConnectAppRegistryPage(items=items, total=total, next_cursor=cursor, extra=extra)
 
@@ -4601,12 +4516,6 @@ class ToriiClient:
             source = policy_record
         else:
             source = record
-
-        def _pick(*names: str) -> Any:
-            for name in names:
-                if name in source and source[name] is not None:
-                    return source[name]
-            return None
 
         return ConnectAppPolicyControls(
             relay_enabled=ToriiClient._optional_bool(
@@ -4638,15 +4547,15 @@ class ToriiClient:
                 context=f"{context}.session_buffer_max_bytes",
             ),
             heartbeat_interval_ms=ToriiClient._coerce_optional_unsigned(
-                _pick("heartbeat_interval_ms", "ping_interval_ms"),
+                source.get("heartbeat_interval_ms"),
                 context=f"{context}.heartbeat_interval_ms",
             ),
             heartbeat_miss_tolerance=ToriiClient._coerce_optional_unsigned(
-                _pick("heartbeat_miss_tolerance", "ping_miss_tolerance"),
+                source.get("heartbeat_miss_tolerance"),
                 context=f"{context}.heartbeat_miss_tolerance",
             ),
             heartbeat_min_interval_ms=ToriiClient._coerce_optional_unsigned(
-                _pick("heartbeat_min_interval_ms", "ping_min_interval_ms"),
+                source.get("heartbeat_min_interval_ms"),
                 context=f"{context}.heartbeat_min_interval_ms",
             ),
             extra={
@@ -4661,9 +4570,6 @@ class ToriiClient:
                     "session_ttl_ms",
                     "frame_max_bytes",
                     "session_buffer_max_bytes",
-                    "ping_interval_ms",
-                    "ping_miss_tolerance",
-                    "ping_min_interval_ms",
                     "heartbeat_interval_ms",
                     "heartbeat_miss_tolerance",
                     "heartbeat_min_interval_ms",
@@ -4674,31 +4580,19 @@ class ToriiClient:
     @staticmethod
     def _parse_connect_manifest(payload: Mapping[str, Any], *, context: str) -> ConnectAdmissionManifest:
         record = ToriiClient._ensure_mapping(payload, context)
-        manifest_record = record.get("manifest")
-        manifest = (
-            ToriiClient._ensure_mapping(manifest_record, f"{context}.manifest")
-            if isinstance(manifest_record, Mapping)
-            else record
-        )
-        entries_value = manifest.get("entries") or manifest.get("apps") or []
+        entries_value = record.get("entries")
         if not isinstance(entries_value, list):
             raise RuntimeError(f"{context}.entries must be a list")
         entries = [
             ToriiClient._parse_connect_manifest_entry(entry, context=f"{context}.entries[{index}]")
             for index, entry in enumerate(entries_value)
         ]
-        recognized = {"entries", "apps", "version", "manifest_hash", "manifestHash", "updated_at", "updatedAt"}
-        extra = {key: value for key, value in manifest.items() if key not in recognized}
+        recognized = {"entries", "version", "manifest_hash", "updated_at"}
+        extra = {key: value for key, value in record.items() if key not in recognized}
         return ConnectAdmissionManifest(
-            version=ToriiClient._coerce_optional_unsigned(manifest.get("version"), context=f"{context}.version"),
-            manifest_hash=ToriiClient._optional_string(
-                manifest.get("manifest_hash") or manifest.get("manifestHash"),
-                f"{context}.manifest_hash",
-            ),
-            updated_at=ToriiClient._optional_string(
-                manifest.get("updated_at") or manifest.get("updatedAt"),
-                f"{context}.updated_at",
-            ),
+            version=ToriiClient._coerce_optional_unsigned(record.get("version"), context=f"{context}.version"),
+            manifest_hash=ToriiClient._optional_string(record.get("manifest_hash"), f"{context}.manifest_hash"),
+            updated_at=ToriiClient._optional_string(record.get("updated_at"), f"{context}.updated_at"),
             entries=entries,
             extra=extra,
         )
@@ -4706,12 +4600,11 @@ class ToriiClient:
     @staticmethod
     def _parse_connect_manifest_entry(payload: Mapping[str, Any], *, context: str) -> ConnectAdmissionManifestEntry:
         record = ToriiClient._ensure_mapping(payload, context)
-        app_id_value = record.get("app_id") or record.get("appId") or record.get("id")
-        app_id = ToriiClient._require_string(app_id_value, f"{context}.app_id")
+        app_id = ToriiClient._require_string(record.get("app_id"), f"{context}.app_id")
         namespaces = ToriiClient._parse_string_list(record.get("namespaces", []), context=f"{context}.namespaces")
         metadata = ToriiClient._require_plain_object(record.get("metadata", {}), f"{context}.metadata")
         policy = ToriiClient._require_plain_object(record.get("policy", {}), f"{context}.policy")
-        known = {"app_id", "appId", "id", "namespaces", "metadata", "policy"}
+        known = {"app_id", "namespaces", "metadata", "policy"}
         extra = {key: value for key, value in record.items() if key not in known}
         return ConnectAdmissionManifestEntry(
             app_id=app_id,
@@ -5043,10 +4936,10 @@ class ToriiClient:
     @staticmethod
     def _parse_kaigi_relay_summary(payload: Any, *, context: str) -> KaigiRelaySummary:
         record = ToriiClient._ensure_mapping(payload, context)
-        relay_id = record.get("relay_id") or record.get("relayId")
-        domain = record.get("domain") or record.get("domain_id") or record.get("domainId")
-        bandwidth_value = record.get("bandwidth_class") or record.get("bandwidthClass") or 0
-        fingerprint_value = record.get("hpke_fingerprint_hex") or record.get("hpkeFingerprintHex")
+        relay_id = record.get("relay_id")
+        domain = record.get("domain")
+        bandwidth_value = record.get("bandwidth_class") or 0
+        fingerprint_value = record.get("hpke_fingerprint_hex")
         status_value = record.get("status")
         status: Optional[str] = None
         if status_value is not None:
@@ -5056,7 +4949,7 @@ class ToriiClient:
                     f"{context}.status must be one of {sorted(_KAIGI_HEALTH_STATUSES)}"
                 )
             status = status_literal
-        reported_at = record.get("reported_at_ms", record.get("reportedAtMs"))
+        reported_at = record.get("reported_at_ms")
         reported_at_ms = (
             ToriiClient._coerce_unsigned(reported_at, f"{context}.reported_at_ms")
             if reported_at is not None
@@ -5078,10 +4971,10 @@ class ToriiClient:
     def _parse_kaigi_relay_detail(payload: Mapping[str, Any], *, context: str) -> KaigiRelayDetail:
         record = ToriiClient._ensure_mapping(payload, context)
         relay_summary = ToriiClient._parse_kaigi_relay_summary(record.get("relay"), context=f"{context}.relay")
-        hpke_public_key = record.get("hpke_public_key_b64") or record.get("hpkePublicKeyB64")
+        hpke_public_key = record.get("hpke_public_key_b64")
         reported_call_value = record.get("reported_call")
         metrics_value = record.get("metrics")
-        reported_by_value = record.get("reported_by") or record.get("reportedBy")
+        reported_by_value = record.get("reported_by")
         notes_value = record.get("notes")
         return KaigiRelayDetail(
             relay=relay_summary,
@@ -5110,8 +5003,8 @@ class ToriiClient:
     @staticmethod
     def _parse_kaigi_relay_reported_call(payload: Any, *, context: str) -> KaigiRelayReportedCall:
         record = ToriiClient._ensure_mapping(payload, context)
-        domain = record.get("domain_id") or record.get("domain") or record.get("domainId")
-        name = record.get("call_name") or record.get("name") or record.get("callName")
+        domain = record.get("domain_id")
+        name = record.get("call_name")
         return KaigiRelayReportedCall(
             domain_id=ToriiClient._require_non_empty_string(domain, f"{context}.domain_id"),
             call_name=ToriiClient._require_non_empty_string(name, f"{context}.call_name"),
@@ -5120,7 +5013,7 @@ class ToriiClient:
     @staticmethod
     def _parse_kaigi_relay_domain_metrics(payload: Any, *, context: str) -> KaigiRelayDomainMetrics:
         record = ToriiClient._ensure_mapping(payload, context)
-        domain = record.get("domain") or record.get("domain_id") or record.get("domainId")
+        domain = record.get("domain")
         return KaigiRelayDomainMetrics(
             domain=ToriiClient._require_non_empty_string(domain, f"{context}.domain"),
             registrations_total=ToriiClient._coerce_unsigned(
@@ -5372,8 +5265,6 @@ class ToriiClient:
         )
         connected_peers_value = value.get("connected_peers")
         if connected_peers_value is None:
-            connected_peers_value = value.get("connectedPeers")
-        if connected_peers_value is None:
             peers_list: Optional[List[str]] = None
         else:
             if not isinstance(connected_peers_value, list):
@@ -5396,27 +5287,27 @@ class ToriiClient:
     def _parse_telemetry_peer_config(value: Any, *, context: str) -> PeerTelemetryConfig:
         if not isinstance(value, Mapping):
             raise RuntimeError(f"{context} must be a JSON object")
-        public_key = value.get("public_key") or value.get("publicKey")
+        public_key = value.get("public_key")
         if not isinstance(public_key, str) or not public_key:
             raise RuntimeError(f"{context} missing `public_key`")
         queue_capacity = ToriiClient._coerce_optional_unsigned(
-            value.get("queue_capacity", value.get("queueCapacity")),
+            value.get("queue_capacity"),
             context=f"{context}.queue_capacity",
         )
         block_size = ToriiClient._coerce_optional_unsigned(
-            value.get("network_block_gossip_size", value.get("networkBlockGossipSize")),
+            value.get("network_block_gossip_size"),
             context=f"{context}.network_block_gossip_size",
         )
         tx_size = ToriiClient._coerce_optional_unsigned(
-            value.get("network_tx_gossip_size", value.get("networkTxGossipSize")),
+            value.get("network_tx_gossip_size"),
             context=f"{context}.network_tx_gossip_size",
         )
         block_period = ToriiClient._parse_optional_duration_ms(
-            value.get("network_block_gossip_period", value.get("networkBlockGossipPeriod")),
+            value.get("network_block_gossip_period"),
             context=f"{context}.network_block_gossip_period",
         )
         tx_period = ToriiClient._parse_optional_duration_ms(
-            value.get("network_tx_gossip_period", value.get("networkTxGossipPeriod")),
+            value.get("network_tx_gossip_period"),
             context=f"{context}.network_tx_gossip_period",
         )
         return PeerTelemetryConfig(
@@ -5686,18 +5577,18 @@ class ToriiClient:
         record = ToriiClient._ensure_mapping(value or {}, context)
         enabled = ToriiClient._coerce_bool(record.get("enabled"), f"{context}.enabled")
         default_hash = ToriiClient._coerce_optional_string(
-            record.get("default_hash") or record.get("defaultHash"),
+            record.get("default_hash"),
             context=f"{context}.default_hash",
         )
         allowed_signing = ToriiClient._parse_string_list(
-            record.get("allowed_signing") or record.get("allowedSigning"),
+            record.get("allowed_signing"),
             context=f"{context}.allowed_signing",
         )
         sm2_distid_default = ToriiClient._coerce_optional_string(
-            record.get("sm2_distid_default") or record.get("sm2DistIdDefault"),
+            record.get("sm2_distid_default"),
             context=f"{context}.sm2_distid_default",
         )
-        openssl_preview = record.get("openssl_preview", record.get("opensslPreview", False))
+        openssl_preview = record.get("openssl_preview", False)
         if not isinstance(openssl_preview, bool):
             raise RuntimeError(f"{context}.openssl_preview must be a boolean")
         acceleration = ToriiClient._parse_node_sm_acceleration(
@@ -5717,8 +5608,8 @@ class ToriiClient:
     def _parse_node_sm_acceleration(value: Any, *, context: str) -> NodeSmAcceleration:
         record = ToriiClient._ensure_mapping(value or {}, context)
         scalar = record.get("scalar", True)
-        neon_sm3 = record.get("neon_sm3", record.get("neonSm3", False))
-        neon_sm4 = record.get("neon_sm4", record.get("neonSm4", False))
+        neon_sm3 = record.get("neon_sm3", False)
+        neon_sm4 = record.get("neon_sm4", False)
         if not isinstance(scalar, bool) or not isinstance(neon_sm3, bool) or not isinstance(neon_sm4, bool):
             raise RuntimeError(f"{context} acceleration flags must be boolean")
         policy = ToriiClient._require_string(record.get("policy", ""), f"{context}.policy")
@@ -5732,17 +5623,17 @@ class ToriiClient:
     @staticmethod
     def _parse_node_curve_capabilities(value: Any, *, context: str) -> NodeCurveCapabilities:
         record = ToriiClient._ensure_mapping(value or {}, context)
-        version_value = record.get("registry_version") or record.get("registryVersion")
+        version_value = record.get("registry_version")
         if version_value is None:
             registry_version = 1
         else:
             registry_version = ToriiClient._coerce_positive_int(version_value, context=f"{context}.registry_version")
         allowed = ToriiClient._parse_int_list(
-            record.get("allowed_curve_ids") or record.get("allowedCurveIds"),
+            record.get("allowed_curve_ids"),
             context=f"{context}.allowed_curve_ids",
         )
         bitmap = ToriiClient._parse_int_list(
-            record.get("allowed_curve_bitmap") or record.get("allowedCurveBitmap"),
+            record.get("allowed_curve_bitmap"),
             context=f"{context}.allowed_curve_bitmap",
         )
         return NodeCurveCapabilities(
@@ -5768,7 +5659,7 @@ class ToriiClient:
         record = ToriiClient._ensure_mapping(payload, context)
         policy = ToriiClient._require_string(record.get("policy"), f"{context}.policy")
         abi_hash = ToriiClient._normalize_hex_string(
-            record.get("abi_hash_hex") or record.get("abi_hash"),
+            record.get("abi_hash_hex"),
             context=f"{context}.abi_hash_hex",
             expected_length=64,
         )
@@ -5810,12 +5701,12 @@ class ToriiClient:
     def _parse_runtime_upgrade_item(value: Any, index: int, *, context: str) -> RuntimeUpgradeListItem:
         record = ToriiClient._ensure_mapping(value, f"{context}[{index}]")
         identifier = ToriiClient._normalize_hex_string(
-            record.get("id_hex") or record.get("idHex"),
+            record.get("id_hex"),
             context=f"{context}[{index}].id_hex",
             expected_length=64,
         )
         record_payload = ToriiClient._ensure_mapping(
-            record.get("record") or record.get("runtime_upgrade") or record.get("runtimeUpgrade"),
+            record.get("record"),
             context=f"{context}[{index}].record",
         )
         normalized_record = ToriiClient._parse_runtime_upgrade_record(
@@ -5831,7 +5722,7 @@ class ToriiClient:
         status = ToriiClient._parse_runtime_upgrade_status(record.get("status"), context=f"{context}.status")
         proposer = ToriiClient._require_string(record.get("proposer"), f"{context}.proposer")
         created_height = ToriiClient._coerce_unsigned(
-            record.get("created_height") or record.get("createdHeight"),
+            record.get("created_height"),
             f"{context}.created_height",
         )
         return RuntimeUpgradeRecord(
@@ -5847,13 +5738,13 @@ class ToriiClient:
         name = ToriiClient._require_string(record.get("name"), f"{context}.name")
         description = ToriiClient._require_string(record.get("description"), f"{context}.description")
         abi_version = ToriiClient._coerce_unsigned(
-            record.get("abi_version") or record.get("abiVersion"),
+            record.get("abi_version"),
             f"{context}.abi_version",
         )
         if abi_version == 0:
             raise RuntimeError(f"{context}.abi_version must be greater than zero")
         abi_hash = ToriiClient._normalize_hex_string(
-            record.get("abi_hash") or record.get("abi_hash_hex") or record.get("abiHashHex"),
+            record.get("abi_hash"),
             context=f"{context}.abi_hash",
             expected_length=64,
         )
@@ -5866,11 +5757,11 @@ class ToriiClient:
             context=f"{context}.added_pointer_types",
         )
         start_height = ToriiClient._coerce_unsigned(
-            record.get("start_height") or record.get("startHeight"),
+            record.get("start_height"),
             f"{context}.start_height",
         )
         end_height = ToriiClient._coerce_unsigned(
-            record.get("end_height") or record.get("endHeight"),
+            record.get("end_height"),
             f"{context}.end_height",
         )
         return RuntimeUpgradeManifest(
@@ -5911,25 +5802,14 @@ class ToriiClient:
         record = ToriiClient._ensure_mapping(value, context)
         name = ToriiClient._require_string(record.get("name"), f"{context}.name")
         description = ToriiClient._require_string(record.get("description"), f"{context}.description")
-        abi_version_value = (
-            record.get("abi_version")
-            or record.get("abiVersion")
-            or record.get("target_version")
-            or record.get("targetVersion")
-            or record.get("version")
-        )
-        abi_hash_value = (
-            record.get("abi_hash")
-            or record.get("abiHash")
-            or record.get("abi_hash_hex")
-            or record.get("abiHashHex")
-        )
+        abi_version_value = record.get("abi_version")
+        abi_hash_value = record.get("abi_hash")
         if abi_version_value is None:
             raise RuntimeError(f"{context}.abi_version is required")
         if abi_hash_value is None:
             raise RuntimeError(f"{context}.abi_hash is required")
-        start_value = record.get("start_height") or record.get("startHeight")
-        end_value = record.get("end_height") or record.get("endHeight")
+        start_value = record.get("start_height")
+        end_value = record.get("end_height")
         if start_value is None or end_value is None:
             raise RuntimeError(f"{context}.start_height and {context}.end_height are required")
         start_height = ToriiClient._coerce_unsigned(start_value, f"{context}.start_height")

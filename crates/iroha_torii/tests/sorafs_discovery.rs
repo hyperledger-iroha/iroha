@@ -1135,7 +1135,7 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
 
-    let chain_id = ChainId::from("test-chain");
+    let chain_id = cfg.common.chain.clone();
     let chain_id_arc = Arc::new(chain_id.clone());
     let torii = Torii::new_with_handle(
         chain_id,
@@ -1471,7 +1471,19 @@ fn ensure_authority_registered(
     next_height: &mut u64,
 ) {
     let view = harness.state.view();
-    if view.world().accounts().get(&authority.account).is_some() {
+    let account_exists = view.world().accounts().get(&authority.account).is_some();
+    let permissions = view.world().account_permissions().get(&authority.account);
+    let has_register = permissions.as_ref().is_some_and(|perms| {
+        perms
+            .iter()
+            .any(|perm| perm.name() == "CanRegisterSorafsPin")
+    });
+    let has_approve = permissions.as_ref().is_some_and(|perms| {
+        perms
+            .iter()
+            .any(|perm| perm.name() == "CanApproveSorafsPin")
+    });
+    if account_exists && has_register && has_approve {
         return;
     }
     let domain_id = authority.account.domain().clone();
@@ -1493,19 +1505,44 @@ fn ensure_authority_registered(
     let mut block = harness.state.block(header);
     let mut tx = block.transaction();
 
-    if tx.world().domain(&domain_id).is_err() {
-        let new_domain = dm::Domain::new(domain_id.clone());
-        let register_domain = dm::Register::domain(new_domain);
-        register_domain
+    if !account_exists {
+        if tx.world().domain(&domain_id).is_err() {
+            let new_domain = dm::Domain::new(domain_id.clone());
+            let register_domain = dm::Register::domain(new_domain);
+            register_domain
+                .execute(&authority.account, &mut tx)
+                .expect("register domain for test authority");
+        }
+
+        let new_account = dm::Account::new(authority.account.clone());
+        let register_account = dm::Register::account(new_account);
+        register_account
             .execute(&authority.account, &mut tx)
-            .expect("register domain for test authority");
+            .expect("register account for test authority");
     }
 
-    let new_account = dm::Account::new(authority.account.clone());
-    let register_account = dm::Register::account(new_account);
-    register_account
-        .execute(&authority.account, &mut tx)
-        .expect("register account for test authority");
+    if !has_register {
+        let register_perm = dm::Permission::new(
+            "CanRegisterSorafsPin"
+                .parse()
+                .expect("CanRegisterSorafsPin permission token"),
+            Json::new(()),
+        );
+        dm::Grant::account_permission(register_perm, authority.account.clone())
+            .execute(&authority.account, &mut tx)
+            .expect("grant register pin permission");
+    }
+    if !has_approve {
+        let approve_perm = dm::Permission::new(
+            "CanApproveSorafsPin"
+                .parse()
+                .expect("CanApproveSorafsPin permission token"),
+            Json::new(()),
+        );
+        dm::Grant::account_permission(approve_perm, authority.account.clone())
+            .execute(&authority.account, &mut tx)
+            .expect("grant approve pin permission");
+    }
 
     tx.apply();
     block.commit().expect("commit authority registration block");
@@ -1827,6 +1864,8 @@ async fn sorafs_storage_endpoints_round_trip() {
         .pin_policy(PinPolicy::default())
         .build()
         .expect("manifest");
+    let manifest_digest = manifest.digest().expect("manifest digest");
+    let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
 
     let manifest_b64 = base64::engine::general_purpose::STANDARD
         .encode(to_bytes(&manifest).expect("encode manifest"));
@@ -1852,6 +1891,13 @@ async fn sorafs_storage_endpoints_round_trip() {
             json::to_vec(&pin_body).expect("serialize pin request"),
         ))
         .expect("pin request");
+    let mut pin_request = pin_request;
+    pin_request
+        .extensions_mut()
+        .insert(ConnectInfo::<SocketAddr>(SocketAddr::from((
+            [127, 0, 0, 1],
+            0,
+        ))));
     let pin_response = app
         .clone()
         .oneshot(pin_request)
@@ -1952,6 +1998,13 @@ async fn sorafs_storage_endpoints_round_trip() {
             json::to_vec(&por_body).expect("serialize por request"),
         ))
         .expect("por request");
+    let mut por_request = por_request;
+    por_request
+        .extensions_mut()
+        .insert(ConnectInfo::<SocketAddr>(SocketAddr::from((
+            [127, 0, 0, 1],
+            0,
+        ))));
     let por_response = app
         .clone()
         .oneshot(por_request)
@@ -1985,8 +2038,8 @@ async fn sorafs_storage_endpoints_round_trip() {
     let proof_body = {
         let mut map = json::Map::new();
         map.insert(
-            "manifest_id_hex".to_owned(),
-            json::Value::from(manifest_id.clone()),
+            "manifest_digest_hex".to_owned(),
+            json::Value::from(manifest_digest_hex.clone()),
         );
         map.insert(
             "provider_id_hex".to_owned(),
@@ -2031,9 +2084,11 @@ async fn sorafs_storage_endpoints_round_trip() {
         proof_items += 1;
         let value: json::Value = json::from_str(line).expect("parse proof stream item");
         assert_eq!(
-            value.get("manifest_id_hex").and_then(json::Value::as_str),
-            Some(manifest_id.as_str()),
-            "manifest id echoed in stream item"
+            value
+                .get("manifest_digest_hex")
+                .and_then(json::Value::as_str),
+            Some(manifest_digest_hex.as_str()),
+            "manifest digest echoed in stream item"
         );
         assert_eq!(
             value.get("proof_kind").and_then(json::Value::as_str),

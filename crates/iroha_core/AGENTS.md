@@ -13,7 +13,7 @@ These guidelines apply to the `crates/iroha_core` crate.
 - Follow root/crates `AGENTS.md` for formatting, linting, and dependency policy.
 
 ## Notes
-- If public types change, coordinate updates with `iroha_data_model` and serialization compatibility.
+- If public types change, coordinate updates with `iroha_data_model` and serialization layout stability.
 
 ## Tooling tip
 - Python: if `python` is unavailable, use `python3` to run scripts.

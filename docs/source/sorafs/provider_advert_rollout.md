@@ -165,8 +165,6 @@ groups:
 Run `scripts/check_prometheus_rules.sh observability/prometheus/sorafs_admission.rules.yml`
 before pushing changes to ensure the syntax passes `promtool check rules`.
 
-## Compatibility Matrix
-
 ## Admission Outcomes
 
 - Missing `chunk_range_fetch` capability → reject with `reason="missing_capability"`.

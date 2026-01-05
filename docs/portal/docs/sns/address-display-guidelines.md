@@ -100,7 +100,6 @@ client-side copy modes before Local selectors are disabled.
 ## Local → Global migration toolkit
 
 Use the [Local → Global toolkit](local-to-global-toolkit.md) to automate
-auditing and converting legacy Local selectors. The helper script emits both the
 JSON audit report and the converted IH58/compressed list that operators attach
 to readiness tickets, while the accompanying runbook links the Grafana
 dashboards and Alertmanager rules that gate the strict-mode cutover.
@@ -153,7 +152,6 @@ table and `docs/account_structure.md` for the complete byte diagram.
 
 ## Enforcing canonical forms
 
-Operators converting legacy Local encodings to canonical IH58 or compressed
 strings must follow the CLI workflow documented under ADDR-5:
 
 1. `iroha address inspect` now emits a structured JSON summary with IH58,
@@ -189,13 +187,10 @@ strings must follow the CLI workflow documented under ADDR-5:
    reads newline-separated literals (comments starting with `#` are ignored, and
    `--input -` or no flag uses STDIN), emits a JSON report with
    canonical/IH58/compressed summaries for every entry, and counts both parse
-   errors and Local-domain warnings. Use `--allow-errors` when auditing legacy
    dumps that contain junk rows, and gate automation with `--fail-on-warning`
    once operators are ready to block Local selectors in CI.
 6. When you need a newline-to-newline rewrite, use
-  `iroha address normalize --input legacy.txt --only-local --append-domain --network-prefix 753 --format ih58 --output normalized.txt`.
   For Local-selector remediation spreadsheets, use
-  `iroha address audit --input legacy.txt --allow-errors --network-prefix 753 --format csv`
   to export a `input,status,format,…` CSV that highlights canonical encodings, warnings, and parse failures in one pass.
    The helper skips non-Local rows by default, converts every remaining entry
    into the requested encoding (IH58/compressed/hex/JSON), and preserves the
@@ -221,7 +216,6 @@ automation to keep parity with the roadmap exit criteria. Torii now defaults to
 when diagnosing regressions. Keep mirroring `torii_address_domain_total{domain_kind}`
 into Grafana (`dashboards/grafana/address_ingest.json`) so the ADDR-7 evidence pack
 can prove `domain_kind="local12"` stayed at zero for the required 30-day window before
-mainnet disables the legacy selectors. The Alertmanager pack
 (`dashboards/alerts/address_ingest_rules.yml`) adds three guardrails:
 
 - `AddressLocal8Resurgence` pages whenever a context reports a fresh Local-8
@@ -244,6 +238,5 @@ the cutover:
 
 > **Addresses:** Added the `iroha address normalize --only-local --append-domain`
 > helper and wired it into CI (`ci/check_address_normalize.sh`) so wallet/explorer
-> pipelines can convert legacy Local selectors to canonical IH58/compressed forms
 > before Local-8/Local-12 are blocked on mainnet. Update any custom exports to
 > run the command and attach the normalized list to the release evidence bundle.

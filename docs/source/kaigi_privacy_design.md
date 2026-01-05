@@ -20,7 +20,6 @@ All additions remain Norito-first, run under ABI version 1, and must execute det
 2. Maintain strong accounting guarantees: every join, leave, and usage event must still reconcile deterministically.
 3. Provide optional relay manifests that describe onion routes for control/data channels and can be audited on-chain.
 4. Keep the fallback (fully transparent roster) operational for deployments that do not require privacy.
-5. Avoid hard-forking the data model by evolving `KaigiRecord` in a backward-compatible manner with Norito codecs.
 
 # Threat Model Summary
 
@@ -75,11 +74,9 @@ pub enum KaigiPrivacyMode {
 
 `NewKaigi` receives matching optional fields so hosts can opt into privacy at creation time.
 
-Norito schema compatibility:
 
 - Fields use `#[norito(with = "...")]` helpers to enforce canonical encoding (little-endian for integers, sorted hops by position).
 - `KaigiRecord::from_new` seeds the new vectors empty and copies any provided relay manifest.
-- Serialization tests will enforce round-trip compatibility for both privacy modes.
 
 # Instruction Surface Changes
 

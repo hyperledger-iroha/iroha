@@ -19,7 +19,7 @@ description: Arquitetura de storage, quotas e hooks de ciclo de vida para nodes 
 ---
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/sorafs_node_storage.md`. Mantenha ambas as copias sincronizadas ate que o conjunto de documentacao Sphinx legado seja retirado.
+Esta pagina espelha `docs/source/sorafs/sorafs_node_storage.md`. Mantenha ambas as copias sincronizadas.
 :::
 
 ## Design de storage do nodo SoraFS (Draft)
@@ -194,7 +194,6 @@ payloads fazem round-trip corretamente antes das APIs Torii entrarem. [crates/so
 2. **Discovery / Adverts**:
    - Gerar documentos `ProviderAdvertV1` usando capacidade/saude atual, assinar
      com a chave aprovada pelo conselho e publicar via discovery. Use a lista
-     `profile_aliases` para manter handles canonicos e legacy disponiveis.
 3. **Fluxo de pin**:
    - O gateway recebe um manifest assinado (incluindo plano de chunk, raiz PoR,
      assinaturas do conselho). Valida a lista de aliases (`sorafs.sf1@1.0.0`

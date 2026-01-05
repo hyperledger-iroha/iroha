@@ -6,7 +6,6 @@ description: Language-specific snippets for integrating SoraFS artefacts.
 ---
 
 :::note Canonical Source
-This page mirrors `docs/source/sorafs/developer/sdk/index.md`. Keep both copies in sync until the legacy Sphinx set is retired.
 :::
 
 Use this hub to track the per-language helpers that ship with the SoraFS toolchain.

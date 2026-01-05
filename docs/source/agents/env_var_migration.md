@@ -4,7 +4,6 @@ This tracker summarizes production-facing environment-variable toggles surfaced
 by `docs/source/agents/env_var_inventory.{json,md}` and the intended migration
 path into `iroha_config` (or explicit dev/test-only scoping).
 
-_Inventory source: `python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inventory.json --md docs/source/agents/env_var_inventory.md` (last refreshed Dec 07, 2025 with updated `cfg!`/debug detection). Guard: `ci/check_env_config_surface.sh` ✅ (prod hits limited to FastPQ Metal overrides, the deprecated P2P topology shim, and build/debug tooling; next sweep scheduled once additional config surfaces land)._
 
 Note: `ci/check_env_config_surface.sh` now fails when new **production** env
 shims appear relative to `AGENTS_BASE_REF` unless `ENV_CONFIG_GUARD_ALLOW=1` is
@@ -28,7 +27,6 @@ set; document intentional additions here before using the override.
   templates document the knob so operators no longer need env overrides.
 - **Izanami network opt-in** — Added an explicit `allow_net` CLI/config flag for
   the Izanami chaos tool; runs now require `allow_net=true`/`--allow-net` and
-  the legacy `IROHA_ALLOW_NET` shim is confined to test skips.
 - **IVM banner beep** — Replaced the `IROHA_BEEP` env shim with config-driven
   `ivm.banner.{show,beep}` toggles (default: true/true). Startup banner/beep
   wiring now reads configuration only in production; dev/test builds still honour
@@ -42,16 +40,13 @@ set; document intentional additions here before using the override.
   removed the `IROHA_SM_OPENSSL_PREVIEW` guard. Hosts apply the policy at
   startup, benches/tests may opt in via `CRYPTO_SM_INTRINSICS`, and the OpenSSL
   preview now respects only the config flag.
-- **Izanami allow_net** — The legacy `IROHA_ALLOW_NET` shim has been removed;
   Izanami already requires `--allow-net`/persisted config, and tests now rely on
   that knob rather than ambient env toggles.
 - **FastPQ GPU tuning** — Added `fastpq.metal.{max_in_flight,threadgroup_width,metal_trace,metal_debug_enum,metal_debug_fused}`
   config knobs (defaults: `None`/`None`/`false`/`false`/`false`) and thread them through CLI parsing
-  and lane startup so the Metal backend applies overrides before initialising. The legacy
   `FASTPQ_METAL_*` / `FASTPQ_DEBUG_*` shims now behave as dev/test fallbacks and
   are ignored once configuration loads (even when the config leaves them unset); docs/inventory were
   refreshed to flag the migration.【crates/irohad/src/main.rs:2609】【crates/iroha_core/src/fastpq/lane.rs:109】【crates/fastpq_prover/src/overrides.rs:11】
-- **IVM debug env fencing** — Legacy debug/trace env toggles
   (`IVM_DECODE_TRACE`, `IVM_DEBUG_WSV`, `IVM_DEBUG_COMPACT`, `IVM_DEBUG_INVALID`,
   `IVM_DEBUG_REGALLOC`, `IVM_DEBUG_METAL_ENUM`, `IVM_DEBUG_METAL_SELFTEST`,
   `IVM_FORCE_METAL_ENUM`, `IVM_FORCE_METAL_SELFTEST_FAIL`, `IVM_FORCE_CUDA_SELFTEST_FAIL`,

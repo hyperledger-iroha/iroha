@@ -246,3 +246,52 @@ fn test_get_merkle_compact_syscall() {
     // Basic sanity on dirs: at least has bits set within range
     assert_eq!(dirs >> depth, 0);
 }
+
+#[test]
+fn test_get_merkle_path_syscall_out_of_bounds() {
+    let mut vm = IVM::new(u64::MAX);
+    let max_addr = vm
+        .memory
+        .stack_top()
+        .saturating_add(ivm::Memory::STACK_SLOP);
+    vm.set_register(10, max_addr);
+    vm.set_register(11, ivm::Memory::OUTPUT_START);
+    let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_PATH as u8);
+    vm.load_program(&prog).unwrap();
+    let res = vm.run();
+    assert!(matches!(res, Err(VMError::MemoryOutOfBounds)));
+}
+
+#[test]
+fn test_get_merkle_compact_syscall_out_of_bounds() {
+    let mut vm = IVM::new(u64::MAX);
+    let max_addr = vm
+        .memory
+        .stack_top()
+        .saturating_add(ivm::Memory::STACK_SLOP);
+    let out = ivm::Memory::OUTPUT_START;
+    let root_out = out + 2048;
+    vm.set_register(10, max_addr);
+    vm.set_register(11, out);
+    vm.set_register(12, 0);
+    vm.set_register(13, root_out);
+    let prog = assemble_syscall(syscalls::SYSCALL_GET_MERKLE_COMPACT as u8);
+    vm.load_program(&prog).unwrap();
+    let res = vm.run();
+    assert!(matches!(res, Err(VMError::MemoryOutOfBounds)));
+}
+
+#[test]
+fn test_get_register_merkle_compact_syscall_out_of_bounds() {
+    let mut vm = IVM::new(u64::MAX);
+    let out = ivm::Memory::OUTPUT_START;
+    let root_out = out + 2048;
+    vm.set_register(10, ivm::parallel::REGISTER_COUNT as u64);
+    vm.set_register(11, out);
+    vm.set_register(12, 0);
+    vm.set_register(13, root_out);
+    let prog = assemble_syscall(syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT as u8);
+    vm.load_program(&prog).unwrap();
+    let res = vm.run();
+    assert!(matches!(res, Err(VMError::RegisterOutOfBounds)));
+}

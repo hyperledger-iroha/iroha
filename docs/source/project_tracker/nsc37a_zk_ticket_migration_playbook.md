@@ -14,7 +14,6 @@ This playbook describes how streaming operators, governance facilitators, and SD
 | **Schema Owners (ZK WG)** | Finalise the schema hash, publish golden serialization vectors, and coordinate halo2 verifier registry entries. |
 | **Core Host Team** | Implement nullifier storage, host-side validation errors, and WSV migration tooling. |
 | **Streaming Runtime Team** | Update relay validators and auditors to work with commitments/nullifiers. |
-| **SDK Owners (Python / JS / Swift / Java)** | Emit and parse the updated ticket format, expose migration toggles, and perform backwards-compatibility testing. |
 | **Governance Ops** | Approve the verifier registry entries, publish upgrade notices, and coordinate ticket issuer cut-overs. |
 
 ## 2. Prerequisites
@@ -38,14 +37,8 @@ This playbook describes how streaming operators, governance facilitators, and SD
 - Issue a dry-run batch of tickets in staging and confirm revocation flows.
 
 ### Phase C — Production Soft-Launch (Week 2)
-- Enable `streaming.zk_tickets_v2` for production issuers while keeping legacy tickets accepted (dual mode).
 - Relay validators log both commitment and nullifier statuses and raise alerts on duplicate nullifiers.
 - Operators monitor telemetry dashboards (`dashboards/streaming/zk_ticket_adoption.json`) for anomalies.
-
-### Phase D — Legacy Shutdown (Week 4)
-- Governance publishes a manifest update disabling legacy ticket issuance.
-- Core Host removes legacy acceptance path and enforces nullifier uniqueness (hard fail).
-- Archive migration artefacts and update runbooks.
 
 ## 4. Testing Checklist
 
@@ -59,7 +52,6 @@ This playbook describes how streaming operators, governance facilitators, and SD
 ## 5. Rollback Plan
 
 1. Toggle feature flag `streaming.zk_tickets_v2` off in issuers and relay validators.
-2. Re-enable legacy ticket acceptance in Core Host (keep nullifier map intact to prevent collisions).
 3. Issue rollback notice via governance channels and retrigger audit scripts.
 4. If a verifier mismatch caused the incident, publish corrected registry entries before attempting re-enablement.
 
@@ -71,7 +63,6 @@ This playbook describes how streaming operators, governance facilitators, and SD
 
 ## 7. Post-Migration Tasks
 
-- Update `docs/source/norito_streaming.md` to mark legacy tickets as deprecated.
 - Close outstanding SDK tickets (Python `NT-451`, JS `NT-452`, Swift `NT-453`, Java `NT-454`).
 - File an incident summary if rollback plan was invoked (link to `ops/incidents/`).
 

@@ -36,7 +36,7 @@ Sumeragi evidence کیلئے عارضی audit endpoints۔
   پرانی submissions کی تفتیش کر سکیں۔
 - POST `/v1/sumeragi/evidence`
   - Hex-encoded Norito evidence کو Sumeragi actor (`ControlFlow::Evidence`) میں جمع کراتا ہے۔
-  - Request body (JSON): `{ "evidence_hex": "<hex string>" }`; hex string میں whitespace نظرانداز ہوتا ہے۔
+  - Request body (JSON): `{ "evidence_hex": "<hex string>" }`; hex string Norito-framed `ConsensusEvidence` bytes کی نمائندگی کرتی ہے اور whitespace نظرانداز ہوتا ہے۔
   - Response (JSON): `{ "status": "accepted", "kind": "<variant>" }` کامیابی پر۔
   - Validation signer/height/view/epoch برابری کو double-vote payloads کیلئے چیک کرتا ہے، single-signer payloads کو non-empty ہونے کی شرط دیتا ہے، `Censorship` evidence کیلئے receipt quorums نافذ کرتا ہے (signed `TransactionSubmissionReceipt` payloads)، اور `InvalidProposal` records کو رد کرتا ہے جو height/view کو advance نہیں کرتے یا جن کا parent hash embedded commit certificate سے مختلف ہو۔
   - CLI helper: `iroha sumeragi evidence submit --evidence-hex <hex>` یا `--evidence-hex-file <path>`.

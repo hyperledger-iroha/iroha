@@ -96,7 +96,6 @@ pub struct DaCommitmentBundle {
 ```
 
 يدخل hash الخاص بالحزمة في hash الكتلة وفي بيانات `SignedBlockWire`. عندما لا
-تحمل الكتلة بيانات DA يبقى الحقل `None` لكي تتجنب lanes legacy الحمل الزائد.
 
 ملاحظة تنفيذية: `BlockPayload` و`BlockBuilder` الشفاف يعرضان الان
 setters/getters لـ `da_commitments` (راجع `BlockBuilder::set_da_commitments`

@@ -271,15 +271,17 @@ pub trait SoranetRouteProvisionTx: Send + Sync + 'static {
 pub struct FilesystemSoranetProvisioner {
     spool_dir: PathBuf,
     counter: AtomicU64,
+    max_spool_bytes: u64,
 }
 
 impl FilesystemSoranetProvisioner {
     /// Construct a new filesystem provisioner rooted at the provided directory.
     #[must_use]
-    pub fn new(spool_dir: PathBuf) -> Self {
+    pub fn new(spool_dir: PathBuf, max_spool_bytes: u64) -> Self {
         Self {
             spool_dir,
             counter: AtomicU64::new(0),
+            max_spool_bytes,
         }
     }
 
@@ -315,6 +317,21 @@ impl FilesystemSoranetProvisioner {
             .expect("spool path is valid UTF-8");
         (file, tmp)
     }
+
+    fn spool_usage_bytes(&self) -> Result<u64, SoranetTransportError> {
+        if !self.spool_dir.exists() {
+            return Ok(0);
+        }
+        dir_size(&self.spool_dir).map_err(|error| {
+            SoranetTransportError::with_source(
+                format!(
+                    "failed to measure SoraNet spool directory {}",
+                    self.spool_dir.display()
+                ),
+                error,
+            )
+        })
+    }
 }
 
 impl SoranetRouteProvisionTx for FilesystemSoranetProvisioner {
@@ -341,6 +358,18 @@ impl SoranetRouteProvisionTx for FilesystemSoranetProvisioner {
         let bytes = to_bytes(update).map_err(|error| {
             SoranetTransportError::with_source("failed to encode privacy route update", error)
         })?;
+
+        if self.max_spool_bytes > 0 {
+            let used = self.spool_usage_bytes()?;
+            let required = used.saturating_add(bytes.len() as u64);
+            if required > self.max_spool_bytes {
+                return Err(SoranetTransportError::new(format!(
+                    "SoraNet spool budget exceeded: used {used} bytes, update {update_len} bytes, limit {limit} bytes",
+                    update_len = bytes.len(),
+                    limit = self.max_spool_bytes
+                )));
+            }
+        }
 
         {
             let mut file = fs::File::create(&tmp_path).map_err(|error| {
@@ -379,6 +408,27 @@ impl SoranetRouteProvisionTx for FilesystemSoranetProvisioner {
         );
         Ok(())
     }
+}
+
+fn dir_size(path: &Path) -> io::Result<u64> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let mut total = 0u64;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let entry_path = entry.path();
+            if file_type.is_dir() {
+                stack.push(entry_path);
+            } else if file_type.is_file() {
+                total = total.saturating_add(entry.metadata()?.len());
+            }
+        }
+    }
+    Ok(total)
 }
 
 const NORITO_STREAM_SUBDIR: &str = "norito-stream";
@@ -2736,13 +2786,6 @@ where
             Err(StreamingProcessError::MissingFeedbackParity { .. }) => {
                 self.streaming
                     .apply_manifest_transport_capabilities(peer.id(), &mut manifest)?;
-                hint.stream_id = manifest.stream_id;
-                hint.parity_chunks = 0;
-                if hint.report_interval_ms == 0 {
-                    if let Some(resolution) = self.streaming.transport_capabilities(peer.id()) {
-                        hint.report_interval_ms = resolution.fec_feedback_interval_ms;
-                    }
-                }
                 self.send_manifest(peer, manifest);
                 Ok(())
             }
@@ -2876,7 +2919,7 @@ mod tests {
 
     #[test]
     fn file_names_append_tmp_extension() {
-        let provisioner = FilesystemSoranetProvisioner::new(PathBuf::from("/tmp/spool"));
+        let provisioner = FilesystemSoranetProvisioner::new(PathBuf::from("/tmp/spool"), 0);
         let update = PrivacyRouteUpdate {
             route_id: hash_with(0xAA),
             stream_id: hash_with(0xBB),
@@ -4340,7 +4383,7 @@ mod tests {
     #[test]
     fn filesystem_soranet_provisioner_writes_updates_to_disk() {
         let dir = tempdir().expect("create temp dir");
-        let provisioner = FilesystemSoranetProvisioner::new(dir.path().to_path_buf());
+        let provisioner = FilesystemSoranetProvisioner::new(dir.path().to_path_buf(), 0);
         let exit = PrivacyRelay {
             relay_id: hash_with(0xE1),
             endpoint: Multiaddr::from("/dns/exit-relay/udp/9443/quic"),
@@ -4394,9 +4437,41 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_soranet_provisioner_rejects_when_budget_exceeded() {
+        let dir = tempdir().expect("create temp dir");
+        let provisioner = FilesystemSoranetProvisioner::new(dir.path().to_path_buf(), 1);
+        let exit = PrivacyRelay {
+            relay_id: hash_with(0xE1),
+            endpoint: Multiaddr::from("/dns/exit-relay/udp/9443/quic"),
+            key_fingerprint: hash_with(0xE2),
+            capabilities: PrivacyCapabilities::from_bits(0b101),
+        };
+        let update = PrivacyRouteUpdate {
+            route_id: hash_with(0xA1),
+            stream_id: hash_with(0xB2),
+            content_key_id: 17,
+            valid_from_segment: 4,
+            valid_until_segment: 9,
+            exit_token: vec![0xDE, 0xAD, 0xBE, 0xEF],
+            soranet: Some(SoranetRoute {
+                channel_id: SoranetChannelId::new(hash_with(0xC3)),
+                exit_multiaddr: Multiaddr::from("/dns/torii/udp/9443/quic"),
+                padding_budget_ms: Some(25),
+                access_kind: SoranetAccessKind::Authenticated,
+                stream_tag: SoranetStreamTag::NoritoStream,
+            }),
+        };
+
+        let err = provisioner
+            .provision_privacy_route(&update, &exit)
+            .expect_err("spool budget should reject updates");
+        assert!(err.to_string().contains("spool budget"));
+    }
+
+    #[test]
     fn filesystem_soranet_provisioner_routes_kaigi_updates() {
         let dir = tempdir().expect("create temp dir");
-        let provisioner = FilesystemSoranetProvisioner::new(dir.path().to_path_buf());
+        let provisioner = FilesystemSoranetProvisioner::new(dir.path().to_path_buf(), 0);
         let exit = PrivacyRelay {
             relay_id: hash_with(0xE9),
             endpoint: Multiaddr::from("/dns/exit-kaigi/udp/9443/quic"),

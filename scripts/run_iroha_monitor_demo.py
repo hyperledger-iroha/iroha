@@ -722,7 +722,7 @@ def hash_file(path: Path) -> str | None:
 
 
 def relative_to_root(path: Path, root: Path) -> str:
-    _ = root  # root retained for future compatibility
+    _ = root  # root reserved for future extensions
     return path.name
 
 

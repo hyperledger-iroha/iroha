@@ -150,7 +150,6 @@ block. Provide one of the following input sets:
    - `SWIFT_TELEMETRY_SALT_STATUS` — path to a JSON file with `salt_epoch` and
      `last_rotation` (e.g., exporter artifact or `dashboards/data/swift_salt_status.sample.json`).
    - `SWIFT_TELEMETRY_OVERRIDES_STORE` — path to the override ledger produced by
-     `python3 scripts/swift_status_export.py telemetry-override list` (or the legacy helper).
    - Optional `SWIFT_TELEMETRY_PROFILE_ALIGNMENT`, `SWIFT_TELEMETRY_SCHEMA_VERSION`,
      `SWIFT_TELEMETRY_NOTES_FILE`, and `SWIFT_TELEMETRY_NOTES` (newline-separated string)
      to add alignment status and operator notes.
@@ -171,7 +170,6 @@ overrides so the collector reflects real counts. For local dry-runs, point
 
 ### Pipeline metadata inputs
 
-- Provide the timing feed via `SWIFT_PIPELINE_METADATA_FEED_PATH` (or the legacy
   `SWIFT_PIPELINE_METADATA` / `MOBILE_PARITY_PIPELINE_METADATA` variables). When
   pulling from a secret store, set `SWIFT_PIPELINE_METADATA_FEED_URL`,
   `SWIFT_PIPELINE_METADATA_FEED_URL_FILE`, or

@@ -8,7 +8,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 :::note Source canonique
 Reflete `docs/source/da/threat_model.md`. Gardez les deux versions en sync
-jusqu'a la retraite des docs legacy.
 :::
 
 # Modele de menaces Data Availability Sora Nexus

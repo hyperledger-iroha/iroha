@@ -3041,24 +3041,26 @@ mod tests {
         let pid_bytes = hex::decode(&proposal_id).expect("proposal id hex");
         let mut pid_arr = [0u8; 32];
         pid_arr.copy_from_slice(&pid_bytes);
-        let view = harness.state.view();
-        let proposal = view
-            .world()
-            .governance_proposals()
-            .get(&pid_arr)
-            .cloned()
-            .expect("proposal stored");
-        assert!(matches!(
-            proposal.status,
-            GovernanceProposalStatus::Proposed
-        ));
-        let referendum = view
-            .world()
-            .governance_referenda()
-            .get(&proposal_id)
-            .copied()
-            .expect("referendum stored");
-        assert!(matches!(referendum.mode, GovernanceReferendumMode::Plain));
+        {
+            let view = harness.state.view();
+            let proposal = view
+                .world()
+                .governance_proposals()
+                .get(&pid_arr)
+                .cloned()
+                .expect("proposal stored");
+            assert!(matches!(
+                proposal.status,
+                GovernanceProposalStatus::Proposed
+            ));
+            let referendum = view
+                .world()
+                .governance_referenda()
+                .get(&proposal_id)
+                .copied()
+                .expect("referendum stored");
+            assert!(matches!(referendum.mode, GovernanceReferendumMode::Plain));
+        }
 
         let ballot = PlainBallotDto {
             authority: authority_str.clone(),

@@ -114,7 +114,7 @@ seletores Local sejam desativados.
 ## Toolkit de migracao Local -> Global
 
 Use o [toolkit Local -> Global](local-to-global-toolkit.md) para automatizar a
-revisao e conversao de seletores Local legados. O helper emite tanto o relatorio
+revisao e conversao de seletores Local alternativos. O helper emite tanto o relatorio
 JSON de auditoria quanto a lista convertida IH58/comprimida que operadores
 anexam a tickets de readiness, enquanto o runbook associado vincula dashboards
 Grafana e regras Alertmanager que controlam o cutover em modo estrito.
@@ -169,7 +169,7 @@ seletor/estado e `docs/account_structure.md` para o diagrama completo de bytes.
 
 ## Impor formas canonicas
 
-Operadores que convertem codificacoes Local legadas para IH58 canonico ou
+Operadores que convertem codificacoes Local alternativas para IH58 canonico ou
 strings comprimidas devem seguir o workflow CLI documentado em ADDR-5:
 
 1. `iroha address inspect` agora emite um resumo JSON estruturado com IH58,
@@ -205,13 +205,11 @@ strings comprimidas devem seguir o workflow CLI documentado em ADDR-5:
    le literais separados por nova linha (comentarios iniciados com `#` sao
    ignorados, e `--input -` ou nenhum flag usa STDIN), emite um relatorio JSON
    com resumos canonicos/IH58/comprimidos para cada entrada e conta erros de
-   parse e avisos de dominio Local. Use `--allow-errors` ao auditar dumps legados
+   parse e avisos de dominio Local. Use `--allow-errors` ao auditar dumps alternativos
    com linhas lixo, e trave a automacao com `--fail-on-warning` quando os
    operadores estiverem prontos para bloquear seletores Local no CI.
 6. Quando precisar de reescrita linha a linha, use
-  `iroha address normalize --input legacy.txt --only-local --append-domain --network-prefix 753 --format ih58 --output normalized.txt`.
   Para planilhas de remediacao de seletores Local, use
-  `iroha address audit --input legacy.txt --allow-errors --network-prefix 753 --format csv`
   para exportar um CSV `input,status,format,...` que destaca codificacoes
   canonicas, avisos e falhas de parse em uma unica passada.
    O helper ignora linhas nao Local por padrao, converte cada entrada restante
@@ -239,7 +237,7 @@ clusters dev/test ao diagnosticar regressions. Continue espelhando
 `torii_address_domain_total{domain_kind}` no Grafana
 (`dashboards/grafana/address_ingest.json`) para que o pacote de evidencia ADDR-7
 prove que `domain_kind="local12"` permaneceu em zero na janela requerida de 30
- dias antes de a mainnet desativar seletores legados. O pacote Alertmanager
+ dias antes de a mainnet desativar seletores alternativos. O pacote Alertmanager
 (`dashboards/alerts/address_ingest_rules.yml`) adiciona tres guardrails:
 
 - `AddressLocal8Resurgence` pagina sempre que um contexto reporta um incremento
@@ -263,7 +261,7 @@ cutover:
 
 > **Enderecos:** Adicionado o helper `iroha address normalize --only-local --append-domain`
 > e conectado no CI (`ci/check_address_normalize.sh`) para que pipelines de
-> carteira/explorador possam converter seletores Local legados para formas
+> carteira/explorador possam converter seletores Local alternativos para formas
 > canonicas IH58/comprimidas antes de Local-8/Local-12 serem bloqueados na
 > mainnet. Atualize quaisquer exports personalizados para rodar o comando e
 > anexar a lista normalizada ao bundle de evidencia de release.

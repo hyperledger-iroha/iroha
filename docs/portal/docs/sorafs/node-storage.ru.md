@@ -19,7 +19,6 @@ description: Архитектура хранения, квоты и lifecycle ho
 ---
 
 :::note Канонический источник
-Эта страница отражает `docs/source/sorafs/sorafs_node_storage.md`. Держите обе копии синхронизированными, пока legacy документация Sphinx не будет выведена из эксплуатации.
 :::
 
 ## Дизайн хранения узла SoraFS (Черновик)
@@ -190,7 +189,6 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 2. **Discovery / Adverts**:
    - Сформировать `ProviderAdvertV1` на основе текущей емкости/здоровья, подписать
      ключом, одобренным советом, и опубликовать через discovery канал.
-     Использовать список `profile_aliases`, чтобы канонические и legacy handles
      оставались доступными.
 3. **Pin Workflow**:
    - Gateway получает подписанный manifest (с планом чанков, корнем PoR и подписями

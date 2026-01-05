@@ -25,6 +25,7 @@ base64 = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { version = "0.9", default-features = false, features = ["std"] }
 time = { workspace = true }
+iroha_crypto = { path = "../iroha_crypto" }
 
 [dev-dependencies]
 assert_cmd = "2.1.1"

@@ -156,7 +156,7 @@ LaneConfigEntry {
 ## Configuration & Norito types
 
 - `LaneCatalog`, `LaneConfig`, and `DataSpaceCatalog` live in
-  `iroha_data_model::nexus` and provide Norito-compatible structures for
+  `iroha_data_model::nexus` and provide Norito-format structures for
   manifests and SDKs.
 - `LaneConfig` lives in `iroha_config::parameters::actual::Nexus` and is derived
   automatically from the catalog; it does not require Norito encoding because it

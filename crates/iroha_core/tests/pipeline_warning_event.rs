@@ -20,6 +20,7 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
             store_dir: iroha_config::base::WithOrigin::inline(
                 temp_dir.path().to_str().unwrap().into(),
             ),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             block_sync_roster_retention:
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
@@ -81,6 +82,7 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
 
     // Inject a mismatching sidecar for this block height before validation
     let height = new_block.header().height().get();
+    let block_hash = new_block.header().hash();
     let mut fingerprint = [0u8; 32];
     fingerprint[..4].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
     let sidecar_txs: Vec<PipelineTxSnapshot> = new_block
@@ -94,6 +96,7 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
         .collect();
     let sidecar = PipelineRecoverySidecar::new_v1(
         height,
+        block_hash,
         PipelineDagSnapshot {
             fingerprint,
             key_count: 0,
@@ -129,6 +132,7 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
             store_dir: iroha_config::base::WithOrigin::inline(
                 temp_dir.path().to_str().unwrap().into(),
             ),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             block_sync_roster_retention:
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
@@ -190,10 +194,12 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
 
     // Inject a stale sidecar (no tx hashes for this block height) before validation
     let height = new_block.header().height().get();
+    let block_hash = new_block.header().hash();
     let mut fingerprint = [0u8; 32];
     fingerprint[..4].copy_from_slice(&[0xBA, 0xAD, 0xF0, 0x0D]);
     let sidecar = PipelineRecoverySidecar::new_v1(
         height,
+        block_hash,
         PipelineDagSnapshot {
             fingerprint,
             key_count: 0,

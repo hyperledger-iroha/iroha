@@ -34,18 +34,23 @@ pub fn derive_direction_keys(session_key: &SessionKey, sid: &[u8; 32]) -> ([u8; 
 }
 
 /// Compute X25519 shared secret and derive direction keys.
+///
+/// # Errors
+///
+/// Returns an error when the peer public key is invalid or the shared secret
+/// fails contributory checks.
 pub fn x25519_derive_keys(
     local_sk: &[u8; 32],
     peer_pk: &[u8; 32],
     sid: &[u8; 32],
-) -> ([u8; 32], [u8; 32]) {
+) -> Result<([u8; 32], [u8; 32]), iroha_crypto::Error> {
     let x = X25519Sha256::new();
-    let peer = X25519Sha256::decode_public_key(peer_pk).expect("peer pk");
+    let peer = X25519Sha256::decode_public_key(peer_pk)?;
     let (_pk, sk) = x.keypair(iroha_crypto::KeyGenOption::FromPrivateKey(
         (*local_sk).into(),
     ));
-    let sess = x.compute_shared_secret(&sk, &peer);
-    derive_direction_keys(&sess, sid)
+    let sess = x.compute_shared_secret(&sk, &peer)?;
+    Ok(derive_direction_keys(&sess, sid))
 }
 
 /// Build v1 AAD: "connect:v1" || sid || dir || seq || kind=1

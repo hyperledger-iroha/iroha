@@ -75,7 +75,6 @@ A cobertura de regressao vive em
   de seus artefatos JSON para que dashboards acompanhem a adocao da feature.
 - Fixtures sob `fixtures/sorafs_manifest/provider_admission/` agora incluem:
   - adverts multi-origem canonicos,
-  - uma variante legacy sem range para testes de downgrade, e
   - `multi_fetch_plan.json` para que suites de SDK reproduzam um plano de fetch
     multi-peer deterministico.
 

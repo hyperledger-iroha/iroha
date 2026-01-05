@@ -11,7 +11,6 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 
 :::note Source canonique
-Cette page reflète `docs/source/sorafs/developer/sdk/rust.md`. Gardez les deux copies synchronisées jusqu'à la retraite du set Sphinx legacy.
 :::
 
 Les crates Rust de ce dépôt alimentent le CLI et peuvent être embarqués dans des

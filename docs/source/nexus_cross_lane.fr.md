@@ -170,7 +170,6 @@ Le merge ring DOIT appliquer ce qui suit avant d'accepter un engagement de lane:
   `lane_relay_invalid_total{error}`, `lane_relay_emergency_override_total{outcome}`, et
   `nexus_audit_outcome_total` existent deja dans `crates/iroha_telemetry/src/metrics.rs`. Les
   operateurs doivent alerter sur les pics de missing-availability (les compteurs de reschedule sont
-  legacy et doivent rester a zero), et `lane_relay_invalid_total` doit rester a zero hors exercices
   adversariaux.
 - **Surfaces Torii:**  
   `/v1/sumeragi/status` inclut `lane_commitments`, `lane_settlement_commitments` et des snapshots

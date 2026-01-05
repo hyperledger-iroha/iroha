@@ -6,7 +6,6 @@ sidebar_label: Developer Overview
 ---
 
 :::note Canonical Source
-Mirrors `docs/source/sorafs/developer/index.md`. Keep both versions in sync until the legacy docs are retired.
 :::
 
 # SoraFS Developer Guides

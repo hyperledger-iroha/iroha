@@ -46,8 +46,6 @@ pub use simd_crc64::{crc64_fallback, hardware_crc64};
 #[cfg(feature = "gpu-compression")]
 pub mod gpu_zstd;
 
-const OWNED_PREFIX_LEN: usize = core::mem::size_of::<u64>();
-
 /// Default upper bound on Norito archive length (bytes) when hosts do not
 /// provide an explicit configuration.
 const DEFAULT_MAX_ARCHIVE_LEN: u64 = 64 * 1024 * 1024; // 64 MiB
@@ -57,8 +55,8 @@ static MAX_ARCHIVE_LEN: AtomicU64 = AtomicU64::new(DEFAULT_MAX_ARCHIVE_LEN);
 fn serialize_owned<W: Write, T: NoritoSerialize>(mut writer: W, value: &T) -> Result<(), Error> {
     let payload = encode_adaptive(value);
     let len = payload.len() as u64;
-    writer.write_u64::<LittleEndian>(len).map_err(Error::from)?;
-    writer.write_all(&payload).map_err(Error::from)?;
+    write_len(&mut writer, len)?;
+    writer.write_all(&payload)?;
     Ok(())
 }
 
@@ -76,19 +74,12 @@ fn owned_bytes_from_ctx<A>(archived: &Archived<A>) -> Result<&[u8], Error> {
 }
 
 fn parse_owned_payload(bytes: &[u8]) -> Result<(&[u8], usize), Error> {
-    if bytes.len() < OWNED_PREFIX_LEN {
-        return Err(Error::LengthMismatch);
-    }
-    let mut len_bytes = [0u8; OWNED_PREFIX_LEN];
-    len_bytes.copy_from_slice(&bytes[..OWNED_PREFIX_LEN]);
-    let len = u64::from_le_bytes(len_bytes) as usize;
-    let end = OWNED_PREFIX_LEN
-        .checked_add(len)
-        .ok_or(Error::LengthMismatch)?;
+    let (len, hdr) = read_len_from_slice(bytes)?;
+    let end = hdr.checked_add(len).ok_or(Error::LengthMismatch)?;
     if end > bytes.len() {
         return Err(Error::LengthMismatch);
     }
-    Ok((&bytes[OWNED_PREFIX_LEN..end], end))
+    Ok((&bytes[hdr..end], end))
 }
 
 /// Override the maximum allowed Norito archive length (bytes).
@@ -117,6 +108,11 @@ pub(crate) fn payload_len_to_usize(length: u64) -> Result<usize, Error> {
         return Err(Error::ArchiveLengthExceeded { length, limit });
     }
     usize::try_from(length).map_err(|_| Error::ArchiveLengthExceeded { length, limit })
+}
+
+#[inline]
+pub(crate) fn len_u64_to_usize(length: u64) -> Result<usize, Error> {
+    usize::try_from(length).map_err(|_| Error::LengthMismatch)
 }
 
 /// Maximum padding (bytes) allowed between a Norito header and the payload when
@@ -155,7 +151,9 @@ const FNV_PRIME: u64 = 0x100000001b3;
 pub mod header_flags {
     /// Packed sequence layouts are used for variable-sized collections.
     pub const PACKED_SEQ: u8 = 0x01;
-    /// Compact varint lengths are used for field/element prefixes.
+    /// Compact varint lengths are used for per-field/element length prefixes
+    /// (including string/blob lengths). Does not affect packed-seq offsets or
+    /// the outer sequence length header.
     pub const COMPACT_LEN: u8 = 0x02;
     /// Packed struct layout (offsets + data) for derive-generated types.
     pub const PACKED_STRUCT: u8 = 0x04;
@@ -164,11 +162,14 @@ pub mod header_flags {
     /// When set, packed sequence layouts write `len` varints representing
     /// element sizes, followed by the concatenated data segment.
     /// When not set, packed sequence layouts use `(len+1)` u64 offsets.
+    /// This flag is scoped to packed sequences and does not affect other
+    /// length prefixes.
     pub const VARINT_OFFSETS: u8 = 0x08;
     /// Sequence length itself is encoded as compact varint instead of fixed u64.
     ///
     /// This applies to the outer length header used by sequences and maps when
-    /// present. Decoders select behavior based on this flag.
+    /// present. Decoders select behavior based on this flag only for the
+    /// top-level sequence length prefix.
     pub const COMPACT_SEQ_LEN: u8 = 0x10;
     /// Packed-struct omits per-field sizes for self-delimiting/fixed-size fields
     /// and prefixes a compact bitset indicating which fields carry an explicit size.
@@ -271,14 +272,19 @@ const MAX_VARINT_BYTES: usize = 10;
 
 /// Number of bytes used to encode a length prefix for `value`.
 ///
-/// Honors the active compact-length/varint-offset configuration so callers can
-/// pre-compute buffer sizes accurately.
+/// Honors the active `COMPACT_LEN` layout flag so callers can pre-compute
+/// per-value length prefix sizes accurately.
 pub fn len_prefix_len(value: usize) -> usize {
-    if any_varint_length_enabled() {
+    if use_compact_len() {
         varint_encoded_len(value as u64)
     } else {
         8
     }
+}
+
+/// Number of bytes used to encode a compact varint length prefix.
+pub fn varint_len_prefix_len(value: usize) -> usize {
+    varint_encoded_len(value as u64)
 }
 
 #[inline]
@@ -1209,19 +1215,8 @@ fn layout_flag_enabled(flag: u8) -> bool {
 }
 
 #[inline]
-fn varint_length_enabled() -> bool {
-    layout_flag_enabled(header_flags::COMPACT_LEN)
-        || layout_flag_enabled(header_flags::VARINT_OFFSETS)
-}
-
-#[inline]
 pub fn compact_seq_length_enabled() -> bool {
     layout_flag_enabled(header_flags::COMPACT_SEQ_LEN)
-}
-
-#[inline]
-fn any_varint_length_enabled() -> bool {
-    varint_length_enabled() || compact_seq_length_enabled()
 }
 
 /// True if packed sequence layouts are enabled for the current decode.
@@ -1278,7 +1273,7 @@ pub fn decode_packed_offsets_slice(
         let mut total = 0usize;
         for _ in 0..count {
             let slice_tail = slice.get(used..).ok_or(Error::LengthMismatch)?;
-            let (span, span_used) = read_len_dyn_slice(slice_tail)?;
+            let (span, span_used) = read_varint_len_from_slice(slice_tail)?;
             used = used.checked_add(span_used).ok_or(Error::LengthMismatch)?;
             total = total.checked_add(span).ok_or(Error::LengthMismatch)?;
             offsets.push(total);
@@ -1323,9 +1318,9 @@ pub fn decode_packed_offsets_slice(
     Ok((offsets, bytes_needed, data_len, 0))
 }
 
-/// Write a fixed little-endian 64-bit length header.
+/// Write a length prefix honoring `COMPACT_LEN`.
 pub fn write_len<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
-    if any_varint_length_enabled() {
+    if use_compact_len() {
         let mut buf = [0u8; MAX_VARINT_BYTES];
         let used = encode_varint(value, &mut buf);
         writer.write_all(&buf[..used])?;
@@ -1338,10 +1333,10 @@ pub fn write_len<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
     }
 }
 
-/// Append a fixed little-endian 64-bit length header to `out`.
+/// Append a length prefix honoring `COMPACT_LEN` to `out`.
 #[inline]
 pub fn write_len_to_vec(out: &mut Vec<u8>, value: u64) {
-    if any_varint_length_enabled() {
+    if use_compact_len() {
         let mut buf = [0u8; MAX_VARINT_BYTES];
         let used = encode_varint(value, &mut buf);
         out.extend_from_slice(&buf[..used]);
@@ -1353,26 +1348,40 @@ pub fn write_len_to_vec(out: &mut Vec<u8>, value: u64) {
     }
 }
 
-/// Emit a length prefix honoring the active compact-len configuration.
+/// Write a compact varint length prefix regardless of layout flags.
+pub fn write_varint_len<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
+    let mut buf = [0u8; MAX_VARINT_BYTES];
+    let used = encode_varint(value, &mut buf);
+    writer.write_all(&buf[..used])
+}
+
+/// Append a compact varint length prefix regardless of layout flags.
+pub fn write_varint_len_to_vec(out: &mut Vec<u8>, value: u64) {
+    let mut buf = [0u8; MAX_VARINT_BYTES];
+    let used = encode_varint(value, &mut buf);
+    out.extend_from_slice(&buf[..used]);
+}
+
+/// Emit a length prefix honoring the `COMPACT_LEN` layout flag.
 ///
-/// When the `compact-len` feature is enabled this writes a compact varint.
-/// Otherwise it falls back to a fixed 8-byte little-endian `u64` header.
+/// When `COMPACT_LEN` is set this writes a compact varint. Otherwise it falls
+/// back to a fixed 8-byte little-endian `u64` header.
 pub fn write_len_header<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
     write_len(writer, value)
 }
 
-/// Append a length prefix honoring compact-len configuration.
+/// Append a length prefix honoring the `COMPACT_LEN` layout flag.
 ///
-/// Writes a compact varint when the feature is enabled or an 8-byte
+/// Writes a compact varint when `COMPACT_LEN` is set, or an 8-byte
 /// little-endian `u64` otherwise.
 pub fn write_len_header_to_vec(out: &mut Vec<u8>, value: u64) {
     write_len_to_vec(out, value);
 }
 
-/// Read a compact variable-length unsigned integer from a slice.
+/// Read a length prefix from a slice honoring `COMPACT_LEN`.
 /// Returns (value, bytes_consumed).
 pub fn read_len_from_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
-    if any_varint_length_enabled() {
+    if use_compact_len() {
         let (value, used) = decode_varint_from_slice(bytes)?;
         record_slice_access(bytes, used);
         let len = usize::try_from(value).map_err(|_| Error::LengthMismatch)?;
@@ -1390,7 +1399,7 @@ pub fn read_len_from_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
     }
 }
 
-/// Dynamically read a length prefix from a slice, depending on decode flags.
+/// Dynamically read a length prefix from a slice, honoring `COMPACT_LEN`.
 /// Returns (value, bytes consumed).
 pub fn read_len_dyn_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
     read_len_from_slice(bytes)
@@ -1411,7 +1420,8 @@ pub fn read_seq_len_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
         let mut len_bytes = [0u8; 8];
         len_bytes.copy_from_slice(&bytes[..8]);
         record_slice_access(bytes, 8);
-        Ok((u64::from_le_bytes(len_bytes) as usize, 8))
+        let len = len_u64_to_usize(u64::from_le_bytes(len_bytes))?;
+        Ok((len, 8))
     }
 }
 
@@ -1438,7 +1448,7 @@ pub unsafe fn read_len_ptr_unchecked(ptr: *const u8) -> (usize, usize) {
 /// Same as [`read_len_ptr_unchecked`].
 #[inline]
 pub unsafe fn try_read_len_ptr_unchecked(ptr: *const u8) -> Result<(usize, usize), Error> {
-    if any_varint_length_enabled() {
+    if use_compact_len() {
         let (value, used) = unsafe { decode_varint_from_ptr(ptr)? };
         record_payload_access(ptr, used);
         let len = usize::try_from(value).map_err(|_| Error::LengthMismatch)?;
@@ -1448,7 +1458,8 @@ pub unsafe fn try_read_len_ptr_unchecked(ptr: *const u8) -> Result<(usize, usize
         let header = unsafe { core::slice::from_raw_parts(ptr, 8) };
         lb.copy_from_slice(header);
         record_payload_access(ptr, 8);
-        Ok((u64::from_le_bytes(lb) as usize, 8))
+        let len = len_u64_to_usize(u64::from_le_bytes(lb))?;
+        Ok((len, 8))
     }
 }
 
@@ -1494,6 +1505,14 @@ fn decode_varint_from_slice(bytes: &[u8]) -> Result<(u64, usize), Error> {
         }
     }
     Err(Error::LengthMismatch)
+}
+
+#[inline]
+fn read_varint_len_from_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
+    let (value, used) = decode_varint_from_slice(bytes)?;
+    record_slice_access(bytes, used);
+    let len = usize::try_from(value).map_err(|_| Error::LengthMismatch)?;
+    Ok((len, used))
 }
 
 unsafe fn decode_varint_from_ptr(ptr: *const u8) -> Result<(u64, usize), Error> {
@@ -1596,7 +1615,8 @@ impl<'a> DecodeFromSlice<'a> for usize {
         }
         let mut b = [0u8; 8];
         b.copy_from_slice(&bytes[..8]);
-        Ok(((u64::from_le_bytes(b)) as usize, 8))
+        let value = len_u64_to_usize(u64::from_le_bytes(b))?;
+        Ok((value, 8))
     }
 }
 
@@ -1607,7 +1627,9 @@ impl<'a> DecodeFromSlice<'a> for isize {
         }
         let mut b = [0u8; 8];
         b.copy_from_slice(&bytes[..8]);
-        Ok(((i64::from_le_bytes(b)) as isize, 8))
+        let value = i64::from_le_bytes(b);
+        let value = isize::try_from(value).map_err(|_| Error::LengthMismatch)?;
+        Ok((value, 8))
     }
 }
 
@@ -1677,6 +1699,32 @@ where
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (len, mut offset) = read_seq_len_slice(bytes)?;
+        let remaining = bytes.len().saturating_sub(offset);
+        if use_packed_seq() {
+            if use_varint_offsets() {
+                let mut min_header = len;
+                if should_emit_varint_tail(len) {
+                    let entries = len.checked_add(1).ok_or(Error::LengthMismatch)?;
+                    let tail = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
+                    min_header = min_header.checked_add(tail).ok_or(Error::LengthMismatch)?;
+                }
+                if min_header > remaining {
+                    return Err(Error::LengthMismatch);
+                }
+            } else {
+                let entries = len.checked_add(1).ok_or(Error::LengthMismatch)?;
+                let header_bytes = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
+                if header_bytes > remaining {
+                    return Err(Error::LengthMismatch);
+                }
+            }
+        } else {
+            let min_header = if use_compact_len() { 1 } else { 8 };
+            let min_bytes = len.checked_mul(min_header).ok_or(Error::LengthMismatch)?;
+            if min_bytes > remaining {
+                return Err(Error::LengthMismatch);
+            }
+        }
         if crate::debug_trace_enabled() {
             eprintln!(
                 "Vec::<{}>::decode len={} packed_seq={}",
@@ -3460,22 +3508,13 @@ unsafe fn decode_archived_string_without_ctx_fixed(ptr: *const u8) -> String {
     let mut len_bytes = [0u8; 8];
     let len_src = unsafe { core::slice::from_raw_parts(ptr, 8) };
     len_bytes.copy_from_slice(len_src);
-    let len = u64::from_le_bytes(len_bytes) as usize;
+    let len = len_u64_to_usize(u64::from_le_bytes(len_bytes))
+        .unwrap_or_else(|_| panic!("norito: archived String length overflow"));
     if 8usize.checked_add(len).is_none() {
         panic!("norito: archived String length overflow");
     }
     let body_ptr = unsafe { ptr.add(8) };
     let bytes = unsafe { std::slice::from_raw_parts(body_ptr, len) };
-    if let Ok((inner_len, inner_hdr)) = read_len_from_slice(bytes) {
-        let inner_end = inner_hdr
-            .checked_add(inner_len)
-            .expect("norito: nested string length overflow");
-        if inner_end == bytes.len() {
-            let data = &bytes[inner_hdr..inner_end];
-            return String::from_utf8(data.to_vec())
-                .expect("norito: invalid UTF-8 in archived String");
-        }
-    }
     String::from_utf8(bytes.to_vec()).expect("norito: invalid UTF-8 in archived String")
 }
 
@@ -3526,15 +3565,6 @@ impl<'a> NoritoDeserialize<'a> for String {
             record_payload_access(payload.as_ptr().add(off), len);
         }
         let bytes = &payload[off..end];
-        if let Ok((inner_len, inner_hdr)) = read_len_from_slice(bytes) {
-            let inner_end = inner_hdr
-                .checked_add(inner_len)
-                .ok_or(Error::LengthMismatch)?;
-            if inner_end == bytes.len() {
-                let data = &bytes[inner_hdr..inner_end];
-                return String::from_utf8(data.to_vec()).map_err(|_| Error::InvalidUtf8);
-            }
-        }
         String::from_utf8(bytes.to_vec()).map_err(|_| Error::InvalidUtf8)
     }
 }
@@ -3573,7 +3603,8 @@ impl<'a> NoritoDeserialize<'a> for &'a str {
                 unsafe {
                     let mut len_bytes = [0u8; 8];
                     len_bytes.copy_from_slice(std::slice::from_raw_parts(ptr, 8));
-                    let len = u64::from_le_bytes(len_bytes) as usize;
+                    let len = len_u64_to_usize(u64::from_le_bytes(len_bytes))
+                        .unwrap_or_else(|_| panic!("norito: archived &str length overflow"));
                     let bytes = std::slice::from_raw_parts(ptr.add(8), len);
                     std::str::from_utf8(bytes).expect("invalid utf8")
                 }
@@ -3600,15 +3631,6 @@ impl<'a> NoritoDeserialize<'a> for &'a str {
             record_payload_access(payload.as_ptr().add(off), len);
         }
         let bytes = &payload[off..end];
-        if let Ok((inner_len, inner_hdr)) = read_len_from_slice(bytes) {
-            let inner_end = inner_hdr
-                .checked_add(inner_len)
-                .ok_or(Error::LengthMismatch)?;
-            if inner_end == bytes.len() {
-                let data = &bytes[inner_hdr..inner_end];
-                return std::str::from_utf8(data).map_err(|_| Error::InvalidUtf8);
-            }
-        }
         std::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)
     }
 }
@@ -4672,7 +4694,14 @@ where
         let mut layout = Layout::from_size_align(cap, align).map_err(|_| Error::LengthMismatch)?;
         let (mut buf, mut buf_needs_dealloc) = unsafe { alloc_checked(layout) };
         for _ in 0..len {
-            let (elem_len, hdr) = (read_u64_le_at_ptr(unsafe { ptr.add(offset) })? as usize, 8);
+            let elem_len = match len_u64_to_usize(read_u64_le_at_ptr(unsafe { ptr.add(offset) })?) {
+                Ok(len) => len,
+                Err(err) => {
+                    unsafe { dealloc_checked(buf, layout, buf_needs_dealloc) };
+                    return Err(err);
+                }
+            };
+            let hdr = 8;
             offset += hdr;
             if offset + elem_len > payload.len() {
                 unsafe { dealloc_checked(buf, layout, buf_needs_dealloc) };
@@ -6576,6 +6605,7 @@ mod tests {
             <Result<String, String> as DecodeFromSlice>::decode_from_slice(&rbuf).unwrap();
         assert_eq!(rval, Err(String::from("err")));
         assert_eq!(used, rbuf.len());
+        reset_decode_state();
     }
 
     #[test]
@@ -6588,6 +6618,7 @@ mod tests {
         let (out, used) = <&[u8] as DecodeFromSlice>::decode_from_slice(&buf).unwrap();
         assert_eq!(out, &payload[..]);
         assert_eq!(used, buf.len());
+        reset_decode_state();
     }
 
     #[test]
@@ -6651,7 +6682,10 @@ mod tests {
         {
             // Build a varint-length encoded string payload: len=3, data="abc"
             let mut payload = Vec::new();
-            write_len_to_vec(&mut payload, 3);
+            {
+                let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
+                write_len_to_vec(&mut payload, 3);
+            }
             payload.extend_from_slice(b"abc");
 
             // Compose header with COMPACT_LEN and COMPACT_SEQ_LEN flags set
@@ -6686,6 +6720,41 @@ mod tests {
             "compact-len usage flag must be recorded"
         );
         drop(encode_guard);
+        reset_decode_state();
+    }
+
+    #[test]
+    fn length_prefix_requires_compact_len_flag() {
+        reset_decode_state();
+        {
+            let _guard = DecodeFlagsGuard::enter(
+                header_flags::COMPACT_SEQ_LEN | header_flags::VARINT_OFFSETS,
+            );
+            let mut buf = Vec::new();
+            write_len_to_vec(&mut buf, 5);
+            assert_eq!(buf.len(), 8);
+            let (len, used) = read_len_from_slice(&buf).expect("read len");
+            assert_eq!(len, 5);
+            assert_eq!(used, 8);
+            assert_eq!(len_prefix_len(5), 8);
+        }
+        reset_decode_state();
+    }
+
+    #[test]
+    fn packed_seq_varint_offsets_do_not_require_compact_len() {
+        reset_decode_state();
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(2u64).to_le_bytes());
+        buf.push(1u8);
+        buf.push(1u8);
+        buf.push(0x11);
+        buf.push(0x22);
+        let _guard =
+            DecodeFlagsGuard::enter(header_flags::PACKED_SEQ | header_flags::VARINT_OFFSETS);
+        let (out, used) = <Vec<u8> as DecodeFromSlice>::decode_from_slice(&buf).expect("decode");
+        assert_eq!(out, vec![0x11, 0x22]);
+        assert_eq!(used, buf.len());
         reset_decode_state();
     }
 
@@ -6737,5 +6806,139 @@ mod tests {
         let (out_str, used2) = <&str as DecodeFromSlice>::decode_from_slice(&buf).unwrap();
         assert_eq!(out_str, s);
         assert_eq!(used2, buf.len());
+        reset_decode_state();
+    }
+
+    #[test]
+    fn fixed_u64_length_respects_usize_limits() {
+        reset_decode_state();
+        let _guard = DecodeFlagsGuard::enter_with_hint(0, 0);
+        let overflow = (usize::MAX as u128)
+            .checked_add(1)
+            .and_then(|value| u64::try_from(value).ok());
+
+        if let Some(len) = overflow {
+            let buf = len.to_le_bytes();
+            assert!(matches!(
+                read_seq_len_slice(&buf),
+                Err(Error::LengthMismatch)
+            ));
+            let result = unsafe { try_read_len_ptr_unchecked(buf.as_ptr()) };
+            assert!(matches!(result, Err(Error::LengthMismatch)));
+        } else {
+            let len = 42u64;
+            let buf = len.to_le_bytes();
+            let (value, used) = read_seq_len_slice(&buf).expect("fixed len");
+            assert_eq!(value, 42usize);
+            assert_eq!(used, 8);
+            let result = unsafe { try_read_len_ptr_unchecked(buf.as_ptr()) };
+            let (value, used) = result.expect("fixed len ptr");
+            assert_eq!(value, 42usize);
+            assert_eq!(used, 8);
+        }
+    }
+
+    #[test]
+    fn owned_payload_len_respects_usize_limits() {
+        let overflow = (usize::MAX as u128)
+            .checked_add(1)
+            .and_then(|value| u64::try_from(value).ok());
+
+        if let Some(len) = overflow {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(&len.to_le_bytes());
+            let result = <Box<u8> as DecodeFromSlice>::decode_from_slice(&buf);
+            assert!(matches!(result, Err(Error::LengthMismatch)));
+        } else {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(&1u64.to_le_bytes());
+            buf.push(7);
+            let (value, used) =
+                <Box<u8> as DecodeFromSlice>::decode_from_slice(&buf).expect("decode box");
+            assert_eq!(*value, 7);
+            assert_eq!(used, buf.len());
+        }
+    }
+
+    #[test]
+    fn decode_slice_usize_isize_respects_width() {
+        let value = 17u64;
+        let buf = value.to_le_bytes();
+        let (out, used) = <usize as DecodeFromSlice>::decode_from_slice(&buf).expect("usize");
+        assert_eq!(out, 17usize);
+        assert_eq!(used, 8);
+
+        let value = -9i64;
+        let buf = value.to_le_bytes();
+        let (out, used) = <isize as DecodeFromSlice>::decode_from_slice(&buf).expect("isize");
+        assert_eq!(out, -9isize);
+        assert_eq!(used, 8);
+
+        let overflow = (usize::MAX as u128)
+            .checked_add(1)
+            .and_then(|value| u64::try_from(value).ok());
+        if let Some(value) = overflow {
+            let buf = value.to_le_bytes();
+            let result = <usize as DecodeFromSlice>::decode_from_slice(&buf);
+            assert!(matches!(result, Err(Error::LengthMismatch)));
+
+            let value = i64::try_from(value).expect("overflow fits i64");
+            let buf = value.to_le_bytes();
+            let result = <isize as DecodeFromSlice>::decode_from_slice(&buf);
+            assert!(matches!(result, Err(Error::LengthMismatch)));
+        }
+    }
+
+    #[test]
+    fn vec_decode_rejects_impossible_header_sizes() {
+        reset_decode_state();
+        let _guard = DecodeFlagsGuard::enter_with_hint(0, 0);
+        let len = usize::MAX / 8 + 1;
+        let len_u64 = u64::try_from(len).expect("len fits u64");
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&len_u64.to_le_bytes());
+
+        let result = <Vec<u8> as DecodeFromSlice>::decode_from_slice(&buf);
+        assert!(matches!(result, Err(Error::LengthMismatch)));
+    }
+
+    #[test]
+    fn missing_ctx_string_and_str_decode() {
+        clear_payload_ctx();
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&2u64.to_le_bytes());
+        payload.extend_from_slice(b"ok");
+
+        let align =
+            core::mem::align_of::<Archived<String>>().max(core::mem::align_of::<Archived<&str>>());
+        let archive = crate::ArchiveSlice::new(&payload, align).expect("align payload");
+
+        let archived_string = unsafe { &*(archive.as_slice().as_ptr() as *const Archived<String>) };
+        let decoded = String::deserialize(archived_string);
+        assert_eq!(decoded, "ok");
+
+        clear_payload_ctx();
+        let archived_str = unsafe { &*(archive.as_slice().as_ptr() as *const Archived<&str>) };
+        let decoded = <&str as NoritoDeserialize>::deserialize(archived_str);
+        assert_eq!(decoded, "ok");
+    }
+
+    #[test]
+    fn aos_views_reject_oversize_field_len() {
+        reset_decode_state();
+        let _guard = DecodeFlagsGuard::enter_with_hint(0, 0);
+        let overflow = (usize::MAX as u128)
+            .checked_add(1)
+            .and_then(|value| u64::try_from(value).ok())
+            .unwrap_or(16);
+
+        let mut body = Vec::new();
+        body.extend_from_slice(&1u64.to_le_bytes());
+        body.push(crate::aos::AOS_FORMAT_VERSION);
+        body.extend_from_slice(&1u64.to_le_bytes());
+        body.extend_from_slice(&overflow.to_le_bytes());
+
+        let result = crate::columnar::view_aos_u64_str_bool(&body);
+        assert!(matches!(result, Err(Error::LengthMismatch)));
     }
 }

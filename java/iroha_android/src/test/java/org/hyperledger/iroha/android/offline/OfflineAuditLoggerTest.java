@@ -29,7 +29,7 @@ public final class OfflineAuditLoggerTest {
     assert entries.size() == 2 : "entries size mismatch";
     assert Files.size(logFile) > 0 : "log file should not be empty";
 
-    final String exported = new String(logger.exportAuditJson(), StandardCharsets.UTF_8);
+    final String exported = new String(logger.exportJson(), StandardCharsets.UTF_8);
     assert exported.contains("tx1") : "export missing tx1";
     assert exported.contains("tx2") : "export missing tx2";
 

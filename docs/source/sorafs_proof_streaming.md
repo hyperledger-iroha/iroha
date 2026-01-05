@@ -29,6 +29,9 @@ sorafs_cli proof stream \
 - The command POSTs to `--torii-url/v1/sorafs/proof/stream` with a Norito payload
   matching the `ProofStreamRequestV1` schema (digest, proof kind, nonce,
   and either `sample_count` or `deadline_ms` depending on the proof kind).
+- The request body supplies `manifest_digest_hex` (BLAKE3-256 of the canonical
+  manifest) and `provider_id_hex` so gateways can resolve the stored manifest
+  deterministically.
 - Each streamed NDJSON line is re-emitted to STDOUT unless you pass
   `--emit-events=false`. Use this flag when piping to tooling that expects a
   single JSON summary.

@@ -1380,9 +1380,14 @@ impl Run for ShieldArgs {
             match &self.enc_payload {
                 Some(p) => {
                     let bytes = std::fs::read(p)?;
-                    ConfidentialEncryptedPayload::from_ciphertext(bytes)
+                    norito::decode_from_bytes::<ConfidentialEncryptedPayload>(&bytes)
+                        .map_err(|e| eyre::eyre!("failed to decode encrypted payload: {e}"))?
                 }
-                None => ConfidentialEncryptedPayload::from_ciphertext(Vec::new()),
+                None => {
+                    return Err(eyre::eyre!(
+                        "encrypted payload requires ephemeral_pubkey, nonce_hex, and ciphertext_b64 or an encoded envelope file"
+                    ))
+                }
             }
         };
         let ib: InstructionBox = iroha::data_model::isi::zk::Shield::new(

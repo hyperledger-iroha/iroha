@@ -5,7 +5,7 @@ fn metadata_encode_parse_roundtrip() {
     let cases = vec![
         ProgramMetadata {
             version_major: 1,
-            version_minor: 1,
+            version_minor: 0,
             mode: 0x03,
             vector_length: 0,
             max_cycles: 12345,
@@ -17,7 +17,7 @@ fn metadata_encode_parse_roundtrip() {
             mode: 0x01,
             vector_length: 8,
             max_cycles: u32::MAX as u64 + 1,
-            abi_version: 2,
+            abi_version: 1,
         },
     ];
     for m in cases {
@@ -59,13 +59,13 @@ fn metadata_parse_rejects_bad_magic_and_short() {
         Err(VMError::InvalidMetadata)
     ));
 
-    // Corrupt only tail to ensure parser still consumes fixed size and returns values
-    m[16] ^= 0xFF; // abi_version flipped
+    // Corrupt only a header byte to ensure parser still consumes fixed size and returns values
+    m[7] ^= 0xFF; // vector_length flipped
     let parsed = ProgramMetadata::parse(&m).expect("parse ok despite flip");
     assert_eq!(parsed.header_len, 17);
     // Value should reflect the flip
     assert_ne!(
-        parsed.metadata.abi_version,
-        ProgramMetadata::default().abi_version
+        parsed.metadata.vector_length,
+        ProgramMetadata::default().vector_length
     );
 }

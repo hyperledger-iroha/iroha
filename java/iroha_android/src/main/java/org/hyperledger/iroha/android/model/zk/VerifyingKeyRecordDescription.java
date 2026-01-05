@@ -33,7 +33,6 @@ public final class VerifyingKeyRecordDescription {
   private final String metadataUriCid;
   private final String vkBytesCid;
   private final Long activationHeight;
-  private final Long deprecationHeight;
   private final Long withdrawHeight;
   private final VerifyingKeyStatus status;
 
@@ -51,7 +50,6 @@ public final class VerifyingKeyRecordDescription {
     this.metadataUriCid = builder.metadataUriCid;
     this.vkBytesCid = builder.vkBytesCid;
     this.activationHeight = builder.activationHeight;
-    this.deprecationHeight = builder.deprecationHeight;
     this.withdrawHeight = builder.withdrawHeight;
     this.status = builder.status;
   }
@@ -117,7 +115,6 @@ public final class VerifyingKeyRecordDescription {
         && Objects.equals(metadataUriCid, other.metadataUriCid)
         && Objects.equals(vkBytesCid, other.vkBytesCid)
         && Objects.equals(activationHeight, other.activationHeight)
-        && Objects.equals(deprecationHeight, other.deprecationHeight)
         && Objects.equals(withdrawHeight, other.withdrawHeight)
         && status == other.status;
   }
@@ -138,7 +135,6 @@ public final class VerifyingKeyRecordDescription {
             metadataUriCid,
             vkBytesCid,
             activationHeight,
-            deprecationHeight,
             withdrawHeight,
             status);
     result = 31 * result + Arrays.hashCode(inlineKeyBytes);
@@ -179,9 +175,6 @@ public final class VerifyingKeyRecordDescription {
     if (activationHeight != null) {
       args.put("record.activation_height", Long.toUnsignedString(activationHeight));
     }
-    if (deprecationHeight != null) {
-      args.put("record.deprecation_height", Long.toUnsignedString(deprecationHeight));
-    }
     if (withdrawHeight != null) {
       args.put("record.withdraw_height", Long.toUnsignedString(withdrawHeight));
     }
@@ -207,7 +200,6 @@ public final class VerifyingKeyRecordDescription {
     private String metadataUriCid;
     private String vkBytesCid;
     private Long activationHeight;
-    private Long deprecationHeight;
     private Long withdrawHeight;
     private VerifyingKeyStatus status = VerifyingKeyStatus.ACTIVE;
 
@@ -302,14 +294,6 @@ public final class VerifyingKeyRecordDescription {
       return this;
     }
 
-    public Builder setDeprecationHeight(final Long deprecationHeight) {
-      if (deprecationHeight != null && deprecationHeight < 0) {
-        throw new IllegalArgumentException("deprecationHeight must be non-negative");
-      }
-      this.deprecationHeight = deprecationHeight;
-      return this;
-    }
-
     public Builder setWithdrawHeight(final Long withdrawHeight) {
       if (withdrawHeight != null && withdrawHeight < 0) {
         throw new IllegalArgumentException("withdrawHeight must be non-negative");
@@ -353,13 +337,9 @@ public final class VerifyingKeyRecordDescription {
         }
         lengthValue = vkLength;
       }
-      if (deprecationHeight != null && activationHeight != null
-          && deprecationHeight < activationHeight) {
-        throw new IllegalStateException("deprecationHeight must be >= activationHeight");
-      }
-      if (withdrawHeight != null && deprecationHeight != null
-          && withdrawHeight < deprecationHeight) {
-        throw new IllegalStateException("withdrawHeight must be >= deprecationHeight");
+      if (withdrawHeight != null && activationHeight != null
+          && withdrawHeight < activationHeight) {
+        throw new IllegalStateException("withdrawHeight must be >= activationHeight");
       }
       final String computedCommitment =
           inlineBytes != null

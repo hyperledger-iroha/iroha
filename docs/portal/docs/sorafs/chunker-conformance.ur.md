@@ -19,15 +19,12 @@ description: Fixtures اور SDKs میں deterministic SF1 chunker profile کو 
 ---
 
 :::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/chunker_conformance.md` کی عکاسی کرتا ہے۔ جب تک legacy docs ریٹائر نہ ہو جائیں دونوں ورژنز کو ہم آہنگ رکھیں۔
 :::
 
-یہ گائیڈ وہ تقاضے بیان کرتی ہے جن پر ہر implementation کو عمل کرنا چاہیے تاکہ SoraFS کے deterministic chunker profile (SF1) کے ساتھ compatibility برقرار رہے۔
 یہ regeneration workflow، signing policy، اور verification steps بھی document کرتی ہے تاکہ SDKs میں fixture consumers sync میں رہیں۔
 
 ## Canonical profile
 
-- Profile handle: `sorafs.sf1@1.0.0` (legacy alias `sorafs.sf1@1.0.0`)
 - Input seed (hex): `0000000000dec0ded`
 - Target size: 262144 bytes (256 KiB)
 - Minimum size: 65536 bytes (64 KiB)
@@ -45,7 +42,6 @@ Reference implementation: `sorafs_chunker::chunk_bytes_with_digests_profile`.
 کرتا ہے اور درج ذیل فائلیں `fixtures/sorafs_chunker/` میں بناتا ہے:
 
 - `sf1_profile_v1.{json,rs,ts,go}` — Rust, TypeScript, اور Go consumers کے لیے canonical chunk boundaries۔ ہر فائل
-  canonical handle کو `profile_aliases` میں پہلی entry کے طور پر advertise کرتی ہے، اور اس کے بعد legacy aliases
   آتے ہیں (مثلاً `sorafs.sf1@1.0.0`، پھر `sorafs.sf1@1.0.0`)۔ یہ ordering
   `ensure_charter_compliance` کے ذریعے enforce ہوتی ہے اور اسے تبدیل نہیں کیا جا سکتا۔
 - `manifest_blake3.json` — BLAKE3-verified manifest جو ہر fixture فائل کو cover کرتا ہے۔

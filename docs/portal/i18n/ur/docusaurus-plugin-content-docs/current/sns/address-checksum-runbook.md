@@ -66,7 +66,6 @@ Torii، SDKs، اور والٹ/ایکسپلورر کلائنٹس پر `ERR_CHECK
 ### Manifest یا رجسٹری مسائل
 - `address_manifest_ops.md` فالو کریں تاکہ تازہ ترین manifest bundle validate ہو
   اور Local-8 selectors واپس نہ آئیں۔
-- `scripts/address_local_toolkit.sh audit` استعمال کریں جب legacy Local entries نظر آئیں۔
 
 ### بدنیتی پر مبنی/خراب ٹریفک
 - Torii لاگز اور `torii_http_requests_total` کے ذریعے حملہ آور IPs/app IDs

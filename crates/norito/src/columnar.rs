@@ -12,6 +12,7 @@
 //! - Column 1 (u64): pad to 8-byte alignment, then `[u64; n]` little-endian
 //! - Column 2 (str): pad to 4-byte alignment, `[u32; n+1]` offsets then
 //!   `data: [u8; offsets[n]]` (UTF-8 bytes, not NUL-terminated)
+//!   Offsets start at 0, are non-decreasing, and the final offset equals the blob length.
 //! - Column 3 (bool): packed bitset of length `ceil(n/8)` bytes (LSB-first)
 //!
 //! All padding bytes are zeroed and at most 7 bytes are inserted before a
@@ -30,7 +31,7 @@
 // Shared AoS helpers for ad-hoc small-row layouts
 use crate::{
     aos,
-    core::{ByteSink, Error},
+    core::{ByteSink, Error, len_u64_to_usize},
 };
 
 #[inline]
@@ -67,6 +68,27 @@ fn align_offset(off: &mut usize, align: usize) -> Result<(), Error> {
     Ok(())
 }
 
+#[inline]
+fn validate_u32_offsets(offs_bytes: &[u8], count: usize) -> Result<usize, Error> {
+    let entries = count.checked_add(1).ok_or(Error::LengthMismatch)?;
+    let expected_len = entries.checked_mul(4).ok_or(Error::LengthMismatch)?;
+    if offs_bytes.len() != expected_len {
+        return Err(Error::LengthMismatch);
+    }
+    let mut prev = read_u32_at(offs_bytes, 0) as usize;
+    if prev != 0 {
+        return Err(Error::LengthMismatch);
+    }
+    for i in 1..=count {
+        let cur = read_u32_at(offs_bytes, i) as usize;
+        if cur < prev {
+            return Err(Error::LengthMismatch);
+        }
+        prev = cur;
+    }
+    Ok(prev)
+}
+
 fn decode_ids_column<'a>(
     bytes: &'a [u8],
     off: &mut usize,
@@ -88,14 +110,13 @@ fn decode_ids_column<'a>(
             let tail = bytes.get(p..).ok_or(Error::LengthMismatch)?;
             let (v, used) = read_varint_u64(tail)?;
             p = add_offset(p, used)?;
-            let prev = *vec.last().unwrap();
-            let d = zigzag_decode(v);
-            let curr = if d >= 0 {
-                prev.wrapping_add(d as u64)
-            } else {
-                prev.wrapping_sub((-d) as u64)
-            };
-            vec.push(curr);
+            let prev = *vec.last().unwrap() as i128;
+            let d = zigzag_decode(v) as i128;
+            let curr = prev + d;
+            if curr < 0 || curr > u64::MAX as i128 {
+                return Err(Error::LengthMismatch);
+            }
+            vec.push(curr as u64);
         }
         *off = p;
         Ok(IdsRep::Rebuilt(vec))
@@ -399,10 +420,11 @@ pub fn view_ncb_u64_str_bool(bytes: &[u8]) -> Result<NcbU64StrBoolView<'_>, Erro
     // Column 2: strings
     let names = if desc == DESC_U64_STR_BOOL || desc == DESC_U64_DELTA_STR_BOOL {
         align_offset(&mut off, 4)?;
-        let offs_len = mul_checked(n + 1, 4)?;
+        let offs_count = n.checked_add(1).ok_or(Error::LengthMismatch)?;
+        let offs_len = mul_checked(offs_count, 4)?;
         let offs_bytes = slice_range(bytes, off, offs_len)?;
         off = add_offset(off, offs_len)?;
-        let data_len = read_u32_at(offs_bytes, n) as usize;
+        let data_len = validate_u32_offsets(offs_bytes, n)?;
         let data = slice_range(bytes, off, data_len)?;
         off = add_offset(off, data_len)?;
         let blob_str = {
@@ -424,10 +446,11 @@ pub fn view_ncb_u64_str_bool(bytes: &[u8]) -> Result<NcbU64StrBoolView<'_>, Erro
         let dict_len_bytes = slice_range(bytes, off, 4)?;
         let dict_len = read_u32_at(dict_len_bytes, 0) as usize;
         off = add_offset(off, 4)?;
-        let dict_offs_len = mul_checked(dict_len + 1, 4)?;
+        let dict_count = dict_len.checked_add(1).ok_or(Error::LengthMismatch)?;
+        let dict_offs_len = mul_checked(dict_count, 4)?;
         let dict_offs_bytes = slice_range(bytes, off, dict_offs_len)?;
         off = add_offset(off, dict_offs_len)?;
-        let dict_data_len = read_u32_at(dict_offs_bytes, dict_len) as usize;
+        let dict_data_len = validate_u32_offsets(dict_offs_bytes, dict_len)?;
         let dict_data = slice_range(bytes, off, dict_data_len)?;
         off = add_offset(off, dict_data_len)?;
         // align to 4 for u32 codes
@@ -435,6 +458,12 @@ pub fn view_ncb_u64_str_bool(bytes: &[u8]) -> Result<NcbU64StrBoolView<'_>, Erro
         let codes_len = mul_checked(n, 4)?;
         let codes_bytes = slice_range(bytes, off, codes_len)?;
         off = add_offset(off, codes_len)?;
+        for i in 0..n {
+            let code = read_u32_at(codes_bytes, i) as usize;
+            if code >= dict_len {
+                return Err(Error::LengthMismatch);
+            }
+        }
         let dict_blob = {
             #[cfg(feature = "simdutf8-validate")]
             {
@@ -978,8 +1007,9 @@ pub fn view_ncb_u64_optstr_bool(bytes: &[u8]) -> Result<NcbU64OptStrBoolView<'_>
     for (i, b) in pres_bits.iter().enumerate() {
         let mut bb = *b;
         let start_bit = i * 8;
-        if start_bit + 8 > n {
-            let extra = start_bit + 8 - n;
+        let end_bit = start_bit.checked_add(8).ok_or(Error::LengthMismatch)?;
+        if end_bit > n {
+            let extra = end_bit - n;
             if extra < 8 {
                 let mask = 0xFFu16 >> extra as u16;
                 bb &= mask as u8;
@@ -994,7 +1024,8 @@ pub fn view_ncb_u64_optstr_bool(bytes: &[u8]) -> Result<NcbU64OptStrBoolView<'_>
         p_local += 4 - (p_local & 3);
     }
     let p = add_offset(opt_start, p_local)?;
-    let offs_len = mul_checked(present + 1, 4)?;
+    let offs_count = present.checked_add(1).ok_or(Error::LengthMismatch)?;
+    let offs_len = mul_checked(offs_count, 4)?;
     let end_offs = add_offset(p, offs_len)?;
     if end_offs > bytes.len() {
         return Err(Error::LengthMismatch);
@@ -1131,8 +1162,9 @@ pub fn view_ncb_u64_optu32_bool(bytes: &[u8]) -> Result<NcbU64OptU32BoolView<'_>
     for (i, b) in pres_bits.iter().enumerate() {
         let mut bb = *b;
         let start_bit = i * 8;
-        if start_bit + 8 > n {
-            let extra = start_bit + 8 - n;
+        let end_bit = start_bit.checked_add(8).ok_or(Error::LengthMismatch)?;
+        if end_bit > n {
+            let extra = end_bit - n;
             if extra < 8 {
                 let mask = 0xFFu16 >> extra as u16;
                 bb &= mask as u8;
@@ -1475,22 +1507,22 @@ pub fn view_ncb_u64_bytes_bool(bytes: &[u8]) -> Result<NcbU64BytesBoolView<'_>, 
             for _ in 1..n {
                 let (vv, used) = read_varint_u64(&bytes[p..])?;
                 p += used;
-                let d = zigzag_decode(vv);
-                let prev = *v.last().unwrap();
-                let cur = if d >= 0 {
-                    prev.wrapping_add(d as u64)
-                } else {
-                    prev.wrapping_sub((-d) as u64)
-                };
-                v.push(cur);
+                let d = zigzag_decode(vv) as i128;
+                let prev = *v.last().unwrap() as i128;
+                let cur = prev + d;
+                if cur < 0 || cur > u64::MAX as i128 {
+                    return Err(Error::LengthMismatch);
+                }
+                v.push(cur as u64);
             }
             (IdsRep::Rebuilt(v), p - off)
         }
     } else {
-        let ids_bytes = bytes.get(off..off + 8 * n).ok_or(Error::LengthMismatch)?;
+        let ids_len = mul_checked(n, 8)?;
+        let ids_bytes = slice_range(bytes, off, ids_len)?;
         let (h, b, t) = unsafe { ids_bytes.align_to::<u64>() };
         if h.is_empty() && t.is_empty() {
-            (IdsRep::Slice(b), 8 * n)
+            (IdsRep::Slice(b), ids_len)
         } else {
             let mut v = Vec::with_capacity(n);
             for ch in ids_bytes.chunks_exact(8) {
@@ -1498,18 +1530,18 @@ pub fn view_ncb_u64_bytes_bool(bytes: &[u8]) -> Result<NcbU64BytesBoolView<'_>, 
                 lb.copy_from_slice(ch);
                 v.push(u64::from_le_bytes(lb));
             }
-            (IdsRep::Rebuilt(v), 8 * n)
+            (IdsRep::Rebuilt(v), ids_len)
         }
     };
-    off += used_ids;
+    off = add_offset(off, used_ids)?;
     let mis4 = off & 3;
     if mis4 != 0 {
         off += 4 - mis4;
     }
-    let offs_bytes = bytes
-        .get(off..off + 4 * (n + 1))
-        .ok_or(Error::LengthMismatch)?;
-    off += 4 * (n + 1);
+    let offs_count = n.checked_add(1).ok_or(Error::LengthMismatch)?;
+    let offs_len = mul_checked(offs_count, 4)?;
+    let offs_bytes = slice_range(bytes, off, offs_len)?;
+    off = add_offset(off, offs_len)?;
     let mut last = read_u32_at(offs_bytes, 0) as usize;
     if last != 0 {
         return Err(Error::LengthMismatch);
@@ -1521,8 +1553,8 @@ pub fn view_ncb_u64_bytes_bool(bytes: &[u8]) -> Result<NcbU64BytesBoolView<'_>, 
         }
         last = cur;
     }
-    let blob = bytes.get(off..off + last).ok_or(Error::LengthMismatch)?;
-    off += last;
+    let blob = slice_range(bytes, off, last)?;
+    off = add_offset(off, last)?;
     // Validate monotonic offsets for safety (non-decreasing and within blob)
     for i in 0..n {
         let s = read_u32_at(offs_bytes, i) as usize;
@@ -1532,9 +1564,7 @@ pub fn view_ncb_u64_bytes_bool(bytes: &[u8]) -> Result<NcbU64BytesBoolView<'_>, 
         }
     }
     let bit_bytes = n.div_ceil(8);
-    let bits = bytes
-        .get(off..off + bit_bytes)
-        .ok_or(Error::LengthMismatch)?;
+    let bits = slice_range(bytes, off, bit_bytes)?;
     Ok(NcbU64BytesBoolView {
         n,
         ids,
@@ -1685,7 +1715,7 @@ pub fn view_aos_u64_str_bool(body: &[u8]) -> Result<AosU64StrBoolView<'_>, Error
             }
             let mut lb = [0u8; 8];
             lb.copy_from_slice(&body[off..off + 8]);
-            (u64::from_le_bytes(lb) as usize, 8)
+            (len_u64_to_usize(u64::from_le_bytes(lb))?, 8)
         };
         off += used;
         let s = off;
@@ -1759,7 +1789,7 @@ pub fn view_aos_u64_bytes_bool(body: &[u8]) -> Result<AosU64BytesBoolView<'_>, E
             }
             let mut lb = [0u8; 8];
             lb.copy_from_slice(&body[off..off + 8]);
-            (u64::from_le_bytes(lb) as usize, 8)
+            (len_u64_to_usize(u64::from_le_bytes(lb))?, 8)
         };
         off += used;
         let s = off;
@@ -1942,22 +1972,22 @@ pub fn view_ncb_u64_u32_bool(bytes: &[u8]) -> Result<NcbU64U32BoolView<'_>, Erro
             for _ in 1..n {
                 let (vv, used) = read_varint_u64(&bytes[p..])?;
                 p += used;
-                let d = zigzag_decode(vv);
-                let prev = *v.last().unwrap();
-                let cur = if d >= 0 {
-                    prev.wrapping_add(d as u64)
-                } else {
-                    prev.wrapping_sub((-d) as u64)
-                };
-                v.push(cur);
+                let d = zigzag_decode(vv) as i128;
+                let prev = *v.last().unwrap() as i128;
+                let cur = prev + d;
+                if cur < 0 || cur > u64::MAX as i128 {
+                    return Err(Error::LengthMismatch);
+                }
+                v.push(cur as u64);
             }
             (IdsRep::Rebuilt(v), p - off)
         }
     } else {
-        let ids_bytes = bytes.get(off..off + 8 * n).ok_or(Error::LengthMismatch)?;
+        let ids_len = mul_checked(n, 8)?;
+        let ids_bytes = slice_range(bytes, off, ids_len)?;
         let (h, b, t) = unsafe { ids_bytes.align_to::<u64>() };
         if h.is_empty() && t.is_empty() {
-            (IdsRep::Slice(b), 8 * n)
+            (IdsRep::Slice(b), ids_len)
         } else {
             let mut v = Vec::with_capacity(n);
             for ch in ids_bytes.chunks_exact(8) {
@@ -1965,10 +1995,10 @@ pub fn view_ncb_u64_u32_bool(bytes: &[u8]) -> Result<NcbU64U32BoolView<'_>, Erro
                 lb.copy_from_slice(ch);
                 v.push(u64::from_le_bytes(lb));
             }
-            (IdsRep::Rebuilt(v), 8 * n)
+            (IdsRep::Rebuilt(v), ids_len)
         }
     };
-    off += used_ids;
+    off = add_offset(off, used_ids)?;
     // u32 column (align to 4)
     let mis4 = off & 3;
     if mis4 != 0 {
@@ -1991,30 +2021,32 @@ pub fn view_ncb_u64_u32_bool(bytes: &[u8]) -> Result<NcbU64U32BoolView<'_>, Erro
                     p += used;
                     let d = zigzag_decode(vv);
                     let prev = *v.last().unwrap() as i64;
-                    let cur = (prev + d) as u32;
-                    v.push(cur);
+                    let cur_i128 = (prev as i128) + (d as i128);
+                    if cur_i128 < 0 || cur_i128 > u32::MAX as i128 {
+                        return Err(Error::LengthMismatch);
+                    }
+                    v.push(cur_i128 as u32);
                 }
                 (None, Some(v), p - off)
             }
         } else {
-            let bytes_u32 = bytes.get(off..off + 4 * n).ok_or(Error::LengthMismatch)?;
+            let vals_len = mul_checked(n, 4)?;
+            let bytes_u32 = slice_range(bytes, off, vals_len)?;
             let (h, b, t) = unsafe { bytes_u32.align_to::<u32>() };
             if h.is_empty() && t.is_empty() {
-                (Some(b), None, 4 * n)
+                (Some(b), None, vals_len)
             } else {
                 let mut v = Vec::with_capacity(n);
                 for i in 0..n {
                     v.push(read_u32_at(bytes_u32, i));
                 }
-                (None, Some(v), 4 * n)
+                (None, Some(v), vals_len)
             }
         };
-    off += used_vals;
+    off = add_offset(off, used_vals)?;
     // flags
     let bit_bytes = n.div_ceil(8);
-    let bits = bytes
-        .get(off..off + bit_bytes)
-        .ok_or(Error::LengthMismatch)?;
+    let bits = slice_range(bytes, off, bit_bytes)?;
     Ok(NcbU64U32BoolView {
         n,
         ids,
@@ -2606,22 +2638,22 @@ pub fn view_ncb_u64_str_u32_bool(bytes: &[u8]) -> Result<NcbU64StrU32BoolView<'_
             for _ in 1..n {
                 let (vv, used) = read_varint_u64(&bytes[p..])?;
                 p += used;
-                let d = zigzag_decode(vv);
-                let prev = *v.last().unwrap();
-                let cur = if d >= 0 {
-                    prev.wrapping_add(d as u64)
-                } else {
-                    prev.wrapping_sub((-d) as u64)
-                };
-                v.push(cur);
+                let d = zigzag_decode(vv) as i128;
+                let prev = *v.last().unwrap() as i128;
+                let cur = prev + d;
+                if cur < 0 || cur > u64::MAX as i128 {
+                    return Err(Error::LengthMismatch);
+                }
+                v.push(cur as u64);
             }
             (IdsRep::Rebuilt(v), p - off)
         }
     } else {
-        let ids_bytes = bytes.get(off..off + 8 * n).ok_or(Error::LengthMismatch)?;
+        let ids_len = mul_checked(n, 8)?;
+        let ids_bytes = slice_range(bytes, off, ids_len)?;
         let (h, b, t) = unsafe { ids_bytes.align_to::<u64>() };
         if h.is_empty() && t.is_empty() {
-            (IdsRep::Slice(b), 8 * n)
+            (IdsRep::Slice(b), ids_len)
         } else {
             let mut v = Vec::with_capacity(n);
             for ch in ids_bytes.chunks_exact(8) {
@@ -2629,25 +2661,23 @@ pub fn view_ncb_u64_str_u32_bool(bytes: &[u8]) -> Result<NcbU64StrU32BoolView<'_
                 lb.copy_from_slice(ch);
                 v.push(u64::from_le_bytes(lb));
             }
-            (IdsRep::Rebuilt(v), 8 * n)
+            (IdsRep::Rebuilt(v), ids_len)
         }
     };
-    off += used_ids;
+    off = add_offset(off, used_ids)?;
     // names
     let names = if !is_dict {
         let mis4 = off & 3;
         if mis4 != 0 {
             off += 4 - mis4;
         }
-        let offs_bytes = bytes
-            .get(off..off + 4 * (n + 1))
-            .ok_or(Error::LengthMismatch)?;
-        off += 4 * (n + 1);
-        let data_len = read_u32_at(offs_bytes, n) as usize;
-        let data = bytes
-            .get(off..off + data_len)
-            .ok_or(Error::LengthMismatch)?;
-        off += data_len;
+        let offs_count = n.checked_add(1).ok_or(Error::LengthMismatch)?;
+        let offs_len = mul_checked(offs_count, 4)?;
+        let offs_bytes = slice_range(bytes, off, offs_len)?;
+        off = add_offset(off, offs_len)?;
+        let data_len = validate_u32_offsets(offs_bytes, n)?;
+        let data = slice_range(bytes, off, data_len)?;
+        off = add_offset(off, data_len)?;
         let blob_str = {
             #[cfg(feature = "simdutf8-validate")]
             {
@@ -2658,9 +2688,6 @@ pub fn view_ncb_u64_str_u32_bool(bytes: &[u8]) -> Result<NcbU64StrU32BoolView<'_
                 std::str::from_utf8(data).map_err(|_| Error::InvalidUtf8)?
             }
         };
-        if offs_bytes.len() != 4 * (n + 1) {
-            return Err(Error::LengthMismatch);
-        }
         NamesRep::Offsets {
             offs_bytes,
             blob_str,
@@ -2670,26 +2697,23 @@ pub fn view_ncb_u64_str_u32_bool(bytes: &[u8]) -> Result<NcbU64StrU32BoolView<'_
         if mis4 != 0 {
             off += 4 - mis4;
         }
-        if bytes.len() < off + 4 {
-            return Err(Error::LengthMismatch);
-        }
-        let dict_len = read_u32_at(&bytes[off..off + 4], 0) as usize;
-        off += 4;
-        let dict_offs_bytes = bytes
-            .get(off..off + 4 * (dict_len + 1))
-            .ok_or(Error::LengthMismatch)?;
-        off += 4 * (dict_len + 1);
-        let dict_data_len = read_u32_at(dict_offs_bytes, dict_len) as usize;
-        let dict_data = bytes
-            .get(off..off + dict_data_len)
-            .ok_or(Error::LengthMismatch)?;
-        off += dict_data_len;
+        let dict_len_bytes = slice_range(bytes, off, 4)?;
+        let dict_len = read_u32_at(dict_len_bytes, 0) as usize;
+        off = add_offset(off, 4)?;
+        let dict_count = dict_len.checked_add(1).ok_or(Error::LengthMismatch)?;
+        let dict_offs_len = mul_checked(dict_count, 4)?;
+        let dict_offs_bytes = slice_range(bytes, off, dict_offs_len)?;
+        off = add_offset(off, dict_offs_len)?;
+        let dict_data_len = validate_u32_offsets(dict_offs_bytes, dict_len)?;
+        let dict_data = slice_range(bytes, off, dict_data_len)?;
+        off = add_offset(off, dict_data_len)?;
         let mis4_codes = off & 3;
         if mis4_codes != 0 {
             off += 4 - mis4_codes;
         }
-        let codes_bytes = bytes.get(off..off + 4 * n).ok_or(Error::LengthMismatch)?;
-        off += 4 * n;
+        let codes_len = mul_checked(n, 4)?;
+        let codes_bytes = slice_range(bytes, off, codes_len)?;
+        off = add_offset(off, codes_len)?;
         let dict_blob = {
             #[cfg(feature = "simdutf8-validate")]
             {
@@ -2700,9 +2724,6 @@ pub fn view_ncb_u64_str_u32_bool(bytes: &[u8]) -> Result<NcbU64StrU32BoolView<'_
                 std::str::from_utf8(dict_data).map_err(|_| Error::InvalidUtf8)?
             }
         };
-        if dict_offs_bytes.len() != 4 * (dict_len + 1) || codes_bytes.len() != 4 * n {
-            return Err(Error::LengthMismatch);
-        }
         NamesRep::Dict {
             dict_offs_bytes,
             dict_blob,
@@ -2739,24 +2760,23 @@ pub fn view_ncb_u64_str_u32_bool(bytes: &[u8]) -> Result<NcbU64StrU32BoolView<'_
             (U32Rep::Rebuilt(v), p - off)
         }
     } else {
-        let bytes_u32 = bytes.get(off..off + 4 * n).ok_or(Error::LengthMismatch)?;
+        let vals_len = mul_checked(n, 4)?;
+        let bytes_u32 = slice_range(bytes, off, vals_len)?;
         let (h, b, t) = unsafe { bytes_u32.align_to::<u32>() };
         if h.is_empty() && t.is_empty() {
-            (U32Rep::Slice(b), 4 * n)
+            (U32Rep::Slice(b), vals_len)
         } else {
             let mut v = Vec::with_capacity(n);
             for i in 0..n {
                 v.push(read_u32_at(bytes_u32, i));
             }
-            (U32Rep::Rebuilt(v), 4 * n)
+            (U32Rep::Rebuilt(v), vals_len)
         }
     };
-    off += used_vals;
+    off = add_offset(off, used_vals)?;
     // flags
     let bit_bytes = n.div_ceil(8);
-    let bits = bytes
-        .get(off..off + bit_bytes)
-        .ok_or(Error::LengthMismatch)?;
+    let bits = slice_range(bytes, off, bit_bytes)?;
     Ok(NcbU64StrU32BoolView {
         n,
         ids,
@@ -3030,22 +3050,22 @@ pub fn view_ncb_u64_bytes_u32_bool(bytes: &[u8]) -> Result<NcbU64BytesU32BoolVie
             for _ in 1..n {
                 let (vv, used) = read_varint_u64(&bytes[p..])?;
                 p += used;
-                let d = zigzag_decode(vv);
-                let prev = *v.last().unwrap();
-                let cur = if d >= 0 {
-                    prev.wrapping_add(d as u64)
-                } else {
-                    prev.wrapping_sub((-d) as u64)
-                };
-                v.push(cur);
+                let d = zigzag_decode(vv) as i128;
+                let prev = *v.last().unwrap() as i128;
+                let cur = prev + d;
+                if cur < 0 || cur > u64::MAX as i128 {
+                    return Err(Error::LengthMismatch);
+                }
+                v.push(cur as u64);
             }
             (IdsRep::Rebuilt(v), p - off)
         }
     } else {
-        let ids_bytes = bytes.get(off..off + 8 * n).ok_or(Error::LengthMismatch)?;
+        let ids_len = mul_checked(n, 8)?;
+        let ids_bytes = slice_range(bytes, off, ids_len)?;
         let (h, b, t) = unsafe { ids_bytes.align_to::<u64>() };
         if h.is_empty() && t.is_empty() {
-            (IdsRep::Slice(b), 8 * n)
+            (IdsRep::Slice(b), ids_len)
         } else {
             let mut v = Vec::with_capacity(n);
             for ch in ids_bytes.chunks_exact(8) {
@@ -3053,18 +3073,18 @@ pub fn view_ncb_u64_bytes_u32_bool(bytes: &[u8]) -> Result<NcbU64BytesU32BoolVie
                 lb.copy_from_slice(ch);
                 v.push(u64::from_le_bytes(lb));
             }
-            (IdsRep::Rebuilt(v), 8 * n)
+            (IdsRep::Rebuilt(v), ids_len)
         }
     };
-    off += used_ids;
+    off = add_offset(off, used_ids)?;
     let mis4 = off & 3;
     if mis4 != 0 {
         off += 4 - mis4;
     }
-    let offs_bytes = bytes
-        .get(off..off + 4 * (n + 1))
-        .ok_or(Error::LengthMismatch)?;
-    off += 4 * (n + 1);
+    let offs_count = n.checked_add(1).ok_or(Error::LengthMismatch)?;
+    let offs_len = mul_checked(offs_count, 4)?;
+    let offs_bytes = slice_range(bytes, off, offs_len)?;
+    off = add_offset(off, offs_len)?;
     let mut prev = read_u32_at(offs_bytes, 0) as usize;
     if prev != 0 {
         return Err(Error::LengthMismatch);
@@ -3084,8 +3104,8 @@ pub fn view_ncb_u64_bytes_u32_bool(bytes: &[u8]) -> Result<NcbU64BytesU32BoolVie
             return Err(Error::LengthMismatch);
         }
     }
-    let blob = bytes.get(off..off + last).ok_or(Error::LengthMismatch)?;
-    off += last;
+    let blob = slice_range(bytes, off, last)?;
+    off = add_offset(off, last)?;
     let mis4v = off & 3;
     if mis4v != 0 {
         off += 4 - mis4v;
@@ -3116,23 +3136,22 @@ pub fn view_ncb_u64_bytes_u32_bool(bytes: &[u8]) -> Result<NcbU64BytesU32BoolVie
             (U32Rep::Rebuilt(v), p - off)
         }
     } else {
-        let bytes_u32 = bytes.get(off..off + 4 * n).ok_or(Error::LengthMismatch)?;
+        let vals_len = mul_checked(n, 4)?;
+        let bytes_u32 = slice_range(bytes, off, vals_len)?;
         let (h, b, t) = unsafe { bytes_u32.align_to::<u32>() };
         if h.is_empty() && t.is_empty() {
-            (U32Rep::Slice(b), 4 * n)
+            (U32Rep::Slice(b), vals_len)
         } else {
             let mut v = Vec::with_capacity(n);
             for i in 0..n {
                 v.push(read_u32_at(bytes_u32, i));
             }
-            (U32Rep::Rebuilt(v), 4 * n)
+            (U32Rep::Rebuilt(v), vals_len)
         }
     };
-    off += used_vals;
+    off = add_offset(off, used_vals)?;
     let bit_bytes = n.div_ceil(8);
-    let bits = bytes
-        .get(off..off + bit_bytes)
-        .ok_or(Error::LengthMismatch)?;
+    let bits = slice_range(bytes, off, bit_bytes)?;
     Ok(NcbU64BytesU32BoolView {
         n,
         ids,
@@ -3310,7 +3329,7 @@ pub fn view_aos_u64_str_u32_bool(body: &[u8]) -> Result<AosU64StrU32BoolView<'_>
             }
             let mut lb = [0u8; 8];
             lb.copy_from_slice(&body[off..off + 8]);
-            (u64::from_le_bytes(lb) as usize, 8)
+            (len_u64_to_usize(u64::from_le_bytes(lb))?, 8)
         };
         off += used;
         let s = off;
@@ -3400,7 +3419,7 @@ pub fn view_aos_u64_bytes_u32_bool(body: &[u8]) -> Result<AosU64BytesU32BoolView
             }
             let mut lb = [0u8; 8];
             lb.copy_from_slice(&body[off..off + 8]);
-            (u64::from_le_bytes(lb) as usize, 8)
+            (len_u64_to_usize(u64::from_le_bytes(lb))?, 8)
         };
         off += used;
         let s = off;
@@ -3508,7 +3527,7 @@ pub fn view_aos_u64_optstr_bool(body: &[u8]) -> Result<AosU64OptStrBoolView<'_>,
                 }
                 let mut lb = [0u8; 8];
                 lb.copy_from_slice(&body[off..off + 8]);
-                (u64::from_le_bytes(lb) as usize, 8)
+                (len_u64_to_usize(u64::from_le_bytes(lb))?, 8)
             };
             off += used;
             let s = off;
@@ -3684,7 +3703,7 @@ pub fn view_aos_u64_enum_bool(body: &[u8]) -> Result<AosU64EnumBoolView<'_>, Err
         }
         let mut lb = [0u8; 8];
         lb.copy_from_slice(&body[..8]);
-        (u64::from_le_bytes(lb) as usize, 8)
+        (len_u64_to_usize(u64::from_le_bytes(lb))?, 8)
     };
     off += used;
     let mut rows = Vec::with_capacity(n);
@@ -3708,7 +3727,7 @@ pub fn view_aos_u64_enum_bool(body: &[u8]) -> Result<AosU64EnumBoolView<'_>, Err
                 }
                 let mut lb = [0u8; 8];
                 lb.copy_from_slice(&body[off..off + 8]);
-                (u64::from_le_bytes(lb) as usize, 8)
+                (len_u64_to_usize(u64::from_le_bytes(lb))?, 8)
             };
             off += used;
             let s = off;
@@ -5406,8 +5425,9 @@ pub fn view_opt_str_column(bytes: &[u8], n_rows: usize) -> Result<OptStrColView<
         // Mask out bits beyond n_rows in the last byte
         let mut bb = *b;
         let start_bit = i * 8;
-        if start_bit + 8 > n_rows {
-            let extra = start_bit + 8 - n_rows;
+        let end_bit = start_bit.checked_add(8).ok_or(Error::LengthMismatch)?;
+        if end_bit > n_rows {
+            let extra = end_bit - n_rows;
             if extra < 8 {
                 let mask = 0xFFu16 >> extra as u16;
                 bb &= mask as u8;
@@ -5423,13 +5443,12 @@ pub fn view_opt_str_column(bytes: &[u8], n_rows: usize) -> Result<OptStrColView<
         off += 4 - mis4;
     }
     // Offsets table (present+1) followed by blob
-    let offs_len_bytes = 4 * (present + 1);
-    let offs_bytes = bytes
-        .get(off..off + offs_len_bytes)
-        .ok_or(Error::LengthMismatch)?;
-    off += offs_len_bytes;
-    let last = read_u32_at(offs_bytes, present) as usize;
-    let blob = bytes.get(off..off + last).ok_or(Error::LengthMismatch)?;
+    let offs_count = present.checked_add(1).ok_or(Error::LengthMismatch)?;
+    let offs_len_bytes = mul_checked(offs_count, 4)?;
+    let offs_bytes = slice_range(bytes, off, offs_len_bytes)?;
+    off = add_offset(off, offs_len_bytes)?;
+    let last = validate_u32_offsets(offs_bytes, present)?;
+    let blob = slice_range(bytes, off, last)?;
     let blob_str = {
         #[cfg(feature = "simdutf8-validate")]
         {
@@ -5440,9 +5459,6 @@ pub fn view_opt_str_column(bytes: &[u8], n_rows: usize) -> Result<OptStrColView<
             std::str::from_utf8(blob).map_err(|_| Error::InvalidUtf8)?
         }
     };
-    if offs_bytes.len() != 4 * (present + 1) {
-        return Err(Error::LengthMismatch);
-    }
     let rank = Rank256Cache::build(pres_bits, n_rows)?;
     Ok(OptStrColView {
         n: n_rows,
@@ -5513,8 +5529,9 @@ pub fn view_opt_u32_column(bytes: &[u8], n_rows: usize) -> Result<OptU32ColView<
     for (i, b) in pres_bits.iter().enumerate() {
         let mut bb = *b;
         let start_bit = i * 8;
-        if start_bit + 8 > n_rows {
-            let extra = start_bit + 8 - n_rows;
+        let end_bit = start_bit.checked_add(8).ok_or(Error::LengthMismatch)?;
+        if end_bit > n_rows {
+            let extra = end_bit - n_rows;
             if extra < 8 {
                 let mask = 0xFFu16 >> extra as u16;
                 bb &= mask as u8;
@@ -5529,8 +5546,8 @@ pub fn view_opt_u32_column(bytes: &[u8], n_rows: usize) -> Result<OptU32ColView<
     if mis4 != 0 {
         off += 4 - mis4;
     }
-    let need = 4 * present;
-    let vals_bytes = bytes.get(off..off + need).ok_or(Error::LengthMismatch)?;
+    let vals_len = mul_checked(present, 4)?;
+    let vals_bytes = slice_range(bytes, off, vals_len)?;
     let rank = Rank256Cache::build(pres_bits, n_rows)?;
     Ok(OptU32ColView {
         n: n_rows,
@@ -6427,22 +6444,22 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
             for _ in 1..n {
                 let (v, used) = read_varint_u64(&bytes[p..])?;
                 p += used;
-                let d = zigzag_decode(v);
-                let prev = *vec.last().unwrap();
-                let curr = if d >= 0 {
-                    prev.wrapping_add(d as u64)
-                } else {
-                    prev.wrapping_sub((-d) as u64)
-                };
-                vec.push(curr);
+                let d = zigzag_decode(v) as i128;
+                let prev = *vec.last().unwrap() as i128;
+                let curr = prev + d;
+                if curr < 0 || curr > u64::MAX as i128 {
+                    return Err(Error::LengthMismatch);
+                }
+                vec.push(curr as u64);
             }
             (IdsRep::Rebuilt(vec), p - off)
         }
     } else {
-        let ids_bytes = bytes.get(off..off + 8 * n).ok_or(Error::LengthMismatch)?;
+        let ids_len = mul_checked(n, 8)?;
+        let ids_bytes = slice_range(bytes, off, ids_len)?;
         let (head, body, tail) = unsafe { ids_bytes.align_to::<u64>() };
         if head.is_empty() && tail.is_empty() {
-            (IdsRep::Slice(body), 8 * n)
+            (IdsRep::Slice(body), ids_len)
         } else {
             let mut v = Vec::with_capacity(n);
             for chunk in ids_bytes.chunks_exact(8) {
@@ -6450,13 +6467,13 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
                 lb.copy_from_slice(chunk);
                 v.push(u64::from_le_bytes(lb));
             }
-            (IdsRep::Rebuilt(v), 8 * n)
+            (IdsRep::Rebuilt(v), ids_len)
         }
     };
-    off += used_ids;
+    off = add_offset(off, used_ids)?;
 
     // tags: [u8; n]
-    let tags = bytes.get(off..off + n).ok_or(Error::LengthMismatch)?;
+    let tags = slice_range(bytes, off, n)?;
     // Validate tag values strictly: only TAG_NAME (0) and TAG_CODE (1) allowed
     for (i, &t) in tags.iter().enumerate() {
         if t != TAG_NAME && t != TAG_CODE {
@@ -6464,7 +6481,7 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
             return Err(Error::invalid_tag("validating enum tags column", t));
         }
     }
-    off += n;
+    off = add_offset(off, n)?;
     let tags_view = TagsView::build(tags, n)?;
     // Test-only: verify dense indexes for NAME/CODE tags are consistent with prefix counts
     #[cfg(test)]
@@ -6509,30 +6526,31 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
 
     let names = if use_dict {
         // dict_len, dict_offs, dict_blob, then per-Name codes
-        let dict_len_bytes = bytes
-            .get(off_names..off_names + 4)
-            .ok_or(Error::LengthMismatch)?;
-        off_names += 4;
+        let dict_len_bytes = slice_range(bytes, off_names, 4)?;
+        off_names = add_offset(off_names, 4)?;
         let mut lb = [0u8; 4];
         lb.copy_from_slice(dict_len_bytes);
         let dict_len = u32::from_le_bytes(lb) as usize;
-        let dict_offs_bytes = bytes
-            .get(off_names..off_names + 4 * (dict_len + 1))
-            .ok_or(Error::LengthMismatch)?;
-        off_names += 4 * (dict_len + 1);
-        let dict_data_len = read_u32_at(dict_offs_bytes, dict_len) as usize;
-        let dict_data = bytes
-            .get(off_names..off_names + dict_data_len)
-            .ok_or(Error::LengthMismatch)?;
-        off_names += dict_data_len;
+        let dict_count = dict_len.checked_add(1).ok_or(Error::LengthMismatch)?;
+        let dict_offs_len = mul_checked(dict_count, 4)?;
+        let dict_offs_bytes = slice_range(bytes, off_names, dict_offs_len)?;
+        off_names = add_offset(off_names, dict_offs_len)?;
+        let dict_data_len = validate_u32_offsets(dict_offs_bytes, dict_len)?;
+        let dict_data = slice_range(bytes, off_names, dict_data_len)?;
+        off_names = add_offset(off_names, dict_data_len)?;
         // Align before reading per-Name codes (u32)
         let mis4_codes = off_names & 3;
         if mis4_codes != 0 {
             off_names += 4 - mis4_codes;
         }
-        let codes_bytes = bytes
-            .get(off_names..off_names + 4 * n_name)
-            .ok_or(Error::LengthMismatch)?;
+        let codes_len = mul_checked(n_name, 4)?;
+        let codes_bytes = slice_range(bytes, off_names, codes_len)?;
+        for i in 0..n_name {
+            let code = read_u32_at(codes_bytes, i) as usize;
+            if code >= dict_len {
+                return Err(Error::LengthMismatch);
+            }
+        }
         let dict_blob = {
             #[cfg(feature = "simdutf8-validate")]
             {
@@ -6543,9 +6561,6 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
                 std::str::from_utf8(dict_data).map_err(|_| Error::InvalidUtf8)?
             }
         };
-        if dict_offs_bytes.len() != 4 * (dict_len + 1) || codes_bytes.len() != 4 * n_name {
-            return Err(Error::LengthMismatch);
-        }
         EnumNamesRep::Dict {
             dict_offs_bytes,
             dict_blob,
@@ -6553,15 +6568,12 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
         }
     } else {
         // Offsets-based names: [u32; n_name+1] + blob
-        let total_offs_len = 4 * (n_name + 1);
-        let offs_slice = bytes
-            .get(off_names..off_names + total_offs_len)
-            .ok_or(Error::LengthMismatch)?;
-        off_names += total_offs_len;
-        let last = read_u32_at(offs_slice, n_name) as usize;
-        let data = bytes
-            .get(off_names..off_names + last)
-            .ok_or(Error::LengthMismatch)?;
+        let offs_count = n_name.checked_add(1).ok_or(Error::LengthMismatch)?;
+        let total_offs_len = mul_checked(offs_count, 4)?;
+        let offs_slice = slice_range(bytes, off_names, total_offs_len)?;
+        off_names = add_offset(off_names, total_offs_len)?;
+        let last = validate_u32_offsets(offs_slice, n_name)?;
+        let data = slice_range(bytes, off_names, last)?;
         let blob_str = {
             #[cfg(feature = "simdutf8-validate")]
             {
@@ -6572,9 +6584,6 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
                 std::str::from_utf8(data).map_err(|_| Error::InvalidUtf8)?
             }
         };
-        if offs_slice.len() != 4 * (n_name + 1) {
-            return Err(Error::LengthMismatch);
-        }
         EnumNamesRep::Offsets {
             offs_bytes: offs_slice,
             blob: blob_str,
@@ -6589,42 +6598,32 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
     }
     if use_dict {
         // dict_len (4), dict_offs (4*(dict_len+1)), dict_blob (len at last offset), align4, per-Name codes (4*n_name)
-        let dict_len_bytes = bytes
-            .get(expected_off..expected_off + 4)
-            .ok_or(Error::LengthMismatch)?;
+        let dict_len_bytes = slice_range(bytes, expected_off, 4)?;
         let mut dlb = [0u8; 4];
         dlb.copy_from_slice(dict_len_bytes);
         let dict_len = u32::from_le_bytes(dlb) as usize;
-        expected_off += 4;
-        let dict_offs_bytes = bytes
-            .get(expected_off..expected_off + 4 * (dict_len + 1))
-            .ok_or(Error::LengthMismatch)?;
-        expected_off += 4 * (dict_len + 1);
+        expected_off = add_offset(expected_off, 4)?;
+        let dict_count = dict_len.checked_add(1).ok_or(Error::LengthMismatch)?;
+        let dict_offs_len = mul_checked(dict_count, 4)?;
+        let dict_offs_bytes = slice_range(bytes, expected_off, dict_offs_len)?;
+        expected_off = add_offset(expected_off, dict_offs_len)?;
         // blob length is the last offset
         let last = read_u32_at(dict_offs_bytes, dict_len) as usize;
-        expected_off = expected_off
-            .checked_add(last)
-            .ok_or(Error::LengthMismatch)?;
+        expected_off = add_offset(expected_off, last)?;
         let mis4_codes = expected_off & 3;
         if mis4_codes != 0 {
             expected_off += 4 - mis4_codes;
         }
-        expected_off = expected_off
-            .checked_add(4 * n_name)
-            .ok_or(Error::LengthMismatch)?;
+        let codes_len = mul_checked(n_name, 4)?;
+        expected_off = add_offset(expected_off, codes_len)?;
     } else {
         // offsets (4*(n_name+1)) + blob (last), no extra align beyond initial
-        let total_offs_len = 4usize
-            .checked_mul(n_name + 1)
-            .ok_or(Error::LengthMismatch)?;
-        let offs_slice = bytes
-            .get(expected_off..expected_off + total_offs_len)
-            .ok_or(Error::LengthMismatch)?;
-        expected_off += total_offs_len;
+        let offs_count = n_name.checked_add(1).ok_or(Error::LengthMismatch)?;
+        let total_offs_len = mul_checked(offs_count, 4)?;
+        let offs_slice = slice_range(bytes, expected_off, total_offs_len)?;
+        expected_off = add_offset(expected_off, total_offs_len)?;
         let last = read_u32_at(offs_slice, n_name) as usize;
-        expected_off = expected_off
-            .checked_add(last)
-            .ok_or(Error::LengthMismatch)?;
+        expected_off = add_offset(expected_off, last)?;
     }
     // Now align for codes subcolumn
     let mis4_codes_start = expected_off & 3;
@@ -6676,10 +6675,9 @@ pub fn view_ncb_u64_enum_bool(bytes: &[u8]) -> Result<NcbU64EnumBoolView<'_>, Er
             CodeRep::Rebuilt(vec)
         }
     } else {
-        let codes_bytes = bytes
-            .get(off..off + 4 * n_code)
-            .ok_or(Error::LengthMismatch)?;
-        off += 4 * n_code;
+        let codes_len = mul_checked(n_code, 4)?;
+        let codes_bytes = slice_range(bytes, off, codes_len)?;
+        off = add_offset(off, codes_len)?;
         let (hc, codes_slice, tc) = unsafe { codes_bytes.align_to::<u32>() };
         if hc.is_empty() && tc.is_empty() {
             CodeRep::Slice(codes_slice)

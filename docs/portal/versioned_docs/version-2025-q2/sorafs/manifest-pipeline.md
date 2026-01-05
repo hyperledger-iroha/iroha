@@ -107,4 +107,3 @@ When proposing new chunker profiles:
 4. Submit the charter compliance report with governance signatures.
 
 Automation should prefer canonical handles (`namespace.name@semver`) and fall
-back to numeric IDs only when necessary for backward compatibility.

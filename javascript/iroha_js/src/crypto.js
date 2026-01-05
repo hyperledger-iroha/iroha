@@ -50,12 +50,12 @@ try {
   const parsed = JSON.parse(rawFixture);
   SM2_FIXTURE_REFERENCE = Object.freeze({
     distid: String(parsed.distid),
-    seedHex: String(parsed.seed_hex ?? parsed.seedHex).toUpperCase(),
-    messageHex: String(parsed.message_hex ?? parsed.messageHex).toUpperCase(),
-    privateKeyHex: String(parsed.private_key_hex ?? parsed.privateKeyHex).toUpperCase(),
-    publicKeySec1Hex: String(parsed.public_key_sec1_hex ?? parsed.publicKeySec1Hex).toUpperCase(),
-    publicKeyMultihash: String(parsed.public_key_multihash ?? parsed.publicKeyMultihash),
-    publicKeyPrefixed: String(parsed.public_key_prefixed ?? parsed.publicKeyPrefixed),
+    seedHex: String(parsed.seed_hex).toUpperCase(),
+    messageHex: String(parsed.message_hex).toUpperCase(),
+    privateKeyHex: String(parsed.private_key_hex).toUpperCase(),
+    publicKeySec1Hex: String(parsed.public_key_sec1_hex).toUpperCase(),
+    publicKeyMultihash: String(parsed.public_key_multihash),
+    publicKeyPrefixed: String(parsed.public_key_prefixed),
     za: String(parsed.za).toUpperCase(),
     signature: String(parsed.signature).toUpperCase(),
     r: String(parsed.r).toUpperCase(),
@@ -308,7 +308,7 @@ export function deriveConfidentialKeyset(spendKey) {
     deriveConfidentialKeysetFallback(seed);
 
   const keyset = {
-    skSpend: toBufferField(raw, "sk_spend", "skSpend"),
+    skSpend: toBufferField(raw, "sk_spend"),
     nk: toBufferField(raw, "nk"),
     ivk: toBufferField(raw, "ivk"),
     ovk: toBufferField(raw, "ovk"),
@@ -431,15 +431,12 @@ function toBuffer(value, name) {
   throw new TypeError(`${name} must be a Buffer, string, or ArrayBuffer view`);
 }
 
-function toBufferField(payload, snake, camel) {
-  const value =
-    (payload && snake && payload[snake]) ??
-    (payload && camel && payload[camel]) ??
-    null;
+function toBufferField(payload, snake) {
+  const value = payload && snake ? payload[snake] : null;
   if (value === null || value === undefined) {
-    throw new Error(`native binding returned missing \`${snake ?? camel}\``);
+    throw new Error(`native binding returned missing \`${snake}\``);
   }
-  return toBuffer(value, String(snake ?? camel));
+  return toBuffer(value, String(snake));
 }
 
 function wrapConfidentialKeyset(keys) {

@@ -1338,8 +1338,8 @@ def bootstrap_connect_preview_session(
     if "node" not in payload and preview.node:
         payload["node"] = preview.node
     session = torii_client.create_connect_session(payload)
-    wallet_token = _read_session_token(session, "wallet_token", "token_wallet")
-    app_token = _read_session_token(session, "app_token", "token_app")
+    wallet_token = _read_session_token(session, "wallet_token")
+    app_token = _read_session_token(session, "app_token")
     tokens = ConnectPreviewTokens(wallet=wallet_token, app=app_token)
     return ConnectPreviewBootstrapResult(preview=preview, session=session, tokens=tokens)
 
@@ -1380,13 +1380,11 @@ def _to_base64url(data: bytes) -> str:
     return encoded.rstrip(b"=").decode("ascii")
 
 
-def _read_session_token(obj: Any, primary: str, fallback: str) -> str:
+def _read_session_token(obj: Any, primary: str) -> str:
     if hasattr(obj, primary):
         token = getattr(obj, primary)
-    elif hasattr(obj, fallback):
-        token = getattr(obj, fallback)
     elif isinstance(obj, Mapping):
-        token = obj.get(primary) or obj.get(fallback)
+        token = obj.get(primary)
     else:  # pragma: no cover - defensive
         token = None
     if not isinstance(token, str) or not token:

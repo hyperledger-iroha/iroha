@@ -587,9 +587,31 @@ impl Memory {
     /// underlying memory.
     #[inline]
     pub fn load_region(&self, addr: u64, len: u64) -> Result<&[u8], VMError> {
-        self.check_perm(addr, len as u32, Perm::READ)?;
+        if len > u64::from(u32::MAX) {
+            return Err(VMError::MemoryAccessViolation {
+                addr: addr as u32,
+                perm: Perm::READ,
+            });
+        }
+        let len_u32 = len as u32;
+        self.check_perm(addr, len_u32, Perm::READ)?;
         let start = addr as usize;
-        let end = start + len as usize;
+        let len_usize = usize::try_from(len).map_err(|_| VMError::MemoryAccessViolation {
+            addr: addr as u32,
+            perm: Perm::READ,
+        })?;
+        let end = start
+            .checked_add(len_usize)
+            .ok_or(VMError::MemoryAccessViolation {
+                addr: addr as u32,
+                perm: Perm::READ,
+            })?;
+        if end > self.data.len() {
+            return Err(VMError::MemoryAccessViolation {
+                addr: addr as u32,
+                perm: Perm::READ,
+            });
+        }
         self.record_read_range(addr, len);
         if crate::dev_env::debug_wsv_enabled() && len <= 64 {
             let win_start = start.saturating_sub(16);
@@ -694,6 +716,18 @@ impl Memory {
         let start = Memory::OUTPUT_START as usize;
         let end = start + Memory::OUTPUT_SIZE as usize;
         &self.data[start..end]
+    }
+
+    /// Clear the OUTPUT region and reset the append-only cursor.
+    pub(crate) fn clear_output(&mut self) {
+        let start = Memory::OUTPUT_START as usize;
+        let end = start + Memory::OUTPUT_SIZE as usize;
+        if self.output_cursor == 0 && self.data[start..end].iter().all(|b| *b == 0) {
+            return;
+        }
+        self.data[start..end].fill(0);
+        self.output_cursor = 0;
+        self.update_merkle(start, end - start);
     }
 
     /// Clear recorded access information.
@@ -907,6 +941,19 @@ mod tests {
         assert!(matches!(err, Err(VMError::MemoryAccessViolation { .. })));
         mem.store_u128(base + 16, 0x1111_2222_3333_4444_5555_6666_7777_8888)
             .expect("append at cursor succeeds");
+    }
+
+    #[test]
+    fn load_region_rejects_oversized_len() {
+        let mem = Memory::new(0);
+        let err = mem.load_region(Memory::HEAP_START, u64::from(u32::MAX) + 1);
+        assert!(matches!(
+            err,
+            Err(VMError::MemoryAccessViolation {
+                perm: Perm::READ,
+                ..
+            })
+        ));
     }
 
     #[test]

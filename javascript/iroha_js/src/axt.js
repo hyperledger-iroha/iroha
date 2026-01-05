@@ -167,14 +167,13 @@ function resolveAxtNative() {
  */
 export function normalizeAxtRejectContext(input, context = "axt reject context") {
   const record = ensureObject(input ?? {}, context);
-  const reasonValue = record.reason ?? record.reason_code ?? record.code ?? "unknown";
+  const reasonValue = record.reason ?? "unknown";
   const reason = typeof reasonValue === "string" ? reasonValue : String(reasonValue);
-  const dataspaceRaw =
-    record.dataspace ?? record.dataspace_id ?? record.dataspaceId ?? record.dsid ?? null;
-  const laneRaw = record.lane ?? record.target_lane ?? record.targetLane ?? null;
-  const snapshotRaw = record.snapshot_version ?? record.snapshotVersion ?? null;
-  const nextEraRaw = record.next_min_handle_era ?? record.nextMinHandleEra ?? null;
-  const nextSubNonceRaw = record.next_min_sub_nonce ?? record.nextMinSubNonce ?? null;
+  const dataspaceRaw = record.dataspace ?? null;
+  const laneRaw = record.target_lane ?? null;
+  const snapshotRaw = record.snapshot_version ?? null;
+  const nextEraRaw = record.next_min_handle_era ?? null;
+  const nextSubNonceRaw = record.next_min_sub_nonce ?? null;
   const detailRaw = record.detail ?? "";
   return {
     reason,

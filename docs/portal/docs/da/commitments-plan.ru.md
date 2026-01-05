@@ -11,7 +11,6 @@ translation_last_reviewed: 2026-01-01
 
 :::note Канонический источник
 Эта страница отражает `docs/source/da/commitments_plan.md`. Держите обе версии
-синхронизированными до ухода legacy-доков.
 :::
 
 # План коммитментов Data Availability Sora Nexus (DA-3)
@@ -98,7 +97,6 @@ pub struct DaCommitmentBundle {
 ```
 
 Хэш bundle входит как в hash блока, так и в metadata `SignedBlockWire`. Когда
-блок не несет DA данных, поле остается `None`, чтобы legacy lanes избегали
 накладных расходов.
 
 Implementation note: `BlockPayload` и прозрачный `BlockBuilder` теперь имеют
