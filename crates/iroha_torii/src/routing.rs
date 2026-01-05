@@ -18629,7 +18629,10 @@ pub async fn handle_v1_kaigi_relays(
             context: "kaigi_relays_summary",
             source,
         })?;
-    Ok(crate::utils::respond_value_with_format(payload_value, format))
+    Ok(crate::utils::respond_value_with_format(
+        payload_value,
+        format,
+    ))
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -18751,7 +18754,10 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
             context: "kaigi_relay_detail",
             source,
         })?;
-    Ok(crate::utils::respond_value_with_format(detail_value, format))
+    Ok(crate::utils::respond_value_with_format(
+        detail_value,
+        format,
+    ))
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -18824,7 +18830,10 @@ pub async fn handle_v1_kaigi_relays_health(
             context: "kaigi_relays_health",
             source,
         })?;
-    Ok(crate::utils::respond_value_with_format(snapshot_value, format))
+    Ok(crate::utils::respond_value_with_format(
+        snapshot_value,
+        format,
+    ))
 }
 
 #[cfg(feature = "app_api")]

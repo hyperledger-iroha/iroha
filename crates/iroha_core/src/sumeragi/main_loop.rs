@@ -1,7 +1,6 @@
 //! The main event loop that powers sumeragi.
 #![cfg_attr(test, allow(unnameable_test_items))]
 // TODO: remove temporary allowances once NPoS scheduling and telemetry hooks are fully wired.
-use core::sync::atomic::{AtomicBool, Ordering};
 use std::{
     borrow::Cow,
     cell::Cell,
@@ -3111,22 +3110,6 @@ struct ProposeState {
     last_empty_child_attempt: Option<(Hash, Instant)>,
 }
 
-static DA_DISABLE_FORCED: AtomicBool = AtomicBool::new(false);
-
-pub(super) fn apply_devnet_da_override(da_enabled: bool, chain_id: &ChainId) -> bool {
-    if !da_enabled {
-        if !DA_DISABLE_FORCED.swap(true, Ordering::Relaxed) {
-            warn!(
-                %chain_id,
-                "DA/RBC cannot be disabled on this build; forcing sumeragi.da_enabled=true"
-            );
-        }
-        return true;
-    }
-
-    true
-}
-
 #[allow(
     dead_code,
     clippy::large_types_passed_by_value,
@@ -3155,12 +3138,10 @@ impl Actor {
 
 fn sumeragi_da_enabled(state: &State) -> bool {
     let view = state.view();
-    let chain_id = state.chain_id.clone();
-    let params = view.world.parameters().sumeragi();
-    let da_enabled = params.da_enabled();
+    let da_enabled = view.world.parameters().sumeragi().da_enabled();
     drop(view);
 
-    apply_devnet_da_override(da_enabled, &chain_id)
+    da_enabled
 }
 
 #[allow(clippy::too_many_arguments)] // Helper resets multiple subsystems; keep signature explicit.
@@ -7119,7 +7100,7 @@ impl Actor {
         let params = view.world.parameters().sumeragi();
         let block_time = params.block_time();
         let commit_time = params.commit_time();
-        let da_enabled = apply_devnet_da_override(params.da_enabled(), &self.state.chain_id);
+        let da_enabled = params.da_enabled();
         drop(view);
 
         commit_quorum_timeout_from_durations(
@@ -8509,11 +8490,24 @@ impl RbcSession {
     }
 
     pub(crate) fn record_deliver(&mut self, sender: u32, signature: Vec<u8>) -> bool {
-        let first = !self.delivered;
+        if self.delivered {
+            if self.deliver_sender == Some(sender)
+                && self
+                    .deliver_signature
+                    .as_deref()
+                    .is_some_and(|sig| sig == signature.as_slice())
+            {
+                return false;
+            }
+            if self.deliver_sender == Some(sender) {
+                self.invalid = true;
+            }
+            return false;
+        }
         self.delivered = true;
         self.deliver_sender = Some(sender);
         self.deliver_signature = Some(signature);
-        first
+        true
     }
 
     pub(crate) fn is_invalid(&self) -> bool {
