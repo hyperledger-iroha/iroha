@@ -439,13 +439,16 @@ impl Sm2PrivateKey {
     }
 
     /// Generate a random SM2 private key using the provided RNG.
-    pub fn random<R>(distid: impl Into<String>, rng: &mut R) -> Self
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when the distinguishing identifier is invalid.
+    pub fn random<R>(distid: impl Into<String>, rng: &mut R) -> Result<Self, ParseError>
     where
         R: CryptoRng + RngCore,
     {
         let distid = distid.into();
         let secret = SecretKey::random(rng);
-        Self::from_secret_key(distid, &secret).expect("random SM2 key is valid")
+        Self::from_secret_key(distid, &secret)
     }
 
     /// Deterministically derive an SM2 private key from an arbitrary seed.
@@ -812,18 +815,15 @@ fn parse_der_integer(bytes: &[u8], cursor: &mut usize) -> Result<[u8; 32], Parse
     let slice = &bytes[*cursor..*cursor + len];
     *cursor += len;
 
-    if len > 1 {
-        if slice[0] == 0x00 {
-            if slice[1] & 0x80 == 0 {
-                return Err(ParseError(
-                    "SM2 DER signature INTEGER has non-canonical leading zero".into(),
-                ));
-            }
-        } else if slice[0] & 0x80 != 0 {
-            return Err(ParseError(
-                "SM2 DER signature INTEGER must be non-negative".into(),
-            ));
-        }
+    if slice[0] & 0x80 != 0 {
+        return Err(ParseError(
+            "SM2 DER signature INTEGER must be non-negative".into(),
+        ));
+    }
+    if len > 1 && slice[0] == 0x00 && slice[1] & 0x80 == 0 {
+        return Err(ParseError(
+            "SM2 DER signature INTEGER has non-canonical leading zero".into(),
+        ));
     }
 
     let value = if slice[0] == 0 { &slice[1..] } else { slice };
@@ -2948,7 +2948,8 @@ mod tests {
     #[test]
     fn sm2_public_key_pem_roundtrip() {
         let mut rng = OsRng;
-        let private = Sm2PrivateKey::random("custom-distid", &mut rng);
+        let private = Sm2PrivateKey::random("custom-distid", &mut rng)
+            .expect("valid distid");
         let public = private.public_key();
         let pem = public
             .to_public_key_pem()
@@ -2980,7 +2981,8 @@ mod tests {
     fn sm2_compute_z_aligns_with_signing_key() {
         let mut rng = OsRng;
         let distid = "device:alpha";
-        let private = Sm2PrivateKey::random(distid, &mut rng);
+        let private = Sm2PrivateKey::random(distid, &mut rng)
+            .expect("valid distid");
         let public = private.public_key();
         let za = public.compute_z(distid).expect("compute ZA");
 
@@ -3133,7 +3135,8 @@ mod tests {
     #[test]
     fn sm2_random_private_key_roundtrip() {
         let mut rng = OsRng;
-        let private = Sm2PrivateKey::random(Sm2PublicKey::DEFAULT_DISTID, &mut rng);
+        let private = Sm2PrivateKey::random(Sm2PublicKey::DEFAULT_DISTID, &mut rng)
+            .expect("valid distid");
         let message = b"random sm2";
         let signature = private.sign(message);
         let public = private.public_key();
@@ -3225,6 +3228,13 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sm2_random_rejects_invalid_distid() {
+        let mut rng = OsRng;
+        let distid = "a".repeat(8192);
+        assert!(Sm2PrivateKey::random(distid, &mut rng).is_err());
+    }
+
     #[cfg(not(feature = "ffi_import"))]
     #[test]
     fn sm2_public_key_prefixed_string_matches_public_key_helper() {
@@ -3262,7 +3272,8 @@ mod tests {
     fn sm2_signature_der_handles_high_bit_components() {
         let mut rng = OsRng;
         for attempt in 0..1024usize {
-            let private = Sm2PrivateKey::random("interop-highbit", &mut rng);
+            let private = Sm2PrivateKey::random("interop-highbit", &mut rng)
+                .expect("valid distid");
             let message = format!("attempt-{attempt}").into_bytes();
             let signature = private.sign(&message);
             if signature.r[0] & 0x80 != 0 || signature.s[0] & 0x80 != 0 {
@@ -3316,6 +3327,21 @@ mod tests {
         der.push(0x02);
         der.push(0x20);
         der.extend_from_slice(&s);
+
+        assert!(Sm2Signature::from_der(&der).is_err());
+    }
+
+    #[test]
+    fn sm2_signature_der_rejects_negative_single_byte_integer() {
+        let mut der = Vec::with_capacity(8);
+        der.push(0x30);
+        der.push(0x06);
+        der.push(0x02);
+        der.push(0x01);
+        der.push(0x80);
+        der.push(0x02);
+        der.push(0x01);
+        der.push(0x01);
 
         assert!(Sm2Signature::from_der(&der).is_err());
     }

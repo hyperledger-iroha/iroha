@@ -19,6 +19,23 @@ pub struct Sm2KeyPair {
     private: Sm2PrivateKey,
 }
 
+// Normalize Sm2PrivateKey::random return type across crypto versions.
+trait IntoSm2Result {
+    fn into_result(self) -> Result<Sm2PrivateKey, ParseError>;
+}
+
+impl IntoSm2Result for Sm2PrivateKey {
+    fn into_result(self) -> Result<Sm2PrivateKey, ParseError> {
+        Ok(self)
+    }
+}
+
+impl IntoSm2Result for Result<Sm2PrivateKey, ParseError> {
+    fn into_result(self) -> Result<Sm2PrivateKey, ParseError> {
+        self
+    }
+}
+
 impl fmt::Debug for Sm2KeyPair {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Sm2KeyPair")
@@ -38,13 +55,17 @@ impl Sm2KeyPair {
     /// Generate a random SM2 key pair with the default distinguishing ID.
     pub fn generate() -> Self {
         Self::generate_with_distid(Self::DEFAULT_DISTID)
+            .expect("sm2 default distid must be valid")
     }
 
     /// Generate a random SM2 key pair with a custom distinguishing ID.
-    pub fn generate_with_distid(distid: impl Into<String>) -> Self {
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when the distinguishing identifier is invalid.
+    pub fn generate_with_distid(distid: impl Into<String>) -> Result<Self, ParseError> {
         let mut rng = OsRng;
-        let private = Sm2PrivateKey::random(distid, &mut rng);
-        Self { private }
+        let private = Sm2PrivateKey::random(distid, &mut rng).into_result()?;
+        Ok(Self { private })
     }
 
     /// Deterministically derive a key pair from opaque seed material with the default ID.

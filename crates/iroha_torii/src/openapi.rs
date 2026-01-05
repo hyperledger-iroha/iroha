@@ -671,8 +671,8 @@ fn offline_paths() -> Map {
         "/v1/offline/transfers/proof".to_owned(),
         Value::Object(json_post_operation(
             "Offline",
-            "Submit an offline transfer proof bundle.",
-            "Submit offline transfer proof metadata for verification.",
+            "Build offline transfer proof requests.",
+            "Generate FASTPQ witness payloads from a transfer payload or an on-ledger bundle id.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),

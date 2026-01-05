@@ -251,13 +251,11 @@ in `docs/source/sdk/android/readiness/` for AND5/AND7 readiness gates.
   familiar facade. Each item includes the human-readable issuer, display-ready
   account string, canonical reason, optional note/metadata maps, and the full
   record JSON for downstream auditing.
-- `/v1/offline/transfers/proof` accepts `{bundle_id_hex, kind, counter_checkpoint?,
-  replay_log_head_hex?, replay_log_tail_hex?}` and responds with the canonical
-  `OfflineProofRequest*` payloads. `OfflineToriiClient.buildProofRequest(...)`
-  wraps the endpoint so FASTPQ integrations can fetch `{sum,counter,replay}`
-  witness JSON directly from Torii, matching the CLI flow
-  (`iroha offline transfer proof --bundle … --kind …`) and the Norito structs in
-  `iroha_data_model::offline`.
+- `/v1/offline/transfers/proof` accepts either a transfer payload (`transfer`) or
+  `{bundle_id_hex, kind, counter_checkpoint?, replay_log_head_hex?, replay_log_tail_hex?}` and
+  responds with the canonical `OfflineProofRequest*` payloads. Use the transfer form to build
+  `{sum,counter,replay}` witness JSON before admission; the bundle id form matches the CLI flow
+  (`iroha offline transfer proof --bundle … --kind …`) for already-settled bundles.
 - `/v1/offline/spend-receipts` accepts raw receipts and returns the canonical
   Poseidon `receipts_root` (`OfflineSpendReceiptsSubmitResponse`) so wallets can
   cross-check their local hashing (and surface structured failures) before

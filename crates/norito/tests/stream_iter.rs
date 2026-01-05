@@ -25,6 +25,10 @@ fn overflow_varint() -> Vec<u8> {
     bytes
 }
 
+fn non_canonical_varint_zero() -> Vec<u8> {
+    vec![0x80, 0x00]
+}
+
 #[test]
 fn stream_seq_iter_half_then_finish() {
     // Build a reasonably large Vec<u32>
@@ -216,7 +220,22 @@ fn stream_seq_iter_rejects_overflowing_varint_len() {
     let payload = overflow_varint();
     let bytes =
         norito_core::frame_bare_with_header_flags::<Vec<u32>>(&payload, flags).expect("frame");
-    let err = stream_seq_iter::<_, u32>(Cursor::new(bytes)).expect_err("iter");
+    let err = stream_seq_iter::<_, u32>(Cursor::new(bytes))
+        .err()
+        .expect("iter");
+    assert!(matches!(err, Error::LengthMismatch));
+    norito_core::reset_decode_state();
+}
+
+#[test]
+fn stream_seq_iter_rejects_non_canonical_varint_len() {
+    let flags = header_flags::COMPACT_SEQ_LEN;
+    let payload = non_canonical_varint_zero();
+    let bytes =
+        norito_core::frame_bare_with_header_flags::<Vec<u32>>(&payload, flags).expect("frame");
+    let err = stream_seq_iter::<_, u32>(Cursor::new(bytes))
+        .err()
+        .expect("iter");
     assert!(matches!(err, Error::LengthMismatch));
     norito_core::reset_decode_state();
 }
@@ -227,7 +246,34 @@ fn stream_map_iter_rejects_overflowing_entry_count_varint() {
     let payload = overflow_varint();
     let bytes = norito_core::frame_bare_with_header_flags::<HashMap<u8, u8>>(&payload, flags)
         .expect("frame");
-    let err = StreamMapIter::<u8, u8>::new_hash(Cursor::new(bytes)).expect_err("iter");
+    let err = StreamMapIter::<u8, u8>::new_hash(Cursor::new(bytes))
+        .err()
+        .expect("iter");
+    assert!(matches!(err, Error::LengthMismatch));
+    norito_core::reset_decode_state();
+}
+
+#[test]
+fn stream_map_iter_rejects_non_canonical_entry_count_varint() {
+    let flags = header_flags::COMPACT_SEQ_LEN;
+    let payload = non_canonical_varint_zero();
+    let bytes = norito_core::frame_bare_with_header_flags::<HashMap<u8, u8>>(&payload, flags)
+        .expect("frame");
+    let err = StreamMapIter::<u8, u8>::new_hash(Cursor::new(bytes))
+        .err()
+        .expect("iter");
+    assert!(matches!(err, Error::LengthMismatch));
+    norito_core::reset_decode_state();
+}
+
+#[test]
+fn stream_map_collect_rejects_non_canonical_entry_count_varint() {
+    let flags = header_flags::COMPACT_SEQ_LEN;
+    let payload = non_canonical_varint_zero();
+    let bytes = norito_core::frame_bare_with_header_flags::<HashMap<u8, u8>>(&payload, flags)
+        .expect("frame");
+    let err =
+        stream_hashmap_collect_from_reader::<_, u8, u8>(Cursor::new(bytes)).expect_err("collect");
     assert!(matches!(err, Error::LengthMismatch));
     norito_core::reset_decode_state();
 }

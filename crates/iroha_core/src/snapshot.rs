@@ -458,8 +458,18 @@ fn read_optional_bytes(path: &Path) -> Result<Option<Vec<u8>>, TryReadError> {
 }
 
 fn read_optional_string(path: &Path) -> Result<Option<String>, TryReadError> {
-    match std::fs::read_to_string(path) {
-        Ok(contents) => Ok(Some(contents.trim().to_owned())),
+    match std::fs::read(path) {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(contents) => Ok(Some(contents.trim().to_owned())),
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    path = %path.display(),
+                    "snapshot sidecar contains invalid UTF-8; ignoring"
+                );
+                Ok(None)
+            }
+        },
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(TryReadError::IO(err, path.to_path_buf())),
     }
@@ -1139,6 +1149,16 @@ mod tests {
         try_write_snapshot(&state, &snapshot_store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
 
         assert!(Path::exists(snapshot_store_dir.as_path()))
+    }
+
+    #[test]
+    async fn read_optional_string_ignores_invalid_utf8() {
+        let tmp_root = tempdir().unwrap();
+        let path = tmp_root.path().join("digest.sha256");
+        std::fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
+
+        let value = read_optional_string(&path).expect("read optional string");
+        assert!(value.is_none());
     }
 
     #[test]

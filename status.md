@@ -1,6 +1,39 @@
 # Status
 
 ## Latest Updates
+- Norito: reject non-zero alignment padding and bitset padding bits in NCB/opt columns, enforce trailing-byte checks in NCB views, and document NCB canonicalization rules.
+- Tests: `cargo test -p norito --test ncb_padding_trailing`.
+- Offline proofs: allow `/v1/offline/transfers/proof` to accept transfer payloads pre-admission, refactor proof-request builders onto `OfflineToOnlineTransfer`, add Torii/Swift updates, and refresh docs/tests.
+- Tests: not run (not requested).
+- Tiered state: sync cold shard parent directories before snapshot promotion to harden crash consistency for nested payloads.
+- Tests: not run (not requested).
+- Kura: keep pruned sidecar temp index on rename failure so recovery can promote it.
+- Tests: not run (not requested).
+- Crypto: reject non-canonical SEC1 encodings for secp256k1 public keys (canonical form only) and add regression coverage.
+- Tests: not run (not requested).
+- Kura: avoid promoting orphaned sidecar temp data without matching temp index; add regression coverage for ignoring orphaned temp data.
+- Tests: not run (not requested).
+- Kura: recover sidecar prune artifacts by promoting temp index/data on read/write; add regression coverage for temp index promotion.
+- Tests: not run (not requested).
+- Snapshot/WSV: ignore invalid UTF-8 in snapshot sidecar files so tmp fallbacks still work; add regression coverage.
+- Kura: prefer temp commit-roster journals when present (crash-consistency), with regression coverage for temp promotion.
+- Tests: `cargo test -p norito --test ncb_id_delta_overflow`.
+- Norito: fallback to non-delta id encoding when forced delta would overflow i64, and add regression coverage for u64 id-delta overflow cases.
+- Tests: not run (not requested).
+- Crypto: make SM2 random key generation validate distid instead of panicking, propagate errors to SDK bindings, and add regression coverage for invalid distids.
+- Tests: not run (not requested).
+- Kura: keep commit-marker writes pending on failure so fsync retries; add regression coverage for temp-marker write failures.
+- Tests: not run (not requested).
+- Crypto: enforce HashOf Norito decoding LSB validation and fixed-size DecodeFromSlice consumption; add regression tests.
+- Tests: not run (not requested).
+- Crypto: reject negative single-byte SM2 DER INTEGER encodings to avoid accepting signed DER; add regression coverage.
+- Tests: not run (not requested).
+- Norito: reject non-canonical varint encodings across core/stream/columnar decoders, enforce zero-filled padding during streaming decode, add regression coverage, and document canonical varints.
+- Tests: not run (not requested).
+- Warnings cleanup: remove unused imports/mut, drop unused sorafs helper, add missing Kura sidecar tests, use TelemetryProfile fields in error display, and tighten tiered-state hot entry assertions.
+- Tests: not run (not requested).
+- Crypto: reject out-of-range Merkle proof leaf indices, enforce compact proof depth <= 32, and reject low-order X25519 shared secrets in hybrid KEM/DEM; add regression tests.
+- Tests: not run (not requested).
 - Tiered state: recover snapshot artifacts (.bak/.staging) on startup and add regression coverage for backup restore + staging cleanup.
 - Tests: not run (not requested).
 - Norito: reject trailing bytes in AoS decoders, enforce exact zero-filled header padding for `from_bytes`/`from_compressed_bytes` (plus padding-byte validation for archive views), and add regression coverage; document the padding rule.

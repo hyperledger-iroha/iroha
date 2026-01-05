@@ -36,7 +36,8 @@ impl EcdsaSecp256k1Sha256 {
     ///
     /// # Errors
     ///
-    /// Returns [`ParseError`] when the payload cannot be decoded into a valid key.
+    /// Returns [`ParseError`] when the payload cannot be decoded into a valid key or
+    /// when the encoding is non-canonical (must match the canonical SEC1 encoding).
     pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey, ParseError> {
         EcdsaSecp256k1Impl::parse_public_key(payload)
     }
@@ -178,7 +179,15 @@ mod ecdsa_secp256k1 {
         }
 
         pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey, ParseError> {
-            PublicKey::from_sec1_bytes(payload).map_err(|err| ParseError(err.to_string()))
+            let key = PublicKey::from_sec1_bytes(payload)
+                .map_err(|err| ParseError(err.to_string()))?;
+            let canonical = key.to_sec1_bytes();
+            if canonical.as_ref() != payload {
+                return Err(ParseError(
+                    "non-canonical secp256k1 public key encoding".to_string(),
+                ));
+            }
+            Ok(key)
         }
 
         pub fn parse_private_key(payload: &[u8]) -> Result<PrivateKey, ParseError> {
@@ -197,6 +206,7 @@ impl From<elliptic_curve::Error> for Error {
 #[cfg(test)]
 mod test {
     use amcl::secp256k1::ecp;
+    use k256::elliptic_curve::sec1::ToEncodedPoint;
     use openssl::{
         bn::{BigNum, BigNumContext},
         ec::{EcGroup, EcKey, EcPoint},
@@ -228,6 +238,22 @@ mod test {
         let mut uncompressed = [0u8; PUBLIC_UNCOMPRESSED_KEY_SIZE];
         ecp::ECP::frombytes(&pk.to_sec1_bytes()[..]).tobytes(&mut uncompressed, false);
         uncompressed.to_vec()
+    }
+
+    #[test]
+    fn parse_public_key_rejects_non_canonical_encoding() {
+        let pk = public_key();
+        let canonical = pk.to_sec1_bytes();
+        let compressed = pk.to_encoded_point(true);
+        let uncompressed = pk.to_encoded_point(false);
+        let non_canonical = if canonical.as_ref() == compressed.as_bytes() {
+            uncompressed.as_bytes()
+        } else {
+            compressed.as_bytes()
+        };
+
+        let err = EcdsaSecp256k1Sha256::parse_public_key(non_canonical).unwrap_err();
+        assert!(err.0.contains("non-canonical"), "unexpected error: {err:?}");
     }
 
     #[test]
