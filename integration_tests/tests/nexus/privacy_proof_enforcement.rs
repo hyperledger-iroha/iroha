@@ -31,7 +31,7 @@ fn lane_privacy_proof_allows_compliance() -> Result<()> {
     let mut leaves = Vec::new();
     leaves.extend_from_slice(&[0xAA_u8; 32]);
     leaves.extend_from_slice(&[0xBB_u8; 32]);
-    let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&leaves, 32);
+    let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&leaves, 32).expect("valid chunk");
     let merkle_root = tree.root().expect("merkle root");
     let merkle_proof = tree.get_proof(0).expect("merkle proof");
     let first_leaf_hash: [u8; 32] = tree

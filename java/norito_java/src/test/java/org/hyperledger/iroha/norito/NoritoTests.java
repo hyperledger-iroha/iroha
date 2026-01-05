@@ -32,6 +32,8 @@ public final class NoritoTests {
     testChecksumMismatch();
     testStructAdapter();
     testMapAdapter();
+    testMapAdapterSortsKeys();
+    testPackedMapLayout();
     testStructuralSchemaHash();
     testCompression();
     testCompressionProfiles();
@@ -46,6 +48,7 @@ public final class NoritoTests {
     testEffectiveDecodeFlagsHeaderContext();
     testHeaderFlagsOverrideDecodeGuard();
     testEffectiveDecodeFlagsAdaptiveContext();
+    testVarintRejectsOverlongEncodings();
     testPublicKeyCanonicalArchive();
     testEncryptionSuiteAdapterRoundtrip();
     testTelemetryEventAdapterRoundtrip();
@@ -355,6 +358,81 @@ public final class NoritoTests {
     byte[] encoded = NoritoCodec.encode(value, "iroha.test.Map", adapter);
     Map<String, String> decoded = NoritoCodec.decode(encoded, adapter, "iroha.test.Map");
     assert decoded.equals(value) : "Map adapter roundtrip mismatch";
+  }
+
+  private static void testMapAdapterSortsKeys() {
+    TypeAdapter<Map<Long, Long>> adapter =
+        NoritoAdapters.map(NoritoAdapters.uint(8), NoritoAdapters.uint(8));
+    Map<Long, Long> value = new java.util.HashMap<>();
+    value.put(3L, 4L);
+    value.put(1L, 2L);
+    byte[] encoded = NoritoCodec.encode(value, "iroha.test.MapOrder", adapter);
+    Map<Long, Long> decoded = NoritoCodec.decode(encoded, adapter, "iroha.test.MapOrder");
+    List<Long> keys = new ArrayList<>(decoded.keySet());
+    assert keys.equals(List.of(1L, 3L)) : "Map keys must encode in sorted order";
+  }
+
+  private static void testPackedMapLayout() {
+    TypeAdapter<Map<Long, Long>> adapter =
+        NoritoAdapters.map(NoritoAdapters.uint(8), NoritoAdapters.uint(8));
+    Map<Long, Long> value = new java.util.HashMap<>();
+    value.put(3L, 4L);
+    value.put(1L, 2L);
+    int flags =
+        NoritoHeader.PACKED_SEQ
+            | NoritoHeader.VARINT_OFFSETS
+            | NoritoHeader.COMPACT_SEQ_LEN;
+    String schema = "iroha.test.PackedMap";
+    byte[] encoded = NoritoCodec.encode(value, schema, adapter, flags);
+    NoritoHeader.DecodeResult result =
+        NoritoHeader.decode(encoded, SchemaHash.hash16(schema));
+    byte[] expected =
+        new byte[] {
+            (byte) 0x02,
+            (byte) 0x01,
+            (byte) 0x01,
+            (byte) 0x01,
+            (byte) 0x01,
+            (byte) 0x01,
+            (byte) 0x03,
+            (byte) 0x02,
+            (byte) 0x04
+        };
+    assert Arrays.equals(result.payload(), expected) : "Packed map payload mismatch";
+
+    Map<Long, Long> decoded = NoritoCodec.decode(encoded, adapter, schema);
+    assert decoded.equals(Map.of(1L, 2L, 3L, 4L)) : "Packed map roundtrip mismatch";
+    List<Long> keys = new ArrayList<>(decoded.keySet());
+    assert keys.equals(List.of(1L, 3L)) : "Packed map keys must be sorted";
+  }
+
+  private static void testVarintRejectsOverlongEncodings() {
+    assertVarintRejects(new byte[] {(byte) 0x80, (byte) 0x00});
+    assertVarintRejects(new byte[] {(byte) 0x81, (byte) 0x00});
+    assertVarintRejects(new byte[] {(byte) 0x80, (byte) 0x80, (byte) 0x00});
+    assertVarintRejects(
+        new byte[] {
+            (byte) 0x80,
+            (byte) 0x80,
+            (byte) 0x80,
+            (byte) 0x80,
+            (byte) 0x80,
+            (byte) 0x80,
+            (byte) 0x80,
+            (byte) 0x80,
+            (byte) 0x80,
+            (byte) 0x02
+        });
+  }
+
+  private static void assertVarintRejects(final byte[] input) {
+    boolean failed = false;
+    try {
+      Varint.decode(input, 0);
+    } catch (final IllegalArgumentException ex) {
+      failed = true;
+    }
+    assert failed : "Expected varint decode to reject non-canonical encoding";
   }
 
   private static List<Long> coerceLongList(Object value) {

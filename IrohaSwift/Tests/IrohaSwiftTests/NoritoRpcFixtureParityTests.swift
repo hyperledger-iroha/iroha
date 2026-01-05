@@ -2,7 +2,7 @@ import XCTest
 @testable import IrohaSwift
 
 final class NoritoRpcFixtureParityTests: XCTestCase {
-    private static let signedTransactionType = "iroha_data_model::transaction::SignedTransaction"
+    private static let signedTransactionType = "iroha_data_model::transaction::signed::SignedTransaction"
     private static let fixtureNames = [
         "mint_asset", // numeric + asset
         "register_asset_definition", // asset definition governance

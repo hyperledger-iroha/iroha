@@ -20,7 +20,8 @@ fn construct_proof_from_ivm_path_and_verify() {
     let data: Vec<u8> = (0..77u8).collect();
     let chunk = 32;
     let ivm_tree = ivm::ByteMerkleTree::from_bytes(&data, chunk);
-    let crypto_tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, chunk);
+    let crypto_tree =
+        MerkleTree::<[u8; 32]>::from_byte_chunks(&data, chunk).expect("valid chunk");
     let root = crypto_tree.root().unwrap();
 
     for idx in 0..data.len().div_ceil(chunk) {

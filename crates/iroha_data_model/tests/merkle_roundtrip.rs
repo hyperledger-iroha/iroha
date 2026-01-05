@@ -16,12 +16,13 @@ fn merkle_tree_roundtrip_via_norito() {
             .wrapping_mul(17)
             .wrapping_add(3);
     }
-    let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
+    let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32).expect("valid chunk");
 
     // Stable semantics: encode the underlying data, rebuild on decode, and compare
     let bytes = norito::to_bytes(&data).expect("encode");
     let decoded_data: Vec<u8> = norito::decode_from_bytes(&bytes).expect("decode");
-    let rebuilt = MerkleTree::<[u8; 32]>::from_byte_chunks(&decoded_data, 32);
+    let rebuilt =
+        MerkleTree::<[u8; 32]>::from_byte_chunks(&decoded_data, 32).expect("valid chunk");
 
     assert_eq!(tree, rebuilt);
     assert_eq!(tree.root(), rebuilt.root());
@@ -37,7 +38,7 @@ fn merkle_proof_roundtrip_via_norito() {
             .wrapping_mul(31)
             .wrapping_add(7);
     }
-    let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
+    let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32).expect("valid chunk");
     let idx = 3u32;
     let proof: MerkleProof<[u8; 32]> = tree.get_proof(idx).expect("proof exists");
 
@@ -47,7 +48,8 @@ fn merkle_proof_roundtrip_via_norito() {
     let bytes = norito::to_bytes(&payload).expect("encode");
     let (decoded_data, decoded_idx): (Vec<u8>, u32) =
         norito::decode_from_bytes(&bytes).expect("decode");
-    let rebuilt_tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&decoded_data, 32);
+    let rebuilt_tree =
+        MerkleTree::<[u8; 32]>::from_byte_chunks(&decoded_data, 32).expect("valid chunk");
     let rebuilt_proof: MerkleProof<[u8; 32]> =
         rebuilt_tree.get_proof(decoded_idx).expect("proof exists");
 

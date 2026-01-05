@@ -176,7 +176,8 @@ impl ByteMerkleTree {
         assert!(chunk > 0 && chunk <= 32);
         let zero_hash = Self::compute_zero_hash(chunk);
         // Build via canonical helper to keep hashing/padding semantics exactly the same.
-        let canonical = MerkleTree::<[u8; 32]>::from_byte_chunks(data, chunk);
+        let canonical =
+            MerkleTree::<[u8; 32]>::from_byte_chunks(data, chunk).expect("valid chunk");
         // Extract leaves as raw bytes (HashOf::as_ref bytes) for update paths.
         let leaves: Vec<[u8; 32]> = canonical
             .leaves()
@@ -199,7 +200,8 @@ impl ByteMerkleTree {
         assert!(chunk > 0 && chunk <= 32);
         let zero_hash = Self::compute_zero_hash(chunk);
         // Prefer canonical parallel helper when available; otherwise fall back to sequential.
-        let canonical = MerkleTree::<[u8; 32]>::from_chunked_bytes_parallel(data, chunk);
+        let canonical =
+            MerkleTree::<[u8; 32]>::from_chunked_bytes_parallel(data, chunk).expect("valid chunk");
         let leaves: Vec<[u8; 32]> = canonical
             .leaves()
             .map(|h| {
@@ -521,7 +523,8 @@ impl ByteMerkleTree {
 
         // Prefer CPU SHA2 on AArch64 for medium sizes
         if prefer_cpu_sha2(leaves_count) {
-            let canonical = MerkleTree::<[u8; 32]>::from_byte_chunks(data, chunk);
+            let canonical =
+                MerkleTree::<[u8; 32]>::from_byte_chunks(data, chunk).expect("valid chunk");
             let metrics = iroha_telemetry::metrics::global_or_default();
             metrics.merkle_root_cpu_total.inc();
             return *canonical.root().expect("non-empty").as_ref();
@@ -585,7 +588,8 @@ impl ByteMerkleTree {
         }
 
         // CPU fallback
-        let canonical = MerkleTree::<[u8; 32]>::from_byte_chunks(data, chunk);
+        let canonical =
+            MerkleTree::<[u8; 32]>::from_byte_chunks(data, chunk).expect("valid chunk");
         let metrics = iroha_telemetry::metrics::global_or_default();
         metrics.merkle_root_cpu_total.inc();
         *canonical.root().expect("non-empty").as_ref()
@@ -660,7 +664,8 @@ mod tests {
         ];
         for &(data, chunk) in samples {
             let accel = ByteMerkleTree::root_from_bytes_accel(data, chunk);
-            let canonical = iroha_crypto::MerkleTree::<[u8; 32]>::from_byte_chunks(data, chunk);
+            let canonical = iroha_crypto::MerkleTree::<[u8; 32]>::from_byte_chunks(data, chunk)
+                .expect("valid chunk");
             let expected = *canonical.root().expect("non-empty").as_ref();
             assert_eq!(accel, expected);
         }

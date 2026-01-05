@@ -240,7 +240,26 @@ extension SigningKey {
         guard let rawPrivateKeyProvider else {
             return nil
         }
-        return try? rawPrivateKeyProvider()
+        guard let raw = try? rawPrivateKeyProvider() else {
+            return nil
+        }
+        if algorithm.requiresDistId {
+            guard let distid = metadata.distid else {
+                return nil
+            }
+            let distidBytes = Data(distid.utf8)
+            guard distidBytes.count <= Int(UInt16.max),
+                  raw.count == Sm2Keypair.privateKeyLength else {
+                return nil
+            }
+            var length = UInt16(distidBytes.count).bigEndian
+            var encoded = Data()
+            withUnsafeBytes(of: &length) { encoded.append(contentsOf: $0) }
+            encoded.append(distidBytes)
+            encoded.append(raw)
+            return encoded
+        }
+        return raw
     }
 
     private static func nativeSigningKey(algorithm: SigningAlgorithm,
