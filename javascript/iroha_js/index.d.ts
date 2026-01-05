@@ -2361,7 +2361,6 @@ export interface ConnectSessionResponse {
 
 export interface ConnectSidResult {
   sidBytes: Buffer;
-  sidHex: string;
   sidBase64Url: string;
   nonce: Buffer;
 }
@@ -2385,7 +2384,6 @@ export interface ConnectSessionPreview {
   chainId: string;
   node: string | null;
   sidBytes: Buffer;
-  sidHex: string;
   sidBase64Url: string;
   nonce: Buffer;
   appKeyPair: ConnectKeyPair;

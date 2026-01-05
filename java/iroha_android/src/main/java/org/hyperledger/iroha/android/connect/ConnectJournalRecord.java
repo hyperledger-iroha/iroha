@@ -5,6 +5,7 @@ import java.nio.ByteOrder;
 import java.util.Arrays;
 import java.util.Objects;
 import org.hyperledger.iroha.android.crypto.Blake2b;
+import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
@@ -117,9 +118,12 @@ public final class ConnectJournalRecord {
     if (payloadLength > Integer.MAX_VALUE) {
       throw new ConnectJournalException("payload too large for journal entry");
     }
-    header.getLong(); // checksum (validated by NoritoCodec.decode).
+    final long checksum = header.getLong();
     header.get(); // flags
-    final int recordLength = NoritoHeader.HEADER_LENGTH + (int) payloadLength;
+    final int intPayloadLength = (int) payloadLength;
+    final int paddingLength =
+        detectPaddingLength(data, offset, intPayloadLength, checksum);
+    final int recordLength = NoritoHeader.HEADER_LENGTH + paddingLength + intPayloadLength;
     if (recordLength < 0 || recordLength > remaining) {
       throw new ConnectJournalException("record length exceeds file bounds");
     }
@@ -142,6 +146,45 @@ public final class ConnectJournalRecord {
       throw new ConnectJournalException("payload hash must contain 32 bytes");
     }
     return hash.clone();
+  }
+
+  private static int detectPaddingLength(
+      final byte[] data,
+      final int offset,
+      final int payloadLength,
+      final long checksum)
+      throws ConnectJournalException {
+    if (payloadLength < 0) {
+      throw new ConnectJournalException("payload too large for journal entry");
+    }
+    final int headerEnd = offset + NoritoHeader.HEADER_LENGTH;
+    final int maxAvailable = data.length - headerEnd - payloadLength;
+    if (maxAvailable < 0) {
+      throw new ConnectJournalException("record length exceeds file bounds");
+    }
+    final int maxPadding = Math.min(NoritoHeader.MAX_HEADER_PADDING, maxAvailable);
+    for (int padding = 0; padding <= maxPadding; padding++) {
+      boolean paddingOk = true;
+      for (int i = 0; i < padding; i++) {
+        if (data[headerEnd + i] != 0) {
+          paddingOk = false;
+          break;
+        }
+      }
+      if (!paddingOk) {
+        continue;
+      }
+      int payloadStart = headerEnd + padding;
+      int payloadEnd = payloadStart + payloadLength;
+      if (payloadEnd > data.length) {
+        break;
+      }
+      byte[] payload = Arrays.copyOfRange(data, payloadStart, payloadEnd);
+      if (CRC64.compute(payload) == checksum) {
+        return padding;
+      }
+    }
+    throw new ConnectJournalException("failed to locate payload bytes for journal entry");
   }
 
   public static final class DecodeResult {

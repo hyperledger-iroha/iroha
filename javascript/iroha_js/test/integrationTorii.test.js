@@ -3882,7 +3882,7 @@ test(
         nonce: previewEnv.nonce ?? null,
         sessionOptions,
       });
-      createdSid = result.preview.sidHex;
+      createdSid = result.preview.sidBase64Url;
       assert.ok(
         typeof result.preview.walletUri === "string" &&
           result.preview.walletUri.startsWith("iroha://connect"),
@@ -3892,7 +3892,7 @@ test(
       assert.ok(result.tokens, "bootstrap helper should return session tokens");
       assert.equal(
         result.session.sid,
-        result.preview.sidHex,
+        result.preview.sidBase64Url,
         "session sid must match the preview sid",
       );
       assert.equal(
@@ -3915,7 +3915,9 @@ test(
           result.session.app_uri.includes("connect/app"),
         "connect session app URI must be populated",
       );
-      t.diagnostic(`bootstrapConnectPreviewSession registered sid=${result.preview.sidHex}`);
+      t.diagnostic(
+        `bootstrapConnectPreviewSession registered sid=${result.preview.sidBase64Url}`,
+      );
     } finally {
       if (createdSid) {
         try {

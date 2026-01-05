@@ -1,6 +1,5 @@
 {
-  "sid_hex": "636f6e6e6563742d666978747572652d73696421",
-  "sid_base64": "Y29ubmVjdC1maXh0dXJlLXNpZCE",
+  "sid_base64url": "Y29ubmVjdC1maXh0dXJlLXNpZCE",
   "web_socket_url": "wss://mock.torii.example/v1/connect/ws/preview/Y29ubmVjdC1maXh0dXJlLXNpZCE",
   "torii_base_url": "https://mock.torii.example",
   "connect_policy_hash": "mock-policy-hash-2026-05",

@@ -3,6 +3,7 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
+use crate::{SharedAppState, app_auth::verify_canonical_request, limits};
 use axum::{
     extract::ConnectInfo,
     http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
@@ -21,7 +22,6 @@ use iroha_data_model::{
     da::types::BlobDigest,
 };
 use iroha_logger::{error, info};
-use crate::{SharedAppState, app_auth::verify_canonical_request, limits};
 
 #[derive(Debug)]
 pub enum ContentError {
@@ -323,10 +323,8 @@ fn enforce_auth(
         ContentAuthMode::Public => Ok(()),
         ContentAuthMode::RoleGate(role) => {
             let account = signed_account(state, headers, method, uri)?;
-            let has_role = state
-                .world()
-                .account_roles_iter(&account)
-                .any(|r| r == role);
+            let view = state.view();
+            let has_role = view.world().account_roles_iter(&account).any(|r| r == role);
             if has_role {
                 Ok(())
             } else {
@@ -335,7 +333,8 @@ fn enforce_auth(
         }
         ContentAuthMode::Sponsor(expected) => {
             let account = signed_account(state, headers, method, uri)?;
-            let account_entry = state
+            let view = state.view();
+            let account_entry = view
                 .world()
                 .account(&account)
                 .map_err(|_| ContentError::Forbidden("account not found".to_string()))?;
@@ -637,9 +636,9 @@ mod tests {
 
     use super::*;
     use base64::Engine;
+    use iroha_config::parameters::actual::ContentPow;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
     use iroha_crypto::{KeyPair, Signature};
-    use iroha_config::parameters::actual::ContentPow;
     use iroha_data_model::{
         account::Account,
         content::{ContentCachePolicy, ContentDaReceipt, ContentFileEntry},
@@ -650,6 +649,7 @@ mod tests {
         domain::Domain,
         nexus::{DataSpaceId, LaneId},
         role::RoleId,
+        Registrable,
     };
 
     fn sample_manifest() -> ContentBundleManifest {
@@ -685,7 +685,12 @@ mod tests {
         ))
     }
 
-    fn signed_headers(account: &AccountId, key_pair: &KeyPair, method: &Method, uri: &Uri) -> HeaderMap {
+    fn signed_headers(
+        account: &AccountId,
+        key_pair: &KeyPair,
+        method: &Method,
+        uri: &Uri,
+    ) -> HeaderMap {
         let message = crate::canonical_request_message(method, uri, &[]);
         let signature = Signature::new(key_pair.private_key(), &message);
         let mut headers = HeaderMap::new();
@@ -884,13 +889,14 @@ mod tests {
     #[test]
     fn role_gate_requires_signed_headers() {
         let key_pair = KeyPair::random();
-        let account_id =
-            AccountId::new("wonderland".parse().expect("domain"), key_pair.public_key().clone());
+        let account_id = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            key_pair.public_key().clone(),
+        );
         let state = minimal_state_with_account(&account_id, None);
         let mut manifest = sample_manifest();
-        manifest.auth = ContentAuthMode::RoleGate(
-            RoleId::new("auditor".parse().expect("role name")),
-        );
+        manifest.auth =
+            ContentAuthMode::RoleGate(RoleId::new("auditor".parse().expect("role name")));
         let headers = HeaderMap::new();
         let method = Method::GET;
         let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
@@ -903,27 +909,30 @@ mod tests {
     #[test]
     fn role_gate_rejects_missing_role() {
         let key_pair = KeyPair::random();
-        let account_id =
-            AccountId::new("wonderland".parse().expect("domain"), key_pair.public_key().clone());
+        let account_id = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            key_pair.public_key().clone(),
+        );
         let state = minimal_state_with_account(&account_id, None);
         let mut manifest = sample_manifest();
-        manifest.auth = ContentAuthMode::RoleGate(
-            RoleId::new("auditor".parse().expect("role name")),
-        );
+        manifest.auth =
+            ContentAuthMode::RoleGate(RoleId::new("auditor".parse().expect("role name")));
         let method = Method::GET;
         let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
         let headers = signed_headers(&account_id, &key_pair, &method, &uri);
 
-        let err = enforce_auth(&manifest, &state, &headers, &method, &uri)
-            .expect_err("missing role");
+        let err =
+            enforce_auth(&manifest, &state, &headers, &method, &uri).expect_err("missing role");
         assert!(matches!(err, ContentError::Forbidden(_)));
     }
 
     #[test]
     fn sponsor_accepts_matching_uaid() {
         let key_pair = KeyPair::random();
-        let account_id =
-            AccountId::new("wonderland".parse().expect("domain"), key_pair.public_key().clone());
+        let account_id = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            key_pair.public_key().clone(),
+        );
         let uaid = iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(b"uaid"));
         let state = minimal_state_with_account(&account_id, Some(uaid));
         let mut manifest = sample_manifest();
@@ -938,11 +947,15 @@ mod tests {
     #[test]
     fn sponsor_rejects_mismatched_uaid() {
         let key_pair = KeyPair::random();
-        let account_id =
-            AccountId::new("wonderland".parse().expect("domain"), key_pair.public_key().clone());
+        let account_id = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            key_pair.public_key().clone(),
+        );
         let state = minimal_state_with_account(
             &account_id,
-            Some(iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(b"uaid"))),
+            Some(iroha_data_model::nexus::UniversalAccountId::from_hash(
+                Hash::new(b"uaid"),
+            )),
         );
         let mut manifest = sample_manifest();
         manifest.auth = ContentAuthMode::Sponsor(
@@ -952,8 +965,8 @@ mod tests {
         let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
         let headers = signed_headers(&account_id, &key_pair, &method, &uri);
 
-        let err = enforce_auth(&manifest, &state, &headers, &method, &uri)
-            .expect_err("uaid mismatch");
+        let err =
+            enforce_auth(&manifest, &state, &headers, &method, &uri).expect_err("uaid mismatch");
         assert!(matches!(err, ContentError::Forbidden(_)));
     }
 

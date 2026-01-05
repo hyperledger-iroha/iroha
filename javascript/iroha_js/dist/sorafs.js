@@ -1,6 +1,7 @@
 import { getNativeBinding } from "./native.js";
 
 const NORITO_HEADER_LENGTH = 40;
+const MAX_HEADER_PADDING = 64;
 const MAX_SAFE_NORITO_LENGTH = BigInt(Number.MAX_SAFE_INTEGER);
 const utf8Decoder =
   typeof TextDecoder === "function" ? new TextDecoder("utf-8", { fatal: true }) : null;
@@ -48,12 +49,8 @@ function formatAssignment(raw) {
     };
   }
   const providerIdHex =
-    typeof raw.providerIdHex === "string"
-      ? raw.providerIdHex
-      : typeof raw.provider_id_hex === "string"
-      ? raw.provider_id_hex
-      : "";
-  const sliceValue = raw.sliceGib ?? raw.sliceGiB ?? raw.slice_gib;
+    typeof raw.provider_id_hex === "string" ? raw.provider_id_hex : "";
+  const sliceValue = raw.slice_gib;
   return {
     providerIdHex,
     sliceGiB: typeof sliceValue === "number" ? sliceValue : Number(sliceValue ?? 0),
@@ -84,10 +81,9 @@ function formatSla(raw) {
       minPorSuccessPercentMilli: 0,
     };
   }
-  const ingest = raw.ingestDeadlineSecs ?? raw.ingest_deadline_secs;
-  const availability =
-    raw.minAvailabilityPercentMilli ?? raw.min_availability_percent_milli;
-  const por = raw.minPorSuccessPercentMilli ?? raw.min_por_success_percent_milli;
+  const ingest = raw.ingest_deadline_secs;
+  const availability = raw.min_availability_percent_milli;
+  const por = raw.min_por_success_percent_milli;
   return {
     ingestDeadlineSecs: Number(ingest ?? 0),
     minAvailabilityPercentMilli: Number(availability ?? 0),
@@ -161,46 +157,30 @@ export function decodeReplicationOrder(bytes) {
   const metadata = Array.isArray(payload.metadata)
     ? payload.metadata.map((entry) => formatMetadata(entry))
     : [];
-  const schemaVersion =
-    typeof payload.schemaVersion === "number"
-      ? payload.schemaVersion
-      : Number(payload.schema_version ?? 0);
+  const schemaVersion = Number(payload.schema_version ?? 0);
   const orderIdHex =
-    typeof payload.orderIdHex === "string"
-      ? payload.orderIdHex
-      : typeof payload.order_id_hex === "string"
-      ? payload.order_id_hex
-      : "";
+    typeof payload.order_id_hex === "string" ? payload.order_id_hex : "";
   const manifestCidUtf8 =
-    typeof payload.manifestCidUtf8 === "string"
-      ? payload.manifestCidUtf8
-      : payload.manifest_cid_utf8 === null
+    payload.manifest_cid_utf8 === null
       ? null
       : typeof payload.manifest_cid_utf8 === "string"
       ? payload.manifest_cid_utf8
       : null;
   const manifestCidBase64 =
-    typeof payload.manifestCidBase64 === "string"
-      ? payload.manifestCidBase64
-      : typeof payload.manifest_cid_base64 === "string"
+    typeof payload.manifest_cid_base64 === "string"
       ? payload.manifest_cid_base64
       : "";
   const manifestDigestHex =
-    typeof payload.manifestDigestHex === "string"
-      ? payload.manifestDigestHex
-      : typeof payload.manifest_digest_hex === "string"
+    typeof payload.manifest_digest_hex === "string"
       ? payload.manifest_digest_hex
       : "";
   const chunkingProfile =
-    typeof payload.chunkingProfile === "string"
-      ? payload.chunkingProfile
-      : typeof payload.chunking_profile === "string"
+    typeof payload.chunking_profile === "string"
       ? payload.chunking_profile
       : "";
-  const targetReplicas =
-    payload.targetReplicas ?? payload.target_replicas ?? 0;
-  const issuedAtUnix = payload.issuedAtUnix ?? payload.issued_at_unix ?? 0;
-  const deadlineAtUnix = payload.deadlineAtUnix ?? payload.deadline_at_unix ?? 0;
+  const targetReplicas = payload.target_replicas ?? 0;
+  const issuedAtUnix = payload.issued_at_unix ?? 0;
+  const deadlineAtUnix = payload.deadline_at_unix ?? 0;
   const sla = formatSla(payload.sla);
   return {
     schemaVersion,
@@ -236,11 +216,22 @@ function decodeReplicationOrderFallback(buffer) {
       throw new Error("replication order payload is too large to decode in pure JS");
     }
     const payloadLength = Number(declaredLength);
-    const available = buffer.length - NORITO_HEADER_LENGTH;
-    if (available < payloadLength) {
+    const paddingLen = buffer.length - NORITO_HEADER_LENGTH - payloadLength;
+    if (paddingLen < 0) {
       throw new Error("replication order payload is truncated");
     }
-    const payload = buffer.slice(NORITO_HEADER_LENGTH, NORITO_HEADER_LENGTH + payloadLength);
+    if (paddingLen > MAX_HEADER_PADDING) {
+      throw new Error("replication order payload contains trailing bytes");
+    }
+    if (paddingLen > 0) {
+      for (let i = 0; i < paddingLen; i += 1) {
+        if (buffer[NORITO_HEADER_LENGTH + i] !== 0) {
+          throw new Error("replication order payload contains non-zero padding");
+        }
+      }
+    }
+    const payloadStart = NORITO_HEADER_LENGTH + paddingLen;
+    const payload = buffer.slice(payloadStart, payloadStart + payloadLength);
     const reader = new NoritoChunkReader(payload, "replication order");
     const schemaVersion = readU8Chunk(reader.readChunk("schema_version"), "schema_version");
     const orderIdHex = toHex(reader.readChunk("order_id"), 32, "order_id_hex");
@@ -960,11 +951,11 @@ function transformTaikaiCacheSummary(raw) {
       cold: normaliseEvictionCounts(evictions.cold),
     },
     promotions: {
-      warmToHot: toSafeNumber(promotions.warm_to_hot ?? promotions.warmToHot ?? 0),
-      coldToWarm: toSafeNumber(promotions.cold_to_warm ?? promotions.coldToWarm ?? 0),
-      coldToHot: toSafeNumber(promotions.cold_to_hot ?? promotions.coldToHot ?? 0),
+      warmToHot: toSafeNumber(promotions.warm_to_hot ?? 0),
+      coldToWarm: toSafeNumber(promotions.cold_to_warm ?? 0),
+      coldToHot: toSafeNumber(promotions.cold_to_hot ?? 0),
     },
-    qosDenials: normaliseQosCounts(raw.qos_denials ?? raw.qosDenials),
+    qosDenials: normaliseQosCounts(raw.qos_denials),
   };
 }
 
@@ -973,15 +964,15 @@ function transformTaikaiCacheQueue(raw) {
     return null;
   }
   return {
-    pendingSegments: toSafeNumber(raw.pending_segments ?? raw.pendingSegments ?? 0),
-    pendingBytes: toSafeNumber(raw.pending_bytes ?? raw.pendingBytes ?? 0),
-    pendingBatches: toSafeNumber(raw.pending_batches ?? raw.pendingBatches ?? 0),
-    inFlightBatches: toSafeNumber(raw.in_flight_batches ?? raw.inFlightBatches ?? 0),
-    hedgedBatches: toSafeNumber(raw.hedged_batches ?? raw.hedgedBatches ?? 0),
-    shaperDenials: normaliseQosCounts(raw.shaper_denials ?? raw.shaperDenials),
-    droppedSegments: toSafeNumber(raw.dropped_segments ?? raw.droppedSegments ?? 0),
+    pendingSegments: toSafeNumber(raw.pending_segments ?? 0),
+    pendingBytes: toSafeNumber(raw.pending_bytes ?? 0),
+    pendingBatches: toSafeNumber(raw.pending_batches ?? 0),
+    inFlightBatches: toSafeNumber(raw.in_flight_batches ?? 0),
+    hedgedBatches: toSafeNumber(raw.hedged_batches ?? 0),
+    shaperDenials: normaliseQosCounts(raw.shaper_denials),
+    droppedSegments: toSafeNumber(raw.dropped_segments ?? 0),
     failovers: toSafeNumber(raw.failovers ?? 0),
-    openCircuits: toSafeNumber(raw.open_circuits ?? raw.openCircuits ?? 0),
+    openCircuits: toSafeNumber(raw.open_circuits ?? 0),
   };
 }
 
@@ -1039,11 +1030,10 @@ function transformGatewayScoreboard(raw) {
   }
   return raw.map((entry) => ({
     provider_id:
-      typeof entry.provider_id === "string" ? entry.provider_id : entry.providerId,
+      typeof entry.provider_id === "string" ? entry.provider_id : "",
     alias: entry.alias ?? null,
-    raw_score: entry.raw_score ?? entry.rawScore ?? 0,
-    normalized_weight:
-      entry.normalized_weight ?? entry.normalizedWeight ?? entry.weight ?? 0,
+    raw_score: entry.raw_score ?? 0,
+    normalized_weight: entry.normalized_weight ?? 0,
     eligibility: entry.eligibility ?? null,
   }));
 }

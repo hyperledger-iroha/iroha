@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import {
   createPrivateKey,
   createPublicKey,
+  createHash,
   hkdfSync,
   randomBytes,
   sign as signRaw,
@@ -87,7 +88,7 @@ function resolveNativeBinding() {
 }
 
 /**
- * Generate an Ed25519 key pair. Optionally provide a 32-byte seed for deterministic output.
+ * Generate an Ed25519 key pair. Seed material is hashed to 32 bytes when needed.
  * @param {{seed?: ArrayBufferView | ArrayBuffer | Buffer}} [options]
  * @returns {{algorithm: "ed25519", publicKey: Buffer, privateKey: Buffer}}
  */
@@ -391,10 +392,10 @@ function exportPublicKey(privateKeyObject) {
 
 function normalizeSeed(seed) {
   const buffer = toBuffer(seed, "seed");
-  if (buffer.length !== ED25519_SEED_LENGTH) {
-    throw new Error("ed25519 seed must be 32 bytes");
+  if (buffer.length === ED25519_SEED_LENGTH) {
+    return Buffer.from(buffer);
   }
-  return Buffer.from(buffer);
+  return createHash("sha256").update(buffer).digest();
 }
 
 function normalizePublicKey(publicKey) {
@@ -411,7 +412,13 @@ function extractSeed(privateKey) {
     return Buffer.from(buffer);
   }
   if (buffer.length === ED25519_PRIVATE_KEY_LENGTH) {
-    return Buffer.from(buffer.subarray(0, ED25519_SEED_LENGTH));
+    const seed = Buffer.from(buffer.subarray(0, ED25519_SEED_LENGTH));
+    const publicKey = buffer.subarray(ED25519_SEED_LENGTH);
+    const derivedPublic = exportPublicKey(privateKeyFromSeed(seed));
+    if (!derivedPublic.equals(publicKey)) {
+      throw new Error("ed25519 private key payload has mismatched public key");
+    }
+    return seed;
   }
   throw new Error("ed25519 private key must be 32-byte seed or 64-byte seed+public");
 }

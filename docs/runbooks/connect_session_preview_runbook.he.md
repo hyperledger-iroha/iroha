@@ -48,10 +48,10 @@ translation_last_reviewed: 2026-01-01
      walletBundle: "dev.sora.example.wallet",
      register: true,
    });
-   console.log("sid", preview.sidHex, "ws url", preview.webSocketUrl);
+   console.log("sid", preview.sidBase64Url, "ws url", preview.webSocketUrl);
    ```
    - הגדירו `register: false` לתרחישי QR/deep-link ב-dry-run.
-   - שמרו את `sidHex` שהוחזר, כתובות ה-deeplink, ואת blob ה-`tokens` בתיקיית הראיות; סקירת ה-governance מצפה לארטיפקטים אלו.
+   - שמרו את `sidBase64Url` שהוחזר, כתובות ה-deeplink, ואת blob ה-`tokens` בתיקיית הראיות; סקירת ה-governance מצפה לארטיפקטים אלו.
 3. **הפצת סודות.** שתפו את URI ה-deeplink עם מפעיל הארנק (דוגמת dApp ב-Swift, ארנק Android, או harness QA). לעולם אל תדביקו טוקנים גולמיים בצ'אט; השתמשו בכספת המוצפנת המתועדת בחבילת ה-enablement.
 
 ## 3. הרצת הסשן
@@ -60,8 +60,9 @@ translation_last_reviewed: 2026-01-01
    ```swift
    let connectURL = URL(string: preview.webSocketUrl)!
    let client = ConnectClient(url: connectURL)
-   let session = ConnectSession(sid: Data(hex: preview.sidHex), client: client)
-   let recorder = ConnectReplayRecorder(sessionID: Data(hex: preview.sidHex))
+   let sid: Data = /* decode preview.sidBase64Url into raw bytes using your harness helper */
+   let session = ConnectSession(sessionID: sid, client: client)
+   let recorder = ConnectReplayRecorder(sessionID: sid)
    session.addObserver(ConnectEventObserver(queue: .main) { event in
        logger.info("connect event", metadata: ["kind": "\(event.kind)"])
    })
@@ -90,7 +91,7 @@ translation_last_reviewed: 2026-01-01
 
 1. **מחקו סשנים ב-staging.** מחקו תמיד סשני preview כדי שהתרעות עומק התור יישארו משמעותיות:
    ```js
-   await client.deleteConnectSession(preview.sidHex);
+   await client.deleteConnectSession(preview.sidBase64Url);
    ```
    בריצות Swift בלבד, קראו לאותו endpoint דרך helper של Rust/CLI.
 2. **נקו יומנים.** מחקו כל יומן תור שנשמר (`ApplicationSupport/ConnectQueue/<sid>.to`, מאגרי IndexedDB וכו') כדי שהריצה הבאה תתחיל נקיה. תעדו את hash הקובץ לפני מחיקה אם צריך לאבחן בעיית replay.

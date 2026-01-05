@@ -225,7 +225,10 @@ impl KeyPair {
 
 #[ffi_impl_opaque]
 impl KeyPair {
-    /// Derive a key pair from a seed using pRNG
+    /// Derive a key pair from seed material.
+    ///
+    /// Ed25519 uses the seed directly when 32 bytes are provided; other lengths are
+    /// hashed with SHA-256 to obtain a canonical 32-byte seed.
     pub fn from_seed(seed: Vec<u8>, algorithm: Algorithm) -> Self {
         match algorithm {
             Algorithm::Ed25519 => {
@@ -2444,6 +2447,25 @@ mod tests {
 
         drop(cloned);
         assert_eq!(key.strong_count(), 1, "dropping clone decrements count");
+    }
+
+    #[test]
+    #[cfg(feature = "ml-dsa")]
+    fn ml_dsa_public_key_parse_rejects_invalid_length() {
+        use pqcrypto_dilithium::dilithium3 as dilithium;
+        use pqcrypto_traits::sign::PublicKey as _;
+
+        let (pk, _) = dilithium::keypair();
+        let parsed = PublicKey::from_bytes(Algorithm::MlDsa, pk.as_bytes());
+        assert!(parsed.is_ok(), "expected valid ML-DSA public key bytes");
+
+        let mut bad = pk.as_bytes().to_vec();
+        bad.push(0x00);
+        let err = PublicKey::from_bytes(Algorithm::MlDsa, &bad).unwrap_err();
+        assert!(
+            err.0.contains("invalid ML-DSA public key length"),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]

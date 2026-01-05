@@ -29,6 +29,7 @@ public final class NoritoHeader {
   public static final int COMPRESSION_ZSTD = 1;
 
   public static final int HEADER_LENGTH = 4 + 1 + 1 + 16 + 1 + 8 + 8 + 1;
+  public static final int MAX_HEADER_PADDING = 64;
 
   private final byte[] schemaHash;
   private final int payloadLength;
@@ -146,10 +147,23 @@ public final class NoritoHeader {
     int payloadOffset = HEADER_LENGTH;
     byte[] payload;
     if (compression == COMPRESSION_NONE) {
-      int payloadEnd = payloadOffset + intPayloadLength;
-      if (payloadEnd > data.length) {
+      int minEnd = payloadOffset + intPayloadLength;
+      if (minEnd > data.length) {
         throw new IllegalArgumentException("Length mismatch between header and payload");
       }
+      int paddingLength = data.length - minEnd;
+      if (paddingLength > MAX_HEADER_PADDING) {
+        throw new IllegalArgumentException("Trailing data after Norito payload");
+      }
+      if (paddingLength > 0) {
+        for (int i = 0; i < paddingLength; i++) {
+          if (data[payloadOffset + i] != 0) {
+            throw new IllegalArgumentException("Non-zero Norito header padding");
+          }
+        }
+      }
+      payloadOffset += paddingLength;
+      int payloadEnd = payloadOffset + intPayloadLength;
       if (payloadEnd != data.length) {
         throw new IllegalArgumentException("Trailing data after Norito payload");
       }

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import {
   createPrivateKey,
   createPublicKey,
+  createHash,
   hkdfSync,
   randomBytes,
   sign as signRaw,
@@ -50,12 +51,12 @@ try {
   const parsed = JSON.parse(rawFixture);
   SM2_FIXTURE_REFERENCE = Object.freeze({
     distid: String(parsed.distid),
-    seedHex: String(parsed.seed_hex ?? parsed.seedHex).toUpperCase(),
-    messageHex: String(parsed.message_hex ?? parsed.messageHex).toUpperCase(),
-    privateKeyHex: String(parsed.private_key_hex ?? parsed.privateKeyHex).toUpperCase(),
-    publicKeySec1Hex: String(parsed.public_key_sec1_hex ?? parsed.publicKeySec1Hex).toUpperCase(),
-    publicKeyMultihash: String(parsed.public_key_multihash ?? parsed.publicKeyMultihash),
-    publicKeyPrefixed: String(parsed.public_key_prefixed ?? parsed.publicKeyPrefixed),
+    seedHex: String(parsed.seed_hex).toUpperCase(),
+    messageHex: String(parsed.message_hex).toUpperCase(),
+    privateKeyHex: String(parsed.private_key_hex).toUpperCase(),
+    publicKeySec1Hex: String(parsed.public_key_sec1_hex).toUpperCase(),
+    publicKeyMultihash: String(parsed.public_key_multihash),
+    publicKeyPrefixed: String(parsed.public_key_prefixed),
     za: String(parsed.za).toUpperCase(),
     signature: String(parsed.signature).toUpperCase(),
     r: String(parsed.r).toUpperCase(),
@@ -87,7 +88,7 @@ function resolveNativeBinding() {
 }
 
 /**
- * Generate an Ed25519 key pair. Optionally provide a 32-byte seed for deterministic output.
+ * Generate an Ed25519 key pair. Seed material is hashed to 32 bytes when needed.
  * @param {{seed?: ArrayBufferView | ArrayBuffer | Buffer}} [options]
  * @returns {{algorithm: "ed25519", publicKey: Buffer, privateKey: Buffer}}
  */
@@ -309,7 +310,7 @@ export function deriveConfidentialKeyset(spendKey) {
     deriveConfidentialKeysetFallback(seed);
 
   const keyset = {
-    skSpend: toBufferField(raw, "sk_spend", "skSpend"),
+    skSpend: toBufferField(raw, "sk_spend"),
     nk: toBufferField(raw, "nk"),
     ivk: toBufferField(raw, "ivk"),
     ovk: toBufferField(raw, "ovk"),
@@ -391,10 +392,10 @@ function exportPublicKey(privateKeyObject) {
 
 function normalizeSeed(seed) {
   const buffer = toBuffer(seed, "seed");
-  if (buffer.length !== ED25519_SEED_LENGTH) {
-    throw new Error("ed25519 seed must be 32 bytes");
+  if (buffer.length === ED25519_SEED_LENGTH) {
+    return Buffer.from(buffer);
   }
-  return Buffer.from(buffer);
+  return createHash("sha256").update(buffer).digest();
 }
 
 function normalizePublicKey(publicKey) {
@@ -411,7 +412,13 @@ function extractSeed(privateKey) {
     return Buffer.from(buffer);
   }
   if (buffer.length === ED25519_PRIVATE_KEY_LENGTH) {
-    return Buffer.from(buffer.subarray(0, ED25519_SEED_LENGTH));
+    const seed = Buffer.from(buffer.subarray(0, ED25519_SEED_LENGTH));
+    const publicKey = buffer.subarray(ED25519_SEED_LENGTH);
+    const derivedPublic = exportPublicKey(privateKeyFromSeed(seed));
+    if (!derivedPublic.equals(publicKey)) {
+      throw new Error("ed25519 private key payload has mismatched public key");
+    }
+    return seed;
   }
   throw new Error("ed25519 private key must be 32-byte seed or 64-byte seed+public");
 }
@@ -432,15 +439,12 @@ function toBuffer(value, name) {
   throw new TypeError(`${name} must be a Buffer, string, or ArrayBuffer view`);
 }
 
-function toBufferField(payload, snake, camel) {
-  const value =
-    (payload && snake && payload[snake]) ??
-    (payload && camel && payload[camel]) ??
-    null;
+function toBufferField(payload, snake) {
+  const value = payload && snake ? payload[snake] : null;
   if (value === null || value === undefined) {
-    throw new Error(`native binding returned missing \`${snake ?? camel}\``);
+    throw new Error(`native binding returned missing \`${snake}\``);
   }
-  return toBuffer(value, String(snake ?? camel));
+  return toBuffer(value, String(snake));
 }
 
 function wrapConfidentialKeyset(keys) {

@@ -1,5 +1,5 @@
 /**
- * Structured validation errors used by the JS SDK. These extend {@link Error}
+ * Structured validation errors used by the JS SDK. These extend {@link TypeError}
  * while exposing a stable code + path field for diagnostics.
  */
 export const ValidationErrorCode = Object.freeze({
@@ -16,7 +16,7 @@ export const ValidationErrorCode = Object.freeze({
   VALUE_OUT_OF_RANGE: "ERR_VALUE_OUT_OF_RANGE",
 });
 
-export class ValidationError extends Error {
+export class ValidationError extends TypeError {
   constructor(code, message, options = {}) {
     super(message);
     this.name = "ValidationError";

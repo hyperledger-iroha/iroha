@@ -17,6 +17,7 @@ public final class NoritoTests {
   public static void main(String[] args) {
     testCrc64();
     testHeaderRoundtrip();
+    testHeaderPaddingAccepted();
     testSchemaHashCanonicalPath();
     testEncodeDecodeUInt();
     testEncodeDecodeString();
@@ -129,6 +130,27 @@ public final class NoritoTests {
     NoritoHeader.DecodeResult result = NoritoHeader.decode(combined, schemaHash);
     assert result.header().checksum() == header.checksum();
     assert result.payload().length == 4;
+  }
+
+  private static void testHeaderPaddingAccepted() {
+    byte[] schemaHash = SchemaHash.hash16("iroha.test.Padding");
+    byte[] payload = new byte[] {9, 8, 7};
+    long checksum = CRC64.compute(payload);
+    NoritoHeader header =
+        new NoritoHeader(
+            schemaHash,
+            payload.length,
+            checksum,
+            NoritoCodec.DEFAULT_FLAGS,
+            NoritoHeader.COMPRESSION_NONE);
+    byte[] headerBytes = header.encode();
+    byte[] padding = new byte[16];
+    byte[] combined = new byte[headerBytes.length + padding.length + payload.length];
+    System.arraycopy(headerBytes, 0, combined, 0, headerBytes.length);
+    System.arraycopy(padding, 0, combined, headerBytes.length, padding.length);
+    System.arraycopy(payload, 0, combined, headerBytes.length + padding.length, payload.length);
+    NoritoHeader.DecodeResult result = NoritoHeader.decode(combined, schemaHash);
+    assert Arrays.equals(result.payload(), payload) : "Payload mismatch with padding";
   }
 
   private static void testEncodeDecodeUInt() {

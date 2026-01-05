@@ -150,7 +150,6 @@ use sorafs_orchestrator::{
 };
 use tokio::runtime::Runtime;
 
-const ED25519_SEED_LENGTH: usize = 32;
 const SM2_PRIVATE_KEY_LENGTH: usize = 32;
 const SM2_PUBLIC_KEY_LENGTH: usize = 65;
 const SM2_SIGNATURE_LENGTH: usize = Sm2Signature::LENGTH;
@@ -177,7 +176,7 @@ pub struct JsKeyPair {
     pub algorithm: String,
     /// Raw public key bytes.
     pub public_key: Buffer,
-    /// Raw private key bytes (seed + public concatenation).
+    /// Raw private key bytes (ed25519 seed material).
     pub private_key: Buffer,
     /// Optional distinguishing identifier for algorithms that require it (SM2).
     pub distid: Option<String>,
@@ -493,7 +492,6 @@ pub fn blake3_hash_bytes(payload: Uint8Array) -> napi::Result<Buffer> {
 pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
     let keypair = if let Some(seed) = seed {
         let bytes = seed.to_vec();
-        ensure_seed_length(&bytes)?;
         KeyPair::from_seed(bytes, Algorithm::Ed25519)
     } else {
         KeyPair::random_with_algorithm(Algorithm::Ed25519)
@@ -510,7 +508,7 @@ pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
     })
 }
 
-/// Derive an Ed25519 public key from a private key seed.
+/// Derive an Ed25519 public key from a private key seed or keypair payload.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs typed arrays require owned values at the boundary
 pub fn ed25519_public_key_from_private(private_key: Uint8Array) -> napi::Result<Buffer> {
@@ -964,16 +962,6 @@ pub fn sm2_fixture_from_seed(
         r: r_hex,
         s: s_hex,
     })
-}
-
-fn ensure_seed_length(seed: &[u8]) -> napi::Result<()> {
-    if seed.len() != ED25519_SEED_LENGTH {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "ed25519 seed must be 32 bytes",
-        ));
-    }
-    Ok(())
 }
 
 fn sm2_distid_arg(distid: Option<String>) -> String {

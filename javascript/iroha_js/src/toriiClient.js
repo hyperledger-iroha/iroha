@@ -13569,14 +13569,11 @@ const BASE64URL_BODY_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 function normalizeConnectSid(value, name) {
   const trimmed = requireNonEmptyString(value, name);
-  if (isHexSid(trimmed)) {
-    return trimmed;
-  }
   const { body, padding } = splitBase64Url(trimmed);
   if (!body || !BASE64URL_BODY_PATTERN.test(body)) {
     throw connectSidTypeError(name);
   }
-  if (padding && padding !== "=" && padding !== "==") {
+  if (padding) {
     throw connectSidTypeError(name);
   }
   let decoded;
@@ -13592,15 +13589,7 @@ function normalizeConnectSid(value, name) {
 }
 
 function connectSidTypeError(name) {
-  return new TypeError(`${name} must be a 32-byte base64url or hex string`);
-}
-
-function isHexSid(value) {
-  const hasPrefix = value.startsWith("0x") || value.startsWith("0X");
-  const hex = hasPrefix ? value.slice(2) : value;
-  return (
-    hex.length === CONNECT_SID_BYTES * 2 && /^[0-9a-fA-F]+$/.test(hex)
-  );
+  return new TypeError(`${name} must be a 32-byte base64url string (no padding)`);
 }
 
 function splitBase64Url(value) {

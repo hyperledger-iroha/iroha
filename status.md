@@ -1,6 +1,14 @@
 # Status
 
 ## Latest Updates
+- Torii/Connect/content: enforce base64url-only SIDs across Connect preview/session/WS (server + JS/Python/Swift + connect-cli + fixtures/docs), reserve WS capacity during handshake, and require canonical signed headers for role/sponsor content reads; docs/OpenAPI updated.
+- Tests: not run (not requested).
+- Build fixes: import AudioEncoderSampleCountMismatchInfo in Norito streaming, add DecodeFromSlice/Debug for archive_view DummyPayload, disambiguate Ed25519 test key types, fix missing qc2_hash in tiered snapshot test, and use StateView/Registrable in Torii content auth tests.
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450` and dead_code in `crates/norito/src/core.rs:6792`).
+- Norito/SDKs: accept alignment padding in Python/Java/Swift/JS header parsing, fix JS ConnectJournalRecord major/hash encoding, and add cross-language padding/header tests; update `norito.md` and Python design notes.
+- Tests: not run (not requested).
+- Crypto/JS: standardize Ed25519 seed derivation (SHA-256 for non-32 seeds), accept 64-byte seed+public private keys, and validate ML-DSA public-key parsing; update JS SDK parity/tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options); `cargo test --workspace` (timed out after 120s during compile; warnings about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450` and dead_code in `crates/norito/src/core.rs:6792`).
 - IVM/Kotodama: allow dynamic bounds in `.take`/`.range` when `kotodama_dynamic_bounds` is enabled; add regression tests for non-literal bounds.
 - Tests: `cargo test --workspace` (failed: missing `AudioEncoderSampleCountMismatchInfo` in `crates/norito/src/streaming.rs:4230`; warning about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450`).
 - Kura: avoid pre-shrinking the block index before batch writes by adding a targeted append path for rewrites; add regression coverage for tail rewrites.
