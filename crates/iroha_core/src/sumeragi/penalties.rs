@@ -354,7 +354,15 @@ fn roster_for_evidence(
     commit_certs: &[CommitCertificate],
     checkpoints: &[ValidatorSetCheckpoint],
 ) -> Option<Vec<PeerId>> {
-    for (height, hash) in super::evidence::evidence_block_refs(evidence) {
+    let refs = super::evidence::evidence_block_refs(evidence);
+    if refs.is_empty() {
+        let view = state.view();
+        let roster: Vec<_> = view.commit_topology().iter().cloned().collect();
+        if !roster.is_empty() {
+            return Some(roster);
+        }
+    }
+    for (height, hash) in refs {
         if let Some(snapshot) = state.commit_roster_snapshot_for_block(height, hash) {
             let roster = snapshot.validator_checkpoint.validator_set;
             if !roster.is_empty() {

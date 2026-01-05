@@ -600,6 +600,17 @@ impl Actor {
                     );
                     return Ok(());
                 }
+                let expected_epoch = self.epoch_for_height(block_height);
+                if qc.epoch != expected_epoch {
+                    warn!(
+                        incoming_hash = %block_hash,
+                        height = block_height,
+                        expected_epoch,
+                        qc_epoch = qc.epoch,
+                        "ignoring block sync QC with mismatched epoch"
+                    );
+                    return Ok(());
+                }
                 if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
                     warn!(
                         incoming_hash = %block_hash,
@@ -753,6 +764,17 @@ impl Actor {
                 height = block_height,
                 qc_height = qc.height,
                 "ignoring cached block sync QC that does not match block height"
+            );
+            return;
+        }
+        let expected_epoch = self.epoch_for_height(block_height);
+        if qc.epoch != expected_epoch {
+            warn!(
+                incoming_hash = %block_hash,
+                height = block_height,
+                expected_epoch,
+                qc_epoch = qc.epoch,
+                "ignoring cached block sync QC with mismatched epoch"
             );
             return;
         }
