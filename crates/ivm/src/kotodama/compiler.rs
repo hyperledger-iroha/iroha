@@ -157,6 +157,10 @@ fn emit_store64(code: &mut Vec<u8>, base: u8, rs: u8, offset: i64, scratch: u8) 
     push_word(code, encode_store64_rv(scratch, rs, 0));
 }
 
+fn stack_slot_offset_bytes(offset: usize) -> i64 {
+    8i64 + offset as i64
+}
+
 fn reserve_pointer_literal_stub(code: &mut Vec<u8>) -> usize {
     let start = code.len();
     for _ in 0..POINTER_STUB_LEN {
@@ -388,7 +392,7 @@ mod tests {
     use super::{
         Compiler, CompilerOptions, DEFAULT_MAX_CYCLES, WIDE_IMM_MAX, emit_addi, emit_load64,
         emit_store64, patch_pointer_literal_stub, pointer_type_for_kind,
-        reserve_pointer_literal_stub,
+        reserve_pointer_literal_stub, stack_slot_offset_bytes,
     };
     use crate::{IVM, ProgramMetadata, encoding, instruction, pointer_abi::PointerType};
 
@@ -461,6 +465,14 @@ mod tests {
             word,
             encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 7, 6, 0)
         );
+    }
+
+    #[test]
+    fn stack_slot_offsets_do_not_truncate_large_offsets() {
+        let offset = i16::MAX as usize + 2048;
+        let bytes = stack_slot_offset_bytes(offset);
+        assert_eq!(bytes, 8i64 + offset as i64);
+        assert!(bytes > i16::MAX as i64);
     }
 
     #[test]
@@ -1051,27 +1063,26 @@ impl Compiler {
                 if let Some(r) = alloc.regs.get(t) {
                     *r as u8
                 } else if let Some(off) = alloc.stack.get(t) {
-                    let total = 8i32 + (*off as i32);
-                    emit_load64(code, scratch, sp, total as i64, Some(scratch));
+                    let total = stack_slot_offset_bytes(*off);
+                    emit_load64(code, scratch, sp, total, Some(scratch));
                     scratch
                 } else {
                     0
                 }
             };
-            let dst_reg = |t: &ir::Temp| -> (u8, bool, i16) {
+            let dst_reg = |t: &ir::Temp| -> (u8, bool, i64) {
                 if let Some(r) = alloc.regs.get(t) {
                     (*r as u8, false, 0)
                 } else if let Some(off) = alloc.stack.get(t) {
-                    (scratchd, true, (8 + *off) as i16)
+                    (scratchd, true, stack_slot_offset_bytes(*off))
                 } else {
                     (scratchd, false, 0)
                 }
             };
             let spill_back =
-                |_: &ir::Temp, from: u8, spilled: bool, imm: i16, code: &mut Vec<u8>| {
+                |_: &ir::Temp, from: u8, spilled: bool, offset: i64, code: &mut Vec<u8>| {
                     if spilled {
-                        let total = imm as i32;
-                        emit_store64(code, sp, from, total as i64, scratch2);
+                        emit_store64(code, sp, from, offset, scratch2);
                     }
                 };
 

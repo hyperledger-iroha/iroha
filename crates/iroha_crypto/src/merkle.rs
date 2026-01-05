@@ -615,17 +615,14 @@ impl<T> CompactMerkleProof<T> {
     #[allow(clippy::cast_possible_truncation)]
     pub fn from_full(full: MerkleProof<T>) -> Self {
         let depth = full.audit_path.len().min(32) as u8;
-        // Derive BFS index at leaf level for the given depth, then walk up to
-        // compute direction bits. This matches `MerkleProof::verify` parity.
-        let mut idx =
-            MerkleTree::<T>::index_in_tree_unchecked(full.leaf_index as usize, depth as usize);
-        let mut dirs: u32 = 0;
-        #[allow(clippy::cast_possible_truncation)]
-        for i in 0..(depth as usize) {
-            let bit = (idx % 2) as u32; // 0 => left child; 1 => right child
-            dirs |= bit << i;
-            idx = idx.saturating_sub(1) >> 1;
-        }
+        // Direction bits use leaf-index semantics: bit i = 0 (left), 1 (right).
+        let depth_bits = u32::from(depth);
+        let mask = if depth == 32 {
+            u32::MAX
+        } else {
+            (1u32 << depth_bits) - 1
+        };
+        let dirs = full.leaf_index & mask;
         let siblings = full.audit_path.into_iter().take(depth as usize).collect();
         CompactMerkleProof {
             depth,
@@ -661,8 +658,8 @@ impl<T> CompactMerkleProof<T> {
                 None => return false,
             };
             let (l, r) = match dirs & 1 {
-                0 => (sib.as_ref(), Some(&acc)),
-                1 => (Some(&acc), sib.as_ref()),
+                0 => (Some(&acc), sib.as_ref()),
+                1 => (sib.as_ref(), Some(&acc)),
                 _ => unreachable!(),
             };
             dirs >>= 1;
@@ -775,15 +772,10 @@ impl CompactMerkleProof<[u8; 32]> {
                 Some(sib) => sib,
                 None => return false,
             };
+            let acc_hash = HashOf::from_untyped_unchecked(Hash::prehashed(acc_bytes));
             let (l_opt, r_opt) = match dirs & 1 {
-                0 => (
-                    sib,
-                    Some(HashOf::from_untyped_unchecked(Hash::prehashed(acc_bytes))),
-                ),
-                1 => (
-                    Some(HashOf::from_untyped_unchecked(Hash::prehashed(acc_bytes))),
-                    sib,
-                ),
+                0 => (Some(acc_hash), sib),
+                1 => (sib, Some(acc_hash)),
                 _ => unreachable!(),
             };
             dirs >>= 1;
@@ -1511,6 +1503,42 @@ mod tests {
         // Expand back to full using the same index and compare audit path
         let expanded = compact.into_full_with_index(idx);
         assert_eq!(full.audit_path(), expanded.audit_path());
+    }
+
+    #[test]
+    fn compact_proof_dirs_match_leaf_index_bits() {
+        let leaves = test_hashes(8);
+        let tree: MerkleTree<_> = leaves.clone().into_iter().collect();
+        let root = tree.root().expect("root");
+
+        for idx in 0..8u32 {
+            let leaf = tree.leaves().nth(idx as usize).unwrap();
+            let full = tree.get_proof(idx).expect("proof");
+            let compact = CompactMerkleProof::from_full(full);
+            let depth = compact.depth() as usize;
+            let mask = (1u64 << depth) - 1;
+            assert_eq!(
+                compact.dirs() as u64,
+                (idx as u64) & mask,
+                "dirs mismatch at idx={idx}"
+            );
+            assert!(compact.clone().verify(&leaf, &root));
+        }
+    }
+
+    #[test]
+    fn compact_proof_sha256_dirs_match_leaf_index_bits() {
+        let data: Vec<u8> = (0..128u32).map(|i| (i % 251) as u8).collect();
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
+        let root = tree.root().expect("root");
+        let idx = 2u32;
+        let leaf = tree.leaves().nth(idx as usize).unwrap();
+        let full = tree.get_proof(idx).expect("proof");
+        let compact = CompactMerkleProof::from_full(full);
+        let depth = compact.depth() as usize;
+        let mask = (1u64 << depth) - 1;
+        assert_eq!(compact.dirs() as u64, (idx as u64) & mask);
+        assert!(compact.verify_sha256(&leaf, &root));
     }
 
     #[test]

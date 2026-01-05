@@ -1037,10 +1037,8 @@ fn analyze_statement(
             }
             // Accept bounded forms: `.take(n)` and `.range(start, n)`
             // Desugar to a typed for-each with the base map expression and rely on
-            // the current IR lowering which performs a deterministic two-iteration walk.
-            // The semantic layer keeps track of the literal bound even though the
-            // downstream lowering still clamps to two iterations. Once dynamic bounds
-            // are supported end-to-end we can remove that limitation.
+            // IR lowering to enforce deterministic bounds. Non-state maps clamp to a
+            // single entry; state maps honor the literal bound (defaulting to 2 when omitted).
             if let Expr::Call { name, args } = map {
                 if name == "take" && args.len() == 2 {
                     // Analyze base map expression and infer key/value types

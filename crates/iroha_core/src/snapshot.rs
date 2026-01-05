@@ -1353,11 +1353,8 @@ mod tests {
             std::fs::copy(main, tmp).expect("copy snapshot files to temp");
         }
 
-        std::fs::write(
-            store_dir.join(SNAPSHOT_MERKLE_FILE_NAME),
-            b"{\"corrupt\":",
-        )
-        .expect("write corrupt merkle metadata");
+        std::fs::write(store_dir.join(SNAPSHOT_MERKLE_FILE_NAME), b"{\"corrupt\":")
+            .expect("write corrupt merkle metadata");
 
         let state = try_read_snapshot(
             &store_dir,

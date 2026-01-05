@@ -719,6 +719,7 @@ pub mod telemetry {
 /// - Unicode escapes (`\uXXXX`) are decoded to Unicode scalars, including
 ///   surrogate pairs (two `\u` sequences representing one code point) which are
 ///   combined into a single character when valid.
+/// - Leading zeros in numbers are rejected to match JSON rules.
 /// - Number parsing is conservative and aims for correctness over breadth for
 ///   benchmarking scenarios.
 pub mod json {
@@ -2130,6 +2131,9 @@ pub mod json {
             let (byte, line, col) = p.pos_meta(i.min(len));
             return Err(Error::ExpectedDigits { byte, line, col });
         }
+        if bytes[int_start] == b'0' && i > int_start + 1 {
+            return Err(p.err_at(int_start + 1, Parser::LEADING_ZERO_MSG));
+        }
         let mut is_float = false;
         if i < len && bytes[i] == b'.' {
             is_float = true;
@@ -2325,6 +2329,14 @@ pub mod json {
         }
 
         #[test]
+        fn unescape_json_string_preserves_utf8_bytes() {
+            let raw = format!("price: {}\\nend", '\u{00A2}');
+            let out = unescape_json_string(&raw).expect("unescape");
+            let expected = format!("price: {}\nend", '\u{00A2}');
+            assert_eq!(out, expected);
+        }
+
+        #[test]
         fn parse_u64_rejects_leading_zero() {
             let mut parser = Parser::new("01");
             let err = parser
@@ -2353,6 +2365,17 @@ pub mod json {
                 let mut parser = Parser::new(sample);
                 let err = parse_number_token(&mut parser)
                     .expect_err("leading zero in Value parser should be rejected");
+                match err {
+                    Error::WithPos { msg, .. } => assert_eq!(msg, Parser::LEADING_ZERO_MSG),
+                    other => panic!("unexpected error variant for {sample:?}: {other:?}"),
+                }
+            }
+        }
+
+        #[test]
+        fn parse_value_rejects_leading_zero() {
+            for sample in ["01", "-012"] {
+                let err = parse_value(sample).expect_err("leading zero should be rejected");
                 match err {
                     Error::WithPos { msg, .. } => assert_eq!(msg, Parser::LEADING_ZERO_MSG),
                     other => panic!("unexpected error variant for {sample:?}: {other:?}"),
@@ -3086,7 +3109,7 @@ pub mod json {
     /// characters (`< 0x20`) appearing unescaped.
     pub fn unescape_json_string(s: &str) -> Result<String, Error> {
         let bytes = s.as_bytes();
-        let mut out = String::with_capacity(bytes.len());
+        let mut out = Vec::with_capacity(bytes.len());
         let mut i = 0usize;
         while i < bytes.len() {
             let b = bytes[i];
@@ -3099,7 +3122,7 @@ pub mod json {
                         col: 1,
                     });
                 }
-                out.push(b as char);
+                out.push(b);
                 continue;
             }
             if i >= bytes.len() {
@@ -3112,14 +3135,14 @@ pub mod json {
             let esc = bytes[i];
             i += 1;
             match esc {
-                b'"' => out.push('"'),
-                b'\\' => out.push('\\'),
-                b'/' => out.push('/'),
-                b'b' => out.push('\u{08}'),
-                b'f' => out.push('\u{0C}'),
-                b'n' => out.push('\n'),
-                b'r' => out.push('\r'),
-                b't' => out.push('\t'),
+                b'"' => out.push(b'"'),
+                b'\\' => out.push(b'\\'),
+                b'/' => out.push(b'/'),
+                b'b' => out.push(0x08),
+                b'f' => out.push(0x0C),
+                b'n' => out.push(b'\n'),
+                b'r' => out.push(b'\r'),
+                b't' => out.push(b'\t'),
                 b'u' => {
                     let hex_to_u32 = |idx: &mut usize| -> Result<u32, Error> {
                         let mut v: u32 = 0;
@@ -3181,7 +3204,9 @@ pub mod json {
                         hi
                     };
                     if let Some(ch) = char::from_u32(cp) {
-                        out.push(ch);
+                        let mut buf = [0u8; 4];
+                        let n = ch.encode_utf8(&mut buf).len();
+                        out.extend_from_slice(&buf[..n]);
                     } else {
                         return Err(Error::WithPos {
                             msg: "invalid codepoint",
@@ -3201,7 +3226,7 @@ pub mod json {
                 }
             }
         }
-        Ok(out)
+        String::from_utf8(out).map_err(|_| Error::InvalidUtf8)
     }
 
     /// A minimal JSON parser over `&str`.

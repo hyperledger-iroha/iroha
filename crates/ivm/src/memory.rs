@@ -193,19 +193,16 @@ impl Memory {
         depth_cap: Option<usize>,
     ) -> (CompactMerkleProof<[u8; 32]>, HashOf<MerkleTree<[u8; 32]>>) {
         let (full_root, path) = self.merkle_root_and_path(addr);
-        let leaf_index = (addr / 32) as usize;
+        let leaf_index = (addr / 32) as u32;
         let mut depth = path.len().min(32);
         if let Some(cap) = depth_cap {
             depth = depth.min(cap);
         }
-        let mut dirs: u32 = 0;
-        let total = path.len();
-        let mut idx = ((1usize << total) - 1).saturating_add(leaf_index);
-        for i in 0..depth {
-            let bit = (idx & 1) as u32;
-            dirs |= bit << i;
-            idx = idx.saturating_sub(1) >> 1;
-        }
+        let dirs = if depth == 32 {
+            leaf_index
+        } else {
+            leaf_index & ((1u32 << depth) - 1)
+        };
         let typed_siblings: Vec<Option<HashOf<[u8; 32]>>> = path
             .iter()
             .take(depth)
@@ -217,8 +214,7 @@ impl Memory {
                 }
             })
             .collect();
-        let proof_for_root =
-            MerkleProof::from_audit_path(leaf_index as u32, typed_siblings.clone());
+        let proof_for_root = MerkleProof::from_audit_path(leaf_index, typed_siblings.clone());
         let compact = CompactMerkleProof::from_parts(depth as u8, dirs, typed_siblings);
         let root: HashOf<MerkleTree<[u8; 32]>> = if depth < path.len() {
             let base = (addr / 32) * 32;

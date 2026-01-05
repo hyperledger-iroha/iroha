@@ -1273,6 +1273,7 @@ impl TieredStateBackend {
             return Ok(());
         }
 
+        let mut pruned = false;
         let mut entries = fs::read_dir(root)
             .wrap_err_with(|| {
                 format!(
@@ -1299,8 +1300,17 @@ impl TieredStateBackend {
                         path = entry.path().display()
                     )
                 })?;
+                pruned = true;
             }
             entries.remove(0);
+        }
+        if pruned {
+            Self::sync_dir(root).wrap_err_with(|| {
+                format!(
+                    "failed to sync tiered snapshot root after prune {path}",
+                    path = root.display()
+                )
+            })?;
         }
         Ok(())
     }
@@ -1337,6 +1347,7 @@ impl TieredStateBackend {
             sizes.push((idx, path, size));
         }
 
+        let mut pruned = false;
         while total_bytes > self.max_cold_bytes && sizes.len() > 1 {
             let (_, path, size) = sizes.remove(0);
             fs::remove_dir_all(&path).wrap_err_with(|| {
@@ -1346,6 +1357,7 @@ impl TieredStateBackend {
                 )
             })?;
             total_bytes = total_bytes.saturating_sub(size);
+            pruned = true;
         }
 
         if total_bytes > self.max_cold_bytes && sizes.len() == 1 {
@@ -1358,6 +1370,14 @@ impl TieredStateBackend {
             );
         }
 
+        if pruned {
+            Self::sync_dir(root).wrap_err_with(|| {
+                format!(
+                    "failed to sync tiered snapshot root after cold prune {path}",
+                    path = root.display()
+                )
+            })?;
+        }
         Ok(())
     }
 
