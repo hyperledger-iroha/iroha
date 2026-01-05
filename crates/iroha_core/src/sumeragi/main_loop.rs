@@ -1660,6 +1660,7 @@ fn build_invalid_proposal_evidence(
     invalid_proposal_evidence(proposal, reason)
 }
 
+#[cfg(test)]
 fn new_view_highest_qc_phase_valid(qc: &crate::sumeragi::consensus::Qc) -> bool {
     matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
 }
@@ -2346,12 +2347,14 @@ impl NewViewTracker {
         entry.senders.len()
     }
 
+    #[cfg(test)]
     fn count(&self, height: u64, view: u64) -> usize {
         self.entries
             .get(&(height, view))
             .map_or(0, |entry| entry.senders.len())
     }
 
+    #[cfg(test)]
     fn count_with_local(&self, height: u64, view: u64, local: Option<ValidatorIndex>) -> usize {
         self.entries
             .get(&(height, view))
@@ -3287,7 +3290,6 @@ enum RosterValidationError {
         actual: u16,
     },
     ValidatorSetHashMismatch,
-    SignerIndexOverflow(u32),
     SignerOutOfRange {
         signer: u32,
         roster_len: u32,
@@ -3297,7 +3299,6 @@ enum RosterValidationError {
         actual: usize,
     },
     DuplicateSigner(u32),
-    SignatureInvalid(u32),
     AggregateSignatureMissing,
     AggregateSignatureInvalid,
     CommitQuorumMissing {
@@ -3483,6 +3484,7 @@ fn pending_replay_due(last_sent: Option<Instant>, now: Instant, cooldown: Durati
     last_sent.is_none_or(|sent| now.saturating_duration_since(sent) >= cooldown)
 }
 
+#[cfg(test)]
 fn signature_topology_for_roster(
     roster: &[PeerId],
     height: u64,
@@ -4327,7 +4329,7 @@ impl Actor {
         block: &SignedBlock,
         roster: &[PeerId],
         mode_tag: &str,
-        epoch: u64,
+        _epoch: u64,
         consensus_mode: ConsensusMode,
     ) -> Option<(CommitCertificate, Option<CommitStakeSnapshot>)> {
         if roster.is_empty() {
@@ -4368,7 +4370,7 @@ impl Actor {
 
     fn persist_roster_sidecar_for_commit(&self, block: &SignedBlock, roster: &[PeerId]) {
         let height = block.header().height().get();
-        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(height);
         if let Some((cert, stake_snapshot)) = Self::synthesize_commit_certificate(
             self.state.as_ref(),
             block,
@@ -7693,6 +7695,7 @@ fn availability_timeout_from_quorum(
     saturating_mul_duration(base, da_availability_timeout_multiplier.max(1))
 }
 
+#[cfg(test)]
 fn availability_gate_timeout_exceeded(pending_age: Duration, timeout: Duration) -> bool {
     timeout != Duration::ZERO && pending_age >= timeout
 }
@@ -7791,6 +7794,7 @@ fn distinct_epochs_for_block_votes(
         .collect()
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PipelinePhase {
     Propose,

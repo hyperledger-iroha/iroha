@@ -273,7 +273,9 @@ pub fn render_runtime_upgrade_types_markdown_section() -> String {
     out.push_str("- `RuntimeUpgradeManifest` fields:\n");
     out.push_str("  - `name: String` — human-readable label.\n");
     out.push_str("  - `description: String` — short description for operators.\n");
-    out.push_str("  - `abi_version: u16` — target ABI version to activate.\n");
+    out.push_str(
+        "  - `abi_version: u16` — target ABI version to activate (must be 1 in the first release).\n",
+    );
     out.push_str("  - `abi_hash: [u8; 32]` — canonical ABI hash for the target policy.\n");
     out.push_str(
         "  - `added_syscalls: Vec<u16>` — syscall numbers that become valid with this version.\n",

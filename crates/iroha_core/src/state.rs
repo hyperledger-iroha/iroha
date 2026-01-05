@@ -4138,6 +4138,7 @@ pub struct StateBlock<'state> {
     /// Chain identifier for this block.
     pub chain_id: iroha_data_model::ChainId,
     /// `NPoS` PRF seed derived from the pre-block world state at this height.
+    #[allow(dead_code)]
     pre_block_npos_seed: [u8; 32],
     /// Accumulated settlement receipts for transactions in this block.
     settlement_accumulator: crate::settlement::SettlementAccumulator,
@@ -18832,7 +18833,7 @@ mod tests {
     };
     #[cfg(feature = "sm")]
     use iroha_crypto::sm::Sm2PublicKey;
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         block::{
             BlockHeader, SignedBlock,

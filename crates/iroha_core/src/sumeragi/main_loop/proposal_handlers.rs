@@ -89,7 +89,6 @@ impl Actor {
         &mut self,
         hint: super::message::ProposalHint,
     ) -> Result<()> {
-        let mut hint = hint;
         let highest_qc = hint.highest_cert;
         let height = hint.height;
         let view = hint.view;
@@ -485,12 +484,12 @@ impl Actor {
         if self.pending.pending_blocks.contains_key(&block_hash) {
             if da_enabled {
                 let session_key = Self::session_key(&block_hash, height, view);
+                let payload_bytes = super::proposals::block_payload_bytes(&block);
+                let payload_hash = Hash::new(&payload_bytes);
                 if !self.subsystems.da_rbc.rbc.sessions.contains_key(&session_key) {
-                    let payload_bytes = super::proposals::block_payload_bytes(&block);
-                    let payload_hash = Hash::new(&payload_bytes);
                     self.seed_rbc_session_from_block(session_key, &block, payload_hash)?;
-                    self.hydrate_rbc_session_from_block(session_key, &payload_bytes, payload_hash)?;
                 }
+                self.hydrate_rbc_session_from_block(session_key, &payload_bytes, payload_hash)?;
             }
             debug!(
                 height,
@@ -709,17 +708,14 @@ impl Actor {
             );
             return Ok(());
         }
-        {
-            let pending = match self.pending.pending_blocks.entry(block_hash) {
-                Entry::Occupied(mut occ) => {
-                    occ.get_mut()
-                        .replace_block(block, payload_hash, height, view);
-                    occ.into_mut()
-                }
-                Entry::Vacant(vac) => {
-                    vac.insert(PendingBlock::new(block, payload_hash, height, view))
-                }
-            };
+        match self.pending.pending_blocks.entry(block_hash) {
+            Entry::Occupied(mut occ) => {
+                occ.get_mut()
+                    .replace_block(block, payload_hash, height, view);
+            }
+            Entry::Vacant(vac) => {
+                vac.insert(PendingBlock::new(block, payload_hash, height, view));
+            }
         }
 
         let mut status_update = None;
