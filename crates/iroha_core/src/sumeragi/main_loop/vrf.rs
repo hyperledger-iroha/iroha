@@ -110,6 +110,7 @@ impl VrfActor {
         self.local = None;
     }
 
+    #[allow(dead_code)]
     pub(super) fn is_empty(&self) -> bool {
         self.local.is_none()
     }
@@ -184,12 +185,12 @@ impl Actor {
         let mut pending_commit: Option<crate::sumeragi::consensus::VrfCommit> = None;
 
         if position <= commit_end {
-            let commit_needed = if let Some(state) = self.subsystems.vrf.state_mut(self.consensus_mode, epoch)
-            {
-                !state.commit_sent
-            } else {
-                false
-            };
+            let commit_needed =
+                if let Some(state) = self.subsystems.vrf.state_mut(self.consensus_mode, epoch) {
+                    !state.commit_sent
+                } else {
+                    false
+                };
 
             if commit_needed {
                 let (reveal, commitment) = self.derive_vrf_material(epoch, local_signer);
@@ -351,7 +352,7 @@ impl Actor {
                 let snapshot = manager.snapshot_current_epoch(roster_len_hint, height);
                 let seed = manager.seed();
                 self.persist_vrf_snapshot(snapshot, false, None)?;
-                self.refresh_npos_seed(seed);
+                self.refresh_npos_seed(seed, height, super::commit::EpochRefreshPhase::PreCommit);
                 VrfNoteResult::Accepted
             }
             VrfNoteResult::AcceptedLate => {
@@ -398,8 +399,11 @@ impl Actor {
         ) {
             if let Some(local_idx) = local_signer {
                 if local_idx == commit.signer {
-                    self.subsystems.vrf
-                        .note_commit(self.consensus_mode, commit.epoch, commit.commitment);
+                    self.subsystems.vrf.note_commit(
+                        self.consensus_mode,
+                        commit.epoch,
+                        commit.commitment,
+                    );
                 }
             }
         }
@@ -427,7 +431,7 @@ impl Actor {
                 let seed = manager.seed();
                 self.persist_vrf_snapshot(snapshot, false, None)?;
                 super::status::set_vrf_late_reveals_total(late_reveals_total);
-                self.refresh_npos_seed(seed);
+                self.refresh_npos_seed(seed, height, super::commit::EpochRefreshPhase::PreCommit);
                 super::status::set_prf_context(seed, height, 0);
                 #[cfg(feature = "telemetry")]
                 self.telemetry.set_prf_context(Some(seed), height, 0);
@@ -482,8 +486,11 @@ impl Actor {
         ) {
             if let Some(local_idx) = local_signer {
                 if local_idx == reveal.signer {
-                    self.subsystems.vrf
-                        .note_reveal(self.consensus_mode, reveal.epoch, reveal.reveal);
+                    self.subsystems.vrf.note_reveal(
+                        self.consensus_mode,
+                        reveal.epoch,
+                        reveal.reveal,
+                    );
                 }
             }
         }
@@ -559,10 +566,8 @@ impl Actor {
             })
         };
 
-        let (epoch_length, commit_deadline_offset, reveal_deadline_offset) = self
-            .epoch_manager
-            .as_ref()
-            .map_or(
+        let (epoch_length, commit_deadline_offset, reveal_deadline_offset) =
+            self.epoch_manager.as_ref().map_or(
                 (
                     self.config.epoch_length_blocks,
                     self.config.vrf_commit_deadline_offset,

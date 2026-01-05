@@ -256,8 +256,7 @@ impl Actor {
         topology: super::network_topology::Topology,
     ) {
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        let signature_topology =
-            topology_for_view(&topology, height, view, mode_tag, prf_seed);
+        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
         let required = signature_topology.min_votes_for_commit();
         let voting_len = signature_topology.as_ref().len();
         if let Some(existing) = self.qc_cache.get(&(phase, block_hash, height, view, epoch)) {
@@ -613,8 +612,7 @@ impl Actor {
             return;
         }
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        let signature_topology =
-            topology_for_view(&topology, height, view, mode_tag, prf_seed);
+        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
         let required = signature_topology.min_votes_for_commit();
         let voting_len = signature_topology.as_ref().len();
         if required == 0 {
@@ -1128,8 +1126,7 @@ impl Actor {
             );
             return Ok(());
         }
-        let (consensus_mode, mode_tag, prf_seed) =
-            self.consensus_context_for_height(qc.height);
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
         let commit_topology = if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
             self.roster_for_new_view_with_mode(
                 qc.subject_block_hash,
@@ -1379,7 +1376,7 @@ impl Actor {
         }
         if !block_known {
             if let Some(lock) = self.locked_qc {
-            // Keep status in sync if we cleared an unknown lock earlier.
+                // Keep status in sync if we cleared an unknown lock earlier.
                 super::status::set_locked_qc(lock.height, lock.view, Some(lock.subject_block_hash));
             }
         }
@@ -1473,8 +1470,7 @@ impl Actor {
             return Ok(());
         }
         self.record_phase_sample(PipelinePhase::CollectExec, qc.height, qc.view);
-        let (consensus_mode, mode_tag, prf_seed) =
-            self.consensus_context_for_height(qc.height);
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
         let topology_peers = self.roster_for_vote_with_mode(
             qc.subject_block_hash,
             qc.height,

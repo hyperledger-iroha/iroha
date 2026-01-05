@@ -450,13 +450,8 @@ impl Actor {
         };
         if incoming_qc.is_none() && had_incoming_qc {
             if let Some(qc) = original_candidate_qc {
-                let signature_topology = super::topology_for_view(
-                    &topology,
-                    qc.height,
-                    qc.view,
-                    mode_tag,
-                    prf_seed,
-                );
+                let signature_topology =
+                    super::topology_for_view(&topology, qc.height, qc.view, mode_tag, prf_seed);
                 if super::qc_aggregate_consistent(
                     &qc,
                     &signature_topology,
@@ -858,41 +853,41 @@ impl Actor {
                     "skipping fetch response for aborted inflight pending block"
                 );
             } else {
-            let block = &inflight.pending.block;
-            let block_hash = block.hash();
-            let block_height = block.header().height().get();
-            let block_view = u64::from(block.header().view_change_index());
-            let update = super::block_sync_update_with_roster(
-                block,
-                self.state.as_ref(),
-                self.kura.as_ref(),
-                self.config.consensus_mode,
-                self.common_config.trusted_peers.value(),
-                self.common_config.peer.id(),
-            );
-            let mut update = update;
-            Self::apply_cached_qcs_to_block_sync_update(
-                &mut update,
-                &self.qc_cache,
-                &self.vote_log,
-                block_hash,
-                block_height,
-                block_view,
-            );
-            let has_roster =
-                update.commit_certificate.is_some() || update.validator_checkpoint.is_some();
-            let has_cached_qc =
-                update.commit_certificate.is_some() || !update.commit_votes.is_empty();
-            if !has_roster && !has_cached_qc {
-                let msg = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
-                self.send_fetch_pending_block_response(peer.clone(), msg);
-            } else {
-                self.send_fetch_pending_block_response(
-                    peer.clone(),
-                    BlockMessage::BlockSyncUpdate(update),
+                let block = &inflight.pending.block;
+                let block_hash = block.hash();
+                let block_height = block.header().height().get();
+                let block_view = u64::from(block.header().view_change_index());
+                let update = super::block_sync_update_with_roster(
+                    block,
+                    self.state.as_ref(),
+                    self.kura.as_ref(),
+                    self.config.consensus_mode,
+                    self.common_config.trusted_peers.value(),
+                    self.common_config.peer.id(),
                 );
-            }
-            return Ok(());
+                let mut update = update;
+                Self::apply_cached_qcs_to_block_sync_update(
+                    &mut update,
+                    &self.qc_cache,
+                    &self.vote_log,
+                    block_hash,
+                    block_height,
+                    block_view,
+                );
+                let has_roster =
+                    update.commit_certificate.is_some() || update.validator_checkpoint.is_some();
+                let has_cached_qc =
+                    update.commit_certificate.is_some() || !update.commit_votes.is_empty();
+                if !has_roster && !has_cached_qc {
+                    let msg = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
+                    self.send_fetch_pending_block_response(peer.clone(), msg);
+                } else {
+                    self.send_fetch_pending_block_response(
+                        peer.clone(),
+                        BlockMessage::BlockSyncUpdate(update),
+                    );
+                }
+                return Ok(());
             }
         }
 
@@ -903,41 +898,41 @@ impl Actor {
                     "skipping fetch response for aborted pending block"
                 );
             } else {
-            let block = &pending.block;
-            let block_hash = block.hash();
-            let block_height = block.header().height().get();
-            let block_view = u64::from(block.header().view_change_index());
-            let update = super::block_sync_update_with_roster(
-                block,
-                self.state.as_ref(),
-                self.kura.as_ref(),
-                self.config.consensus_mode,
-                self.common_config.trusted_peers.value(),
-                self.common_config.peer.id(),
-            );
-            let mut update = update;
-            Self::apply_cached_qcs_to_block_sync_update(
-                &mut update,
-                &self.qc_cache,
-                &self.vote_log,
-                block_hash,
-                block_height,
-                block_view,
-            );
-            let has_roster =
-                update.commit_certificate.is_some() || update.validator_checkpoint.is_some();
-            let has_cached_qc =
-                update.commit_certificate.is_some() || !update.commit_votes.is_empty();
-            if !has_roster && !has_cached_qc {
-                let msg = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
-                self.send_fetch_pending_block_response(peer.clone(), msg);
-            } else {
-                self.send_fetch_pending_block_response(
-                    peer.clone(),
-                    BlockMessage::BlockSyncUpdate(update),
+                let block = &pending.block;
+                let block_hash = block.hash();
+                let block_height = block.header().height().get();
+                let block_view = u64::from(block.header().view_change_index());
+                let update = super::block_sync_update_with_roster(
+                    block,
+                    self.state.as_ref(),
+                    self.kura.as_ref(),
+                    self.config.consensus_mode,
+                    self.common_config.trusted_peers.value(),
+                    self.common_config.peer.id(),
                 );
-            }
-            return Ok(());
+                let mut update = update;
+                Self::apply_cached_qcs_to_block_sync_update(
+                    &mut update,
+                    &self.qc_cache,
+                    &self.vote_log,
+                    block_hash,
+                    block_height,
+                    block_view,
+                );
+                let has_roster =
+                    update.commit_certificate.is_some() || update.validator_checkpoint.is_some();
+                let has_cached_qc =
+                    update.commit_certificate.is_some() || !update.commit_votes.is_empty();
+                if !has_roster && !has_cached_qc {
+                    let msg = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
+                    self.send_fetch_pending_block_response(peer.clone(), msg);
+                } else {
+                    self.send_fetch_pending_block_response(
+                        peer.clone(),
+                        BlockMessage::BlockSyncUpdate(update),
+                    );
+                }
+                return Ok(());
             }
         }
 

@@ -19,6 +19,8 @@ const MERGE_QC_DOMAIN_TAG: &[u8] = b"iroha:merge:qc:v1\0";
 pub struct MergeLedgerCandidate {
     /// Epoch/height for the merge entry.
     pub epoch_id: u64,
+    /// Merge committee view derived from lane tips.
+    pub view: u64,
     /// Canonical tips for each execution lane.
     pub lane_tips: Vec<HashOf<BlockHeader>>,
     /// Merge-hint Poseidon roots aligned with the lane tips.
@@ -45,6 +47,7 @@ impl From<&MergeLedgerEntry> for MergeLedgerCandidate {
     fn from(entry: &MergeLedgerEntry) -> Self {
         Self {
             epoch_id: entry.epoch_id,
+            view: entry.merge_qc.view,
             lane_tips: entry.lane_tips.clone(),
             merge_hint_roots: entry.merge_hint_roots.clone(),
             global_state_root: entry.global_state_root,
@@ -63,13 +66,9 @@ struct MergeLedgerSignPayload {
 
 /// Compute the deterministic message digest for merge-committee signatures.
 #[must_use]
-pub fn merge_qc_message_digest(
-    chain_id: &ChainId,
-    view: u64,
-    candidate: &MergeLedgerCandidate,
-) -> Hash {
+pub fn merge_qc_message_digest(chain_id: &ChainId, candidate: &MergeLedgerCandidate) -> Hash {
     let payload = MergeLedgerSignPayload {
-        view,
+        view: candidate.view,
         epoch_id: candidate.epoch_id,
         lane_tips: candidate.lane_tips.clone(),
         merge_hint_roots: candidate.merge_hint_roots.clone(),
@@ -151,13 +150,14 @@ mod tests {
     fn merge_qc_message_digest_is_deterministic() {
         let candidate = MergeLedgerCandidate {
             epoch_id: 7,
+            view: 3,
             lane_tips: vec![HashOf::from_untyped_unchecked(Hash::new(b"lane-0"))],
             merge_hint_roots: vec![Hash::new(b"hint-0")],
             global_state_root: Hash::new(b"global"),
         };
         let chain_id: ChainId = "nexus-merge".parse().expect("chain id parses");
-        let digest_a = merge_qc_message_digest(&chain_id, 0, &candidate);
-        let digest_b = merge_qc_message_digest(&chain_id, 0, &candidate);
+        let digest_a = merge_qc_message_digest(&chain_id, &candidate);
+        let digest_b = merge_qc_message_digest(&chain_id, &candidate);
         assert_eq!(digest_a, digest_b);
     }
 }

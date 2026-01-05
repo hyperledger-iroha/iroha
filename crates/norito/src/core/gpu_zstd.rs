@@ -447,7 +447,7 @@ pub fn decode_all(compressed: &[u8], uncompressed_size: u64) -> Result<Vec<u8>, 
     }
 
     // CPU fallback
-    let mut decoder = zstd::Decoder::new(compressed)?;
+    let decoder = zstd::Decoder::new(compressed)?;
     let mut out = Vec::with_capacity(target_len);
     let max_len = target_len.saturating_add(1);
     decoder.take(max_len as u64).read_to_end(&mut out)?;

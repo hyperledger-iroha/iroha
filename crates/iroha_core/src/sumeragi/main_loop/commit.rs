@@ -8,8 +8,13 @@ use std::{
 use iroha_logger::prelude::*;
 use rand::seq::SliceRandom;
 
-use super::*;
 use super::pacing::{Pacemaker, PacemakerBackpressure, PacemakerBackpressureAction};
+use super::*;
+
+pub(super) enum EpochRefreshPhase {
+    PreCommit,
+    PostCommit,
+}
 
 const COMMIT_WORK_QUEUE_CAP: usize = 1;
 const COMMIT_RESULT_QUEUE_CAP: usize = 1;
@@ -42,12 +47,10 @@ pub(super) enum CommitOutcome {
     KuraStoreFailed {
         committed_block: crate::block::CommittedBlock,
         error: crate::kura::Error,
-        pipeline_events: Vec<PipelineEventBox>,
     },
     StateCommitFailed {
         committed_block: crate::block::CommittedBlock,
         error: String,
-        pipeline_events: Vec<PipelineEventBox>,
     },
     Success {
         committed_block: crate::block::CommittedBlock,
@@ -147,7 +150,6 @@ pub(super) fn execute_commit_work(
                     return CommitOutcome::KuraStoreFailed {
                         committed_block,
                         error: err,
-                        pipeline_events,
                     };
                 }
             }
@@ -161,7 +163,6 @@ pub(super) fn execute_commit_work(
                 return CommitOutcome::StateCommitFailed {
                     committed_block,
                     error: err.to_string(),
-                    pipeline_events,
                 };
             }
             CommitOutcome::Success {
@@ -319,7 +320,13 @@ impl Actor {
 
     fn drain_commit_results(&mut self) -> bool {
         let mut progress = false;
-        while let Some(recv_result) = self.subsystems.commit.result_rx.as_ref().map(mpsc::Receiver::try_recv) {
+        while let Some(recv_result) = self
+            .subsystems
+            .commit
+            .result_rx
+            .as_ref()
+            .map(mpsc::Receiver::try_recv)
+        {
             match recv_result {
                 Ok(result) => {
                     let inflight = match self.subsystems.commit.inflight.take() {
@@ -490,11 +497,8 @@ impl Actor {
         let quorum_signer_count = qc_signers.as_ref().map(BTreeSet::len);
         let has_quorum_signers = qc_signers.is_some();
         let view_signers = qc_signers.as_ref().and_then(|signers| {
-            let mapped = super::normalize_signer_indices_to_view(
-                signers,
-                &topology,
-                &canonical_topology,
-            );
+            let mapped =
+                super::normalize_signer_indices_to_view(signers, &topology, &canonical_topology);
             if mapped.len() != signers.len() {
                 warn!(
                     height = pending_height,
@@ -852,7 +856,6 @@ impl Actor {
             CommitOutcome::KuraStoreFailed {
                 committed_block,
                 error,
-                pipeline_events: _,
             } => {
                 let pending = pending_opt.take().expect("pending present");
                 crate::sumeragi::status::record_kura_stage(
@@ -915,7 +918,6 @@ impl Actor {
             CommitOutcome::StateCommitFailed {
                 committed_block,
                 error,
-                pipeline_events: _,
             } => {
                 let mut pending = pending_opt.take().expect("pending present");
                 crate::sumeragi::status::record_kura_stage(
@@ -1264,7 +1266,10 @@ impl Actor {
             self.qc_signer_tally.retain(|(_, hash, height, _, _), _| {
                 *hash == block_hash || *height > pending_height
             });
-            self.subsystems.propose.proposal_cache.prune_height_leq(pending_height);
+            self.subsystems
+                .propose
+                .proposal_cache
+                .prune_height_leq(pending_height);
             if let Some(parent) = parent_to_cleanup {
                 self.qc_cache
                     .retain(|(_, hash, _, _, _), _| hash != &parent);
@@ -1429,8 +1434,12 @@ impl Actor {
             }
         }
         let (consensus_mode, _, _) = self.consensus_context_for_height(pending_height);
-        let commit_topology =
-            self.roster_for_vote_with_mode(block_hash, pending_height, pending_view, consensus_mode);
+        let commit_topology = self.roster_for_vote_with_mode(
+            block_hash,
+            pending_height,
+            pending_view,
+            consensus_mode,
+        );
         iroha_logger::info!(
             commit_topology_len = commit_topology.len(),
             commit_topology = ?commit_topology,
@@ -1474,7 +1483,14 @@ impl Actor {
             .or_else(|| {
                 self.qc_cache
                     .get(&qc_key)
-                    .and_then(|qc| super::qc_signer_indices(qc, topology.as_ref().len(), topology.as_ref().len()).ok())
+                    .and_then(|qc| {
+                        super::qc_signer_indices(
+                            qc,
+                            topology.as_ref().len(),
+                            topology.as_ref().len(),
+                        )
+                        .ok()
+                    })
                     .map(|parsed| parsed.voting)
             });
         let allow_quorum_bypass = false;
@@ -1566,13 +1582,30 @@ impl Actor {
         self.qc_signer_tally
             .retain(|(_, hash, _, _, _), _| hash != &block_hash);
         self.execution_qc_cache.remove(&block_hash);
-        self.subsystems.propose.proposal_cache.pop_hint(height, view);
-        self.subsystems.propose.proposal_cache.pop_proposal(height, view);
-        self.subsystems.propose.proposals_seen.remove(&(height, view));
+        self.subsystems
+            .propose
+            .proposal_cache
+            .pop_hint(height, view);
+        self.subsystems
+            .propose
+            .proposal_cache
+            .pop_proposal(height, view);
+        self.subsystems
+            .propose
+            .proposals_seen
+            .remove(&(height, view));
         self.pending.pending_replay_last_sent.remove(&block_hash);
         let session_key = Self::session_key(&block_hash, height, view);
-        self.subsystems.da_rbc.rbc.payload_rebroadcast_last_sent.remove(&session_key);
-        self.subsystems.da_rbc.rbc.ready_rebroadcast_last_sent.remove(&session_key);
+        self.subsystems
+            .da_rbc
+            .rbc
+            .payload_rebroadcast_last_sent
+            .remove(&session_key);
+        self.subsystems
+            .da_rbc
+            .rbc
+            .ready_rebroadcast_last_sent
+            .remove(&session_key);
         drop(pending);
         super::status::record_commit_inflight_timeout(height, view, block_hash, elapsed);
         super::status::record_commit_inflight_finish(inflight.id);
@@ -1735,11 +1768,10 @@ impl Actor {
                     continue;
                 }
             }
-            let (payload_hash, aborted) =
-                match self.pending.pending_blocks.get(&hash) {
-                    Some(snapshot) => (snapshot.payload_hash, snapshot.aborted),
-                    None => continue,
-                };
+            let (payload_hash, aborted) = match self.pending.pending_blocks.get(&hash) {
+                Some(snapshot) => (snapshot.payload_hash, snapshot.aborted),
+                None => continue,
+            };
             let kura_has_block = self.kura.get_block_height_by_hash(hash).is_some();
             let (state_height, state_tip_hash) = {
                 let view = self.state.view();
@@ -1839,8 +1871,6 @@ impl Actor {
                     "deferring commit while awaiting kura retry window"
                 );
             }
-
-
 
             let gate_cost = gate_start.elapsed();
 
@@ -2243,8 +2273,13 @@ impl Actor {
         while let Some(peer) = self.next_redundant_collector() {
             self.note_collector_contact(peer.clone(), true);
         }
-        let mut collector_targets: Vec<_> =
-            self.subsystems.propose.collectors_contacted.iter().cloned().collect();
+        let mut collector_targets: Vec<_> = self
+            .subsystems
+            .propose
+            .collectors_contacted
+            .iter()
+            .cloned()
+            .collect();
         let mut fallback_to_topology = false;
         if collector_targets.is_empty() {
             fallback_to_topology = true;
@@ -2490,8 +2525,13 @@ impl Actor {
         while let Some(peer) = self.next_redundant_collector() {
             self.note_collector_contact(peer.clone(), true);
         }
-        let mut collector_targets: Vec<_> =
-            self.subsystems.propose.collectors_contacted.iter().cloned().collect();
+        let mut collector_targets: Vec<_> = self
+            .subsystems
+            .propose
+            .collectors_contacted
+            .iter()
+            .cloned()
+            .collect();
         let mut fallback_to_topology = false;
         if collector_targets.is_empty() {
             fallback_to_topology = true;
@@ -2535,9 +2575,7 @@ impl Actor {
             let msg = match phase {
                 crate::sumeragi::consensus::Phase::Prepare
                 | crate::sumeragi::consensus::Phase::Commit
-                | crate::sumeragi::consensus::Phase::NewView => {
-                    BlockMessage::CommitVote(vote)
-                }
+                | crate::sumeragi::consensus::Phase::NewView => BlockMessage::CommitVote(vote),
             };
             for peer in &collector_targets {
                 self.schedule_background(BackgroundRequest::Post {
@@ -2565,12 +2603,8 @@ impl Actor {
             ConsensusMode::Npos => self.epoch_for_height(height),
         };
 
-        let topology_peers = self.roster_for_vote_with_mode(
-            block_hash,
-            height,
-            view,
-            consensus_mode,
-        );
+        let topology_peers =
+            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
         if topology_peers.is_empty() {
             return;
         }
@@ -2949,6 +2983,7 @@ impl Actor {
         targets
     }
 
+    #[allow(dead_code)]
     fn broadcast_block_created(&mut self, created: super::message::BlockCreated, peers: &[PeerId]) {
         for peer in peers {
             self.schedule_background(BackgroundRequest::Post {
@@ -2958,6 +2993,7 @@ impl Actor {
         }
     }
 
+    #[allow(dead_code)]
     fn rebroadcast_highest_qc_payload(
         &mut self,
         qc: &crate::sumeragi::consensus::QcHeaderRef,
@@ -3023,6 +3059,7 @@ impl Actor {
         }
     }
 
+    #[allow(dead_code)]
     fn rebroadcast_highest_qc_payload_throttled(
         &mut self,
         qc: &crate::sumeragi::consensus::QcHeaderRef,
@@ -3143,11 +3180,8 @@ impl Actor {
                 return None;
             }
         };
-        let canonical_signers = super::normalize_signer_indices_to_canonical(
-            &signers,
-            &signature_topology,
-            &topology,
-        );
+        let canonical_signers =
+            super::normalize_signer_indices_to_canonical(&signers, &signature_topology, &topology);
         if canonical_signers.len() != signers.len() {
             warn!(
                 height = qc.height,
@@ -3177,7 +3211,6 @@ impl Actor {
         self.qc_cache.insert(key, rebuilt.clone());
         Some(rebuilt)
     }
-
 
     fn recover_qc_from_kura_block(
         qc: &crate::sumeragi::consensus::QcHeaderRef,
@@ -3288,8 +3321,14 @@ impl Actor {
             }
         }
         for (height, view) in stale_hints {
-            self.subsystems.propose.proposal_cache.pop_hint(height, view);
-            self.subsystems.propose.proposals_seen.remove(&(height, view));
+            self.subsystems
+                .propose
+                .proposal_cache
+                .pop_hint(height, view);
+            self.subsystems
+                .propose
+                .proposals_seen
+                .remove(&(height, view));
         }
 
         let mut stale_proposals = Vec::new();
@@ -3315,8 +3354,14 @@ impl Actor {
             }
         }
         for (height, view) in stale_proposals {
-            self.subsystems.propose.proposal_cache.pop_proposal(height, view);
-            self.subsystems.propose.proposals_seen.remove(&(height, view));
+            self.subsystems
+                .propose
+                .proposal_cache
+                .pop_proposal(height, view);
+            self.subsystems
+                .propose
+                .proposals_seen
+                .remove(&(height, view));
         }
 
         let mut stale_qcs: Vec<QcVoteKey> = Vec::new();
@@ -3367,7 +3412,11 @@ impl Actor {
             .copied()
             .collect();
         for key in payload_keys {
-            self.subsystems.da_rbc.rbc.payload_rebroadcast_last_sent.remove(&key);
+            self.subsystems
+                .da_rbc
+                .rbc
+                .payload_rebroadcast_last_sent
+                .remove(&key);
         }
         let ready_keys: Vec<_> = self
             .subsystems
@@ -3379,9 +3428,15 @@ impl Actor {
             .copied()
             .collect();
         for key in ready_keys {
-            self.subsystems.da_rbc.rbc.ready_rebroadcast_last_sent.remove(&key);
+            self.subsystems
+                .da_rbc
+                .rbc
+                .ready_rebroadcast_last_sent
+                .remove(&key);
         }
-        self.subsystems.da_rbc.rbc
+        self.subsystems
+            .da_rbc
+            .rbc
             .persisted_full_sessions
             .retain(|(hash, _, _)| *hash != block_hash);
         self.pending.pending_replay_last_sent.remove(&block_hash);
@@ -3408,8 +3463,13 @@ impl Actor {
         self.publish_rbc_backlog_snapshot();
     }
 
-    pub(super) fn refresh_npos_seed(&mut self, seed: [u8; 32]) {
-        let (mut cfg, epoch_params) = {
+    pub(super) fn refresh_npos_seed(
+        &mut self,
+        seed: [u8; 32],
+        height: u64,
+        phase: EpochRefreshPhase,
+    ) {
+        let (cfg, epoch_params, seed_for_height) = {
             let view = self.state.view();
             let cfg = super::load_npos_collector_config(&view)
                 .or(self.npos_collectors)
@@ -3419,9 +3479,10 @@ impl Actor {
                     redundant_send_r: self.config.npos.redundant_send_r,
                 });
             let epoch_params = super::load_npos_epoch_params(&view, &self.config);
-            (cfg, epoch_params)
+            let seed_for_height = super::npos_seed_for_height(&view, height);
+            (cfg, epoch_params, seed_for_height)
         };
-        cfg.seed = seed;
+        let mut next_seed = seed;
         self.npos_collectors = Some(cfg);
         if let Some(manager) = self.epoch_manager.as_mut() {
             manager.set_params(
@@ -3429,6 +3490,20 @@ impl Actor {
                 epoch_params.commit_deadline_offset,
                 epoch_params.reveal_deadline_offset,
             );
+            if matches!(phase, EpochRefreshPhase::PostCommit) {
+                let epoch_for_height = manager.epoch_for_height(height);
+                let expected_epoch =
+                    if height > 0 && height.is_multiple_of(manager.epoch_length_blocks()) {
+                        epoch_for_height.saturating_add(1)
+                    } else {
+                        epoch_for_height
+                    };
+                if manager.epoch() != expected_epoch {
+                    manager.reset_epoch_state(expected_epoch, seed_for_height);
+                    self.subsystems.vrf.reset();
+                    next_seed = seed_for_height;
+                }
+            }
             super::status::set_epoch_parameters(
                 manager.epoch_length_blocks(),
                 manager.commit_window_end(),
@@ -3440,6 +3515,9 @@ impl Actor {
                 manager.commit_window_end(),
                 manager.reveal_window_end(),
             );
+        }
+        if let Some(cfg) = self.npos_collectors.as_mut() {
+            cfg.seed = next_seed;
         }
     }
 
@@ -3622,7 +3700,7 @@ impl Actor {
             None
         };
 
-        self.refresh_npos_seed(seed);
+        self.refresh_npos_seed(seed, height, EpochRefreshPhase::PostCommit);
         super::status::set_prf_context(seed, height, 0);
         #[cfg(feature = "telemetry")]
         self.telemetry.set_prf_context(Some(seed), height, 0);
@@ -3941,8 +4019,16 @@ impl Actor {
         self.subsystems.da_rbc.rbc.pending.clear();
         self.subsystems.da_rbc.rbc.sessions.clear();
         self.subsystems.da_rbc.rbc.session_rosters.clear();
-        self.subsystems.da_rbc.rbc.payload_rebroadcast_last_sent.clear();
-        self.subsystems.da_rbc.rbc.ready_rebroadcast_last_sent.clear();
+        self.subsystems
+            .da_rbc
+            .rbc
+            .payload_rebroadcast_last_sent
+            .clear();
+        self.subsystems
+            .da_rbc
+            .rbc
+            .ready_rebroadcast_last_sent
+            .clear();
         self.subsystems.da_rbc.rbc.persisted_full_sessions.clear();
         self.subsystems.da_rbc.rbc.status_handle.clear();
         self.subsystems.da_rbc.da.da_bundles.clear();
@@ -3955,6 +4041,7 @@ impl Actor {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     /// Test-only wrapper around the commit hook.
     pub(super) fn on_block_commit_for_tests(&mut self, height: u64) -> Result<()> {
         self.on_block_commit(height)
@@ -4572,8 +4659,8 @@ mod tests {
             },
         };
 
-        let record =
-            Actor::precommit_signer_record_from_cached_qc(&qc, &validator_set).expect("record built");
+        let record = Actor::precommit_signer_record_from_cached_qc(&qc, &validator_set)
+            .expect("record built");
 
         let expected_signers: BTreeSet<_> = [0_u32, 1_u32, 2_u32].into_iter().collect();
         assert_eq!(record.block_hash, block_hash);

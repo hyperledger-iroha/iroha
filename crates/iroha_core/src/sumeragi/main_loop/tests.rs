@@ -742,6 +742,71 @@ async fn apply_mode_flip_uses_world_epoch_params() {
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn apply_mode_flip_aligns_epoch_to_current_height_without_vrf_record() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.epoch_length_blocks = 5;
+    consensus_cfg.vrf_commit_deadline_offset = 2;
+    consensus_cfg.vrf_reveal_deadline_offset = 4;
+
+    let height = 7u64;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        for idx in 1..=height {
+            let idx_byte = u8::try_from(idx).expect("height fits in u8 for test hash");
+            let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [idx_byte; Hash::LENGTH],
+            ));
+            state.push_block_hash_for_testing(hash);
+        }
+    }
+
+    actor
+        .apply_mode_flip(ConsensusMode::Npos)
+        .expect("mode flip should succeed");
+    let manager = actor.epoch_manager.as_ref().expect("epoch manager set");
+    let expected_epoch = (height - 1) / 5;
+    assert_eq!(manager.epoch(), expected_epoch);
+    let expected_seed = {
+        let view = actor.state.view();
+        super::npos_seed_for_height(&view, height)
+    };
+    assert_eq!(manager.seed(), expected_seed);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_new_aligns_epoch_to_current_height_without_vrf_record() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.epoch_length_blocks = 4;
+    consensus_cfg.vrf_commit_deadline_offset = 1;
+    consensus_cfg.vrf_reveal_deadline_offset = 2;
+
+    let height = 6u64;
+    let harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, height).await;
+    let manager = harness
+        .actor
+        .epoch_manager
+        .as_ref()
+        .expect("epoch manager set");
+    let expected_epoch = (height - 1) / 4;
+    assert_eq!(manager.epoch(), expected_epoch);
+    let expected_seed = {
+        let view = harness.actor.state.view();
+        super::npos_seed_for_height(&view, height)
+    };
+    assert_eq!(manager.seed(), expected_seed);
+
+    harness.shutdown.send();
+}
+
 fn block_with_da_commitment(manifest_hash: ManifestDigest) -> SignedBlock {
     let mut record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
     record.manifest_hash = manifest_hash;
@@ -1040,6 +1105,15 @@ async fn test_actor_harness_with_config(
     consensus_cfg: SumeragiConfig,
     rbc_store_cfg: Option<crate::sumeragi::RbcStoreConfig>,
 ) -> TestActorHarness {
+    test_actor_harness_with_config_and_height(peer_count, consensus_cfg, rbc_store_cfg, 0).await
+}
+
+async fn test_actor_harness_with_config_and_height(
+    peer_count: usize,
+    consensus_cfg: SumeragiConfig,
+    rbc_store_cfg: Option<crate::sumeragi::RbcStoreConfig>,
+    initial_height: u64,
+) -> TestActorHarness {
     use iroha_config::{
         base::WithOrigin,
         parameters::actual::{
@@ -1191,11 +1265,17 @@ async fn test_actor_harness_with_config(
         block.commit();
     }
     let kura = Kura::blank_kura_for_testing();
-    let state = Arc::new(State::new_for_testing(
-        world,
-        Arc::clone(&kura),
-        LiveQueryStore::start_test(),
-    ));
+    let mut state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
+    if initial_height > 0 {
+        for height in 1..=initial_height {
+            let height_byte = u8::try_from(height).expect("height fits in u8 for test hash");
+            let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [height_byte; Hash::LENGTH],
+            ));
+            state.push_block_hash_for_testing(hash);
+        }
+    }
+    let state = Arc::new(state);
     let time_source = TimeSource::new_system();
     let queue = Arc::new(Queue::test(QueueConfig::default(), &time_source));
     let events_sender: crate::EventsSender = tokio::sync::broadcast::Sender::new(1);
@@ -1209,6 +1289,8 @@ async fn test_actor_harness_with_config(
     let block_sync_gossip_limit =
         usize::try_from(iroha_config::parameters::defaults::network::BLOCK_GOSSIP_SIZE.get())
             .unwrap_or(usize::MAX);
+    let block_count =
+        crate::kura::BlockCount(usize::try_from(initial_height).unwrap_or(usize::MAX));
 
     #[cfg(feature = "telemetry")]
     let telemetry =
@@ -1227,7 +1309,7 @@ async fn test_actor_harness_with_config(
         spool_dir.path().to_path_buf(),
         peers_gossiper,
         genesis_network,
-        crate::kura::BlockCount(0),
+        block_count,
         block_sync_gossip_limit,
         telemetry,
         None,
@@ -1250,7 +1332,7 @@ async fn test_actor_harness_with_config(
         spool_dir.path().to_path_buf(),
         peers_gossiper,
         genesis_network,
-        crate::kura::BlockCount(0),
+        block_count,
         block_sync_gossip_limit,
         None,
         rbc_store_cfg,
@@ -1383,8 +1465,7 @@ async fn merge_committee_signatures_commit_merge_entry() {
     assert!(!entry.merge_qc.aggregate_signature.is_empty());
 
     let candidate = crate::merge::MergeLedgerCandidate::from(entry.as_ref());
-    let expected =
-        crate::merge::merge_qc_message_digest(&actor.chain_id, entry.merge_qc.view, &candidate);
+    let expected = crate::merge::merge_qc_message_digest(&actor.chain_id, &candidate);
     assert_eq!(entry.merge_qc.message_digest, expected);
 }
 
@@ -1428,7 +1509,7 @@ async fn merge_committee_accepts_remote_signature() {
     let candidates = actor.state.merge_entry_candidates_from_lane_relays();
     assert_eq!(candidates.len(), 1);
     let candidate = &candidates[0];
-    let message_digest = crate::merge::merge_qc_message_digest(&actor.chain_id, 0, candidate);
+    let message_digest = crate::merge::merge_qc_message_digest(&actor.chain_id, candidate);
     let signature = Signature::new(harness.key_pairs[1].private_key(), message_digest.as_ref());
     let merge_signature = MergeCommitteeSignature {
         epoch_id: candidate.epoch_id,
@@ -17392,7 +17473,7 @@ async fn refresh_npos_seed_updates_collector_params_from_world() {
     }
 
     let seed = [0x5A; 32];
-    actor.refresh_npos_seed(seed);
+    actor.refresh_npos_seed(seed, 0, super::commit::EpochRefreshPhase::PreCommit);
 
     let cfg = actor.npos_collectors.expect("npos collectors set");
     assert_eq!(cfg.seed, seed);
@@ -17402,6 +17483,61 @@ async fn refresh_npos_seed_updates_collector_params_from_world() {
     assert_eq!(manager.epoch_length_blocks(), 12);
     assert_eq!(manager.commit_window_end(), 4);
     assert_eq!(manager.reveal_window_end(), 10);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn refresh_npos_seed_realigns_epoch_after_epoch_length_change() {
+    use iroha_data_model::parameter::system::SumeragiNposParameters;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.epoch_length_blocks = 10;
+    consensus_cfg.vrf_commit_deadline_offset = 1;
+    consensus_cfg.vrf_reveal_deadline_offset = 2;
+
+    let height = 15;
+    let mut harness =
+        test_actor_harness_with_config_and_height(4, consensus_cfg, None, height).await;
+    let actor = &mut harness.actor;
+
+    let seed_epoch0 = [0x3D; 32];
+    let seed_epoch1 = [0x3E; 32];
+    seed_npos_epochs(actor, 10, seed_epoch0, seed_epoch1);
+
+    let epoch_len = 4;
+    let new_seed = [0x7B; 32];
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        let npos_params = SumeragiNposParameters {
+            epoch_length_blocks: epoch_len,
+            epoch_seed: new_seed,
+            vrf_commit_window_blocks: 1,
+            vrf_reveal_window_blocks: 2,
+            ..SumeragiNposParameters::default()
+        };
+        params.custom.insert(
+            SumeragiNposParameters::parameter_id(),
+            npos_params.into_custom_parameter(),
+        );
+        block.commit();
+    }
+
+    let seed = actor
+        .epoch_manager
+        .as_ref()
+        .expect("epoch manager set")
+        .seed();
+    actor.refresh_npos_seed(seed, height, super::commit::EpochRefreshPhase::PostCommit);
+
+    let manager = actor.epoch_manager.as_ref().expect("epoch manager set");
+    assert_eq!(manager.epoch_length_blocks(), epoch_len);
+    assert_eq!(manager.epoch(), (height - 1) / epoch_len);
+    assert_eq!(manager.seed(), new_seed);
 
     harness.shutdown.send();
 }
