@@ -298,10 +298,7 @@ Manifests may include an `abi_hash` that binds the program to the node’s IVM A
 
 ```bash
 # ABI v1
-iroha ivm abi-hash
-
-# Experimental ABI policy (e.g., version 2)
-iroha ivm abi-hash --policy exp:2 --uppercase
+iroha ivm abi-hash --policy v1 --uppercase
 
 The command prints a 32‑byte hex digest. Embed this value in `manifest.abi_hash`. Nodes verify that `abi_hash` equals their runtime policy hash and reject mismatches at admission.
 

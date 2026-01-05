@@ -6,7 +6,7 @@ direction: ltr
 source: docs/source/torii_contracts_api.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: b2157741ae3a79c81ede6212981b727f2aadc4c74d9411a9a1c79560478b643a
+source_hash: 6c972aa47dadebf39566ef20ca2bb234b090f7d1
 source_last_modified: "2025-11-06T19:37:43.740810+00:00"
 translation_last_reviewed: null
 ---

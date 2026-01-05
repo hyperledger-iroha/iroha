@@ -7056,16 +7056,16 @@ fn prepare_contract_call(
             )),
         )));
     }
-    if meta.abi_version == 0 {
+    if meta.abi_version != 1 {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            QueryExecutionFail::Conversion("abi_version 0 is not supported".into()),
+            QueryExecutionFail::Conversion(format!(
+                "unsupported abi_version {}; expected 1",
+                meta.abi_version
+            )),
         )));
     }
 
-    let syscall_policy = match meta.abi_version {
-        1 => SyscallPolicy::AbiV1,
-        v => SyscallPolicy::Experimental(v),
-    };
+    let syscall_policy = SyscallPolicy::AbiV1;
     let abi_hash = iroha_crypto::Hash::prehashed(ivm::syscalls::compute_abi_hash(syscall_policy));
 
     let mut manifest = view

@@ -395,9 +395,9 @@ mod tests {
     /// Manifest and record Norito payloads must roundtrip without losing proposer metadata.
     fn encode_decode_manifest_and_record() {
         let manifest = RuntimeUpgradeManifest {
-            name: "ABI V2".to_string(),
-            description: "Activate ABI v2".to_string(),
-            abi_version: 2,
+            name: "ABI V1".to_string(),
+            description: "Activate ABI v1".to_string(),
+            abi_version: 1,
             abi_hash: [0x11; 32],
             added_syscalls: vec![4001, 4002],
             added_pointer_types: vec![0x0101, 0x0102],
@@ -435,9 +435,9 @@ mod tests {
     fn signature_payload_excludes_provenance_signatures() {
         let kp = KeyPair::random();
         let mut manifest = RuntimeUpgradeManifest {
-            name: "ABI V2".to_string(),
-            description: "Activate ABI v2".to_string(),
-            abi_version: 2,
+            name: "ABI V1".to_string(),
+            description: "Activate ABI v1".to_string(),
+            abi_version: 1,
             abi_hash: [0x11; 32],
             added_syscalls: vec![4001],
             added_pointer_types: vec![0x0101],

@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/runtime_upgrades.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bb2077856de0420cb6ce7f04939caa6348e22c22bee93189a22a8596c71c7cbc
+source_hash: 8990e19977e7f3fb370b9c8f66064542135fa171
 source_last_modified: "2025-12-04T06:31:08.260928+00:00"
 translation_last_reviewed: 2026-01-01
 ---
@@ -20,6 +20,8 @@ translation_last_reviewed: 2026-01-01
 hardfork کئے۔ Nodes پہلے سے binaries رول آؤٹ کرتے ہیں؛ activation آن چین ایک محدود height window
 کے اندر coordinated ہوتی ہے۔ پرانے contracts بغیر تبدیلی کے چلتے رہتے ہیں؛ نئی صلاحیتیں ABI version
 اور policy سے gate ہوتی ہیں۔
+
+نوٹ (پہلا ریلیز): صرف ABI v1 سپورٹڈ ہے۔ دیگر ABI ورژنز کیلئے runtime upgrade manifests مستقبل کے ریلیز تک رد کیے جاتے ہیں جب نئی ABI شامل ہو۔
 
 Goals
 - مقررہ height window میں deterministic activation اور idempotent application۔
@@ -84,9 +86,8 @@ Events (Data Events)
 - RuntimeUpgradeEvent::{Proposed { id, manifest }, Activated { id, abi_version, at_height }, Canceled { id }}
 
 Admission Rules
-- Contract Admission: `ProgramMetadata.abi_version = v` والے manifests کیلئے:
-  - Activation سے پہلے `v`: `IvmAdmissionError::AbiVersionNotActive { v }` کے ساتھ reject کریں۔
-  - Activation کے بعد: `abi_hash(v)` دوبارہ compute کریں اور payload/manifest سے equality ضروری ہے؛ ورنہ `IvmAdmissionError::ManifestAbiHashMismatch` کے ساتھ reject کریں۔
+- Contract Admission: پہلے ریلیز میں صرف `ProgramMetadata.abi_version = 1` قبول ہے؛ باقی اقدار `IvmAdmissionError::UnsupportedAbiVersion` کے ساتھ reject ہوتی ہیں۔
+  - ABI v1 کیلئے `abi_hash(1)` دوبارہ compute کریں اور payload/manifest سے مطابقت مانگیں؛ ورنہ `IvmAdmissionError::ManifestAbiHashMismatch` کے ساتھ reject کریں۔
 - Transaction Admission: `ProposeRuntimeUpgrade`/`ActivateRuntimeUpgrade`/`CancelRuntimeUpgrade` کیلئے مناسب permissions (root/sudo) درکار ہیں؛ window overlap constraints پوری ہونی چاہئیں۔
 
 Provenance Enforcement

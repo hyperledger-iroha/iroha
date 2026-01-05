@@ -313,7 +313,11 @@ fn program_summary_from_bytes(bytes: &[u8]) -> Result<ProgramSummary> {
     let metadata = parsed.metadata;
     let policy = match metadata.abi_version {
         1 => ivm::SyscallPolicy::AbiV1,
-        v => ivm::SyscallPolicy::Experimental(v),
+        v => {
+            return Err(eyre!(
+                "unsupported abi_version {v}; expected 1 for the first release"
+            ));
+        }
     };
     let abi_hash = Hash::prehashed(ivm::syscalls::compute_abi_hash(policy));
     let meta_hash = Hash::new(metadata.encode());

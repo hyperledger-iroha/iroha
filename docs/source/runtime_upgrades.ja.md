@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/runtime_upgrades.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bb2077856de0420cb6ce7f04939caa6348e22c22bee93189a22a8596c71c7cbc
+source_hash: 8990e19977e7f3fb370b9c8f66064542135fa171
 source_last_modified: "2025-12-04T06:31:08.260928+00:00"
 translation_last_reviewed: 2026-01-01
 ---
@@ -15,6 +15,8 @@ translation_last_reviewed: 2026-01-01
 ハードフォーク無しで導入するための、決定論的かつガバナンス制御の仕組みを規定します。ノードは事前に
 バイナリを展開し、アクティベーションは高さウィンドウ内でオンチェーン調整されます。既存コントラクトは
 変更なしで動作し、新機能は ABI バージョンとポリシーでゲートされます。
+
+注記(初回リリース): ABI v1 のみサポートします。他の ABI バージョン向け runtime upgrade manifest は将来の ABI 追加まで拒否されます。
 
 目的
 - 予定された高さウィンドウでの決定論的アクティベーション (冪等適用)。
@@ -79,9 +81,8 @@ translation_last_reviewed: 2026-01-01
 - RuntimeUpgradeEvent::{Proposed { id, manifest }, Activated { id, abi_version, at_height }, Canceled { id }}
 
 入場ルール
-- コントラクト入場: `ProgramMetadata.abi_version = v` の manifest に対して:
-  - `v` が未アクティブ: `IvmAdmissionError::AbiVersionNotActive { v }` で拒否。
-  - アクティブ後: `abi_hash(v)` を再計算し payload/manifest と一致させる。不一致は `IvmAdmissionError::ManifestAbiHashMismatch`。
+- コントラクト入場: 初回リリースでは `ProgramMetadata.abi_version = 1` のみ許可され、他の値は `IvmAdmissionError::UnsupportedAbiVersion` で拒否。
+  - ABI v1 の場合は `abi_hash(1)` を再計算し payload/manifest と一致させる。不一致は `IvmAdmissionError::ManifestAbiHashMismatch`。
 - トランザクション入場: `ProposeRuntimeUpgrade`/`ActivateRuntimeUpgrade`/`CancelRuntimeUpgrade` は適切な権限 (root/sudo) が必要。ウィンドウ重複制約を満たすこと。
 
 プロベナンス強制

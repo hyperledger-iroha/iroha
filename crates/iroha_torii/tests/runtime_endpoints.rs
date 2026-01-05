@@ -79,14 +79,14 @@ async fn runtime_activate_and_cancel_validate_identifiers() {
 }
 
 #[tokio::test]
-async fn runtime_upgrades_list_sorted_by_window_then_version() {
+async fn runtime_upgrades_list_sorted_by_window() {
     let authority = random_authority();
 
     let manifests = vec![
         RuntimeUpgradeManifest {
-            name: "ABI v4".into(),
+            name: "ABI v1 (late)".into(),
             description: "Third".into(),
-            abi_version: 4,
+            abi_version: 1,
             abi_hash: [0x03; 32],
             added_syscalls: vec![],
             added_pointer_types: vec![],
@@ -97,9 +97,9 @@ async fn runtime_upgrades_list_sorted_by_window_then_version() {
             provenance: Vec::new(),
         },
         RuntimeUpgradeManifest {
-            name: "ABI version 2".into(),
+            name: "ABI v1 (early)".into(),
             description: "First".into(),
-            abi_version: 2,
+            abi_version: 1,
             abi_hash: [0x01; 32],
             added_syscalls: vec![],
             added_pointer_types: vec![],
@@ -110,9 +110,9 @@ async fn runtime_upgrades_list_sorted_by_window_then_version() {
             provenance: Vec::new(),
         },
         RuntimeUpgradeManifest {
-            name: "ABI v3".into(),
+            name: "ABI v1 (mid)".into(),
             description: "Second".into(),
-            abi_version: 3,
+            abi_version: 1,
             abi_hash: [0x02; 32],
             added_syscalls: vec![],
             added_pointer_types: vec![],
@@ -153,5 +153,5 @@ async fn runtime_upgrades_list_sorted_by_window_then_version() {
             )
         })
         .collect();
-    assert_eq!(order, vec![(2, 2), (6, 3), (10, 4)]);
+    assert_eq!(order, vec![(2, 1), (6, 1), (10, 1)]);
 }

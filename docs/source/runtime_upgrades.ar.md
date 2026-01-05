@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/runtime_upgrades.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bb2077856de0420cb6ce7f04939caa6348e22c22bee93189a22a8596c71c7cbc
+source_hash: 8990e19977e7f3fb370b9c8f66064542135fa171
 source_last_modified: "2025-12-04T06:31:08.260928+00:00"
 translation_last_reviewed: 2026-01-01
 ---
@@ -19,6 +19,8 @@ translation_last_reviewed: 2026-01-01
 وانواع pointer-ABI) دون ايقاف الشبكة او عمل hardfork للعقد. تقوم العقد بنشر الثنائيات مسبقا؛
 ويتم تنسيق التفعيل على السلسلة ضمن نافذة ارتفاع محدودة. العقود القديمة تستمر دون تغيير؛ اما
 القدرات الجديدة فمقيدة حسب نسخة ABI والسياسة.
+
+ملاحظة (الاصدار الاول): يتم دعم ABI v1 فقط. يتم رفض manifests الخاصة بترقية runtime لنسخ ABI الاخرى حتى اصدار مستقبلي يضيف ABI جديدة.
 
 الاهداف
 - تفعيل حتمي ضمن نافذة ارتفاع مجدولة مع تطبيق idempotent.
@@ -83,9 +85,8 @@ translation_last_reviewed: 2026-01-01
 - RuntimeUpgradeEvent::{Proposed { id, manifest }, Activated { id, abi_version, at_height }, Canceled { id }}
 
 قواعد القبول
-- قبول العقود: للـ manifests التي فيها `ProgramMetadata.abi_version = v`:
-  - قبل تفعيل `v`: رفض مع `IvmAdmissionError::AbiVersionNotActive { v }`.
-  - بعد التفعيل: اعادة حساب `abi_hash(v)` واشتراط المساواة مع payload/manifest؛ والا رفض بـ `IvmAdmissionError::ManifestAbiHashMismatch`.
+- قبول العقود: في الاصدار الاول يقبل فقط `ProgramMetadata.abi_version = 1`؛ القيم الاخرى ترفض مع `IvmAdmissionError::UnsupportedAbiVersion`.
+  - لــ ABI v1، يعاد حساب `abi_hash(1)` ويشترط التطابق مع payload/manifest عند توفره؛ والا يرفض بـ `IvmAdmissionError::ManifestAbiHashMismatch`.
 - قبول المعاملات: التعليمات `ProposeRuntimeUpgrade`/`ActivateRuntimeUpgrade`/`CancelRuntimeUpgrade` تتطلب صلاحيات مناسبة (root/sudo); يجب ان تلتزم بقيود تداخل النوافذ.
 
 تطبيق provenance

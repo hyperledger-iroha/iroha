@@ -306,10 +306,7 @@ curl -s -X POST \
 
 ```bash
 # ABI v1
-iroha ivm abi-hash
-
-# 実験的ポリシー（例: バージョン 2）
-iroha ivm abi-hash --policy exp:2 --uppercase
+iroha ivm abi-hash --policy v1 --uppercase
 ```
 
 32 バイト hex ダイジェストが出力されるため、`manifest.abi_hash` に設定します。ノードはランタイムポリシーとの一致を確認し、差異があれば受理時に拒否します。

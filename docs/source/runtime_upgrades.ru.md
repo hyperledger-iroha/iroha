@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/runtime_upgrades.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bb2077856de0420cb6ce7f04939caa6348e22c22bee93189a22a8596c71c7cbc
+source_hash: 8990e19977e7f3fb370b9c8f66064542135fa171
 source_last_modified: "2025-12-04T06:31:08.260928+00:00"
 translation_last_reviewed: 2026-01-01
 ---
@@ -16,6 +16,8 @@ translation_last_reviewed: 2026-01-01
 без hardfork. Узлы заранее раскатывают бинарники; активация координируется on-chain в
 ограниченном окне высот. Старые контракты продолжают работать без изменений; новые возможности
 гейтятся по версии ABI и политике.
+
+Примечание (первый релиз): поддерживается только ABI v1. Runtime upgrade manifest для других ABI версий отклоняются до будущего релиза с новой ABI.
 
 Цели
 - Детерминированная активация в запланированном окне высот с идемпотентным применением.
@@ -80,9 +82,8 @@ Storage layout
 - RuntimeUpgradeEvent::{Proposed { id, manifest }, Activated { id, abi_version, at_height }, Canceled { id }}
 
 Правила admission
-- Admission контрактов: для manifest с `ProgramMetadata.abi_version = v`:
-  - До активации `v`: отклонить с `IvmAdmissionError::AbiVersionNotActive { v }`.
-  - После активации: пересчитать `abi_hash(v)` и требовать равенства с payload/manifest; иначе отклонить с `IvmAdmissionError::ManifestAbiHashMismatch`.
+- Admission контрактов: в первом релизе допускается только `ProgramMetadata.abi_version = 1`; остальные значения отклоняются с `IvmAdmissionError::UnsupportedAbiVersion`.
+  - Для ABI v1 пересчитать `abi_hash(1)` и требовать равенства с payload/manifest при наличии; иначе отклонить с `IvmAdmissionError::ManifestAbiHashMismatch`.
 - Admission транзакций: инструкции `ProposeRuntimeUpgrade`/`ActivateRuntimeUpgrade`/`CancelRuntimeUpgrade` требуют соответствующих прав (root/sudo); должны удовлетворять ограничениям перекрытия окон.
 
 Enforcement provenance

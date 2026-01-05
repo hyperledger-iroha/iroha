@@ -2,6 +2,8 @@
 
 This document specifies a deterministic, governance‑controlled mechanism to introduce new IVM/host capabilities (e.g., new syscalls and pointer‑ABI types) without stopping the network or hard‑forking nodes. Nodes roll out binaries in advance; activation is coordinated on‑chain within a bounded height window. Old contracts continue to run unchanged; new capabilities are gated by ABI version and policy.
 
+Note (first release): Only ABI v1 is supported. Runtime upgrade manifests targeting other ABI versions are rejected until a future release introduces a new ABI version.
+
 Goals
 - Deterministic activation at a scheduled height window with idempotent application.
 - Coexistence of multiple ABI versions; never break existing binaries.
@@ -65,9 +67,8 @@ Events (Data Events)
 - RuntimeUpgradeEvent::{Proposed { id, manifest }, Activated { id, abi_version, at_height }, Canceled { id }}
 
 Admission Rules
-- Contract Admission: For manifests with `ProgramMetadata.abi_version = v`:
-  - Before activation of `v`: reject with `IvmAdmissionError::AbiVersionNotActive { v }`.
-  - After activation: recompute `abi_hash(v)` and require equality with payload/manifest; else reject with `IvmAdmissionError::ManifestAbiHashMismatch`.
+- Contract Admission: Only `ProgramMetadata.abi_version = 1` is accepted in the first release; other values are rejected with `IvmAdmissionError::UnsupportedAbiVersion`.
+  - For ABI v1 payloads, recompute `abi_hash(1)` and require equality with payload/manifest when provided; mismatches reject with `IvmAdmissionError::ManifestAbiHashMismatch`.
 - Transaction Admission: Instructions `ProposeRuntimeUpgrade`/`ActivateRuntimeUpgrade`/`CancelRuntimeUpgrade` require appropriate permissions (root/sudo); must satisfy window overlap constraints.
 
 Provenance Enforcement
