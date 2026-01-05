@@ -1,6 +1,10 @@
 # Status
 
 ## Latest Updates
+- IVM/Kotodama: allow dynamic bounds in `.take`/`.range` when `kotodama_dynamic_bounds` is enabled; add regression tests for non-literal bounds.
+- Tests: `cargo test --workspace` (failed: missing `AudioEncoderSampleCountMismatchInfo` in `crates/norito/src/streaming.rs:4230`; warning about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450`).
+- Kura: avoid pre-shrinking the block index before batch writes by adding a targeted append path for rewrites; add regression coverage for tail rewrites.
+- Tests: not run (not requested).
 - IVM/Kotodama: keep spill stack offsets in i64 to avoid truncation, make regalloc interval ordering deterministic, and clarify map-iteration bounds commentary; add unit coverage for large stack offsets and deterministic allocation ties.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
 - Kura: validate sidecar temp index sanity before promotion to avoid replacing good indexes with partial temp writes; add regression coverage for corrupt temp index handling.

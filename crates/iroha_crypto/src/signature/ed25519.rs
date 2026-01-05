@@ -6,11 +6,13 @@ use curve25519_dalek::edwards::EdwardsPoint;
 #[cfg(feature = "ecc-batch")]
 use curve25519_dalek::{constants, scalar::Scalar, traits::IsIdentity};
 use ed25519_dalek::Signature;
+use sha2::{Digest, Sha256};
 use signature::Signer as _;
+use zeroize::Zeroize;
 
 #[cfg(feature = "rand")]
 use crate::rng::os_rng;
-use crate::{Error, KeyGenOption, ParseError, rng::rng_from_seed};
+use crate::{Error, KeyGenOption, ParseError};
 
 pub type PublicKey = ed25519_dalek::VerifyingKey;
 pub type PrivateKey = ed25519_dalek::SigningKey;
@@ -20,7 +22,7 @@ use std::iter;
 use std::{format, string::ToString as _, vec::Vec};
 
 #[cfg(feature = "ecc-batch")]
-use sha2::{Digest, Sha512};
+use sha2::Sha512;
 
 fn parse_fixed_size<T, E, F, const SIZE: usize>(
     payload: &[u8],
@@ -41,6 +43,19 @@ where
     fixed_parser(&fixed_payload).map_err(|err| ParseError(err.to_string()))
 }
 
+fn ed25519_seed_from_material(seed: &[u8]) -> [u8; 32] {
+    if seed.len() == 32 {
+        let mut out = [0u8; 32];
+        out.copy_from_slice(seed);
+        return out;
+    }
+
+    let digest = Sha256::digest(seed);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Ed25519Sha512;
 
@@ -52,9 +67,10 @@ impl Ed25519Sha512 {
                 let mut rng = os_rng();
                 PrivateKey::generate(&mut rng)
             }
-            KeyGenOption::UseSeed(seed) => {
-                let mut rng = rng_from_seed(seed);
-                PrivateKey::generate(&mut rng)
+            KeyGenOption::UseSeed(mut seed) => {
+                let seed_bytes = ed25519_seed_from_material(&seed);
+                seed.zeroize();
+                PrivateKey::from_bytes(&seed_bytes)
             }
             KeyGenOption::FromPrivateKey(ref s) => PrivateKey::clone(s),
         };
@@ -92,9 +108,28 @@ impl Ed25519Sha512 {
     }
 
     pub fn parse_private_key(payload: &[u8]) -> Result<PrivateKey, ParseError> {
-        parse_fixed_size(payload, |bytes| {
-            Ok::<_, Infallible>(PrivateKey::from_bytes(bytes))
-        })
+        match payload.len() {
+            32 => parse_fixed_size(payload, |bytes| {
+                Ok::<_, Infallible>(PrivateKey::from_bytes(bytes))
+            }),
+            64 => {
+                let mut seed = [0u8; 32];
+                seed.copy_from_slice(&payload[..32]);
+                let mut public = [0u8; 32];
+                public.copy_from_slice(&payload[32..]);
+                let signing_key = PrivateKey::from_bytes(&seed);
+                if signing_key.verifying_key().to_bytes() != public {
+                    return Err(ParseError(
+                        "ed25519 private key payload has mismatched public key".to_string(),
+                    ));
+                }
+                seed.zeroize();
+                Ok(signing_key)
+            }
+            len => Err(ParseError(format!(
+                "the payload size is incorrect: expected 32 or 64, but got {len}"
+            ))),
+        }
     }
 
     pub fn sign(message: &[u8], sk: &PrivateKey) -> Vec<u8> {
@@ -308,7 +343,7 @@ mod test {
         traits::{Identity, IsIdentity},
     };
     use ed25519_dalek::Verifier;
-    use sha2::{Digest, Sha512};
+    use sha2::{Digest, Sha256, Sha512};
 
     const MESSAGE_1: &[u8] = b"This is a dummy message for use with tests";
     const SIGNATURE_1: &str = "451b5b8e8725321541954997781de51f4142e4a56bab68d24f6a6b92615de5eefb74134138315859a32c7cf5fe5a488bc545e2e08e5eedfd1fb10188d532d808";
@@ -473,7 +508,60 @@ mod test {
         let err = Ed25519Sha512::parse_private_key(&[1, 2, 3]).unwrap_err();
         assert_eq!(
             err,
-            ParseError("the payload size is incorrect: expected 32, but got 3".to_string())
+            ParseError("the payload size is incorrect: expected 32 or 64, but got 3".to_string())
+        );
+    }
+
+    #[test]
+    fn seeded_keypair_uses_seed_bytes() {
+        let seed = [0x11; 32];
+        let (pk, sk) = Ed25519Sha512::keypair(KeyGenOption::UseSeed(seed.to_vec()));
+        let expected = PrivateKey::from_bytes(&seed);
+        assert_eq!(sk.to_bytes(), expected.to_bytes());
+        assert_eq!(pk.to_bytes(), expected.verifying_key().to_bytes());
+    }
+
+    #[test]
+    fn seeded_keypair_hashes_non_32_seed() {
+        let seed = b"iroha-ed25519-seed";
+        let (pk, sk) = Ed25519Sha512::keypair(KeyGenOption::UseSeed(seed.to_vec()));
+        let digest = Sha256::digest(seed);
+        let mut derived = [0u8; 32];
+        derived.copy_from_slice(&digest);
+        let expected = PrivateKey::from_bytes(&derived);
+        assert_eq!(sk.to_bytes(), expected.to_bytes());
+        assert_eq!(pk.to_bytes(), expected.verifying_key().to_bytes());
+    }
+
+    #[test]
+    fn parse_private_key_accepts_seed_or_keypair_bytes() {
+        let seed = [0x42; 32];
+        let signing_key = PrivateKey::from_bytes(&seed);
+        let public = signing_key.verifying_key().to_bytes();
+
+        let seed_parsed = Ed25519Sha512::parse_private_key(&seed).expect("seed parse");
+        assert_eq!(seed_parsed.to_bytes(), signing_key.to_bytes());
+
+        let mut keypair_bytes = [0u8; 64];
+        keypair_bytes[..32].copy_from_slice(&seed);
+        keypair_bytes[32..].copy_from_slice(&public);
+        let keypair_parsed =
+            Ed25519Sha512::parse_private_key(&keypair_bytes).expect("keypair parse");
+        assert_eq!(keypair_parsed.to_bytes(), signing_key.to_bytes());
+    }
+
+    #[test]
+    fn parse_private_key_rejects_mismatched_keypair_bytes() {
+        let seed = [0x01; 32];
+        let signing_key = PrivateKey::from_bytes(&seed);
+        let mut keypair_bytes = [0u8; 64];
+        keypair_bytes[..32].copy_from_slice(&seed);
+        keypair_bytes[32..].copy_from_slice(&signing_key.verifying_key().to_bytes());
+        keypair_bytes[63] ^= 0x01;
+        let err = Ed25519Sha512::parse_private_key(&keypair_bytes).unwrap_err();
+        assert!(
+            err.0.contains("mismatched public key"),
+            "unexpected error: {err:?}"
         );
     }
 
