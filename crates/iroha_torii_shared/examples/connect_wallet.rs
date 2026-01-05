@@ -27,6 +27,10 @@ use iroha_torii_shared::connect_sdk as sdk;
 #[cfg(feature = "connect")]
 use norito::codec::{DecodeAll as _, Encode as _};
 #[cfg(feature = "connect")]
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+#[cfg(feature = "connect")]
+use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
+#[cfg(feature = "connect")]
 use tokio_tungstenite::tungstenite::{Bytes, Message};
 
 #[cfg(feature = "connect")]
@@ -59,12 +63,15 @@ async fn main() -> anyhow::Result<()> {
 
     // Connect WS as wallet
     let ws_url = format!(
-        "{}/v1/connect/ws?sid={}&role=wallet&token={}",
+        "{}/v1/connect/ws?sid={}&role=wallet",
         node.replace("http", "ws"),
-        sid_b64,
-        token
+        sid_b64
     );
-    let (mut ws, _resp) = tokio_tungstenite::connect_async(&ws_url).await?;
+    let mut request = ws_url.into_client_request()?;
+    request
+        .headers_mut()
+        .insert(AUTHORIZATION, format!("Bearer {token}").parse()?);
+    let (mut ws, _resp) = tokio_tungstenite::connect_async(request).await?;
     eprintln!("wallet: connected WS");
 
     // Derive deterministic demo ephemerals from sid so app/wallet interoperate

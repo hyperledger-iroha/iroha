@@ -44,6 +44,8 @@ Notas:
 - `CONNECT_SESSION_TTL_MS` y `CONNECT_DEDUPE_TTL_MS` usan literales de
   duración en la configuración de usuario y se mapean a los campos efectivos
   `session_ttl` y `dedupe_ttl`.
+- `CONNECT_WS_PER_IP_MAX_SESSIONS=0` deshabilita el límite de sesiones por IP.
+- `CONNECT_WS_RATE_PER_IP_PER_MIN=0` deshabilita el limitador de tasa de handshake por IP.
 - La lógica de heartbeat limita el intervalo configurado al mínimo aceptable
   para navegadores (`ping_min_interval_ms`); el servidor tolera
   `ping_miss_tolerance` pongs consecutivos perdidos antes de cerrar el
@@ -59,4 +61,3 @@ Consulta también:
 `crates/iroha_config/src/parameters/{user,actual}.rs` y los valores por
 defecto en `crates/iroha_config/src/parameters/defaults.rs` (módulo
 `connect`).
-

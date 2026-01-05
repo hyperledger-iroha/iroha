@@ -379,6 +379,8 @@ impl std::error::Error for MultihashConvertError {}
 mod tests {
     use super::*;
     use crate::hex_decode;
+    #[cfg(feature = "sm")]
+    use crate::sm::encode_sm2_public_key_payload;
 
     #[test]
     fn test_encode_public_key() {
@@ -395,8 +397,10 @@ mod tests {
     #[test]
     fn test_encode_sm2_public_key() {
         let algorithm = Algorithm::Sm2;
-        let payload = hex_decode("040AE4C7798AA0F119471BEE11825BE46202BB79E2A5844495E97C04FF4DF2548A7C0240F88F1CD4E16352A73C17B7F16F07353E53A176D684A9FE0C6BB798E857").unwrap();
-        let multihash = hex_decode("862641040AE4C7798AA0F119471BEE11825BE46202BB79E2A5844495E97C04FF4DF2548A7C0240F88F1CD4E16352A73C17B7F16F07353E53A176D684A9FE0C6BB798E857").unwrap();
+        let distid = "ALICE123@YAHOO.COM";
+        let sec1 = hex_decode("040AE4C7798AA0F119471BEE11825BE46202BB79E2A5844495E97C04FF4DF2548A7C0240F88F1CD4E16352A73C17B7F16F07353E53A176D684A9FE0C6BB798E857").unwrap();
+        let payload = encode_sm2_public_key_payload(distid, &sec1).expect("sm2 payload");
+        let multihash = hex_decode("8626550012414C494345313233405941484F4F2E434F4D040AE4C7798AA0F119471BEE11825BE46202BB79E2A5844495E97C04FF4DF2548A7C0240F88F1CD4E16352A73C17B7F16F07353E53A176D684A9FE0C6BB798E857").unwrap();
         assert_eq!(encode_public_key(algorithm, &payload).unwrap(), multihash);
     }
 
@@ -506,11 +510,13 @@ mod tests {
     #[test]
     fn test_sm2_public_key_multihash_roundtrip() {
         let algorithm = Algorithm::Sm2;
-        // Use uncompressed SEC1 payload length (1 + 32 + 32)
-        let mut payload = vec![0u8; 65];
-        for (idx, byte) in payload.iter_mut().enumerate() {
+        let distid = "sm2-multihash-test";
+        let mut sec1 = vec![0u8; 65];
+        for (idx, byte) in sec1.iter_mut().enumerate() {
             *byte = u8::try_from(idx % 256).expect("value fits into u8");
         }
+        let payload =
+            crate::sm::encode_sm2_public_key_payload(distid, &sec1).expect("encode SM2 payload");
         let encoded = encode_public_key(algorithm, &payload).expect("encode sm2 pk");
         let (decoded_alg, decoded_payload) = decode_public_key(&encoded).expect("decode sm2 pk");
         assert_eq!(decoded_alg, algorithm);

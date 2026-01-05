@@ -27,7 +27,7 @@ use iroha_crypto::{
     Signature, derive_keyset_from_slice,
     error::ParseError,
     kex::{KeyExchangeScheme, X25519Sha256},
-    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
+    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
 use iroha_data_model::{
     account::Account,
@@ -6369,8 +6369,12 @@ fn load_sm2_keypair_py(
 #[pyo3(name = "sm2_public_key_multihash", signature = (public_key, distid=None))]
 /// Return the canonical multihash encoding for an SM2 public key.
 fn sm2_public_key_multihash_py(public_key: &[u8], distid: Option<&str>) -> PyResult<String> {
-    let _ = parse_sm2_public_key(distid, public_key)?;
-    PublicKey::from_bytes(Algorithm::Sm2, public_key)
+    let distid = sm2_distid_arg(distid);
+    let _ = parse_sm2_public_key(Some(distid.as_str()), public_key)?;
+    let payload = encode_sm2_public_key_payload(&distid, public_key).map_err(|err| {
+        PyValueError::new_err(format!("failed to encode SM2 public key payload: {err}"))
+    })?;
+    PublicKey::from_bytes(Algorithm::Sm2, &payload)
         .map(|pk| pk.to_string())
         .map_err(|err| PyValueError::new_err(format!("failed to construct SM2 public key: {err}")))
 }
@@ -6453,7 +6457,10 @@ fn sm2_fixture_from_seed_py(
     let secret_hex = hex::encode_upper(private.secret_bytes());
     let public_bytes = public.to_sec1_bytes(false);
     let public_hex = hex::encode_upper(&public_bytes);
-    let public_key = PublicKey::from_bytes(Algorithm::Sm2, &public_bytes).map_err(|err| {
+    let payload = encode_sm2_public_key_payload(distid, &public_bytes).map_err(|err| {
+        PyValueError::new_err(format!("failed to encode SM2 public key payload: {err}"))
+    })?;
+    let public_key = PublicKey::from_bytes(Algorithm::Sm2, &payload).map_err(|err| {
         PyValueError::new_err(format!("failed to construct SM2 public key: {err}"))
     })?;
     let multihash = public_key.to_string();

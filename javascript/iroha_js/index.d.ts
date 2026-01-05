@@ -6579,7 +6579,10 @@ export function loadSm2KeyPair(
   distid?: string,
 ): Sm2KeyPair;
 
-export function sm2PublicKeyMultihash(publicKey: ArrayBufferView | ArrayBuffer | Buffer): string;
+export function sm2PublicKeyMultihash(
+  publicKey: ArrayBufferView | ArrayBuffer | Buffer,
+  distid?: string,
+): string;
 
 export function signSm2(
   message: ArrayBufferView | ArrayBuffer | Buffer | string,

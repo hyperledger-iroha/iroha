@@ -208,6 +208,7 @@ seiyaku Name {
 ### ユーティリティ系ビルトイン
 - `info(string|int|tuple)`: 構造化イベント／メッセージを OUTPUT に出力します。
 - `hash(blob) -> Blob*`: Norito エンコードされたハッシュを Blob として返します。
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk)` と `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk)`: インライン ISI ビルダー。引数はすべてコンパイル時リテラル（文字列リテラル、またはリテラルから生成したポインターコンストラクタ）でなければなりません。`nullifier32` と `inputs32` は 32 バイト固定（生文字列または `0x` 16進）、`amount` は非負。戻り値は NoritoBytes を指す `Blob*` です。
 
 ### 備考
 - ビルトインは薄いラッパーであり、コンパイラはレジスタ転送と `SCALL` にローアリングします。

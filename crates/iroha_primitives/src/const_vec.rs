@@ -228,7 +228,7 @@ impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {
             );
         }
 
-        writer.write_u64::<ncore::LittleEndian>(slice.len() as u64)?;
+        ncore::write_seq_len(&mut writer, slice.len() as u64)?;
         if ncore::use_packed_seq() {
             Self::serialize_packed(slice, &mut writer, trace_enabled)
         } else {
@@ -239,7 +239,7 @@ impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {
     fn encoded_len_hint(&self) -> Option<usize> {
         let slice: &[T] = &self.0;
         let len = slice.len();
-        let seq_hdr: usize = 8;
+        let seq_hdr = ncore::seq_len_prefix_len(len);
         if !ncore::use_packed_seq() {
             let mut total = seq_hdr;
             let use_compact = ncore::use_compact_len();
@@ -278,7 +278,7 @@ impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {
     fn encoded_len_exact(&self) -> Option<usize> {
         let slice: &[T] = &self.0;
         let len = slice.len();
-        let seq_hdr: usize = 8;
+        let seq_hdr = ncore::seq_len_prefix_len(len);
         if !ncore::use_packed_seq() {
             let mut total = seq_hdr;
             let use_compact = ncore::use_compact_len();
@@ -1101,7 +1101,7 @@ where
     {
         let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
         let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
-        reencoded.write_u64::<ncore::LittleEndian>(vec.len() as u64)?;
+        ncore::write_seq_len(&mut reencoded, vec.len() as u64)?;
         if ncore::use_packed_seq() {
             #[cfg(debug_assertions)]
             let trace_enabled = norito::debug_trace_enabled();
@@ -1272,7 +1272,7 @@ mod tests {
         codec::{self, Decode, Encode},
     };
 
-    use super::{ConstVec, decode_const_vec_manual, ncore};
+    use super::{ConstVec, decode_const_vec_manual, ncore, reencode_and_verify};
 
     #[repr(transparent)]
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1433,6 +1433,18 @@ mod tests {
     }
 
     #[test]
+    fn compact_seq_len_updates_encoded_lengths() {
+        let flags = ncore::header_flags::COMPACT_LEN | ncore::header_flags::COMPACT_SEQ_LEN;
+        let _guard = ncore::DecodeFlagsGuard::enter(flags);
+        let value = ConstVec::from(vec![1_u8, 2_u8]);
+        let mut bytes = Vec::new();
+        NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
+        assert_eq!(value.encoded_len_exact(), Some(bytes.len()));
+        assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
+        assert_eq!(bytes.len(), 5);
+    }
+
+    #[test]
     fn packed_seq_roundtrip_alignment() {
         let flags = ncore::header_flags::PACKED_SEQ;
         let encode_guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
@@ -1460,6 +1472,17 @@ mod tests {
                 "ConstVec exact length is no longer reported under canonical layout"
             );
         }
+    }
+
+    #[test]
+    fn reencode_and_verify_respects_compact_seq_len() {
+        let flags = ncore::header_flags::COMPACT_LEN | ncore::header_flags::COMPACT_SEQ_LEN;
+        let _guard = ncore::DecodeFlagsGuard::enter(flags);
+        let value = ConstVec::from(vec![1_u8, 2_u8, 3_u8]);
+        let mut bytes = Vec::new();
+        NoritoSerialize::serialize(&value, &mut bytes).expect("serialize const vec");
+        let len = reencode_and_verify(value.as_ref(), &bytes).expect("reencode const vec");
+        assert_eq!(len, bytes.len());
     }
 
     #[test]

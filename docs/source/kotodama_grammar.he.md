@@ -210,6 +210,7 @@ seiyaku Name {
 ### בילט-אינים שירותיים
 - ‎`info(string|int|tuple)`: מפיק אירוע/מסר מובנה דרך OUTPUT.
 - ‎`hash(blob) -> Blob*`: מחזיר TLV של Norito המכיל hash.
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk)` ו-`build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk)`: בוני ISI אינליין. כל הארגומנטים חייבים להיות ליטרלים בזמן קומפילציה (ליטרל מחרוזת או קונסטרוקטור מצביע שמבוסס על ליטרל). `nullifier32` ו-`inputs32` חייבים להיות בדיוק 32 בתים (מחרוזת גולמית או hex עם `0x`), ו-`amount` חייב להיות לא שלילי. הערך המוחזר הוא `Blob*` שמצביע ל-NoritoBytes.
 
 ### הערות
 - בילט-אינים הם שכבות דקות; הקומפיילר מנמיך להעברות רגיסטר וקריאת `SCALL`.

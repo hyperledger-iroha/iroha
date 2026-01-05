@@ -7,6 +7,7 @@ use clap::{Args, Subcommand};
 use eyre::{Result, WrapErr, eyre};
 use iroha_crypto::{
     Algorithm, PrivateKey, PublicKey, Sm2PrivateKey, Sm2PublicKey, Sm3Digest, Sm4Key,
+    sm::{encode_sm2_private_key_payload, encode_sm2_public_key_payload},
 };
 use norito::json;
 use rand::random;
@@ -860,8 +861,10 @@ fn collect_sm2_artifacts(private: &Sm2PrivateKey) -> Sm2Artifacts {
     let mut secret = private.secret_bytes();
     let private_key_hex = hex::encode_upper(secret.as_ref());
     let private_key_b64 = BASE64.encode(secret.as_ref());
-    let private_key_config = PrivateKey::from_bytes(Algorithm::Sm2, &secret)
-        .map_or_else(|_| "<unavailable>".to_string(), |pk| pk.to_string());
+    let private_key_config = encode_sm2_private_key_payload(&distid, &secret)
+        .ok()
+        .and_then(|payload| PrivateKey::from_bytes(Algorithm::Sm2, &payload).ok())
+        .map_or_else(|| "<unavailable>".to_string(), |pk| pk.to_string());
     let private_key_pem = private
         .to_pkcs8_pem()
         .unwrap_or_else(|_| "<unavailable>".to_string());
@@ -871,8 +874,10 @@ fn collect_sm2_artifacts(private: &Sm2PrivateKey) -> Sm2Artifacts {
     let public_key_hex = hex::encode_upper(&public_bytes);
     let public_key_b64 = BASE64.encode(&public_bytes);
     let public_key_compressed_hex = hex::encode_upper(&public_compressed);
-    let public_key_config = PublicKey::from_bytes(Algorithm::Sm2, &public_bytes)
-        .map_or_else(|_| "<unavailable>".to_string(), |pk| pk.to_string());
+    let public_key_config = encode_sm2_public_key_payload(&distid, &public_bytes)
+        .ok()
+        .and_then(|payload| PublicKey::from_bytes(Algorithm::Sm2, &payload).ok())
+        .map_or_else(|| "<unavailable>".to_string(), |pk| pk.to_string());
     let public_key_pem = public
         .to_public_key_pem()
         .unwrap_or_else(|_| "<unavailable>".to_string());
@@ -1387,13 +1392,15 @@ mod tests {
         struct DistidGuard(String);
         impl Drop for DistidGuard {
             fn drop(&mut self) {
-                Sm2PublicKey::set_default_distid(self.0.clone());
+                Sm2PublicKey::set_default_distid(self.0.clone())
+                    .expect("restore default distid");
             }
         }
 
         let original = Sm2PublicKey::default_distid();
         let _guard = DistidGuard(original.clone());
-        Sm2PublicKey::set_default_distid("runtime-default-test");
+        Sm2PublicKey::set_default_distid("runtime-default-test")
+            .expect("override distid");
 
         let parsed = super::parse_distid(None).expect("parse distid");
         assert_eq!(parsed, "runtime-default-test");

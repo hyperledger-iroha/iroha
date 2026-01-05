@@ -1066,7 +1066,7 @@ async fn connect_endpoints_hidden_when_disabled() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(Uri::from_static("/v1/connect/ws?sid=AA&role=app&token=t"))
+                .uri(Uri::from_static("/v1/connect/ws?sid=AA&role=app"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

@@ -805,7 +805,7 @@ The JS SDK now ships higher-level SM2 helpers backed by the native host:
 - `loadSm2KeyPair(privateKey, distid?)`
 - `signSm2(message, privateKey, distid?)`
 - `verifySm2(message, signature, publicKey, distid?)`
-- `sm2PublicKeyMultihash(publicKey)`
+- `sm2PublicKeyMultihash(publicKey, distid?)`
 
 All helpers default to the canonical distinguishing ID (`1234567812345678`)
 and share the same deterministic policy as the Rust/Python SDKs. The
@@ -825,7 +825,7 @@ import {
 
 const generated = generateSm2KeyPair();
 console.log(generated.distid); // "1234567812345678"
-console.log(sm2PublicKeyMultihash(generated.publicKey));
+console.log(sm2PublicKeyMultihash(generated.publicKey, generated.distid));
 
 const seed = Buffer.from("11".repeat(32), "hex");
 const derived = deriveSm2KeyPairFromSeed(seed, "1234567812345678");

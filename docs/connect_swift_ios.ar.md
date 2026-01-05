@@ -43,8 +43,10 @@ translation_last_reviewed: 2025-11-14
 ```swift
 import IrohaSwift
 
-let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sidB64)&role=app&token=\(token)")!
-let connectClient = ConnectClient(url: connectURL)
+let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sidB64)&role=app")!
+var connectRequest = URLRequest(url: connectURL)
+connectRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+let connectClient = ConnectClient(request: connectRequest)
 let sessionID = Data(base64Encoded: sidB64)!
 
 Task {
@@ -209,8 +211,10 @@ func createConnectSession(node: String, chainId: String, appEphemeralPk: Data, c
 
 // Join WS with token (URLSessionWebSocketTask)
 func joinWs(node: String, sid: String, role: String, token: String, onMessage: @escaping (Data)->Void) {
-    let wsUrl = node.replacingOccurrences(of: "http", with: "ws") + "/v1/connect/ws?sid=\(sid)&role=\(role)&token=\(token)"
-    let task = URLSession.shared.webSocketTask(with: URL(string: wsUrl)!)
+    let wsUrl = node.replacingOccurrences(of: "http", with: "ws") + "/v1/connect/ws?sid=\(sid)&role=\(role)"
+    var request = URLRequest(url: URL(string: wsUrl)!)
+    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    let task = URLSession.shared.webSocketTask(with: request)
     task.resume()
     func recv() {
         task.receive { result in

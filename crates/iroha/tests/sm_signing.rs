@@ -5,6 +5,7 @@ use core::fmt::Write as _;
 use std::{fs, path::PathBuf};
 
 use hex::FromHex;
+use iroha::crypto::sm::{encode_sm2_private_key_payload, encode_sm2_public_key_payload};
 use iroha::crypto::{self, Algorithm, KeyPair, PrivateKey, PublicKey, Sm2PrivateKey, Sm2PublicKey};
 use norito::derive::JsonDeserialize;
 
@@ -12,7 +13,8 @@ struct DistIdGuard(String);
 
 impl Drop for DistIdGuard {
     fn drop(&mut self) {
-        Sm2PublicKey::set_default_distid(self.0.clone());
+        Sm2PublicKey::set_default_distid(self.0.clone())
+            .expect("restore default distid");
     }
 }
 
@@ -58,7 +60,8 @@ fn sm2_signatures_are_deterministic() {
     let fixture = load_fixture();
 
     let original_distid = Sm2PublicKey::default_distid();
-    Sm2PublicKey::set_default_distid(fixture.distid.clone());
+    Sm2PublicKey::set_default_distid(fixture.distid.clone())
+        .expect("override distid");
     let _guard = DistIdGuard(original_distid);
 
     let seed = <[u8; 32]>::from_hex(&fixture.seed_hex).expect("fixture seed should yield 32 bytes");
@@ -70,9 +73,13 @@ fn sm2_signatures_are_deterministic() {
     assert_eq!(to_upper_hex(&secret_bytes), fixture.private_key_hex);
     assert_eq!(to_upper_hex(&public_bytes), fixture.public_key_sec1_hex);
 
+    let public_payload =
+        encode_sm2_public_key_payload(&fixture.distid, &public_bytes).expect("public payload");
+    let private_payload =
+        encode_sm2_private_key_payload(&fixture.distid, &secret_bytes).expect("private payload");
     let key_pair = KeyPair::new(
-        PublicKey::from_bytes(Algorithm::Sm2, &public_bytes).expect("SM2 public key"),
-        PrivateKey::from_bytes(Algorithm::Sm2, &secret_bytes).expect("SM2 private key"),
+        PublicKey::from_bytes(Algorithm::Sm2, &public_payload).expect("SM2 public key"),
+        PrivateKey::from_bytes(Algorithm::Sm2, &private_payload).expect("SM2 private key"),
     )
     .expect("construct SM2 key pair");
 

@@ -6,7 +6,7 @@ use std::{fs, path::PathBuf};
 use hex::FromHex;
 use iroha_crypto::{
     Algorithm, PublicKey,
-    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
+    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
 use norito::json::{self, JsonDeserialize};
 use sm3::{Digest, Sm3};
@@ -155,7 +155,9 @@ fn assert_root_alignment(root: &FixtureRoot, default: &FixtureCase) {
 
 fn verify_public_encodings(case_id: &str, public_sec1: &[u8], case: &FixtureCase) {
     if let Some(multihash_expected) = &case.public_key_multihash {
-        let derived = PublicKey::from_bytes(Algorithm::Sm2, public_sec1)
+        let payload = encode_sm2_public_key_payload(&case.distid, public_sec1)
+            .unwrap_or_else(|err| panic!("case {case_id}: invalid SM2 payload: {err}"));
+        let derived = PublicKey::from_bytes(Algorithm::Sm2, &payload)
             .unwrap_or_else(|err| panic!("case {case_id}: cannot derive multihash: {err}"));
         assert_eq!(
             derived.to_string(),

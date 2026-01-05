@@ -24,8 +24,8 @@
 //! - Helpers in this module produce a one-byte tagged payload and hide the
 //!   AoS vs NCB choice from callers.
 //! - For small inputs (AoS path), encoders use compact, ad-hoc AoS formats that
-//!   do not depend on thread‑local decode flags. Lengths are varint‑encoded when
-//!   `compact-len` is enabled, or fixed u64 otherwise.
+//!   honor the active decode/layout flags. Lengths follow `COMPACT_LEN` (varint
+//!   when enabled, fixed u64 otherwise).
 //! - Tag values are an internal detail: `0x00` = AoS, `0x01` = columnar.
 
 // Shared AoS helpers for ad-hoc small-row layouts
@@ -4203,7 +4203,11 @@ fn read_varint_u64(bytes: &[u8]) -> Result<(u64, usize), Error> {
     loop {
         let b = *bytes.get(i).ok_or(Error::LengthMismatch)?;
         i += 1;
-        value |= ((b & 0x7F) as u64) << shift;
+        let payload = (b & 0x7f) as u64;
+        if shift == 63 && payload > 1 {
+            return Err(Error::LengthMismatch);
+        }
+        value |= payload << shift;
         if (b & 0x80) == 0 {
             break;
         }

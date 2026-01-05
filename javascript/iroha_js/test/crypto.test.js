@@ -95,7 +95,7 @@ nativeTest("generateSm2KeyPair produces valid keys and signatures", () => {
   assert.equal(signature.length, SM2_SIGNATURE_LENGTH);
   assert.equal(verifySm2(message, signature, pair.publicKey, pair.distid), true);
   assert.equal(verifySm2(Buffer.from("tampered"), signature, pair.publicKey, pair.distid), false);
-  assert.match(sm2PublicKeyMultihash(pair.publicKey), /^8626/i);
+  assert.match(sm2PublicKeyMultihash(pair.publicKey, pair.distid), /^8626/i);
 });
 
 nativeTest("deriveSm2KeyPairFromSeed matches fixture data", () => {
@@ -106,7 +106,10 @@ nativeTest("deriveSm2KeyPairFromSeed matches fixture data", () => {
   assert.equal(pair.distid, SM2_FIXTURE.distid);
   assert.equal(pair.privateKey.toString("hex").toUpperCase(), SM2_FIXTURE.privateKeyHex);
   assert.equal(pair.publicKey.toString("hex").toUpperCase(), SM2_FIXTURE.publicKeySec1Hex);
-  assert.equal(sm2PublicKeyMultihash(pair.publicKey), SM2_FIXTURE.publicKeyMultihash);
+  assert.equal(
+    sm2PublicKeyMultihash(pair.publicKey, pair.distid),
+    SM2_FIXTURE.publicKeyMultihash,
+  );
 
   const signature = signSm2(message, pair.privateKey, pair.distid);
   assert.equal(signature.toString("hex").toUpperCase(), SM2_FIXTURE.signature);

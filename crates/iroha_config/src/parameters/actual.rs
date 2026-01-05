@@ -5348,9 +5348,9 @@ pub struct Connect {
     pub enabled: bool,
     /// Max concurrent WS sessions across roles.
     pub ws_max_sessions: usize,
-    /// Max concurrent WS sessions per remote IP.
+    /// Max concurrent WS sessions per remote IP (0 disables the per-IP cap).
     pub ws_per_ip_max_sessions: usize,
-    /// Per-IP WS handshake rate (requests per minute).
+    /// Per-IP WS handshake rate (requests per minute, 0 disables rate limiting).
     pub ws_rate_per_ip_per_min: u32,
     /// Session inactivity TTL.
     pub session_ttl: Duration,
