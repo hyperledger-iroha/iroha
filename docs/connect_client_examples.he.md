@@ -201,7 +201,7 @@ fun main() {
 ```
 
 הערות:
-- הלקוח מחשב `sid` (‎32 בתים; base64url/הקס) ושולח POST אל `/v1/connect/session` כדי לקבל אסימונים חד-פעמיים. השרת מחזיר את ה-sid, ואל ה-WS מתחברים עם `token=...`.
+- הלקוח מחשב `sid` (‎32 בתים; base64url/הקס) ושולח POST אל `/v1/connect/session` כדי לקבל אסימונים חד-פעמיים. השרת מחזיר את ה-sid, ואל ה-WS מתחברים עם `Authorization: Bearer <token>` או `Sec-WebSocket-Protocol: iroha-connect.token.v1.<base64url(token)>`.
 - לאחר יצירת המפתחות (Approve) יש לשלוח Close/Reject כמטען מוצפן.
-- מפתחות dedupe ו-`seq` חייבים להיות מונוטוניים לפי כיוון. הקפידו על `Envelope.seq == frame.seq`.
+- מפתחות dedupe ו-`seq` חייבים להיות מונוטוניים לפי כיוון. הקפידו על `Envelope.seq == frame.seq`. אירועי שרת משתמשים במונה רצף נפרד ואינם חלק מ-AEAD/dedupe.
 </div>

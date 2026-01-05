@@ -129,9 +129,12 @@ struct Session {
     acc_perms: Mutex<Option<proto::PermissionsV1>>,
     // Handshake approval observed
     approved: Mutex<bool>,
-    // Last seen sequence per direction
+    // Last seen peer sequence per direction
     last_seq_app_to_wallet: Mutex<Option<u64>>,
     last_seq_wallet_to_app: Mutex<Option<u64>>,
+    // Server-generated sequence per direction (control events, close)
+    server_seq_app_to_wallet: Mutex<u64>,
+    server_seq_wallet_to_app: Mutex<u64>,
     // Outstanding ping expectations per role
     heartbeat_app: Mutex<HeartbeatQueue>,
     heartbeat_wallet: Mutex<HeartbeatQueue>,
@@ -161,6 +164,8 @@ impl Default for Session {
             approved: Mutex::new(false),
             last_seq_app_to_wallet: Mutex::new(None),
             last_seq_wallet_to_app: Mutex::new(None),
+            server_seq_app_to_wallet: Mutex::new(0),
+            server_seq_wallet_to_app: Mutex::new(0),
             heartbeat_app: Mutex::new(HeartbeatQueue::default()),
             heartbeat_wallet: Mutex::new(HeartbeatQueue::default()),
         }
@@ -174,19 +179,17 @@ struct HeartbeatFailure {
 }
 
 impl Session {
-    async fn bump_seq(&self, dir: proto::Dir) -> u64 {
+    async fn next_server_seq(&self, dir: proto::Dir) -> u64 {
         match dir {
             proto::Dir::AppToWallet => {
-                let mut last = self.last_seq_app_to_wallet.lock().await;
-                let next = last.map(|prev| prev.saturating_add(1)).unwrap_or(1);
-                *last = Some(next);
-                next
+                let mut last = self.server_seq_app_to_wallet.lock().await;
+                *last = last.saturating_add(1);
+                *last
             }
             proto::Dir::WalletToApp => {
-                let mut last = self.last_seq_wallet_to_app.lock().await;
-                let next = last.map(|prev| prev.saturating_add(1)).unwrap_or(1);
-                *last = Some(next);
-                next
+                let mut last = self.server_seq_wallet_to_app.lock().await;
+                *last = last.saturating_add(1);
+                *last
             }
         }
     }
@@ -281,8 +284,24 @@ impl Bus {
                 tokio::time::sleep(interval).await;
                 let now = Instant::now();
                 let _ = me.prune_expired_sessions(now).await;
+                let _ = me.prune_handshake_buckets(now).await;
             }
         });
+    }
+
+    fn handshake_bucket_ttl(&self) -> Duration {
+        // Cap idle retention so per-IP buckets don't grow without bound.
+        let min_ttl = Duration::from_secs(60);
+        let max_ttl = Duration::from_secs(600);
+        self.policy.session_ttl.max(min_ttl).min(max_ttl)
+    }
+
+    async fn prune_handshake_buckets(&self, now: Instant) -> usize {
+        let ttl = self.handshake_bucket_ttl();
+        let mut buckets = self.handshake_buckets.lock().await;
+        let before = buckets.len();
+        buckets.retain(|_, bucket| now.saturating_duration_since(bucket.last_refill) <= ttl);
+        before.saturating_sub(buckets.len())
     }
 
     async fn session_expired(&self, sid: &Sid, now: Instant) -> bool {
@@ -326,7 +345,7 @@ impl Bus {
     ) -> Result<(), (axum::http::StatusCode, String)> {
         self.check_handshake_cap()?;
         // Per-IP cap
-        {
+        if self.policy.ws_per_ip_max_sessions > 0 {
             let counts = self.per_ip_counts.lock().await;
             if counts.get(&ip).copied().unwrap_or(0) >= self.policy.ws_per_ip_max_sessions {
                 return Err((
@@ -374,6 +393,9 @@ impl Bus {
         &self,
         ip: IpAddr,
     ) -> Result<(), (axum::http::StatusCode, String)> {
+        if self.policy.ws_rate_per_ip_per_min == 0 {
+            return Ok(());
+        }
         // Handshake rate per minute token bucket
         let mut buckets = self.handshake_buckets.lock().await;
         let rate_per_sec = f64::from(self.policy.ws_rate_per_ip_per_min) / 60.0;
@@ -565,7 +587,7 @@ impl Bus {
             proto::Role::App => (proto::Dir::WalletToApp, proto::Role::Wallet),
             proto::Role::Wallet => (proto::Dir::AppToWallet, proto::Role::App),
         };
-        let seq = sess.bump_seq(dir).await;
+        let seq = sess.next_server_seq(dir).await;
         let frame = proto::ConnectFrameV1 {
             sid,
             dir,
@@ -582,7 +604,9 @@ impl Bus {
             proto::Role::Wallet => sess.wallet_tx.lock().await.clone(),
         };
         if let Some(tx) = tx_opt {
-            let _ = tx.send(frame).await;
+            if tx.send(frame).await.is_ok() {
+                *sess.last_activity.lock().await = Instant::now();
+            }
         }
     }
 
@@ -1329,6 +1353,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prune_handshake_buckets_removes_idle_entries() {
+        let cfg = iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 1000,
+            ws_per_ip_max_sessions: 1000,
+            ws_rate_per_ip_per_min: 1,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: 262_144,
+            ping_interval: Duration::from_secs(30),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_secs(15),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: true,
+            relay_strategy: "broadcast",
+            p2p_ttl_hops: 0,
+        };
+        let bus = Bus::from_config(&cfg);
+        let ip: IpAddr = "203.0.113.99".parse().unwrap();
+        assert!(bus.pre_ws_handshake(ip).await.is_ok());
+
+        let expiry = Instant::now() + bus.handshake_bucket_ttl() + Duration::from_secs(1);
+        let removed = bus.prune_handshake_buckets(expiry).await;
+        assert_eq!(removed, 1);
+        let removed_again = bus.prune_handshake_buckets(expiry).await;
+        assert_eq!(removed_again, 0);
+    }
+
+    #[tokio::test]
+    async fn handshake_rate_zero_disables_limit() {
+        let cfg = iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 1000,
+            ws_per_ip_max_sessions: 1000,
+            ws_rate_per_ip_per_min: 0,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: 262_144,
+            ping_interval: Duration::from_secs(30),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_secs(15),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: true,
+            relay_strategy: "broadcast",
+            p2p_ttl_hops: 0,
+        };
+        let bus = Bus::from_config(&cfg);
+        let ip: IpAddr = "203.0.113.10".parse().unwrap();
+        for _ in 0..4 {
+            assert!(bus.pre_ws_handshake(ip).await.is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn per_ip_session_cap_zero_disables_limit() {
+        let cfg = iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 1000,
+            ws_per_ip_max_sessions: 0,
+            ws_rate_per_ip_per_min: 120,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: 262_144,
+            ping_interval: Duration::from_secs(30),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_secs(15),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: true,
+            relay_strategy: "broadcast",
+            p2p_ttl_hops: 0,
+        };
+        let bus = Bus::from_config(&cfg);
+        let ip: IpAddr = "198.51.100.1".parse().unwrap();
+        assert!(bus.pre_ws_handshake(ip).await.is_ok());
+        bus.session_opened(ip).await;
+        assert!(bus.pre_ws_handshake(ip).await.is_ok());
+        bus.session_opened(ip).await;
+        assert!(bus.pre_ws_handshake(ip).await.is_ok());
+    }
+
+    #[tokio::test]
     async fn handshake_rate_limited() {
         let cfg = iroha_config::parameters::actual::Connect {
             enabled: true,
@@ -1531,6 +1639,111 @@ mod tests {
         );
         let st = bus.status().await;
         assert!(st.plaintext_control_drops_total >= 1);
+    }
+
+    #[tokio::test]
+    async fn server_events_do_not_advance_peer_seq() {
+        let bus = Bus::new();
+        let sid = [0xACu8; 32];
+        let mut app_inbox = bus.attach(sid, proto::Role::App).await;
+        let session = bus.get_or_create(&sid).await;
+
+        let initial = proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::WalletToApp,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Ping { nonce: 1 }),
+        };
+        bus.relay(initial).await;
+        let got = timeout(Duration::from_millis(50), app_inbox.recv())
+            .await
+            .expect("app frame")
+            .expect("frame");
+        assert_eq!(got.seq, 1);
+        assert_eq!(*session.last_seq_wallet_to_app.lock().await, Some(1));
+
+        let before_activity = Instant::now() - Duration::from_secs(5);
+        *session.last_activity.lock().await = before_activity;
+
+        let control = proto::ConnectControlV1::ServerEvent {
+            event: proto::ServerEventV1::BlockProofs {
+                height: 1,
+                entry_hash: "00".into(),
+                proofs_json: "{}".into(),
+            },
+        };
+        bus.send_server_event(
+            &sid,
+            session.clone(),
+            proto::Dir::WalletToApp,
+            &control,
+            proto::Role::App,
+        )
+        .await;
+
+        let server_frame = timeout(Duration::from_millis(50), app_inbox.recv())
+            .await
+            .expect("server event")
+            .expect("frame");
+        assert!(matches!(
+            server_frame.kind,
+            proto::FrameKind::Control(proto::ConnectControlV1::ServerEvent { .. })
+        ));
+        assert_eq!(*session.last_seq_wallet_to_app.lock().await, Some(1));
+        let after_activity = *session.last_activity.lock().await;
+        assert!(
+            after_activity > before_activity,
+            "server events should update session activity"
+        );
+
+        let next = proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::WalletToApp,
+            seq: 2,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Ping { nonce: 2 }),
+        };
+        bus.relay(next).await;
+        let got_next = timeout(Duration::from_millis(50), app_inbox.recv())
+            .await
+            .expect("app frame")
+            .expect("frame");
+        assert_eq!(got_next.seq, 2);
+    }
+
+    #[tokio::test]
+    async fn notify_close_updates_activity_without_touching_peer_seq() {
+        let bus = Bus::new();
+        let sid = [0xADu8; 32];
+        let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+        let session = bus.get_or_create(&sid).await;
+
+        *session.last_seq_app_to_wallet.lock().await = Some(7);
+        let before_activity = Instant::now() - Duration::from_secs(10);
+        *session.last_activity.lock().await = before_activity;
+
+        bus.notify_close(
+            session.clone(),
+            sid,
+            proto::Role::Wallet,
+            "test close",
+        )
+        .await;
+
+        let close_frame = timeout(Duration::from_millis(50), wallet_inbox.recv())
+            .await
+            .expect("close frame")
+            .expect("frame");
+        assert!(matches!(
+            close_frame.kind,
+            proto::FrameKind::Control(proto::ConnectControlV1::Close { .. })
+        ));
+        assert_eq!(close_frame.seq, 1);
+        assert_eq!(*session.last_seq_app_to_wallet.lock().await, Some(7));
+        let after_activity = *session.last_activity.lock().await;
+        assert!(
+            after_activity > before_activity,
+            "close frames should update session activity"
+        );
     }
 
     #[tokio::test]
@@ -1751,7 +1964,7 @@ impl Bus {
         control: &proto::ConnectControlV1,
         target: proto::Role,
     ) {
-        let seq = session.bump_seq(dir).await;
+        let seq = session.next_server_seq(dir).await;
         let frame = proto::ConnectFrameV1 {
             sid: sid
                 .try_into()
@@ -1765,7 +1978,9 @@ impl Bus {
             proto::Role::Wallet => session.wallet_tx.lock().await.clone(),
         };
         if let Some(tx) = tx_opt {
-            let _ = tx.send(frame).await;
+            if tx.send(frame).await.is_ok() {
+                *session.last_activity.lock().await = Instant::now();
+            }
             self.shared.frames_out_total.fetch_add(1, Ordering::Relaxed);
         }
     }

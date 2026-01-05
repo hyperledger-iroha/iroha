@@ -9,7 +9,7 @@ use core::fmt;
 use iroha_crypto::{
     Algorithm, PublicKey,
     error::{Error as CryptoError, ParseError},
-    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
+    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
 use rand_core_06::OsRng;
 use thiserror::Error;
@@ -111,7 +111,9 @@ impl Sm2KeyPair {
     /// Panics if the internal key material is somehow inconsistent.
     #[must_use]
     pub fn public_key_multihash(&self) -> String {
-        let payload = self.public_key_sec1_bytes(false);
+        let sec1 = self.public_key_sec1_bytes(false);
+        let payload = encode_sm2_public_key_payload(self.distid(), &sec1)
+            .expect("SM2 payload derived from key material must encode");
         let pk = PublicKey::from_bytes(Algorithm::Sm2, &payload)
             .expect("SM2 SEC1 payload generated from private key must be valid");
         pk.to_string()
@@ -231,7 +233,9 @@ mod tests {
         assert_eq!(keypair.private_key_bytes(), expected_private);
         assert_eq!(keypair.public_key_sec1_bytes(false), expected_public);
         assert_eq!(keypair.public_key_multihash(), fixture.public_key_multihash);
-        let prefixed = PublicKey::from_bytes(Algorithm::Sm2, &expected_public)
+        let payload = encode_sm2_public_key_payload(&fixture.distid, &expected_public)
+            .expect("fixture SM2 payload");
+        let prefixed = PublicKey::from_bytes(Algorithm::Sm2, &payload)
             .expect("fixture public key payload must be valid");
         assert_eq!(prefixed.to_prefixed_string(), fixture.public_key_prefixed);
 

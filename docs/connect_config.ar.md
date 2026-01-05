@@ -45,6 +45,8 @@ translation_last_reviewed: 2025-11-14
 - تستخدم `CONNECT_SESSION_TTL_MS` و `CONNECT_DEDUPE_TTL_MS` قيم مدة (duration
   literals) في إعدادات المستخدم، وتُربَطان بالحقول الفعلية `session_ttl`
   و`dedupe_ttl`.
+- `CONNECT_WS_PER_IP_MAX_SESSIONS=0` يعطّل حد الجلسات لكل عنوان IP.
+- `CONNECT_WS_RATE_PER_IP_PER_MIN=0` يعطّل محدد معدل المصافحة لكل عنوان IP.
 - يقوم نظام heartbeat بتقييد الفترة الزمنية المكوّنة إلى الحد الأدنى
   المناسب للمتصفحات (`ping_min_interval_ms`)، ويتحمّل الخادم قيمة
   `ping_miss_tolerance` من رسائل pong المفقودة على التوالي قبل إغلاق
@@ -60,4 +62,3 @@ translation_last_reviewed: 2025-11-14
 `crates/iroha_config/src/parameters/defaults.rs` (الوحدة `connect`).
 
 </div>
-

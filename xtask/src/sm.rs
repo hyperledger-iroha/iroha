@@ -9,7 +9,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use hex::encode_upper;
 use iroha_crypto::{
     Algorithm, PrivateKey, PublicKey,
-    sm::{Sm2PrivateKey, Sm2PublicKey},
+    sm::{
+        Sm2PrivateKey, Sm2PublicKey, encode_sm2_private_key_payload, encode_sm2_public_key_payload,
+    },
 };
 use norito::json::{self, Value};
 use rand_core_06::OsRng;
@@ -399,7 +401,8 @@ fn collect_sm2_artifacts(private: &Sm2PrivateKey) -> Result<Sm2Artifacts, Box<dy
     let mut secret = private.secret_bytes();
     let private_key_hex = encode_upper(secret);
     let private_key_b64 = BASE64.encode(secret);
-    let private_key_config = PrivateKey::from_bytes(Algorithm::Sm2, &secret)?.to_string();
+    let private_payload = encode_sm2_private_key_payload(&distid, &secret)?;
+    let private_key_config = PrivateKey::from_bytes(Algorithm::Sm2, &private_payload)?.to_string();
     let private_key_pem = private.to_pkcs8_pem()?;
 
     let public = private.public_key();
@@ -408,7 +411,8 @@ fn collect_sm2_artifacts(private: &Sm2PrivateKey) -> Result<Sm2Artifacts, Box<dy
     let public_key_hex = encode_upper(&public_bytes);
     let public_key_b64 = BASE64.encode(&public_bytes);
     let public_key_compressed_hex = encode_upper(&public_compressed);
-    let public_key_config = PublicKey::from_bytes(Algorithm::Sm2, &public_bytes)?.to_string();
+    let public_payload = encode_sm2_public_key_payload(&distid, &public_bytes)?;
+    let public_key_config = PublicKey::from_bytes(Algorithm::Sm2, &public_payload)?.to_string();
     let public_key_pem = public.to_public_key_pem()?;
 
     secret.zeroize();

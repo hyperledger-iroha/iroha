@@ -166,6 +166,7 @@ fn streaming_map_entry_lengths_respect_archive_limit() {
     let mut payload = Vec::new();
     payload.extend_from_slice(&1u64.to_le_bytes());
     payload.extend_from_slice(&oversized.to_le_bytes());
+    payload.extend_from_slice(&0u64.to_le_bytes());
 
     let framed = core::frame_bare_with_header_flags::<HashMap<String, u32>>(&payload, 0)
         .expect("frame payload");

@@ -11368,7 +11368,8 @@ impl State {
         }
         #[cfg(feature = "sm")]
         {
-            Sm2PublicKey::set_default_distid(initial_crypto.sm2_distid_default.clone());
+            Sm2PublicKey::set_default_distid(initial_crypto.sm2_distid_default.clone())
+                .expect("sm2_distid_default must be valid");
         }
         // Seed AXT policy cache from any persisted Space Directory manifests on startup.
         let manifest_view = s.world.space_directory_manifests.view();
@@ -12736,7 +12737,8 @@ impl State {
             }
         };
         iroha_crypto::sm::set_intrinsic_policy(intrinsic_policy);
-        iroha_crypto::sm::Sm2PublicKey::set_default_distid(crypto.sm2_distid_default.clone());
+        iroha_crypto::sm::Sm2PublicKey::set_default_distid(crypto.sm2_distid_default.clone())
+            .expect("sm2_distid_default must be valid");
         #[cfg(feature = "sm-ffi-openssl")]
         iroha_crypto::sm::OpenSslProvider::set_preview_enabled(crypto.enable_sm_openssl_preview);
     }
@@ -18518,7 +18520,8 @@ pub(crate) mod deserialize {
             view_lock: parking_lot::RwLock::new(()),
         };
         #[cfg(feature = "sm")]
-        Sm2PublicKey::set_default_distid(initial_crypto.sm2_distid_default.clone());
+        Sm2PublicKey::set_default_distid(initial_crypto.sm2_distid_default.clone())
+            .expect("sm2_distid_default must be valid");
         #[cfg(feature = "telemetry")]
         {
             let view = state.world.governance_proposals.view();
@@ -19174,7 +19177,8 @@ mod tests {
         struct DistidGuard(String);
         impl Drop for DistidGuard {
             fn drop(&mut self) {
-                Sm2PublicKey::set_default_distid(self.0.clone());
+                Sm2PublicKey::set_default_distid(self.0.clone())
+                    .expect("sm2_distid_default must be valid");
             }
         }
 
@@ -25098,13 +25102,15 @@ mod tests {
         struct DistidGuard(String);
         impl Drop for DistidGuard {
             fn drop(&mut self) {
-                Sm2PublicKey::set_default_distid(self.0.clone());
+                Sm2PublicKey::set_default_distid(self.0.clone())
+                    .expect("sm2_distid_default must be valid");
             }
         }
 
         let original = Sm2PublicKey::default_distid();
         let _guard = DistidGuard(original.clone());
-        Sm2PublicKey::set_default_distid("pre-existing".to_owned());
+        Sm2PublicKey::set_default_distid("pre-existing".to_owned())
+            .expect("distid must be valid");
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();

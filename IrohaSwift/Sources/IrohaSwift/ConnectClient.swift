@@ -29,19 +29,23 @@ public enum ConnectCloseCode: UInt16, Sendable {
 
 /// Factory used by `ConnectClient` so tests can inject a stub.
 public struct ConnectWebSocketFactory: Sendable {
-    private let makeTask: @Sendable (URL) -> ConnectWebSocketTask
+    private let makeTask: @Sendable (URLRequest) -> ConnectWebSocketTask
 
-    public init(makeTask: @escaping @Sendable (URL) -> ConnectWebSocketTask) {
+    public init(makeTask: @escaping @Sendable (URLRequest) -> ConnectWebSocketTask) {
         self.makeTask = makeTask
     }
 
     public func make(url: URL) -> ConnectWebSocketTask {
-        makeTask(url)
+        makeTask(URLRequest(url: url))
+    }
+
+    public func make(request: URLRequest) -> ConnectWebSocketTask {
+        makeTask(request)
     }
 
     public static func urlSession(session: URLSession = .shared) -> ConnectWebSocketFactory {
-        ConnectWebSocketFactory { url in
-            URLSessionConnectWebSocketTask(session: session, url: url)
+        ConnectWebSocketFactory { request in
+            URLSessionConnectWebSocketTask(session: session, request: request)
         }
     }
 }
@@ -49,8 +53,8 @@ public struct ConnectWebSocketFactory: Sendable {
 final class URLSessionConnectWebSocketTask: ConnectWebSocketTask {
     private let task: URLSessionWebSocketTask
 
-    init(session: URLSession, url: URL) {
-        task = session.webSocketTask(with: url)
+    init(session: URLSession, request: URLRequest) {
+        task = session.webSocketTask(with: request)
     }
 
     func resume() {
@@ -113,13 +117,16 @@ public actor ConnectClient {
         self.task = webSocketFactory.make(url: url)
     }
 
+    public init(request: URLRequest,
+                webSocketFactory: ConnectWebSocketFactory = .urlSession()) {
+        self.task = webSocketFactory.make(request: request)
+    }
+
     public static func makeWebSocketURL(baseURL: URL,
                                         sid: String,
                                         role: ToriiConnectRole,
-                                        token: String,
                                         endpointPath: String = "/v1/connect/ws") throws -> URL {
         let normalizedSid = try validateNonEmpty(sid, field: "sid")
-        let normalizedToken = try validateNonEmpty(token, field: "token")
         let normalizedPath = endpointPath.hasPrefix("/") ? String(endpointPath.dropFirst()) : endpointPath
         guard var components = URLComponents(url: baseURL.appendingPathComponent(normalizedPath),
                                              resolvingAgainstBaseURL: false) else {
@@ -127,8 +134,7 @@ public actor ConnectClient {
         }
         components.queryItems = [
             URLQueryItem(name: "sid", value: normalizedSid),
-            URLQueryItem(name: "role", value: role.rawValue),
-            URLQueryItem(name: "token", value: normalizedToken)
+            URLQueryItem(name: "role", value: role.rawValue)
         ]
         guard let urlWithQuery = components.url else {
             throw ToriiClientError.invalidURL(endpointPath)
@@ -141,6 +147,21 @@ public actor ConnectClient {
             throw ToriiClientError.invalidURL(endpointPath)
         }
         return finalURL
+    }
+
+    public static func makeWebSocketRequest(baseURL: URL,
+                                            sid: String,
+                                            role: ToriiConnectRole,
+                                            token: String,
+                                            endpointPath: String = "/v1/connect/ws") throws -> URLRequest {
+        let url = try makeWebSocketURL(baseURL: baseURL,
+                                       sid: sid,
+                                       role: role,
+                                       endpointPath: endpointPath)
+        let normalizedToken = try validateNonEmpty(token, field: "token")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(normalizedToken)", forHTTPHeaderField: "Authorization")
+        return request
     }
 
     /// Begin the WebSocket session. Safe to call multiple times (subsequent calls are no-ops).

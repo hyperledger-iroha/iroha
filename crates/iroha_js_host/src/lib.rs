@@ -35,7 +35,7 @@ use iroha::da::{
 };
 use iroha_crypto::{
     Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature, derive_keyset_from_slice,
-    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
+    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
 #[cfg(test)]
 use iroha_data_model::da::types::DaRentQuote;
@@ -588,7 +588,10 @@ pub fn sm2_keypair_from_private(
 /// Compute the canonical multihash string for an SM2 public key.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
-pub fn sm2_public_key_multihash(public_key: Uint8Array) -> napi::Result<String> {
+pub fn sm2_public_key_multihash(
+    public_key: Uint8Array,
+    distid: Option<String>,
+) -> napi::Result<String> {
     let payload = public_key.as_ref();
     if payload.len() != SM2_PUBLIC_KEY_LENGTH {
         return Err(napi::Error::new(
@@ -599,7 +602,11 @@ pub fn sm2_public_key_multihash(public_key: Uint8Array) -> napi::Result<String> 
             ),
         ));
     }
-    PublicKey::from_bytes(Algorithm::Sm2, payload)
+    let distid = sm2_distid_arg(distid);
+    let _ = parse_sm2_public_key(Some(distid.clone()), payload)?;
+    let encoded = encode_sm2_public_key_payload(&distid, payload)
+        .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))?;
+    PublicKey::from_bytes(Algorithm::Sm2, &encoded)
         .map(|pk| pk.to_string())
         .map_err(norito_to_napi)
 }
@@ -927,8 +934,9 @@ pub fn sm2_fixture_from_seed(
     let secret_hex = hex::encode_upper(private.secret_bytes());
     let public_bytes = public.to_sec1_bytes(false);
     let public_hex = hex::encode_upper(&public_bytes);
-    let public_key =
-        PublicKey::from_bytes(Algorithm::Sm2, &public_bytes).map_err(norito_to_napi)?;
+    let payload =
+        encode_sm2_public_key_payload(distid.as_str(), &public_bytes).map_err(norito_to_napi)?;
+    let public_key = PublicKey::from_bytes(Algorithm::Sm2, &payload).map_err(norito_to_napi)?;
     let multihash = public_key.to_string();
     let prefixed = public_key.to_prefixed_string();
     let za = public.compute_z(distid.as_str()).map_err(norito_to_napi)?;

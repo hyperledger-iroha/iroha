@@ -199,6 +199,6 @@ fun main() {
 ```
 
 備考:
-- クライアントが `sid`（32 バイト; base64url/16 進）を計算し、`/v1/connect/session` に POST してワンタイムトークンを取得します。サーバーは `sid` をエコーし、WS には `token=...` で参加します。
+- クライアントが `sid`（32 バイト; base64url/16 進）を計算し、`/v1/connect/session` に POST してワンタイムトークンを取得します。サーバーは `sid` をエコーし、WS は `Authorization: Bearer <token>` または `Sec-WebSocket-Protocol: iroha-connect.token.v1.<base64url(token)>` で接続します。
 - キーが確立された（Approve）後は Close/Reject を暗号化ペイロードで送信してください。
-- デデュープキーと `seq` は方向ごとに単調増加である必要があります。`Envelope.seq == frame.seq` を維持してください。
+- デデュープキーと `seq` は方向ごとに単調増加である必要があります。`Envelope.seq == frame.seq` を維持してください。サーバーイベントは別のシーケンスを使い、AEAD/dedupe から除外されます。

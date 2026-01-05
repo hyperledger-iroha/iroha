@@ -7,28 +7,14 @@ use norito::{
         decode_rows_u64_optu32_bool_adaptive, decode_rows_u64_str_bool_adaptive,
         decode_rows_u64_str_u32_bool_adaptive,
     },
-    core::{DecodeFlagsGuard, Error, header_flags, reset_decode_state},
+    core::{DecodeFlagsGuard, Error, header_flags, len_prefix_len, reset_decode_state},
 };
 
-// Compute the offset in the adaptive AoS body where the version byte sits: after [n varint]
+// Compute the offset in the adaptive AoS body where the version byte sits: after the length prefix.
 fn aos_version_offset_for_len(n: usize) -> usize {
     // Body layout for AoS: [len prefix][ver][payload...]. Prefix width depends
-    // on the compile-time compact-len setting.
-    #[cfg(feature = "compact-len")]
-    {
-        let mut v = n as u64;
-        let mut len = 1usize;
-        while v >= 0x80 {
-            v >>= 7;
-            len += 1;
-        }
-        len
-    }
-    #[cfg(not(feature = "compact-len"))]
-    {
-        let _ = n;
-        8
-    }
+    // on the active COMPACT_LEN flag.
+    len_prefix_len(n)
 }
 
 #[test]
@@ -126,21 +112,27 @@ fn aos_opt_u32_bool_roundtrip_and_bad_version() {
 }
 
 #[test]
-fn aos_len_prefix_ignores_decode_flags() {
+fn aos_len_prefix_respects_decode_flags() {
     let rows: Vec<(u64, &str, bool)> = vec![(1, "alpha", true), (2, "beta", false)];
-    let body = norito::aos::encode_rows_u64_str_bool(&rows);
     let expected: Vec<(u64, String, bool)> = rows
         .iter()
         .map(|(id, name, flag)| (*id, (*name).to_string(), *flag))
         .collect();
+    let body = {
+        let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
+        norito::aos::encode_rows_u64_str_bool(&rows)
+    };
     {
-        let _guard = DecodeFlagsGuard::enter(
-            header_flags::COMPACT_LEN
-                | header_flags::VARINT_OFFSETS
-                | header_flags::COMPACT_SEQ_LEN,
-        );
+        let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
         let decoded = norito::aos::decode_rows_u64_str_bool(&body).expect("decode");
         assert_eq!(decoded, expected);
+    }
+    {
+        let _guard = DecodeFlagsGuard::enter(0);
+        assert!(
+            norito::aos::decode_rows_u64_str_bool(&body).is_err(),
+            "AoS length prefixes must honor COMPACT_LEN flags"
+        );
     }
     reset_decode_state();
 }
@@ -152,19 +144,4 @@ fn matches_unsupported_version(err: Error) {
         Error::Message(_) => {}
         other => panic!("unexpected error: {other:?}"),
     }
-}
-
-fn hex_to_bytes(hex: &str) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(hex.len() / 2);
-    let mut iter = hex
-        .as_bytes()
-        .iter()
-        .copied()
-        .filter(|c| !c.is_ascii_whitespace());
-    while let (Some(hi), Some(lo)) = (iter.next(), iter.next()) {
-        let hi = (hi as char).to_digit(16).expect("hex hi nibble");
-        let lo = (lo as char).to_digit(16).expect("hex lo nibble");
-        bytes.push(((hi << 4) | lo) as u8);
-    }
-    bytes
 }

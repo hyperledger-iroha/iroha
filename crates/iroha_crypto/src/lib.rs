@@ -510,10 +510,7 @@ impl PublicKeyFull {
                 bls::BlsSmall::parse_public_key(payload).map(PublicKeyFull::BlsSmall)
             }
             #[cfg(feature = "sm")]
-            Algorithm::Sm2 => {
-                Sm2PublicKey::from_sec1_bytes(Sm2PublicKey::default_distid(), payload)
-                    .map(PublicKeyFull::Sm2)
-            }
+            Algorithm::Sm2 => sm::decode_sm2_public_key_payload(payload).map(PublicKeyFull::Sm2),
         }
     }
 
@@ -535,7 +532,11 @@ impl PublicKeyFull {
             #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
             Self::BlsSmall(key) => key.to_bytes().to_const_vec(),
             #[cfg(feature = "sm")]
-            Self::Sm2(key) => key.to_sec1_bytes(false).to_const_vec(),
+            Self::Sm2(key) => {
+                sm::encode_sm2_public_key_payload(key.distid(), &key.to_sec1_bytes(false))
+                    .expect("SM2 public key payload must be encodable")
+                    .to_const_vec()
+            }
         }
     }
 
@@ -569,7 +570,7 @@ impl From<&PublicKeyCompact> for PublicKeyFull {
 /// In case signature verification is needed, it will be decoded.
 ///
 /// Invariant: `payload` is valid, that is conversion to full form must not give error.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct PublicKeyCompact {
     // First byte corresponds to algorithm
@@ -1741,10 +1742,7 @@ impl PrivateKey {
                     .map(|secret| PrivateKeyInner::Gost { algorithm, secret })
             }
             #[cfg(feature = "sm")]
-            Algorithm::Sm2 => {
-                sm::Sm2PrivateKey::from_bytes(sm::Sm2PublicKey::default_distid(), payload)
-                    .map(PrivateKeyInner::Sm2)
-            }
+            Algorithm::Sm2 => sm::decode_sm2_private_key_payload(payload).map(PrivateKeyInner::Sm2),
             #[cfg(feature = "bls")]
             Algorithm::BlsNormal => {
                 bls::BlsNormal::parse_private_key(payload).map(PrivateKeyInner::BlsNormal)
@@ -1802,7 +1800,10 @@ impl PrivateKey {
             #[cfg(feature = "gost")]
             PrivateKeyInner::Gost { secret, .. } => secret.as_bytes().to_vec(),
             #[cfg(feature = "sm")]
-            PrivateKeyInner::Sm2(key) => key.secret_bytes().to_vec(),
+            PrivateKeyInner::Sm2(key) => {
+                sm::encode_sm2_private_key_payload(key.distid(), &key.secret_bytes())
+                    .expect("SM2 private key payload must be encodable")
+            }
             #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
             PrivateKeyInner::BlsNormal(key) => key.to_bytes().clone(),
             #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
@@ -2605,7 +2606,8 @@ mod tests {
         let private = Sm2PrivateKey::new(Sm2PublicKey::DEFAULT_DISTID, [0x42; 32])
             .expect("construct SM2 private key");
         let sm2_pk = private.public_key();
-        let payload = sm2_pk.to_sec1_bytes(false);
+        let sec1 = sm2_pk.to_sec1_bytes(false);
+        let payload = sm::encode_sm2_public_key_payload(sm2_pk.distid(), &sec1).expect("payload");
         let pk = PublicKey::from_bytes(Algorithm::Sm2, &payload).expect("construct SM2 key");
 
         let canonical = pk.to_string();
@@ -2616,7 +2618,7 @@ mod tests {
         );
         assert!(
             canonical.ends_with(&payload_hex),
-            "SM2 multihash should embed SEC1 payload"
+            "SM2 multihash should embed payload bytes"
         );
 
         let prefixed = pk.to_prefixed_string();

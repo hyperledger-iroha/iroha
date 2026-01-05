@@ -931,8 +931,11 @@ so CI cadence checks and dashboards continue to track ownership.
 The SDK ships an early `ConnectClient` wrapper that manages the raw WebSocket session. Frame encoding/decoding flows through `ConnectCodec`, which now requires the Norito bridge (throws `ConnectCodecError.bridgeUnavailable` when the XCFramework is absent). Use `ConnectCrypto` to generate Connect X25519 key pairs and derive directional session keys from the bridge:
 
 ```swift
-let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sid)")!
-let connect = ConnectClient(url: connectURL)
+let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sid)&role=app")!
+// token = token_app or token_wallet from /v1/connect/session
+var connectRequest = URLRequest(url: connectURL)
+connectRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+let connect = ConnectClient(request: connectRequest)
 
 Task {
     await connect.start()
@@ -964,11 +967,11 @@ let torii = ToriiClient(baseURL: URL(string: "https://torii.example")!)
 let session = try await torii.createConnectSession(sid: "demo-session")
 let apps = try await torii.listConnectApps()
 let manifest = try await torii.getConnectAdmissionManifest()
-let wsURL = try ConnectClient.makeWebSocketURL(baseURL: torii.baseURL,
-                                               sid: session.sid,
-                                               role: .app,
-                                               token: session.tokenApp)
-let connect = ConnectClient(url: wsURL)
+let wsRequest = try ConnectClient.makeWebSocketRequest(baseURL: torii.baseURL,
+                                                       sid: session.sid,
+                                                       role: .app,
+                                                       token: session.tokenApp)
+let connect = ConnectClient(request: wsRequest)
 ```
 
 Encryption/decryption of ciphertext envelopes is handled by the bridge-backed helpers:

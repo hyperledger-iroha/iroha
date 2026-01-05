@@ -135,10 +135,32 @@ pub(crate) fn payload_without_leading_padding(
     if padding > max_padding {
         return Err(Error::LengthMismatch);
     }
+    if padding != 0 && slice[..padding].iter().any(|&b| b != 0) {
+        return Err(Error::LengthMismatch);
+    }
     Ok(match padding {
         0 => slice,
         _ => &slice[padding..],
     })
+}
+
+/// Strip alignment padding between the header and payload, requiring an exact
+/// padding length and zero-filled padding bytes.
+pub(crate) fn payload_without_leading_padding_exact(
+    slice: &[u8],
+    payload_len: usize,
+    padding: usize,
+) -> Result<&[u8], Error> {
+    let expected = padding
+        .checked_add(payload_len)
+        .ok_or(Error::LengthMismatch)?;
+    if slice.len() != expected {
+        return Err(Error::LengthMismatch);
+    }
+    if padding != 0 && slice[..padding].iter().any(|&b| b != 0) {
+        return Err(Error::LengthMismatch);
+    }
+    Ok(&slice[padding..])
 }
 
 /// Initial value for the FNV-1a hash used in [`compute_schema_hash`].
@@ -276,6 +298,18 @@ const MAX_VARINT_BYTES: usize = 10;
 /// per-value length prefix sizes accurately.
 pub fn len_prefix_len(value: usize) -> usize {
     if use_compact_len() {
+        varint_encoded_len(value as u64)
+    } else {
+        8
+    }
+}
+
+/// Number of bytes used to encode a sequence length prefix for `value`.
+///
+/// Honors the active `COMPACT_SEQ_LEN` layout flag so callers can pre-compute
+/// sequence header sizes accurately.
+pub fn seq_len_prefix_len(value: usize) -> usize {
+    if use_compact_seq_len() {
         varint_encoded_len(value as u64)
     } else {
         8
@@ -881,26 +915,6 @@ unsafe fn copy_from_payload(src: *const u8, dst: *mut u8, len: usize) -> Result<
     Ok(())
 }
 
-fn read_u64_le_at_ptr(ptr: *const u8) -> Result<u64, Error> {
-    let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
-    let ptr_us = ptr as usize;
-    let end = ptr_us.checked_add(8).ok_or(Error::LengthMismatch)?;
-    let base_end = base.checked_add(total).ok_or(Error::LengthMismatch)?;
-    if ptr_us < base || end > base_end {
-        return Err(Error::LengthMismatch);
-    }
-    let off = ptr_us - base;
-    let slice_end = off.checked_add(8).ok_or(Error::LengthMismatch)?;
-    if slice_end > total {
-        return Err(Error::LengthMismatch);
-    }
-    let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-    let mut lb = [0u8; 8];
-    lb.copy_from_slice(&payload[off..slice_end]);
-    record_payload_access(ptr, 8);
-    Ok(u64::from_le_bytes(lb))
-}
-
 /// RAII guard to set and restore the current payload context.
 pub struct PayloadCtxGuard {
     prev: Option<PayloadCtxState>,
@@ -1156,7 +1170,7 @@ pub(crate) fn prepare_header_decode(flags: u8, hint: u8, require_match: bool) ->
     if decode_flags_active() {
         let active_flags = get_decode_flags();
         let active_hint = decode_flags_hint();
-        if require_match && (active_flags != flags || active_hint != hint) {
+        if require_match && active_flags != flags {
             return Err(Error::DecodeFlagsMismatch {
                 header_flags: flags,
                 header_hint: hint,
@@ -1333,6 +1347,19 @@ pub fn write_len<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
     }
 }
 
+/// Write a sequence length prefix honoring `COMPACT_SEQ_LEN`.
+pub fn write_seq_len<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
+    if use_compact_seq_len() {
+        let mut buf = [0u8; MAX_VARINT_BYTES];
+        let used = encode_varint(value, &mut buf);
+        writer.write_all(&buf[..used])?;
+        note_compact_seq_len_emitted();
+        Ok(())
+    } else {
+        writer.write_u64::<LittleEndian>(value)
+    }
+}
+
 /// Append a length prefix honoring `COMPACT_LEN` to `out`.
 #[inline]
 pub fn write_len_to_vec(out: &mut Vec<u8>, value: u64) {
@@ -1495,6 +1522,9 @@ fn decode_varint_from_slice(bytes: &[u8]) -> Result<(u64, usize), Error> {
     let mut shift = 0u32;
     for (idx, byte) in bytes.iter().copied().enumerate().take(MAX_VARINT_BYTES) {
         let payload = (byte & 0x7f) as u64;
+        if shift == 63 && payload > 1 {
+            return Err(Error::LengthMismatch);
+        }
         result |= payload << shift;
         if byte & 0x80 == 0 {
             return Ok((result, idx + 1));
@@ -2026,20 +2056,22 @@ where
 {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         let len = u64::try_from(self.len()).map_err(|_| Error::LengthMismatch)?;
-        writer.write_u64::<LittleEndian>(len)?;
+        write_seq_len(&mut writer, len)?;
 
         let mut buffer = Vec::new();
         for (key, value) in self.iter() {
             buffer.clear();
             key.serialize(&mut buffer)?;
-            writer.write_u64::<LittleEndian>(
+            write_len(
+                &mut writer,
                 u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
             )?;
             writer.write_all(&buffer)?;
 
             buffer.clear();
             value.serialize(&mut buffer)?;
-            writer.write_u64::<LittleEndian>(
+            write_len(
+                &mut writer,
                 u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
             )?;
             writer.write_all(&buffer)?;
@@ -2082,20 +2114,22 @@ where
         let mut entries: Vec<_> = self.iter().collect();
         entries.sort_by(|(ka, _), (kb, _)| ka.cmp(kb));
         let len = u64::try_from(entries.len()).map_err(|_| Error::LengthMismatch)?;
-        writer.write_u64::<LittleEndian>(len)?;
+        write_seq_len(&mut writer, len)?;
 
         let mut buffer = Vec::new();
         for (key, value) in entries.into_iter() {
             buffer.clear();
             key.serialize(&mut buffer)?;
-            writer.write_u64::<LittleEndian>(
+            write_len(
+                &mut writer,
                 u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
             )?;
             writer.write_all(&buffer)?;
 
             buffer.clear();
             value.serialize(&mut buffer)?;
-            writer.write_u64::<LittleEndian>(
+            write_len(
+                &mut writer,
                 u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
             )?;
             writer.write_all(&buffer)?;
@@ -2135,13 +2169,14 @@ where
 {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         let len = u64::try_from(self.len()).map_err(|_| Error::LengthMismatch)?;
-        writer.write_u64::<LittleEndian>(len)?;
+        write_seq_len(&mut writer, len)?;
 
         let mut buffer = Vec::new();
         for item in self.iter() {
             buffer.clear();
             item.serialize(&mut buffer)?;
-            writer.write_u64::<LittleEndian>(
+            write_len(
+                &mut writer,
                 u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
             )?;
             writer.write_all(&buffer)?;
@@ -2182,13 +2217,14 @@ where
         let mut items: Vec<_> = self.iter().collect();
         items.sort();
         let len = u64::try_from(items.len()).map_err(|_| Error::LengthMismatch)?;
-        writer.write_u64::<LittleEndian>(len)?;
+        write_seq_len(&mut writer, len)?;
 
         let mut buffer = Vec::new();
         for item in items.into_iter() {
             buffer.clear();
             item.serialize(&mut buffer)?;
-            writer.write_u64::<LittleEndian>(
+            write_len(
+                &mut writer,
                 u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
             )?;
             writer.write_all(&buffer)?;
@@ -3666,9 +3702,8 @@ impl NoritoSerialize for Cow<'_, str> {
 
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         let bytes = self.as_ref().as_bytes();
-        writer.write_u64::<LittleEndian>(
-            u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?,
-        )?;
+        let len = u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?;
+        write_len(&mut writer, len)?;
         writer.write_all(bytes)?;
         Ok(())
     }
@@ -3733,7 +3768,7 @@ impl<T: NoritoSerialize> NoritoSerialize for Box<T> {
     fn encoded_len_exact(&self) -> Option<usize> {
         (**self)
             .encoded_len_exact()
-            .map(|inner| inner + core::mem::size_of::<u64>())
+            .map(|inner| inner + len_prefix_len(inner))
     }
 }
 
@@ -3764,7 +3799,7 @@ impl<T: NoritoSerialize> NoritoSerialize for Rc<T> {
     fn encoded_len_exact(&self) -> Option<usize> {
         (**self)
             .encoded_len_exact()
-            .map(|inner| inner + core::mem::size_of::<u64>())
+            .map(|inner| inner + len_prefix_len(inner))
     }
 }
 
@@ -3795,7 +3830,7 @@ impl<T: NoritoSerialize> NoritoSerialize for Arc<T> {
     fn encoded_len_exact(&self) -> Option<usize> {
         (**self)
             .encoded_len_exact()
-            .map(|inner| inner + core::mem::size_of::<u64>())
+            .map(|inner| inner + len_prefix_len(inner))
     }
 }
 
@@ -3951,32 +3986,24 @@ impl<T: NoritoSerialize, E: NoritoSerialize> NoritoSerialize for Result<T, E> {
             Ok(value) => {
                 writer.write_u8(0)?;
                 if let Some(e) = value.encoded_len_exact() {
-                    {
-                        writer.write_u64::<LittleEndian>(e as u64)?;
-                    }
+                    write_len(&mut writer, e as u64)?;
                     value.serialize(&mut writer)?;
                 } else {
                     let mut buf = Vec::new();
                     value.serialize(&mut buf)?;
-                    {
-                        writer.write_u64::<LittleEndian>(buf.len() as u64)?;
-                    }
+                    write_len(&mut writer, buf.len() as u64)?;
                     writer.write_all(&buf)?;
                 }
             }
             Err(err) => {
                 writer.write_u8(1)?;
                 if let Some(e) = err.encoded_len_exact() {
-                    {
-                        writer.write_u64::<LittleEndian>(e as u64)?;
-                    }
+                    write_len(&mut writer, e as u64)?;
                     err.serialize(&mut writer)?;
                 } else {
                     let mut buf = Vec::new();
                     err.serialize(&mut buf)?;
-                    {
-                        writer.write_u64::<LittleEndian>(buf.len() as u64)?;
-                    }
+                    write_len(&mut writer, buf.len() as u64)?;
                     writer.write_all(&buf)?;
                 }
             }
@@ -4052,9 +4079,7 @@ impl<T: NoritoSerialize, const N: usize> NoritoSerialize for [T; N] {
         for item in self {
             buf.clear();
             item.serialize(&mut buf)?;
-            {
-                writer.write_u64::<LittleEndian>(buf.len() as u64)?;
-            }
+            write_len(&mut writer, buf.len() as u64)?;
             writer.write_all(&buf)?;
         }
         Ok(())
@@ -4371,7 +4396,11 @@ pub mod stream {
                 let mut byte = [0u8; 1];
                 self.read_exact(&mut byte)?;
                 let b = byte[0];
-                result |= ((b & 0x7f) as u64) << shift;
+                let payload = (b & 0x7f) as u64;
+                if shift == 63 && payload > 1 {
+                    return Err(Error::LengthMismatch);
+                }
+                result |= payload << shift;
                 if b & 0x80 == 0 {
                     return Ok(result);
                 }
@@ -4434,7 +4463,9 @@ pub mod stream {
             let supported = header_flags::PACKED_SEQ
                 | header_flags::COMPACT_LEN
                 | header_flags::VARINT_OFFSETS
-                | header_flags::COMPACT_SEQ_LEN;
+                | header_flags::COMPACT_SEQ_LEN
+                | header_flags::PACKED_STRUCT
+                | header_flags::FIELD_BITSET;
             let unsupported = flags & !supported;
             if unsupported != 0 {
                 return Err(Error::UnsupportedFeature("sequence layout flag"));
@@ -4549,13 +4580,13 @@ pub mod stream {
 impl<T: NoritoSerialize> NoritoSerialize for VecDeque<T> {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         let len = u64::try_from(self.len()).map_err(|_| Error::LengthMismatch)?;
-        writer.write_u64::<LittleEndian>(len)?;
+        write_seq_len(&mut writer, len)?;
         let mut buf = Vec::new();
         for item in self {
             buf.clear();
             item.serialize(&mut buf)?;
             let elem_len = u64::try_from(buf.len()).map_err(|_| Error::LengthMismatch)?;
-            writer.write_u64::<LittleEndian>(elem_len)?;
+            write_len(&mut writer, elem_len)?;
             writer.write_all(&buf)?;
         }
         Ok(())
@@ -4593,13 +4624,13 @@ where
 impl<T: NoritoSerialize> NoritoSerialize for LinkedList<T> {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         let len = u64::try_from(self.len()).map_err(|_| Error::LengthMismatch)?;
-        writer.write_u64::<LittleEndian>(len)?;
+        write_seq_len(&mut writer, len)?;
         let mut buf = Vec::new();
         for item in self {
             buf.clear();
             item.serialize(&mut buf)?;
             let elem_len = u64::try_from(buf.len()).map_err(|_| Error::LengthMismatch)?;
-            writer.write_u64::<LittleEndian>(elem_len)?;
+            write_len(&mut writer, elem_len)?;
             writer.write_all(&buf)?;
         }
         Ok(())
@@ -4645,17 +4676,12 @@ where
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         let mut items: Vec<_> = self.iter().collect();
         items.sort();
-        {
-            let _ = use_compact_seq_len;
-            writer.write_u64::<LittleEndian>(items.len() as u64)?;
-        }
+        write_seq_len(&mut writer, items.len() as u64)?;
         let mut buf = Vec::new();
         for item in items {
             buf.clear();
             (*item).serialize(&mut buf)?;
-            {
-                writer.write_u64::<LittleEndian>(buf.len() as u64)?;
-            }
+            write_len(&mut writer, buf.len() as u64)?;
             writer.write_all(&buf)?;
         }
         Ok(())
@@ -4694,14 +4720,13 @@ where
         let mut layout = Layout::from_size_align(cap, align).map_err(|_| Error::LengthMismatch)?;
         let (mut buf, mut buf_needs_dealloc) = unsafe { alloc_checked(layout) };
         for _ in 0..len {
-            let elem_len = match len_u64_to_usize(read_u64_le_at_ptr(unsafe { ptr.add(offset) })?) {
-                Ok(len) => len,
+            let (elem_len, hdr) = match read_len_dyn_at_ptr(unsafe { ptr.add(offset) }) {
+                Ok(res) => res,
                 Err(err) => {
                     unsafe { dealloc_checked(buf, layout, buf_needs_dealloc) };
                     return Err(err);
                 }
             };
-            let hdr = 8;
             offset += hdr;
             if offset + elem_len > payload.len() {
                 unsafe { dealloc_checked(buf, layout, buf_needs_dealloc) };
@@ -4739,14 +4764,16 @@ where
 
 impl<T: NoritoSerialize> NoritoSerialize for Vec<T> {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_u64::<LittleEndian>(
+        write_seq_len(
+            &mut writer,
             u64::try_from(self.len()).map_err(|_| Error::LengthMismatch)?,
         )?;
         let mut buffer = Vec::new();
         for item in self {
             buffer.clear();
             item.serialize(&mut buffer)?;
-            writer.write_u64::<LittleEndian>(
+            write_len(
+                &mut writer,
                 u64::try_from(buffer.len()).map_err(|_| Error::LengthMismatch)?,
             )?;
             writer.write_all(&buffer)?;
@@ -4817,7 +4844,7 @@ macro_rules! impl_tuple {
                 $(
                     __buf.clear();
                     self.$idx.serialize(&mut __buf)?;
-                    writer.write_u64::<LittleEndian>(__buf.len() as u64)?;
+                    write_len(&mut writer, __buf.len() as u64)?;
                     writer.write_all(__buf.as_slice())?;
                 )+
                 Ok(())
@@ -5028,7 +5055,7 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
     value: &T,
 ) -> Result<(Vec<u8>, u8), Error> {
     let encode_guard = EncodeContextGuard::enter();
-    let base_flags = default_encode_flags();
+    let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
     let estimated = value
         .encoded_len_exact()
         .or_else(|| value.encoded_len_hint())
@@ -5480,11 +5507,9 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
     let compressed = &bytes[Header::SIZE..];
     let payload = match header.compression {
         Compression::None => {
-            let trimmed = payload_without_leading_padding(
-                compressed,
-                payload_len,
-                payload_alignment_padding_for::<T>(),
-            )?;
+            let padding = payload_alignment_padding_for::<T>();
+            let trimmed =
+                payload_without_leading_padding_exact(compressed, payload_len, padding)?;
             trimmed.to_vec()
         }
         Compression::Zstd => {
@@ -5538,8 +5563,8 @@ pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(bytes: &'a [u8]) -> Result<&'a A
     let pos = cursor.position() as usize;
     let slice = &bytes[pos..];
     let payload_len = payload_len_to_usize(header.length)?;
-    let payload =
-        payload_without_leading_padding(slice, payload_len, payload_alignment_padding_for::<T>())?;
+    let padding = payload_alignment_padding_for::<T>();
+    let payload = payload_without_leading_padding_exact(slice, payload_len, padding)?;
     if crc64(payload) != header.checksum {
         return Err(Error::ChecksumMismatch);
     }
@@ -6146,6 +6171,30 @@ mod tests {
     }
 
     #[test]
+    fn payload_without_padding_rejects_nonzero_prefix() {
+        let padded = vec![1, 0, 0, 1, 2, 3, 4];
+        let err = payload_without_leading_padding(&padded, 4, 3)
+            .expect_err("nonzero padding should be rejected");
+        assert!(matches!(err, Error::LengthMismatch));
+    }
+
+    #[test]
+    fn payload_without_padding_exact_accepts_expected_padding() {
+        let padded = vec![0, 0, 0xAA, 0xBB];
+        let view = payload_without_leading_padding_exact(&padded, 2, 2)
+            .expect("exact padding should trim");
+        assert_eq!(view, &padded[2..]);
+    }
+
+    #[test]
+    fn payload_without_padding_exact_rejects_nonzero_padding() {
+        let padded = vec![1, 0, 0xAA, 0xBB];
+        let err = payload_without_leading_padding_exact(&padded, 2, 2)
+            .expect_err("nonzero padding should be rejected");
+        assert!(matches!(err, Error::LengthMismatch));
+    }
+
+    #[test]
     fn payload_without_padding_rejects_short_slice() {
         let data = vec![1, 2];
         let err = payload_without_leading_padding(&data, 3, 0).expect_err("length mismatch");
@@ -6176,6 +6225,26 @@ mod tests {
         mutated.extend_from_slice(&bytes[insert_at..]);
 
         let result = from_bytes::<u64>(&mutated);
+        assert!(matches!(result, Err(Error::LengthMismatch)));
+    }
+
+    #[test]
+    fn from_bytes_rejects_trailing_bytes() {
+        let value: u64 = 0xCAFEBABE_DEADBEEF;
+        let mut bytes = to_bytes(&value).expect("encode header-framed payload");
+        bytes.push(0);
+
+        let result = from_bytes::<u64>(&bytes);
+        assert!(matches!(result, Err(Error::LengthMismatch)));
+    }
+
+    #[test]
+    fn from_compressed_bytes_rejects_trailing_bytes() {
+        let value: u64 = 0x1111_2222_3333_4444;
+        let mut bytes = to_bytes(&value).expect("encode header-framed payload");
+        bytes.push(0);
+
+        let result = from_compressed_bytes::<u64>(&bytes);
         assert!(matches!(result, Err(Error::LengthMismatch)));
     }
 

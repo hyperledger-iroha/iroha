@@ -14,6 +14,12 @@ fn corrupt_first_id_delta(body: &mut [u8]) {
     body[off] = 3; // zigzag(-2)
 }
 
+fn overflow_varint_bytes() -> Vec<u8> {
+    let mut bytes = vec![0x80; 9];
+    bytes.push(0x02);
+    bytes
+}
+
 #[test]
 fn str_bool_invalid_descriptor_and_short() {
     // Too short
@@ -382,12 +388,8 @@ fn enum_invalid_descriptor_and_tag_and_dict_code_oob() {
     // There is exactly one Name row; set its code to an out-of-bounds index (== dict_len)
     if dict_len > 0 {
         body[off_names..off_names + 4].copy_from_slice(&(dict_len as u32).to_le_bytes());
-        let view = view_ncb_u64_enum_bool(&body).expect("view ok");
-        let res = view.payload(0);
-        assert!(res.is_err());
-        if let Err(err) = res {
-            assert!(matches!(err, Error::LengthMismatch));
-        }
+        let res_view = view_ncb_u64_enum_bool(&body);
+        assert!(matches!(res_view, Err(Error::LengthMismatch)));
     }
 }
 
@@ -485,6 +487,20 @@ fn u64_u32_bool_id_delta_underflow() {
 }
 
 #[test]
+fn u64_u32_bool_id_delta_overflow_rejected() {
+    let mut body = Vec::new();
+    body.extend_from_slice(&2u32.to_le_bytes());
+    body.push(0x23);
+    while body.len() & 7 != 0 {
+        body.push(0);
+    }
+    body.extend_from_slice(&1u64.to_le_bytes());
+    body.extend_from_slice(&overflow_varint_bytes());
+    let res = norito::columnar::view_ncb_u64_u32_bool(&body);
+    assert!(matches!(res, Err(Error::LengthMismatch)));
+}
+
+#[test]
 fn str_u32_bool_names_offsets_non_monotonic() {
     // Make offsets non-monotonic so s > e for some row
     let rows: Vec<(u64, &str, u32, bool)> =
@@ -498,8 +514,6 @@ fn str_u32_bool_names_offsets_non_monotonic() {
         off += 8 - mis;
     }
     off += 8 * n;
-    // tags
-    off += n;
     // names offsets (non-dict)
     let mis4 = off & 3;
     if mis4 != 0 {
@@ -544,8 +558,6 @@ fn bytes_u32_bool_offsets_non_monotonic() {
         off += 8 - mis;
     }
     off += 8 * n;
-    // tags
-    off += n;
     // bytes offsets (non-dict)
     let mis4 = off & 3;
     if mis4 != 0 {

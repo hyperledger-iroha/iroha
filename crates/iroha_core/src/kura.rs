@@ -62,6 +62,7 @@ impl From<CommittedBlock> for Arc<SignedBlock> {
 const INDEX_FILE_NAME: &str = "blocks.index";
 const DATA_FILE_NAME: &str = "blocks.data";
 const HASHES_FILE_NAME: &str = "blocks.hashes";
+const COUNT_FILE_NAME: &str = "blocks.count.norito";
 const PIPELINE_DIR_NAME: &str = "pipeline";
 const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
 const PIPELINE_SIDECARS_INDEX_FILE: &str = "sidecars.index";
@@ -925,7 +926,7 @@ impl Kura {
     #[iroha_logger::log(skip_all, name = "kura_init")]
     fn init(block_store: &mut BlockStore, mode: InitMode) -> Result<(BlockData, ChainValidation)> {
         let block_index_count: usize = block_store
-            .read_index_count()?
+            .read_durable_index_count()?
             .try_into()
             .expect("INTERNAL BUG: block index count exceeds usize::MAX");
 
@@ -963,10 +964,19 @@ impl Kura {
         block_store: &mut BlockStore,
         block_index_count: usize,
     ) -> Result<ChainValidation, Error> {
-        let block_hashes_count = block_store
+        let mut block_hashes_count: usize = block_store
             .read_hashes_count()?
             .try_into()
             .expect("INTERNAL BUG: block hashes count exceeds usize::MAX");
+        if block_hashes_count > block_index_count {
+            warn!(
+                hashes_count = block_hashes_count,
+                index_count = block_index_count,
+                "hashes file longer than index; truncating to durable count"
+            );
+            block_store.truncate_hashes_to_count(block_index_count as u64)?;
+            block_hashes_count = block_index_count;
+        }
         if block_hashes_count == block_index_count {
             let mut block_indices = vec![BlockIndex::default(); block_index_count];
             block_store.read_block_indices(0, &mut block_indices)?;
@@ -1499,10 +1509,12 @@ impl Kura {
         let data = Self::file_len_or_zero(&blocks_dir.join(DATA_FILE_NAME))?;
         let index = Self::file_len_or_zero(&blocks_dir.join(INDEX_FILE_NAME))?;
         let hashes = Self::file_len_or_zero(&blocks_dir.join(HASHES_FILE_NAME))?;
+        let marker = Self::file_len_or_zero(&blocks_dir.join(COUNT_FILE_NAME))?;
         let sidecars = Self::sidecar_bytes(blocks_dir)?;
         Ok(data
             .saturating_add(index)
             .saturating_add(hashes)
+            .saturating_add(marker)
             .saturating_add(sidecars))
     }
 
@@ -1576,6 +1588,33 @@ impl Kura {
         Ok(used)
     }
 
+    fn purge_retired_storage(&self) -> bool {
+        if self.store_root.as_os_str().is_empty() {
+            return false;
+        }
+        let retired_root = self.store_root.join("retired");
+        if !retired_root.exists() {
+            return false;
+        }
+        match std::fs::remove_dir_all(&retired_root) {
+            Ok(()) => {
+                info!(
+                    path = %retired_root.display(),
+                    "purged retired Kura segments to reclaim disk budget"
+                );
+                true
+            }
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %retired_root.display(),
+                    "failed to purge retired Kura segments while reclaiming disk budget"
+                );
+                false
+            }
+        }
+    }
+
     fn pending_block_bytes(&self, persisted_count: usize, unindexed_bytes: u64) -> Result<u64> {
         let pending_blocks = {
             let data = self.block_data.lock();
@@ -1618,7 +1657,7 @@ impl Kura {
 
         let (persisted_count, unindexed_bytes) = {
             let mut block_store = self.block_store.lock();
-            let persisted = usize::try_from(block_store.read_index_count()?)?;
+            let persisted = usize::try_from(block_store.read_durable_index_count()?)?;
             let persisted_u64 = persisted as u64;
             let indexed_data_len = if persisted == 0 {
                 0
@@ -1640,12 +1679,23 @@ impl Kura {
 
         let used = self.kura_disk_usage_bytes()?;
         let pending_bytes = self.pending_block_bytes(persisted_count, unindexed_bytes)?;
-        let required = used
+        let mut required = used
             .saturating_add(pending_bytes)
             .saturating_add(block_required)
             .saturating_add(merge_entry_bytes);
 
         if required > self.max_disk_usage_bytes {
+            let mut used = used;
+            if self.purge_retired_storage() {
+                used = self.kura_disk_usage_bytes()?;
+                required = used
+                    .saturating_add(pending_bytes)
+                    .saturating_add(block_required)
+                    .saturating_add(merge_entry_bytes);
+                if required <= self.max_disk_usage_bytes {
+                    return Ok(());
+                }
+            }
             return Err(Error::StorageBudgetExceeded {
                 limit: self.max_disk_usage_bytes,
                 used,
@@ -1771,6 +1821,8 @@ pub struct BlockStore {
     read_scratch: Vec<u8>,
     data_mmap: Option<MemoryMirror>,
     data_mmap_len: u64,
+    commit_marker_count: u64,
+    commit_marker_pending: Option<u64>,
 }
 
 impl Debug for BlockStore {
@@ -1790,6 +1842,8 @@ impl Debug for BlockStore {
                 &self.data_mmap.as_ref().map(MemoryMirror::kind),
             )
             .field("mmap_len", &self.data_mmap_len)
+            .field("commit_marker_count", &self.commit_marker_count)
+            .field("commit_marker_pending", &self.commit_marker_pending)
             .finish()
     }
 }
@@ -1897,6 +1951,25 @@ impl BlockIndex {
             start: read_u64(file, buff)?,
             length: read_u64(file, buff)?,
         })
+    }
+}
+
+#[derive(Debug, Clone, Encode, Decode)]
+struct BlockStoreCommitMarker {
+    /// Marker format version (v1).
+    version: u32,
+    /// Count of blocks that are fully durable on disk.
+    count: u64,
+}
+
+impl BlockStoreCommitMarker {
+    const VERSION: u32 = 1;
+
+    fn new(count: u64) -> Self {
+        Self {
+            version: Self::VERSION,
+            count,
+        }
     }
 }
 
@@ -2789,6 +2862,17 @@ impl Kura {
             iroha_logger::debug!(height, ?index_path, kind, "empty sidecar length; skipping");
             return None;
         }
+        if entry.len > STRICT_INIT_MAX_BLOCK_BYTES {
+            iroha_logger::warn!(
+                height,
+                len = entry.len,
+                limit = STRICT_INIT_MAX_BLOCK_BYTES,
+                ?index_path,
+                kind,
+                "sidecar length exceeds limit; skipping"
+            );
+            return None;
+        }
         let len_usize = if let Ok(len) = usize::try_from(entry.len) {
             len
         } else {
@@ -3162,6 +3246,8 @@ impl BlockStore {
             read_scratch: Vec::new(),
             data_mmap: None,
             data_mmap_len: 0,
+            commit_marker_count: 0,
+            commit_marker_pending: None,
         }
     }
 
@@ -3187,6 +3273,170 @@ impl BlockStore {
             self.hashes_file = Some(FileWrap::open_read_write(path)?);
         }
         Ok(self.hashes_file.as_mut().expect("handle just initialised"))
+    }
+
+    fn commit_marker_path(&self) -> PathBuf {
+        self.path_to_blockchain.join(COUNT_FILE_NAME)
+    }
+
+    fn read_commit_marker(&mut self) -> Result<Option<BlockStoreCommitMarker>> {
+        let path = self.commit_marker_path();
+        if path.as_os_str().is_empty() {
+            return Ok(None);
+        }
+        let tmp_path = path.with_extension("norito.tmp");
+        let mut main_invalid = false;
+        match std::fs::read(&path) {
+            Ok(bytes) => match norito::decode_from_bytes::<BlockStoreCommitMarker>(&bytes) {
+                Ok(marker) => {
+                    if marker.version == BlockStoreCommitMarker::VERSION {
+                        return Ok(Some(marker));
+                    }
+                    warn!(
+                        version = marker.version,
+                        "unsupported block store marker version; ignoring"
+                    );
+                    main_invalid = true;
+                }
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "failed to decode block store marker; ignoring corrupted marker"
+                    );
+                    main_invalid = true;
+                }
+            },
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => return Err(Error::IO(err, path)),
+        }
+
+        if main_invalid {
+            if let Err(err) = std::fs::remove_file(&path) {
+                warn!(
+                    ?err,
+                    path = %path.display(),
+                    "failed to remove corrupted block store marker"
+                );
+            }
+        }
+
+        match std::fs::read(&tmp_path) {
+            Ok(bytes) => match norito::decode_from_bytes::<BlockStoreCommitMarker>(&bytes) {
+                Ok(marker) => {
+                    if marker.version != BlockStoreCommitMarker::VERSION {
+                        warn!(
+                            version = marker.version,
+                            "unsupported block store temp marker version; ignoring"
+                        );
+                        return Ok(None);
+                    }
+                    warn!(
+                        path = %tmp_path.display(),
+                        "recovered block store marker from temp file"
+                    );
+                    self.write_commit_marker(marker.count)?;
+                    Ok(Some(marker))
+                }
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        path = %tmp_path.display(),
+                        "failed to decode temp block store marker"
+                    );
+                    let _ = std::fs::remove_file(&tmp_path);
+                    Ok(None)
+                }
+            },
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(Error::IO(err, tmp_path)),
+        }
+    }
+
+    fn write_commit_marker(&mut self, count: u64) -> Result<()> {
+        let path = self.commit_marker_path();
+        if path.as_os_str().is_empty() {
+            return Ok(());
+        }
+        let marker = BlockStoreCommitMarker::new(count);
+        let bytes = norito::to_bytes(&marker).map_err(Error::NoritoFrame)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        }
+        let tmp_path = path.with_extension("norito.tmp");
+        {
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp_path)
+                .map_err(|err| Error::IO(err, tmp_path.clone()))?;
+            file.write_all(&bytes)
+                .and_then(|_| file.flush())
+                .and_then(|_| file.sync_data())
+                .map_err(|err| Error::IO(err, tmp_path.clone()))?;
+        }
+        std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
+        if let Some(parent) = path.parent() {
+            sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        }
+        Ok(())
+    }
+
+    fn init_commit_marker(&mut self) -> Result<()> {
+        if self.path_to_blockchain.as_os_str().is_empty() {
+            return Ok(());
+        }
+
+        let logical_count = {
+            let index_file = self.ensure_index_file()?;
+            let len = index_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
+            let aligned = len - (len % BlockIndex::SIZE);
+            if aligned != len {
+                warn!(
+                    len,
+                    aligned,
+                    "block index length misaligned; truncating trailing bytes"
+                );
+                index_file.try_io(|file| file.set_len(aligned))?;
+            }
+            aligned / BlockIndex::SIZE
+        };
+        if matches!(self.fsync.mode, FsyncMode::Off) {
+            self.write_commit_marker(logical_count)?;
+            self.truncate_hashes_to_count(logical_count)?;
+            self.truncate_data_to_index(logical_count)?;
+            self.commit_marker_count = logical_count;
+            self.commit_marker_pending = None;
+            return Ok(());
+        }
+
+        let mut durable_count = match self.read_commit_marker()? {
+            Some(marker) => marker.count,
+            None => {
+                self.write_commit_marker(logical_count)?;
+                logical_count
+            }
+        };
+
+        if logical_count < durable_count {
+            warn!(
+                logical_count,
+                durable_count, "block store marker exceeds index length; truncating marker"
+            );
+            durable_count = logical_count;
+            self.write_commit_marker(durable_count)?;
+        }
+
+        if logical_count > durable_count {
+            self.prune(durable_count)?;
+        }
+
+        self.truncate_hashes_to_count(durable_count)?;
+        self.truncate_data_to_index(durable_count)?;
+
+        self.commit_marker_count = durable_count;
+        self.commit_marker_pending = None;
+        Ok(())
     }
 
     fn drop_cached_handles(&mut self) {
@@ -3218,12 +3468,22 @@ impl BlockStore {
             return Ok(());
         }
 
-        // Sync index last so the index length reflects only fully-durable data/hashes.
+        // Sync index last so the commit marker only advances after data/hashes/index are durable.
         self.sync_target(FsyncTarget::Data, Self::ensure_data_file)?;
         self.sync_target(FsyncTarget::Hashes, Self::ensure_hashes_file)?;
         self.sync_target(FsyncTarget::Index, Self::ensure_index_file)?;
 
         self.fsync.clear();
+        self.commit_pending_marker()?;
+        Ok(())
+    }
+
+    fn commit_pending_marker(&mut self) -> Result<()> {
+        let Some(count) = self.commit_marker_pending.take() else {
+            return Ok(());
+        };
+        self.write_commit_marker(count)?;
+        self.commit_marker_count = count;
         Ok(())
     }
 
@@ -3414,10 +3674,27 @@ impl BlockStore {
     /// Note that if there is an error, you can be quite sure all
     /// other read and write operations will also fail.
     #[allow(clippy::integer_division)]
-    pub fn read_index_count(&mut self) -> Result<u64> {
+    fn read_index_count_from_len(&mut self) -> Result<u64> {
         let index_file = self.ensure_index_file()?;
         let len = index_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
         Ok(len / BlockIndex::SIZE)
+    }
+
+    /// Return the logical index count based on the index file length.
+    #[allow(clippy::integer_division)]
+    pub fn read_index_count(&mut self) -> Result<u64> {
+        self.read_index_count_from_len()
+    }
+
+    /// Return the durable index count as recorded by the commit marker.
+    pub fn read_durable_index_count(&mut self) -> Result<u64> {
+        if self.path_to_blockchain.as_os_str().is_empty() {
+            return Ok(0);
+        }
+        if matches!(self.fsync.mode, FsyncMode::Off) {
+            return self.read_index_count_from_len();
+        }
+        Ok(self.commit_marker_count)
     }
 
     /// Read a series of block hashes from the block hashes file
@@ -3471,6 +3748,52 @@ impl BlockStore {
         let hashes_file = self.ensure_hashes_file()?;
         let len = hashes_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
         Ok(len / SIZE_OF_BLOCK_HASH)
+    }
+
+    fn truncate_hashes_to_count(&mut self, count: u64) -> Result<()> {
+        if self.path_to_blockchain.as_os_str().is_empty() {
+            return Ok(());
+        }
+        let hashes_file = self.ensure_hashes_file()?;
+        let new_len = count.saturating_mul(SIZE_OF_BLOCK_HASH);
+        let current_len = hashes_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
+        if new_len < current_len {
+            hashes_file.try_io(|file| file.set_len(new_len))?;
+        }
+        Ok(())
+    }
+
+    fn truncate_data_to_index(&mut self, count: u64) -> Result<()> {
+        if self.path_to_blockchain.as_os_str().is_empty() {
+            return Ok(());
+        }
+        if count == 0 {
+            self.invalidate_data_mmap();
+            let data_file = self.ensure_data_file()?;
+            data_file.try_io(|file| file.set_len(0))?;
+            return Ok(());
+        }
+        let last_index = match self.read_block_index(count.saturating_sub(1)) {
+            Ok(index) => index,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    count, "failed to read last block index while trimming data file"
+                );
+                return Ok(());
+            }
+        };
+        let target_len = last_index.start.saturating_add(last_index.length);
+        let current_len = {
+            let data_file = self.ensure_data_file()?;
+            data_file.try_io(|file| file.metadata().map(|meta| meta.len()))?
+        };
+        if current_len > target_len {
+            self.invalidate_data_mmap();
+            let data_file = self.ensure_data_file()?;
+            data_file.try_io(|file| file.set_len(target_len))?;
+        }
+        Ok(())
     }
 
     /// Return the current size of the block data file in bytes.
@@ -3645,6 +3968,8 @@ impl BlockStore {
             })?;
         }
         self.drop_cached_handles();
+        self.init_commit_marker()?;
+        self.drop_cached_handles();
         Ok(())
     }
 
@@ -3783,7 +4108,7 @@ impl BlockStore {
             new_hashes_len, "append_block_batch wrote hashes"
         );
 
-        // Write the index after data + hashes so the index length acts as the commit marker.
+        // Write the index after data + hashes so the commit marker can safely advance.
         let index_file = self.ensure_index_file()?;
         let new_index_len = (start_height + blocks.len() as u64) * BlockIndex::SIZE;
         index_file.try_io(|file| {
@@ -3801,6 +4126,11 @@ impl BlockStore {
             new_index_len, "append_block_batch wrote index entries"
         );
 
+        let end_height = start_height + blocks.len() as u64;
+        self.commit_marker_pending = Some(
+            self.commit_marker_pending
+                .map_or(end_height, |pending| pending.max(end_height)),
+        );
         self.mark_fsync_pending();
         if matches!(self.fsync.mode, FsyncMode::On)
             || (matches!(self.fsync.mode, FsyncMode::Batched)
@@ -3809,11 +4139,7 @@ impl BlockStore {
             self.flush_pending_fsync(false)?;
         }
 
-        debug!(
-            start_height,
-            end_height = start_height + blocks.len() as u64,
-            "append_block_batch complete"
-        );
+        debug!(start_height, end_height, "append_block_batch complete");
         Ok(())
     }
 
@@ -3835,6 +4161,7 @@ impl BlockStore {
     pub fn prune(&mut self, height: u64) -> Result<()> {
         self.invalidate_data_mmap();
         let last_block_index: Option<BlockIndex>;
+        let mut pruned_index_count = 0u64;
 
         {
             let mut file =
@@ -3845,10 +4172,12 @@ impl BlockStore {
 
             last_block_index = if new_len > 0 {
                 let actual_height = new_len / BlockIndex::SIZE;
+                pruned_index_count = actual_height;
                 file.try_io(|f| f.seek(SeekFrom::Start((actual_height - 1) * BlockIndex::SIZE)))?;
                 let mut buff = [0; 8];
                 Some(file.try_io(|f| BlockIndex::read(f, &mut buff))?)
             } else {
+                pruned_index_count = 0;
                 None
             };
         }
@@ -3867,6 +4196,10 @@ impl BlockStore {
             let new_len = last_block_index.map_or(0, |x| x.start + x.length).min(len);
             file.try_io(|f| f.set_len(new_len))?;
         }
+
+        self.commit_marker_pending = None;
+        self.commit_marker_count = self.commit_marker_count.min(pruned_index_count);
+        self.write_commit_marker(self.commit_marker_count)?;
 
         Ok(())
     }
@@ -4864,6 +5197,38 @@ mod tests {
             .store_block(block)
             .expect_err("lane 1 bytes should exceed budget");
         assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
+    }
+
+    #[test]
+    fn store_block_reclaims_retired_storage_when_budget_exceeded() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let budget_limit = Kura::block_required_bytes(&block).expect("block bytes");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::base::util::Bytes(budget_limit),
+            blocks_in_memory: BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) =
+            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+
+        let retired_root = temp_dir.path().join("retired").join("blocks");
+        std::fs::create_dir_all(&retired_root).expect("create retired dir");
+        std::fs::write(retired_root.join("stale.bin"), [0u8; 1]).expect("seed retired file");
+
+        kura.store_block(block)
+            .expect("store block after retired purge");
+        assert!(
+            !temp_dir.path().join("retired").exists(),
+            "retired storage should be purged"
+        );
     }
 
     #[test]
@@ -6368,6 +6733,49 @@ mod tests {
     }
 
     #[test]
+    fn sidecar_reader_rejects_oversized_payloads() {
+        let temp_dir = TempDir::new().unwrap();
+        let store_root = temp_dir.path().join("kura");
+        let kura = Kura::new(
+            &Config {
+                init_mode: InitMode::Strict,
+                store_dir: iroha_config::base::WithOrigin::inline(store_root),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: BLOCKS_IN_MEMORY,
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity:
+                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: iroha_config::kura::FsyncMode::Batched,
+                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                block_sync_roster_retention:
+                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention:
+                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .unwrap()
+        .0;
+
+        let mut dir = kura.store_dir().expect("store dir");
+        dir.push(PIPELINE_DIR_NAME);
+        std::fs::create_dir_all(&dir).expect("create pipeline dir");
+        let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
+        let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+
+        std::fs::write(&data_path, &[]).expect("create sidecar data file");
+        let entry = SidecarIndexEntry {
+            offset: 0,
+            len: STRICT_INIT_MAX_BLOCK_BYTES + 1,
+        }
+        .to_bytes();
+        std::fs::write(&index_path, entry).expect("write oversized index entry");
+
+        assert!(kura.read_pipeline_metadata(1).is_none());
+    }
+
+    #[test]
     fn pipeline_sidecar_ignores_invalid_prev_entry() {
         use iroha_config::base::WithOrigin;
 
@@ -7112,6 +7520,129 @@ mod tests {
         let mut store = new_block_store(&temp_dir);
         assert_eq!(store.read_index_count().unwrap(), 2);
         assert_eq!(store.read_hashes_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn commit_marker_prunes_excess_entries_on_init() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let mut blocks = DummyBlocks::new();
+        for _ in 0..3 {
+            store.append_block_to_chain(&blocks.next()).unwrap();
+        }
+
+        store.write_commit_marker(1).unwrap();
+        drop(store);
+
+        let mut reopened = BlockStore::new(&blocks_dir);
+        reopened.create_files_if_they_do_not_exist().unwrap();
+
+        assert_eq!(reopened.read_index_count().unwrap(), 1);
+        assert_eq!(reopened.read_hashes_count().unwrap(), 1);
+        assert_eq!(reopened.read_durable_index_count().unwrap(), 1);
+
+        let last = reopened.read_block_index(0).unwrap();
+        let data_len = reopened.data_file_len().unwrap();
+        assert_eq!(data_len, last.start + last.length);
+    }
+
+    #[test]
+    fn commit_marker_truncates_hashes_tail_on_init() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let mut blocks = DummyBlocks::new();
+        for _ in 0..2 {
+            store.append_block_to_chain(&blocks.next()).unwrap();
+        }
+
+        let hashes_path = blocks_dir.join(HASHES_FILE_NAME);
+        let hashes_file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&hashes_path)
+            .unwrap();
+        hashes_file.set_len(3 * SIZE_OF_BLOCK_HASH).unwrap();
+        drop(store);
+
+        let mut reopened = BlockStore::new(&blocks_dir);
+        reopened.create_files_if_they_do_not_exist().unwrap();
+        assert_eq!(reopened.read_index_count().unwrap(), 2);
+        assert_eq!(reopened.read_hashes_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn commit_marker_corruption_falls_back_to_index_count() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let mut blocks = DummyBlocks::new();
+        for _ in 0..2 {
+            store.append_block_to_chain(&blocks.next()).unwrap();
+        }
+
+        let marker_path = blocks_dir.join(COUNT_FILE_NAME);
+        std::fs::write(&marker_path, b"corrupt").unwrap();
+        drop(store);
+
+        let mut reopened = BlockStore::new(&blocks_dir);
+        reopened.create_files_if_they_do_not_exist().unwrap();
+        assert_eq!(reopened.read_durable_index_count().unwrap(), 2);
+        let marker = reopened.read_commit_marker().unwrap().expect("marker");
+        assert_eq!(marker.count, 2);
+    }
+
+    #[test]
+    fn index_misalignment_truncates_on_init() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let mut blocks = DummyBlocks::new();
+        for _ in 0..2 {
+            store.append_block_to_chain(&blocks.next()).unwrap();
+        }
+
+        let index_path = blocks_dir.join(INDEX_FILE_NAME);
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&index_path)
+            .unwrap();
+        file.write_all(&[0u8; 3]).unwrap();
+        drop(store);
+
+        let mut reopened = BlockStore::new(&blocks_dir);
+        reopened.create_files_if_they_do_not_exist().unwrap();
+        let len = reopened.index_file_len().unwrap();
+        assert_eq!(len % BlockIndex::SIZE, 0);
+        assert_eq!(reopened.read_index_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn prune_does_not_advance_commit_marker() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let block = DummyBlocks::new().next();
+        store.append_block_to_chain(block.as_ref()).unwrap();
+
+        let marker = store.read_commit_marker().unwrap().expect("marker");
+        assert_eq!(marker.count, 1);
+
+        store.prune(5).unwrap();
+
+        let marker_after = store.read_commit_marker().unwrap().expect("marker");
+        assert_eq!(marker_after.count, 1);
+        assert_eq!(store.read_index_count().unwrap(), 1);
     }
 
     #[test]
