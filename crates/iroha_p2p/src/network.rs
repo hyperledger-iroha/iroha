@@ -102,11 +102,17 @@ fn parse_cidr(s: &str) -> Option<IpNet> {
             let full_bytes = (bits / 8) as usize;
             let rem_bits = bits % 8;
             if full_bytes < 16 {
-                for b in net.iter_mut().skip(full_bytes + 1) {
-                    *b = 0;
+                if rem_bits == 0 {
+                    for b in net.iter_mut().skip(full_bytes) {
+                        *b = 0;
+                    }
+                } else {
+                    for b in net.iter_mut().skip(full_bytes + 1) {
+                        *b = 0;
+                    }
+                    let mask = 0xFFu8 << (8 - rem_bits);
+                    net[full_bytes] &= mask;
                 }
-                let mask = 0xFFu8 << (8 - rem_bits);
-                net[full_bytes] &= mask;
             }
             return Some(IpNet {
                 kind: IpKind::V6 { net, bits },
@@ -5417,6 +5423,40 @@ mod tests {
                 other
             ),
             "IP outside allowlist CIDR should be rejected"
+        );
+    }
+
+    #[test]
+    fn ipv6_cidr_byte_boundary_is_respected() {
+        let allow = parse_cidrs(&vec!["2001:db8::/64".to_string()]);
+        let inside: IpAddr = "2001:db8::1".parse().expect("valid IPv6");
+        let outside: IpAddr = "2001:db8:0:1::1".parse().expect("valid IPv6");
+        let mut prefix = HashMap::new();
+        let mut ip_buckets = HashMap::new();
+
+        assert!(
+            allow_ip_with_policy(
+                &allow,
+                &[],
+                false,
+                default_accept_params(),
+                &mut prefix,
+                &mut ip_buckets,
+                inside
+            ),
+            "IPv6 address inside the /64 should be accepted"
+        );
+        assert!(
+            !allow_ip_with_policy(
+                &allow,
+                &[],
+                false,
+                default_accept_params(),
+                &mut prefix,
+                &mut ip_buckets,
+                outside
+            ),
+            "IPv6 address outside the /64 should be rejected"
         );
     }
 

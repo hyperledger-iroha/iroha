@@ -9,14 +9,43 @@ use norito::json::{self, JsonDeserialize, JsonSerialize};
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
 use sha2::{Digest as _, Sha256};
+use thiserror::Error;
 
 use crate::{Hash, HashOf};
 
 /// Array representation of [Merkle tree](https://en.wikipedia.org/wiki/Merkle_tree)
 /// for verifying elements of type `T`.
+///
+/// The canonical encoding stores nodes in breadth-first order; leaves and the
+/// root must be present when the tree is non-empty. Internal nodes may be
+/// `None` only for rightmost padding in incomplete trees (where both children
+/// are missing). Missing nodes in proofs belong only in `MerkleProof` audit
+/// paths.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, TypeId)]
 #[repr(transparent)]
 pub struct MerkleTree<T>(Vec<Option<HashOf<T>>>);
+
+/// Errors returned by Merkle tree helpers.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum MerkleError {
+    /// Chunk size must be in the range `1..=32`.
+    #[error("invalid chunk size {chunk}; expected 1..=32 bytes")]
+    InvalidChunkSize {
+        /// The invalid chunk size provided by the caller.
+        chunk: usize,
+    },
+    /// Merkle tree layout is malformed.
+    #[error("invalid merkle tree layout: {0}")]
+    InvalidLayout(String),
+}
+
+fn validate_chunk_size(chunk: usize) -> Result<(), MerkleError> {
+    if (1..=32).contains(&chunk) {
+        Ok(())
+    } else {
+        Err(MerkleError::InvalidChunkSize { chunk })
+    }
+}
 
 crate::ffi::ffi_item! {
     /// A Merkle proof: index of a leaf among all leaves, and the shortest list of additional nodes to recompute the root.
@@ -90,11 +119,18 @@ impl MerkleTree<[u8; 32]> {
 
 impl<'de, T> norito::core::NoritoDeserialize<'de> for MerkleTree<T> {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("MerkleTree decode")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
         #[allow(unsafe_code)]
-        let inner = norito::core::NoritoDeserialize::deserialize(unsafe {
+        let inner = norito::core::NoritoDeserialize::try_deserialize(unsafe {
             &*core::ptr::from_ref(archived).cast::<norito::core::Archived<Vec<Option<HashOf<T>>>>>()
-        });
-        MerkleTree(inner)
+        })?;
+        Self::from_nodes_checked(inner)
+            .map_err(|err| norito::core::Error::Message(err.to_string()))
     }
 }
 
@@ -108,7 +144,8 @@ impl<T> JsonSerialize for MerkleTree<T> {
 #[cfg(feature = "json")]
 impl<T> JsonDeserialize for MerkleTree<T> {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
-        json::JsonDeserialize::json_deserialize(parser).map(MerkleTree)
+        let nodes = json::JsonDeserialize::json_deserialize(parser)?;
+        MerkleTree::from_nodes_checked(nodes).map_err(|err| json::Error::Message(err.to_string()))
     }
 }
 
@@ -359,6 +396,72 @@ impl<T> Default for MerkleTree<T> {
 }
 
 impl<T> MerkleTree<T> {
+    fn from_nodes_checked(nodes: Vec<Option<HashOf<T>>>) -> Result<Self, MerkleError> {
+        Self::validate_nodes(&nodes)?;
+        Ok(Self(nodes))
+    }
+
+    fn validate_nodes(nodes: &[Option<HashOf<T>>]) -> Result<(), MerkleError> {
+        if nodes.is_empty() {
+            return Ok(());
+        }
+        let len = nodes.len();
+        let height = (usize::BITS - len.leading_zeros()).saturating_sub(1);
+        let height_usize = height as usize;
+        if height_usize >= usize::BITS as usize {
+            return Err(MerkleError::InvalidLayout(
+                "merkle tree height exceeds platform bit width".to_owned(),
+            ));
+        }
+        let pow2 = 1usize << height_usize;
+        let offset = pow2 - 1;
+        if len <= offset {
+            return Err(MerkleError::InvalidLayout(
+                "merkle tree node count underflows leaf offset".to_owned(),
+            ));
+        }
+        let leaf_count = len - offset;
+        let expected_height = <Self as CompleteBinaryTree>::height_from_n_leaves(leaf_count);
+        if expected_height != height {
+            return Err(MerkleError::InvalidLayout(format!(
+                "merkle tree node count {len} does not match leaf count {leaf_count}"
+            )));
+        }
+        if nodes[0].is_none() {
+            return Err(MerkleError::InvalidLayout(
+                "merkle tree root must be present".to_owned(),
+            ));
+        }
+        if nodes[offset..].iter().any(Option::is_none) {
+            return Err(MerkleError::InvalidLayout(
+                "merkle tree leaves must be present".to_owned(),
+            ));
+        }
+        for i in 0..offset {
+            let li = (i << 1) + 1;
+            let ri = li + 1;
+            let left = nodes.get(li).and_then(|node| node.as_ref());
+            let right = nodes.get(ri).and_then(|node| node.as_ref());
+            let parent = nodes[i].as_ref();
+            if left.is_none() && right.is_some() {
+                return Err(MerkleError::InvalidLayout(format!(
+                    "merkle tree has right-only child at node {i}"
+                )));
+            }
+            if parent.is_none() && (left.is_some() || right.is_some()) {
+                return Err(MerkleError::InvalidLayout(format!(
+                    "merkle tree missing parent for existing child at node {i}"
+                )));
+            }
+            if left.is_none() && right.is_none() && parent.is_some() {
+                return Err(MerkleError::InvalidLayout(format!(
+                    "merkle tree has parent without children at node {i}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Return the depth (number of edges from root to any leaf) of the complete tree.
     #[must_use]
     pub fn depth(&self) -> u32 {
@@ -542,8 +645,12 @@ impl<T> MerkleProof<T> {
     /// Verifies the Merkle proof against the given leaf and root hash.
     /// Returns true if the computed root from the proof matches the given root.
     /// Rejects proofs where `leaf_index` cannot fit within the implied height.
+    /// Rejects proofs whose audit path length exceeds the platform bit width.
     pub fn verify(self, leaf: &HashOf<T>, root: &HashOf<MerkleTree<T>>, max_height: usize) -> bool {
         let height = self.audit_path.len();
+        if height >= usize::BITS as usize {
+            return false;
+        }
         // Reject if the proof claims a tree taller than allowed.
         if max_height < height {
             return false;
@@ -876,8 +983,12 @@ impl MerkleTree<[u8; 32]> {
     /// pieces and hashing each zero-padded chunk with SHA-256. The final chunk,
     /// if shorter, is padded with zeros up to `chunk` bytes before hashing.
     /// Inner nodes are combined as SHA-256(left||right).
-    pub fn from_byte_chunks(data: &[u8], chunk: usize) -> Self {
-        assert!(chunk > 0 && chunk <= 32, "chunk size must be 1..=32");
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MerkleError::InvalidChunkSize`] when `chunk` is outside `1..=32`.
+    pub fn from_byte_chunks(data: &[u8], chunk: usize) -> Result<Self, MerkleError> {
+        validate_chunk_size(chunk)?;
 
         let mut leaves = Vec::new();
         let mut exact = data.chunks_exact(chunk);
@@ -905,7 +1016,7 @@ impl MerkleTree<[u8; 32]> {
             leaves.push(arr);
         }
 
-        Self::from_hashed_leaves_sha256(leaves)
+        Ok(Self::from_hashed_leaves_sha256(leaves))
     }
 
     /// Build a Merkle tree from an owned vector of pre-hashed 32-byte leaves,
@@ -972,8 +1083,8 @@ impl MerkleTree<[u8; 32]> {
 
     /// Parallel variant of `from_byte_chunks` guarded by the `rayon` feature.
     #[cfg(feature = "rayon")]
-    pub fn from_chunked_bytes_parallel(data: &[u8], chunk: usize) -> Self {
-        assert!(chunk > 0 && chunk <= 32, "chunk size must be 1..=32");
+    pub fn from_chunked_bytes_parallel(data: &[u8], chunk: usize) -> Result<Self, MerkleError> {
+        validate_chunk_size(chunk)?;
 
         let num_chunks = data.len().div_ceil(chunk);
         let mut leaves = vec![[0u8; 32]; num_chunks.max(1)];
@@ -996,7 +1107,7 @@ impl MerkleTree<[u8; 32]> {
             arr.copy_from_slice(&digest);
             *slot = arr;
         });
-        Self::from_hashed_leaves_sha256_parallel(leaves)
+        Ok(Self::from_hashed_leaves_sha256_parallel(leaves))
     }
 
     /// Incrementally update the leaf at `leaf_index` with a new SHA-256 digest
@@ -1415,7 +1526,8 @@ mod tests {
         let manual: MerkleTree<[u8; 32]> = MerkleTree::from_hashed_leaves_sha256([l0, l1]);
 
         // Helper-based build
-        let via_helper = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, chunk);
+        let via_helper =
+            MerkleTree::<[u8; 32]>::from_byte_chunks(&data, chunk).expect("valid chunk");
 
         assert_eq!(manual.root(), via_helper.root());
     }
@@ -1424,8 +1536,9 @@ mod tests {
     #[test]
     fn byte_tree_parallel_equals_sequential() {
         let data: Vec<u8> = (0..150u32).map(|i| (i % 251) as u8).collect();
-        let a = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
-        let b = MerkleTree::<[u8; 32]>::from_chunked_bytes_parallel(&data, 32);
+        let a = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32).expect("valid chunk");
+        let b =
+            MerkleTree::<[u8; 32]>::from_chunked_bytes_parallel(&data, 32).expect("valid chunk");
         assert_eq!(a.root(), b.root());
     }
 
@@ -1445,7 +1558,7 @@ mod tests {
     #[test]
     fn byte_proof_verify_sha256() {
         let data: Vec<u8> = (0..90u32).map(|i| (i % 200) as u8).collect();
-        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32).expect("valid chunk");
         let root = tree.root().expect("root");
         let idx = 1u32;
         let proof = tree.get_proof(idx).expect("proof");
@@ -1461,7 +1574,7 @@ mod tests {
     #[test]
     fn byte_proof_rejects_out_of_range_leaf_index_sha256() {
         let data: Vec<u8> = (0..90u32).map(|i| (i % 200) as u8).collect();
-        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32).expect("valid chunk");
         let root = tree.root().expect("root");
         let idx = 1u32;
         let leaf = tree.leaves().nth(idx as usize).unwrap();
@@ -1476,7 +1589,7 @@ mod tests {
     #[test]
     fn byte_proof_compute_root_sha256_matches_root() {
         let data: Vec<u8> = (0..64u32).map(|i| (i % 251) as u8).collect();
-        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32).expect("valid chunk");
         let root = tree.root().expect("root");
         let idx = 1u32;
         let proof = tree.get_proof(idx).expect("proof");
@@ -1529,7 +1642,7 @@ mod tests {
     #[test]
     fn compact_proof_sha256_dirs_match_leaf_index_bits() {
         let data: Vec<u8> = (0..128u32).map(|i| (i % 251) as u8).collect();
-        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32).expect("valid chunk");
         let root = tree.root().expect("root");
         let idx = 2u32;
         let leaf = tree.leaves().nth(idx as usize).unwrap();
@@ -1581,7 +1694,7 @@ mod tests {
     #[test]
     fn compact_proof_sha256_rejects_sibling_length_mismatch() {
         let data: Vec<u8> = (0..96u32).map(|i| (i % 251) as u8).collect();
-        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32).expect("valid chunk");
         let root = tree.root().expect("root");
         let idx = 1u32;
         let leaf = tree.leaves().nth(idx as usize).unwrap();
@@ -1593,7 +1706,7 @@ mod tests {
     #[test]
     fn compact_proof_sha256_rejects_depth_over_32() {
         let data: Vec<u8> = (0..96u32).map(|i| (i % 251) as u8).collect();
-        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32).expect("valid chunk");
         let root = tree.root().expect("root");
         let idx = 1u32;
         let leaf = tree.leaves().nth(idx as usize).unwrap();
@@ -1608,7 +1721,7 @@ mod tests {
     #[test]
     fn byte_proof_tamper_audit_path_fails_sha256() {
         let data: Vec<u8> = (0..120u32).map(|i| (i % 251) as u8).collect();
-        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32).expect("valid chunk");
         let root = tree.root().expect("root");
         let idx = 2u32;
         let mut proof = tree.get_proof(idx).expect("proof");
@@ -1675,7 +1788,7 @@ mod tests {
     #[test]
     fn byte_proof_reversed_order_fails_sha256() {
         let data: Vec<u8> = (0..120u32).map(|i| (i % 251) as u8).collect();
-        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32).expect("valid chunk");
         let root = tree.root().expect("root");
         let idx = 2u32;
         let leaf = tree.leaves().nth(idx as usize).unwrap();
@@ -1703,7 +1816,7 @@ mod tests {
     #[test]
     fn byte_proof_right_only_child_fails_sha256() {
         let data: Vec<u8> = (0..96u32).map(|i| (i % 251) as u8).collect();
-        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32).expect("valid chunk");
         let root = tree.root().expect("root");
         let idx = 1u32; // even parity at first step
         let leaf = tree.leaves().nth(idx as usize).unwrap();
@@ -1772,7 +1885,7 @@ mod tests {
     #[test]
     fn byte_proof_right_only_child_deeper_fails_sha256() {
         let data: Vec<u8> = (0..320u32).map(|i| (i % 251) as u8).collect();
-        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32).expect("valid chunk");
         let root = tree.root().expect("root");
 
         let n = data.len().div_ceil(32);
@@ -1805,12 +1918,81 @@ mod tests {
     #[test]
     fn byte_proof_max_height_too_small_fails_sha256() {
         let data: Vec<u8> = (0..96u32).map(|i| (i % 251) as u8).collect();
-        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32);
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32).expect("valid chunk");
         let root = tree.root().expect("root");
         let idx = 2u32;
         let leaf = tree.leaves().nth(idx as usize).unwrap();
         let proof = tree.get_proof(idx).expect("proof");
         let too_small = proof.audit_path.len().saturating_sub(1);
         assert!(!proof.verify_sha256(&leaf, &root, too_small));
+    }
+
+    #[test]
+    fn from_byte_chunks_rejects_invalid_chunk_size() {
+        let data = [0u8; 4];
+        assert!(matches!(
+            MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 0),
+            Err(MerkleError::InvalidChunkSize { .. })
+        ));
+        assert!(matches!(
+            MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 64),
+            Err(MerkleError::InvalidChunkSize { .. })
+        ));
+    }
+
+    #[cfg(feature = "rayon")]
+    #[test]
+    fn from_chunked_bytes_parallel_rejects_invalid_chunk_size() {
+        let data = [0u8; 4];
+        assert!(matches!(
+            MerkleTree::<[u8; 32]>::from_chunked_bytes_parallel(&data, 0),
+            Err(MerkleError::InvalidChunkSize { .. })
+        ));
+    }
+
+    #[test]
+    fn merkle_proof_verify_rejects_oversized_height() {
+        let leaf = HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
+        let root =
+            HashOf::<MerkleTree<()>>::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
+        let proof = MerkleProof::from_audit_path(0, vec![None; usize::BITS as usize]);
+        assert!(!proof.verify(&leaf, &root, usize::BITS as usize));
+    }
+
+    #[test]
+    fn merkle_tree_decode_rejects_invalid_layout() {
+        let bad_leaf = HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
+        let bad_tree = MerkleTree::<()>(vec![Some(bad_leaf), Some(bad_leaf)]);
+        let bytes = norito::codec::encode_adaptive(&bad_tree);
+        let err = norito::decode_from_bytes::<MerkleTree<()>>(&bytes)
+            .expect_err("invalid merkle layout should fail");
+        assert!(matches!(err, norito::Error::Message(_)));
+    }
+
+    #[test]
+    fn merkle_tree_decode_rejects_missing_nodes() {
+        let bad_tree = MerkleTree::<()>(vec![None]);
+        let bytes = norito::codec::encode_adaptive(&bad_tree);
+        let err = norito::decode_from_bytes::<MerkleTree<()>>(&bytes)
+            .expect_err("missing nodes should fail");
+        assert!(matches!(err, norito::Error::Message(_)));
+    }
+
+    #[test]
+    fn merkle_tree_decode_rejects_missing_parent() {
+        let leaf = HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
+        let bad_tree = MerkleTree::<()>(vec![
+            Some(leaf),
+            None,
+            Some(leaf),
+            Some(leaf),
+            Some(leaf),
+            Some(leaf),
+            Some(leaf),
+        ]);
+        let bytes = norito::codec::encode_adaptive(&bad_tree);
+        let err = norito::decode_from_bytes::<MerkleTree<()>>(&bytes)
+            .expect_err("missing parent should fail");
+        assert!(matches!(err, norito::Error::Message(_)));
     }
 }

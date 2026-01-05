@@ -38,8 +38,15 @@ public final class Varint {
         throw new IllegalArgumentException("Unexpected end of data while decoding varint");
       }
       int b = data[index++] & 0xFF;
-      result |= (long) (b & 0x7F) << shift;
+      int chunk = b & 0x7F;
+      if (shift == 63 && chunk > 1) {
+        throw new IllegalArgumentException("Varint exceeds 64 bits");
+      }
+      result |= (long) chunk << shift;
       if ((b & 0x80) == 0) {
+        if (shift > 0 && chunk == 0) {
+          throw new IllegalArgumentException("Varint is not canonically encoded");
+        }
         break;
       }
       shift += 7;

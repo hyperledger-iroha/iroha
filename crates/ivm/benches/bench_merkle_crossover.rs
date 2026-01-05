@@ -31,7 +31,8 @@ fn bench_merkle_crossover(c: &mut Criterion) {
                     let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(
                         std::hint::black_box(&data),
                         chunk,
-                    );
+                    )
+                    .expect("valid chunk");
                     std::hint::black_box(tree.root());
                 },
                 BatchSize::LargeInput,

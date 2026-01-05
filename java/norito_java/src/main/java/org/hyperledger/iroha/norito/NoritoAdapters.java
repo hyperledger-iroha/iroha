@@ -471,36 +471,233 @@ public final class NoritoAdapters {
   private static final class MapAdapter<K, V> implements TypeAdapter<Map<K, V>> {
     private final TypeAdapter<K> key;
     private final TypeAdapter<V> value;
-    private final EntryAdapter<K, V> entryAdapter;
-    private final SequenceAdapter<Map.Entry<K, V>> seq;
 
     private MapAdapter(TypeAdapter<K> key, TypeAdapter<V> value) {
       this.key = key;
       this.value = value;
-      this.entryAdapter = new EntryAdapter<>(key, value);
-      this.seq = new SequenceAdapter<>(entryAdapter);
     }
 
     @Override
     public void encode(NoritoEncoder encoder, Map<K, V> map) {
-      List<Map.Entry<K, V>> entries = new ArrayList<>(map.size());
-      entries.addAll(map.entrySet());
-      seq.encode(encoder, entries);
+      List<Map.Entry<K, V>> entries = sortedEntries(map);
+      boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_SEQ_LEN) != 0;
+      encoder.writeLength(entries.size(), compactLen);
+      if ((encoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
+        encodePacked(encoder, entries);
+      } else {
+        encodeCompat(encoder, entries);
+      }
     }
 
     @Override
     public Map<K, V> decode(NoritoDecoder decoder) {
-      List<Map.Entry<K, V>> entries = seq.decode(decoder);
-      Map<K, V> map = new LinkedHashMap<>(entries.size());
-      for (Map.Entry<K, V> entry : entries) {
-        map.put(entry.getKey(), entry.getValue());
+      long length = decoder.readLength(decoder.compactSeqLenActive());
+      if (length > Integer.MAX_VALUE) {
+        throw new IllegalArgumentException("Map too large");
       }
-      return map;
+      int count = (int) length;
+      if ((decoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
+        return decodePacked(decoder, count);
+      }
+      return decodeCompat(decoder, count);
     }
 
     @Override
     public boolean isSelfDelimiting() {
       return true;
+    }
+
+    private Map<K, V> decodeCompat(final NoritoDecoder decoder, final int count) {
+      Map<K, V> map = new LinkedHashMap<>(count);
+      boolean compactLen = decoder.compactLenActive();
+      for (int i = 0; i < count; i++) {
+        long keyLen = decoder.readLength(compactLen);
+        if (keyLen > Integer.MAX_VALUE) {
+          throw new IllegalArgumentException("Map key too large");
+        }
+        K decodedKey = decodeSizedField(key, decoder, (int) keyLen);
+        if (map.containsKey(decodedKey)) {
+          throw new IllegalArgumentException("Duplicate map key");
+        }
+        long valueLen = decoder.readLength(compactLen);
+        if (valueLen > Integer.MAX_VALUE) {
+          throw new IllegalArgumentException("Map value too large");
+        }
+        V decodedValue = decodeSizedField(value, decoder, (int) valueLen);
+        map.put(decodedKey, decodedValue);
+      }
+      return map;
+    }
+
+    private Map<K, V> decodePacked(final NoritoDecoder decoder, final int count) {
+      boolean varintOffsets = (decoder.flags() & NoritoHeader.VARINT_OFFSETS) != 0;
+      List<Integer> keySizes;
+      List<Integer> valueSizes;
+      if (varintOffsets) {
+        keySizes = readVarintSizes(decoder, count, "Map key");
+        valueSizes = readVarintSizes(decoder, count, "Map value");
+      } else {
+        keySizes = readFixedOffsets(decoder, count, "Map key");
+        valueSizes = readFixedOffsets(decoder, count, "Map value");
+      }
+
+      List<K> keys = new ArrayList<>(count);
+      for (int size : keySizes) {
+        keys.add(decodeSizedField(key, decoder, size));
+      }
+
+      Map<K, V> map = new LinkedHashMap<>(count);
+      for (int i = 0; i < count; i++) {
+        V decodedValue = decodeSizedField(value, decoder, valueSizes.get(i));
+        K decodedKey = keys.get(i);
+        if (map.containsKey(decodedKey)) {
+          throw new IllegalArgumentException("Duplicate map key");
+        }
+        map.put(decodedKey, decodedValue);
+      }
+      return map;
+    }
+
+    private List<Map.Entry<K, V>> sortedEntries(final Map<K, V> map) {
+      List<Map.Entry<K, V>> entries = new ArrayList<>(map.size());
+      entries.addAll(map.entrySet());
+      for (Map.Entry<K, V> entry : entries) {
+        if (entry.getKey() == null) {
+          throw new IllegalArgumentException("Map keys must be non-null");
+        }
+      }
+      if (map instanceof java.util.SortedMap<?, ?>) {
+        return entries;
+      }
+      entries.sort((left, right) -> compareKeys(left.getKey(), right.getKey()));
+      return entries;
+    }
+
+    @SuppressWarnings("unchecked")
+    private int compareKeys(final K left, final K right) {
+      if (left instanceof Comparable<?> comparable) {
+        try {
+          return ((Comparable<Object>) comparable).compareTo(right);
+        } catch (final ClassCastException ex) {
+          throw new IllegalArgumentException(
+              "Map keys must be Comparable for deterministic encoding", ex);
+        }
+      }
+      throw new IllegalArgumentException("Map keys must be Comparable for deterministic encoding");
+    }
+
+    private void encodeCompat(final NoritoEncoder encoder, final List<Map.Entry<K, V>> entries) {
+      boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+      for (Map.Entry<K, V> entry : entries) {
+        byte[] keyBytes = encodeField(encoder, key, entry.getKey());
+        encoder.writeLength(keyBytes.length, compactLen);
+        encoder.append(keyBytes);
+
+        byte[] valueBytes = encodeField(encoder, value, entry.getValue());
+        encoder.writeLength(valueBytes.length, compactLen);
+        encoder.append(valueBytes);
+      }
+    }
+
+    private void encodePacked(final NoritoEncoder encoder, final List<Map.Entry<K, V>> entries) {
+      boolean varintOffsets = (encoder.flags() & NoritoHeader.VARINT_OFFSETS) != 0;
+      if (entries.isEmpty()) {
+        if (!varintOffsets) {
+          writeFixedOffsets(encoder, List.of());
+          writeFixedOffsets(encoder, List.of());
+        }
+        return;
+      }
+      List<Integer> keySizes = new ArrayList<>(entries.size());
+      List<Integer> valueSizes = new ArrayList<>(entries.size());
+      List<byte[]> keyPayloads = new ArrayList<>(entries.size());
+      List<byte[]> valuePayloads = new ArrayList<>(entries.size());
+      for (Map.Entry<K, V> entry : entries) {
+        byte[] keyBytes = encodeField(encoder, key, entry.getKey());
+        byte[] valueBytes = encodeField(encoder, value, entry.getValue());
+        keySizes.add(keyBytes.length);
+        valueSizes.add(valueBytes.length);
+        keyPayloads.add(keyBytes);
+        valuePayloads.add(valueBytes);
+      }
+      if (varintOffsets) {
+        writeVarintSizes(encoder, keySizes);
+        writeVarintSizes(encoder, valueSizes);
+      } else {
+        writeFixedOffsets(encoder, keySizes);
+        writeFixedOffsets(encoder, valueSizes);
+      }
+      for (byte[] keyBytes : keyPayloads) {
+        encoder.append(keyBytes);
+      }
+      for (byte[] valueBytes : valuePayloads) {
+        encoder.append(valueBytes);
+      }
+    }
+
+    private byte[] encodeField(
+        final NoritoEncoder encoder, final TypeAdapter<?> adapter, final Object value) {
+      NoritoEncoder child = encoder.childEncoder();
+      encodeAdapter(adapter, child, value);
+      return child.toByteArray();
+    }
+
+    private <T> T decodeSizedField(
+        final TypeAdapter<T> adapter, final NoritoDecoder decoder, final int size) {
+      byte[] chunk = decoder.readBytes(size);
+      NoritoDecoder child = new NoritoDecoder(chunk, decoder.flags(), decoder.flagsHint());
+      T value = adapter.decode(child);
+      if (child.remaining() != 0) {
+        throw new IllegalArgumentException("Map entry did not consume all bytes");
+      }
+      return value;
+    }
+
+    private List<Integer> readVarintSizes(
+        final NoritoDecoder decoder, final int count, final String label) {
+      List<Integer> sizes = new ArrayList<>(count);
+      for (int i = 0; i < count; i++) {
+        long size = decoder.readVarint();
+        if (size > Integer.MAX_VALUE) {
+          throw new IllegalArgumentException(label + " too large");
+        }
+        sizes.add((int) size);
+      }
+      return sizes;
+    }
+
+    private List<Integer> readFixedOffsets(
+        final NoritoDecoder decoder, final int count, final String label) {
+      List<Integer> sizes = new ArrayList<>(count);
+      long previous = decoder.readUInt(64);
+      if (previous != 0) {
+        throw new IllegalArgumentException(label + " offsets must start at 0");
+      }
+      for (int i = 0; i < count; i++) {
+        long current = decoder.readUInt(64);
+        long delta = current - previous;
+        if (delta < 0 || delta > Integer.MAX_VALUE) {
+          throw new IllegalArgumentException("Invalid " + label + " offsets");
+        }
+        sizes.add((int) delta);
+        previous = current;
+      }
+      return sizes;
+    }
+
+    private void writeVarintSizes(final NoritoEncoder encoder, final List<Integer> sizes) {
+      for (int size : sizes) {
+        encoder.append(Varint.encode(size));
+      }
+    }
+
+    private void writeFixedOffsets(final NoritoEncoder encoder, final List<Integer> sizes) {
+      long offset = 0;
+      encoder.writeUInt(offset, 64);
+      for (int size : sizes) {
+        offset += size;
+        encoder.writeUInt(offset, 64);
+      }
     }
   }
 

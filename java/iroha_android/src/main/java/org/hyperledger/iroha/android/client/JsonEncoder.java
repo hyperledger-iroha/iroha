@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-/** Minimal JSON encoder mirroring the structures parsed by {@link JsonParser}. */
+/** Minimal JSON encoder mirroring the structures parsed by {@link JsonParser} (sorted keys). */
 public final class JsonEncoder {
 
   private JsonEncoder() {}
@@ -35,16 +35,24 @@ public final class JsonEncoder {
     }
     if (value instanceof Map<?, ?> map) {
       builder.append('{');
+      final List<String> keys = new java.util.ArrayList<>(map.size());
+      for (final Object key : map.keySet()) {
+        if (!(key instanceof String stringKey)) {
+          throw new IllegalStateException("JSON object keys must be strings");
+        }
+        keys.add(stringKey);
+      }
+      keys.sort(String::compareTo);
       boolean first = true;
-      for (final Map.Entry<String, Object> entry : ((Map<String, Object>) map).entrySet()) {
+      for (final String key : keys) {
         if (!first) {
           builder.append(',');
         } else {
           first = false;
         }
-        writeString(builder, Objects.requireNonNull(entry.getKey(), "json key"));
+        writeString(builder, Objects.requireNonNull(key, "json key"));
         builder.append(':');
-        write(builder, entry.getValue());
+        write(builder, ((Map<String, Object>) map).get(key));
       }
       builder.append('}');
       return;

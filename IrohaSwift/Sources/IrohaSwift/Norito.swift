@@ -6,6 +6,7 @@ public struct NoritoHeader {
     public static let magic = Data([0x4E, 0x52, 0x54, 0x30]) // "NRT0"
     public static let versionMajor: UInt8 = 0
     public static let versionMinor: UInt8 = 0
+    public static let encodedLength = 4 + 1 + 1 + 16 + 1 + 8 + 8 + 1
 
     public let schema: [UInt8] // 16 bytes
     public let compression: NoritoCompression
@@ -24,6 +25,12 @@ public struct NoritoHeader {
         out.append(flags)
         return out
     }
+}
+
+struct NoritoFrame {
+    let header: NoritoHeader
+    let payload: Data
+    let paddingLength: Int
 }
 
 // FNV-1a 64-bit (little-endian duplication to 16 bytes)
@@ -76,4 +83,59 @@ public func noritoEncode(typeName: String, payload: Data, flags: UInt8 = 0) -> D
     out.append(header.encode())
     out.append(payload)
     return out
+}
+
+func noritoDecodeFrame(_ data: Data) -> NoritoFrame? {
+    let headerLength = NoritoHeader.encodedLength
+    guard data.count >= headerLength else { return nil }
+    guard data.prefix(4) == NoritoHeader.magic else { return nil }
+    let major = data[4]
+    let minor = data[5]
+    guard major == NoritoHeader.versionMajor, minor == NoritoHeader.versionMinor else {
+        return nil
+    }
+    let schema = [UInt8](data[6..<22])
+    guard let compression = NoritoCompression(rawValue: data[22]) else {
+        return nil
+    }
+    guard let payloadLength = data.readUInt64LE(at: 23) else {
+        return nil
+    }
+    guard let checksum = data.readUInt64LE(at: 31) else {
+        return nil
+    }
+    let flags = data[39]
+    guard payloadLength <= UInt64(Int.max) else { return nil }
+    let payloadLen = Int(payloadLength)
+    let payloadStart = data.count - payloadLen
+    guard payloadStart >= headerLength else { return nil }
+    let paddingLength = payloadStart - headerLength
+    if paddingLength > 0 {
+        let padding = data[headerLength..<payloadStart]
+        if padding.contains(where: { $0 != 0 }) {
+            return nil
+        }
+    }
+    let payload = Data(data[payloadStart..<data.count])
+    guard crc64ECMA(payload) == checksum else { return nil }
+    let header = NoritoHeader(schema: schema,
+                              compression: compression,
+                              length: payloadLength,
+                              checksum: checksum,
+                              flags: flags)
+    return NoritoFrame(header: header, payload: payload, paddingLength: paddingLength)
+}
+
+private extension Data {
+    func readUInt64LE(at offset: Int) -> UInt64? {
+        guard offset >= 0, offset + 8 <= count else {
+            return nil
+        }
+        var value: UInt64 = 0
+        self[offset..<(offset + 8)].withUnsafeBytes { buffer in
+            guard let base = buffer.baseAddress else { return }
+            memcpy(&value, base, 8)
+        }
+        return UInt64(littleEndian: value)
+    }
 }

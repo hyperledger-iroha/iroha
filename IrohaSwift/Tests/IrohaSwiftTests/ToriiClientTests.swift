@@ -280,6 +280,7 @@ private enum DaTestFixtures {
     static let clientBlobHex = String(repeating: "CD", count: 32)
     static let blobHashHex = String(repeating: "EF", count: 32)
     static let chunkRootHex = String(repeating: "12", count: 32)
+    static let manifestHashHex = String(repeating: "34", count: 32)
 
     private static let manifestDictionary: [String: Any] = [
         "chunker_handle": manifestHandle,
@@ -306,6 +307,7 @@ private enum DaTestFixtures {
             "storage_ticket": storageTicketInput,
             "client_blob_id": "0x\(clientBlobHex.uppercased())",
             "blob_hash": "0x\(blobHashHex)",
+            "manifest_hash": "0x\(manifestHashHex)",
             "chunk_root": "0x\(chunkRootHex)",
             "lane_id": 2,
             "epoch": 7,
@@ -886,6 +888,7 @@ final class ToriiClientTests: XCTestCase {
             "storage_ticket":"\(ticket)",
             "client_blob_id":"\(String(repeating: "cd", count: 32))",
             "blob_hash":"\(String(repeating: "ef", count: 32))",
+            "manifest_hash":"\(String(repeating: "99", count: 32))",
             "chunk_root":"\(String(repeating: "11", count: 32))",
             "lane_id":7,
             "epoch":11,
@@ -2630,10 +2633,10 @@ data: {"Trigger":{"Deleted":"nightly-tick"}}
     func testStreamProofEventsAsync() async throws {
         let ssePayload = """
 id: 42
-data: {"Proof":{"Verified":{"id":{"backend":"halo2/ipa","hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"vk_ref":{"backend":"halo2/ipa","name":"vk_main"},"vk_commitment":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","call_hash":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","envelope_hash":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}}}
+        data: {"Proof":{"Verified":{"id":{"backend":"halo2/ipa","proof_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"vk_ref":{"backend":"halo2/ipa","name":"vk_main"},"vk_commitment":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","call_hash":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","envelope_hash":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}}}
 
 id: 43
-data: {"Proof":{"Rejected":{"id":{"backend":"halo2/ipa","hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}}
+        data: {"Proof":{"Rejected":{"id":{"backend":"halo2/ipa","proof_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}}
 
 """
             .data(using: .utf8)!
@@ -2683,7 +2686,7 @@ data: {"Proof":{"Rejected":{"id":{"backend":"halo2/ipa","hash_hex":"aaaaaaaaaaaa
     func testStreamProofEventsIncludesLastEventIdHeader() async throws {
         let ssePayload = """
 id: 88
-data: {"Proof":{"Rejected":{"id":{"backend":"halo2/ipa","hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}}
+        data: {"Proof":{"Rejected":{"id":{"backend":"halo2/ipa","proof_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}}
 
 """
             .data(using: .utf8)!
@@ -3864,6 +3867,7 @@ final class ToriiClientIntegrationTests: XCTestCase {
             "storage_ticket": ticket,
             "client_blob_id": String(repeating: "b", count: 64),
             "blob_hash": String(repeating: "c", count: 64),
+            "manifest_hash": String(repeating: "e", count: 64),
             "chunk_root": String(repeating: "d", count: 64),
             "lane_id": 7,
             "epoch": 42,
@@ -3907,6 +3911,7 @@ final class ToriiClientIntegrationTests: XCTestCase {
             "storage_ticket": ticket,
             "client_blob_id": String(repeating: "1", count: 64),
             "blob_hash": String(repeating: "2", count: 64),
+            "manifest_hash": String(repeating: "4", count: 64),
             "chunk_root": String(repeating: "3", count: 64),
             "lane_id": 3,
             "epoch": 9,

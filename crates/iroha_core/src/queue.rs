@@ -2840,7 +2840,7 @@ pub mod tests {
         let mut leaves = Vec::new();
         leaves.extend_from_slice(&[0x01_u8; 32]);
         leaves.extend_from_slice(&[0x02_u8; 32]);
-        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&leaves, 32);
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&leaves, 32).expect("valid chunk");
         let merkle_root = tree.root().expect("merkle root");
         let proof = tree.get_proof(0).expect("merkle proof");
         let first_leaf_hash: [u8; 32] = tree

@@ -370,7 +370,11 @@ public final class HttpClientTransport implements IrohaClient {
       final TransportRequest request,
       final ClientResponse lastResponse,
       final Throwable lastError) {
-    final boolean hasAnotherAttempt = config.retryPolicy().allowsRetry(attempt);
+    final boolean isNetworkFailure = lastError != null && lastResponse == null;
+    final boolean hasAnotherAttempt =
+        isNetworkFailure
+            ? config.retryPolicy().shouldRetryError(attempt)
+            : config.retryPolicy().allowsRetry(attempt);
     if (!hasAnotherAttempt) {
       enqueuePending(transaction);
       if (lastResponse != null && lastError == null) {

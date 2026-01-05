@@ -1047,6 +1047,7 @@ impl MockWorldStateView {
     }
 
     /// Attempt to unregister an account. Fails if it has non-zero balances or owns NFTs.
+    /// Clears direct permissions and role assignments when removal succeeds.
     pub fn unregister_account(&mut self, id: &AccountId) -> bool {
         let has_bal = self
             .balances
@@ -1056,7 +1057,12 @@ impl MockWorldStateView {
         if has_bal || has_nfts {
             return false;
         }
-        self.accounts.remove(id).is_some()
+        let removed = self.accounts.remove(id).is_some();
+        if removed {
+            self.permissions.remove(id);
+            self.role_assignments.remove(id);
+        }
+        removed
     }
 
     /// Register a new asset definition with given mintability.

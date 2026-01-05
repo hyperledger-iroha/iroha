@@ -1151,6 +1151,7 @@ where
 {
     write.write_all(PRE_MAGIC).await?;
     write.write_all(&[PRE_VERSION]).await?;
+    write.flush().await?;
     Ok(())
 }
 
@@ -1181,6 +1182,7 @@ where
     let len = u16::try_from(payload.len()).map_err(|_| crate::Error::HandshakeMessageTooLarge)?;
     write.write_all(&len.to_be_bytes()).await?;
     write.write_all(payload).await?;
+    write.flush().await?;
     Ok(())
 }
 
@@ -2134,11 +2136,12 @@ mod run {
         async fn send(&mut self) -> Result<(), Error> {
             let chunk = self.queue.chunk();
             if !chunk.is_empty() {
-                let n = self.write.write(chunk).await?;
-                self.queue.advance(n);
-            }
-            Ok(())
+            let n = self.write.write(chunk).await?;
+            self.queue.advance(n);
+            self.write.flush().await?;
         }
+        Ok(())
+    }
 
         /// Check if message sender has data ready to be sent.
         fn ready(&self) -> bool {
@@ -2156,6 +2159,12 @@ mod run {
 
     #[cfg(test)]
     mod tests {
+        use std::{
+            pin::Pin,
+            sync::{Arc, Mutex},
+            task::{Context, Poll},
+        };
+
         use bytes::Bytes;
         use iroha_crypto::encryption::ChaCha20Poly1305;
         use norito::codec::{Decode, Encode};
@@ -2168,6 +2177,67 @@ mod run {
 
         #[derive(Encode, Decode, Clone, Debug)]
         struct Blob(Vec<u8>);
+
+        #[derive(Default)]
+        struct WriteStats {
+            writes: usize,
+            flushes: usize,
+        }
+
+        struct TrackingWrite {
+            stats: Arc<Mutex<WriteStats>>,
+        }
+
+        impl AsyncWrite for TrackingWrite {
+            fn poll_write(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                buf: &[u8],
+            ) -> Poll<std::io::Result<usize>> {
+                let mut stats = self.stats.lock().expect("stats lock");
+                stats.writes = stats.writes.saturating_add(buf.len());
+                Poll::Ready(Ok(buf.len()))
+            }
+
+            fn poll_flush(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                let mut stats = self.stats.lock().expect("stats lock");
+                stats.flushes = stats.flushes.saturating_add(1);
+                Poll::Ready(Ok(()))
+            }
+
+            fn poll_shutdown(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_flushes_after_send() {
+            let stats = Arc::new(Mutex::new(WriteStats::default()));
+            let writer = TrackingWrite {
+                stats: stats.clone(),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[1u8; 32])
+                    .expect("valid key length");
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            sender
+                .prepare_message(&Message::Data(Dummy))
+                .expect("prepare message");
+            assert!(sender.ready(), "message sender should have queued data");
+            sender.send().await.expect("send");
+            assert!(!sender.ready(), "queue should be drained");
+
+            let stats = stats.lock().expect("stats lock");
+            assert!(stats.writes > 0, "expected at least one write");
+            assert!(stats.flushes > 0, "expected at least one flush");
+        }
 
         #[tokio::test(flavor = "current_thread")]
         async fn low_round_robin_serves_all_topics() {
@@ -3605,6 +3675,7 @@ mod state {
             buf.extend_from_slice(&encrypted);
 
             write_half.write_all(&buf).await?;
+            write_half.flush().await?;
             Ok(GetKey {
                 connection,
                 kx_local_pk,
@@ -3834,7 +3905,11 @@ mod state {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{
+        pin::Pin,
+        sync::Arc,
+        task::{Context, Poll},
+    };
 
     use iroha_crypto::{
         KeyGenOption, KeyPair,
@@ -3843,9 +3918,79 @@ mod tests {
     };
     use iroha_primitives::addr::SocketAddr;
     use norito::codec::Encode;
+    use tokio::io::AsyncWrite;
 
     use super::{Connection, SoranetHandshakeConfig, cryptographer::Cryptographer, state::*};
     use crate::{ConfidentialHandshakeCaps, RelayRole};
+
+    struct TrackingWrite {
+        buffer: Vec<u8>,
+        flushes: usize,
+    }
+
+    impl TrackingWrite {
+        fn new() -> Self {
+            Self {
+                buffer: Vec::new(),
+                flushes: 0,
+            }
+        }
+    }
+
+    impl AsyncWrite for TrackingWrite {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            self.buffer.extend_from_slice(buf);
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            self.flushes = self.flushes.saturating_add(1);
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_writes_flush_frames() {
+        let mut writer = TrackingWrite::new();
+        super::write_pre_handshake_header(&mut writer)
+            .await
+            .expect("preface write");
+        assert_eq!(writer.flushes, 1, "preface should flush once");
+
+        let payload = b"hello";
+        super::write_handshake_frame(&mut writer, payload)
+            .await
+            .expect("handshake frame write");
+        assert_eq!(writer.flushes, 2, "handshake frame should flush once");
+
+        let mut expected = Vec::from(&super::PRE_MAGIC[..]);
+        expected.push(super::PRE_VERSION);
+        assert_eq!(
+            &writer.buffer[..expected.len()],
+            expected.as_slice(),
+            "preface bytes should be written first"
+        );
+
+        let frame = &writer.buffer[expected.len()..];
+        assert_eq!(frame.len(), 2 + payload.len());
+        let len = u16::from_be_bytes([frame[0], frame[1]]);
+        assert_eq!(len as usize, payload.len());
+        assert_eq!(&frame[2..], payload);
+    }
 
     #[test]
     fn payload_with_address_is_consistent_between_sides() {
