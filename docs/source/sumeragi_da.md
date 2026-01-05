@@ -15,9 +15,9 @@ For light-client driven sampling of RBC payloads see
 ### DA timeout & advisory warnings
 
 With `da_enabled=true`, the commit pipeline records availability evidence
-(either `AvailabilityQC` or an RBC `READY` quorum; not local RBC `DELIVER`).
+(either `availability evidence` or an RBC `READY` quorum; not local RBC `DELIVER`).
 Consensus does **not** wait for availability evidence: commit/finalize proceeds
-based on the normal QC thresholds, and missing availability is logged for
+based on the normal commit-certificate thresholds, and missing availability is logged for
 operator visibility.
 
 The availability deadline is derived from the configured block/commit times and the
@@ -33,9 +33,9 @@ Keep these values aligned across validators to avoid divergent view-change
 pacing.
 
 Automatic RBC resend/abort driven by availability tracking was removed to avoid
-circular waits between delivery and voting. Nodes that observe `AvailabilityQC`
+circular waits between delivery and voting. Nodes that observe `availability evidence`
 or an RBC `READY` quorum without the payload fetch it deterministically from the
-QC signers for a bounded number of attempts, then fall back to the full commit
+commit-certificate signers for a bounded number of attempts, then fall back to the full commit
 topology.
 
 ## Metrics captured

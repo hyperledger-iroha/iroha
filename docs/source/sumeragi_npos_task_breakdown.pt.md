@@ -16,24 +16,24 @@ Esta nota expande o roadmap da Fase A em tarefas pequenas de engenharia para pod
 ### A2 - Adocao de mensagens em nivel wire
 - DONE: Expor os tipos Norito `Proposal`/`Vote`/`Qc` em `BlockMessage` e exercitar round-trips de encode/decode (`crates/iroha_data_model/tests/consensus_roundtrip.rs`).
 - DONE: Bloquear os frames antigos `BlockSigned/BlockCommitted`; o toggle de migracao ficou em `false` antes da retirada.
-- DONE: Retirar o knob de migracao que alternava as mensagens de bloco antigas; o modo Vote/QC agora e o unico caminho wire.
+- DONE: Retirar o knob de migracao que alternava as mensagens de bloco antigas; o modo Vote/commit certificate agora e o unico caminho wire.
 - DONE: Atualizar routers Torii, comandos CLI e consumidores de telemetria para preferir snapshots JSON `/v1/sumeragi/*` aos frames de bloco antigos.
-- DONE: A cobertura de integracao exercita os endpoints `/v1/sumeragi/*` somente pelo pipeline Vote/QC (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
+- DONE: A cobertura de integracao exercita os endpoints `/v1/sumeragi/*` somente pelo pipeline Vote/commit certificate (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
 - DONE: Remover os frames antigos quando houver paridade de recursos e testes de interoperabilidade.
 
 ### Plano de remocao de frames
-1. DONE: Testes soak multi-no rodaram 72 h nos harnesses de telemetria e CI; os snapshots do Torii mostraram throughput estavel do proposer e formacao de QC sem regressao.
-2. DONE: A cobertura de testes de integracao agora roda apenas no caminho Vote/QC (`sumeragi_vote_qc_commit.rs`), garantindo que peers mistos alcancem consenso sem os frames antigos.
-3. DONE: A documentacao de operador e a ajuda do CLI nao mencionam mais o caminho wire anterior; a orientacao de troubleshooting agora aponta para a telemetria Vote/QC.
-4. DONE: Variantes de mensagens, contadores de telemetria e caches de commit pendentes foram removidos; a matriz de compatibilidade agora reflete a superficie somente Vote/QC.
+1. DONE: Testes soak multi-no rodaram 72 h nos harnesses de telemetria e CI; os snapshots do Torii mostraram throughput estavel do proposer e formacao de commit certificate sem regressao.
+2. DONE: A cobertura de testes de integracao agora roda apenas no caminho Vote/commit certificate (`sumeragi_vote_qc_commit.rs`), garantindo que peers mistos alcancem consenso sem os frames antigos.
+3. DONE: A documentacao de operador e a ajuda do CLI nao mencionam mais o caminho wire anterior; a orientacao de troubleshooting agora aponta para a telemetria Vote/commit certificate.
+4. DONE: Variantes de mensagens, contadores de telemetria e caches de commit pendentes foram removidos; a matriz de compatibilidade agora reflete a superficie somente Vote/commit certificate.
 
 ### A3 - Aplicacao do motor e pacemaker
-- DONE: Invariantes Lock/HighestQC aplicadas em `handle_message` (ver `block_created_header_sanity`).
+- DONE: Invariantes Lock/Highestcommit certificate aplicadas em `handle_message` (ver `block_created_header_sanity`).
 - DONE: O acompanhamento de disponibilidade de dados valida o hash do payload RBC ao registrar a entrega (`Actor::ensure_block_matches_rbc_payload`), para que sessoes divergentes nao sejam tratadas como entregues.
-- DONE: Inserir o requisito PrecommitQC (`require_precommit_qc`) nas configs padrao e adicionar testes negativos (padrao agora `true`; testes cobrem caminhos com gate e opt-out).
+- DONE: Inserir o requisito Precommitcommit certificate (`require_precommit_qc`) nas configs padrao e adicionar testes negativos (padrao agora `true`; testes cobrem caminhos com gate e opt-out).
 - DONE: Substituir heuristicas de redundant-send em nivel de view por controladores de pacemaker baseados em EMA (`aggregator_retry_deadline` agora deriva da EMA em tempo real e define deadlines de redundant send).
 - DONE: Bloquear a montagem de propostas sob backpressure da fila (`BackpressureGate` agora para o pacemaker quando a fila esta saturada e registra deferrals para status/telemetry).
-- DONE: Votos de availability sao emitidos apos a validacao da proposta quando DA e requerido (sem esperar o `DELIVER` local de RBC), e a evidencia de availability e acompanhada via `AvailabilityQC` como prova de seguranca enquanto o commit prossegue sem esperar. Isso evita esperas circulares entre transporte de payload e votacao.
+- DONE: Votos de availability sao emitidos apos a validacao da proposta quando DA e requerido (sem esperar o `DELIVER` local de RBC), e a evidencia de availability e acompanhada via `availability evidence` como prova de seguranca enquanto o commit prossegue sem esperar. Isso evita esperas circulares entre transporte de payload e votacao.
 - DONE: A cobertura de restart/liveness agora exercita recuperacao RBC em cold-start (`integration_tests/tests/sumeragi_da.rs::sumeragi_rbc_session_recovers_after_cold_restart`) e retomada do pacemaker apos downtime (`integration_tests/tests/sumeragi_npos_liveness.rs::npos_pacemaker_resumes_after_downtime`).
 - DONE: Adicionar testes de regressao deterministas de restart/view-change cobrindo convergencia de lock (`integration_tests/tests/sumeragi_lock_convergence.rs`).
 
@@ -44,7 +44,7 @@ Esta nota expande o roadmap da Fase A em tarefas pequenas de engenharia para pod
 - DONE: GA-A4.3 - Codificar recuperacao de late-reveal e testes de epoch sem participacao em `integration_tests/tests/sumeragi_randomness.rs` (`npos_late_vrf_reveal_clears_penalty_and_preserves_seed`, `npos_zero_participation_epoch_reports_full_no_participation`), exercitando telemetria de limpeza de penalidades. Owners: `@sumeragi-core`. Tracker: `project_tracker/npos_sumeragi_phase_a.md:7`.
 
 ### A5 - Reconfiguracao conjunta e evidence
-- DONE: O scaffolding de evidence, a persistencia em WSV e os roundtrips Norito agora cobrem double-vote, invalid proposal, invalid QC e variantes de double exec com deduplicacao determinista e poda do horizonte (`sumeragi::evidence`).
+- DONE: O scaffolding de evidence, a persistencia em WSV e os roundtrips Norito agora cobrem double-vote, invalid proposal, invalid commit certificate e variantes de double exec com deduplicacao determinista e poda do horizonte (`sumeragi::evidence`).
 - DONE: GA-A5.1 - Ativacao de joint-consensus (set antigo commita, novo set ativa no proximo bloco) aplicada com cobertura de integracao direcionada.
 - DONE: GA-A5.2 - Docs de governance e fluxos CLI para slashing/jailing atualizados, com testes de sincronizacao mdBook para fixar defaults e o wording do evidence horizon.
 - DONE: GA-A5.3 - Testes de evidence em caminho negativo (duplicate signer, forged signature, stale epoch replay, mixed manifest payloads) mais fixtures fuzz chegaram e rodam nightly para proteger a validacao de roundtrip Norito.

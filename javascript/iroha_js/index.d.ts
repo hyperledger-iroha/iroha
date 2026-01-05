@@ -3634,10 +3634,10 @@ export interface ToriiSumeragiParamsSnapshot {
 }
 
 export type SumeragiEvidenceKind =
-  | "DoublePrevote"
-  | "DoublePrecommit"
+  | "DoublePrepare"
+  | "DoubleCommit"
   | "DoubleExecVote"
-  | "InvalidQC"
+  | "InvalidCommitCertificate"
   | "InvalidProposal";
 
 export interface SumeragiEvidenceListOptions {
@@ -3655,8 +3655,8 @@ export interface SumeragiEvidenceRecordBase {
 }
 
 export interface SumeragiDoubleVoteEvidenceRecord extends SumeragiEvidenceRecordBase {
-  kind: "DoublePrevote" | "DoublePrecommit";
-  phase: "Prevote" | "Precommit" | "Available";
+  kind: "DoublePrepare" | "DoubleCommit";
+  phase: "Prepare" | "Commit" | "NewView";
   height: number;
   view: number;
   epoch: number;
@@ -3677,8 +3677,8 @@ export interface SumeragiDoubleExecVoteEvidenceRecord extends SumeragiEvidenceRe
   post_state_root_2: string;
 }
 
-export interface SumeragiInvalidQcEvidenceRecord extends SumeragiEvidenceRecordBase {
-  kind: "InvalidQC";
+export interface SumeragiInvalidCommitCertificateEvidenceRecord extends SumeragiEvidenceRecordBase {
+  kind: "InvalidCommitCertificate";
   height: number;
   view: number;
   epoch: number;
@@ -3704,7 +3704,7 @@ export interface SumeragiUnknownEvidenceRecord extends SumeragiEvidenceRecordBas
 export type SumeragiEvidenceRecord =
   | SumeragiDoubleVoteEvidenceRecord
   | SumeragiDoubleExecVoteEvidenceRecord
-  | SumeragiInvalidQcEvidenceRecord
+  | SumeragiInvalidCommitCertificateEvidenceRecord
   | SumeragiInvalidProposalEvidenceRecord
   | SumeragiUnknownEvidenceRecord;
 
@@ -6930,7 +6930,7 @@ export interface TimeTriggerActionOptions {
   metadata?: Record<string, unknown> | string | null;
 }
 
-export interface PrecommitTriggerActionOptions {
+export interface CommitTriggerActionOptions {
   authority: string;
   instructions: ReadonlyArray<object | string>;
   repeats?: number | bigint | null;
@@ -6939,7 +6939,7 @@ export interface PrecommitTriggerActionOptions {
 
 export function buildTimeTriggerAction(options: TimeTriggerActionOptions): string;
 export function buildPrecommitTriggerAction(
-  options: PrecommitTriggerActionOptions,
+  options: CommitTriggerActionOptions,
 ): string;
 
 export function buildCreateKaigiTransaction(

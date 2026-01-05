@@ -6264,15 +6264,15 @@ pub struct Metrics {
     pub sumeragi_missing_block_fetch_total: IntCounterVec,
     /// Sumeragi: missing-block fetch target kind (labels: target=signers|topology)
     pub sumeragi_missing_block_fetch_target_total: IntCounterVec,
-    /// Sumeragi: elapsed milliseconds from first-seen QC to missing-block fetch request
+    /// Sumeragi: elapsed milliseconds from first-seen certificate to missing-block fetch request
     pub sumeragi_missing_block_fetch_dwell_ms: Histogram,
     /// Sumeragi: number of peers targeted when requesting a missing block payload
     pub sumeragi_missing_block_fetch_targets: Histogram,
     /// Sumeragi DA availability: missing availability artifacts (labeled by reason)
     pub sumeragi_da_gate_block_total: IntCounterVec,
-    /// Sumeragi DA availability: last recorded reason code (0=none,1=missing_availability_qc,3=manifest_missing,4=manifest_hash_mismatch,5=manifest_read_failed,6=manifest_spool_scan)
+    /// Sumeragi DA availability: last recorded reason code (0=none,1=missing_local_data,3=manifest_missing,4=manifest_hash_mismatch,5=manifest_read_failed,6=manifest_spool_scan)
     pub sumeragi_da_gate_last_reason: GenericGauge<AtomicU64>,
-    /// Sumeragi DA availability: last satisfaction code (0=none,1=availability_qc)
+    /// Sumeragi DA availability: last satisfaction code (0=none,1=missing_data_recovered)
     pub sumeragi_da_gate_last_satisfied: GenericGauge<AtomicU64>,
     /// Sumeragi DA availability: satisfaction transitions (labeled by gate)
     pub sumeragi_da_gate_satisfied_total: IntCounterVec,
@@ -9028,7 +9028,7 @@ impl Default for Metrics {
         let sumeragi_missing_block_fetch_dwell_ms = Histogram::with_opts(
             HistogramOpts::new(
                 "sumeragi_missing_block_fetch_dwell_ms",
-                "Elapsed milliseconds between first-seen QC and missing-block fetch request",
+                "Elapsed milliseconds between first-seen certificate and missing-block fetch request",
             )
             .buckets(prometheus::exponential_buckets(10.0, 2.0, 8).expect("inputs are valid")),
         )
@@ -9044,25 +9044,25 @@ impl Default for Metrics {
         let sumeragi_da_gate_block_total = IntCounterVec::new(
             Opts::new(
                 "sumeragi_da_gate_block_total",
-                "Sumeragi commits gated by missing data-availability artifacts (missing_availability_qc|manifest_*)",
+                "Sumeragi commits gated by missing data-availability artifacts (missing_local_data|manifest_*)",
             ),
             &["reason"],
         )
         .expect("Infallible");
         let sumeragi_da_gate_last_reason = GenericGauge::new(
             "sumeragi_da_gate_last_reason",
-            "Sumeragi DA availability last reason code (0=none,1=missing_availability_qc,3=manifest_missing,4=manifest_hash_mismatch,5=manifest_read_failed,6=manifest_spool_scan)",
+            "Sumeragi DA availability last reason code (0=none,1=missing_local_data,3=manifest_missing,4=manifest_hash_mismatch,5=manifest_read_failed,6=manifest_spool_scan)",
         )
         .expect("Infallible");
         let sumeragi_da_gate_last_satisfied = GenericGauge::new(
             "sumeragi_da_gate_last_satisfied",
-            "Sumeragi DA availability last satisfaction code (0=none,1=availability_qc)",
+            "Sumeragi DA availability last satisfaction code (0=none,1=missing_data_recovered)",
         )
         .expect("Infallible");
         let sumeragi_da_gate_satisfied_total = IntCounterVec::new(
             Opts::new(
                 "sumeragi_da_gate_satisfied_total",
-                "Sumeragi DA availability satisfactions (availability_qc)",
+                "Sumeragi DA availability satisfactions (missing_data_recovered)",
             ),
             &["gate"],
         )

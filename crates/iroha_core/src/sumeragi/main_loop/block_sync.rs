@@ -29,13 +29,12 @@ impl Actor {
     ) -> Result<()> {
         let super::message::BlockSyncUpdate {
             block,
-            qc: incoming_qc,
-            availability_qc: incoming_availability_qc,
-            precommit_votes,
-            commit_certificate,
+            commit_votes,
+            commit_certificate: incoming_qc,
             validator_checkpoint,
             stake_snapshot,
         } = update;
+        let mut incoming_qc = incoming_qc;
         let block_hash = block.hash();
         let block_height = block.header().height().get();
         let block_view = u64::from(block.header().view_change_index());
@@ -115,7 +114,7 @@ impl Actor {
             block_hash,
             Some(block_view),
         );
-        let cert_hint = commit_certificate.as_ref();
+        let cert_hint = incoming_qc.as_ref();
         let checkpoint_hint = validator_checkpoint.as_ref();
         let Some(selection) = select_block_sync_roster(
             &block,
@@ -282,62 +281,6 @@ impl Actor {
                 return Ok(());
             }
         };
-        let availability_qc = incoming_availability_qc.and_then(|qc| {
-            if qc.height != block_height {
-                warn!(
-                    height = block_height,
-                    view = block_view,
-                    hash = %block_hash,
-                    qc_height = qc.height,
-                    "ignoring block sync AvailabilityQC with mismatched height"
-                );
-                return None;
-            }
-            if qc.subject_block_hash != block_hash {
-                warn!(
-                    height = block_height,
-                    view = block_view,
-                    hash = %block_hash,
-                    qc_hash = %qc.subject_block_hash,
-                    "ignoring block sync AvailabilityQC with mismatched block hash"
-                );
-                return None;
-            }
-            if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Available) {
-                warn!(
-                    height = block_height,
-                    view = block_view,
-                    hash = %block_hash,
-                    phase = ?qc.phase,
-                    "ignoring block sync QC with non-availability phase"
-                );
-                return None;
-            }
-            match validate_block_sync_qc(
-                &qc,
-                &topology,
-                &block_signers,
-                block_view,
-                &self.common_config.chain,
-                mode_tag,
-                prf_seed,
-            ) {
-                Ok(_) => Some(qc),
-                Err(err) => {
-                    record_qc_validation_error(self.telemetry_handle(), &err);
-                    warn!(
-                        ?err,
-                        reason = qc_validation_reason(&err),
-                        hash = %block_hash,
-                        height = block_height,
-                        view = block_view,
-                        block_signers = block_signers.len(),
-                        "dropping block sync AvailabilityQC after validation failure"
-                    );
-                    None
-                }
-            }
-        });
         let commit_quorum = topology.min_votes_for_commit().max(1);
         let mut candidate_qc =
             incoming_qc.or_else(|| crate::block_sync::BlockSynchronizer::block_sync_qc_for(&block));
@@ -362,7 +305,7 @@ impl Actor {
                 );
                 return None;
             }
-            if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Precommit) {
+            if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
                 warn!(
                     height = block_height,
                     view = block_view,
@@ -486,7 +429,7 @@ impl Actor {
         let derive_valid_qc = || {
             cached_qc_for(
                 &self.qc_cache,
-                crate::sumeragi::consensus::Phase::Precommit,
+                crate::sumeragi::consensus::Phase::Commit,
                 block_hash,
                 block_height,
                 block_view,
@@ -549,7 +492,7 @@ impl Actor {
         }
         let incoming_qc_signers = incoming_qc.as_ref().map(qc_signer_count);
         let allow_nonextending_qc = selection.commit_certificate.is_some()
-            || commit_certificate.as_ref().is_some_and(|cert| {
+            || incoming_qc.as_ref().is_some_and(|cert| {
                 super::validate_commit_certificate_roster(
                     cert,
                     block_hash,
@@ -649,23 +592,7 @@ impl Actor {
             }
         }
 
-        if let Some(qc) = availability_qc {
-            if creation_ok && block_known_after_creation {
-                self.process_availability_qc(&qc, true);
-            }
-            self.qc_cache.insert(
-                (
-                    crate::sumeragi::consensus::Phase::Available,
-                    qc.subject_block_hash,
-                    qc.height,
-                    qc.view,
-                    qc.epoch,
-                ),
-                qc,
-            );
-        }
-
-        for vote in precommit_votes {
+        for vote in commit_votes {
             self.handle_vote(vote);
         }
 
@@ -705,7 +632,7 @@ impl Actor {
                     );
                     return Ok(());
                 }
-                if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Precommit) {
+                if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
                     warn!(
                         incoming_hash = %block_hash,
                         phase = ?qc.phase,
@@ -736,6 +663,8 @@ impl Actor {
                                     .bls_aggregate_signature
                                     .clone(),
                                 roster_len: topology.as_ref().len(),
+                                mode_tag: mode_tag.to_string(),
+                                validator_set: topology.as_ref().to_vec(),
                             },
                         );
                         self.note_validated_qc_tally(&qc, tally.clone());
@@ -748,6 +677,7 @@ impl Actor {
                             );
                             return Ok(());
                         }
+                        super::status::record_commit_certificate(qc.clone());
                         self.qc_cache.insert(
                             (
                                 qc.phase,
@@ -758,9 +688,6 @@ impl Actor {
                             ),
                             qc.clone(),
                         );
-                        if let Some(highest) = self.highest_qc {
-                            self.maybe_broadcast_new_view(highest, None, None);
-                        }
                         #[cfg(feature = "telemetry")]
                         if let Some(telemetry) = self.telemetry_handle() {
                             telemetry.note_qc_signer_counts(
@@ -854,7 +781,7 @@ impl Actor {
             );
             return;
         }
-        if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Precommit) {
+        if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             warn!(
                 incoming_hash = %block_hash,
                 phase = ?qc.phase,
@@ -882,6 +809,8 @@ impl Actor {
                         signers: tally.voting_signers.clone(),
                         bls_aggregate_signature: qc.aggregate.bls_aggregate_signature.clone(),
                         roster_len: topology.as_ref().len(),
+                        mode_tag: mode_tag.to_string(),
+                        validator_set: topology.as_ref().to_vec(),
                     },
                 );
                 self.note_validated_qc_tally(&qc, tally.clone());
@@ -894,6 +823,7 @@ impl Actor {
                     );
                     return;
                 }
+                super::status::record_commit_certificate(qc.clone());
                 self.qc_cache.insert(
                     (
                         qc.phase,
@@ -971,9 +901,8 @@ impl Actor {
             );
             let has_roster =
                 update.commit_certificate.is_some() || update.validator_checkpoint.is_some();
-            let has_cached_qc = update.qc.is_some()
-                || update.availability_qc.is_some()
-                || !update.precommit_votes.is_empty();
+            let has_cached_qc =
+                update.commit_certificate.is_some() || !update.commit_votes.is_empty();
             if !has_roster && !has_cached_qc {
                 let msg = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
                 self.send_fetch_pending_block_response(peer.clone(), msg);
@@ -1017,9 +946,8 @@ impl Actor {
             );
             let has_roster =
                 update.commit_certificate.is_some() || update.validator_checkpoint.is_some();
-            let has_cached_qc = update.qc.is_some()
-                || update.availability_qc.is_some()
-                || !update.precommit_votes.is_empty();
+            let has_cached_qc =
+                update.commit_certificate.is_some() || !update.commit_votes.is_empty();
             if !has_roster && !has_cached_qc {
                 let msg = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
                 self.send_fetch_pending_block_response(peer.clone(), msg);
@@ -1058,9 +986,8 @@ impl Actor {
                 );
                 let has_roster =
                     update.commit_certificate.is_some() || update.validator_checkpoint.is_some();
-                let has_cached_qc = update.qc.is_some()
-                    || update.availability_qc.is_some()
-                    || !update.precommit_votes.is_empty();
+                let has_cached_qc =
+                    update.commit_certificate.is_some() || !update.commit_votes.is_empty();
                 let msg = if !has_roster && !has_cached_qc {
                     BlockMessage::BlockCreated(super::message::BlockCreated::from(block))
                 } else {

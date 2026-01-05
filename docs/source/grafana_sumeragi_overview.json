@@ -7,7 +7,7 @@
   "panels": [
     {
       "type": "timeseries",
-      "title": "Highest vs Locked QC Height",
+      "title": "Highest vs Locked commit certificate Height",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "targets": [
         {

@@ -25,12 +25,12 @@ translation_last_reviewed: 2025-12-28
 
 - **Grafana (`dashboards/grafana/nexus_lanes.json`)** — ينشر لوحة “Nexus Lane Finality & Oracles”. تتبع اللوحات:
   - `histogram_quantile()` على `iroha_slot_duration_ms` (p50/p95/p99) مع مقياس آخر عينة.
-  - `iroha_da_quorum_ratio` و `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m])` لإبراز اضطراب DA.
+  - `iroha_da_quorum_ratio` و `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])` لإبراز اضطراب DA.
   - إشارات الأوراكل: `iroha_oracle_price_local_per_xor`, `iroha_oracle_staleness_seconds`, `iroha_oracle_twap_window_seconds`, `iroha_oracle_haircut_basis_points`.
   - لوحة مخزن التسوية (`iroha_settlement_buffer_xor`) التي تعرض خصومات لكل lane من إيصالات `LaneBlockCommitment`.
 - **قواعد التنبيه** — تعيد استخدام بنود Slot/DA SLO من `ans3.md`. التنبيه عند:
   - p95 لمدة الفتحة > 1000 ms في نافذتين متتاليتين 5 م،
-  - نسبة نصاب DA < 0.95 أو `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m]) > 0`،
+  - نسبة نصاب DA < 0.95 أو `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m]) > 0`،
   - Staleness للأوراكل > 90 ث أو نافذة TWAP ≠ 60 ث المضبوطة،
   - مخزن التسوية < 25 % (soft) / 10 % (hard) عند تفعيل المقياس.
 
@@ -41,7 +41,7 @@ translation_last_reviewed: 2025-12-28
 | `histogram_quantile(0.95, iroha_slot_duration_ms)` | ≤ 1000 ms (hard)، 950 ms warning | استخدم لوحة القياس أو شغّل `scripts/telemetry/check_slot_duration.py` (`--json-out artifacts/nx18/slot_summary.json`) على تصدير Prometheus أثناء اختبارات chaos. |
 | `iroha_slot_duration_ms_latest` | يعكس أحدث فتحة؛ حقّق إذا > 1100 ms حتى لو بدت الكوانتيالات سليمة. | صدّر القيمة عند فتح الحوادث. |
 | `iroha_da_quorum_ratio` | ≥ 0.95 على نافذة متحركة 30 م. | مشتق من إعادة جدولة DA أثناء commits. |
-| `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m])` | يجب أن يبقى 0 خارج rehearsals. | اعتبر أي زيادة مستمرة `missing-availability warning`. |
+| `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])` | يجب أن يبقى 0 خارج rehearsals. | اعتبر أي زيادة مستمرة `missing-availability warning`. |
 
 كل إعادة جدولة تطلق أيضاً تحذيراً في خط Torii مع `kind = "missing-availability warning"`. التقط هذه الأحداث مع ذروة القياس لتحديد رأس الكتلة المتأثر، محاولة الإعادة، وعدّادات requeue دون التنقيب في سجلات المصدّقين.【crates/iroha_core/src/sumeragi/main_loop.rs:5164】
 | `iroha_oracle_staleness_seconds` | ≤ 60 ث. تنبيه عند 75 ث. | يشير إلى TWAP feeds قديمة 60 ث. |

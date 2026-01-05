@@ -1110,11 +1110,11 @@ def test_list_sumeragi_evidence_parses_records() -> None:
                 "total": 3,
                 "items": [
                     {
-                        "kind": "DoublePrevote",
+                        "kind": "DoublePrepare",
                         "recorded_height": 1,
                         "recorded_view": 2,
                         "recorded_ms": 3,
-                        "phase": "Prevote",
+                        "phase": "Prepare",
                         "height": 4,
                         "view": 5,
                         "epoch": 6,
@@ -1147,13 +1147,13 @@ def test_list_sumeragi_evidence_parses_records() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    page = client.list_sumeragi_evidence(limit=5, offset=1, kind="DoublePrevote")
+    page = client.list_sumeragi_evidence(limit=5, offset=1, kind="DoublePrepare")
 
     assert page.total == 3
     assert len(page.items) == 3
     prevote = page.items[0]
-    assert prevote.kind == "DoublePrevote"
-    assert prevote.phase == "Prevote"
+    assert prevote.kind == "DoublePrepare"
+    assert prevote.phase == "Prepare"
     assert prevote.block_hash_1 == "aa11"
     assert prevote.block_hash_2 == "bb22"
     invalid_proposal = page.items[1]
@@ -1164,7 +1164,7 @@ def test_list_sumeragi_evidence_parses_records() -> None:
     assert fallback.detail == "legacy entry"
     call = session.calls[0]
     assert call["url"].endswith("/v1/sumeragi/evidence")
-    assert call["params"] == {"limit": 5, "offset": 1, "kind": "DoublePrevote"}
+    assert call["params"] == {"limit": 5, "offset": 1, "kind": "DoublePrepare"}
 
 
 def test_list_sumeragi_evidence_validates_limit() -> None:

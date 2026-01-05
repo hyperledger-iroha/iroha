@@ -77,7 +77,7 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 ### Sumeragi Consensus
 
 **Current controls**
-- Quorum assembly records double-vote evidence (`Evidence::DoublePrevote` / `Evidence::DoublePrecommit`).
+- Quorum assembly records double-vote evidence (`Evidence::DoublePrepare` / `Evidence::DoubleCommit`).
 - RBC payload hashes and size clamps; READY/DELIVER gating validated by tests in `crates/iroha_core/tests`.
 - Pacemaker timers bounded via `iroha_config::sumeragi.timers` (see `status.md`, Sep 10 2025 update).
 - Collector path verifies ExecWitness roots before commit; evidence triggers peer quarantine.

@@ -166,7 +166,7 @@ Le merge ring DOIT appliquer ce qui suit avant d'accepter un engagement de lane:
 
 - **Metriques:**  
   `nexus_scheduler_lane_teu_*`, `nexus_scheduler_dataspace_*`, `sumeragi_rbc_da_reschedule_total`,
-  `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_availability_qc"}`,
+  `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_local_data"}`,
   `lane_relay_invalid_total{error}`, `lane_relay_emergency_override_total{outcome}`, et
   `nexus_audit_outcome_total` existent deja dans `crates/iroha_telemetry/src/metrics.rs`. Les
   operateurs doivent alerter sur les pics de missing-availability (les compteurs de reschedule sont
@@ -180,7 +180,7 @@ Le merge ring DOIT appliquer ce qui suit avant d'accepter un engagement de lane:
   `dashboards/grafana/nexus_lanes.json` trace le backlog de lane, signaux de disponibilite DA et
   les totaux de settlement exposes ci-dessus. Les definitions d'alertes doivent paginer quand:
   - `nexus_scheduler_dataspace_age_slots` depasse la politique.
-  - `sumeragi_da_gate_block_total{reason="missing_availability_qc"}` augmente de facon persistante.
+  - `sumeragi_da_gate_block_total{reason="missing_local_data"}` augmente de facon persistante.
   - `total_xor_variance_micro` devie des normes historiques.
 - **Bundles de preuves:**  
   Chaque release doit attacher des exports `LaneBlockCommitment`, snapshots Grafana/Alertmanager

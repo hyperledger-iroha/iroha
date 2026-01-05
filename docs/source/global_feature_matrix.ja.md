@@ -16,11 +16,11 @@ translator: manual
 
 | 機能 | 状態 | メモ | エビデンス |
 |------|------|------|-------------|
-| 複数コレクター K/r サポート & first-QC-wins | ◉ | 決定論的コレクター選定、冗長ファンアウト、オンチェーンの K/r パラメータ、最初の QC 採用がテスト付きで出荷済み。 | status.md:255; status.md:314 |
+| 複数コレクター K/r サポート & first-commit-certificate-wins | ◉ | 決定論的コレクター選定、冗長ファンアウト、オンチェーンの K/r パラメータ、最初の commit certificate 採用がテスト付きで出荷済み。 | status.md:255; status.md:314 |
 | ペースメーカーのバックオフ／RTT 下限／決定論的ジッタ | ◉ | コンフィグで制御可能なタイマにジッタ帯域を実装し、テレメトリとドキュメントを整備。 | status.md:251 |
-| NEW_VIEW ゲーティング & HighestQC 追跡 | ◉ | NEW_VIEW / Evidence を伝搬し、HighestQC は単調増加で採用。ハンドシェイクがフィンガープリントを保護。 | status.md:210 |
-| AvailabilityQC ゲーティング | ○ | `da_enabled=true` で Availability 投票 / QC を発行しコミットを制御。追加の磨き込みは継続。 | status.md:190 |
-| 信頼できるブロードキャスト（DA ペイロード輸送） | ◉ | `da_enabled=true` で RBC (Init/Chunk/Ready/Deliver) が有効化され、ペイロード配布/欠落回復に利用。コミットは AvailabilityQC でゲート（ローカルの `DELIVER` は条件ではありません）。 | status.md:283-284 |
+| NEW_VIEW ゲーティング & Highest commit certificate 追跡 | ◉ | NEW_VIEW / Evidence を伝搬し、Highest commit certificate は単調増加で採用。ハンドシェイクがフィンガープリントを保護。 | status.md:210 |
+| availability evidence ゲーティング | ○ | `da_enabled=true` で Availability 投票 / availability evidence を発行しコミットを制御。追加の磨き込みは継続。 | status.md:190 |
+| 信頼できるブロードキャスト（DA ペイロード輸送） | ◉ | `da_enabled=true` で RBC (Init/Chunk/Ready/Deliver) が有効化され、ペイロード配布/欠落回復に利用。コミットは availability evidence でゲート（ローカルの `DELIVER` は条件ではありません）。 | status.md:283-284 |
 | ExecutionQC 収集 & ゲーティング | ○ | Exec 投票、ウィットネス封筒、ゲーティングを実装済み。集約署名の最適化が未完。 | status.md:177 |
 | エビデンス伝搬 & 監査エンドポイント | ◉ | `ControlFlow::Evidence`、Torii エビデンス API、ネガティブテストを実装。 | status.md:176; status.md:760-761 |
 | RBC テレメトリ、準備／DELIVER メトリクス | ◉ | `/v1/sumeragi/rbc*` エンドポイントとテレメトリカウンタ／ヒストグラムを提供。 | status.md:283-284; status.md:772 |

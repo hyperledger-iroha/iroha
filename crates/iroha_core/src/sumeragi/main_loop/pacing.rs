@@ -202,7 +202,7 @@ pub(super) enum AdaptiveAction {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct AdaptiveObservabilityMetrics {
-    pub(super) missing_availability_total: u64,
+    pub(super) missing_local_data_total: u64,
     pub(super) max_qc_latency_ms: u64,
 }
 
@@ -214,7 +214,7 @@ impl AdaptiveObservabilityMetrics {
             .max()
             .unwrap_or(0);
         Self {
-            missing_availability_total: status::da_gate_missing_availability_total(),
+            missing_local_data_total: status::da_gate_missing_local_data_total(),
             max_qc_latency_ms,
         }
     }
@@ -224,7 +224,7 @@ impl AdaptiveObservabilityMetrics {
 pub(super) struct AdaptiveObservabilityState {
     base_propose_interval: Duration,
     base_collector_limit: u8,
-    last_missing_availability_total: u64,
+    last_missing_local_data_total: u64,
     last_trigger: Option<Instant>,
     applied: bool,
 }
@@ -234,12 +234,12 @@ impl AdaptiveObservabilityState {
         cfg: AdaptiveObservability,
         base_propose_interval: Duration,
         base_collector_limit: u8,
-        initial_missing_availability_total: u64,
+        initial_missing_local_data_total: u64,
     ) -> Self {
         let mut state = Self {
             base_propose_interval,
             base_collector_limit: base_collector_limit.max(1),
-            last_missing_availability_total: initial_missing_availability_total,
+            last_missing_local_data_total: initial_missing_local_data_total,
             last_trigger: None,
             applied: false,
         };
@@ -264,22 +264,22 @@ impl AdaptiveObservabilityState {
         now: Instant,
     ) -> AdaptiveAction {
         let missing_delta = metrics
-            .missing_availability_total
-            .saturating_sub(self.last_missing_availability_total);
-        self.last_missing_availability_total = metrics.missing_availability_total;
+            .missing_local_data_total
+            .saturating_sub(self.last_missing_local_data_total);
+        self.last_missing_local_data_total = metrics.missing_local_data_total;
 
         if !cfg.enabled {
             return self.reset(pacemaker, collector_redundant_limit, now);
         }
 
         let qc_alert = metrics.max_qc_latency_ms >= cfg.qc_latency_alert_ms;
-        let availability_alert = missing_delta >= cfg.da_reschedule_burst;
+        let missing_data_alert = missing_delta >= cfg.da_reschedule_burst;
         let cooldown = Duration::from_millis(cfg.cooldown_ms);
         let past_cooldown = self
             .last_trigger
             .is_none_or(|last| now.saturating_duration_since(last) >= cooldown);
 
-        if (qc_alert || availability_alert) && past_cooldown {
+        if (qc_alert || missing_data_alert) && past_cooldown {
             *collector_redundant_limit = (*collector_redundant_limit)
                 .max(cfg.collector_redundant_r.max(self.base_collector_limit));
             let boosted = self

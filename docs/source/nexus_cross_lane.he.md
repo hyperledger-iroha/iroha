@@ -160,7 +160,7 @@ Governance עבור lanes admin-managed ורשומות staking של public lanes
 
 - **מדדים:**  
   `nexus_scheduler_lane_teu_*`, `nexus_scheduler_dataspace_*`, `sumeragi_rbc_da_reschedule_total`,
-  `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_availability_qc"}`,
+  `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_local_data"}`,
   `lane_relay_invalid_total{error}`, `lane_relay_emergency_override_total{outcome}` ו-
   `nexus_audit_outcome_total` קיימים כבר ב-`crates/iroha_telemetry/src/metrics.rs`. מפעילים צריכים
   להתריע על קפיצות missing-availability (מוני reschedule הם legacy וחייבים להישאר אפס), ו-
@@ -173,7 +173,7 @@ Governance עבור lanes admin-managed ורשומות staking של public lanes
   `dashboards/grafana/nexus_lanes.json` מציג backlog של lane, אותות זמינות DA ואת סכומי settlement
   המוצגים לעיל. הגדרות ההתראה צריכות לעמוד כאשר:
   - `nexus_scheduler_dataspace_age_slots` מפר את המדיניות.
-  - `sumeragi_da_gate_block_total{reason="missing_availability_qc"}` עולה באופן מתמשך.
+  - `sumeragi_da_gate_block_total{reason="missing_local_data"}` עולה באופן מתמשך.
   - `total_xor_variance_micro` סוטה מהנורמות ההיסטוריות.
 - **חבילות ראיות:**  
   כל שחרור חייב לצרף ייצואי `LaneBlockCommitment`, צילומי Grafana/Alertmanager ו-manifests של relay DA

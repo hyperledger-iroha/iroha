@@ -6650,6 +6650,14 @@ pub(crate) mod valid {
             })
         }
 
+        /// Commit using a validated commit certificate.
+        ///
+        /// Callers must ensure the block has already passed validation and the commit
+        /// certificate was verified; this skips block-signature quorum checks.
+        pub fn commit_with_certificate(self) -> WithCommittedBlockEvents {
+            WithEvents::new(Ok(CommittedBlock(self)))
+        }
+
         /// Commit using a prevalidated signer set (e.g., from a QC).
         ///
         /// The block signatures are still verified to guard against forged aggregates; `signers`
@@ -7069,6 +7077,31 @@ pub(crate) mod valid {
             assert_eq!(tally.set_b_signatures, 0);
 
             assert!(block.commit(&topology).unpack(|_| {}).is_ok());
+        }
+
+        #[test]
+        fn commit_with_certificate_skips_signature_quorum() {
+            let key_pairs =
+                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+                    .take(4)
+                    .collect::<Vec<_>>();
+            let topology = test_topology_with_keys(&key_pairs);
+            assert_eq!(topology.min_votes_for_commit(), 3);
+
+            let block = ValidBlock::new_dummy(key_pairs[0].private_key());
+            let commit_result = block.commit_with_certificate().unpack(|_| {});
+
+            assert!(
+                commit_result.is_ok(),
+                "commit_with_certificate should bypass signature quorum checks"
+            );
+            let strict_result = ValidBlock::new_dummy(key_pairs[0].private_key())
+                .commit(&topology)
+                .unpack(|_| {});
+            assert!(
+                strict_result.is_err(),
+                "strict commit should still enforce signature quorum"
+            );
         }
 
         #[test]

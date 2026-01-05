@@ -128,20 +128,20 @@ fn sample_evidence_hex() -> String {
     fn vote_with_seed(seed: u8) -> Vote {
         let hash = Hash::prehashed([seed; 32]);
         Vote {
-            phase: Phase::Prevote,
+            phase: Phase::Prepare,
             block_hash: HashOf::from_untyped_unchecked(hash),
             height: 1,
             view: 0,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: vec![seed],
         }
     }
     let v1 = vote_with_seed(0x11);
     let v2 = vote_with_seed(0x22);
     let evidence = Evidence {
-        kind: EvidenceKind::DoublePrevote,
+        kind: EvidenceKind::DoublePrepare,
         payload: EvidencePayload::DoubleVote { v1, v2 },
     };
     hex::encode(norito::codec::Encode::encode(&evidence))

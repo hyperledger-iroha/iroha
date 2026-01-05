@@ -1,21 +1,21 @@
 //! Data-availability tracking helpers.
 //!
-//! When `sumeragi.da_enabled = true`, the node tracks availability evidence
-//! (`AvailabilityQC` or an RBC `READY` quorum) for DA commitments. The evidence
-//! is recorded and surfaced via telemetry to support long-term storage guarantees,
-//! but it does not gate consensus in v1.
+//! When `sumeragi.da_enabled = true`, the node tracks availability and manifest
+//! signals for DA commitments. These signals are advisory and must not block
+//! commit/finalize paths in v1.
 //!
-//! Reliable broadcast remains a transport and recovery mechanism for payload
-//! distribution (e.g., when a peer misses `BlockCreated`), but it must not
-//! block commit or finalize paths.
+//! Consensus only waits when the local node lacks required data to validate,
+//! in which case it requests the missing data from peers and retries once it
+//! arrives. Reliable broadcast remains a transport and recovery mechanism for
+//! payload distribution (e.g., when a peer misses `BlockCreated`).
 
 use iroha_data_model::nexus::LaneId;
 
 /// Outcome of the data-availability evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GateReason {
-    /// The node has not yet observed an `AvailabilityQC` for the block.
-    MissingAvailabilityQc,
+    /// Local validation needs data that is missing and must be fetched.
+    MissingLocalData,
     /// Required manifest is missing or invalid on the local node.
     ManifestGuard {
         /// Lane the guarded blob belongs to.
@@ -58,20 +58,20 @@ impl ManifestGateKind {
 /// Which gate condition was satisfied most recently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GateSatisfaction {
-    /// An `AvailabilityQC` was observed after previously gating on it.
-    AvailabilityQc,
+    /// Missing local data was fetched successfully.
+    MissingDataRecovered,
 }
 
 /// Evaluate whether availability evidence is still missing for a block.
 /// This result is advisory and must not block consensus.
 #[must_use]
-pub fn evaluate(da_enabled: bool, has_availability_qc: bool) -> Option<GateReason> {
+pub fn evaluate(da_enabled: bool, missing_local_data: bool) -> Option<GateReason> {
     if !da_enabled {
         return None;
     }
 
-    if !has_availability_qc {
-        return Some(GateReason::MissingAvailabilityQc);
+    if missing_local_data {
+        return Some(GateReason::MissingLocalData);
     }
 
     None
@@ -84,7 +84,7 @@ pub fn gate_satisfaction(
     current: Option<GateReason>,
 ) -> Option<GateSatisfaction> {
     match (previous, current) {
-        (Some(GateReason::MissingAvailabilityQc), None) => Some(GateSatisfaction::AvailabilityQc),
+        (Some(GateReason::MissingLocalData), None) => Some(GateSatisfaction::MissingDataRecovered),
         _ => None,
     }
 }
@@ -99,29 +99,26 @@ mod tests {
     }
 
     #[test]
-    fn missing_qc_reports_missing_availability() {
-        assert_eq!(
-            evaluate(true, false),
-            Some(GateReason::MissingAvailabilityQc)
-        );
+    fn missing_data_reports_missing_local_data() {
+        assert_eq!(evaluate(true, true), Some(GateReason::MissingLocalData));
     }
 
     #[test]
-    fn availability_qc_clears_missing_availability() {
-        assert_eq!(evaluate(true, true), None);
+    fn available_data_clears_missing_local_data() {
+        assert_eq!(evaluate(true, false), None);
     }
 
     #[test]
     fn gate_satisfaction_tracks_transitions() {
         assert_eq!(
-            gate_satisfaction(Some(GateReason::MissingAvailabilityQc), None),
-            Some(GateSatisfaction::AvailabilityQc)
+            gate_satisfaction(Some(GateReason::MissingLocalData), None),
+            Some(GateSatisfaction::MissingDataRecovered)
         );
         assert_eq!(gate_satisfaction(None, None), None);
         assert_eq!(
             gate_satisfaction(
-                Some(GateReason::MissingAvailabilityQc),
-                Some(GateReason::MissingAvailabilityQc)
+                Some(GateReason::MissingLocalData),
+                Some(GateReason::MissingLocalData)
             ),
             None
         );

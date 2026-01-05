@@ -1338,7 +1338,7 @@ pub struct SumeragiEvidenceListFilter<'a> {
     pub limit: Option<u32>,
     /// Offset into the persisted evidence list.
     pub offset: Option<u32>,
-    /// Optional filter by evidence kind (`DoublePrevote`, `InvalidQC`, etc.).
+    /// Optional filter by evidence kind (`DoublePrepare`, `InvalidCommitCertificate`, etc.).
     pub kind: Option<&'a str>,
 }
 
@@ -1761,7 +1761,7 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     da_gate.insert(
         "reason".into(),
         Value::from(match wire.da_gate.reason {
-            SumeragiDaGateReason::MissingAvailabilityQc => "missing_availability_qc",
+            SumeragiDaGateReason::MissingLocalData => "missing_local_data",
             SumeragiDaGateReason::ManifestMissing => "manifest_missing",
             SumeragiDaGateReason::ManifestHashMismatch => "manifest_hash_mismatch",
             SumeragiDaGateReason::ManifestReadFailed => "manifest_read_failed",
@@ -1772,13 +1772,13 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     da_gate.insert(
         "last_satisfied".into(),
         Value::from(match wire.da_gate.last_satisfied {
-            SumeragiDaGateSatisfaction::AvailabilityQc => "availability_qc",
+            SumeragiDaGateSatisfaction::MissingDataRecovered => "missing_data_recovered",
             SumeragiDaGateSatisfaction::None => "none",
         }),
     );
     da_gate.insert(
-        "missing_availability_total".into(),
-        Value::from(wire.da_gate.missing_availability_total),
+        "missing_local_data_total".into(),
+        Value::from(wire.da_gate.missing_local_data_total),
     );
     da_gate.insert(
         "manifest_guard_total".into(),
@@ -2986,7 +2986,7 @@ mod evidence_filter_tests {
         let filter = SumeragiEvidenceListFilter {
             limit: Some(25),
             offset: Some(10),
-            kind: Some("InvalidQC"),
+            kind: Some("InvalidCommitCertificate"),
         };
         let params = filter.param_entries();
         assert_eq!(
@@ -2994,7 +2994,7 @@ mod evidence_filter_tests {
             vec![
                 ("limit", "25".to_string()),
                 ("offset", "10".to_string()),
-                ("kind", "InvalidQC".to_string())
+                ("kind", "InvalidCommitCertificate".to_string())
             ]
         );
     }
@@ -3129,7 +3129,8 @@ mod evidence_http_tests {
     use http::StatusCode;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature};
     use iroha_data_model::block::consensus::{
-        Evidence, EvidenceKind, EvidencePayload, EvidenceRecord, Phase, Vote,
+        CertPhase as Phase, CommitVote as Vote, Evidence, EvidenceKind, EvidencePayload,
+        EvidenceRecord,
     };
     use iroha_test_samples::gen_account_in;
     use norito::{codec::Encode as NoritoEncode, json::Value};
@@ -3784,7 +3785,7 @@ mod evidence_http_tests {
         let filter = SumeragiEvidenceListFilter {
             limit: Some(5),
             offset: Some(2),
-            kind: Some("InvalidQC"),
+            kind: Some("InvalidCommitCertificate"),
         };
 
         let json = with_mock_http(
@@ -3812,7 +3813,10 @@ mod evidence_http_tests {
             .collect();
         assert_eq!(params.get("limit"), Some(&"5".to_string()));
         assert_eq!(params.get("offset"), Some(&"2".to_string()));
-        assert_eq!(params.get("kind"), Some(&"InvalidQC".to_string()));
+        assert_eq!(
+            params.get("kind"),
+            Some(&"InvalidCommitCertificate".to_string())
+        );
     }
 
     #[test]
@@ -3836,24 +3840,23 @@ mod evidence_http_tests {
     fn make_vote(height: u64, view: u64, seed: u8) -> Vote {
         let hash = Hash::prehashed([seed; 32]);
         Vote {
-            phase: Phase::Prevote,
+            phase: Phase::Prepare,
             block_hash: HashOf::from_untyped_unchecked(hash),
             height,
             view,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         }
     }
 
     fn sample_record() -> EvidenceRecord {
         let v1 = make_vote(10, 3, 0x55);
-        let mut v2 = make_vote(10, 3, 0x66);
-        v2.signature = vec![0xAA];
+        let v2 = make_vote(10, 3, 0x66);
         EvidenceRecord {
             evidence: Evidence {
-                kind: EvidenceKind::DoublePrevote,
+                kind: EvidenceKind::DoublePrepare,
                 payload: EvidencePayload::DoubleVote { v1, v2 },
             },
             recorded_at_height: 42,
@@ -8473,8 +8476,9 @@ mod tx_hash_tests {
     #[test]
     fn tx_confirmation_error_wraps_timeout_report() {
         let err = eyre!("confirmation stream failed");
-        let wrapped =
-            err.wrap_err(super::Client::tx_confirmation_timeout_report(Duration::from_secs(1)));
+        let wrapped = err.wrap_err(super::Client::tx_confirmation_timeout_report(
+            Duration::from_secs(1),
+        ));
         let messages: Vec<String> = wrapped.chain().map(|cause| cause.to_string()).collect();
         assert!(
             messages
@@ -8768,9 +8772,8 @@ mod tx_confirmation_stream_tests {
         let rejection = TransactionRejectionReason::Validation(ValidationFail::InternalError(
             "rejected".to_string(),
         ));
-        let final_err = super::tx_confirmation_final_report(super::tx_rejection_to_report(
-            &rejection,
-        ));
+        let final_err =
+            super::tx_confirmation_final_report(super::tx_rejection_to_report(&rejection));
         assert!(!super::should_fallback_after_confirmation_error(&final_err));
 
         let transient = eyre!("transient");
@@ -9386,7 +9389,7 @@ mod tests {
             da_gate: SumeragiDaGateStatus {
                 reason: SumeragiDaGateReason::None,
                 last_satisfied: SumeragiDaGateSatisfaction::None,
-                missing_availability_total: 0,
+                missing_local_data_total: 0,
                 manifest_guard_total: 0,
             },
             kura_store: SumeragiKuraStoreStatus {
@@ -11155,7 +11158,7 @@ mod tests {
             da_gate: SumeragiDaGateStatus {
                 reason: SumeragiDaGateReason::None,
                 last_satisfied: SumeragiDaGateSatisfaction::None,
-                missing_availability_total: 0,
+                missing_local_data_total: 0,
                 manifest_guard_total: 0,
             },
             kura_store: SumeragiKuraStoreStatus {
@@ -11434,7 +11437,7 @@ mod tests {
             da_gate: SumeragiDaGateStatus {
                 reason: SumeragiDaGateReason::None,
                 last_satisfied: SumeragiDaGateSatisfaction::None,
-                missing_availability_total: 0,
+                missing_local_data_total: 0,
                 manifest_guard_total: 0,
             },
             kura_store: SumeragiKuraStoreStatus {

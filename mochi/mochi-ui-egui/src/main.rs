@@ -12286,7 +12286,7 @@ mod tests {
             da_gate: SumeragiDaGateStatus {
                 reason: SumeragiDaGateReason::None,
                 last_satisfied: SumeragiDaGateSatisfaction::None,
-                missing_availability_total: 0,
+                missing_local_data_total: 0,
                 manifest_guard_total: 0,
             },
             kura_store: SumeragiKuraStoreStatus {

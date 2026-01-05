@@ -419,15 +419,15 @@ async fn sumeragi_status_endpoint_supports_norito_payload() {
     iroha_core::sumeragi::status::record_missing_block_fetch(3, 17);
     iroha_core::sumeragi::status::record_da_gate_transition(
         None,
-        Some(GateReason::MissingAvailabilityQc),
+        Some(GateReason::MissingLocalData),
     );
     iroha_core::sumeragi::status::record_da_gate_transition(
-        Some(GateReason::MissingAvailabilityQc),
+        Some(GateReason::MissingLocalData),
         None,
     );
     iroha_core::sumeragi::status::record_da_gate_transition(
         None,
-        Some(GateReason::MissingAvailabilityQc),
+        Some(GateReason::MissingLocalData),
     );
     let kura_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
@@ -480,15 +480,12 @@ async fn sumeragi_status_endpoint_supports_norito_payload() {
     assert!(!wire.commit_inflight.active);
     assert_eq!(wire.commit_inflight.timeout_total, 0);
     assert_eq!(wire.worker_loop.queue_diagnostics.blocked_total.vote_rx, 0);
-    assert_eq!(
-        wire.da_gate.reason,
-        SumeragiDaGateReason::MissingAvailabilityQc
-    );
+    assert_eq!(wire.da_gate.reason, SumeragiDaGateReason::MissingLocalData);
     assert_eq!(
         wire.da_gate.last_satisfied,
-        SumeragiDaGateSatisfaction::AvailabilityQc
+        SumeragiDaGateSatisfaction::MissingDataRecovered
     );
-    assert!(wire.da_gate.missing_availability_total >= 1);
+    assert!(wire.da_gate.missing_local_data_total >= 1);
     assert_eq!(wire.da_gate.manifest_guard_total, 0);
     assert!(wire.kura_store.failures_total >= 1);
     assert!(wire.kura_store.abort_total >= 1);

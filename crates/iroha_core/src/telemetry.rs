@@ -115,9 +115,9 @@ use crate::{
     },
 };
 
-const PHASE_PREVOTE: &str = "prevote";
-const PHASE_PRECOMMIT: &str = "precommit";
-const PHASE_AVAILABLE: &str = "available";
+const PHASE_PREPARE: &str = "prepare";
+const PHASE_COMMIT: &str = "commit";
+const PHASE_NEW_VIEW: &str = "new_view";
 const PIPELINE_BUCKET_LABELS: [&str; 8] = ["1", "2", "4", "8", "16", "32", "64", "128"];
 
 #[cfg(feature = "telemetry")]
@@ -5077,7 +5077,7 @@ impl Telemetry {
     #[inline]
     fn da_gate_reason_label(reason: GateReason) -> (&'static str, u64) {
         match reason {
-            GateReason::MissingAvailabilityQc => ("missing_availability_qc", 1),
+            GateReason::MissingLocalData => ("missing_local_data", 1),
             GateReason::ManifestGuard { kind, .. } => {
                 let code = match kind {
                     crate::sumeragi::da::ManifestGateKind::Missing => 3,
@@ -5093,7 +5093,7 @@ impl Telemetry {
     #[inline]
     fn da_gate_satisfaction_label(satisfaction: GateSatisfaction) -> (&'static str, u64) {
         match satisfaction {
-            GateSatisfaction::AvailabilityQc => ("availability_qc", 1),
+            GateSatisfaction::MissingDataRecovered => ("missing_data_recovered", 1),
         }
     }
 
@@ -5395,81 +5395,39 @@ impl Telemetry {
 
     fn record_consensus_message(&self, msg: &BlockMessage, sent: bool) {
         match msg {
-            BlockMessage::PrevoteVote(_) => {
+            BlockMessage::CommitVote(vote) => {
+                let phase_label = match vote.phase {
+                    crate::sumeragi::consensus::Phase::Prepare => PHASE_PREPARE,
+                    crate::sumeragi::consensus::Phase::Commit => PHASE_COMMIT,
+                    crate::sumeragi::consensus::Phase::NewView => PHASE_NEW_VIEW,
+                };
                 if sent {
                     self.metrics
                         .sumeragi_votes_sent_total
-                        .with_label_values(&[PHASE_PREVOTE])
+                        .with_label_values(&[phase_label])
                         .inc();
                 } else {
                     self.metrics
                         .sumeragi_votes_received_total
-                        .with_label_values(&[PHASE_PREVOTE])
+                        .with_label_values(&[phase_label])
                         .inc();
                 }
             }
-            BlockMessage::PrecommitVote(_) => {
-                if sent {
-                    self.metrics
-                        .sumeragi_votes_sent_total
-                        .with_label_values(&[PHASE_PRECOMMIT])
-                        .inc();
-                } else {
-                    self.metrics
-                        .sumeragi_votes_received_total
-                        .with_label_values(&[PHASE_PRECOMMIT])
-                        .inc();
-                }
-            }
-            BlockMessage::AvailabilityVote(_) => {
-                if sent {
-                    self.metrics
-                        .sumeragi_votes_sent_total
-                        .with_label_values(&[PHASE_AVAILABLE])
-                        .inc();
-                } else {
-                    self.metrics
-                        .sumeragi_votes_received_total
-                        .with_label_values(&[PHASE_AVAILABLE])
-                        .inc();
-                }
-            }
-            BlockMessage::PrevoteQC(_) => {
+            BlockMessage::CommitCertificate(cert) => {
+                let phase_label = match cert.phase {
+                    crate::sumeragi::consensus::Phase::Prepare => PHASE_PREPARE,
+                    crate::sumeragi::consensus::Phase::Commit => PHASE_COMMIT,
+                    crate::sumeragi::consensus::Phase::NewView => PHASE_NEW_VIEW,
+                };
                 if sent {
                     self.metrics
                         .sumeragi_qc_sent_total
-                        .with_label_values(&[PHASE_PREVOTE])
+                        .with_label_values(&[phase_label])
                         .inc();
                 } else {
                     self.metrics
                         .sumeragi_qc_received_total
-                        .with_label_values(&[PHASE_PREVOTE])
-                        .inc();
-                }
-            }
-            BlockMessage::PrecommitQC(_) => {
-                if sent {
-                    self.metrics
-                        .sumeragi_qc_sent_total
-                        .with_label_values(&[PHASE_PRECOMMIT])
-                        .inc();
-                } else {
-                    self.metrics
-                        .sumeragi_qc_received_total
-                        .with_label_values(&[PHASE_PRECOMMIT])
-                        .inc();
-                }
-            }
-            BlockMessage::AvailabilityQC(_) => {
-                if sent {
-                    self.metrics
-                        .sumeragi_qc_sent_total
-                        .with_label_values(&[PHASE_AVAILABLE])
-                        .inc();
-                } else {
-                    self.metrics
-                        .sumeragi_qc_received_total
-                        .with_label_values(&[PHASE_AVAILABLE])
+                        .with_label_values(&[phase_label])
                         .inc();
                 }
             }
@@ -7700,7 +7658,10 @@ impl Telemetry {
                 .set(cert.epoch);
             self.metrics
                 .sumeragi_commit_certificate_signatures_total
-                .set(u64::try_from(cert.signatures.len()).unwrap_or(u64::MAX));
+                .set(
+                    u64::try_from(crate::sumeragi::consensus::qc_signer_count(cert))
+                        .unwrap_or(u64::MAX),
+                );
             self.metrics
                 .sumeragi_commit_certificate_validator_set_len
                 .set(u64::try_from(cert.validator_set.len()).unwrap_or(u64::MAX));
@@ -8411,6 +8372,7 @@ mod tests {
         ChainId, Level,
         account::AccountId,
         asset::AssetDefinitionId,
+        consensus::VALIDATOR_SET_HASH_VERSION_V1,
         events::data::space_directory::{SpaceDirectoryEvent, SpaceDirectoryManifestRevoked},
         isi::Log,
         nexus::{
@@ -8450,12 +8412,7 @@ mod tests {
         pipeline::access::AccessSetSource,
         prelude::World,
         query::store::LiveQueryStore,
-        sumeragi::{
-            consensus,
-            message::{BlockMessage, PrecommitQCMsg, PrevoteVoteMsg},
-            network_topology::Topology,
-            status,
-        },
+        sumeragi::{consensus, message::BlockMessage, network_topology::Topology, status},
         tx::AcceptedTransaction,
     };
 
@@ -8491,14 +8448,20 @@ mod tests {
         let validator_set_hash = HashOf::new(&validator_set);
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; 32]));
         let cert = CommitCertificate {
+            phase: consensus::Phase::Commit,
+            subject_block_hash: block_hash,
             height: 42,
-            block_hash,
             view: 7,
             epoch: 1,
+            mode_tag: consensus::PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
             validator_set_hash,
-            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: validator_set.clone(),
-            signatures: Vec::new(),
+            aggregate: consensus::CommitAggregate {
+                signers_bitmap: Vec::new(),
+                bls_aggregate_signature: Vec::new(),
+            },
         };
 
         telemetry.set_commit_certificate_summary(&cert);
@@ -9078,7 +9041,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(metrics.clone(), true);
 
-        telemetry.note_da_gate_block(GateReason::MissingAvailabilityQc);
+        telemetry.note_da_gate_block(GateReason::MissingLocalData);
         telemetry.set_da_gate_last_reason(Some(GateReason::ManifestGuard {
             lane: LaneId::new(1),
             epoch: 7,
@@ -9091,7 +9054,7 @@ mod tests {
         assert_eq!(
             metrics
                 .sumeragi_da_gate_block_total
-                .with_label_values(&["missing_availability_qc"])
+                .with_label_values(&["missing_local_data"])
                 .get(),
             1
         );
@@ -9107,12 +9070,12 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(metrics.clone(), true);
 
-        telemetry.note_da_gate_satisfaction(GateSatisfaction::AvailabilityQc);
+        telemetry.note_da_gate_satisfaction(GateSatisfaction::MissingDataRecovered);
 
         assert_eq!(
             metrics
                 .sumeragi_da_gate_satisfied_total
-                .with_label_values(&["availability_qc"])
+                .with_label_values(&["missing_data_recovered"])
                 .get(),
             1
         );
@@ -10553,30 +10516,30 @@ mod tests {
             Hash::prehashed([0x11; Hash::LENGTH]),
         );
         let vote = consensus::Vote {
-            phase: consensus::Phase::Prevote,
+            phase: consensus::Phase::Prepare,
             block_hash: vote_hash,
             height: 1,
             view: 1,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
-        let vote_msg = BlockMessage::PrevoteVote(PrevoteVoteMsg(vote.clone()));
+        let vote_msg = BlockMessage::CommitVote(vote.clone());
         telemetry.note_consensus_message_sent(&vote_msg);
         telemetry.note_consensus_message_received(&vote_msg);
 
         assert_eq!(
             metrics
                 .sumeragi_votes_sent_total
-                .with_label_values(&[super::PHASE_PREVOTE])
+                .with_label_values(&[super::PHASE_PREPARE])
                 .get(),
             1
         );
         assert_eq!(
             metrics
                 .sumeragi_votes_received_total
-                .with_label_values(&[super::PHASE_PREVOTE])
+                .with_label_values(&[super::PHASE_PREPARE])
                 .get(),
             1
         );
@@ -10584,32 +10547,40 @@ mod tests {
         let qc_hash = HashOf::<iroha_data_model::block::Header>::from_untyped_unchecked(
             Hash::prehashed([0x22; Hash::LENGTH]),
         );
-        let qc = consensus::Qc {
-            phase: consensus::Phase::Precommit,
+        let validator_set = vec![iroha_data_model::peer::PeerId::new(
+            KeyPair::random().public_key().clone(),
+        )];
+        let qc = consensus::CommitCertificate {
+            phase: consensus::Phase::Commit,
             subject_block_hash: qc_hash,
             height: 2,
             view: 3,
             epoch: 0,
-            aggregate: consensus::QcAggregate {
+            mode_tag: consensus::PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: consensus::CommitAggregate {
                 signers_bitmap: vec![0x01],
                 bls_aggregate_signature: Vec::new(),
             },
         };
-        let qc_msg = BlockMessage::PrecommitQC(PrecommitQCMsg(qc.clone()));
+        let qc_msg = BlockMessage::CommitCertificate(qc.clone());
         telemetry.note_consensus_message_sent(&qc_msg);
         telemetry.note_consensus_message_received(&qc_msg);
 
         assert_eq!(
             metrics
                 .sumeragi_qc_sent_total
-                .with_label_values(&[super::PHASE_PRECOMMIT])
+                .with_label_values(&[super::PHASE_COMMIT])
                 .get(),
             1
         );
         assert_eq!(
             metrics
                 .sumeragi_qc_received_total
-                .with_label_values(&[super::PHASE_PRECOMMIT])
+                .with_label_values(&[super::PHASE_COMMIT])
                 .get(),
             1
         );

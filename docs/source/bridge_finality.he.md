@@ -67,7 +67,7 @@ commit certificate, ולוודא ששדות ה-commitment תואמים ל-certif
 
 1. חשב מחדש `block_hash` מ-`block_header`; דחה על אי התאמה.
 2. בדוק ש-`commit_certificate.block_hash` תואם ל-`block_hash` המחושב מחדש;
-   דחה זוגות header/QC לא תואמים.
+   דחה זוגות header/commit certificate לא תואמים.
 3. בדוק ש-`chain_id` תואם לשרשרת Iroha הצפויה.
 4. חשב מחדש `validator_set_hash` מ-`commit_certificate.validator_set` ובדוק שהוא תואם
    ל-hash/גרסה הרשומים.

@@ -391,7 +391,7 @@ impl AccountAddress {
         let mut cursor = 1;
         let domain = DomainSelector::decode(bytes, &mut cursor)?;
         if matches!(domain, DomainSelector::Local12(_)) {
-            ensure_local_selector_boundary(bytes, cursor)?;
+            ensure_local_selector_boundary(bytes, cursor, header.class.controller_tag())?;
         }
         let controller = ControllerPayload::decode(bytes, &mut cursor)?;
         if cursor != bytes.len() {
@@ -664,6 +664,15 @@ enum AddressClass {
     MultiSig = 1,
 }
 
+impl AddressClass {
+    const fn controller_tag(self) -> u8 {
+        match self {
+            Self::SingleKey => CONTROLLER_SINGLE_KEY_TAG,
+            Self::MultiSig => CONTROLLER_MULTISIG_TAG,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum DomainSelector {
     Default,
@@ -754,10 +763,26 @@ impl DomainSelector {
 fn ensure_local_selector_boundary(
     bytes: &[u8],
     controller_cursor: usize,
+    expected_controller_tag: u8,
 ) -> Result<(), AccountAddressError> {
     match bytes.get(controller_cursor) {
         Some(&tag) if is_valid_controller_tag(tag) => Ok(()),
-        Some(_) => Ok(()),
+        Some(_) => {
+            if controller_cursor >= 4
+                && bytes.get(controller_cursor - 4) == Some(&expected_controller_tag)
+            {
+                let mut legacy_cursor = controller_cursor - 4;
+                if ControllerPayload::decode(bytes, &mut legacy_cursor).is_ok()
+                    && legacy_cursor == bytes.len()
+                {
+                    return Err(AccountAddressError::LocalDigestTooShort {
+                        expected: LOCAL_SELECTOR_DIGEST_LEN,
+                        found: LOCAL_SELECTOR_DIGEST_LEN - 4,
+                    });
+                }
+            }
+            Ok(())
+        }
         None => {
             let digest_start = controller_cursor.saturating_sub(LOCAL_SELECTOR_DIGEST_LEN);
             let found = bytes

@@ -10257,7 +10257,7 @@ impl State {
         let sidecar = if sidecar_snapshot.is_some() {
             crate::kura::RosterSidecar::new_v2(
                 commit_certificate.height,
-                commit_certificate.block_hash,
+                commit_certificate.subject_block_hash,
                 Some(commit_certificate.clone()),
                 Some(checkpoint.clone()),
                 sidecar_snapshot,
@@ -10265,7 +10265,7 @@ impl State {
         } else {
             crate::kura::RosterSidecar::new_v1(
                 commit_certificate.height,
-                commit_certificate.block_hash,
+                commit_certificate.subject_block_hash,
                 Some(commit_certificate.clone()),
                 Some(checkpoint.clone()),
             )
@@ -14295,35 +14295,46 @@ impl<'state> StateBlock<'state> {
         self.commit_topology.mutate_vec(|vec| *vec = next_topology);
 
         if !checkpoint_topology.is_empty() {
-            // Persist roster hints with canonical signature indices (not view-rotated).
-            let signatures =
-                self.canonicalize_commit_roster_signatures(block.as_ref(), &checkpoint_topology);
-            let validator_set_hash = HashOf::new(&checkpoint_topology);
             let block_height = block.as_ref().header().height().get();
             let block_hash = block.as_ref().hash();
             let stake_snapshot =
                 CommitStakeSnapshot::from_roster(self.world(), &checkpoint_topology);
-            let checkpoint = ValidatorSetCheckpoint::new(
-                block_height,
-                block_hash,
-                checkpoint_topology.clone(),
-                signatures.clone(),
-                iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-                None,
-            );
-            let commit_cert = CommitCertificate {
-                height: block_height,
-                block_hash,
-                view: u64::from(block.as_ref().header().view_change_index()),
-                epoch: 0,
-                validator_set_hash,
-                validator_set_hash_version:
-                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-                validator_set: checkpoint_topology,
-                signatures,
-            };
-            self.state_ref
-                .record_commit_roster(&commit_cert, &checkpoint, stake_snapshot);
+            if let Some(commit_cert) = crate::sumeragi::status::commit_certificate_history()
+                .into_iter()
+                .find(|cert| {
+                    cert.height == block_height
+                        && cert.subject_block_hash == block_hash
+                        && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
+                })
+            {
+                if commit_cert.validator_set != checkpoint_topology {
+                    warn!(
+                        height = block_height,
+                        block = %block_hash,
+                        expected = checkpoint_topology.len(),
+                        actual = commit_cert.validator_set.len(),
+                        "skipping commit roster record: validator set mismatch"
+                    );
+                } else {
+                    let checkpoint = ValidatorSetCheckpoint::new(
+                        block_height,
+                        block_hash,
+                        commit_cert.validator_set.clone(),
+                        commit_cert.aggregate.signers_bitmap.clone(),
+                        commit_cert.aggregate.bls_aggregate_signature.clone(),
+                        commit_cert.validator_set_hash_version,
+                        None,
+                    );
+                    self.state_ref
+                        .record_commit_roster(&commit_cert, &checkpoint, stake_snapshot);
+                }
+            } else {
+                warn!(
+                    height = block_height,
+                    block = %block_hash,
+                    "missing commit certificate; skipping commit roster record"
+                );
+            }
         }
 
         self.world.external_event_buf.mutate_vec(|events| {
@@ -14336,138 +14347,6 @@ impl<'state> StateBlock<'state> {
             );
         });
         self.world.external_event_buf.take_vec()
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn canonicalize_commit_roster_signatures(
-        &self,
-        block: &SignedBlock,
-        roster: &[PeerId],
-    ) -> Vec<iroha_data_model::block::BlockSignature> {
-        use crate::sumeragi::network_topology::Topology;
-
-        if roster.is_empty() {
-            return Vec::new();
-        }
-
-        let height = block.header().height().get();
-        let view = u64::from(block.header().view_change_index());
-
-        // Use the pre-block seed to avoid re-locking block-scoped state while canonicalizing.
-        let prf_seed = if height == self._curr_block.height().get() {
-            self.pre_block_npos_seed
-        } else {
-            crate::sumeragi::npos_seed_for_height_from_world(&self.world, &self.chain_id, height)
-        };
-
-        let canonical_topology = Topology::new(roster.to_vec());
-        let block_hash = block.hash();
-        let signatures_match = |topology: &Topology| -> bool {
-            for signature in block.signatures() {
-                let Ok(idx) = usize::try_from(signature.index()) else {
-                    return false;
-                };
-                let Some(peer) = topology.as_ref().get(idx) else {
-                    return false;
-                };
-                if signature
-                    .signature()
-                    .verify_hash(peer.public_key(), block_hash)
-                    .is_err()
-                {
-                    return false;
-                }
-            }
-            true
-        };
-
-        let mut candidates = Vec::new();
-        candidates.push(canonical_topology.clone());
-
-        if let Ok(view_usize) = usize::try_from(view) {
-            let mut perm = canonical_topology.clone();
-            perm.nth_rotation(view_usize);
-            if candidates.iter().all(|topo| topo != &perm) {
-                candidates.push(perm);
-            }
-        } else {
-            warn!(
-                view,
-                "skipping topology rotation for roster signatures: view exceeds usize"
-            );
-        }
-
-        let mut npos = canonical_topology.clone();
-        let leader = npos.leader_index_prf(prf_seed, height, view);
-        npos.rotate_preserve_view_to_front(leader);
-        if candidates.iter().all(|topo| topo != &npos) {
-            candidates.push(npos);
-        }
-
-        let signature_topology = candidates.iter().find(|topo| signatures_match(topo));
-        let mut mapped = BTreeSet::new();
-        let mut invalid = 0usize;
-
-        if let Some(signature_topology) = signature_topology {
-            for signature in block.signatures() {
-                let Ok(idx) = usize::try_from(signature.index()) else {
-                    invalid = invalid.saturating_add(1);
-                    continue;
-                };
-                let Some(peer) = signature_topology.as_ref().get(idx) else {
-                    invalid = invalid.saturating_add(1);
-                    continue;
-                };
-                let Some(canonical_idx) = canonical_topology.position(peer.public_key()) else {
-                    invalid = invalid.saturating_add(1);
-                    continue;
-                };
-                mapped.insert(iroha_data_model::block::BlockSignature::new(
-                    canonical_idx as u64,
-                    signature.signature().clone(),
-                ));
-            }
-        } else {
-            warn!(
-                height,
-                view,
-                roster_len = roster.len(),
-                "failed to align roster signatures; falling back to per-signature verification"
-            );
-            for signature in block.signatures() {
-                let mut matched = None;
-                for (idx, peer) in roster.iter().enumerate() {
-                    if signature
-                        .signature()
-                        .verify_hash(peer.public_key(), block_hash)
-                        .is_ok()
-                    {
-                        matched = Some(idx);
-                        break;
-                    }
-                }
-                if let Some(idx) = matched {
-                    mapped.insert(iroha_data_model::block::BlockSignature::new(
-                        idx as u64,
-                        signature.signature().clone(),
-                    ));
-                } else {
-                    invalid = invalid.saturating_add(1);
-                }
-            }
-        }
-
-        if invalid > 0 {
-            debug!(
-                height,
-                view,
-                invalid,
-                roster_len = roster.len(),
-                "skipped invalid block signatures while canonicalizing roster"
-            );
-        }
-
-        mapped.into_iter().collect()
     }
 
     fn apply_replayed_axt_envelopes(&mut self, envelopes: &[AxtEnvelopeRecord], current_slot: u64) {
@@ -15517,23 +15396,37 @@ mod replay_validation_tests {
         }
 
         let signatures: Vec<_> = signed_block.signatures().cloned().collect();
+        let mut signers_bitmap = vec![0u8; roster.len().div_ceil(8)];
+        for signature in &signatures {
+            let idx = usize::try_from(signature.index()).unwrap_or(usize::MAX);
+            if idx < roster.len() {
+                signers_bitmap[idx / 8] |= 1u8 << (idx % 8);
+            }
+        }
         let block_hash = signed_block.hash();
         let validator_set_hash = HashOf::new(&roster);
         let commit_cert = CommitCertificate {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
             height: 2,
-            block_hash,
             view: 0,
             epoch: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
             validator_set_hash,
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            signatures: signatures.clone(),
+            aggregate: crate::sumeragi::consensus::CommitAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: Vec::new(),
+            },
         };
         let checkpoint = ValidatorSetCheckpoint::new(
             2,
             block_hash,
             roster,
-            signatures,
+            signers_bitmap,
+            Vec::new(),
             VALIDATOR_SET_HASH_VERSION_V1,
             None,
         );
@@ -21932,19 +21825,26 @@ mod tests {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
         let roster = vec![peer];
         let commit_cert = CommitCertificate {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
             height: 2,
-            block_hash,
             view: 1,
             epoch: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            signatures: Vec::new(),
+            aggregate: crate::sumeragi::consensus::CommitAggregate {
+                signers_bitmap: vec![0b0000_0001],
+                bls_aggregate_signature: Vec::new(),
+            },
         };
         let checkpoint = ValidatorSetCheckpoint::new(
             2,
             block_hash,
             roster,
+            vec![0b0000_0001],
             Vec::new(),
             iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             None,
@@ -21997,8 +21897,7 @@ mod tests {
         let certs = status::commit_certificate_history();
         let cert = certs.first().expect("commit certificate recorded");
         assert_eq!(cert.height, committed.as_ref().header().height().get());
-        assert_eq!(cert.signatures.len(), 1);
-        assert_eq!(cert.signatures[0].index(), 1);
+        assert_eq!(cert.aggregate.signers_bitmap, vec![0b0000_0010]);
 
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -22041,24 +21940,31 @@ mod tests {
             0,
         );
         let block_hash = header.hash();
-        let signature = SignatureOf::from_hash(kp.private_key(), block_hash);
-        let block_sig = iroha_data_model::block::BlockSignature::new(0, signature);
         let roster = vec![peer];
+        let signers_bitmap = vec![0b0000_0001];
+        let bls_aggregate_signature = vec![0xAA; 96];
         let commit_cert = CommitCertificate {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
             height: 2,
-            block_hash,
             view: 1,
             epoch: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            signatures: vec![block_sig.clone()],
+            aggregate: crate::sumeragi::consensus::CommitAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: bls_aggregate_signature.clone(),
+            },
         };
         let checkpoint = ValidatorSetCheckpoint::new(
             2,
             block_hash,
             roster,
-            vec![block_sig],
+            signers_bitmap,
+            bls_aggregate_signature,
             VALIDATOR_SET_HASH_VERSION_V1,
             None,
         );
@@ -22068,7 +21974,7 @@ mod tests {
         let sidecar = kura
             .read_roster_metadata(commit_cert.height)
             .expect("roster sidecar persisted");
-        assert_eq!(sidecar.block_hash, commit_cert.block_hash);
+        assert_eq!(sidecar.block_hash, commit_cert.subject_block_hash);
         assert_eq!(
             sidecar.commit_certificate.as_ref(),
             Some(&commit_cert),

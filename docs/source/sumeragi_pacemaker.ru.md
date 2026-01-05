@@ -109,5 +109,5 @@ Telemetry:
 - Проверить config: `max(sumeragi_pacemaker_backoff_multiplier)`, `max(sumeragi_pacemaker_rtt_floor_multiplier)`, `max(sumeragi_pacemaker_max_backoff_ms)`
 
 ## Детерминизм и безопасность
-- Таймеры/backoff/jitter влияют только на то, когда узлы запускают предложения/смены view; они не влияют на валидность подписей или правила QC.
+- Таймеры/backoff/jitter влияют только на то, когда узлы запускают предложения/смены view; они не влияют на валидность подписей или правила commit certificate.
 - Любая случайность должна быть детерминированной для узла и (height, view). Избегайте time-of-day или RNG ОС в критических путях консенсуса.

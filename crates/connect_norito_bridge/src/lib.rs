@@ -72,6 +72,7 @@ use iroha_primitives::{json::Json, numeric::Numeric};
 use iroha_torii_shared::{connect as proto, connect_sdk};
 use ivm::{AccelerationConfig, BackendRuntimeStatus};
 use libc::{c_char, c_int, c_uchar, c_ulong, c_ulonglong, free, malloc};
+use norito::core::DecodeFromSlice;
 use norito::{decode_from_bytes, to_bytes};
 use rand::{RngCore, rng};
 use sha2::{Digest, Sha256, Sha512};
@@ -2351,7 +2352,17 @@ fn encode_envelope_framed(env: &proto::EnvelopeV1) -> Result<Vec<u8>, norito::co
 }
 
 fn decode_signed_transaction(bytes: &[u8]) -> Result<SignedTransaction, norito::core::Error> {
-    norito::decode_from_bytes::<SignedTransaction>(bytes)
+    match norito::decode_from_bytes::<SignedTransaction>(bytes) {
+        Ok(decoded) => Ok(decoded),
+        Err(norito::core::Error::InvalidMagic) => {
+            let (decoded, used) = SignedTransaction::decode_from_slice(bytes)?;
+            if used != bytes.len() {
+                return Err(norito::core::Error::LengthMismatch);
+            }
+            Ok(decoded)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 fn encode_asset_transaction<F>(
@@ -2399,7 +2410,10 @@ where
     }
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
     let signed = builder.sign(&private_key);
-    let signed_bytes = norito::codec::Encode::encode(&signed);
+    let (payload, flags) = norito::codec::encode_with_header_flags(&signed);
+    let signed_bytes =
+        norito::core::frame_bare_with_header_flags::<SignedTransaction>(&payload, flags)
+            .expect("frame signed transaction");
     let mut hash = [0u8; 32];
     hash.copy_from_slice(signed.hash().as_ref());
     (signed_bytes, hash)

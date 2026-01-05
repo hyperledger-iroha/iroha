@@ -160,7 +160,7 @@ settlement hash)، وعند فشل `verify_with_quorum` (اخطاء طول bitma
 
 - **المقاييس:**  
   `nexus_scheduler_lane_teu_*`, `nexus_scheduler_dataspace_*`, `sumeragi_rbc_da_reschedule_total`,
-  `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_availability_qc"}`,
+  `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_local_data"}`,
   `lane_relay_invalid_total{error}`, `lane_relay_emergency_override_total{outcome}` و
   `nexus_audit_outcome_total` موجودة في `crates/iroha_telemetry/src/metrics.rs`. يجب على المشغلين
   التنبيه عند ارتفاع missing-availability (عدادات reschedule قديمة ويجب ان تبقى صفرا)، ويجب ان
@@ -173,7 +173,7 @@ settlement hash)، وعند فشل `verify_with_quorum` (اخطاء طول bitma
   يعرض `dashboards/grafana/nexus_lanes.json` تراكم lane واشارات توفر DA ومجاميع settlement المذكورة
   اعلاه. يجب ان ترسل التنبيهات عندما:
   - `nexus_scheduler_dataspace_age_slots` يتجاوز السياسة.
-  - `sumeragi_da_gate_block_total{reason="missing_availability_qc"}` يرتفع باستمرار.
+  - `sumeragi_da_gate_block_total{reason="missing_local_data"}` يرتفع باستمرار.
   - `total_xor_variance_micro` ينحرف عن المعدلات التاريخية.
 - **حزم الادلة:**  
   يجب على كل اصدار ارفاق صادرات `LaneBlockCommitment` ولقطات Grafana/Alertmanager وmanifests لـ DA
