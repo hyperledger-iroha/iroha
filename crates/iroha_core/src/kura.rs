@@ -1322,12 +1322,11 @@ impl Kura {
                 "kura writer acquired block_store for batch"
             );
             let end_height = start_height + blocks_to_be_written.len();
-            if let Err(error) = block_store_guard.write_index_count(start_height as u64) {
-                error!(?error, "Failed to write index count");
-                panic!("Kura has encountered a fatal IO error.");
-            }
-
-            if let Err(error) = block_store_guard.append_block_batch(&blocks_to_be_written) {
+            let start_height_u64 =
+                u64::try_from(start_height).expect("start height fits in u64");
+            if let Err(error) =
+                block_store_guard.append_block_batch_at(start_height_u64, &blocks_to_be_written)
+            {
                 error!(?error, "Failed to store block batch");
                 panic!("Kura has encountered a fatal IO error.");
             }
@@ -4479,14 +4478,22 @@ impl BlockStore {
     ///
     /// # Errors
     /// Propagates I/O and encoding errors.
-    #[allow(clippy::too_many_lines)]
     pub fn append_block_batch(&mut self, blocks: &[Arc<SignedBlock>]) -> Result<()> {
+        let start_height = self.read_index_count()?;
+        self.append_block_batch_at(start_height, blocks)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn append_block_batch_at(
+        &mut self,
+        start_height: u64,
+        blocks: &[Arc<SignedBlock>],
+    ) -> Result<()> {
         if blocks.is_empty() {
             return Ok(());
         }
 
         self.invalidate_data_mmap();
-        let start_height = self.read_index_count()?;
         debug!(
             start_height,
             batch_len = blocks.len(),
@@ -6181,6 +6188,51 @@ mod tests {
             let hash = block_store.read_block_hashes(idx as u64, 1).unwrap();
             assert_eq!(hash, vec![block.hash()]);
         }
+    }
+
+    #[test]
+    fn append_block_batch_at_rewrites_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut block_store = BlockStore::new(dir.path());
+        block_store.create_files_if_they_do_not_exist().unwrap();
+
+        let leader = KeyPair::random();
+        let block1: Arc<SignedBlock> =
+            Arc::new(ValidBlock::new_dummy(leader.private_key()).into());
+        let block2: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                header.set_prev_block_hash(Some(block1.hash()));
+            })
+            .into(),
+        );
+        block_store
+            .append_block_batch(&[block1.clone(), block2.clone()])
+            .unwrap();
+
+        let replacement: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                header.set_prev_block_hash(Some(block1.hash()));
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into(),
+        );
+        assert_ne!(replacement.hash(), block2.hash(), "replacement must differ");
+
+        block_store
+            .append_block_batch_at(1, &[replacement.clone()])
+            .unwrap();
+
+        assert_eq!(block_store.read_index_count().unwrap(), 2);
+        assert_eq!(block_store.read_hashes_count().unwrap(), 2);
+        let hash = block_store.read_block_hashes(1, 1).unwrap();
+        assert_eq!(hash, vec![replacement.hash()]);
+
+        let BlockIndex { start, length } = block_store.read_block_index(1).unwrap();
+        let len: usize = length.try_into().expect("block length fits in usize");
+        let mut bytes = vec![0_u8; len];
+        block_store.read_block_data(start, &mut bytes).unwrap();
+        let decoded = decode_framed_signed_block(&bytes).expect("decode replaced block");
+        assert_eq!(decoded.hash(), replacement.hash());
     }
 
     #[test]

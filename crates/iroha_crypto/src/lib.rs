@@ -488,10 +488,13 @@ impl PublicKeyFull {
             #[cfg(feature = "ml-dsa")]
             Algorithm::MlDsa => {
                 use pqcrypto_dilithium::dilithium3 as dilithium;
+                use pqcrypto_traits::sign::PublicKey as _;
                 if payload.len() != dilithium::public_key_bytes() {
                     return Err(ParseError("invalid ML-DSA public key length".to_string()));
                 }
-                Ok(PublicKeyFull::MlDsa(payload.to_vec()))
+                let pk = dilithium::PublicKey::from_bytes(payload)
+                    .map_err(|_| ParseError("invalid ML-DSA public key".to_string()))?;
+                Ok(PublicKeyFull::MlDsa(pk.as_bytes().to_vec()))
             }
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA

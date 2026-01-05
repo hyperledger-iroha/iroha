@@ -1063,32 +1063,33 @@ fn analyze_statement(
                         Expr::Number(n) if *n >= 0 => Some(*n as usize),
                         _ => None,
                     };
-                    if literal_bound.is_none() {
-                        return Err(SemanticError{ message: "E_UNBOUNDED_ITERATION: `.take(n)` requires a positive integer literal for now".into() });
+                    if let Some(bound) = literal_bound {
+                        if bound > 1 && !map_expr_is_state(&args[0]) {
+                            return Err(SemanticError {
+                                message: "E_MAP_BOUNDS: in-memory Map iteration supports at most 1 element; reduce the bound or move the map into `state`.".into(),
+                            });
+                        }
+                        // E_ITER_MUTATION: forbid structural modifications to the iterated map inside the loop body
+                        if let Expr::Ident(map_name) = &args[0]
+                            && block_mutates_map(&body_t, map_name)
+                        {
+                            return Err(SemanticError { message: "E_ITER_MUTATION: structural modifications to the iterated map are forbidden during iteration".into() });
+                        }
+                        return Ok(vec![TypedStatement::ForEachMap {
+                            key: key.clone(),
+                            value: value.clone(),
+                            map: base_map,
+                            body: body_t,
+                            start: 0,
+                            bound: Some(bound),
+                            #[cfg(feature = "kotodama_dynamic_bounds")]
+                            dyn_count: None,
+                            #[cfg(feature = "kotodama_dynamic_bounds")]
+                            dyn_start: None,
+                        }]);
                     }
-                    if literal_bound.unwrap() > 1 && !map_expr_is_state(&args[0]) {
-                        return Err(SemanticError {
-                            message: "E_MAP_BOUNDS: in-memory Map iteration supports at most 1 element; reduce the bound or move the map into `state`.".into(),
-                        });
-                    }
-                    // E_ITER_MUTATION: forbid structural modifications to the iterated map inside the loop body
-                    if let Expr::Ident(map_name) = &args[0]
-                        && block_mutates_map(&body_t, map_name)
-                    {
-                        return Err(SemanticError { message: "E_ITER_MUTATION: structural modifications to the iterated map are forbidden during iteration".into() });
-                    }
-                    return Ok(vec![TypedStatement::ForEachMap {
-                        key: key.clone(),
-                        value: value.clone(),
-                        map: base_map,
-                        body: body_t,
-                        start: 0,
-                        bound: literal_bound,
-                        #[cfg(feature = "kotodama_dynamic_bounds")]
-                        dyn_count: None,
-                        #[cfg(feature = "kotodama_dynamic_bounds")]
-                        dyn_start: None,
-                    }]);
+                    #[cfg(not(feature = "kotodama_dynamic_bounds"))]
+                    return Err(SemanticError{ message: "E_UNBOUNDED_ITERATION: `.take(n)` requires a positive integer literal for now".into() });
                 }
                 #[cfg(feature = "kotodama_dynamic_bounds")]
                 if name == "take" && args.len() == 2 {
@@ -1190,49 +1191,49 @@ fn analyze_statement(
                     let body_t =
                         analyze_block(body, &mut local_vars, expected_ret, loop_depth + 1)?;
                     let start = match &args[1] {
-                        Expr::Number(n) if *n >= 0 => *n as usize,
-                        _ => {
-                            return Err(SemanticError{ message: "E_UNBOUNDED_ITERATION: `.range(start, end)` requires non-negative integer literals for now".into() });
-                        }
+                        Expr::Number(n) if *n >= 0 => Some(*n as usize),
+                        _ => None,
                     };
                     // Interpret second numeric as end; compute n = end - start
                     let end = match &args[2] {
-                        Expr::Number(n) if *n >= 0 => *n as usize,
-                        _ => {
-                            return Err(SemanticError{ message: "E_UNBOUNDED_ITERATION: `.range(start, end)` requires non-negative integer literals for now".into() });
-                        }
+                        Expr::Number(n) if *n >= 0 => Some(*n as usize),
+                        _ => None,
                     };
-                    if end < start {
-                        return Err(SemanticError {
-                            message:
-                                "E_UNBOUNDED_ITERATION: `.range(start, end)` requires end >= start"
+                    if let (Some(start), Some(end)) = (start, end) {
+                        if end < start {
+                            return Err(SemanticError {
+                                message:
+                                    "E_UNBOUNDED_ITERATION: `.range(start, end)` requires end >= start"
+                                        .into(),
+                            });
+                        }
+                        if !map_expr_is_state(&args[0]) && (start != 0 || (end - start) > 1) {
+                            return Err(SemanticError {
+                                message: "E_MAP_BOUNDS: in-memory Map iteration supports at most 1 element starting at index 0; reduce the range or move the map into `state`."
                                     .into(),
-                        });
+                            });
+                        }
+                        let static_bound = Some(end - start);
+                        if let Expr::Ident(map_name) = &args[0]
+                            && block_mutates_map(&body_t, map_name)
+                        {
+                            return Err(SemanticError { message: "E_ITER_MUTATION: structural modifications to the iterated map are forbidden during iteration".into() });
+                        }
+                        return Ok(vec![TypedStatement::ForEachMap {
+                            key: key.clone(),
+                            value: value.clone(),
+                            map: base_map,
+                            body: body_t,
+                            start,
+                            bound: static_bound,
+                            #[cfg(feature = "kotodama_dynamic_bounds")]
+                            dyn_count: None,
+                            #[cfg(feature = "kotodama_dynamic_bounds")]
+                            dyn_start: None,
+                        }]);
                     }
-                    if !map_expr_is_state(&args[0]) && (start != 0 || (end - start) > 1) {
-                        return Err(SemanticError {
-                            message: "E_MAP_BOUNDS: in-memory Map iteration supports at most 1 element starting at index 0; reduce the range or move the map into `state`."
-                                .into(),
-                        });
-                    }
-                    let static_bound = Some(end - start);
-                    if let Expr::Ident(map_name) = &args[0]
-                        && block_mutates_map(&body_t, map_name)
-                    {
-                        return Err(SemanticError { message: "E_ITER_MUTATION: structural modifications to the iterated map are forbidden during iteration".into() });
-                    }
-                    return Ok(vec![TypedStatement::ForEachMap {
-                        key: key.clone(),
-                        value: value.clone(),
-                        map: base_map,
-                        body: body_t,
-                        start,
-                        bound: static_bound,
-                        #[cfg(feature = "kotodama_dynamic_bounds")]
-                        dyn_count: None,
-                        #[cfg(feature = "kotodama_dynamic_bounds")]
-                        dyn_start: None,
-                    }]);
+                    #[cfg(not(feature = "kotodama_dynamic_bounds"))]
+                    return Err(SemanticError{ message: "E_UNBOUNDED_ITERATION: `.range(start, end)` requires non-negative integer literals for now".into() });
                 }
                 #[cfg(feature = "kotodama_dynamic_bounds")]
                 if name == "range" && args.len() == 3 {
@@ -4378,6 +4379,36 @@ mod tests {
             err.message,
             "durable state map iteration supports Map<int, *> keys only"
         );
+    }
+
+    #[cfg(feature = "kotodama_dynamic_bounds")]
+    #[test]
+    fn dynamic_map_take_accepts_non_literal_bounds() {
+        let program = parse(
+            "state M: Map<int, int>; \
+             fn main(n: int) { \
+                 for (k, v) in M.take(n) { \
+                     let _x = v; \
+                 } \
+             }",
+        )
+        .expect("parse dynamic take");
+        analyze(&program).expect("dynamic take should be accepted with feature");
+    }
+
+    #[cfg(feature = "kotodama_dynamic_bounds")]
+    #[test]
+    fn dynamic_map_range_accepts_non_literal_bounds() {
+        let program = parse(
+            "state M: Map<int, int>; \
+             fn main(start: int, end: int) { \
+                 for (k, v) in M.range(start, end) { \
+                     let _x = v; \
+                 } \
+             }",
+        )
+        .expect("parse dynamic range");
+        analyze(&program).expect("dynamic range should be accepted with feature");
     }
 
     #[test]

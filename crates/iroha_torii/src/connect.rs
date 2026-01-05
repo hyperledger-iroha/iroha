@@ -1269,15 +1269,15 @@ mod tests {
         let bus = Bus::from_config(&cfg);
         let ip: IpAddr = "127.0.0.1".parse().unwrap();
         // Two sessions should be allowed
-        assert!(bus.pre_ws_handshake(ip).await.is_ok());
-        bus.session_opened(ip).await;
-        assert!(bus.pre_ws_handshake(ip).await.is_ok());
-        bus.session_opened(ip).await;
+        let mut first = bus.pre_ws_handshake(ip).await.expect("first ok");
+        let mut second = bus.pre_ws_handshake(ip).await.expect("second ok");
         // Third should be rejected by per-ip cap
         assert!(bus.pre_ws_handshake(ip).await.is_err());
         // Close one and attempt again
-        bus.session_closed(ip).await;
-        assert!(bus.pre_ws_handshake(ip).await.is_ok());
+        first.release().await;
+        let mut third = bus.pre_ws_handshake(ip).await.expect("third ok after release");
+        second.release().await;
+        third.release().await;
     }
 
     #[tokio::test]
@@ -1348,21 +1348,21 @@ mod tests {
         let bus_clone = bus_primary.clone();
         let ip: IpAddr = "192.0.2.1".parse().unwrap();
 
-        bus_primary.pre_ws_handshake(ip).await.unwrap();
-        bus_primary.session_opened(ip).await;
+        let mut permit = bus_primary.pre_ws_handshake(ip).await.unwrap();
 
         let status_from_clone = bus_clone.status().await;
         assert_eq!(status_from_clone.sessions_total, 1);
 
         assert!(bus_clone.pre_ws_handshake(ip).await.is_err());
 
-        bus_clone.session_closed(ip).await;
+        permit.release().await;
 
         let status_after_close = bus_primary.status().await;
         assert_eq!(status_after_close.sessions_total, 0);
 
         // Once closed, the clone should permit another handshake.
-        assert!(bus_clone.pre_ws_handshake(ip).await.is_ok());
+        let mut reopened = bus_clone.pre_ws_handshake(ip).await.expect("reopen ok");
+        reopened.release().await;
     }
 
     #[tokio::test]
@@ -1419,13 +1419,14 @@ mod tests {
         };
         let bus = Bus::from_config(&cfg);
         let ip: IpAddr = "203.0.113.99".parse().unwrap();
-        assert!(bus.pre_ws_handshake(ip).await.is_ok());
+        let mut permit = bus.pre_ws_handshake(ip).await.expect("handshake ok");
 
         let expiry = Instant::now() + bus.handshake_bucket_ttl() + Duration::from_secs(1);
         let removed = bus.prune_handshake_buckets(expiry).await;
         assert_eq!(removed, 1);
         let removed_again = bus.prune_handshake_buckets(expiry).await;
         assert_eq!(removed_again, 0);
+        permit.release().await;
     }
 
     #[tokio::test]
@@ -1450,7 +1451,8 @@ mod tests {
         let bus = Bus::from_config(&cfg);
         let ip: IpAddr = "203.0.113.10".parse().unwrap();
         for _ in 0..4 {
-            assert!(bus.pre_ws_handshake(ip).await.is_ok());
+            let mut permit = bus.pre_ws_handshake(ip).await.expect("handshake ok");
+            permit.release().await;
         }
     }
 
@@ -1475,11 +1477,12 @@ mod tests {
         };
         let bus = Bus::from_config(&cfg);
         let ip: IpAddr = "198.51.100.1".parse().unwrap();
-        assert!(bus.pre_ws_handshake(ip).await.is_ok());
-        bus.session_opened(ip).await;
-        assert!(bus.pre_ws_handshake(ip).await.is_ok());
-        bus.session_opened(ip).await;
-        assert!(bus.pre_ws_handshake(ip).await.is_ok());
+        let mut first = bus.pre_ws_handshake(ip).await.expect("first ok");
+        let mut second = bus.pre_ws_handshake(ip).await.expect("second ok");
+        let mut third = bus.pre_ws_handshake(ip).await.expect("third ok");
+        first.release().await;
+        second.release().await;
+        third.release().await;
     }
 
     #[tokio::test]
@@ -1504,10 +1507,12 @@ mod tests {
         let bus = Bus::from_config(&cfg);
         let ip: IpAddr = "10.0.0.1".parse().unwrap();
         // Two immediate handshakes allowed (burst = 2)
-        assert!(bus.pre_ws_handshake(ip).await.is_ok());
-        assert!(bus.pre_ws_handshake(ip).await.is_ok());
+        let mut first = bus.pre_ws_handshake(ip).await.expect("first ok");
+        let mut second = bus.pre_ws_handshake(ip).await.expect("second ok");
         // Third should be rate-limited
         assert!(bus.pre_ws_handshake(ip).await.is_err());
+        first.release().await;
+        second.release().await;
     }
 
     #[tokio::test]
