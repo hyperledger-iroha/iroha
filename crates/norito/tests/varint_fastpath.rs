@@ -3,6 +3,7 @@ use norito::core::{read_len_from_slice, write_len_to_vec};
 
 #[test]
 fn fixed_width_roundtrip() {
+    norito::core::reset_decode_state();
     let values = [
         0u64,
         1,
@@ -22,4 +23,5 @@ fn fixed_width_roundtrip() {
         assert_eq!(out as u64, v);
         assert_eq!(used, 8, "decoder must always consume 8 bytes");
     }
+    norito::core::reset_decode_state();
 }

@@ -1,3 +1,5 @@
+//! Control-flow opcode semantics tests.
+
 use ivm::{IVM, ProgramMetadata, VMError, encoding, instruction};
 
 const CLASSIC_ARITH_IMM: u8 = 0x13;
@@ -24,15 +26,15 @@ fn program_with(instrs: &[u32]) -> Vec<u8> {
 }
 
 #[test]
-fn jalr_alignment_evenizes_target() {
-    // x1 (RA) <- pc+4; pc <- (x2 + imm) & !1
-    // Setup: load x2 with odd address by using ADDI (classic compatibility encoding)
+fn jalr_alignment_word_aligns_target() {
+    // x1 (RA) <- pc+4; pc <- (x2 + imm) & !3
+    // Setup: load x2 with an odd address so we hit the 4-byte alignment mask.
     let mut code: Vec<u8> = Vec::new();
-    // addi x2, x0, 3
-    let addi = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 2, 0, 3);
+    // addi x2, x0, 9
+    let addi = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 2, 0, 9);
     code.extend_from_slice(&addi.to_le_bytes());
-    // jalr x3, x2, 5  => target = 3 + 5 = 8 -> evenized to 8
-    let jalr = encoding::wide::encode_ri(instruction::wide::control::JALR, 3, 2, 5);
+    // jalr x3, x2, 1  => target = 9 + 1 = 10 -> word-aligned to 8
+    let jalr = encoding::wide::encode_ri(instruction::wide::control::JALR, 3, 2, 1);
     code.extend_from_slice(&jalr.to_le_bytes());
     // halt
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
@@ -42,7 +44,7 @@ fn jalr_alignment_evenizes_target() {
     vm.load_program(&prog).unwrap();
     let res = vm.run();
     assert!(res.is_ok());
-    // After JALR: target is evenized to 8, then HALT executes and advances PC by 4 → 12
+    // After JALR: target is word-aligned to 8, then HALT executes and advances PC by 4 → 12
     assert_eq!(vm.pc(), 12);
     // RA saved is implementation: return_addr = old_pc + 4 (here, pc after addi=4, so RA=8)
     assert_eq!(vm.register(3), 8);

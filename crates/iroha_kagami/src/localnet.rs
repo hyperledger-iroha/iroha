@@ -24,7 +24,7 @@ use iroha_version::BuildLine;
 
 use crate::{
     Outcome, RunArgs,
-    genesis::{build_line_from_env, generate_default},
+    genesis::{build_line_from_env, generate_default, validate_consensus_mode_for_line},
     tui,
 };
 
@@ -63,7 +63,7 @@ pub struct LocalnetOptions {
     pub consensus_mode: SumeragiConsensusMode,
     /// Optional staged consensus mode to activate at `mode_activation_height`.
     pub next_consensus_mode: Option<SumeragiConsensusMode>,
-    /// Optional activation height for switching to `consensus_mode`.
+    /// Optional activation height for switching to `next_consensus_mode`.
     pub mode_activation_height: Option<u64>,
 }
 
@@ -253,18 +253,30 @@ pub struct Args {
     #[arg(long, value_name = "COUNT")]
     redundant_send_r: Option<u8>,
     /// Consensus mode to emit in genesis/configs.
-    #[arg(long, default_value = "permissioned", value_enum, value_name = "MODE")]
-    consensus_mode: ConsensusModeArg,
+    /// Defaults to `npos` on Iroha3 and `permissioned` on Iroha2.
+    #[arg(long, value_enum, value_name = "MODE")]
+    consensus_mode: Option<ConsensusModeArg>,
     /// Optional staged consensus mode to activate at `mode_activation_height`.
     #[arg(long, value_enum, value_name = "MODE")]
     next_consensus_mode: Option<ConsensusModeArg>,
-    /// Optional activation height for switching to `consensus_mode`.
+    /// Optional activation height for switching to `next_consensus_mode`.
     #[arg(long, value_name = "HEIGHT")]
     mode_activation_height: Option<u64>,
 }
 
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
+        let build_line = build_line_from_env();
+        let consensus_mode = self.consensus_mode.map_or_else(
+            || {
+                if build_line.is_iroha3() {
+                    SumeragiConsensusMode::Npos
+                } else {
+                    SumeragiConsensusMode::Permissioned
+                }
+            },
+            SumeragiConsensusMode::from,
+        );
         let opts = LocalnetOptions {
             peers: self.peers,
             seed: self.seed,
@@ -283,7 +295,7 @@ impl<T: Write> RunArgs<T> for Args {
             } else {
                 vec![]
             },
-            consensus_mode: self.consensus_mode.into(),
+            consensus_mode,
             next_consensus_mode: self.next_consensus_mode.map(Into::into),
             mode_activation_height: self.mode_activation_height,
             block_time_ms: self.block_time_ms,
@@ -324,7 +336,10 @@ pub fn generate_localnet<T: Write>(opts: &LocalnetOptions, writer: &mut BufWrite
     generate_localnet_with_line(opts, build_line, writer)
 }
 
-fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
+fn validate_localnet_options(
+    opts: &LocalnetOptions,
+    build_line: BuildLine,
+) -> Result<ResolvedHosts> {
     match (opts.next_consensus_mode, opts.mode_activation_height) {
         (Some(_), None) => {
             return Err(eyre!(
@@ -357,6 +372,7 @@ fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
             "`--mode-activation-height` must be greater than zero"
         ));
     }
+    validate_consensus_mode_for_line(build_line, opts.consensus_mode, opts.next_consensus_mode)?;
 
     let bind = CanonicalHost::parse(&opts.bind_host, "--bind-host")?;
     let public = CanonicalHost::parse(&opts.public_host, "--public-host")?;
@@ -370,7 +386,7 @@ fn generate_localnet_with_line<T: Write>(
     build_line: BuildLine,
     writer: &mut BufWriter<T>,
 ) -> Outcome {
-    let hosts = validate_localnet_options(opts)?;
+    let hosts = validate_localnet_options(opts, build_line)?;
     validate_port_ranges(opts.peers, opts.base_api_port, opts.base_p2p_port)?;
     fs::create_dir_all(&opts.out_dir).wrap_err("failed to create output directory for localnet")?;
     let out_dir = fs::canonicalize(&opts.out_dir).wrap_err_with(|| {
@@ -410,7 +426,9 @@ fn generate_localnet_with_line<T: Write>(
     genesis = append_peer_pop(genesis, &peers);
     let genesis_json_path = out_dir.join("genesis.json");
     let genesis_signed_path = out_dir.join("genesis.signed.nrt");
-    let genesis = genesis.with_consensus_meta();
+    let genesis = genesis
+        .with_consensus_mode(opts.consensus_mode)
+        .with_consensus_meta();
     write_genesis(
         &genesis,
         genesis_public_key.clone(),
@@ -1212,7 +1230,7 @@ mod tests {
             block_time_ms: None,
             commit_time_ms: None,
             redundant_send_r: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
+            consensus_mode: SumeragiConsensusMode::Npos,
             next_consensus_mode: None,
             mode_activation_height: None,
         };
@@ -1244,7 +1262,7 @@ mod tests {
             block_time_ms: None,
             commit_time_ms: None,
             redundant_send_r: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
+            consensus_mode: SumeragiConsensusMode::Npos,
             next_consensus_mode: None,
             mode_activation_height: None,
         };
@@ -1272,7 +1290,7 @@ mod tests {
             block_time_ms: None,
             commit_time_ms: None,
             redundant_send_r: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
+            consensus_mode: SumeragiConsensusMode::Npos,
             next_consensus_mode: None,
             mode_activation_height: None,
         };
@@ -1336,7 +1354,7 @@ mod tests {
             block_time_ms: None,
             commit_time_ms: None,
             redundant_send_r: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
+            consensus_mode: SumeragiConsensusMode::Npos,
             next_consensus_mode: None,
             mode_activation_height: None,
         };
@@ -1392,7 +1410,7 @@ mod tests {
             block_time_ms: None,
             commit_time_ms: None,
             redundant_send_r: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
+            consensus_mode: SumeragiConsensusMode::Npos,
             next_consensus_mode: None,
             mode_activation_height: None,
         };
@@ -1507,7 +1525,7 @@ mod tests {
             block_time_ms: None,
             commit_time_ms: None,
             redundant_send_r: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
+            consensus_mode: SumeragiConsensusMode::Npos,
             next_consensus_mode: None,
             mode_activation_height: None,
         };
@@ -1564,7 +1582,7 @@ mod tests {
             block_time_ms: None,
             commit_time_ms: None,
             redundant_send_r: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
+            consensus_mode: SumeragiConsensusMode::Npos,
             next_consensus_mode: None,
             mode_activation_height: None,
         };
@@ -1601,7 +1619,7 @@ mod tests {
             block_time_ms: None,
             commit_time_ms: None,
             redundant_send_r: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
+            consensus_mode: SumeragiConsensusMode::Npos,
             next_consensus_mode: None,
             mode_activation_height: None,
         };
@@ -1635,7 +1653,7 @@ mod tests {
             block_time_ms: Some(1_000),
             commit_time_ms: None,
             redundant_send_r: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
+            consensus_mode: SumeragiConsensusMode::Npos,
             next_consensus_mode: None,
             mode_activation_height: None,
         };
@@ -1668,12 +1686,12 @@ mod tests {
             block_time_ms: None,
             commit_time_ms: None,
             redundant_send_r: None,
-            consensus_mode: SumeragiConsensusMode::Npos,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
             next_consensus_mode: Some(SumeragiConsensusMode::Npos),
             mode_activation_height: Some(5),
         };
 
-        generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
+        generate_localnet_with_line(&opts, BuildLine::Iroha2, &mut BufWriter::new(Vec::new()))
             .expect("generate npos localnet files");
 
         let genesis_path = temp.path().join("genesis.json");
@@ -1704,7 +1722,54 @@ mod tests {
                 .and_then(toml::Value::as_table)
                 .and_then(|s| s.get("consensus_mode"))
                 .and_then(toml::Value::as_str),
-            Some("npos")
+            Some("permissioned")
+        );
+    }
+
+    #[test]
+    fn staged_cutover_preserves_permissioned_manifest_mode() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let opts = LocalnetOptions {
+            peers: NonZeroU16::new(3).expect("non-zero"),
+            seed: Some("localnet-staged-cutover".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 28080,
+            base_p2p_port: 27337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            next_consensus_mode: Some(SumeragiConsensusMode::Npos),
+            mode_activation_height: Some(7),
+        };
+
+        generate_localnet_with_line(&opts, BuildLine::Iroha2, &mut BufWriter::new(Vec::new()))
+            .expect("generate staged localnet");
+
+        let genesis_path = temp.path().join("genesis.json");
+        let genesis_contents = fs::read_to_string(&genesis_path).expect("read genesis");
+        let manifest: iroha_genesis::RawGenesisTransaction =
+            norito::json::from_str(&genesis_contents).expect("parse genesis manifest");
+
+        assert_eq!(
+            manifest.consensus_mode(),
+            Some(SumeragiConsensusMode::Permissioned),
+            "manifest consensus_mode should reflect the current mode"
+        );
+        let params = manifest.effective_parameters();
+        assert_eq!(
+            params.sumeragi().next_mode(),
+            Some(SumeragiConsensusMode::Npos),
+            "manifest should preserve staged next_mode"
+        );
+        assert_eq!(
+            params.sumeragi().mode_activation_height(),
+            Some(7),
+            "manifest should preserve mode_activation_height"
         );
     }
 
@@ -1784,6 +1849,11 @@ mod tests {
     fn build_line_env_controls_da_rbc_in_generated_artifacts() {
         fn assert_for_line(build_line: BuildLine, expected: bool) {
             let temp = tempfile::tempdir().expect("tmp dir");
+            let consensus_mode = if build_line.is_iroha3() {
+                SumeragiConsensusMode::Npos
+            } else {
+                SumeragiConsensusMode::Permissioned
+            };
             let opts = LocalnetOptions {
                 peers: NonZeroU16::new(2).expect("non-zero"),
                 seed: Some(format!("da-rbc-{build_line:?}")),
@@ -1797,7 +1867,7 @@ mod tests {
                 block_time_ms: None,
                 commit_time_ms: None,
                 redundant_send_r: None,
-                consensus_mode: SumeragiConsensusMode::Permissioned,
+                consensus_mode,
                 next_consensus_mode: None,
                 mode_activation_height: None,
             };
@@ -1875,7 +1945,7 @@ mod tests {
             block_time_ms: None,
             commit_time_ms: None,
             redundant_send_r: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
+            consensus_mode: SumeragiConsensusMode::Npos,
             next_consensus_mode: None,
             mode_activation_height: None,
         };
@@ -1902,7 +1972,7 @@ mod tests {
             block_time_ms: None,
             commit_time_ms: None,
             redundant_send_r: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
+            consensus_mode: SumeragiConsensusMode::Npos,
             next_consensus_mode: None,
             mode_activation_height: None,
         };
@@ -1929,7 +1999,7 @@ mod tests {
             block_time_ms: None,
             commit_time_ms: None,
             redundant_send_r: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
+            consensus_mode: SumeragiConsensusMode::Npos,
             next_consensus_mode: None,
             mode_activation_height: None,
         };
@@ -1960,9 +2030,64 @@ mod tests {
             next_consensus_mode: None,
             mode_activation_height: Some(1),
         };
-        let err = validate_localnet_options(&opts).expect_err("missing next mode should fail");
+        let err = validate_localnet_options(&opts, BuildLine::Iroha2)
+            .expect_err("missing next mode should fail");
         assert!(
             err.to_string().contains("--next-consensus-mode"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_localnet_options_rejects_permissioned_on_iroha3() {
+        let opts = LocalnetOptions {
+            peers: NonZeroU16::new(1).unwrap(),
+            seed: None,
+            bind_host: DEFAULT_BIND_HOST.to_string(),
+            public_host: DEFAULT_PUBLIC_HOST.to_string(),
+            base_api_port: 28080,
+            base_p2p_port: 28337,
+            out_dir: PathBuf::from("unused"),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+        let err = validate_localnet_options(&opts, BuildLine::Iroha3)
+            .expect_err("permissioned should be rejected on Iroha3");
+        assert!(
+            err.to_string().contains("Iroha3 requires"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_localnet_options_rejects_staged_cutover_on_iroha3() {
+        let opts = LocalnetOptions {
+            peers: NonZeroU16::new(1).unwrap(),
+            seed: None,
+            bind_host: DEFAULT_BIND_HOST.to_string(),
+            public_host: DEFAULT_PUBLIC_HOST.to_string(),
+            base_api_port: 28080,
+            base_p2p_port: 28337,
+            out_dir: PathBuf::from("unused"),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: Some(SumeragiConsensusMode::Npos),
+            mode_activation_height: Some(1),
+        };
+        let err = validate_localnet_options(&opts, BuildLine::Iroha3)
+            .expect_err("staged cutover should be rejected on Iroha3");
+        assert!(
+            err.to_string().contains("staged consensus cutovers"),
             "unexpected error: {err}"
         );
     }
@@ -1997,7 +2122,7 @@ mod tests {
             block_time_ms: None,
             commit_time_ms: None,
             redundant_send_r: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
+            consensus_mode: SumeragiConsensusMode::Npos,
             next_consensus_mode: None,
             mode_activation_height: None,
         };

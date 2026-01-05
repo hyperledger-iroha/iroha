@@ -15,7 +15,8 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_crypto::KeyPair;
-use iroha_data_model::{ChainId, account::AccountId, transaction::TransactionBuilder};
+use iroha_data_model::{ChainId, account::AccountId, isi::Log, transaction::TransactionBuilder};
+use iroha_logger::Level;
 use iroha_torii::{OnlinePeersProvider, Torii};
 use iroha_torii_shared::uri;
 use iroha_version::codec::EncodeVersioned;
@@ -116,6 +117,7 @@ pub fn sample_transaction_bytes() -> Vec<u8> {
         key_pair.public_key().clone(),
     );
     TransactionBuilder::new(chain_id, account)
+        .with_instructions([Log::new(Level::INFO, "norito-rpc test".to_owned())])
         .sign(key_pair.private_key())
         .encode_versioned()
 }

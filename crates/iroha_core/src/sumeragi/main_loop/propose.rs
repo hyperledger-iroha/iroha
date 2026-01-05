@@ -406,9 +406,19 @@ impl Actor {
 
                 let receipt_plan = if nexus_enabled {
                     let cursor_snapshot = self.state.da_receipt_cursor_snapshot();
-                    crate::da::receipts::prune_spool(&self.subsystems.da_rbc.spool_dir, &cursor_snapshot);
-                    let receipts = crate::da::receipts::load_receipt_entries(&self.subsystems.da_rbc.spool_dir)
-                        .map_err(|err| eyre!(err))?;
+                    let (receipts, _cache_outcome) = {
+                        let da_rbc = &mut self.subsystems.da_rbc;
+                        crate::da::receipts::prune_spool(&da_rbc.spool_dir, &cursor_snapshot);
+                        da_rbc
+                            .spool_cache
+                            .load_receipt_entries(&da_rbc.spool_dir)
+                            .map_err(|err| eyre!(err))?
+                    };
+                    #[cfg(feature = "telemetry")]
+                    self.telemetry.note_da_spool_cache(
+                        crate::telemetry::DaSpoolCacheKind::Receipts,
+                        _cache_outcome.as_telemetry(),
+                    );
                     crate::da::receipts::plan_committable_receipts(
                         &lane_config,
                         &cursor_snapshot,
@@ -420,17 +430,25 @@ impl Actor {
                     Vec::new()
                 };
 
-                let mut bundle_opt = match crate::da::commitments::load_commitment_bundle(
-                    &self.subsystems.da_rbc.spool_dir,
-                ) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            spool = %self.subsystems.da_rbc.spool_dir.display(),
-                            "failed to load DA commitments from spool; proceeding without DA bundle"
-                        );
-                        None
+                let mut bundle_opt = {
+                    let da_rbc = &mut self.subsystems.da_rbc;
+                    match da_rbc.spool_cache.load_commitment_bundle(&da_rbc.spool_dir) {
+                        Ok((value, _cache_outcome)) => {
+                            #[cfg(feature = "telemetry")]
+                            self.telemetry.note_da_spool_cache(
+                                crate::telemetry::DaSpoolCacheKind::Commitments,
+                                _cache_outcome.as_telemetry(),
+                            );
+                            value
+                        }
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                spool = %da_rbc.spool_dir.display(),
+                                "failed to load DA commitments from spool; proceeding without DA bundle"
+                            );
+                            None
+                        }
                     }
                 };
 
@@ -442,19 +460,33 @@ impl Actor {
 
                 if let Some(bundle) = bundle_opt.as_mut() {
                     // Drop commitments that were already sealed to avoid duplication.
-                    bundle.commitments.retain(|record| {
-                        let key =
-                            iroha_data_model::da::commitment::DaCommitmentKey::from_record(record);
-                        if self.subsystems.da_rbc.da.sealed_commitments.contains(&key) {
-                            return false;
+                    let filtered = {
+                        let da_rbc = &mut self.subsystems.da_rbc;
+                        let mut kept = Vec::with_capacity(bundle.commitments.len());
+                        for record in &bundle.commitments {
+                            let key = iroha_data_model::da::commitment::DaCommitmentKey::from_record(
+                                record,
+                            );
+                            if da_rbc.da.sealed_commitments.contains(&key) {
+                                continue;
+                            }
+                            let policy = lane_config.manifest_policy(record.lane_id);
+                            let (available, _cache_outcome) =
+                                crate::sumeragi::main_loop::manifest_available_for_commitment(
+                                &mut da_rbc.manifest_cache,
+                                &da_rbc.spool_dir,
+                                record,
+                                policy,
+                            );
+                            #[cfg(feature = "telemetry")]
+                            self.telemetry.note_da_manifest_cache(_cache_outcome.as_telemetry());
+                            if available {
+                                kept.push(record.clone());
+                            }
                         }
-
-                        crate::sumeragi::main_loop::manifest_available_for_commitment(
-                            &self.subsystems.da_rbc.spool_dir,
-                            record,
-                            lane_config.manifest_policy(record.lane_id),
-                        )
-                    });
+                        kept
+                    };
+                    bundle.commitments = filtered;
 
                     if nexus_enabled {
                         if receipt_plan.is_empty() {
@@ -521,18 +553,25 @@ impl Actor {
                     builder = builder.with_da_commitments(Some(bundle));
                 }
 
-                let pin_bundle_opt = match crate::da::pin_intents::load_pin_intents(
-                    &self.subsystems.da_rbc.spool_dir,
-                ) {
-                    Ok(Some(intents)) => Some(DaPinIntentBundle::new(intents)),
-                    Ok(None) => None,
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            spool = %self.subsystems.da_rbc.spool_dir.display(),
-                            "failed to load DA pin intents from spool; proceeding without pin bundle"
-                        );
-                        None
+                let pin_bundle_opt = {
+                    let da_rbc = &mut self.subsystems.da_rbc;
+                    match da_rbc.spool_cache.load_pin_bundle(&da_rbc.spool_dir) {
+                        Ok((value, _cache_outcome)) => {
+                            #[cfg(feature = "telemetry")]
+                            self.telemetry.note_da_spool_cache(
+                                crate::telemetry::DaSpoolCacheKind::PinIntents,
+                                _cache_outcome.as_telemetry(),
+                            );
+                            value
+                        }
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                spool = %da_rbc.spool_dir.display(),
+                                "failed to load DA pin intents from spool; proceeding without pin bundle"
+                            );
+                            None
+                        }
                     }
                 };
 
@@ -874,7 +913,7 @@ impl Actor {
     /// The current `PoR` proof bundle is tracked by commitments only; we bound proof
     /// openings by the same count until proof summaries are threaded through the
     /// consensus path.
-    pub(super) fn validate_da_bundle(&self, bundle: &DaCommitmentBundle) -> Result<()> {
+    pub(super) fn validate_da_bundle(&mut self, bundle: &DaCommitmentBundle) -> Result<()> {
         let lane_config = self.state.nexus_snapshot().lane_config.clone();
         validate_da_bundle_caps(
             bundle,
@@ -884,7 +923,19 @@ impl Actor {
 
         for record in &bundle.commitments {
             let policy = lane_config.manifest_policy(record.lane_id);
-            match manifest_guard_outcome(&self.subsystems.da_rbc.spool_dir, record, policy) {
+            let (outcome, _cache_outcome) = {
+                let da_rbc = &mut self.subsystems.da_rbc;
+                manifest_guard_outcome(
+                    &mut da_rbc.manifest_cache,
+                    &da_rbc.spool_dir,
+                    record,
+                    policy,
+                )
+            };
+            #[cfg(feature = "telemetry")]
+            self.telemetry
+                .note_da_manifest_cache(_cache_outcome.as_telemetry());
+            match outcome {
                 ManifestGuardOutcome::Pass => {}
                 ManifestGuardOutcome::Warn(err) => warn!(
                     ?err,

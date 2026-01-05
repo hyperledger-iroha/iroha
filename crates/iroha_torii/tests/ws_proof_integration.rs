@@ -10,11 +10,16 @@ use axum::{Router, routing::get};
 use futures_util::{SinkExt as _, StreamExt as _};
 use proof_events::ProofEventFixture;
 use tokio::net::TcpListener;
+use tokio_tungstenite::tungstenite::Message;
 
 #[cfg(feature = "ws_integration_tests")]
 #[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn ws_proof_json_integration() {
+    use iroha_data_model::{
+        events::{EventBox, data::proof::ProofEvent, stream::EventMessage},
+        prelude::DataEvent,
+    };
     // Setup broadcast sender and WS route
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(16).0;
     let app = Router::new().route(
@@ -57,7 +62,7 @@ async fn ws_proof_json_integration() {
         proof_call_hash: None,
         proof_envelope_hash: None,
     };
-    let sub_bytes = <_ as norito::codec::Encode>::encode(&sub);
+    let sub_bytes = norito::to_bytes(&sub).expect("subscription encode");
     ws_stream
         .send(tokio_tungstenite::tungstenite::Message::Binary(
             sub_bytes.into(),
@@ -81,19 +86,31 @@ async fn ws_proof_json_integration() {
         .send(ev_ok)
         .expect("events stream subscriber to be ready for matching backend");
 
-    // Read frames until we get a Text JSON (the first one might be filtered internally)
-    let mut got_json = None;
+    // Read frames until we get a ProofVerified event (wire may be JSON text or Norito binary).
+    let mut matched = false;
     while let Some(msg) = ws_stream.next().await {
-        if let tokio_tungstenite::tungstenite::Message::Text(s) = msg.unwrap() {
-            got_json = Some(s);
-            break;
+        match msg.expect("ws message") {
+            Message::Text(s) => {
+                let v: norito::json::Value = norito::json::from_str(&s).expect("json parse");
+                if v.get("event").and_then(|x| x.as_str()) == Some("ProofVerified")
+                    && v.get("backend").and_then(|x| x.as_str()) == Some("halo2/ipa")
+                {
+                    matched = true;
+                    break;
+                }
+            }
+            Message::Binary(bytes) => {
+                let EventMessage(event) = norito::decode_from_bytes(&bytes).expect("event message");
+                if let EventBox::Data(data) = event {
+                    if let DataEvent::Proof(ProofEvent::Verified(verified)) = data.as_ref() {
+                        assert_eq!(verified.id.backend, "halo2/ipa");
+                        matched = true;
+                        break;
+                    }
+                }
+            }
+            Message::Close(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
         }
     }
-    let s = got_json.expect("text json message");
-    let v: norito::json::Value = norito::json::from_str(&s).expect("json parse");
-    assert_eq!(
-        v.get("event").and_then(|x| x.as_str()),
-        Some("ProofVerified")
-    );
-    assert_eq!(v.get("backend").and_then(|x| x.as_str()), Some("halo2/ipa"));
+    assert!(matched, "proof verified event");
 }

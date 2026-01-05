@@ -4,7 +4,7 @@ use crate::{
     isi::{
         InstructionRegistry, RegisterPeerWithPop, bridge, consensus_keys, endorsement, kaigi,
         nexus, offline, oracle, repo, runtime_upgrade, settlement, smart_contract_code, social,
-        sorafs,
+        sorafs, space_directory,
         transparent::{RemoveAssetKeyValue, SetAssetKeyValue},
         verifying_keys, zk,
     },
@@ -115,6 +115,9 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<sorafs::CompleteReplicationOrder>,
     InstructionRegistry::register::<sorafs::RegisterProviderOwner>,
     InstructionRegistry::register::<sorafs::UnregisterProviderOwner>,
+    InstructionRegistry::register::<space_directory::PublishSpaceDirectoryManifest>,
+    InstructionRegistry::register::<space_directory::RevokeSpaceDirectoryManifest>,
+    InstructionRegistry::register::<space_directory::ExpireSpaceDirectoryManifest>,
     InstructionRegistry::register::<smart_contract_code::RegisterSmartContractCode>,
     InstructionRegistry::register::<smart_contract_code::DeactivateContractInstance>,
     InstructionRegistry::register::<smart_contract_code::ActivateContractInstance>,

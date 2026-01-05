@@ -121,7 +121,9 @@ pub struct RawGenesisTransaction {
     /// instructions, update topology, or configure triggers.
     #[norito(default)]
     transactions: Vec<RawGenesisTx>,
-    /// Optional consensus mode advertised in genesis for operator visibility.
+    /// Consensus mode advertised in genesis for operator visibility.
+    /// Required in JSON manifests; `None` is reserved for programmatic builders
+    /// that set the value later (e.g., via `with_consensus_mode`).
     /// Not consumed by the node runtime (handshake gates the mode independently).
     #[norito(default)]
     consensus_mode: Option<iroha_data_model::parameter::system::SumeragiConsensusMode>,
@@ -1358,61 +1360,35 @@ impl norito::json::JsonDeserialize for GenesisTopologyEntry {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         let value = norito::json::Value::json_deserialize(parser)?;
-        match value {
-            norito::json::Value::Object(mut map) => {
-                let has_peer = map.contains_key("peer");
-                let has_pop = map.contains_key("pop_hex");
-                if has_peer || has_pop {
-                    let peer_value = map
-                        .remove("peer")
-                        .ok_or_else(|| norito::json::Error::missing_field("peer"))?;
-                    let peer: PeerId =
-                        norito::json::value::from_value(peer_value).map_err(|err| {
-                            norito::json::Error::Message(format!("failed to decode `peer`: {err}"))
-                        })?;
-                    let pop_hex = match map.remove("pop_hex") {
-                        None | Some(norito::json::Value::Null) => None,
-                        Some(norito::json::Value::String(raw)) => Some(normalize_pop_hex(&raw)?),
-                        Some(other) => {
-                            let raw = norito::json::value::from_value::<String>(other).map_err(
-                                |err| {
-                                    norito::json::Error::Message(format!(
-                                        "failed to decode `pop_hex`: {err}"
-                                    ))
-                                },
-                            )?;
-                            Some(normalize_pop_hex(&raw)?)
-                        }
-                    };
-                    if let Some((field, _)) = map.into_iter().next() {
-                        return Err(norito::json::Error::UnknownField { field });
-                    }
-                    Ok(Self { peer, pop_hex })
-                } else {
-                    let peer: PeerId = norito::json::value::from_value(
-                        norito::json::Value::Object(map),
-                    )
-                    .map_err(|err| {
-                        norito::json::Error::Message(format!(
-                            "failed to decode topology peer: {err}"
-                        ))
-                    })?;
-                    Ok(Self {
-                        peer,
-                        pop_hex: None,
-                    })
-                }
+        let mut map = match value {
+            norito::json::Value::Object(map) => map,
+            _ => {
+                return Err(norito::json::Error::Message(
+                    "topology entries must be objects with `peer` and optional `pop_hex`"
+                        .to_string(),
+                ));
             }
-            other => {
-                let peer: PeerId = norito::json::value::from_value(other).map_err(|err| {
-                    norito::json::Error::Message(format!("failed to decode topology peer: {err}"))
+        };
+        let peer_value = map
+            .remove("peer")
+            .ok_or_else(|| norito::json::Error::missing_field("peer"))?;
+        let peer: PeerId = norito::json::value::from_value(peer_value).map_err(|err| {
+            norito::json::Error::Message(format!("failed to decode `peer`: {err}"))
+        })?;
+        let pop_hex = match map.remove("pop_hex") {
+            None | Some(norito::json::Value::Null) => None,
+            Some(norito::json::Value::String(raw)) => Some(normalize_pop_hex(&raw)?),
+            Some(other) => {
+                let raw = norito::json::value::from_value::<String>(other).map_err(|err| {
+                    norito::json::Error::Message(format!("failed to decode `pop_hex`: {err}"))
                 })?;
-                Ok(Self {
-                    peer,
-                    pop_hex: None,
-                })
+                Some(normalize_pop_hex(&raw)?)
             }
+        };
+        if let Some((field, _)) = map.into_iter().next() {
+            return Err(norito::json::Error::UnknownField { field });
         }
+        Ok(Self { peer, pop_hex })
     }
 }
 
@@ -1764,9 +1740,9 @@ impl RawGenesisTransaction {
         let transactions =
             Self::decode_value::<Vec<RawGenesisTx>>(transactions_value, "transactions")?;
         Self::reject_set_parameter_instructions(&transactions)?;
-        let consensus_mode = Self::take_optional_field::<
+        let consensus_mode = Some(Self::take_required_field::<
             iroha_data_model::parameter::system::SumeragiConsensusMode,
-        >(&mut map, "consensus_mode")?;
+        >(&mut map, "consensus_mode")?);
         let bls_domain = Self::take_optional_field::<String>(&mut map, "bls_domain")?;
         let wire_proto_versions = map
             .remove("wire_proto_versions")
@@ -2020,7 +1996,19 @@ impl RawGenesisTransaction {
         &self.transactions
     }
 
-    /// Optional consensus mode advertised in the manifest.
+    /// Remove topology entries from all transactions.
+    #[must_use]
+    pub fn clear_topology(mut self) -> Self {
+        for tx in &mut self.transactions {
+            tx.topology.clear();
+        }
+        self
+    }
+
+    /// Consensus mode advertised in the manifest.
+    ///
+    /// `None` is reserved for programmatic builders that have not called
+    /// `with_consensus_mode` yet.
     #[must_use]
     pub fn consensus_mode(
         &self,
@@ -2572,6 +2560,10 @@ mod tests2 {
             norito::json::Value::String(".".into()),
         );
         manifest_fields.insert(
+            "consensus_mode".to_string(),
+            norito::json::Value::String("Permissioned".into()),
+        );
+        manifest_fields.insert(
             "transactions".to_string(),
             norito::json::Value::Array(vec![norito::json::Value::Object(tx_map)]),
         );
@@ -2582,6 +2574,34 @@ mod tests2 {
         assert!(
             err.to_string().contains("SetParameter"),
             "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn raw_genesis_requires_consensus_mode() {
+        init_instruction_registry();
+
+        let mut manifest_fields = norito::json::Map::new();
+        manifest_fields.insert(
+            "chain".to_string(),
+            norito::json::Value::String("test-chain".into()),
+        );
+        manifest_fields.insert("executor".to_string(), norito::json::Value::Null);
+        manifest_fields.insert(
+            "ivm_dir".to_string(),
+            norito::json::Value::String(".".into()),
+        );
+        manifest_fields.insert(
+            "transactions".to_string(),
+            norito::json::Value::Array(vec![norito::json::Value::Object(norito::json::Map::new())]),
+        );
+
+        let manifest = norito::json::Value::Object(manifest_fields);
+        let err = RawGenesisTransaction::from_json_value(manifest)
+            .expect_err("missing consensus_mode should be rejected");
+        assert!(
+            err.to_string().contains("consensus_mode"),
+            "unexpected error: {err}"
         );
     }
 
@@ -2615,6 +2635,10 @@ mod tests2 {
         manifest_fields.insert(
             "ivm_dir".to_string(),
             norito::json::Value::String(".".into()),
+        );
+        manifest_fields.insert(
+            "consensus_mode".to_string(),
+            norito::json::Value::String("Permissioned".into()),
         );
         manifest_fields.insert(
             "transactions".to_string(),
@@ -2677,6 +2701,10 @@ mod tests2 {
             norito::json::Value::String(".".into()),
         );
         manifest_fields.insert(
+            "consensus_mode".to_string(),
+            norito::json::Value::String("Permissioned".into()),
+        );
+        manifest_fields.insert(
             "transactions".to_string(),
             norito::json::Value::Array(vec![norito::json::Value::Object(tx_map)]),
         );
@@ -2692,7 +2720,7 @@ mod tests2 {
     }
 
     #[test]
-    fn topology_entries_accept_peer_value() {
+    fn topology_entries_reject_peer_value() {
         init_instruction_registry();
         let peer = PeerId::new(iroha_crypto::KeyPair::random().public_key().clone());
         let peer_value = norito::json::value::to_value(&peer).expect("serialize peer");
@@ -2714,18 +2742,73 @@ mod tests2 {
             norito::json::Value::String(".".into()),
         );
         manifest_fields.insert(
+            "consensus_mode".to_string(),
+            norito::json::Value::String("Permissioned".into()),
+        );
+        manifest_fields.insert(
             "transactions".to_string(),
             norito::json::Value::Array(vec![norito::json::Value::Object(tx_map)]),
         );
 
         let manifest = norito::json::Value::Object(manifest_fields);
-        let parsed = RawGenesisTransaction::from_json_value(manifest)
-            .expect("peer-only topology entries should parse");
-        assert_eq!(parsed.transactions.len(), 1);
-        let tx = &parsed.transactions[0];
-        assert_eq!(tx.topology.len(), 1);
-        assert_eq!(tx.topology[0].peer, peer);
-        assert!(tx.topology[0].pop_hex.is_none());
+        let err = RawGenesisTransaction::from_json_value(manifest)
+            .expect_err("peer-only topology entries should be rejected");
+        assert!(
+            err.to_string().contains("topology entries must be objects"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn clear_topology_removes_all_entries() {
+        let chain = ChainId::from("iroha:test:clear-topology");
+        let peer_a = PeerId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let peer_b = PeerId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let manifest = GenesisBuilder::new_without_executor(chain, ".")
+            .set_topology(vec![peer_a])
+            .next_transaction()
+            .set_topology(vec![peer_b])
+            .build_raw()
+            .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+
+        let cleared = manifest.clear_topology();
+        assert!(
+            cleared
+                .transactions()
+                .iter()
+                .all(|tx| tx.topology().is_empty()),
+            "expected all topology entries to be removed"
+        );
+    }
+
+    #[test]
+    fn builder_preserves_consensus_metadata() {
+        let manifest = RawGenesisTransaction {
+            chain: ChainId::from("iroha:test:builder-meta"),
+            executor: None,
+            ivm_dir: IvmPath::default(),
+            transactions: vec![RawGenesisTx::default()],
+            consensus_mode: Some(SumeragiConsensusMode::Permissioned),
+            bls_domain: Some("bls:test-domain".to_string()),
+            wire_proto_versions: vec![1, 2],
+            consensus_fingerprint: Some("0xabc123".to_string()),
+            crypto: ManifestCrypto::default(),
+        };
+
+        let rebuilt = manifest
+            .clone()
+            .into_builder()
+            .domain("example".parse().expect("domain name"))
+            .finish_domain()
+            .build_raw();
+
+        assert_eq!(rebuilt.consensus_mode, manifest.consensus_mode);
+        assert_eq!(rebuilt.bls_domain, manifest.bls_domain);
+        assert_eq!(rebuilt.wire_proto_versions, manifest.wire_proto_versions);
+        assert_eq!(
+            rebuilt.consensus_fingerprint,
+            manifest.consensus_fingerprint
+        );
     }
 
     #[test]
@@ -3166,6 +3249,10 @@ impl RawGenesisTransaction {
             ivm_dir: self.ivm_dir.0,
             transactions,
             crypto: self.crypto,
+            consensus_mode: self.consensus_mode,
+            bls_domain: self.bls_domain,
+            wire_proto_versions: self.wire_proto_versions,
+            consensus_fingerprint: self.consensus_fingerprint,
         }
     }
 
@@ -3605,6 +3692,10 @@ pub struct GenesisBuilder {
     ivm_dir: PathBuf,
     transactions: Vec<GenesisTxBuilder>,
     crypto: ManifestCrypto,
+    consensus_mode: Option<iroha_data_model::parameter::system::SumeragiConsensusMode>,
+    bls_domain: Option<String>,
+    wire_proto_versions: Vec<u32>,
+    consensus_fingerprint: Option<String>,
 }
 
 /// Domain editing mode of the [`GenesisBuilder`] to register accounts and assets under the domain.
@@ -3616,6 +3707,10 @@ pub struct GenesisDomainBuilder {
     transactions: Vec<GenesisTxBuilder>,
     domain_id: DomainId,
     crypto: ManifestCrypto,
+    consensus_mode: Option<iroha_data_model::parameter::system::SumeragiConsensusMode>,
+    bls_domain: Option<String>,
+    wire_proto_versions: Vec<u32>,
+    consensus_fingerprint: Option<String>,
 }
 
 #[derive(Default)]
@@ -3635,6 +3730,10 @@ impl GenesisBuilder {
             ivm_dir: ivm_dir.into(),
             transactions: vec![GenesisTxBuilder::default()],
             crypto: ManifestCrypto::default(),
+            consensus_mode: None,
+            bls_domain: None,
+            wire_proto_versions: Vec::new(),
+            consensus_fingerprint: None,
         }
     }
 
@@ -3646,6 +3745,10 @@ impl GenesisBuilder {
             ivm_dir: ivm_dir.into(),
             transactions: vec![GenesisTxBuilder::default()],
             crypto: ManifestCrypto::default(),
+            consensus_mode: None,
+            bls_domain: None,
+            wire_proto_versions: Vec::new(),
+            consensus_fingerprint: None,
         }
     }
 
@@ -3686,6 +3789,10 @@ impl GenesisBuilder {
             transactions: self.transactions,
             domain_id,
             crypto: self.crypto,
+            consensus_mode: self.consensus_mode,
+            bls_domain: self.bls_domain,
+            wire_proto_versions: self.wire_proto_versions,
+            consensus_fingerprint: self.consensus_fingerprint,
         }
     }
 
@@ -3779,10 +3886,10 @@ impl GenesisBuilder {
             executor: self.executor,
             ivm_dir: self.ivm_dir.into(),
             transactions,
-            consensus_mode: None,
-            bls_domain: None,
-            wire_proto_versions: Vec::new(),
-            consensus_fingerprint: None,
+            consensus_mode: self.consensus_mode,
+            bls_domain: self.bls_domain,
+            wire_proto_versions: self.wire_proto_versions,
+            consensus_fingerprint: self.consensus_fingerprint,
             crypto: self.crypto,
         }
     }
@@ -3797,6 +3904,10 @@ impl GenesisDomainBuilder {
             ivm_dir: self.ivm_dir,
             transactions: self.transactions,
             crypto: self.crypto,
+            consensus_mode: self.consensus_mode,
+            bls_domain: self.bls_domain,
+            wire_proto_versions: self.wire_proto_versions,
+            consensus_fingerprint: self.consensus_fingerprint,
         }
     }
 
@@ -3994,7 +4105,10 @@ mod tests {
     use iroha_data_model::{
         block::SignedBlock,
         isi::SetParameter,
-        parameter::{Parameter, system::confidential_metadata},
+        parameter::{
+            Parameter,
+            system::{SumeragiConsensusMode, confidential_metadata},
+        },
         transaction::Executable,
     };
     use iroha_primitives::json::Json;
@@ -4023,7 +4137,7 @@ mod tests {
         let executor_path = tmp_dir.path().join("executor.to");
         std::fs::write(&executor_path, dummy_bytecode).unwrap();
         let genesis = format!(
-            r#"{{"chain":"00000000-0000-0000-0000-000000000000","executor":"{}","transactions":[{{}}]}}"#,
+            r#"{{"chain":"00000000-0000-0000-0000-000000000000","executor":"{}","consensus_mode":"Permissioned","transactions":[{{}}]}}"#,
             executor_path.file_name().unwrap().to_str().unwrap()
         );
         let genesis_path = tmp_dir.path().join("genesis.json");
@@ -4449,7 +4563,9 @@ mod tests {
     #[test]
     fn roundtrip_raw_genesis_serialization() -> Result<()> {
         let (_tmp_dir, builder) = test_builder();
-        let raw = builder.build_raw();
+        let raw = builder
+            .build_raw()
+            .with_consensus_mode(SumeragiConsensusMode::Permissioned);
         let json = norito::json::to_json(&raw)?;
         let de: RawGenesisTransaction = norito::json::from_str(&json)?;
         let json2 = norito::json::to_json(&de)?;

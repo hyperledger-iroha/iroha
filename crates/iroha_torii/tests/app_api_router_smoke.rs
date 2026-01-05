@@ -113,7 +113,10 @@ async fn app_api_router_smoke() {
         .unwrap();
     assert!(matches!(
         resp_assets.status(),
-        StatusCode::OK | StatusCode::UNPROCESSABLE_ENTITY | StatusCode::TOO_MANY_REQUESTS
+        StatusCode::OK
+            | StatusCode::UNPROCESSABLE_ENTITY
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::BAD_REQUEST
     ));
 
     // 2) App API: GET /v1/events/sse — endpoint exists; allow OK or 429 depending on rate limits

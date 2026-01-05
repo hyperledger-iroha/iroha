@@ -22,6 +22,11 @@ use iroha_torii::Torii;
 use iroha_torii_shared::uri::NEXUS_LANE_LIFECYCLE;
 use tower::ServiceExt as _;
 
+fn decode_norito_json(bytes: &[u8]) -> norito::json::Value {
+    let decoded: String = norito::decode_from_bytes(bytes).expect("decode Norito JSON");
+    norito::json::from_str(&decoded).expect("parse JSON payload")
+}
+
 fn build_app(nexus_enabled: bool) -> Router {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.nexus.enabled = nexus_enabled;
@@ -124,7 +129,7 @@ async fn nexus_lifecycle_applies_plan_and_reports_lane_count() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let payload: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+    let payload = decode_norito_json(&bytes);
     assert_eq!(payload["ok"].as_bool(), Some(true));
     assert_eq!(payload["lane_count"].as_u64(), Some(2));
 }
@@ -181,6 +186,6 @@ async fn nexus_lifecycle_supports_retire_after_add() {
         .unwrap();
     assert_eq!(retire_resp.status(), StatusCode::ACCEPTED);
     let bytes = retire_resp.into_body().collect().await.unwrap().to_bytes();
-    let payload: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+    let payload = decode_norito_json(&bytes);
     assert_eq!(payload["lane_count"].as_u64(), Some(1));
 }

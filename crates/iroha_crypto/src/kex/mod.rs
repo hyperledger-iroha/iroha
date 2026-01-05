@@ -7,7 +7,7 @@ mod x25519;
 
 pub use x25519::X25519Sha256;
 
-use crate::{KeyGenOption, SessionKey, error::ParseError};
+use crate::{Error, KeyGenOption, SessionKey, error::ParseError};
 
 /// A Generic trait for key exchange schemes. Each scheme provides a way to generate keys and
 /// do a diffie-hellman computation
@@ -33,11 +33,15 @@ pub trait KeyExchangeScheme {
     /// Compute the diffie-hellman shared secret.
     /// `local_private_key` is the key generated from calling `keypair` while
     /// `remote_public_key` is the key received from a different call to `keypair` from another party.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the shared secret fails contributory checks (e.g. low-order points).
     fn compute_shared_secret(
         &self,
         local_private_key: &Self::PrivateKey,
         remote_public_key: &Self::PublicKey,
-    ) -> SessionKey;
+    ) -> Result<SessionKey, Error>;
 
     /// Get byte representation of a public key.
     fn encode_public_key(pk: &Self::PublicKey) -> Vec<u8>;

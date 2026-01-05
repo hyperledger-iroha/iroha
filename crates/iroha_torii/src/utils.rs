@@ -55,7 +55,7 @@ impl ResponseFormat {
 /// Negotiate the response format from an optional `Accept` header value.
 ///
 /// Returns an HTTP response carrying status `406 Not Acceptable` when the header
-/// explicitly forbids both JSON and Norito.
+/// explicitly forbids both JSON and Norito or contains an invalid q-value.
 #[allow(clippy::result_large_err)] // callers expect to bubble the full HTTP response on negotiation failure
 pub fn negotiate_response_format(accept: Option<&HeaderValue>) -> Result<ResponseFormat, Response> {
     let Some(header) = accept else {
@@ -95,15 +95,21 @@ pub fn negotiate_response_format(accept: Option<&HeaderValue>) -> Result<Respons
             let p = param.trim();
             let p_lower = p.to_ascii_lowercase();
             if let Some(rest) = p_lower.strip_prefix("q=") {
-                if let Ok(parsed) = rest.parse::<f32>() {
-                    quality = parsed.clamp(0.0, 1.0);
-                } else {
+                let parsed = rest.parse::<f32>().map_err(|_| {
+                    (
+                        StatusCode::NOT_ACCEPTABLE,
+                        "invalid q-value in Accept header",
+                    )
+                        .into_response()
+                })?;
+                if !parsed.is_finite() || !(0.0..=1.0).contains(&parsed) {
                     return Err((
                         StatusCode::NOT_ACCEPTABLE,
                         "invalid q-value in Accept header",
                     )
                         .into_response());
                 }
+                quality = parsed;
             }
         }
 
@@ -981,6 +987,13 @@ pub mod extractors {
         #[test]
         fn negotiate_rejects_unsupported_media_type() {
             let header = HeaderValue::from_static("text/plain");
+            let err = super::super::negotiate_response_format(Some(&header)).unwrap_err();
+            assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE);
+        }
+
+        #[test]
+        fn negotiate_rejects_invalid_q_value() {
+            let header = HeaderValue::from_static("application/json;q=2");
             let err = super::super::negotiate_response_format(Some(&header)).unwrap_err();
             assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE);
         }

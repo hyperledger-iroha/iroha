@@ -486,6 +486,8 @@ fn decode_proof_attachments(
     content_type: &str,
     body: &[u8],
 ) -> Result<Vec<ProofAttachment>, String> {
+    const ZK1_MIME_TYPE: &str = "application/x-zk1";
+
     if content_type.contains(super::utils::NORITO_MIME_TYPE) {
         if body.len() >= 4 && &body[..4] == b"ZK1\0" {
             return match zk1_minimal_validate(body) {
@@ -495,6 +497,12 @@ fn decode_proof_attachments(
         }
         return decode_norito_attachments(body)
             .map_err(|err| format!("norito decode error: {err}"));
+    }
+    if content_type.contains(ZK1_MIME_TYPE) {
+        return match zk1_minimal_validate(body) {
+            Ok(()) => Err("unsupported ZK1 envelope (expected ProofAttachment payload)".into()),
+            Err(err) => Err(err),
+        };
     }
     if content_type.contains("application/json") || content_type.contains("text/json") {
         return decode_json_attachments(body).map_err(|err| format!("json decode error: {err}"));

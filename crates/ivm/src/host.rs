@@ -1464,6 +1464,13 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_GET_MERKLE_PATH => {
                 let addr = vm.register(10);
+                let max_addr = vm
+                    .memory
+                    .stack_top()
+                    .saturating_add(crate::Memory::STACK_SLOP);
+                if addr >= max_addr {
+                    return Err(VMError::MemoryOutOfBounds);
+                }
                 let dest = vm.register(11);
                 let root_out = vm.register(12);
                 let (root, path) = vm.memory.merkle_root_and_path(addr);
@@ -1478,6 +1485,13 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_GET_MERKLE_COMPACT => {
                 let addr = vm.register(10);
+                let max_addr = vm
+                    .memory
+                    .stack_top()
+                    .saturating_add(crate::Memory::STACK_SLOP);
+                if addr >= max_addr {
+                    return Err(VMError::MemoryOutOfBounds);
+                }
                 let dest = vm.register(11);
                 let depth_cap_raw = vm.register(12) as usize;
                 let depth_cap = if depth_cap_raw == 0 {
@@ -1506,7 +1520,11 @@ impl IVMHost for DefaultHost {
                 Ok(0)
             }
             crate::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT => {
-                let idx = vm.register(10) as usize;
+                let idx_raw = vm.register(10);
+                let idx = usize::try_from(idx_raw).map_err(|_| VMError::RegisterOutOfBounds)?;
+                if idx >= crate::parallel::REGISTER_COUNT {
+                    return Err(VMError::RegisterOutOfBounds);
+                }
                 let dest = vm.register(11);
                 let depth_cap_raw = vm.register(12) as usize;
                 let depth_cap = if depth_cap_raw == 0 {

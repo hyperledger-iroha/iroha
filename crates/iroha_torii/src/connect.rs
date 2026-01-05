@@ -464,7 +464,7 @@ impl Bus {
                 "connect: authorize_token rejected unknown sid"
             );
             return Err((
-                axum::http::StatusCode::BAD_REQUEST,
+                axum::http::StatusCode::UNAUTHORIZED,
                 "connect: unknown sid".into(),
             ));
         };

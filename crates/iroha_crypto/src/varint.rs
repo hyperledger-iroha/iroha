@@ -70,6 +70,9 @@ macro_rules! from_uint(
             #[allow(trivial_numeric_casts)]
             impl From<$ty> for VarUint {
                 fn from(n: $ty) -> Self {
+                    if n == 0 {
+                        return Self { payload: vec![0] };
+                    }
                     let zeros = n.leading_zeros();
                     let end = core::mem::size_of::<$ty>() * 8 - zeros as usize;
 
@@ -90,7 +93,11 @@ macro_rules! from_uint(
 from_uint!(u8, u16, u32, u64, u128);
 
 impl VarUint {
-    /// Construct `VarUint`.
+    /// Construct `VarUint` from canonical unsigned-varint bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the payload is malformed or uses a non-canonical encoding.
     pub fn new(bytes: impl AsRef<[u8]>) -> Result<Self, ConvertError> {
         let idx = bytes
             .as_ref()
@@ -105,6 +112,12 @@ impl VarUint {
             .0;
         let (payload, empty) = bytes.as_ref().split_at(idx + 1);
         let payload = payload.to_vec();
+
+        if payload.len() > 1 && (payload.last().copied().unwrap_or(0) & 0b0111_1111) == 0 {
+            return Err(ConvertError::new(String::from(
+                "Non-canonical varuint encoding",
+            )));
+        }
 
         if empty.is_empty() {
             return Ok(Self { payload });
@@ -161,6 +174,30 @@ mod tests {
     #[test]
     fn test_new_returns_err_on_extra_bytes() {
         assert!(VarUint::new([0b1000_0000, 0b0000_0001, 0xFF]).is_err());
+    }
+
+    #[test]
+    fn varuint_from_zero_encodes_single_byte() {
+        let varuint: VarUint = 0u8.into();
+        let bytes: Vec<u8> = varuint.into();
+        assert_eq!(bytes, vec![0x00]);
+    }
+
+    #[test]
+    fn varuint_zero_roundtrip() {
+        let varuint = VarUint::new([0x00]).unwrap();
+        let value: u64 = varuint.try_into().unwrap();
+        assert_eq!(value, 0);
+    }
+
+    #[test]
+    fn varuint_new_rejects_non_canonical_zero() {
+        assert!(VarUint::new([0x80, 0x00]).is_err());
+    }
+
+    #[test]
+    fn varuint_new_rejects_non_canonical_one() {
+        assert!(VarUint::new([0x81, 0x00]).is_err());
     }
 
     #[test]

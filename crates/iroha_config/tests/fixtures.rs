@@ -18,7 +18,7 @@ use iroha_config::parameters::user::ParseError;
 use iroha_config::parameters::{
     actual::{
         BlockSync, DaManifestPolicy, DataspaceGossip, DataspaceGossipFallback, FraudRiskBand,
-        LaneProfile, OfflineProofMode, OperatorAuthLockout, OperatorTokenFallback,
+        LaneProfile, NexusStorage, OfflineProofMode, OperatorAuthLockout, OperatorTokenFallback,
         OperatorTokenSource, OracleChangeThresholds, OracleEconomics, OracleGovernance,
         OracleTwitterBinding, Root as Config, SoranetVpn, Streaming, StreamingSoranetAccessKind,
         StreamingSync, ToriiOperatorAuth, TransactionGossiper,
@@ -790,6 +790,7 @@ fn minimal_config_snapshot() {
                         id: ParameterId(kura.store_dir),
                     },
                 },
+                max_disk_usage_bytes: Bytes(0),
                 blocks_in_memory: 1024,
                 block_sync_roster_retention: 7200,
                 roster_sidecar_retention: 512,
@@ -957,6 +958,7 @@ fn minimal_config_snapshot() {
             },
             nexus: Nexus {
                 enabled: true,
+                storage: NexusStorage::default(),
                 staking: NexusStaking {
                     public_validator_mode: StakeElected,
                     restricted_validator_mode: AdminManaged,
@@ -1195,8 +1197,11 @@ fn minimal_config_snapshot() {
             tiered_state: TieredState {
                 enabled: false,
                 hot_retained_keys: 0,
+                hot_retained_bytes: Bytes(0),
+                hot_retained_grace_snapshots: 1,
                 cold_store_root: None,
                 max_snapshots: 2,
+                max_cold_bytes: Bytes(0),
             },
             compute: Compute {
                 enabled: false,
@@ -1776,6 +1781,7 @@ fn minimal_config_snapshot() {
                     access_kind: Authenticated,
                     channel_salt: "iroha.soranet.channel.seed.v1",
                     provision_spool_dir: "./storage/streaming/soranet_routes",
+                    provision_spool_max_bytes: Bytes(0),
                 },
                 sync: StreamingSync {
                     enabled: false,
@@ -2126,6 +2132,34 @@ fn nexus_lane_relay_emergency_rejects_threshold_above_members() {
         debug,
         "nexus.lane_relay_emergency.multisig_threshold 6 must be <= multisig_members 5"
     );
+}
+
+#[test]
+fn nexus_storage_weights_require_full_budget() {
+    use iroha_config::parameters::user::{Nexus, NexusStorage, NexusStorageWeights};
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        storage: NexusStorage {
+            disk_budget_weights: NexusStorageWeights {
+                kura_blocks_bps: 9_000,
+                wsv_snapshots_bps: 0,
+                sorafs_bps: 0,
+                soranet_spool_bps: 0,
+                soravpn_spool_bps: 0,
+            },
+            ..NexusStorage::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter
+        .into_result()
+        .expect_err("invalid storage weights must be rejected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(debug, "nexus.storage.disk_budget_weights");
 }
 
 #[test]

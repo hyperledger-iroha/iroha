@@ -1881,6 +1881,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,

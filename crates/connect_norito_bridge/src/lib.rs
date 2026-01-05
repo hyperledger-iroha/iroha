@@ -2351,7 +2351,14 @@ fn encode_envelope_framed(env: &proto::EnvelopeV1) -> Result<Vec<u8>, norito::co
 }
 
 fn decode_signed_transaction(bytes: &[u8]) -> Result<SignedTransaction, norito::core::Error> {
-    norito::decode_from_bytes::<SignedTransaction>(bytes)
+    match norito::decode_from_bytes::<SignedTransaction>(bytes) {
+        Ok(tx) => Ok(tx),
+        Err(norito::Error::InvalidMagic) => {
+            let mut cursor = std::io::Cursor::new(bytes);
+            norito::codec::Decode::decode(&mut cursor)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 fn encode_asset_transaction<F>(
@@ -2747,7 +2754,11 @@ pub unsafe extern "C" fn connect_norito_connect_derive_keys(
             Ok(bytes) => bytes,
             Err(code) => return code,
         };
-        let (app_key, wallet_key) = connect_sdk::x25519_derive_keys(&local_sk, &peer_pk, &sid);
+        let (app_key, wallet_key) = match connect_sdk::x25519_derive_keys(&local_sk, &peer_pk, &sid)
+        {
+            Ok(keys) => keys,
+            Err(_) => return -2,
+        };
         ptr::copy_nonoverlapping(app_key.as_ptr(), out_app_ptr, 32);
         ptr::copy_nonoverlapping(wallet_key.as_ptr(), out_wallet_ptr, 32);
         0

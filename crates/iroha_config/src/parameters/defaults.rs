@@ -627,6 +627,8 @@ pub mod kura {
 
     use nonzero_ext::nonzero;
 
+    use iroha_config_base::util::Bytes;
+
     use crate::kura::FsyncMode;
 
     /// Directory for Kura storage relative to the node working directory.
@@ -643,6 +645,8 @@ pub mod kura {
     pub const FSYNC_MODE: FsyncMode = FsyncMode::Batched;
     /// Default batching interval for fsync operations.
     pub const FSYNC_INTERVAL: Duration = Duration::from_millis(50);
+    /// Maximum on-disk footprint allowed for Kura (0 = unlimited).
+    pub const MAX_DISK_USAGE_BYTES: Bytes<u64> = Bytes(0);
 }
 
 /// P2P networking defaults covering gossip, framing, and socket behavior.
@@ -812,6 +816,8 @@ pub mod streaming {
 
     /// Defaults applied to SoraNet circuit integration for streaming routes.
     pub mod soranet {
+        use iroha_config_base::util::Bytes;
+
         /// Enable automatic SoraNet provisioning for streaming routes by default.
         pub const ENABLED: bool = true;
         /// Default exit relay multiaddr used when none is provided in manifests.
@@ -824,6 +830,8 @@ pub mod streaming {
         pub const CHANNEL_SALT: &str = "iroha.soranet.channel.seed.v1";
         /// Directory used to spool SoraNet privacy route updates before relays ingest them.
         pub const PROVISION_SPOOL_DIR: &str = "./storage/streaming/soranet_routes";
+        /// Maximum on-disk footprint for the SoraNet provisioning spool (0 = unlimited).
+        pub const PROVISION_SPOOL_MAX_BYTES: Bytes<u64> = Bytes(0);
 
         /// Convenience accessor returning the default padding budget as an `Option`.
         #[must_use]
@@ -1610,6 +1618,28 @@ pub mod nexus {
         pub const REPLAY_RETENTION_SLOTS_MAX: u64 = 4_096;
     }
 
+    /// Storage budget defaults for Nexus-enabled nodes.
+    pub mod storage {
+        use iroha_config_base::util::Bytes;
+
+        /// Aggregate on-disk budget for Iroha3 storage (bytes).
+        pub const MAX_DISK_USAGE_BYTES: Bytes<u64> = Bytes(256 * 1024 * 1024 * 1024);
+        /// WSV hot-tier serialized payload budget (bytes).
+        pub const MAX_WSV_MEMORY_BYTES: Bytes<u64> = Bytes(8 * 1024 * 1024 * 1024);
+        /// Budget share for Kura block storage (basis points).
+        pub const KURA_BLOCKS_BPS: u16 = 3_000;
+        /// Budget share for tiered-state cold snapshots (basis points).
+        pub const WSV_SNAPSHOTS_BPS: u16 = 2_000;
+        /// Budget share for SoraFS storage (basis points).
+        pub const SORAFS_BPS: u16 = 4_000;
+        /// Budget share for SoraNet route spools (basis points).
+        pub const SORANET_SPOOL_BPS: u16 = 500;
+        /// Budget share reserved for future SoraVPN storage (basis points).
+        pub const SORAVPN_SPOOL_BPS: u16 = 500;
+        /// Total basis points for storage budgeting.
+        pub const BPS_TOTAL: u16 = 10_000;
+    }
+
     /// Default number of execution lanes (single-lane placeholder).
     pub const LANE_COUNT: NonZeroU32 = nonzero!(1u32);
     /// Default alias assigned to the primary lane when no catalog entries are provided.
@@ -1975,10 +2005,20 @@ pub mod pipeline {
 
 /// Tiered state backend defaults.
 pub mod tiered_state {
+    use iroha_config_base::util::Bytes;
+
     /// Disable tiered snapshots by default.
     pub const ENABLED: bool = false;
     /// Keep all keys hot unless explicitly configured.
     pub const HOT_RETAINED_KEYS: usize = 0;
+    /// Hot-tier byte budget based on serialized Norito JSON size (0 = unlimited).
+    pub const HOT_RETAINED_BYTES: Bytes<u64> = Bytes(0);
+    /// Minimum snapshots to retain newly hot entries before demotion (0 = disabled).
+    pub const HOT_RETAINED_GRACE_SNAPSHOTS: u64 = 1;
+    /// Optional cold-tier byte budget across snapshots (0 = unlimited).
+    pub const MAX_COLD_BYTES: Bytes<u64> = Bytes(0);
+    /// Default on-disk root for tiered state snapshots.
+    pub const DEFAULT_COLD_STORE_ROOT: &str = "./storage/tiered_state";
     /// Retain the latest two snapshots when enabled.
     pub const MAX_SNAPSHOTS: usize = 2;
 }

@@ -52,6 +52,7 @@ struct PeerSettings {
     network: std::collections::BTreeMap<u16, peer::PeerInfo>,
     topology: std::collections::BTreeSet<iroha_data_model::peer::Peer>,
     consensus_mode: Option<String>,
+    next_consensus_mode: Option<String>,
     mode_activation_height: Option<u64>,
 }
 
@@ -65,6 +66,7 @@ impl PeerSettings {
         config_dir: &std::path::Path,
         target_dir: &path::AbsolutePath,
         consensus_mode: Option<String>,
+        next_consensus_mode: Option<String>,
         mode_activation_height: Option<u64>,
     ) -> Result<Self, Error> {
         let network = if let Some(overrides) = overrides {
@@ -81,13 +83,14 @@ impl PeerSettings {
                 .map(|(idx, override_)| {
                     let nth = u16::try_from(idx).expect("peer override index must fit into u16");
                     let extra_seed = nth.to_be_bytes();
-                    let key_pair = peer::generate_key_pair(seed, &extra_seed);
+                    let (key_pair, pop) = peer::generate_bls_key_pair(seed, &extra_seed);
                     (
                         nth,
                         (
                             override_.name,
                             [override_.p2p_port, override_.api_port],
                             key_pair,
+                            pop,
                         ),
                     )
                 })
@@ -104,6 +107,7 @@ impl PeerSettings {
             network,
             topology,
             consensus_mode,
+            next_consensus_mode,
             mode_activation_height,
         })
     }
@@ -152,6 +156,7 @@ impl<'a> Swarm<'a> {
         target_path: &'a std::path::Path,
         peer_overrides: Option<Vec<peer::PeerOverride>>,
         consensus_mode: Option<String>,
+        next_consensus_mode: Option<String>,
         mode_activation_height: Option<u64>,
     ) -> Result<Self, Error> {
         if target_path.is_dir() {
@@ -168,6 +173,7 @@ impl<'a> Swarm<'a> {
                 config_dir,
                 &target_dir,
                 consensus_mode,
+                next_consensus_mode,
                 mode_activation_height,
             )?,
             image: ImageSettings::new(image, build_dir, ignore_cache, &target_dir)?,
@@ -238,6 +244,7 @@ mod tests {
         target_path: &'a std::path::Path,
         peer_overrides: Option<Vec<PeerOverride>>,
         consensus_mode: Option<&'a str>,
+        next_consensus_mode: Option<&'a str>,
         mode_activation_height: Option<u64>,
     }
 
@@ -254,6 +261,7 @@ mod tests {
             target_path,
             peer_overrides,
             consensus_mode,
+            next_consensus_mode,
             mode_activation_height,
         } = paths;
         let mut buffer = Vec::new();
@@ -268,6 +276,7 @@ mod tests {
             target_path,
             peer_overrides,
             consensus_mode.map(str::to_owned),
+            next_consensus_mode.map(str::to_owned),
             mode_activation_height,
         )
         .unwrap()
@@ -295,6 +304,7 @@ mod tests {
                 target_path: TARGET_PATH.as_ref(),
                 peer_overrides: None,
                 consensus_mode: None,
+                next_consensus_mode: None,
                 mode_activation_height: None,
             },
         )
@@ -317,14 +327,16 @@ mod tests {
                       jq \\
                           --arg executor \"$$EXECUTOR_ABSOLUTE_PATH\" \\
                           --arg ivm_dir \"$$IVM_DIR_ABSOLUTE_PATH\" \\
-                          --argjson topology \"$$TOPOLOGY\" \\
-                          'if ($executor|length)>0 then .executor = $$executor else del(.executor) end | if ($ivm_dir|length)>0 then .ivm_dir = $$ivm_dir else del(.ivm_dir) end | .topology = $$topology' /config/genesis.json \\
+                          'if ($executor|length)>0 then .executor = $$executor else del(.executor) end | if ($ivm_dir|length)>0 then .ivm_dir = $$ivm_dir else del(.ivm_dir) end' /config/genesis.json \\
                           >/tmp/genesis.json && \\
                       kagami genesis sign /tmp/genesis.json \\
                           --public-key $$GENESIS_PUBLIC_KEY \\
                           --private-key $$GENESIS_PRIVATE_KEY \\
                           ${GENESIS_CONSENSUS_MODE:+--consensus-mode $$GENESIS_CONSENSUS_MODE} \\
+                          ${GENESIS_NEXT_CONSENSUS_MODE:+--next-consensus-mode $$GENESIS_NEXT_CONSENSUS_MODE} \\
                           ${GENESIS_MODE_ACTIVATION_HEIGHT:+--mode-activation-height $$GENESIS_MODE_ACTIVATION_HEIGHT} \\
+                          --topology \"$$TOPOLOGY\" \\
+                          ${GENESIS_PEER_POPS:+$$GENESIS_PEER_POPS} \\
                           --out-file $$GENESIS \\
                       && \\
                       exec irohad
@@ -333,13 +345,14 @@ mod tests {
                   API_ADDRESS: 0.0.0.0:8080
                   CHAIN: 00000000-0000-0000-0000-000000000000
                   GENESIS: /tmp/genesis.signed.nrt
+                  GENESIS_PEER_POPS: '--peer-pop ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39=0xb9cd3633f028c577f15527ce9ea028e5b80223d380465f50cbc1cb0fbae7b608e63e28a0b10078e7a7f6e8954b35bb5712ad7d22e23469a11943052c035959444cde9cf2fc7524f4a17200c4e9f08620985f456f75c010c9d9682f8caa6c3cd5'
                   GENESIS_PRIVATE_KEY: 802620FB8B867188E4952F1E83534B9B2E0A12D5122BD6F417CBC79D50D8A8C9C917B0
                   GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
                   P2P_ADDRESS: 0.0.0.0:1337
                   P2P_PUBLIC_ADDRESS: irohad0:1337
-                  PRIVATE_KEY: 802620F173D8C4913E2244715B9BF810AC0A4DBE1C9E08F595C8D9510E3E335EF964BB
-                  PUBLIC_KEY: ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA
-                  TOPOLOGY: '["ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA"]'
+                  PRIVATE_KEY: 8926207AAB38417AB8226BEA595EB47FE1138165550E3BB5667F8AE4FFECBF6B2AC13D
+                  PUBLIC_KEY: ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39
+                  TOPOLOGY: '["ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39"]'
                 image: hyperledger/iroha:dev
                 init: true
                 ports:
@@ -376,14 +389,16 @@ mod tests {
                       jq \\
                           --arg executor \"$$EXECUTOR_ABSOLUTE_PATH\" \\
                           --arg ivm_dir \"$$IVM_DIR_ABSOLUTE_PATH\" \\
-                          --argjson topology \"$$TOPOLOGY\" \\
-                          'if ($executor|length)>0 then .executor = $$executor else del(.executor) end | if ($ivm_dir|length)>0 then .ivm_dir = $$ivm_dir else del(.ivm_dir) end | .topology = $$topology' /config/genesis.json \\
+                          'if ($executor|length)>0 then .executor = $$executor else del(.executor) end | if ($ivm_dir|length)>0 then .ivm_dir = $$ivm_dir else del(.ivm_dir) end' /config/genesis.json \\
                           >/tmp/genesis.json && \\
                       kagami genesis sign /tmp/genesis.json \\
                           --public-key $$GENESIS_PUBLIC_KEY \\
                           --private-key $$GENESIS_PRIVATE_KEY \\
                           ${GENESIS_CONSENSUS_MODE:+--consensus-mode $$GENESIS_CONSENSUS_MODE} \\
+                          ${GENESIS_NEXT_CONSENSUS_MODE:+--next-consensus-mode $$GENESIS_NEXT_CONSENSUS_MODE} \\
                           ${GENESIS_MODE_ACTIVATION_HEIGHT:+--mode-activation-height $$GENESIS_MODE_ACTIVATION_HEIGHT} \\
+                          --topology \"$$TOPOLOGY\" \\
+                          ${GENESIS_PEER_POPS:+$$GENESIS_PEER_POPS} \\
                           --out-file $$GENESIS \\
                       && \\
                       exec irohad
@@ -392,13 +407,14 @@ mod tests {
                   API_ADDRESS: 0.0.0.0:8080
                   CHAIN: 00000000-0000-0000-0000-000000000000
                   GENESIS: /tmp/genesis.signed.nrt
+                  GENESIS_PEER_POPS: '--peer-pop ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39=0xb9cd3633f028c577f15527ce9ea028e5b80223d380465f50cbc1cb0fbae7b608e63e28a0b10078e7a7f6e8954b35bb5712ad7d22e23469a11943052c035959444cde9cf2fc7524f4a17200c4e9f08620985f456f75c010c9d9682f8caa6c3cd5'
                   GENESIS_PRIVATE_KEY: 802620FB8B867188E4952F1E83534B9B2E0A12D5122BD6F417CBC79D50D8A8C9C917B0
                   GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
                   P2P_ADDRESS: 0.0.0.0:1337
                   P2P_PUBLIC_ADDRESS: irohad0:1337
-                  PRIVATE_KEY: 802620F173D8C4913E2244715B9BF810AC0A4DBE1C9E08F595C8D9510E3E335EF964BB
-                  PUBLIC_KEY: ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA
-                  TOPOLOGY: '["ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA"]'
+                  PRIVATE_KEY: 8926207AAB38417AB8226BEA595EB47FE1138165550E3BB5667F8AE4FFECBF6B2AC13D
+                  PUBLIC_KEY: ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39
+                  TOPOLOGY: '["ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39"]'
                 image: hyperledger/iroha:dev
                 init: true
                 ports:
@@ -434,14 +450,16 @@ mod tests {
                       jq \\
                           --arg executor \"$$EXECUTOR_ABSOLUTE_PATH\" \\
                           --arg ivm_dir \"$$IVM_DIR_ABSOLUTE_PATH\" \\
-                          --argjson topology \"$$TOPOLOGY\" \\
-                          'if ($executor|length)>0 then .executor = $$executor else del(.executor) end | if ($ivm_dir|length)>0 then .ivm_dir = $$ivm_dir else del(.ivm_dir) end | .topology = $$topology' /config/genesis.json \\
+                          'if ($executor|length)>0 then .executor = $$executor else del(.executor) end | if ($ivm_dir|length)>0 then .ivm_dir = $$ivm_dir else del(.ivm_dir) end' /config/genesis.json \\
                           >/tmp/genesis.json && \\
                       kagami genesis sign /tmp/genesis.json \\
                           --public-key $$GENESIS_PUBLIC_KEY \\
                           --private-key $$GENESIS_PRIVATE_KEY \\
                           ${GENESIS_CONSENSUS_MODE:+--consensus-mode $$GENESIS_CONSENSUS_MODE} \\
+                          ${GENESIS_NEXT_CONSENSUS_MODE:+--next-consensus-mode $$GENESIS_NEXT_CONSENSUS_MODE} \\
                           ${GENESIS_MODE_ACTIVATION_HEIGHT:+--mode-activation-height $$GENESIS_MODE_ACTIVATION_HEIGHT} \\
+                          --topology \"$$TOPOLOGY\" \\
+                          ${GENESIS_PEER_POPS:+$$GENESIS_PEER_POPS} \\
                           --out-file $$GENESIS \\
                       && \\
                       exec irohad
@@ -450,14 +468,15 @@ mod tests {
                   API_ADDRESS: 0.0.0.0:8080
                   CHAIN: 00000000-0000-0000-0000-000000000000
                   GENESIS: /tmp/genesis.signed.nrt
+                  GENESIS_PEER_POPS: '--peer-pop ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39=0xb9cd3633f028c577f15527ce9ea028e5b80223d380465f50cbc1cb0fbae7b608e63e28a0b10078e7a7f6e8954b35bb5712ad7d22e23469a11943052c035959444cde9cf2fc7524f4a17200c4e9f08620985f456f75c010c9d9682f8caa6c3cd5 --peer-pop ea0130AF63B2147C0EF0F20FD16CEDB429F427BCEA17EEC18224324B996077D9BBD53EF7842E96B670ECA000EA82B3A88CD8F0=0x932e9c24c0cee5b3c79174f89bffca9068ab96a5a183e29d2b0ca64ce688ca3caba4e63bd67fb2532b8ee1cdee19f479014a8df44540fda6853b161efcc8afc1561dbbc6422830d713087de8cb29f176f678fc8793c589f9bedbee53d84e1c73 --peer-pop ea0130A3C2A34B6C65EEC10C3B044F4F29401B43E8A8A4E104BA6B2ED9D00C0706FC196811D4BC96A88989F7FA6904FEF5F90A=0x92116175995869a1e32d7964fcea60289c50c9fd1bb7baa35453b4cea19e20e2cd75db3456f969217f2332662678632b074b46d6d23b91d2049023a8acd40d1de304fcd4bdd09b5e1e62bc0ef2e7f3c1e4a0d0f587c98f36b7be9d1744d9e165 --peer-pop ea013081877D45ECCFCDB08F4CE36B9E948F0C6367E0A6066712D989E4E40BD8577417AD633132C935DF04D5AF546FDEC356E9=0xb9e4f1ef4aae8b525ceccf97cdbdd598d9a70bd72821796c41311f5c0a475e3c7506f1717680038a9836e8a79516a85a0a7a1c4677e9a26d80dd567d42e81683eb35f7257a286469fdfa9e4ea8a0e399dc8e9749b488bf5180b0eb048c880457'
                   GENESIS_PRIVATE_KEY: 802620FB8B867188E4952F1E83534B9B2E0A12D5122BD6F417CBC79D50D8A8C9C917B0
                   GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
                   P2P_ADDRESS: 0.0.0.0:1337
                   P2P_PUBLIC_ADDRESS: irohad0:1337
-                  PRIVATE_KEY: 802620F173D8C4913E2244715B9BF810AC0A4DBE1C9E08F595C8D9510E3E335EF964BB
-                  PUBLIC_KEY: ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA
-                  TOPOLOGY: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300"]'
-                  TRUSTED_PEERS: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300"]'
+                  PRIVATE_KEY: 8926207AAB38417AB8226BEA595EB47FE1138165550E3BB5667F8AE4FFECBF6B2AC13D
+                  PUBLIC_KEY: ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39
+                  TOPOLOGY: '["ea013081877D45ECCFCDB08F4CE36B9E948F0C6367E0A6066712D989E4E40BD8577417AD633132C935DF04D5AF546FDEC356E9","ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39","ea0130A3C2A34B6C65EEC10C3B044F4F29401B43E8A8A4E104BA6B2ED9D00C0706FC196811D4BC96A88989F7FA6904FEF5F90A","ea0130AF63B2147C0EF0F20FD16CEDB429F427BCEA17EEC18224324B996077D9BBD53EF7842E96B670ECA000EA82B3A88CD8F0"]'
+                  TRUSTED_PEERS: '["ea013081877D45ECCFCDB08F4CE36B9E948F0C6367E0A6066712D989E4E40BD8577417AD633132C935DF04D5AF546FDEC356E9","ea0130A3C2A34B6C65EEC10C3B044F4F29401B43E8A8A4E104BA6B2ED9D00C0706FC196811D4BC96A88989F7FA6904FEF5F90A","ea0130AF63B2147C0EF0F20FD16CEDB429F427BCEA17EEC18224324B996077D9BBD53EF7842E96B670ECA000EA82B3A88CD8F0"]'
                 image: hyperledger/iroha:dev
                 init: true
                 ports:
@@ -476,9 +495,9 @@ mod tests {
                   GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
                   P2P_ADDRESS: 0.0.0.0:1338
                   P2P_PUBLIC_ADDRESS: irohad1:1338
-                  PRIVATE_KEY: 802620FD8E2F03755AA130464ABF57A75E207BE870636B57F614D7A7B94E42318F9CA9
-                  PUBLIC_KEY: ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2
-                  TRUSTED_PEERS: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300"]'
+                  PRIVATE_KEY: 892620C0E8730DDB91DF6EA2049A6C92B8CB76C5FAEEB61AD87D969B07585650E2D94C
+                  PUBLIC_KEY: ea0130AF63B2147C0EF0F20FD16CEDB429F427BCEA17EEC18224324B996077D9BBD53EF7842E96B670ECA000EA82B3A88CD8F0
+                  TRUSTED_PEERS: '["ea013081877D45ECCFCDB08F4CE36B9E948F0C6367E0A6066712D989E4E40BD8577417AD633132C935DF04D5AF546FDEC356E9","ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39","ea0130A3C2A34B6C65EEC10C3B044F4F29401B43E8A8A4E104BA6B2ED9D00C0706FC196811D4BC96A88989F7FA6904FEF5F90A"]'
                 image: hyperledger/iroha:dev
                 init: true
                 ports:
@@ -497,9 +516,9 @@ mod tests {
                   GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
                   P2P_ADDRESS: 0.0.0.0:1339
                   P2P_PUBLIC_ADDRESS: irohad2:1339
-                  PRIVATE_KEY: 8026203A18FAC2654F1C8A331A84F4B142396EEC900022B38842D88D55E0DE144C8DF2
-                  PUBLIC_KEY: ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300
-                  TRUSTED_PEERS: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA"]'
+                  PRIVATE_KEY: 892620D48701E56C55E12E34FFE323E9073A99FB020D24EA5136415C1724C78270790F
+                  PUBLIC_KEY: ea0130A3C2A34B6C65EEC10C3B044F4F29401B43E8A8A4E104BA6B2ED9D00C0706FC196811D4BC96A88989F7FA6904FEF5F90A
+                  TRUSTED_PEERS: '["ea013081877D45ECCFCDB08F4CE36B9E948F0C6367E0A6066712D989E4E40BD8577417AD633132C935DF04D5AF546FDEC356E9","ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39","ea0130AF63B2147C0EF0F20FD16CEDB429F427BCEA17EEC18224324B996077D9BBD53EF7842E96B670ECA000EA82B3A88CD8F0"]'
                 image: hyperledger/iroha:dev
                 init: true
                 ports:
@@ -518,9 +537,9 @@ mod tests {
                   GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
                   P2P_ADDRESS: 0.0.0.0:1340
                   P2P_PUBLIC_ADDRESS: irohad3:1340
-                  PRIVATE_KEY: 8026209464445DBA9030D6AC4F83161D3219144F886068027F6708AF9686F85DF6C4F0
-                  PUBLIC_KEY: ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26
-                  TRUSTED_PEERS: '["ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300"]'
+                  PRIVATE_KEY: 892620A58A3381FD2BB62E71F093EED8EDF9B7963A0BD2E6FF7F8E04994E0D70E7CF50
+                  PUBLIC_KEY: ea013081877D45ECCFCDB08F4CE36B9E948F0C6367E0A6066712D989E4E40BD8577417AD633132C935DF04D5AF546FDEC356E9
+                  TRUSTED_PEERS: '["ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39","ea0130A3C2A34B6C65EEC10C3B044F4F29401B43E8A8A4E104BA6B2ED9D00C0706FC196811D4BC96A88989F7FA6904FEF5F90A","ea0130AF63B2147C0EF0F20FD16CEDB429F427BCEA17EEC18224324B996077D9BBD53EF7842E96B670ECA000EA82B3A88CD8F0"]'
                 image: hyperledger/iroha:dev
                 init: true
                 ports:
@@ -553,14 +572,16 @@ mod tests {
                       jq \\
                           --arg executor \"$$EXECUTOR_ABSOLUTE_PATH\" \\
                           --arg ivm_dir \"$$IVM_DIR_ABSOLUTE_PATH\" \\
-                          --argjson topology \"$$TOPOLOGY\" \\
-                          'if ($executor|length)>0 then .executor = $$executor else del(.executor) end | if ($ivm_dir|length)>0 then .ivm_dir = $$ivm_dir else del(.ivm_dir) end | .topology = $$topology' /config/genesis.json \\
+                          'if ($executor|length)>0 then .executor = $$executor else del(.executor) end | if ($ivm_dir|length)>0 then .ivm_dir = $$ivm_dir else del(.ivm_dir) end' /config/genesis.json \\
                           >/tmp/genesis.json && \\
                       kagami genesis sign /tmp/genesis.json \\
                           --public-key $$GENESIS_PUBLIC_KEY \\
                           --private-key $$GENESIS_PRIVATE_KEY \\
                           ${GENESIS_CONSENSUS_MODE:+--consensus-mode $$GENESIS_CONSENSUS_MODE} \\
+                          ${GENESIS_NEXT_CONSENSUS_MODE:+--next-consensus-mode $$GENESIS_NEXT_CONSENSUS_MODE} \\
                           ${GENESIS_MODE_ACTIVATION_HEIGHT:+--mode-activation-height $$GENESIS_MODE_ACTIVATION_HEIGHT} \\
+                          --topology \"$$TOPOLOGY\" \\
+                          ${GENESIS_PEER_POPS:+$$GENESIS_PEER_POPS} \\
                           --out-file $$GENESIS \\
                       && \\
                       exec irohad
@@ -569,13 +590,14 @@ mod tests {
                   API_ADDRESS: 0.0.0.0:8080
                   CHAIN: 00000000-0000-0000-0000-000000000000
                   GENESIS: /tmp/genesis.signed.nrt
+                  GENESIS_PEER_POPS: '--peer-pop ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39=0xb9cd3633f028c577f15527ce9ea028e5b80223d380465f50cbc1cb0fbae7b608e63e28a0b10078e7a7f6e8954b35bb5712ad7d22e23469a11943052c035959444cde9cf2fc7524f4a17200c4e9f08620985f456f75c010c9d9682f8caa6c3cd5'
                   GENESIS_PRIVATE_KEY: 802620FB8B867188E4952F1E83534B9B2E0A12D5122BD6F417CBC79D50D8A8C9C917B0
                   GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
                   P2P_ADDRESS: 0.0.0.0:1337
                   P2P_PUBLIC_ADDRESS: irohad0:1337
-                  PRIVATE_KEY: 802620F173D8C4913E2244715B9BF810AC0A4DBE1C9E08F595C8D9510E3E335EF964BB
-                  PUBLIC_KEY: ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA
-                  TOPOLOGY: '["ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA"]'
+                  PRIVATE_KEY: 8926207AAB38417AB8226BEA595EB47FE1138165550E3BB5667F8AE4FFECBF6B2AC13D
+                  PUBLIC_KEY: ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39
+                  TOPOLOGY: '["ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39"]'
                 healthcheck:
                   interval: 2s
                   retries: 30
@@ -614,14 +636,16 @@ mod tests {
                       jq \\
                           --arg executor \"$$EXECUTOR_ABSOLUTE_PATH\" \\
                           --arg ivm_dir \"$$IVM_DIR_ABSOLUTE_PATH\" \\
-                          --argjson topology \"$$TOPOLOGY\" \\
-                          'if ($executor|length)>0 then .executor = $$executor else del(.executor) end | if ($ivm_dir|length)>0 then .ivm_dir = $$ivm_dir else del(.ivm_dir) end | .topology = $$topology' /config/genesis.json \\
+                          'if ($executor|length)>0 then .executor = $$executor else del(.executor) end | if ($ivm_dir|length)>0 then .ivm_dir = $$ivm_dir else del(.ivm_dir) end' /config/genesis.json \\
                           >/tmp/genesis.json && \\
                       kagami genesis sign /tmp/genesis.json \\
                           --public-key $$GENESIS_PUBLIC_KEY \\
                           --private-key $$GENESIS_PRIVATE_KEY \\
                           ${GENESIS_CONSENSUS_MODE:+--consensus-mode $$GENESIS_CONSENSUS_MODE} \\
+                          ${GENESIS_NEXT_CONSENSUS_MODE:+--next-consensus-mode $$GENESIS_NEXT_CONSENSUS_MODE} \\
                           ${GENESIS_MODE_ACTIVATION_HEIGHT:+--mode-activation-height $$GENESIS_MODE_ACTIVATION_HEIGHT} \\
+                          --topology \"$$TOPOLOGY\" \\
+                          ${GENESIS_PEER_POPS:+$$GENESIS_PEER_POPS} \\
                           --out-file $$GENESIS \\
                       && \\
                       exec irohad
@@ -630,14 +654,15 @@ mod tests {
                   API_ADDRESS: 0.0.0.0:8080
                   CHAIN: 00000000-0000-0000-0000-000000000000
                   GENESIS: /tmp/genesis.signed.nrt
+                  GENESIS_PEER_POPS: '--peer-pop ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39=0xb9cd3633f028c577f15527ce9ea028e5b80223d380465f50cbc1cb0fbae7b608e63e28a0b10078e7a7f6e8954b35bb5712ad7d22e23469a11943052c035959444cde9cf2fc7524f4a17200c4e9f08620985f456f75c010c9d9682f8caa6c3cd5 --peer-pop ea0130AF63B2147C0EF0F20FD16CEDB429F427BCEA17EEC18224324B996077D9BBD53EF7842E96B670ECA000EA82B3A88CD8F0=0x932e9c24c0cee5b3c79174f89bffca9068ab96a5a183e29d2b0ca64ce688ca3caba4e63bd67fb2532b8ee1cdee19f479014a8df44540fda6853b161efcc8afc1561dbbc6422830d713087de8cb29f176f678fc8793c589f9bedbee53d84e1c73 --peer-pop ea0130A3C2A34B6C65EEC10C3B044F4F29401B43E8A8A4E104BA6B2ED9D00C0706FC196811D4BC96A88989F7FA6904FEF5F90A=0x92116175995869a1e32d7964fcea60289c50c9fd1bb7baa35453b4cea19e20e2cd75db3456f969217f2332662678632b074b46d6d23b91d2049023a8acd40d1de304fcd4bdd09b5e1e62bc0ef2e7f3c1e4a0d0f587c98f36b7be9d1744d9e165 --peer-pop ea013081877D45ECCFCDB08F4CE36B9E948F0C6367E0A6066712D989E4E40BD8577417AD633132C935DF04D5AF546FDEC356E9=0xb9e4f1ef4aae8b525ceccf97cdbdd598d9a70bd72821796c41311f5c0a475e3c7506f1717680038a9836e8a79516a85a0a7a1c4677e9a26d80dd567d42e81683eb35f7257a286469fdfa9e4ea8a0e399dc8e9749b488bf5180b0eb048c880457'
                   GENESIS_PRIVATE_KEY: 802620FB8B867188E4952F1E83534B9B2E0A12D5122BD6F417CBC79D50D8A8C9C917B0
                   GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
                   P2P_ADDRESS: 0.0.0.0:1337
                   P2P_PUBLIC_ADDRESS: irohad0:1337
-                  PRIVATE_KEY: 802620F173D8C4913E2244715B9BF810AC0A4DBE1C9E08F595C8D9510E3E335EF964BB
-                  PUBLIC_KEY: ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA
-                  TOPOLOGY: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300"]'
-                  TRUSTED_PEERS: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300"]'
+                  PRIVATE_KEY: 8926207AAB38417AB8226BEA595EB47FE1138165550E3BB5667F8AE4FFECBF6B2AC13D
+                  PUBLIC_KEY: ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39
+                  TOPOLOGY: '["ea013081877D45ECCFCDB08F4CE36B9E948F0C6367E0A6066712D989E4E40BD8577417AD633132C935DF04D5AF546FDEC356E9","ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39","ea0130A3C2A34B6C65EEC10C3B044F4F29401B43E8A8A4E104BA6B2ED9D00C0706FC196811D4BC96A88989F7FA6904FEF5F90A","ea0130AF63B2147C0EF0F20FD16CEDB429F427BCEA17EEC18224324B996077D9BBD53EF7842E96B670ECA000EA82B3A88CD8F0"]'
+                  TRUSTED_PEERS: '["ea013081877D45ECCFCDB08F4CE36B9E948F0C6367E0A6066712D989E4E40BD8577417AD633132C935DF04D5AF546FDEC356E9","ea0130A3C2A34B6C65EEC10C3B044F4F29401B43E8A8A4E104BA6B2ED9D00C0706FC196811D4BC96A88989F7FA6904FEF5F90A","ea0130AF63B2147C0EF0F20FD16CEDB429F427BCEA17EEC18224324B996077D9BBD53EF7842E96B670ECA000EA82B3A88CD8F0"]'
                 healthcheck:
                   interval: 2s
                   retries: 30
@@ -660,9 +685,9 @@ mod tests {
                   GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
                   P2P_ADDRESS: 0.0.0.0:1338
                   P2P_PUBLIC_ADDRESS: irohad1:1338
-                  PRIVATE_KEY: 802620FD8E2F03755AA130464ABF57A75E207BE870636B57F614D7A7B94E42318F9CA9
-                  PUBLIC_KEY: ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2
-                  TRUSTED_PEERS: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300"]'
+                  PRIVATE_KEY: 892620C0E8730DDB91DF6EA2049A6C92B8CB76C5FAEEB61AD87D969B07585650E2D94C
+                  PUBLIC_KEY: ea0130AF63B2147C0EF0F20FD16CEDB429F427BCEA17EEC18224324B996077D9BBD53EF7842E96B670ECA000EA82B3A88CD8F0
+                  TRUSTED_PEERS: '["ea013081877D45ECCFCDB08F4CE36B9E948F0C6367E0A6066712D989E4E40BD8577417AD633132C935DF04D5AF546FDEC356E9","ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39","ea0130A3C2A34B6C65EEC10C3B044F4F29401B43E8A8A4E104BA6B2ED9D00C0706FC196811D4BC96A88989F7FA6904FEF5F90A"]'
                 healthcheck:
                   interval: 2s
                   retries: 30
@@ -685,9 +710,9 @@ mod tests {
                   GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
                   P2P_ADDRESS: 0.0.0.0:1339
                   P2P_PUBLIC_ADDRESS: irohad2:1339
-                  PRIVATE_KEY: 8026203A18FAC2654F1C8A331A84F4B142396EEC900022B38842D88D55E0DE144C8DF2
-                  PUBLIC_KEY: ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300
-                  TRUSTED_PEERS: '["ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26","ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA"]'
+                  PRIVATE_KEY: 892620D48701E56C55E12E34FFE323E9073A99FB020D24EA5136415C1724C78270790F
+                  PUBLIC_KEY: ea0130A3C2A34B6C65EEC10C3B044F4F29401B43E8A8A4E104BA6B2ED9D00C0706FC196811D4BC96A88989F7FA6904FEF5F90A
+                  TRUSTED_PEERS: '["ea013081877D45ECCFCDB08F4CE36B9E948F0C6367E0A6066712D989E4E40BD8577417AD633132C935DF04D5AF546FDEC356E9","ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39","ea0130AF63B2147C0EF0F20FD16CEDB429F427BCEA17EEC18224324B996077D9BBD53EF7842E96B670ECA000EA82B3A88CD8F0"]'
                 healthcheck:
                   interval: 2s
                   retries: 30
@@ -710,9 +735,9 @@ mod tests {
                   GENESIS_PUBLIC_KEY: ed0120F9F92758E815121F637C9704DFDA54842BA937AA721C0603018E208D6E25787E
                   P2P_ADDRESS: 0.0.0.0:1340
                   P2P_PUBLIC_ADDRESS: irohad3:1340
-                  PRIVATE_KEY: 8026209464445DBA9030D6AC4F83161D3219144F886068027F6708AF9686F85DF6C4F0
-                  PUBLIC_KEY: ed012063ED3DFEDEBD8A86B4941CC4379D2EF0B74BDFE61F033FC0C89867D57C882A26
-                  TRUSTED_PEERS: '["ed012064BD9B25BF8477144D03B26FC8CF5D8A354B2F780DA310EE69933DC1E86FBCE2","ed012087FDCACF58B891947600B0C37795CADB5A2AE6DE612338FDA9489AB21CE427BA","ed01208EA177921AF051CD12FC07E3416419320908883A1104B31401B650EEB820A300"]'
+                  PRIVATE_KEY: 892620A58A3381FD2BB62E71F093EED8EDF9B7963A0BD2E6FF7F8E04994E0D70E7CF50
+                  PUBLIC_KEY: ea013081877D45ECCFCDB08F4CE36B9E948F0C6367E0A6066712D989E4E40BD8577417AD633132C935DF04D5AF546FDEC356E9
+                  TRUSTED_PEERS: '["ea01308F5DE301D031B70D0E3B5410135371DB3F9639030F3FAC945925C94F7FF94E5D4FEEEA8965412A9E3348FF237DE0BF39","ea0130A3C2A34B6C65EEC10C3B044F4F29401B43E8A8A4E104BA6B2ED9D00C0706FC196811D4BC96A88989F7FA6904FEF5F90A","ea0130AF63B2147C0EF0F20FD16CEDB429F427BCEA17EEC18224324B996077D9BBD53EF7842E96B670ECA000EA82B3A88CD8F0"]'
                 healthcheck:
                   interval: 2s
                   retries: 30
@@ -754,6 +779,7 @@ mod tests {
                 target_path: &target_path,
                 peer_overrides: None,
                 consensus_mode: Some("npos"),
+                next_consensus_mode: Some("npos"),
                 mode_activation_height: Some(7),
             },
         );
@@ -763,12 +789,20 @@ mod tests {
             "genesis signing environment should carry consensus mode"
         );
         assert!(
+            output.contains("GENESIS_NEXT_CONSENSUS_MODE: npos"),
+            "genesis signing environment should carry next consensus mode"
+        );
+        assert!(
             output.contains("GENESIS_MODE_ACTIVATION_HEIGHT: 7"),
             "genesis signing environment should carry activation height"
         );
         assert!(
             output.contains("--consensus-mode $$GENESIS_CONSENSUS_MODE"),
             "signing command must forward consensus mode override"
+        );
+        assert!(
+            output.contains("--next-consensus-mode $$GENESIS_NEXT_CONSENSUS_MODE"),
+            "signing command must forward next consensus mode override"
         );
         assert!(
             output.contains("--mode-activation-height $$GENESIS_MODE_ACTIVATION_HEIGHT"),
@@ -793,6 +827,7 @@ mod tests {
                 target_path: &target_path,
                 peer_overrides: None,
                 consensus_mode: None,
+                next_consensus_mode: None,
                 mode_activation_height: None,
             },
         );
@@ -837,6 +872,7 @@ mod tests {
                 target_path: &target_path,
                 peer_overrides: Some(overrides),
                 consensus_mode: None,
+                next_consensus_mode: None,
                 mode_activation_height: None,
             },
         );
@@ -872,6 +908,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert!(matches!(result, Err(crate::Error::TargetFileIsADirectory)));
@@ -899,6 +936,7 @@ mod tests {
             false,
             &target_path,
             Some(overrides),
+            None,
             None,
             None,
         );

@@ -1,6 +1,20 @@
 //! Negative tests for adaptive AoS rows decoding.
 use norito::core::Error;
 
+#[cfg(feature = "compact-len")]
+fn write_varint_len(out: &mut Vec<u8>, mut value: u64) {
+    loop {
+        let byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value == 0 {
+            out.push(byte);
+            break;
+        } else {
+            out.push(byte | 0x80);
+        }
+    }
+}
+
 #[test]
 fn decode_rows_u64_str_bool_adaptive_truncated_header() {
     // Tag + incomplete varint length
@@ -21,7 +35,7 @@ fn decode_rows_u64_str_bool_adaptive_truncated_row() {
     // n = 1
     #[cfg(feature = "compact-len")]
     {
-        norito::core::write_len_to_vec(&mut body, 1);
+        write_varint_len(&mut body, 1);
     }
     #[cfg(not(feature = "compact-len"))]
     {
@@ -34,7 +48,7 @@ fn decode_rows_u64_str_bool_adaptive_truncated_row() {
     // name length = 3, name bytes = "abc"
     #[cfg(feature = "compact-len")]
     {
-        norito::core::write_len_to_vec(&mut body, 3);
+        write_varint_len(&mut body, 3);
     }
     #[cfg(not(feature = "compact-len"))]
     {

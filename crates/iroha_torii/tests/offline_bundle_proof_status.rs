@@ -174,13 +174,24 @@ fn build_harness(include_proof: bool) -> Harness {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(
+    let chain_id = cfg.common.chain.clone();
+    #[cfg(feature = "telemetry")]
+    let state = Arc::new(State::new_with_chain(
         World::default(),
         Arc::clone(&kura),
         query,
+        chain_id.clone(),
+        iroha_core::telemetry::StateTelemetry::default(),
+    ));
+    #[cfg(not(feature = "telemetry"))]
+    let state = Arc::new(State::new_with_chain(
+        World::default(),
+        Arc::clone(&kura),
+        query,
+        chain_id.clone(),
     ));
 
-    let fixtures = build_fixtures(include_proof);
+    let fixtures = build_fixtures(chain_id.clone(), include_proof);
     seed_state(&state, &fixtures);
 
     let queue_cfg = QueueConfig::default();
@@ -190,7 +201,7 @@ fn build_harness(include_proof: bool) -> Harness {
     drop(peers_tx);
 
     let torii = Torii::new_with_handle(
-        ChainId::from("test-chain"),
+        chain_id,
         kiso,
         cfg.torii.clone(),
         queue,
@@ -211,8 +222,7 @@ fn build_harness(include_proof: bool) -> Harness {
 }
 
 #[allow(clippy::too_many_lines)]
-fn build_fixtures(include_proof: bool) -> Fixtures {
-    let chain_id = ChainId::from("test-chain");
+fn build_fixtures(chain_id: ChainId, include_proof: bool) -> Fixtures {
     let domain = iroha_data_model::domain::DomainId::from_str("merchants").expect("domain id");
     let operator_keys = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
     let operator = AccountId::of(domain.clone(), operator_keys.public_key().clone());
@@ -335,9 +345,9 @@ fn build_fixtures(include_proof: bool) -> Fixtures {
         let envelope = AggregateProofEnvelope {
             version: AGGREGATE_PROOF_VERSION_V1,
             receipts_root,
-            proof_sum: Some(vec![0; 2]),
+            proof_sum: None,
             proof_counter: None,
-            proof_replay: Some(vec![1; 3]),
+            proof_replay: None,
             metadata: proof_metadata,
         };
         (
@@ -345,9 +355,9 @@ fn build_fixtures(include_proof: bool) -> Fixtures {
             Some(receipts_root_hex.clone()),
             Some(ExpectedSummary {
                 version: AGGREGATE_PROOF_VERSION_V1,
-                proof_sum_bytes: Some(2),
+                proof_sum_bytes: None,
                 proof_counter_bytes: None,
-                proof_replay_bytes: Some(3),
+                proof_replay_bytes: None,
                 metadata_keys,
             }),
         )

@@ -5933,6 +5933,18 @@ pub struct Metrics {
     pub state_tiered_cold_entries: GenericGauge<AtomicU64>,
     /// Tiered state: total bytes written to the cold tier in the latest snapshot.
     pub state_tiered_cold_bytes: GenericGauge<AtomicU64>,
+    /// Tiered state: cold entries reused without re-encoding in the latest snapshot.
+    pub state_tiered_cold_reused_entries: GenericGauge<AtomicU64>,
+    /// Tiered state: total bytes reused from cold payloads in the latest snapshot.
+    pub state_tiered_cold_reused_bytes: GenericGauge<AtomicU64>,
+    /// Tiered state: entries promoted into the hot tier in the latest snapshot.
+    pub state_tiered_hot_promotions: GenericGauge<AtomicU64>,
+    /// Tiered state: entries demoted into the cold tier in the latest snapshot.
+    pub state_tiered_hot_demotions: GenericGauge<AtomicU64>,
+    /// Tiered state: hot-tier key budget overflow caused by grace retention.
+    pub state_tiered_hot_grace_overflow_keys: GenericGauge<AtomicU64>,
+    /// Tiered state: hot-tier byte budget overflow caused by grace retention.
+    pub state_tiered_hot_grace_overflow_bytes: GenericGauge<AtomicU64>,
     /// Tiered state: last recorded snapshot index.
     pub state_tiered_last_snapshot_index: GenericGauge<AtomicU64>,
     /// Governance: proposal counts grouped by status
@@ -6278,6 +6290,10 @@ pub struct Metrics {
     pub sumeragi_da_gate_satisfied_total: IntCounterVec,
     /// Sumeragi DA manifest guard: outcomes labeled by result/reason.
     pub sumeragi_da_manifest_guard_total: IntCounterVec,
+    /// Sumeragi DA manifest cache: outcomes labeled by result.
+    pub sumeragi_da_manifest_cache_total: IntCounterVec,
+    /// Sumeragi DA spool cache: outcomes labeled by kind/result.
+    pub sumeragi_da_spool_cache_total: IntCounterVec,
     /// Sumeragi DA pin intent spool: outcomes labeled by result/reason.
     pub sumeragi_da_pin_intent_spool_total: IntCounterVec,
     /// Sumeragi RBC: active sessions (gauge)
@@ -8006,6 +8022,36 @@ impl Default for Metrics {
             "Total bytes written to the tiered-state cold tier in the latest snapshot",
         )
         .expect("Infallible");
+        let state_tiered_cold_reused_entries = GenericGauge::new(
+            "state_tiered_cold_reused_entries",
+            "Cold entries reused without re-encoding in the latest tiered-state snapshot",
+        )
+        .expect("Infallible");
+        let state_tiered_cold_reused_bytes = GenericGauge::new(
+            "state_tiered_cold_reused_bytes",
+            "Total bytes reused from cold payloads in the latest tiered-state snapshot",
+        )
+        .expect("Infallible");
+        let state_tiered_hot_promotions = GenericGauge::new(
+            "state_tiered_hot_promotions",
+            "Entries promoted into the tiered-state hot tier in the latest snapshot",
+        )
+        .expect("Infallible");
+        let state_tiered_hot_demotions = GenericGauge::new(
+            "state_tiered_hot_demotions",
+            "Entries demoted into the tiered-state cold tier in the latest snapshot",
+        )
+        .expect("Infallible");
+        let state_tiered_hot_grace_overflow_keys = GenericGauge::new(
+            "state_tiered_hot_grace_overflow_keys",
+            "Hot-tier key budget overflow caused by grace retention in the latest snapshot",
+        )
+        .expect("Infallible");
+        let state_tiered_hot_grace_overflow_bytes = GenericGauge::new(
+            "state_tiered_hot_grace_overflow_bytes",
+            "Hot-tier byte budget overflow caused by grace retention in the latest snapshot",
+        )
+        .expect("Infallible");
         let state_tiered_last_snapshot_index = GenericGauge::new(
             "state_tiered_last_snapshot_index",
             "Latest tiered-state snapshot index recorded by this peer",
@@ -9073,6 +9119,22 @@ impl Default for Metrics {
                 "Sumeragi DA manifest guard outcomes (allowed|rejected by reason)",
             ),
             &["result", "reason"],
+        )
+        .expect("Infallible");
+        let sumeragi_da_manifest_cache_total = IntCounterVec::new(
+            Opts::new(
+                "sumeragi_da_manifest_cache_total",
+                "Sumeragi DA manifest cache outcomes (hit|miss)",
+            ),
+            &["result"],
+        )
+        .expect("Infallible");
+        let sumeragi_da_spool_cache_total = IntCounterVec::new(
+            Opts::new(
+                "sumeragi_da_spool_cache_total",
+                "Sumeragi DA spool cache outcomes (hit|miss by kind)",
+            ),
+            &["kind", "result"],
         )
         .expect("Infallible");
         let sumeragi_da_pin_intent_spool_total = IntCounterVec::new(
@@ -12337,6 +12399,12 @@ impl Default for Metrics {
             state_tiered_hot_entries,
             state_tiered_cold_entries,
             state_tiered_cold_bytes,
+            state_tiered_cold_reused_entries,
+            state_tiered_cold_reused_bytes,
+            state_tiered_hot_promotions,
+            state_tiered_hot_demotions,
+            state_tiered_hot_grace_overflow_keys,
+            state_tiered_hot_grace_overflow_bytes,
             state_tiered_last_snapshot_index,
             alias_usage_total,
             iso_reference_status,
@@ -12457,6 +12525,8 @@ impl Default for Metrics {
             sumeragi_da_gate_last_satisfied,
             sumeragi_da_gate_satisfied_total,
             sumeragi_da_manifest_guard_total,
+            sumeragi_da_manifest_cache_total,
+            sumeragi_da_spool_cache_total,
             sumeragi_da_pin_intent_spool_total,
             sumeragi_post_to_peer_total,
             sumeragi_bg_post_enqueued_total,
@@ -12802,6 +12872,12 @@ impl Default for Metrics {
             state_tiered_hot_entries,
             state_tiered_cold_entries,
             state_tiered_cold_bytes,
+            state_tiered_cold_reused_entries,
+            state_tiered_cold_reused_bytes,
+            state_tiered_hot_promotions,
+            state_tiered_hot_demotions,
+            state_tiered_hot_grace_overflow_keys,
+            state_tiered_hot_grace_overflow_bytes,
             state_tiered_last_snapshot_index,
             governance_proposals_status,
             governance_council_members,
@@ -13014,6 +13090,8 @@ impl Default for Metrics {
             sumeragi_da_gate_last_satisfied,
             sumeragi_da_gate_satisfied_total,
             sumeragi_da_manifest_guard_total,
+            sumeragi_da_manifest_cache_total,
+            sumeragi_da_spool_cache_total,
             sumeragi_da_pin_intent_spool_total,
             sumeragi_rbc_sessions_active,
             sumeragi_rbc_sessions_pruned_total,

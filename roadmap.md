@@ -4,6 +4,7 @@ This roadmap enumerates the outstanding efforts required to ship the optional
 NPoS Sumeragi mode and keep the broader Nexus transition on track. For every task listed here we are preparing the first public release, so teams can design and implement with a clean slate. Completed
 items continue to live in `status.md`; only tasks that still need engineering
 work appear here.
+Latest sync: crypto Merkle/compact-proof/multihash/PublicKeyCompact hardening is complete; no new open crypto hygiene items (see `status.md`).
 
 The repository now serves two release lines:
 - **Iroha 2** — the self-hosted deployment track for organisations running
@@ -154,8 +155,16 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Remove Swift SDK ConnectKeyStore plaintext migration + OfflineVerdictStore shim; update the iOS demo to drop pipeline guidance.
  - [x] Remove width inference in rANS table tooling (require explicit `width_bits`).
  - [x] Clean Torii contract API and IVM docs to remove alias notes.
+ - [x] Harden Norito length decoding to reject u64→usize overflows across core and AoS columnar views; add regression coverage.
+ - [x] Tighten Norito StreamMapIter packed-seq offset validation and payload length accounting; add regression coverage.
+ - [x] Validate NCB name/opt-str offsets for monotonicity and use canonical DecodeFromSlice in Norito streaming types; add regression coverage.
+ - [x] Harden NCB columnar views with checked length multipliers, enum dict code validation, and u32-delta bounds; add regression coverage.
+ - [x] Validate NCB dict codes, harden opt-column length parsing, and guard SIMD bundle length handling; add regression coverage.
+ - [x] Reject id-delta underflow in NCB views and add regression coverage for delta-coded ids.
+ - [x] Guard opt-column presence-bitset masking against 32-bit overflow in optstr/optu32 NCB views.
  - [ ] Enforce ABI v1 only (remove Experimental policy paths) and update related tests/docs.
  - [ ] Remove Norito toggles and length/offset decode paths (update `norito.md`).
+ - [x] Standardize Norito length-prefix flag scoping (COMPACT_LEN/COMPACT_SEQ_LEN/VARINT_OFFSETS) and update the spec/docs.
  - [x] Sweep docs/translations for remaining references and clean up tooling flags.
 
 17. **BRIDGE-RECEIPTS-TYPED — Replace bridge log stub with typed events** (Core/Executor/CLI, Line: Shared, Owner: Core Protocol WG, Priority: Medium, Status: 🈴 Completed, target TBD)
@@ -197,6 +206,14 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Portal SoraFS orchestrator tuning guide translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
  - [x] Portal SoraFS multi-source rollout runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
  - [x] Portal SoraFS orchestrator configuration guide translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
+
+25. **NEXUS-STORAGE-BUDGETS — Enforce global storage budgets + DA offload** (Storage/Core, Line: Iroha 3, Owner: Nexus Core WG, Priority: High, Status: 🈺 In Progress, target TBD)
+ - [x] Add Nexus storage budget configuration with per-component weight splits, clamp Kura/WSV cold tier/SoraFS/SoraNet spool caps, and wire defaults into the Nexus profile config.
+ - [x] Account for merge-ledger + sidecar + roster journal bytes (including queued blocks + retired lanes) in Kura budget enforcement.
+ - [ ] Surface operator-facing warnings/telemetry when caps trigger.
+ - [ ] Implement live hot-tier eviction using measured WSV memory usage (not snapshot size estimates).
+ - [ ] Wire dedicated SoraVPN spool caps and DA-backed cold/Wsv retrieval for Iroha 3 while keeping Iroha 2 full-replica behavior (SoraVPN budget currently folds into SoraNet spool caps).
+ - [ ] Add operator guidance + metrics for sizing `nexus.storage` budgets and monitoring cap pressure.
  - [x] Portal SoraFS node operations runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
  - [x] Portal SoraFS node storage design translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
  - [x] Portal SoraFS node implementation plan translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
@@ -979,6 +996,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Allow localnet/swarm generation to set `--mode-activation-height` (default none) so staged NPoS activation is reproducible; fail fast when NPoS is requested without `sumeragi_npos_parameters` via the shared helper.【crates/iroha_kagami/src/genesis/npos.rs:16】【crates/iroha_kagami/src/swarm.rs:145】【crates/iroha_kagami/src/localnet.rs:77】
  - [x] Add doc snippets/workflows for spinning up NPoS devnets via Kagami (bare-metal and Docker), including how to supply VRF seeds/rosters and how to pass PoPs/topology at sign time.【crates/iroha_kagami/README.md:45】【crates/iroha_kagami/docs/swarm.md:97】
  - [x] Tests: regenerate localnet/swarm fixtures under both modes; add sanity checks that generated configs parse and that NPoS manifests carry `next_mode` + `mode_activation_height` when requested.【crates/iroha_kagami/src/localnet.rs:848】【crates/iroha_swarm/src/schema.rs:177】
+ - [x] Enforce Iroha3 NPoS-only consensus with no staged cutovers across Kagami generate/sign/localnet/swarm, propagate BLS PoPs into swarm signing, and update Kagami swarm/NPoS docs to use the `--next-consensus-mode` + activation-height pair.【crates/iroha_kagami/src/genesis/generate.rs:410】【crates/iroha_kagami/src/genesis/sign.rs:86】【crates/iroha_kagami/src/swarm.rs:145】【crates/iroha_swarm/src/schema.rs:74】【crates/iroha_kagami/docs/swarm.md:67】
 
 
 1. **SUM-MODE-CUTOVER — Make consensus mode transitions operable and explicit** (Consensus/Genesis/Config, Status: 🈴 Completed, target TBD)

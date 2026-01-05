@@ -157,13 +157,24 @@ fn build_receipt_harness() -> ReceiptHarness {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(
+    let chain_id = cfg.common.chain.clone();
+    #[cfg(feature = "telemetry")]
+    let state = Arc::new(State::new_with_chain(
         World::default(),
         Arc::clone(&kura),
         query,
+        chain_id.clone(),
+        iroha_core::telemetry::StateTelemetry::default(),
+    ));
+    #[cfg(not(feature = "telemetry"))]
+    let state = Arc::new(State::new_with_chain(
+        World::default(),
+        Arc::clone(&kura),
+        query,
+        chain_id.clone(),
     ));
 
-    let fixtures = build_receipt_fixtures();
+    let fixtures = build_receipt_fixtures(chain_id.clone());
     seed_offline_receipts(&state, &fixtures);
 
     let queue_cfg = QueueConfig::default();
@@ -173,7 +184,7 @@ fn build_receipt_harness() -> ReceiptHarness {
     drop(peers_tx);
 
     let torii = Torii::new_with_handle(
-        ChainId::from("test-chain"),
+        chain_id,
         kiso,
         cfg.torii.clone(),
         queue,
@@ -194,8 +205,7 @@ fn build_receipt_harness() -> ReceiptHarness {
 }
 
 #[allow(clippy::too_many_lines)]
-fn build_receipt_fixtures() -> ReceiptFixtures {
-    let chain_id = ChainId::from("test-chain");
+fn build_receipt_fixtures(chain_id: ChainId) -> ReceiptFixtures {
     let domain = iroha_data_model::domain::DomainId::from_str("merchants").expect("domain id");
     let operator_keys = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
     let operator = AccountId::of(domain.clone(), operator_keys.public_key().clone());

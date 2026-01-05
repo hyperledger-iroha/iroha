@@ -574,6 +574,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         kura: A::Kura {
             init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: WithOrigin::inline(std::env::temp_dir()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: nonzero!(10usize),
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -755,8 +756,11 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         tiered_state: A::TieredState {
             enabled: defaults::tiered_state::ENABLED,
             hot_retained_keys: defaults::tiered_state::HOT_RETAINED_KEYS,
+            hot_retained_bytes: defaults::tiered_state::HOT_RETAINED_BYTES,
+            hot_retained_grace_snapshots: defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
             cold_store_root: None,
             max_snapshots: defaults::tiered_state::MAX_SNAPSHOTS,
+            max_cold_bytes: defaults::tiered_state::MAX_COLD_BYTES,
         },
         compute: A::Compute {
             enabled: defaults::compute::ENABLED,

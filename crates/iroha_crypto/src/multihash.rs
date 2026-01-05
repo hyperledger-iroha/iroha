@@ -39,31 +39,25 @@ pub fn encode_private_key(
     encode_multihash(digest_function, payload)
 }
 
-pub fn multihash_to_hex_string(bytes: &[u8]) -> String {
+/// Format a multihash as a canonical hex string.
+///
+/// # Errors
+///
+/// Returns an error when the input is not a canonical multihash payload.
+pub fn multihash_to_hex_string(bytes: &[u8]) -> Result<String, ParseError> {
     // Format as: <varint fn-code lower><varint len lower><payload upper>
     // Length may span multiple varint bytes for larger keys (e.g., ML‑DSA).
-    // Find end of varint-encoded function code
-    let idx_fn_end = bytes
-        .iter()
-        .enumerate()
-        .find(|&(_, &b)| (b & 0b1000_0000) == 0)
-        .map_or_else(|| bytes.len().saturating_sub(1), |(i, _)| i);
+    let (digest_function, payload) = decode_multihash(bytes)?;
+    let df_varint: varint::VarUint = digest_function.into();
+    let df_bytes: Vec<u8> = df_varint.into();
+    let len_varint: varint::VarUint = (payload.len() as u64).into();
+    let len_bytes: Vec<u8> = len_varint.into();
 
-    let (fn_code_bytes, rest) = bytes.split_at(idx_fn_end + 1);
-    // Find end of varint-encoded digest length within the remaining bytes
-    let idx_len_end = rest
-        .iter()
-        .enumerate()
-        .find(|&(_, &b)| (b & 0b1000_0000) == 0)
-        .map_or_else(|| rest.len().saturating_sub(1), |(i, _)| i);
-
-    let (len_bytes, payload) = rest.split_at(idx_len_end + 1);
-
-    let fn_code = hex::encode(fn_code_bytes);
+    let fn_code = hex::encode(df_bytes);
     let dig_size = hex::encode(len_bytes);
     let key = hex::encode_upper(payload);
 
-    format!("{fn_code}{dig_size}{key}")
+    Ok(format!("{fn_code}{dig_size}{key}"))
 }
 
 /// Encode a public key into an algorithm-prefixed multihash hex string, e.g. "ed25519:...".
@@ -76,7 +70,7 @@ pub fn encode_public_key_prefixed(
     Ok(format!(
         "{}:{}",
         algorithm.as_static_str(),
-        multihash_to_hex_string(&mh)
+        multihash_to_hex_string(&mh).map_err(|err| MultihashConvertError::new(err.to_string()))?
     ))
 }
 
@@ -90,7 +84,7 @@ pub fn encode_private_key_prefixed(
     Ok(format!(
         "{}:{}",
         algorithm.as_static_str(),
-        multihash_to_hex_string(&mh)
+        multihash_to_hex_string(&mh).map_err(|err| MultihashConvertError::new(err.to_string()))?
     ))
 }
 
@@ -415,6 +409,24 @@ mod tests {
             hex_decode("ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4")
                 .unwrap();
         assert_eq!(decode_public_key(&multihash).unwrap(), (algorithm, payload));
+    }
+
+    #[test]
+    fn multihash_to_hex_string_formats_canonical() {
+        let multihash =
+            hex_decode("ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4")
+                .unwrap();
+        let formatted = multihash_to_hex_string(&multihash).expect("format");
+        assert_eq!(
+            formatted,
+            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
+        );
+    }
+
+    #[test]
+    fn multihash_to_hex_string_rejects_truncated_input() {
+        assert!(multihash_to_hex_string(&[]).is_err());
+        assert!(multihash_to_hex_string(&[0x01]).is_err());
     }
 
     #[test]

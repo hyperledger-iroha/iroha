@@ -4753,7 +4753,7 @@ mod evidence_submit_tests {
                 v2: vote,
             },
         };
-        let encoded = hex::encode(forged.encode());
+        let encoded = hex::encode(norito::to_bytes(&forged).expect("encode evidence"));
         let err = decode_and_validate_evidence(&encoded, &state, &chain_id)
             .expect_err("invalid evidence must fail");
         assert!(matches!(
@@ -4770,7 +4770,7 @@ mod evidence_submit_tests {
         let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let state = test_state_with_peer(PeerId::new(keypair.public_key().clone()));
         let ev = sample_evidence(&chain_id, &keypair);
-        let encoded = hex::encode(ev.encode());
+        let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
         let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
             .expect("valid evidence should be accepted");
         assert_eq!(decoded.kind, EvidenceKind::DoublePrevote);
@@ -4796,7 +4796,7 @@ mod evidence_submit_tests {
             kind: EvidenceKind::DoublePrevote,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
-        let encoded = hex::encode(ev.encode());
+        let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
         let err = decode_and_validate_evidence(&encoded, &state, &chain_id)
             .expect_err("mismatched mode evidence must fail");
         assert!(matches!(
@@ -4921,13 +4921,16 @@ mod evidence_submit_tests {
         }
 
         let mode_tag = iroha_core::sumeragi::consensus::NPOS_TAG;
-        let v1 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x11);
-        let v2 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x22);
+        let signer_index = u32::try_from(leader_epoch0).expect("leader index fits in vote signer");
+        let mut v1 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x11);
+        v1.signer = signer_index;
+        let mut v2 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x22);
+        v2.signer = signer_index;
         let ev = Evidence {
             kind: EvidenceKind::DoublePrevote,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
-        let encoded = hex::encode(ev.encode());
+        let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
         let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
             .expect("evidence should validate with subject-height seed");
         assert_eq!(decoded.kind, EvidenceKind::DoublePrevote);
@@ -11342,6 +11345,15 @@ fn validate_tx_filter_adapter(
     use iroha_crypto::HashOf;
     use iroha_data_model::{prelude as dm, query::error::QueryExecutionFail, transaction::signed};
 
+    fn invalid_field_path(field: &str) -> Error {
+        Error::AppQueryValidation {
+            code: "invalid_field_path",
+            message: format!(
+                "unsupported field `{field}` for {ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY}"
+            ),
+        }
+    }
+
     fn validate_rec(
         expr: &FilterExpr,
         depth: usize,
@@ -11400,7 +11412,7 @@ fn validate_tx_filter_adapter(
                         .map(|_| ())
                         .map_err(|_| Error::Query(dm::ValidationFail::TooComplex))
                 }
-                _ => Err(Error::Query(dm::ValidationFail::TooComplex)),
+                _ => Err(invalid_field_path(f.0.as_str())),
             },
             F::Lt(f, v) | F::Lte(f, v) | F::Gt(f, v) | F::Gte(f, v) => match f.0.as_str() {
                 "timestamp_ms" => {
@@ -11409,7 +11421,13 @@ fn validate_tx_filter_adapter(
                     }
                     Ok(())
                 }
-                _ => Err(Error::Query(dm::ValidationFail::TooComplex)),
+                field
+                    if matches!(field, "authority" | "entrypoint_hash" | "result_ok")
+                        || field.starts_with("metadata.") =>
+                {
+                    Err(Error::Query(dm::ValidationFail::TooComplex))
+                }
+                _ => Err(invalid_field_path(f.0.as_str())),
             },
             F::In(f, list) | F::Nin(f, list) => {
                 if list.len() > MAX_SET {
@@ -11467,7 +11485,7 @@ fn validate_tx_filter_adapter(
                             Err(Error::Query(dm::ValidationFail::TooComplex))
                         }
                     }
-                    _ => Err(Error::Query(dm::ValidationFail::TooComplex)),
+                    _ => Err(invalid_field_path(f.0.as_str())),
                 }
             }
             F::Exists(f) | F::IsNull(f) => match f.0.as_str() {
@@ -11478,7 +11496,7 @@ fn validate_tx_filter_adapter(
                         .map(|_| ())
                         .map_err(|_| Error::Query(dm::ValidationFail::TooComplex))
                 }
-                _ => Err(Error::Query(dm::ValidationFail::TooComplex)),
+                _ => Err(invalid_field_path(f.0.as_str())),
             },
         }
     }
@@ -12150,6 +12168,10 @@ pub const ENDPOINT_ACCOUNTS_ASSETS: &str = "/v1/accounts/{account_id}/assets";
 pub const ENDPOINT_ACCOUNTS_ASSETS_QUERY: &str = "/v1/accounts/{account_id}/assets/query";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_PORTFOLIO: &str = "/v1/accounts/{uaid}/portfolio";
+#[cfg(feature = "app_api")]
+const ENDPOINT_DOMAINS_LIST: &str = "/v1/domains";
+#[cfg(feature = "app_api")]
+const ENDPOINT_DOMAINS_QUERY: &str = "/v1/domains/query";
 pub const ENDPOINT_SPACE_DIRECTORY_BINDINGS: &str = "/v1/space-directory/uaids/{uaid}";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_SPACE_DIRECTORY_MANIFESTS: &str = "/v1/space-directory/uaids/{uaid}/manifests";
@@ -14043,9 +14065,18 @@ mod sse_filter_tests {
     }
 
     fn sample_offline_event(policy: AndroidIntegrityPolicy) -> EventBox {
-        let controller: AccountId = "alice@wonderland".parse().unwrap();
-        let receiver: AccountId = "bob@wonderland".parse().unwrap();
-        let deposit: AccountId = "carol@wonderland".parse().unwrap();
+        let controller: AccountId =
+            "ed0120aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@wonderland"
+                .parse()
+                .unwrap();
+        let receiver: AccountId =
+            "ed0120bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb@wonderland"
+                .parse()
+                .unwrap();
+        let deposit: AccountId =
+            "ed0120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc@wonderland"
+                .parse()
+                .unwrap();
         let asset_definition: AssetDefinitionId = "rose#wonderland".parse().unwrap();
         let bundled = OfflineTransferSettled {
             bundle_id: Hash::new(b"bundle"),
@@ -16557,6 +16588,7 @@ mod tx_query_integration_smoke {
 #[cfg(all(test, feature = "app_api"))]
 mod app_api_integration_tests {
     use std::borrow::Cow;
+    use std::sync::{LazyLock, Mutex, MutexGuard};
 
     use axum::{Router, routing::post};
     use http_body_util::BodyExt as _;
@@ -16574,6 +16606,37 @@ mod app_api_integration_tests {
     use super::*;
     use crate::tests_runtime_handlers::mk_app_state_for_tests;
 
+    static APP_QUERY_LIMITS_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    fn app_query_limits_guard() -> MutexGuard<'static, ()> {
+        APP_QUERY_LIMITS_TEST_LOCK
+            .lock()
+            .expect("app query limits test lock poisoned")
+    }
+
+    struct AppQueryLimitsOverride {
+        _guard: MutexGuard<'static, ()>,
+        previous: AppQueryLimits,
+    }
+
+    impl AppQueryLimitsOverride {
+        fn new(limits: AppQueryLimits) -> Self {
+            let guard = app_query_limits_guard();
+            let previous = app_query_limits();
+            set_app_query_limits(limits);
+            Self {
+                _guard: guard,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for AppQueryLimitsOverride {
+        fn drop(&mut self) {
+            set_app_query_limits(self.previous);
+        }
+    }
+
     fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
         crate::json_object(pairs)
     }
@@ -16586,8 +16649,33 @@ mod app_api_integration_tests {
         crate::json_value(value)
     }
 
+    fn state_with_assets(
+        domain_id: DomainId,
+        authority: AccountId,
+        accounts: Vec<AccountId>,
+        asset_definitions: Vec<AssetDefinitionId>,
+        assets: Vec<Asset>,
+    ) -> Arc<State> {
+        let domain = Domain::new(domain_id).build(&authority);
+        let accounts: Vec<Account> = accounts
+            .into_iter()
+            .map(|id| Account::new(id).build(&authority))
+            .collect();
+        let asset_definitions: Vec<AssetDefinition> = asset_definitions
+            .into_iter()
+            .map(|id| AssetDefinition::numeric(id).build(&authority))
+            .collect();
+        let world = World::with_assets([domain], accounts, asset_definitions, assets, []);
+        Arc::new(iroha_core::state::State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ))
+    }
+
     #[tokio::test]
     async fn tx_query_empty_ok() {
+        let _guard = app_query_limits_guard();
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
@@ -16637,6 +16725,7 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn tx_query_sorted_total_counts_matches() {
+        let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -16730,6 +16819,7 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn tx_query_rejects_invalid_authority_value() {
+        let _guard = app_query_limits_guard();
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
@@ -16779,6 +16869,7 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn tx_query_rejects_invalid_entrypoint_hash_value() {
+        let _guard = app_query_limits_guard();
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
@@ -16838,6 +16929,7 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn tx_query_rejects_excessive_set_size_and_depth() {
+        let _guard = app_query_limits_guard();
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
@@ -16891,10 +16983,7 @@ mod app_api_integration_tests {
             }
             inner
         }
-        let base = obj(vec![
-            ("op", val("exists")),
-            ("args", arr(vec![val("authority")])),
-        ]);
+        let base = obj(vec![("op", val("exists")), ("args", val("authority"))]);
         let deep = nest(base, 12);
         let body2 = json_string(obj(vec![("filter", deep)]));
         let req2 = http::Request::builder()
@@ -16909,6 +16998,7 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn tx_query_rejects_invalid_operator_for_authority() {
+        let _guard = app_query_limits_guard();
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
@@ -16953,6 +17043,7 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn account_assets_query_rejects_invalid_operator_for_quantity() {
+        let _guard = app_query_limits_guard();
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
@@ -16998,6 +17089,7 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn asset_holders_query_rejects_invalid_operator_for_account_id() {
+        let _guard = app_query_limits_guard();
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
@@ -17047,71 +17139,31 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn account_assets_query_pagination_preserves_total() {
-        // Build a small world with two assets for Alice
-        let state = Arc::new(iroha_core::state::State::new_for_testing(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
+        let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
         let alice_id: AccountId =
             AccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
-
-        // Populate state
-        let header = iroha_data_model::block::BlockHeader::new(
-            nonzero_ext::nonzero!(1_u64),
-            None,
-            None,
-            None,
-            0,
-            0,
+        let domain_id = alice_id.domain().clone();
+        let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let lily_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
+        let assets = vec![
+            Asset::new(
+                AssetId::new(rose_def.clone(), alice_id.clone()),
+                Numeric::from(10_u32),
+            ),
+            Asset::new(
+                AssetId::new(lily_def.clone(), alice_id.clone()),
+                Numeric::from(7_u32),
+            ),
+        ];
+        let state = state_with_assets(
+            domain_id,
+            alice_id.clone(),
+            vec![alice_id.clone()],
+            vec![rose_def, lily_def],
+            assets,
         );
-        let mut sblock = state.block(header);
-        let mut stx = sblock.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::account(Account::new(alice_id.clone()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        // Two asset definitions under the same domain
-        Register::asset_definition(AssetDefinition::numeric("rose#wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::asset_definition(AssetDefinition::numeric("lily#wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        // Mint both assets to Alice
-        Mint::asset_numeric(
-            10_u32,
-            AssetId::new("rose#wonderland".parse().unwrap(), alice_id.clone()),
-        )
-        .execute(&alice_id, &mut stx)
-        .unwrap();
-        Mint::asset_numeric(
-            7_u32,
-            AssetId::new("lily#wonderland".parse().unwrap(), alice_id.clone()),
-        )
-        .execute(&alice_id, &mut stx)
-        .unwrap();
-        stx.apply();
-        // Insert an empty transactions block record to satisfy state invariants, then commit
-        let leader = iroha_crypto::KeyPair::random();
-        let _topo = iroha_core::sumeragi::network_topology::Topology::new(vec![
-            iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
-        ]);
-        let unverified = iroha_core::block::BlockBuilder::new(Vec::new())
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        // Validate against state and then commit per current core API
-        let valid = unverified
-            .clone()
-            .validate_and_record_transactions(&mut sblock)
-            .unpack(|_| {});
-        let committed = valid.clone().commit_unchecked().unpack(|_| {});
-        crate::test_utils::finalize_committed_block(&state, sblock, committed);
 
         // Route under test
         let app = Router::new().route(
@@ -17154,66 +17206,31 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn account_assets_query_sort_by_quantity_desc() {
-        // Build identical world with two assets for Alice
-        let state = Arc::new(iroha_core::state::State::new_for_testing(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
+        let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
         let alice_id: AccountId =
             AccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
-
-        let header = iroha_data_model::block::BlockHeader::new(
-            nonzero_ext::nonzero!(1_u64),
-            None,
-            None,
-            None,
-            0,
-            0,
+        let domain_id = alice_id.domain().clone();
+        let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let lily_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
+        let assets = vec![
+            Asset::new(
+                AssetId::new(rose_def.clone(), alice_id.clone()),
+                Numeric::from(10_u32),
+            ),
+            Asset::new(
+                AssetId::new(lily_def.clone(), alice_id.clone()),
+                Numeric::from(7_u32),
+            ),
+        ];
+        let state = state_with_assets(
+            domain_id,
+            alice_id.clone(),
+            vec![alice_id.clone()],
+            vec![rose_def, lily_def],
+            assets,
         );
-        let mut sblock = state.block(header);
-        let mut stx = sblock.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::account(Account::new(alice_id.clone()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::asset_definition(AssetDefinition::numeric("rose#wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::asset_definition(AssetDefinition::numeric("lily#wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Mint::asset_numeric(
-            10_u32,
-            AssetId::new("rose#wonderland".parse().unwrap(), alice_id.clone()),
-        )
-        .execute(&alice_id, &mut stx)
-        .unwrap();
-        Mint::asset_numeric(
-            7_u32,
-            AssetId::new("lily#wonderland".parse().unwrap(), alice_id.clone()),
-        )
-        .execute(&alice_id, &mut stx)
-        .unwrap();
-        stx.apply();
-        let leader = iroha_crypto::KeyPair::random();
-        let _topo = iroha_core::sumeragi::network_topology::Topology::new(vec![
-            iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
-        ]);
-        let unverified = iroha_core::block::BlockBuilder::new(Vec::new())
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let valid = unverified
-            .clone()
-            .validate_and_record_transactions(&mut sblock)
-            .unpack(|_| {});
-        let committed = valid.clone().commit_unchecked().unpack(|_| {});
-        crate::test_utils::finalize_committed_block(&state, sblock, committed);
 
         let app = Router::new().route(
             "/v1/accounts/{account_id}/assets/query",
@@ -17264,12 +17281,12 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn account_assets_query_rejects_limit_above_max_config() {
+        let _limits = AppQueryLimitsOverride::new(AppQueryLimits::new(1, 3, 10, 1));
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-        crate::routing::set_app_query_limits(crate::routing::AppQueryLimits::new(1, 3, 10, 1));
 
         let app = Router::new().route(
             "/v1/accounts/{account_id}/assets/query",
@@ -17301,57 +17318,28 @@ mod app_api_integration_tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
-        crate::routing::reset_app_query_limits_for_tests();
     }
 
     #[tokio::test]
     async fn domains_query_respects_desc_sort() {
-        let state = Arc::new(iroha_core::state::State::new_for_testing(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
+        let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
         let alice_id: AccountId = AccountId::new("alpha".parse().unwrap(), kp.public_key().clone());
-
-        let header = iroha_data_model::block::BlockHeader::new(
-            nonzero_ext::nonzero!(1_u64),
-            None,
-            None,
-            None,
-            0,
-            0,
+        let domain_alpha = Domain::new("alpha".parse().unwrap()).build(&alice_id);
+        let domain_omega = Domain::new("omega".parse().unwrap()).build(&alice_id);
+        let domain_gamma = Domain::new("gamma".parse().unwrap()).build(&alice_id);
+        let account = Account::new(alice_id.clone()).build(&alice_id);
+        let world = World::with(
+            [domain_alpha, domain_omega, domain_gamma],
+            [account],
+            Vec::<AssetDefinition>::new(),
         );
-        let mut sblock = state.block(header);
-        let mut stx = sblock.transaction();
-        Register::domain(Domain::new("alpha".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::account(Account::new(alice_id.clone()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::domain(Domain::new("omega".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::domain(Domain::new("gamma".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        stx.apply();
-        let leader = iroha_crypto::KeyPair::random();
-        let _topo = iroha_core::sumeragi::network_topology::Topology::new(vec![
-            iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
-        ]);
-        let unverified = iroha_core::block::BlockBuilder::new(Vec::new())
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let valid = unverified
-            .clone()
-            .validate_and_record_transactions(&mut sblock)
-            .unpack(|_| {});
-        let committed = valid.clone().commit_unchecked().unpack(|_| {});
-        crate::test_utils::finalize_committed_block(&state, sblock, committed);
+        let state = Arc::new(iroha_core::state::State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
 
         let app = Router::new().route(
             "/v1/domains/query",
@@ -17400,70 +17388,8 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn asset_holders_query_pagination_preserves_total() {
-        // Build a small world with one asset definition held by two accounts
-        let state = Arc::new(iroha_core::state::State::new_for_testing(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
-        use iroha_crypto::KeyPair;
-        let kp_a = KeyPair::random();
-        let kp_b = KeyPair::random();
-        let alice_id: AccountId =
-            AccountId::new("wonderland".parse().unwrap(), kp_a.public_key().clone());
-        let bob_id: AccountId =
-            AccountId::new("wonderland".parse().unwrap(), kp_b.public_key().clone());
-
-        // Populate state
-        let header = iroha_data_model::block::BlockHeader::new(
-            nonzero_ext::nonzero!(1_u64),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let mut sblock = state.block(header);
-        let mut stx = sblock.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::account(Account::new(alice_id.clone()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::account(Account::new(bob_id.clone()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::asset_definition(AssetDefinition::numeric("rose#wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Mint::asset_numeric(
-            10_u32,
-            AssetId::new("rose#wonderland".parse().unwrap(), alice_id.clone()),
-        )
-        .execute(&alice_id, &mut stx)
-        .unwrap();
-        Mint::asset_numeric(
-            20_u32,
-            AssetId::new("rose#wonderland".parse().unwrap(), bob_id.clone()),
-        )
-        .execute(&alice_id, &mut stx)
-        .unwrap();
-        stx.apply();
-        let leader = iroha_crypto::KeyPair::random();
-        let _topo = iroha_core::sumeragi::network_topology::Topology::new(vec![
-            iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
-        ]);
-        let unverified = iroha_core::block::BlockBuilder::new(Vec::new())
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let valid = unverified
-            .clone()
-            .validate_and_record_transactions(&mut sblock)
-            .unpack(|_| {});
-        let _committed = valid.clone().commit_unchecked().unpack(|_| {});
-        let _ = sblock.commit();
+        let _guard = app_query_limits_guard();
+        let (state, _, _) = build_asset_holder_fixture_state();
 
         // Route under test
         let telemetry = MaybeTelemetry::disabled();
@@ -17511,68 +17437,8 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn asset_holders_query_sort_by_quantity_desc() {
-        let state = Arc::new(iroha_core::state::State::new_for_testing(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
-        use iroha_crypto::KeyPair;
-        let kp_a = KeyPair::random();
-        let kp_b = KeyPair::random();
-        let alice_id: AccountId =
-            AccountId::new("wonderland".parse().unwrap(), kp_a.public_key().clone());
-        let bob_id: AccountId =
-            AccountId::new("wonderland".parse().unwrap(), kp_b.public_key().clone());
-
-        let header = iroha_data_model::block::BlockHeader::new(
-            nonzero_ext::nonzero!(1_u64),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let mut sblock = state.block(header);
-        let mut stx = sblock.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::account(Account::new(alice_id.clone()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::account(Account::new(bob_id.clone()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::asset_definition(AssetDefinition::numeric("rose#wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Mint::asset_numeric(
-            10_u32,
-            AssetId::new("rose#wonderland".parse().unwrap(), alice_id.clone()),
-        )
-        .execute(&alice_id, &mut stx)
-        .unwrap();
-        Mint::asset_numeric(
-            20_u32,
-            AssetId::new("rose#wonderland".parse().unwrap(), bob_id.clone()),
-        )
-        .execute(&alice_id, &mut stx)
-        .unwrap();
-        stx.apply();
-        let leader = iroha_crypto::KeyPair::random();
-        let _topo = iroha_core::sumeragi::network_topology::Topology::new(vec![
-            iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
-        ]);
-        let unverified = iroha_core::block::BlockBuilder::new(Vec::new())
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let valid = unverified
-            .clone()
-            .validate_and_record_transactions(&mut sblock)
-            .unpack(|_| {});
-        let committed = valid.clone().commit_unchecked().unpack(|_| {});
-        crate::test_utils::finalize_committed_block(&state, sblock, committed);
+        let _guard = app_query_limits_guard();
+        let (state, _, _) = build_asset_holder_fixture_state();
 
         let telemetry = MaybeTelemetry::disabled();
         let app = Router::new().route(
@@ -17628,66 +17494,31 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn account_assets_get_pagination_preserves_total() {
-        let state = Arc::new(iroha_core::state::State::new_for_testing(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
+        let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
         let alice_id: AccountId =
             AccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
-
-        // Populate state
-        let header = iroha_data_model::block::BlockHeader::new(
-            nonzero_ext::nonzero!(1_u64),
-            None,
-            None,
-            None,
-            0,
-            0,
+        let domain_id = alice_id.domain().clone();
+        let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let lily_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
+        let assets = vec![
+            Asset::new(
+                AssetId::new(rose_def.clone(), alice_id.clone()),
+                Numeric::from(10_u32),
+            ),
+            Asset::new(
+                AssetId::new(lily_def.clone(), alice_id.clone()),
+                Numeric::from(7_u32),
+            ),
+        ];
+        let state = state_with_assets(
+            domain_id,
+            alice_id.clone(),
+            vec![alice_id.clone()],
+            vec![rose_def, lily_def],
+            assets,
         );
-        let mut sblock = state.block(header);
-        let mut stx = sblock.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::account(Account::new(alice_id.clone()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::asset_definition(AssetDefinition::numeric("rose#wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::asset_definition(AssetDefinition::numeric("lily#wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Mint::asset_numeric(
-            10_u32,
-            AssetId::new("rose#wonderland".parse().unwrap(), alice_id.clone()),
-        )
-        .execute(&alice_id, &mut stx)
-        .unwrap();
-        Mint::asset_numeric(
-            7_u32,
-            AssetId::new("lily#wonderland".parse().unwrap(), alice_id.clone()),
-        )
-        .execute(&alice_id, &mut stx)
-        .unwrap();
-        stx.apply();
-        let leader = iroha_crypto::KeyPair::random();
-        let _topo = iroha_core::sumeragi::network_topology::Topology::new(vec![
-            iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
-        ]);
-        let unverified = iroha_core::block::BlockBuilder::new(Vec::new())
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let valid = unverified
-            .clone()
-            .validate_and_record_transactions(&mut sblock)
-            .unpack(|_| {});
-        let _committed = valid.clone().commit_unchecked().unpack(|_| {});
-        let _ = sblock.commit();
 
         use axum::routing::get;
         let app = Router::new().route(
@@ -17726,58 +17557,25 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn account_assets_get_rejects_limit_above_cap() {
-        let state = Arc::new(iroha_core::state::State::new_for_testing(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
+        let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
         let alice_id: AccountId =
             AccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
-        let cap = app_query_limits().max_page_limit;
-
-        // Populate state minimally
-        let header = iroha_data_model::block::BlockHeader::new(
-            nonzero_ext::nonzero!(1_u64),
-            None,
-            None,
-            None,
-            0,
-            0,
+        let domain_id = alice_id.domain().clone();
+        let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let assets = vec![Asset::new(
+            AssetId::new(rose_def.clone(), alice_id.clone()),
+            Numeric::from(1_u32),
+        )];
+        let state = state_with_assets(
+            domain_id,
+            alice_id.clone(),
+            vec![alice_id.clone()],
+            vec![rose_def],
+            assets,
         );
-        let mut sblock = state.block(header);
-        let mut stx = sblock.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::account(Account::new(alice_id.clone()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::asset_definition(AssetDefinition::numeric("rose#wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Mint::asset_numeric(
-            1_u32,
-            AssetId::new("rose#wonderland".parse().unwrap(), alice_id.clone()),
-        )
-        .execute(&alice_id, &mut stx)
-        .unwrap();
-        stx.apply();
-        let leader = iroha_crypto::KeyPair::random();
-        let _topo = iroha_core::sumeragi::network_topology::Topology::new(vec![
-            iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
-        ]);
-        let unverified = iroha_core::block::BlockBuilder::new(Vec::new())
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let valid = unverified
-            .clone()
-            .validate_and_record_transactions(&mut sblock)
-            .unpack(|_| {});
-        let _committed = valid.clone().commit(&_topo).unpack(|_| {}).unwrap();
-        let _ = sblock.commit();
+        let cap = app_query_limits().max_page_limit;
 
         let params = crate::filter::Pagination {
             limit: Some(cap + 1),
@@ -17801,69 +17599,8 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn asset_holders_get_pagination_preserves_total() {
-        let state = Arc::new(iroha_core::state::State::new_for_testing(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
-        use iroha_crypto::KeyPair;
-        let kp_a = KeyPair::random();
-        let kp_b = KeyPair::random();
-        let alice_id: AccountId =
-            AccountId::new("wonderland".parse().unwrap(), kp_a.public_key().clone());
-        let bob_id: AccountId =
-            AccountId::new("wonderland".parse().unwrap(), kp_b.public_key().clone());
-
-        // Populate state
-        let header = iroha_data_model::block::BlockHeader::new(
-            nonzero_ext::nonzero!(1_u64),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let mut sblock = state.block(header);
-        let mut stx = sblock.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::account(Account::new(alice_id.clone()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::account(Account::new(bob_id.clone()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::asset_definition(AssetDefinition::numeric("rose#wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Mint::asset_numeric(
-            10_u32,
-            AssetId::new("rose#wonderland".parse().unwrap(), alice_id.clone()),
-        )
-        .execute(&alice_id, &mut stx)
-        .unwrap();
-        Mint::asset_numeric(
-            20_u32,
-            AssetId::new("rose#wonderland".parse().unwrap(), bob_id.clone()),
-        )
-        .execute(&alice_id, &mut stx)
-        .unwrap();
-        stx.apply();
-        let leader = iroha_crypto::KeyPair::random();
-        let _topo = iroha_core::sumeragi::network_topology::Topology::new(vec![
-            iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
-        ]);
-        let unverified = iroha_core::block::BlockBuilder::new(Vec::new())
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let valid = unverified
-            .clone()
-            .validate_and_record_transactions(&mut sblock)
-            .unpack(|_| {});
-        let _committed = valid.clone().commit(&_topo).unpack(|_| {}).unwrap();
-        let _ = sblock.commit();
+        let _guard = app_query_limits_guard();
+        let (state, _, _) = build_asset_holder_fixture_state();
 
         use axum::routing::get;
         let telemetry = MaybeTelemetry::for_tests();
@@ -17905,6 +17642,7 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn asset_holders_get_rejects_limit_above_cap() {
+        let _guard = app_query_limits_guard();
         let (state, _, _) = build_asset_holder_fixture_state();
         let cap = app_query_limits().max_page_limit;
         let params = AssetHolderGetParams {
@@ -17930,6 +17668,7 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn asset_holders_get_supports_compressed_address_format() {
+        let _guard = app_query_limits_guard();
         use axum::routing::get;
 
         let (state, alice_id, bob_id) = build_asset_holder_fixture_state();
@@ -17988,15 +17727,10 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn confidential_asset_transitions_reports_pending_window_metadata() {
+        let _guard = app_query_limits_guard();
         use axum::routing::get;
         use iroha_crypto::KeyPair;
-        use nonzero_ext::nonzero;
 
-        let state = Arc::new(iroha_core::state::State::new_for_testing(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
         let kp = KeyPair::random();
         let alice_id: AccountId =
             AccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
@@ -18021,38 +17755,18 @@ mod app_api_integration_tests {
             pedersen_params_id: Some(11),
             pending_transition: Some(pending_transition),
         };
-
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut sblock = state.block(header);
-        let mut stx = sblock.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::account(Account::new(alice_id.clone()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::asset_definition(
-            AssetDefinition::numeric("rose#wonderland".parse().unwrap())
-                .confidential_policy(policy),
-        )
-        .execute(&alice_id, &mut stx)
-        .unwrap();
-        stx.apply();
-        let leader = KeyPair::random();
-        let _topology = iroha_core::sumeragi::network_topology::Topology::new(vec![
-            iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
-        ]);
-        let unverified = iroha_core::block::BlockBuilder::new(Vec::new())
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let valid = unverified
-            .clone()
-            .validate_and_record_transactions(&mut sblock)
-            .unpack(|_| {});
-        let _committed = valid.clone().commit_unchecked().unpack(|_| {});
-        let _ = sblock.commit();
+        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain = Domain::new(domain_id).build(&alice_id);
+        let account = Account::new(alice_id.clone()).build(&alice_id);
+        let asset_def = AssetDefinition::numeric("rose#wonderland".parse().unwrap())
+            .confidential_policy(policy)
+            .build(&alice_id);
+        let world = World::with([domain], [account], [asset_def]);
+        let state = Arc::new(iroha_core::state::State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
 
         let app = Router::new().route(
             "/v1/confidential/assets/{definition_id}/transitions",
@@ -18105,6 +17819,7 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn get_parameters_returns_json() {
+        let _guard = app_query_limits_guard();
         use axum::routing::get;
         use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::State};
 
@@ -18141,6 +17856,7 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn confidential_derive_keyset_endpoint_roundtrip() {
+        let _guard = app_query_limits_guard();
         let state = mk_app_state_for_tests();
         let request = ConfidentialKeyRequest {
             seed_hex: Some(
@@ -18178,6 +17894,7 @@ mod app_api_integration_tests {
 
     #[tokio::test]
     async fn asset_holders_query_supports_compressed_address_format() {
+        let _guard = app_query_limits_guard();
         use axum::routing::post;
 
         let (state, alice_id, bob_id) = build_asset_holder_fixture_state();
@@ -18247,11 +17964,6 @@ mod app_api_integration_tests {
     }
 
     fn build_asset_holder_fixture_state() -> (Arc<iroha_core::state::State>, AccountId, AccountId) {
-        let state = Arc::new(iroha_core::state::State::new_for_testing(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        ));
         let kp_a = iroha_crypto::KeyPair::random();
         let kp_b = iroha_crypto::KeyPair::random();
         let alice_id: AccountId =
@@ -18259,55 +17971,25 @@ mod app_api_integration_tests {
         let bob_id: AccountId =
             AccountId::new("wonderland".parse().unwrap(), kp_b.public_key().clone());
 
-        let header = iroha_data_model::block::BlockHeader::new(
-            nonzero_ext::nonzero!(1_u64),
-            None,
-            None,
-            None,
-            0,
-            0,
+        let domain_id = alice_id.domain().clone();
+        let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let assets = vec![
+            Asset::new(
+                AssetId::new(rose_def.clone(), alice_id.clone()),
+                Numeric::from(10_u32),
+            ),
+            Asset::new(
+                AssetId::new(rose_def.clone(), bob_id.clone()),
+                Numeric::from(20_u32),
+            ),
+        ];
+        let state = state_with_assets(
+            domain_id,
+            alice_id.clone(),
+            vec![alice_id.clone(), bob_id.clone()],
+            vec![rose_def],
+            assets,
         );
-        let mut sblock = state.block(header);
-        let mut stx = sblock.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::account(Account::new(alice_id.clone()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::account(Account::new(bob_id.clone()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::asset_definition(AssetDefinition::numeric("rose#wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Mint::asset_numeric(
-            10_u32,
-            AssetId::new("rose#wonderland".parse().unwrap(), alice_id.clone()),
-        )
-        .execute(&alice_id, &mut stx)
-        .unwrap();
-        Mint::asset_numeric(
-            20_u32,
-            AssetId::new("rose#wonderland".parse().unwrap(), bob_id.clone()),
-        )
-        .execute(&alice_id, &mut stx)
-        .unwrap();
-        stx.apply();
-        let leader = iroha_crypto::KeyPair::random();
-        let _topo = iroha_core::sumeragi::network_topology::Topology::new(vec![
-            iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
-        ]);
-        let unverified = iroha_core::block::BlockBuilder::new(Vec::new())
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let valid = unverified
-            .clone()
-            .validate_and_record_transactions(&mut sblock)
-            .unpack(|_| {});
-        let _committed = valid.clone().commit(&_topo).unpack(|_| {}).unwrap();
-        let _ = sblock.commit();
 
         (state, alice_id, bob_id)
     }
@@ -18354,52 +18036,19 @@ mod query_endpoint_tests {
             alice_keypair.public_key().clone(),
         );
 
-        // Build a small world and mint a single asset for Alice
+        // Build a small world with a single asset for Alice.
+        let domain = Domain::new("wonderland".parse().unwrap()).build(&alice_id);
+        let account = Account::new(alice_id.clone()).build(&alice_id);
+        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
+        let asset_id = AssetId::new(asset_def_id, alice_id.clone());
+        let asset = Asset::new(asset_id.clone(), Numeric::from(13_u32));
+        let world = World::with_assets([domain], [account], [asset_def], [asset], []);
         let state = Arc::new(iroha_core::state::State::new_for_testing(
-            World::new(),
+            world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-
-        let header = iroha_data_model::block::BlockHeader::new(
-            nonzero_ext::nonzero!(1_u64),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let mut sblock = state.block(header);
-        let mut stx = sblock.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::account(Account::new(alice_id.clone()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        Register::asset_definition(AssetDefinition::numeric("rose#wonderland".parse().unwrap()))
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        let asset_id = AssetId::new("rose#wonderland".parse().unwrap(), alice_id.clone());
-        Mint::asset_numeric(13_u32, asset_id.clone())
-            .execute(&alice_id, &mut stx)
-            .unwrap();
-        stx.apply();
-        // Insert an empty transactions block record to satisfy state invariants, then commit
-        let leader = iroha_crypto::KeyPair::random();
-        let _topo = Topology::new(vec![iroha_data_model::peer::PeerId::new(
-            leader.public_key().clone(),
-        )]);
-        let unverified = BlockBuilder::new(Vec::new())
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let valid = unverified
-            .clone()
-            .validate_and_record_transactions(&mut sblock)
-            .unpack(|_| {});
-        let _committed = valid.clone().commit(&_topo).unpack(|_| {}).unwrap();
-        let _ = sblock.commit();
 
         // Build a SignedQuery for iterable FindAssets (feature-agnostic via erased query)
         use iroha_data_model::query::ErasedIterQuery;
@@ -18597,6 +18246,11 @@ mod query_endpoint_tests {
 
         // Build a block and execute a VerifyProof ISI in it
         let header = dm::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0);
+        // Capture latest block before opening a state block to avoid view deadlocks.
+        let latest_block = {
+            let view = state.view();
+            view.latest_block()
+        };
         let mut block = state.block(header);
         let mut stx = block.transaction();
 
@@ -18636,7 +18290,7 @@ mod query_endpoint_tests {
             iroha_data_model::peer::PeerId::new(leader.public_key().clone()),
         ]);
         let unverified = iroha_core::block::BlockBuilder::new(Vec::new())
-            .chain(0, state.view().latest_block().as_deref())
+            .chain(0, latest_block.as_deref())
             .sign(leader.private_key())
             .unpack(|_| {});
         let valid = unverified
@@ -21364,11 +21018,10 @@ mod status_tests {
 
     #[test]
     fn status_snapshot_json_includes_npos_election() {
-        let peer_pk = PublicKey::from_hex(
-            Algorithm::Ed25519,
-            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
-        )
-        .expect("peer pk parses");
+        let peer_pk: PublicKey =
+            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
+                .parse()
+                .expect("peer pk parses");
         let peer = PeerId::from(peer_pk);
         let params = ValidatorElectionParameters {
             max_validators: 8,
@@ -25160,7 +24813,10 @@ mod tx_projection_display_tests {
 
     #[test]
     fn projections_emit_compressed_authority_when_requested() {
-        let account: AccountId = "alice@wonderland".parse().expect("valid account id");
+        let account: AccountId =
+            "ed0120aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@wonderland"
+                .parse()
+                .expect("valid account id");
         let compressed = account
             .to_account_address()
             .and_then(|addr| addr.to_compressed_sora())
@@ -25182,7 +24838,10 @@ mod tx_projection_display_tests {
 
     #[test]
     fn projections_preserve_ih58_literals_by_default() {
-        let account: AccountId = "bob@wonderland".parse().expect("valid account id");
+        let account: AccountId =
+            "ed0120bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb@wonderland"
+                .parse()
+                .expect("valid account id");
         let projection = TxProjection {
             authority: Some(account.to_string()),
             timestamp_ms: None,
@@ -25408,6 +25067,8 @@ pub async fn handle_v1_account_permissions_with_policy(
         ENDPOINT_ACCOUNTS_PERMISSIONS,
         strict_addresses,
     )?;
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_PERMISSIONS)?;
 
     let state_view = state.view();
     let permissions_iter: Box<dyn Iterator<Item = iroha_data_model::permission::Permission>> =
@@ -25440,8 +25101,8 @@ pub async fn handle_v1_account_permissions_with_policy(
                 },
             )
         }),
-        p.offset,
-        p.limit,
+        pagination.offset,
+        pagination.limit,
         None,
     );
 
@@ -26059,6 +25720,8 @@ pub async fn handle_v1_domains(
     let state_view = state.view();
     let iter = ValidQuery::execute(FindDomains, CompoundPredicate::PASS, &state_view)
         .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_DOMAINS_LIST)?;
 
     #[derive(Clone)]
     struct DomainProj {
@@ -26073,8 +25736,8 @@ pub async fn handle_v1_domains(
                 },
             )
         }),
-        p.offset,
-        p.limit,
+        pagination.offset,
+        pagination.limit,
         None,
     );
 
@@ -26179,6 +25842,17 @@ pub async fn handle_v1_domains_query(
         fetch_size,
         ..
     } = envelope;
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(
+        pagination.limit,
+        pagination.offset,
+        cap,
+        ENDPOINT_DOMAINS_QUERY,
+    )?;
+    let limits = app_query_limits();
+    let fetch_size = limits
+        .clamp_fetch_size(fetch_size)
+        .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
 
     let selectors = compile_domain_sort_spec(&sort);
     let mapped_iter = iter.map({
@@ -26215,6 +25889,154 @@ pub async fn handle_v1_domains_query(
         axum::http::HeaderValue::from_static("application/json"),
     );
     Ok(resp)
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod pagination_enforcement_tests {
+    use std::sync::Arc;
+
+    use crate::utils::extractors::NoritoJson;
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
+
+    use super::*;
+
+    const TEST_ACCOUNT: &str =
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+
+    fn test_state() -> Arc<CoreState> {
+        Arc::new(State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn account_permissions_rejects_limit_zero() {
+        let state = test_state();
+        let params = crate::filter::Pagination {
+            limit: Some(0),
+            offset: 0,
+        };
+
+        let err = handle_v1_account_permissions_with_policy(
+            state,
+            axum::extract::Path(TEST_ACCOUNT.to_string()),
+            crate::NoritoQuery(params),
+            MaybeTelemetry::disabled(),
+            false,
+        )
+        .await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn domains_list_rejects_limit_zero() {
+        let state = test_state();
+        let params = crate::filter::Pagination {
+            limit: Some(0),
+            offset: 0,
+        };
+
+        let err = handle_v1_domains(state, crate::NoritoQuery(params)).await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn domains_query_rejects_limit_zero() {
+        let state = test_state();
+        let envelope = crate::filter::QueryEnvelope {
+            query: None,
+            filter: None,
+            select: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(0),
+                offset: 0,
+            },
+            fetch_size: None,
+            address_format: None,
+        };
+
+        let err = handle_v1_domains_query(state, NoritoJson(envelope)).await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn accounts_list_rejects_limit_zero() {
+        let state = test_state();
+        let params = ListFilterParams {
+            filter: None,
+            limit: Some(0),
+            offset: 0,
+            sort: None,
+            address_format: None,
+        };
+
+        let err = handle_v1_accounts(
+            state,
+            crate::NoritoQuery(params),
+            MaybeTelemetry::disabled(),
+            false,
+        )
+        .await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn accounts_query_rejects_limit_zero() {
+        let state = test_state();
+        let envelope = crate::filter::QueryEnvelope {
+            query: None,
+            filter: None,
+            select: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(0),
+                offset: 0,
+            },
+            fetch_size: None,
+            address_format: None,
+        };
+
+        let err = handle_v1_accounts_query(
+            state,
+            NoritoJson(envelope),
+            MaybeTelemetry::disabled(),
+            false,
+        )
+        .await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
 }
 
 // ---------------------- Accounts listing ----------------------
@@ -26708,6 +26530,8 @@ pub async fn handle_v1_accounts(
     let selectors = compile_account_sort_spec(&sort_spec);
     let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
     record_address_format_selection(&telemetry, ENDPOINT_ACCOUNTS_LIST, address_format);
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_LIST)?;
 
     let mut filter_expr = p
         .filter
@@ -26747,7 +26571,8 @@ pub async fn handle_v1_accounts(
             ))
         }
     });
-    let (items, total) = collect_page_streaming(mapped_iter, p.offset, p.limit, None);
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
 
     let mut arr = Vec::with_capacity(items.len());
     for it in &items {
@@ -26817,7 +26642,13 @@ pub async fn handle_v1_accounts_query(
     let filter_ref = filter_clone.as_ref();
     let filter_projection_ref = filter_clone.as_ref();
     let sort_spec = envelope.sort.clone();
-    let pagination = envelope.pagination;
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(
+        envelope.pagination.limit,
+        envelope.pagination.offset,
+        cap,
+        ENDPOINT_ACCOUNTS_QUERY,
+    )?;
     let fetch_size = envelope.fetch_size;
 
     let (items, total) = if sort_spec.is_empty() {
@@ -35918,9 +35749,9 @@ pub async fn handle_post_nexus_lane_lifecycle(
     queue: Arc<Queue>,
     plan: LaneLifecyclePlanDto,
 ) -> Result<impl IntoResponse> {
-    let nexus = state.nexus_snapshot();
+    let nexus_before = state.nexus_snapshot();
     if let Err(err) = crate::ensure_nexus_lanes_enabled(
-        nexus.enabled,
+        nexus_before.enabled,
         iroha_torii_shared::uri::NEXUS_LANE_LIFECYCLE,
     ) {
         #[cfg(feature = "telemetry")]
@@ -35937,6 +35768,7 @@ pub async fn handle_post_nexus_lane_lifecycle(
             reason: err.to_string(),
         })?;
 
+    let nexus = state.nexus_snapshot();
     let view = state.view();
     let lane_compliance = queue.lane_compliance_engine();
     queue.reconfigure_nexus(&nexus, &view, lane_compliance);

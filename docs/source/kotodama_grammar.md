@@ -110,6 +110,7 @@ Semantics
 - State identifiers are reserved; shadowing a `state` name in parameters or `let` bindings is rejected (`E_STATE_SHADOWED`).
 - State map values are not first-class: use the state identifier directly for map operations and iteration. Binding or passing state maps to user-defined functions is rejected (`E_STATE_MAP_ALIAS`).
 - Durable state maps currently support `int` and pointer-ABI key types only; other key types are rejected at compile time.
+- Durable state fields must be `int`, `bool`, `Json`, `Blob`/`bytes`, or pointer-ABI types (including structs/tuples composed of these fields); `string` is not supported for durable state.
 
 ## Functions and Parameters
 
@@ -232,8 +233,10 @@ Notes
 ## Collections and Maps
 
 Type: `Map<K, V>`
-- Key and value types must be serializable to Norito TLV. Supported K: `int`, `string`, tuples and structs of supported types. V: any supported type.
-- `Map::new()` creates an empty map; for non-`Map<int,int>` maps, provide an explicit type annotation or return type.
+- In-memory maps (heap-allocated via `Map::new()` or passed as parameters) store a single key/value pair; keys and values must be word-sized types: `int`, `bool`, `string`, `Blob`, `bytes`, `Json`, or pointer types (e.g., `AccountId`, `Name`).
+- Durable state maps (`state Map<...>`) use Norito-encoded keys/values. Supported keys: `int` or pointer types. Supported values: `int`, `bool`, `Json`, `Blob`/`bytes`, or pointer types.
+- `Map::new()` allocates and zero-initializes the single in-memory entry (key/value = 0); for non-`Map<int,int>` maps, provide an explicit type annotation or return type.
+- State maps are not first-class values: you cannot reassign them (e.g., `M = Map::new()`); update entries via indexing (`M[key] = value`).
 - Operations:
   - Indexing: `map[key]` get/set value (set performed via host syscall; see runtime API mapping).
   - Existence: `contains(map, key) -> bool` (lowered helper; may be an intrinsic syscall).

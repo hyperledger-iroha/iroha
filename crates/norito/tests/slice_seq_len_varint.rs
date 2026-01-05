@@ -5,6 +5,19 @@ use std::collections::{BinaryHeap, LinkedList, VecDeque};
 
 use norito::core::{self, DecodeFlagsGuard};
 
+fn write_varint_len(out: &mut Vec<u8>, mut value: u64) {
+    loop {
+        let byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value == 0 {
+            out.push(byte);
+            break;
+        } else {
+            out.push(byte | 0x80);
+        }
+    }
+}
+
 #[test]
 fn vecdeque_decode_from_slice_compact_seq_len() {
     let items = ["a", "bbb", "", "z"];
@@ -12,16 +25,16 @@ fn vecdeque_decode_from_slice_compact_seq_len() {
     let mut spans = Vec::new();
     for s in items.iter() {
         let mut payload = Vec::new();
-        core::write_len_to_vec(&mut payload, s.len() as u64);
+        write_varint_len(&mut payload, s.len() as u64);
         payload.extend_from_slice(s.as_bytes());
         spans.push(payload.len());
         elem_payloads.push(payload);
     }
 
     let mut buf = Vec::new();
-    core::write_len_to_vec(&mut buf, items.len() as u64);
+    write_varint_len(&mut buf, items.len() as u64);
     for span in &spans {
-        core::write_len_to_vec(&mut buf, *span as u64);
+        write_varint_len(&mut buf, *span as u64);
     }
     for payload in &elem_payloads {
         buf.extend_from_slice(payload);
@@ -52,9 +65,9 @@ fn linkedlist_decode_from_slice_compact_seq_len() {
     }
 
     let mut buf = Vec::new();
-    core::write_len_to_vec(&mut buf, items.len() as u64);
+    write_varint_len(&mut buf, items.len() as u64);
     for span in &spans {
-        core::write_len_to_vec(&mut buf, *span as u64);
+        write_varint_len(&mut buf, *span as u64);
     }
     for payload in &elem_payloads {
         buf.extend_from_slice(payload);
@@ -77,12 +90,12 @@ fn binaryheap_decode_from_slice_compact_seq_len() {
     let items = [7u32, 3, 9, 1, 5];
     let mut buf = Vec::new();
     #[cfg(feature = "compact-len")]
-    core::write_len_to_vec(&mut buf, items.len() as u64);
+    write_varint_len(&mut buf, items.len() as u64);
     #[cfg(not(feature = "compact-len"))]
     buf.extend_from_slice(&(items.len() as u64).to_le_bytes());
     for &v in items.iter() {
         #[cfg(feature = "compact-len")]
-        core::write_len_to_vec(&mut buf, 4);
+        write_varint_len(&mut buf, 4);
         #[cfg(not(feature = "compact-len"))]
         buf.extend_from_slice(&(4u64).to_le_bytes());
         buf.extend_from_slice(&v.to_le_bytes());

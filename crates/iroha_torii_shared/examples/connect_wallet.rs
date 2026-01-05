@@ -82,7 +82,8 @@ async fn main() -> anyhow::Result<()> {
     let (app_pk, _app_sk) = x.keypair(KeyGenOption::UseSeed(app_seed.to_vec()));
     let (_wallet_pk, wallet_sk) = x.keypair(KeyGenOption::UseSeed(wallet_seed.to_vec()));
     let app_pk_bytes: [u8; 32] = *app_pk.as_bytes();
-    let (k_app, k_wallet) = sdk::x25519_derive_keys(&wallet_sk.to_bytes(), &app_pk_bytes, &sid);
+    let (k_app, k_wallet) = sdk::x25519_derive_keys(&wallet_sk.to_bytes(), &app_pk_bytes, &sid)
+        .expect("x25519 derive keys");
 
     // Read one frame (expect SignRequestTx/Raw)
     let msg = ws.next().await.context("ws recv")??;

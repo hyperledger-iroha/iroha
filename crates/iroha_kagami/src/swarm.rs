@@ -6,10 +6,16 @@ use std::{
 
 use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{WrapErr as _, ensure, eyre};
+use iroha_data_model::parameter::system::SumeragiConsensusMode;
 use iroha_genesis::RawGenesisTransaction;
 use iroha_swarm::PeerOverride;
 
-use crate::{Outcome, RunArgs, genesis::ensure_npos_parameters, localnet::ConsensusModeArg, tui};
+use crate::{
+    Outcome, RunArgs,
+    genesis::{build_line_from_env, ensure_npos_parameters, validate_consensus_mode_for_line},
+    localnet::ConsensusModeArg,
+    tui,
+};
 
 /// Docker Compose configuration generator for Iroha.
 #[allow(clippy::struct_excessive_bools)]
@@ -96,7 +102,10 @@ pub struct Args {
     /// Consensus mode to stamp into the generated genesis (optional).
     #[arg(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
-    /// Optional activation height for switching to `consensus_mode` (requires `--consensus-mode`).
+    /// Optional staged consensus mode to activate at `mode_activation_height`.
+    #[arg(long, value_enum, value_name = "MODE")]
+    next_consensus_mode: Option<ConsensusModeArg>,
+    /// Optional activation height for switching to `next_consensus_mode` (requires `--next-consensus-mode`).
     #[arg(long, value_name = "HEIGHT")]
     mode_activation_height: Option<u64>,
 }
@@ -140,12 +149,19 @@ impl<T: Write> RunArgs<T> for Args {
             return Ok(());
         }
 
-        if args.mode_activation_height.is_some()
-            && !matches!(args.consensus_mode, Some(ConsensusModeArg::Npos))
-        {
-            return Err(eyre!(
-                "`--mode-activation-height` requires `--consensus-mode npos`"
-            ));
+        let build_line = build_line_from_env();
+        match (args.next_consensus_mode, args.mode_activation_height) {
+            (Some(_), None) => {
+                return Err(eyre!(
+                    "`--next-consensus-mode` requires `--mode-activation-height`"
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(eyre!(
+                    "`--mode-activation-height` requires `--next-consensus-mode`"
+                ));
+            }
+            _ => {}
         }
         if let Some(height) = args.mode_activation_height
             && height == 0
@@ -155,8 +171,35 @@ impl<T: Write> RunArgs<T> for Args {
             ));
         }
 
-        if matches!(args.consensus_mode, Some(ConsensusModeArg::Npos)) {
-            ensure_npos_genesis(&args.config_dir)?;
+        let consensus_mode_override = args.consensus_mode.map(SumeragiConsensusMode::from);
+        let next_consensus_mode = args.next_consensus_mode.map(SumeragiConsensusMode::from);
+        let wants_npos = build_line.is_iroha3()
+            || matches!(consensus_mode_override, Some(SumeragiConsensusMode::Npos))
+            || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
+        let manifest = if wants_npos {
+            Some(ensure_npos_genesis(&args.config_dir)?)
+        } else {
+            None
+        };
+        if build_line.is_iroha3() {
+            let manifest = manifest
+                .as_ref()
+                .expect("Iroha3 requires NPoS genesis manifest");
+            let manifest_mode = manifest.consensus_mode().ok_or_else(|| {
+                eyre!(
+                    "genesis manifest missing consensus_mode; regenerate with `kagami genesis generate --consensus-mode npos`"
+                )
+            })?;
+            let effective_mode = consensus_mode_override.unwrap_or(manifest_mode);
+            validate_consensus_mode_for_line(build_line, effective_mode, next_consensus_mode)?;
+            let params = manifest.effective_parameters();
+            if params.sumeragi().next_mode().is_some()
+                || params.sumeragi().mode_activation_height().is_some()
+            {
+                return Err(eyre!(
+                    "Iroha3 does not support staged consensus cutovers; drop `next_mode` and `mode_activation_height` from genesis"
+                ));
+            }
         }
 
         let peer_overrides = match &args.peer_config {
@@ -176,6 +219,12 @@ impl<T: Write> RunArgs<T> for Args {
             &args.out_file,
             peer_overrides,
             args.consensus_mode.as_ref().map(|m| {
+                m.to_possible_value()
+                    .expect("value enum")
+                    .get_name()
+                    .to_owned()
+            }),
+            args.next_consensus_mode.as_ref().map(|m| {
                 m.to_possible_value()
                     .expect("value enum")
                     .get_name()
@@ -286,11 +335,11 @@ fn parse_port(table: &toml::Table, field: &str) -> color_eyre::Result<u16> {
     Ok(port)
 }
 
-fn ensure_npos_genesis(config_dir: &Path) -> color_eyre::Result<()> {
+fn ensure_npos_genesis(config_dir: &Path) -> color_eyre::Result<RawGenesisTransaction> {
     let genesis_path = config_dir.join("genesis.json");
     ensure!(
         genesis_path.exists(),
-        "NPoS swarm generation requires {} to exist; generate one with `kagami genesis generate --consensus-mode npos --mode-activation-height <H>`",
+        "NPoS swarm generation requires {} to exist; generate one with `kagami genesis generate --consensus-mode npos` (or stage with `--next-consensus-mode npos --mode-activation-height <H>` on Iroha2)",
         genesis_path.display()
     );
     let manifest = RawGenesisTransaction::from_path(&genesis_path).wrap_err_with(|| {
@@ -300,7 +349,7 @@ fn ensure_npos_genesis(config_dir: &Path) -> color_eyre::Result<()> {
         )
     })?;
     ensure_npos_parameters(&manifest)?;
-    Ok(())
+    Ok(manifest)
 }
 
 #[cfg(test)]
@@ -323,6 +372,40 @@ mod tests {
     };
     use crate::RunArgs;
 
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        #[allow(unsafe_code)]
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            // Safety: test-only environment changes are scoped to the guard.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        #[allow(unsafe_code)]
+        fn drop(&mut self) {
+            if let Some(value) = &self.previous {
+                // Safety: test-only environment changes are scoped to the guard.
+                unsafe {
+                    std::env::set_var(self.key, value);
+                }
+            } else {
+                // Safety: test-only environment changes are scoped to the guard.
+                unsafe {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
     #[test]
     fn run_succeeds_without_banner() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
@@ -340,6 +423,7 @@ mod tests {
             force: false,
             no_banner: true,
             consensus_mode: None,
+            next_consensus_mode: None,
             mode_activation_height: None,
         };
 
@@ -412,6 +496,7 @@ api_port = 9000
 
     #[test]
     fn swarm_includes_consensus_overrides_in_compose() {
+        let _guard = EnvGuard::set("IROHA_BUILD_LINE", "iroha2");
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let config_dir = temp_dir.path().join("cfg");
         fs::create_dir_all(&config_dir).expect("create config dir");
@@ -429,7 +514,8 @@ api_port = 9000
             print: true,
             force: false,
             no_banner: true,
-            consensus_mode: Some(ConsensusModeArg::Npos),
+            consensus_mode: Some(ConsensusModeArg::Permissioned),
+            next_consensus_mode: Some(ConsensusModeArg::Npos),
             mode_activation_height: Some(9),
         };
 
@@ -442,8 +528,12 @@ api_port = 9000
 
         let output = String::from_utf8(buffer).expect("output should be UTF-8");
         assert!(
-            output.contains("GENESIS_CONSENSUS_MODE: npos"),
+            output.contains("GENESIS_CONSENSUS_MODE: permissioned"),
             "compose output should include GENESIS_CONSENSUS_MODE override: {output}"
+        );
+        assert!(
+            output.contains("GENESIS_NEXT_CONSENSUS_MODE: npos"),
+            "compose output should include GENESIS_NEXT_CONSENSUS_MODE override: {output}"
         );
         assert!(
             output.contains("GENESIS_MODE_ACTIVATION_HEIGHT: 9"),
@@ -453,6 +543,7 @@ api_port = 9000
 
     #[test]
     fn swarm_rejects_activation_without_mode() {
+        let _guard = EnvGuard::set("IROHA_BUILD_LINE", "iroha2");
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let args = Args {
             peers: NonZeroU16::new(1).expect("non-zero"),
@@ -468,6 +559,7 @@ api_port = 9000
             force: false,
             no_banner: true,
             consensus_mode: None,
+            next_consensus_mode: None,
             mode_activation_height: Some(3),
         };
 
@@ -503,7 +595,8 @@ api_port = 9000
             force: true,
             no_banner: true,
             consensus_mode: Some(ConsensusModeArg::Npos),
-            mode_activation_height: Some(5),
+            next_consensus_mode: None,
+            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -543,6 +636,7 @@ api_port = 9000
             force: true,
             no_banner: true,
             consensus_mode: Some(ConsensusModeArg::Npos),
+            next_consensus_mode: None,
             mode_activation_height: None,
         };
 
@@ -557,6 +651,7 @@ api_port = 9000
             "chain": "test-chain",
             "executor": null,
             "ivm_dir": ".",
+            "consensus_mode": "Permissioned",
             "transactions": [
                 {}
             ]
@@ -570,7 +665,8 @@ api_port = 9000
             .append_parameter(Parameter::Custom(
                 SumeragiNposParameters::default().into_custom_parameter(),
             ))
-            .build_raw();
+            .build_raw()
+            .with_consensus_mode(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos);
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(path, json).expect("write npos genesis");
     }

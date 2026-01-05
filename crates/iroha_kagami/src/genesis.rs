@@ -13,7 +13,9 @@ pub mod profile;
 mod sign;
 mod validate;
 
-pub use generate::{build_line_from_env, generate_default};
+pub(crate) use generate::{
+    build_line_from_env, generate_default, validate_consensus_mode_for_line,
+};
 pub use npos::ensure_npos_parameters;
 pub use profile::{
     GenesisProfile, ProfileDefaults, parse_vrf_seed_hex, profile_defaults, resolve_vrf_seed,

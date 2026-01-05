@@ -12988,8 +12988,11 @@ impl State {
         backend.reconfigure(
             cfg.enabled,
             cfg.hot_retained_keys,
+            cfg.hot_retained_bytes.get(),
+            cfg.hot_retained_grace_snapshots,
             cfg.cold_store_root.clone(),
             cfg.max_snapshots,
+            cfg.max_cold_bytes.get(),
         );
     }
 
@@ -14229,6 +14232,12 @@ impl<'state> StateBlock<'state> {
                     manifest.hot_entries.len(),
                     manifest.cold_entries.len(),
                     manifest.cold_bytes_total,
+                    manifest.hot_promotions,
+                    manifest.hot_demotions,
+                    manifest.hot_grace_overflow_keys,
+                    manifest.hot_grace_overflow_bytes,
+                    manifest.cold_reused_entries,
+                    manifest.cold_reused_bytes,
                 );
             }
         }
@@ -15586,6 +15595,7 @@ mod replay_validation_tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().join("kura")),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -16185,6 +16195,7 @@ mod permission_cache_tests {
         let make_config = |dir: &tempfile::TempDir| Config {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -19269,6 +19280,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root.clone()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -19436,7 +19448,7 @@ mod tests {
         let cold_root = temp_dir.path().join("cold");
         std::fs::write(&cold_root, b"blocker file").expect("blocker file");
         *state.tiered_backend.get_mut() =
-            TieredStateBackend::new(true, 0, Some(cold_root.clone()), 1);
+            TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), 1, 0);
 
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
             additions: vec![LaneConfig {
@@ -19494,8 +19506,13 @@ mod tests {
         state.set_tiered_backend(&iroha_config::parameters::actual::TieredState {
             enabled: true,
             hot_retained_keys: 1,
+            hot_retained_bytes:
+                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_BYTES,
+            hot_retained_grace_snapshots:
+                iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
             cold_store_root: Some(temp_file.path().to_path_buf()),
             max_snapshots: 1,
+            max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
         });
         let initial_catalog = state.nexus_snapshot().lane_catalog.clone();
 
@@ -20817,6 +20834,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -21279,6 +21297,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -21594,6 +21613,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -21688,6 +21708,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -21900,6 +21921,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -21971,6 +21993,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -22057,6 +22080,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -22232,6 +22256,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().join("kura")),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -22327,6 +22352,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -22892,6 +22918,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
