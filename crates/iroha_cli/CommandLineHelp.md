@@ -2939,7 +2939,7 @@ Print the current ABI hash for a given policy (default: v1)
 
 ###### **Options:**
 
-* `--policy <POLICY>` — Policy: v1, or exp:<n>
+* `--policy <POLICY>` — Policy: v1
 
   Default value: `v1`
 * `--uppercase` — Uppercase hex output (default: lowercase)

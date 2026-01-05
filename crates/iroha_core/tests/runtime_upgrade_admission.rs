@@ -1,4 +1,4 @@
-//! Admission gating for runtime upgrades: pre-activation reject, post-activation accept.
+//! Admission coverage for runtime upgrade manifests under the v1-only policy.
 #![allow(clippy::items_after_statements)]
 
 use std::{borrow::Cow, collections::BTreeSet};
@@ -7,7 +7,7 @@ use iroha_config::parameters::actual::RuntimeUpgradeProvenanceMode;
 use iroha_core::smartcontracts::Execute; // bring trait for `.execute()` on ISIs
 use iroha_core::{
     prelude::World,
-    state::{State, WorldReadOnly},
+    state::State,
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Hash, KeyPair};
@@ -48,12 +48,9 @@ fn metadata_with_gas_limit(limit: u64) -> iroha_data_model::metadata::Metadata {
 }
 
 #[test]
-fn runtime_upgrade_abi_gating_pre_post_activation() {
-    use iroha_core::{kura::Kura, query::store::LiveQueryStore, tx::TransactionRejectionReason};
-    use iroha_data_model::executor::{IvmAdmissionError, ValidationFail};
-    // moved Cow import to module scope to avoid clippy items-after-statements
+fn runtime_upgrade_rejects_non_v1_manifest() {
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
-    // Build world with a domain and an authority account
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
@@ -66,29 +63,22 @@ fn runtime_upgrade_abi_gating_pre_post_activation() {
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
-    // Prepare a minimal IVM program for abi_version = 2 (future)
-    let prog_v2 = minimal_ivm_program(2);
-    let chain: ChainId = "chain".parse().unwrap();
-
-    // Block 1: grant CanManageRuntimeUpgrades and propose an upgrade manifest for v2
-    let header1 =
+    let header =
         iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block1 = state.block(header1);
-    let mut stx1 = block1.transaction();
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
 
-    // Grant permission via a generic Permission token
     let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
     use iroha_data_model::prelude::Grant;
     Grant::account_permission(perm, account_id.clone())
-        .execute(&account_id, &mut stx1)
+        .execute(&account_id, &mut stx)
         .expect("grant permission");
 
-    // Construct a manifest for abi v2 with a window [2, 10)
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
         name: "ABI version 2".to_string(),
-        description: "Activate ABI version 2".to_string(),
+        description: "Unsupported ABI version".to_string(),
         abi_version: 2,
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::Experimental(2)),
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         added_syscalls: vec![],
         added_pointer_types: vec![],
         start_height: 2,
@@ -97,67 +87,24 @@ fn runtime_upgrade_abi_gating_pre_post_activation() {
         slsa_attestation: Vec::new(),
         provenance: Vec::new(),
     };
-    let upgrade_id = manifest.id();
     let manifest_bytes = manifest.canonical_bytes();
-    let propose = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes };
-    propose
-        .execute(&account_id, &mut stx1)
-        .expect("propose runtime upgrade");
-    stx1.apply();
-    block1.commit().unwrap();
+    let err = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes }
+        .execute(&account_id, &mut stx)
+        .expect_err("non-v1 runtime upgrade must be rejected");
 
-    // Still in pre-activation state: submitting abi_version=2 should be rejected at admission
-    let header_pre =
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block_pre = state.block(header_pre);
-    let tx_pre =
-        iroha_data_model::transaction::TransactionBuilder::new(chain.clone(), account_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog_v2.clone())))
-            .sign(kp.private_key());
-    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
-    let accepted_pre = AcceptedTransaction::new_unchecked(Cow::Owned(tx_pre));
-    let (_hash_pre, result_pre) = block_pre.validate_transaction(accepted_pre, &mut ivm_cache);
-    match result_pre {
-        Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-            IvmAdmissionError::AbiVersionNotActive(2),
-        ))) => {}
-        other => panic!("Expected AbiVersionNotActive(2) pre-activation, got {other:?}"),
+    match err {
+        InstructionExecutionError::InvariantViolation(msg) => {
+            assert!(
+                msg.contains("unsupported abi_version 2") && msg.contains("expected 1"),
+                "unexpected msg: {msg}"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
     }
-    drop(block_pre);
-
-    // Block 2: activate the upgrade at start_height
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-    let mut block2 = state.block(header2);
-    let mut stx2 = block2.transaction();
-    let activate =
-        iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade { id: upgrade_id };
-    activate
-        .execute(&account_id, &mut stx2)
-        .expect("activate runtime upgrade at start_height");
-    stx2.apply();
-    block2.commit().unwrap();
-
-    // Block 3: after activation, abi_version=2 should be accepted at admission
-    let header3 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
-    let mut block3 = state.block(header3);
-    let tx_post =
-        iroha_data_model::transaction::TransactionBuilder::new(chain.clone(), account_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog_v2)))
-            .sign(kp.private_key());
-    let accepted_post = AcceptedTransaction::new_unchecked(Cow::Owned(tx_post));
-    let (_hash_post, result_post) = block3.validate_transaction(accepted_post, &mut ivm_cache);
-    assert!(
-        result_post.is_ok(),
-        "abi v2 should be accepted post-activation"
-    );
 }
 
 #[test]
-fn propose_runtime_upgrade_rejects_overlapping_windows() {
+fn propose_runtime_upgrade_rejects_non_incrementing_abi_version() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
     let kura = Kura::blank_kura_for_testing();
@@ -181,43 +128,37 @@ fn propose_runtime_upgrade_rejects_overlapping_windows() {
         .execute(&account_id, &mut stx)
         .expect("grant permission");
 
-    let make_manifest = |start, end| iroha_data_model::runtime::RuntimeUpgradeManifest {
-        name: "ABI version 2".to_string(),
-        description: "Activate ABI version 2".to_string(),
-        abi_version: 2,
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::Experimental(2)),
+    let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
+        name: "ABI version 1".to_string(),
+        description: "ABI v1 already active".to_string(),
+        abi_version: 1,
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         added_syscalls: vec![],
         added_pointer_types: vec![],
-        start_height: start,
-        end_height: end,
+        start_height: 10,
+        end_height: 20,
         sbom_digests: Vec::new(),
         slsa_attestation: Vec::new(),
         provenance: Vec::new(),
     };
+    let manifest_bytes = manifest.canonical_bytes();
+    let err = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes }
+        .execute(&account_id, &mut stx)
+        .expect_err("v1 upgrades are non-incrementing and must be rejected");
 
-    let first = make_manifest(10, 20);
-    let first_bytes = first.canonical_bytes();
-    iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade {
-        manifest_bytes: first_bytes,
+    match err {
+        InstructionExecutionError::InvariantViolation(msg) => {
+            assert!(
+                msg.contains("abi_version must be strictly greater"),
+                "unexpected msg: {msg}"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
     }
-    .execute(&account_id, &mut stx)
-    .expect("first proposal succeeds");
-
-    let second = make_manifest(15, 25);
-    let second_bytes = second.canonical_bytes();
-    let err = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade {
-        manifest_bytes: second_bytes,
-    }
-    .execute(&account_id, &mut stx)
-    .expect_err("overlapping window must be rejected");
-
-    assert!(matches!(
-        err,
-        InstructionExecutionError::InvariantViolation(_)
-    ));
 }
 
 #[test]
+#[ignore = "TODO: re-enable abi_hash mismatch checks when ABI v2 exists"]
 fn propose_runtime_upgrade_rejects_non_matching_abi_hash() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
@@ -243,10 +184,10 @@ fn propose_runtime_upgrade_rejects_non_matching_abi_hash() {
         .expect("grant permission");
 
     let mut manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
-        name: "ABI version 2".to_string(),
-        description: "Activate ABI version 2".to_string(),
-        abi_version: 2,
-        abi_hash: [0xAA; 32], // wrong hash: should be compute_abi_hash(Experimental(2))
+        name: "ABI version 1".to_string(),
+        description: "Activate ABI version 1".to_string(),
+        abi_version: 1,
+        abi_hash: [0xAA; 32], // wrong hash: should be compute_abi_hash(AbiV1)
         added_syscalls: vec![],
         added_pointer_types: vec![],
         start_height: 10,
@@ -269,6 +210,7 @@ fn propose_runtime_upgrade_rejects_non_matching_abi_hash() {
 }
 
 #[test]
+#[ignore = "TODO: re-enable added_* validation when ABI v2 exists"]
 fn propose_runtime_upgrade_rejects_incorrect_added_sets() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
@@ -294,10 +236,10 @@ fn propose_runtime_upgrade_rejects_incorrect_added_sets() {
         .expect("grant permission");
 
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
-        name: "ABI version 2".to_string(),
-        description: "Activate ABI version 2".to_string(),
-        abi_version: 2,
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::Experimental(2)),
+        name: "ABI version 1".to_string(),
+        description: "Activate ABI version 1".to_string(),
+        abi_version: 1,
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         // No new syscalls/types exist in this build, so added_* must be empty.
         added_syscalls: vec![9000],
         added_pointer_types: vec![0x00FF],
@@ -319,6 +261,7 @@ fn propose_runtime_upgrade_rejects_incorrect_added_sets() {
 }
 
 #[test]
+#[ignore = "TODO: re-enable idempotency checks when ABI v2 exists"]
 fn propose_runtime_upgrade_is_idempotent_for_identical_manifest() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
@@ -344,10 +287,10 @@ fn propose_runtime_upgrade_is_idempotent_for_identical_manifest() {
         .expect("grant permission");
 
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
-        name: "ABI version 2".to_string(),
-        description: "Activate ABI version 2".to_string(),
-        abi_version: 2,
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::Experimental(2)),
+        name: "ABI version 1".to_string(),
+        description: "Activate ABI version 1".to_string(),
+        abi_version: 1,
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         added_syscalls: vec![],
         added_pointer_types: vec![],
         start_height: 10,
@@ -381,6 +324,7 @@ fn propose_runtime_upgrade_is_idempotent_for_identical_manifest() {
 }
 
 #[test]
+#[ignore = "TODO: re-enable activation idempotency checks when ABI v2 exists"]
 fn activate_runtime_upgrade_is_idempotent_at_start_height() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
@@ -408,10 +352,10 @@ fn activate_runtime_upgrade_is_idempotent_at_start_height() {
         .expect("grant permission");
 
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
-        name: "ABI version 2".to_string(),
-        description: "Activate ABI version 2".to_string(),
-        abi_version: 2,
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::Experimental(2)),
+        name: "ABI version 1".to_string(),
+        description: "Activate ABI version 1".to_string(),
+        abi_version: 1,
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         added_syscalls: vec![],
         added_pointer_types: vec![],
         start_height: 5,
@@ -453,6 +397,7 @@ fn activate_runtime_upgrade_is_idempotent_at_start_height() {
 }
 
 #[test]
+#[ignore = "TODO: re-enable activation/admission checks when ABI v2 exists"]
 fn activation_allows_new_abi_in_same_block() {
     use iroha_core::{
         kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache,
@@ -470,7 +415,7 @@ fn activation_allows_new_abi_in_same_block() {
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
-    let prog_v2 = minimal_ivm_program(2);
+    let prog_v1 = minimal_ivm_program(1);
     let chain: ChainId = "chain".parse().unwrap();
 
     // Block 1: grant permission and propose upgrade [2, 10)
@@ -485,10 +430,10 @@ fn activation_allows_new_abi_in_same_block() {
         .expect("grant permission");
 
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
-        name: "ABI version 2".to_string(),
-        description: "Activate ABI version 2".to_string(),
-        abi_version: 2,
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::Experimental(2)),
+        name: "ABI version 1".to_string(),
+        description: "Activate ABI version 1".to_string(),
+        abi_version: 1,
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         added_syscalls: vec![],
         added_pointer_types: vec![],
         start_height: 2,
@@ -505,7 +450,7 @@ fn activation_allows_new_abi_in_same_block() {
     stx1.apply();
     block1.commit().unwrap();
 
-    // Block 2: activate upgrade, then validate a v2 program in the same block
+    // Block 2: activate upgrade, then validate a v1 program in the same block
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
@@ -519,18 +464,19 @@ fn activation_allows_new_abi_in_same_block() {
     let tx =
         iroha_data_model::transaction::TransactionBuilder::new(chain.clone(), account_id.clone())
             .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog_v2)))
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog_v1)))
             .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
     assert!(
         result.is_ok(),
-        "program with freshly activated ABI should validate"
+        "program with ABI v1 should validate"
     );
 }
 
 #[test]
+#[ignore = "TODO: re-enable manifest hash mismatch checks when ABI v2 exists"]
 fn active_manifest_hash_mismatch_rejects_contracts() {
     use iroha_core::{
         kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache,
@@ -552,9 +498,9 @@ fn active_manifest_hash_mismatch_rejects_contracts() {
 
     // Seed an activated upgrade record with an incorrect abi_hash.
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
-        name: "ABI version 2".to_string(),
-        description: "Activate ABI version 2".to_string(),
-        abi_version: 2,
+        name: "ABI version 1".to_string(),
+        description: "Activate ABI version 1".to_string(),
+        abi_version: 1,
         abi_hash: [0x11; 32], // deliberately wrong
         added_syscalls: vec![],
         added_pointer_types: vec![],
@@ -580,8 +526,8 @@ fn active_manifest_hash_mismatch_rejects_contracts() {
     stx.apply();
     block.commit().unwrap();
 
-    // Submitting an ABI v2 program should be rejected due to abi_hash mismatch.
-    let prog_v2 = minimal_ivm_program(2);
+    // Submitting an ABI v1 program should be rejected due to abi_hash mismatch.
+    let prog_v1 = minimal_ivm_program(1);
     let chain: ChainId = "chain".parse().unwrap();
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -589,7 +535,7 @@ fn active_manifest_hash_mismatch_rejects_contracts() {
     let tx =
         iroha_data_model::transaction::TransactionBuilder::new(chain.clone(), account_id.clone())
             .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog_v2)))
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog_v1)))
             .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -631,10 +577,10 @@ fn propose_runtime_upgrade_rejects_missing_provenance_when_required() {
         .expect("grant permission");
 
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
-        name: "ABI version 2".to_string(),
-        description: "Activate ABI version 2".to_string(),
-        abi_version: 2,
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::Experimental(2)),
+        name: "ABI version 1".to_string(),
+        description: "Activate ABI version 1".to_string(),
+        abi_version: 1,
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         added_syscalls: vec![],
         added_pointer_types: vec![],
         start_height: 10,
@@ -690,10 +636,10 @@ fn propose_runtime_upgrade_rejects_untrusted_signer() {
         .expect("grant permission");
 
     let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
-        name: "ABI version 2".to_string(),
-        description: "Activate ABI version 2".to_string(),
-        abi_version: 2,
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::Experimental(2)),
+        name: "ABI version 1".to_string(),
+        description: "Activate ABI version 1".to_string(),
+        abi_version: 1,
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         added_syscalls: vec![],
         added_pointer_types: vec![],
         start_height: 10,

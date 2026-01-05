@@ -223,6 +223,20 @@ impl Actor {
             );
             return true;
         }
+        let expected_epoch = self.epoch_for_height(vote.height);
+        if vote.epoch != expected_epoch {
+            iroha_logger::debug!(
+                phase = ?vote.phase,
+                height = vote.height,
+                view = vote.view,
+                epoch = vote.epoch,
+                expected_epoch,
+                signer = vote.signer,
+                block_hash = %vote.block_hash,
+                "dropping vote with mismatched epoch"
+            );
+            return true;
+        }
         if let Some(local_view) = self.stale_view(vote.height, vote.view) {
             let da_enabled = self.runtime_da_enabled();
             let missing_request = self
@@ -384,7 +398,7 @@ impl Actor {
             }
         }
         let key = vote_key(vote);
-        if let Some(existing) = self.vote_log.get(&key) {
+        if let Some(existing) = self.vote_log.get(&key).cloned() {
             if existing.block_hash == vote.block_hash {
                 iroha_logger::debug!(
                     phase = ?vote.phase,
@@ -397,7 +411,7 @@ impl Actor {
                 );
                 return false;
             }
-            self.note_double_vote(Some(existing), vote, evidence_context);
+            self.note_double_vote(Some(&existing), vote, evidence_context);
             let cross_phase = match vote.phase {
                 crate::sumeragi::consensus::Phase::Prepare => {
                     Some(crate::sumeragi::consensus::Phase::Commit)
@@ -409,9 +423,11 @@ impl Actor {
             };
             if let Some(phase) = cross_phase {
                 if let Some(previous) =
-                    self.vote_log.get(&(phase, vote.height, vote.view, vote.epoch, vote.signer))
+                    self.vote_log
+                        .get(&(phase, vote.height, vote.view, vote.epoch, vote.signer))
+                        .cloned()
                 {
-                    self.note_double_vote(Some(previous), vote, evidence_context);
+                    self.note_double_vote(Some(&previous), vote, evidence_context);
                 }
             }
             warn!(
@@ -786,6 +802,19 @@ impl Actor {
                 );
                 return;
             }
+        }
+        let expected_epoch = self.epoch_for_height(vote.height);
+        if vote.epoch != expected_epoch {
+            iroha_logger::debug!(
+                height = vote.height,
+                view = vote.view,
+                epoch = vote.epoch,
+                expected_epoch,
+                signer = vote.signer,
+                block = %vote.block_hash,
+                "dropping exec vote with mismatched epoch"
+            );
+            return;
         }
         let (consensus_mode, mode_tag, prf_seed) =
             self.consensus_context_for_height(vote.height);

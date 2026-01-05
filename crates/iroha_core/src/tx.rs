@@ -1540,57 +1540,15 @@ impl StateBlock<'_> {
             ));
         }
 
-        // ABI validation: reject ABI version 0; gate >1 by runtime governance activation
-        if meta.abi_version == 0 {
+        // ABI validation: first release accepts only ABI v1.
+        if meta.abi_version != 1 {
             return Err(TransactionRejectionReason::Validation(
                 ValidationFail::IvmAdmission(
-                    iroha_data_model::executor::IvmAdmissionError::UnsupportedAbiVersion(0),
-                ),
-            ));
-        }
-        if meta.abi_version > 1 {
-            // Active set: V1 is always active; Activated upgrades extend the set indefinitely
-            let mut active: std::collections::BTreeSet<u16> = [1u16].into_iter().collect();
-            let mut matching_upgrade: Option<iroha_data_model::runtime::RuntimeUpgradeRecord> =
-                None;
-            for (_id, rec) in state_transaction.world.runtime_upgrades.iter() {
-                if let iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(_) = rec.status
-                {
-                    active.insert(rec.manifest.abi_version);
-                    if rec.manifest.abi_version == u16::from(meta.abi_version) {
-                        matching_upgrade = Some(rec.clone());
-                    }
-                }
-            }
-            if !active.contains(&u16::from(meta.abi_version)) {
-                return Err(TransactionRejectionReason::Validation(
-                    ValidationFail::IvmAdmission(
-                        iroha_data_model::executor::IvmAdmissionError::AbiVersionNotActive(
-                            meta.abi_version,
-                        ),
-                    ),
-                ));
-            }
-            let rec = matching_upgrade.ok_or(TransactionRejectionReason::Validation(
-                ValidationFail::IvmAdmission(
-                    iroha_data_model::executor::IvmAdmissionError::AbiVersionNotActive(
+                    iroha_data_model::executor::IvmAdmissionError::UnsupportedAbiVersion(
                         meta.abi_version,
                     ),
                 ),
-            ))?;
-            let expected = iroha_crypto::Hash::prehashed(rec.manifest.abi_hash);
-            if expected != summary.abi_hash {
-                return Err(TransactionRejectionReason::Validation(
-                    ValidationFail::IvmAdmission(
-                        iroha_data_model::executor::IvmAdmissionError::ManifestAbiHashMismatch(
-                            iroha_data_model::executor::ManifestAbiHashMismatchInfo {
-                                expected,
-                                actual: summary.abi_hash,
-                            },
-                        ),
-                    ),
-                ));
-            }
+            ));
         }
 
         // Vector length: 0 means "auto"; otherwise require a sane bound.
@@ -1712,10 +1670,8 @@ impl StateBlock<'_> {
 
         // Admission guard: reject bytecode that invokes syscalls outside the ABI surface.
         if let Some(decoded) = decoded.as_ref() {
-            let policy = match meta.abi_version {
-                1 => ivm::SyscallPolicy::AbiV1,
-                v => ivm::SyscallPolicy::Experimental(v),
-            };
+            debug_assert_eq!(meta.abi_version, 1, "only ABI v1 is supported");
+            let policy = ivm::SyscallPolicy::AbiV1;
             for op in decoded.iter() {
                 if ivm::instruction::wide::opcode(op.inst) == ivm::instruction::wide::system::SCALL
                 {
@@ -3925,9 +3881,9 @@ pub mod tests {
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                iroha_data_model::executor::IvmAdmissionError::AbiVersionNotActive(..),
+                iroha_data_model::executor::IvmAdmissionError::UnsupportedAbiVersion(3),
             ))) => {}
-            other => panic!("Expected AbiVersionNotActive structured error, got {other:?}"),
+            other => panic!("Expected UnsupportedAbiVersion(3) error, got {other:?}"),
         }
     }
 

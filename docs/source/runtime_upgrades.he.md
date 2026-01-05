@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/runtime_upgrades.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bb2077856de0420cb6ce7f04939caa6348e22c22bee93189a22a8596c71c7cbc
+source_hash: 8990e19977e7f3fb370b9c8f66064542135fa171
 source_last_modified: "2025-12-04T06:31:08.260928+00:00"
 translation_last_reviewed: 2026-01-01
 ---
@@ -16,6 +16,8 @@ translation_last_reviewed: 2026-01-01
 # שדרוגי Runtime (IVM + Host) — ללא השבתה, ללא Hardfork
 
 מסמך זה מגדיר מנגנון דטרמיניסטי ומבוקר-ממשל להוספת יכולות IVM/host חדשות (למשל syscalls חדשים וסוגי pointer-ABI) ללא עצירת הרשת או hardfork. הצמתים מפיצים בינארים מראש; ההפעלה מתואמת on-chain בתוך חלון גובה תחום. חוזים ישנים ממשיכים לפעול ללא שינוי; יכולות חדשות מוגנות לפי גרסת ABI ומדיניות.
+
+הערה (מהדורה ראשונה): רק ABI v1 נתמך. מניפסטים של שדרוג runtime לגרסאות ABI אחרות נדחים עד למהדורה עתידית שתוסיף גרסה חדשה.
 
 מטרות
 - הפעלה דטרמיניסטית בחלון גובה מתוזמן עם יישום אידמפוטנטי.
@@ -80,9 +82,8 @@ translation_last_reviewed: 2026-01-01
 - RuntimeUpgradeEvent::{Proposed { id, manifest }, Activated { id, abi_version, at_height }, Canceled { id }}
 
 כללי קבלה
-- קבלת חוזים: עבור manifests עם `ProgramMetadata.abi_version = v`:
-  - לפני הפעלת `v`: דחייה עם `IvmAdmissionError::AbiVersionNotActive { v }`.
-  - אחרי הפעלה: לחשב מחדש `abi_hash(v)` ולדרוש התאמה ל-payload/manifest; אחרת דחייה עם `IvmAdmissionError::ManifestAbiHashMismatch`.
+- קבלת חוזים: במהדורה הראשונה מתקבל רק `ProgramMetadata.abi_version = 1`; ערכים אחרים נדחים עם `IvmAdmissionError::UnsupportedAbiVersion`.
+  - עבור ABI v1, מחשבים מחדש `abi_hash(1)` ודורשים התאמה ל-payload/manifest כאשר מסופק; אחרת דחייה עם `IvmAdmissionError::ManifestAbiHashMismatch`.
 - קבלת טרנזקציות: ההוראות `ProposeRuntimeUpgrade`/`ActivateRuntimeUpgrade`/`CancelRuntimeUpgrade` דורשות הרשאות מתאימות (root/sudo); חייבות לעמוד במגבלות חפיפה של חלונות.
 
 אכיפת provenance

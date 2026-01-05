@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/runtime_upgrades.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bb2077856de0420cb6ce7f04939caa6348e22c22bee93189a22a8596c71c7cbc
+source_hash: 8990e19977e7f3fb370b9c8f66064542135fa171
 source_last_modified: "2025-12-04T06:31:08.260928+00:00"
 translation_last_reviewed: 2026-01-01
 ---
@@ -16,6 +16,8 @@ nouvelles capacites IVM/host (par ex. nouveaux syscalls et types pointer-ABI) sa
 reseau ni hardforker les noeuds. Les noeuds deploient les binaires a l avance; l activation est
 coordonnee on-chain dans une fenetre de hauteur bornee. Les anciens contrats continuent a
 s executer sans changement; les nouvelles capacites sont gatees par version ABI et politique.
+
+Note (premiere version): seul ABI v1 est pris en charge. Les manifests de runtime upgrade pour d autres versions d ABI sont rejetes jusqu a une version future qui introduira une nouvelle ABI.
 
 Objectifs
 - Activation deterministe dans une fenetre de hauteur planifiee avec application idempotente.
@@ -93,9 +95,8 @@ Evenements (Data Events)
 - RuntimeUpgradeEvent::{Proposed { id, manifest }, Activated { id, abi_version, at_height }, Canceled { id }}
 
 Regles d admission
-- Admission des contrats: pour les manifests avec `ProgramMetadata.abi_version = v`:
-  - Avant activation de `v`: rejeter avec `IvmAdmissionError::AbiVersionNotActive { v }`.
-  - Apres activation: recomputer `abi_hash(v)` et exiger l egalite avec le payload/manifest; sinon rejeter avec
+- Admission des contrats: pour la premiere version, seul `ProgramMetadata.abi_version = 1` est accepte; les autres valeurs sont rejetees avec `IvmAdmissionError::UnsupportedAbiVersion`.
+  - Pour ABI v1, recomputer `abi_hash(1)` et exiger l egalite avec le payload/manifest lorsque fourni; sinon rejeter avec
     `IvmAdmissionError::ManifestAbiHashMismatch`.
 - Admission des transactions: les instructions `ProposeRuntimeUpgrade`/`ActivateRuntimeUpgrade`/`CancelRuntimeUpgrade`
   requierent les permissions appropriees (root/sudo); doivent respecter les contraintes de chevauchement de fenetres.

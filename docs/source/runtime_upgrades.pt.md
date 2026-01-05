@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/runtime_upgrades.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bb2077856de0420cb6ce7f04939caa6348e22c22bee93189a22a8596c71c7cbc
+source_hash: 8990e19977e7f3fb370b9c8f66064542135fa171
 source_last_modified: "2025-12-04T06:31:08.260928+00:00"
 translation_last_reviewed: 2026-01-01
 ---
@@ -16,6 +16,8 @@ novas capacidades de IVM/host (por exemplo, novos syscalls e tipos pointer-ABI) 
 ou fazer hardfork. Os nos implantam binarios com antecedencia; a ativacao e coordenada on-chain
 em uma janela de altura limitada. Contratos antigos continuam a rodar sem mudanca; novas
 capacidades sao controladas por versao ABI e politica.
+
+Nota (primeira versao): Apenas ABI v1 e suportado. Manifests de runtime upgrade para outras versoes de ABI sao rejeitados ate que uma versao futura introduza uma nova ABI.
 
 Objetivos
 - Ativacao determinista em uma janela de altura agendada com aplicacao idempotente.
@@ -80,9 +82,8 @@ Eventos (Data Events)
 - RuntimeUpgradeEvent::{Proposed { id, manifest }, Activated { id, abi_version, at_height }, Canceled { id }}
 
 Regras de admissao
-- Admissao de contratos: para manifests com `ProgramMetadata.abi_version = v`:
-  - Antes da ativacao de `v`: rejeitar com `IvmAdmissionError::AbiVersionNotActive { v }`.
-  - Depois da ativacao: recompute `abi_hash(v)` e exija igualdade com payload/manifest; caso contrario, rejeitar com `IvmAdmissionError::ManifestAbiHashMismatch`.
+- Admissao de contratos: na primeira versao, apenas `ProgramMetadata.abi_version = 1` e aceito; outros valores sao rejeitados com `IvmAdmissionError::UnsupportedAbiVersion`.
+  - Para ABI v1, recompute `abi_hash(1)` e exija igualdade com payload/manifest quando fornecido; caso contrario, rejeitar com `IvmAdmissionError::ManifestAbiHashMismatch`.
 - Admissao de transacoes: as instrucoes `ProposeRuntimeUpgrade`/`ActivateRuntimeUpgrade`/`CancelRuntimeUpgrade` exigem permissoes apropriadas (root/sudo); devem satisfazer as restricoes de sobreposicao de janela.
 
 Aplicacao de provenance

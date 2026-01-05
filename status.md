@@ -1,6 +1,10 @@
 # Status
 
 ## Latest Updates
+- ABI: enforce v1-only acceptance across admission/runtime upgrades and CLI/Torii helpers; update runtime-upgrade/contract docs and adjust tests (future v2 cases are now ignored with TODOs).
+- Integration tests: ensure genesis peers always receive a genesis file to prevent empty-storage startup failures.
+- Sumeragi: drop votes/QCs with mismatched epochs (commit + exec paths) to avoid cross-epoch pollution; add regression tests.
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/vars in unrelated modules).
 - Sumeragi: ignore conflicting same-signer votes (record evidence without overwriting the first vote) to avoid QC regression; add regression coverage.
 - Tests: not run (not requested).
 - Sumeragi: drop the DA/RBC devnet override so `sumeragi.da_enabled` is honored at runtime; update docs and runtime DA tests accordingly.

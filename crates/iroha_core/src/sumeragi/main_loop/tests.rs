@@ -5313,6 +5313,45 @@ async fn handle_vote_drops_nonextending_precommit_for_known_block() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn handle_vote_drops_epoch_mismatch() {
+    let mut harness = test_actor_harness(2).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(1).max(1);
+    let view = 0_u64;
+    let expected_epoch = actor.epoch_for_height(height);
+    let mismatched_epoch = expected_epoch.saturating_add(1);
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAC; 32]));
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let chain = actor.common_config.chain.clone();
+
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch: mismatched_epoch,
+        highest_cert: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
+
+    let before = actor.vote_log.len();
+    actor.handle_vote(vote);
+    assert_eq!(
+        actor.vote_log.len(),
+        before,
+        "votes with mismatched epochs should be dropped"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn prune_precommit_votes_conflicting_with_lock_drops_known_conflicts() {
     let mut harness = test_actor_harness(2).await;
     let actor = &mut harness.actor;
@@ -5456,6 +5495,46 @@ async fn handle_exec_vote_accepts_stale_view_when_block_pending() {
     assert!(
         recorded,
         "stale exec vote should be recorded for pending block"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_exec_vote_drops_epoch_mismatch() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(1).max(1);
+    let view = 0_u64;
+    let expected_epoch = actor.epoch_for_height(height);
+    let mismatched_epoch = expected_epoch.saturating_add(1);
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAD; 32]));
+    let mut vote = crate::sumeragi::consensus::ExecVote {
+        block_hash,
+        parent_state_root: Hash::prehashed([0x10; 32]),
+        post_state_root: Hash::prehashed([0x11; 32]),
+        height,
+        view,
+        epoch: mismatched_epoch,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let chain = actor.common_config.chain.clone();
+    let preimage =
+        crate::sumeragi::consensus::bls_preimage::exec_vote(&chain, actor.mode_tag(), &vote);
+    let signature = Signature::new(actor.common_config.key_pair.private_key(), &preimage);
+    vote.bls_sig = signature.payload().to_vec();
+
+    let before = actor.exec_vote_log.len();
+    actor.handle_exec_vote(vote);
+    assert_eq!(
+        actor.exec_vote_log.len(),
+        before,
+        "exec votes with mismatched epochs should be dropped"
     );
 
     harness.shutdown.send();
@@ -5791,6 +5870,44 @@ async fn handle_precommit_vote_uses_roster_snapshot_after_topology_change() {
     assert!(
         recorded,
         "precommit vote should use the persisted roster after topology change"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_qc_drops_epoch_mismatch() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(1).max(1);
+    let view = 0_u64;
+    let expected_epoch = actor.epoch_for_height(height);
+    let mismatched_epoch = expected_epoch.saturating_add(1);
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAE; 32]));
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let chain = actor.common_config.chain.clone();
+    let qc = qc_with_bitmap(
+        &chain,
+        block_hash,
+        height,
+        view,
+        mismatched_epoch,
+        vec![0b0000_1111],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    let before = actor.qc_cache.len();
+    actor.handle_qc(qc).expect("handle qc");
+    assert_eq!(
+        actor.qc_cache.len(),
+        before,
+        "QCs with mismatched epochs should be dropped"
     );
 
     harness.shutdown.send();
@@ -11194,6 +11311,49 @@ async fn handle_execution_qc_persists_valid_qc() {
         stored.bls_aggregate_signature,
         qc.aggregate.bls_aggregate_signature
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_execution_qc_drops_epoch_mismatch() {
+    let mut config = test_sumeragi_config();
+    config.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, config, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(1).max(1);
+    let view = 0_u64;
+    let expected_epoch = actor.epoch_for_height(height);
+    let mismatched_epoch = expected_epoch.saturating_add(1);
+
+    let chain_id = actor.common_config.chain.clone();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAF; 32]));
+    let parent_root = Hash::prehashed([0xB1; 32]);
+    let post_root = Hash::prehashed([0xC1; 32]);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let qc = exec_qc_with_bitmap(
+        &chain_id,
+        block_hash,
+        parent_root,
+        post_root,
+        height,
+        view,
+        mismatched_epoch,
+        vec![0b0000_0111],
+        &topology,
+        &harness.key_pairs,
+    );
+
+    let before = actor.execution_qc_cache.len();
+    actor.handle_execution_qc(qc).expect("handle execution qc");
+    assert_eq!(
+        actor.execution_qc_cache.len(),
+        before,
+        "ExecutionQCs with mismatched epochs should be dropped"
+    );
+
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]

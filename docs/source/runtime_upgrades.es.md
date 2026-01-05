@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/runtime_upgrades.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bb2077856de0420cb6ce7f04939caa6348e22c22bee93189a22a8596c71c7cbc
+source_hash: 8990e19977e7f3fb370b9c8f66064542135fa171
 source_last_modified: "2025-12-04T06:31:08.260928+00:00"
 translation_last_reviewed: 2026-01-01
 ---
@@ -16,6 +16,8 @@ nuevas capacidades de IVM/host (p. ej., nuevos syscalls y tipos pointer-ABI) sin
 hacer hardfork. Los nodos despliegan binarios con antelacion; la activacion se coordina on-chain
  dentro de una ventana de altura acotada. Los contratos antiguos siguen ejecutandose sin cambios;
 las nuevas capacidades se controlan por version ABI y politica.
+
+Nota (primera version): Solo se admite ABI v1. Los manifests de runtime upgrade para otras versiones de ABI se rechazan hasta que una version futura introduzca una nueva ABI.
 
 Objetivos
 - Activacion determinista en una ventana de altura programada con aplicacion idempotente.
@@ -80,9 +82,8 @@ Eventos (Data Events)
 - RuntimeUpgradeEvent::{Proposed { id, manifest }, Activated { id, abi_version, at_height }, Canceled { id }}
 
 Reglas de admision
-- Admision de contratos: para manifests con `ProgramMetadata.abi_version = v`:
-  - Antes de la activacion de `v`: rechazar con `IvmAdmissionError::AbiVersionNotActive { v }`.
-  - Despues de la activacion: recomputar `abi_hash(v)` y exigir igualdad con payload/manifest; si no, rechazar con `IvmAdmissionError::ManifestAbiHashMismatch`.
+- Admision de contratos: en la primera version solo se acepta `ProgramMetadata.abi_version = 1`; otros valores se rechazan con `IvmAdmissionError::UnsupportedAbiVersion`.
+  - Para ABI v1, recomputar `abi_hash(1)` y exigir igualdad con payload/manifest cuando se provea; si no, rechazar con `IvmAdmissionError::ManifestAbiHashMismatch`.
 - Admision de transacciones: las instrucciones `ProposeRuntimeUpgrade`/`ActivateRuntimeUpgrade`/`CancelRuntimeUpgrade` requieren permisos apropiados (root/sudo); deben cumplir las restricciones de solape de ventanas.
 
 Aplicacion de provenance

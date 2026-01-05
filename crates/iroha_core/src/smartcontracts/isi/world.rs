@@ -3698,22 +3698,12 @@ pub mod isi {
     fn policy_for_abi_version(
         abi_version: u16,
     ) -> Result<(ivm::SyscallPolicy, u8), InstructionExecutionError> {
-        if abi_version == 0 {
+        if abi_version != 1 {
             return Err(InstructionExecutionError::InvariantViolation(
-                "abi_version must be >= 1".into(),
+                format!("unsupported abi_version {abi_version}; expected 1").into(),
             ));
         }
-        let abi_u8 = u8::try_from(abi_version).map_err(|_| {
-            InstructionExecutionError::InvariantViolation(
-                "abi_version exceeds supported range".into(),
-            )
-        })?;
-        let policy = if abi_u8 == 1 {
-            ivm::SyscallPolicy::AbiV1
-        } else {
-            ivm::SyscallPolicy::Experimental(abi_u8)
-        };
-        Ok((policy, abi_u8))
+        Ok((ivm::SyscallPolicy::AbiV1, 1))
     }
 
     fn allowed_syscalls_for_policy(policy: ivm::SyscallPolicy) -> BTreeSet<u32> {

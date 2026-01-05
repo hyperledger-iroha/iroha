@@ -1,6 +1,6 @@
 //! IVM/ABI helper subcommands for the CLI.
 
-use eyre::Result;
+use eyre::{Result, eyre};
 
 use crate::{Run, RunContext};
 
@@ -16,7 +16,7 @@ pub enum Command {
 
 #[derive(clap::Args, Debug)]
 pub struct AbiHashArgs {
-    /// Policy: v1, or exp:<n>
+    /// Policy: v1
     #[arg(long, value_name = "POLICY", default_value = "v1")]
     policy: String,
     /// Uppercase hex output (default: lowercase)
@@ -37,7 +37,7 @@ impl Run for Command {
 impl Run for AbiHashArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         // Parse policy
-        let pol = parse_policy(&self.policy);
+        let pol = parse_policy(&self.policy)?;
         let hash = ivm::syscalls::compute_abi_hash(pol);
         let s = if self.uppercase {
             hex_upper(&hash)
@@ -49,14 +49,12 @@ impl Run for AbiHashArgs {
     }
 }
 
-fn parse_policy(s: &str) -> ivm::SyscallPolicy {
+fn parse_policy(s: &str) -> Result<ivm::SyscallPolicy> {
     match s.to_ascii_lowercase().as_str() {
-        "v1" => ivm::SyscallPolicy::AbiV1,
-        other if other.starts_with("exp:") => {
-            let n = other[4..].parse::<u8>().unwrap_or(1);
-            ivm::SyscallPolicy::Experimental(n)
-        }
-        _ => ivm::SyscallPolicy::AbiV1,
+        "v1" => Ok(ivm::SyscallPolicy::AbiV1),
+        other => Err(eyre!(
+            "unsupported ABI policy `{other}`; expected `v1` for the first release"
+        )),
     }
 }
 
@@ -84,19 +82,9 @@ mod tests {
 
     #[test]
     fn policy_parsing_variants() {
-        match parse_policy("v1") {
-            ivm::SyscallPolicy::AbiV1 => {}
-            other => panic!("expected V1, got {other:?}"),
-        }
-        match parse_policy("exp:2") {
-            ivm::SyscallPolicy::Experimental(2) => {}
-            other => panic!("expected Experimental(2), got {other:?}"),
-        }
-        // Fallback
-        match parse_policy("unknown") {
-            ivm::SyscallPolicy::AbiV1 => {}
-            other => panic!("expected fallback to V1, got {other:?}"),
-        }
+        assert!(matches!(parse_policy("v1"), Ok(ivm::SyscallPolicy::AbiV1)));
+        assert!(parse_policy("exp:2").is_err());
+        assert!(parse_policy("unknown").is_err());
     }
 
     #[test]

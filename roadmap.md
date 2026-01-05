@@ -162,7 +162,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Validate NCB dict codes, harden opt-column length parsing, and guard SIMD bundle length handling; add regression coverage.
  - [x] Reject id-delta underflow in NCB views and add regression coverage for delta-coded ids.
  - [x] Guard opt-column presence-bitset masking against 32-bit overflow in optstr/optu32 NCB views.
- - [ ] Enforce ABI v1 only (remove Experimental policy paths) and update related tests/docs.
+ - [x] Enforce ABI v1 only (remove Experimental policy paths) and update related tests/docs.
  - [ ] Remove Norito toggles and length/offset decode paths (update `norito.md`).
  - [x] Standardize Norito length-prefix flag scoping (COMPACT_LEN/COMPACT_SEQ_LEN/VARINT_OFFSETS) and update the spec/docs.
  - [x] Sweep docs/translations for remaining references and clean up tooling flags.
