@@ -127,6 +127,7 @@ impl TieredStateBackend {
 
         self.ensure_cold_root()
             .wrap_err("failed to prepare cold tier root directory")?;
+        self.recover_snapshot_artifacts(&root)?;
 
         let mut max_idx = 0u64;
         for entry in fs::read_dir(&root).wrap_err_with(|| {
@@ -147,6 +148,129 @@ impl TieredStateBackend {
 
         self.snapshot_counter = max_idx;
         self.snapshot_counter_seeded = true;
+        Ok(())
+    }
+
+    fn recover_snapshot_artifacts(&self, root: &Path) -> Result<()> {
+        #[derive(Default)]
+        struct SnapshotArtifacts {
+            live: Option<PathBuf>,
+            backup: Option<PathBuf>,
+            staging: Option<PathBuf>,
+        }
+
+        let mut artifacts: BTreeMap<u64, SnapshotArtifacts> = BTreeMap::new();
+
+        for entry in fs::read_dir(root).wrap_err_with(|| {
+            format!(
+                "failed to read cold tier root {path}",
+                path = root.display()
+            )
+        })? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if !file_type.is_dir() {
+                continue;
+            }
+            let path = entry.path();
+            let name = entry.file_name();
+            if let Some(idx) = Self::parse_snapshot_dir_name(&name) {
+                artifacts.entry(idx).or_default().live = Some(path);
+                continue;
+            }
+            let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+                continue;
+            };
+            if ext != "bak" && ext != "staging" {
+                continue;
+            }
+            let Some(stem) = path.file_stem() else {
+                continue;
+            };
+            let Some(idx) = Self::parse_snapshot_dir_name(stem) else {
+                continue;
+            };
+            let entry = artifacts.entry(idx).or_default();
+            if ext == "bak" {
+                entry.backup = Some(path);
+            } else {
+                entry.staging = Some(path);
+            }
+        }
+
+        let mut touched = false;
+        for (idx, entry) in artifacts {
+            let live_path = root.join(format!("{idx:020}"));
+            if entry.live.is_some() {
+                if let Some(backup) = entry.backup {
+                    if let Err(err) = fs::remove_dir_all(&backup) {
+                        iroha_logger::warn!(
+                            ?err,
+                            path = %backup.display(),
+                            "tiered-state: failed to remove stale snapshot backup"
+                        );
+                    } else {
+                        touched = true;
+                    }
+                }
+                if let Some(staging) = entry.staging {
+                    if let Err(err) = fs::remove_dir_all(&staging) {
+                        iroha_logger::warn!(
+                            ?err,
+                            path = %staging.display(),
+                            "tiered-state: failed to remove stale snapshot staging directory"
+                        );
+                    } else {
+                        touched = true;
+                    }
+                }
+                continue;
+            }
+
+            if let Some(backup) = entry.backup {
+                match fs::rename(&backup, &live_path) {
+                    Ok(()) => {
+                        iroha_logger::info!(
+                            from = %backup.display(),
+                            to = %live_path.display(),
+                            "tiered-state: restored snapshot backup"
+                        );
+                        touched = true;
+                    }
+                    Err(err) => {
+                        iroha_logger::warn!(
+                            ?err,
+                            from = %backup.display(),
+                            to = %live_path.display(),
+                            "tiered-state: failed to restore snapshot backup"
+                        );
+                    }
+                }
+            }
+
+            if let Some(staging) = entry.staging {
+                if let Err(err) = fs::remove_dir_all(&staging) {
+                    iroha_logger::warn!(
+                        ?err,
+                        path = %staging.display(),
+                        "tiered-state: failed to remove stale snapshot staging directory"
+                    );
+                } else {
+                    touched = true;
+                }
+            }
+        }
+
+        if touched {
+            if let Err(err) = Self::sync_dir(root) {
+                iroha_logger::warn!(
+                    ?err,
+                    path = %root.display(),
+                    "tiered-state: failed to sync snapshot root after recovery"
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -396,8 +520,10 @@ impl TieredStateBackend {
         let mut cold_bytes_total: u64 = 0;
         let mut cold_reused_entries: usize = 0;
         let mut cold_reused_bytes: u64 = 0;
+        let mut dirs_to_sync = BTreeSet::new();
         for cold in &plan.cold_entries {
             let abs_path = staging_dir.join(&cold.rel_path);
+            let mut parent_dirs = Vec::new();
             if let Some(parent) = abs_path.parent() {
                 fs::create_dir_all(parent).wrap_err_with(|| {
                     format!(
@@ -405,6 +531,12 @@ impl TieredStateBackend {
                         dir = parent.display()
                     )
                 })?;
+                for ancestor in parent.ancestors() {
+                    parent_dirs.push(ancestor.to_path_buf());
+                    if ancestor == staging_dir {
+                        break;
+                    }
+                }
             }
             let mut payload_len = None;
             let mut reused = false;
@@ -475,11 +607,23 @@ impl TieredStateBackend {
                 meta.last_cold_snapshot = plan.manifest.snapshot_index;
                 meta.last_cold_rel_path = Some(cold.rel_path.clone());
             }
+            for dir in parent_dirs {
+                dirs_to_sync.insert(dir);
+            }
         }
 
         plan.manifest.cold_bytes_total = cold_bytes_total;
         plan.manifest.cold_reused_entries = cold_reused_entries;
         plan.manifest.cold_reused_bytes = cold_reused_bytes;
+
+        for dir in dirs_to_sync {
+            Self::sync_dir(&dir).wrap_err_with(|| {
+                format!(
+                    "failed to sync cold shard directory {path}",
+                    path = dir.display()
+                )
+            })?;
+        }
 
         Self::write_manifest(&staging_dir, &plan.manifest)?;
         Self::sync_dir(&staging_dir).wrap_err_with(|| {
@@ -735,6 +879,26 @@ impl TieredStateBackend {
                         path = new_dir.display()
                     )
                 })?;
+                let archive_parent = archive.parent();
+                let new_parent = new_dir.parent();
+                if let Some(parent) = archive_parent {
+                    Self::sync_dir(parent).wrap_err_with(|| {
+                        format!(
+                            "failed to sync retired lane snapshot dir {path}",
+                            path = parent.display()
+                        )
+                    })?;
+                }
+                if let Some(parent) = new_parent {
+                    if Some(parent) != archive_parent {
+                        Self::sync_dir(parent).wrap_err_with(|| {
+                            format!(
+                                "failed to sync lane snapshot directory {path}",
+                                path = parent.display()
+                            )
+                        })?;
+                    }
+                }
             }
             fs::rename(&old_dir, &new_dir).wrap_err_with(|| {
                 format!(
@@ -743,6 +907,26 @@ impl TieredStateBackend {
                     dst = new_dir.display()
                 )
             })?;
+            let new_parent = new_dir.parent();
+            let old_parent = old_dir.parent();
+            if let Some(parent) = new_parent {
+                Self::sync_dir(parent).wrap_err_with(|| {
+                    format!(
+                        "failed to sync lane snapshot directory {path}",
+                        path = parent.display()
+                    )
+                })?;
+            }
+            if let Some(parent) = old_parent {
+                if Some(parent) != new_parent {
+                    Self::sync_dir(parent).wrap_err_with(|| {
+                        format!(
+                            "failed to sync lane snapshot directory {path}",
+                            path = parent.display()
+                        )
+                    })?;
+                }
+            }
             iroha_logger::info!(
                 lane = %current.lane_id.as_u32(),
                 alias_before = previous.alias,
@@ -811,6 +995,26 @@ impl TieredStateBackend {
                 path = dir.display()
             )
         })?;
+        let dest_parent = dest.parent();
+        let dir_parent = dir.parent();
+        if let Some(parent) = dest_parent {
+            Self::sync_dir(parent).wrap_err_with(|| {
+                format!(
+                    "failed to sync retired lane snapshot directory {path}",
+                    path = parent.display()
+                )
+            })?;
+        }
+        if let Some(parent) = dir_parent {
+            if Some(parent) != dest_parent {
+                Self::sync_dir(parent).wrap_err_with(|| {
+                    format!(
+                        "failed to sync lane snapshot directory {path}",
+                        path = parent.display()
+                    )
+                })?;
+            }
+        }
         iroha_logger::info!(
             lane = %entry.lane_id.as_u32(),
             alias = entry.alias,
@@ -1069,6 +1273,7 @@ impl TieredStateBackend {
             return Ok(());
         }
 
+        let mut pruned = false;
         let mut entries = fs::read_dir(root)
             .wrap_err_with(|| {
                 format!(
@@ -1095,8 +1300,17 @@ impl TieredStateBackend {
                         path = entry.path().display()
                     )
                 })?;
+                pruned = true;
             }
             entries.remove(0);
+        }
+        if pruned {
+            Self::sync_dir(root).wrap_err_with(|| {
+                format!(
+                    "failed to sync tiered snapshot root after prune {path}",
+                    path = root.display()
+                )
+            })?;
         }
         Ok(())
     }
@@ -1133,6 +1347,7 @@ impl TieredStateBackend {
             sizes.push((idx, path, size));
         }
 
+        let mut pruned = false;
         while total_bytes > self.max_cold_bytes && sizes.len() > 1 {
             let (_, path, size) = sizes.remove(0);
             fs::remove_dir_all(&path).wrap_err_with(|| {
@@ -1142,6 +1357,7 @@ impl TieredStateBackend {
                 )
             })?;
             total_bytes = total_bytes.saturating_sub(size);
+            pruned = true;
         }
 
         if total_bytes > self.max_cold_bytes && sizes.len() == 1 {
@@ -1154,6 +1370,14 @@ impl TieredStateBackend {
             );
         }
 
+        if pruned {
+            Self::sync_dir(root).wrap_err_with(|| {
+                format!(
+                    "failed to sync tiered snapshot root after cold prune {path}",
+                    path = root.display()
+                )
+            })?;
+        }
         Ok(())
     }
 
@@ -1201,26 +1425,51 @@ impl TieredStateBackend {
                 )
             })?;
         }
-        let bytes = fs::copy(source, dest).wrap_err_with(|| {
-            format!(
-                "failed to copy cold shard from {source} to {dest}",
-                source = source.display(),
-                dest = dest.display()
-            )
-        })?;
-        let file = fs::File::open(dest).wrap_err_with(|| {
-            format!(
-                "failed to open copied cold shard {path} for syncing",
-                path = dest.display()
-            )
-        })?;
-        file.sync_all().wrap_err_with(|| {
-            format!(
-                "failed to sync copied cold shard {path}",
-                path = dest.display()
-            )
-        })?;
-        Ok(Some(bytes))
+        match fs::hard_link(source, dest) {
+            Ok(()) => {
+                let file = fs::File::open(dest).wrap_err_with(|| {
+                    format!(
+                        "failed to open hard-linked cold shard {path} for syncing",
+                        path = dest.display()
+                    )
+                })?;
+                file.sync_all().wrap_err_with(|| {
+                    format!(
+                        "failed to sync hard-linked cold shard {path}",
+                        path = dest.display()
+                    )
+                })?;
+                Ok(Some(metadata.len()))
+            }
+            Err(link_err) => {
+                iroha_logger::debug!(
+                    ?link_err,
+                    source = %source.display(),
+                    dest = %dest.display(),
+                    "tiered-state: hard-link reuse failed; falling back to copy"
+                );
+                let bytes = fs::copy(source, dest).wrap_err_with(|| {
+                    format!(
+                        "failed to copy cold shard from {source} to {dest}",
+                        source = source.display(),
+                        dest = dest.display()
+                    )
+                })?;
+                let file = fs::File::open(dest).wrap_err_with(|| {
+                    format!(
+                        "failed to open copied cold shard {path} for syncing",
+                        path = dest.display()
+                    )
+                })?;
+                file.sync_all().wrap_err_with(|| {
+                    format!(
+                        "failed to sync copied cold shard {path}",
+                        path = dest.display()
+                    )
+                })?;
+                Ok(Some(bytes))
+            }
+        }
     }
 
     fn parse_snapshot_dir_name(name: &std::ffi::OsStr) -> Option<u64> {
@@ -1716,7 +1965,10 @@ pub struct TieredManifestEntry {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::{fs, num::NonZeroU32};
+
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
 
     use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
     use iroha_crypto::Hash;
@@ -1922,8 +2174,15 @@ mod tests {
         let qc1_hash = hex::encode(sha256(&norito::codec::Encode::encode(
             &qc1.subject_block_hash,
         )));
+        let qc2_hash = hex::encode(sha256(&norito::codec::Encode::encode(
+            &qc2.subject_block_hash,
+        )));
         let hot_hash = manifest.hot_entries[0].key_hash_hex.clone();
 
+        assert!(
+            hot_hash == qc1_hash || hot_hash == qc2_hash,
+            "hot entry should match one of the recent QC hashes"
+        );
         let mutate = if hot_hash == qc1_hash { qc2 } else { qc1 };
         let mut updated = mutate.clone();
         updated.view = 99;
@@ -1990,6 +2249,35 @@ mod tests {
         assert!(manifest2.cold_reused_bytes > 0);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn cold_payload_reuse_prefers_hard_links_when_supported() {
+        let temp = tempdir().expect("tmpdir");
+        let probe_source = temp.path().join("probe_source");
+        let probe_dest = temp.path().join("probe_dest");
+        fs::write(&probe_source, b"probe").expect("write probe");
+        if fs::hard_link(&probe_source, &probe_dest).is_err() {
+            return;
+        }
+        fs::remove_file(&probe_dest).expect("cleanup probe link");
+
+        let source = temp.path().join("source");
+        let dest = temp.path().join("dest");
+        let payload = b"cold payload";
+        fs::write(&source, payload).expect("write source");
+
+        let bytes = TieredStateBackend::try_reuse_cold_payload(&source, &dest)
+            .expect("reuse payload")
+            .expect("reuse should return bytes");
+        assert_eq!(bytes, payload.len() as u64);
+
+        let source_meta = fs::metadata(&source).expect("source metadata");
+        let dest_meta = fs::metadata(&dest).expect("dest metadata");
+        assert_eq!(source_meta.len(), dest_meta.len());
+        assert_eq!(source_meta.nlink(), 2);
+        assert_eq!(dest_meta.nlink(), 2);
+    }
+
     #[test]
     fn prune_snapshots_to_cold_byte_budget() {
         let temp = tempdir().expect("tmpdir");
@@ -2051,6 +2339,56 @@ mod tests {
         assert_eq!(manifest.snapshot_index, 8);
         let new_dir = root.join(format!("{:020}", manifest.snapshot_index));
         assert!(new_dir.exists(), "expected seeded snapshot directory");
+    }
+
+    #[test]
+    fn recover_snapshot_artifacts_restores_backups_and_cleans_staging() {
+        let temp = tempdir().expect("tmpdir");
+        let root = temp.path().to_path_buf();
+
+        let live_dir = root.join(format!("{:020}", 1_u64));
+        fs::create_dir_all(&live_dir).expect("live dir");
+        let live_marker = live_dir.join("marker.txt");
+        fs::write(&live_marker, b"live").expect("live marker");
+
+        let live_backup = live_dir.with_extension("bak");
+        fs::create_dir_all(&live_backup).expect("live backup");
+        fs::write(live_backup.join("marker.txt"), b"backup").expect("backup marker");
+        let live_staging = live_dir.with_extension("staging");
+        fs::create_dir_all(&live_staging).expect("live staging");
+        fs::write(live_staging.join("marker.txt"), b"staging").expect("staging marker");
+
+        let backup_only = root.join(format!("{:020}.bak", 2_u64));
+        fs::create_dir_all(&backup_only).expect("backup only");
+        fs::write(backup_only.join("marker.txt"), b"backup only").expect("backup only marker");
+
+        let staging_only = root.join(format!("{:020}.staging", 3_u64));
+        fs::create_dir_all(&staging_only).expect("staging only");
+        fs::write(staging_only.join("marker.txt"), b"staging only").expect("staging only marker");
+
+        let lanes_root = root.join("lanes");
+        fs::create_dir_all(&lanes_root).expect("lanes dir");
+
+        let backend = TieredStateBackend::new(false, 0, 0, 0, None, 0, 0);
+        backend
+            .recover_snapshot_artifacts(&root)
+            .expect("recover artifacts");
+
+        assert!(live_dir.exists(), "live dir should remain");
+        assert!(live_marker.exists(), "live marker should remain");
+        assert!(!live_backup.exists(), "live backup should be cleaned");
+        assert!(!live_staging.exists(), "live staging should be cleaned");
+
+        let restored = root.join(format!("{:020}", 2_u64));
+        assert!(restored.exists(), "backup should be restored");
+        assert!(
+            restored.join("marker.txt").exists(),
+            "backup contents should be preserved on restore"
+        );
+        assert!(!backup_only.exists(), "backup directory should be renamed");
+
+        assert!(!staging_only.exists(), "staging-only dir should be removed");
+        assert!(lanes_root.exists(), "lanes dir should be preserved");
     }
 
     #[test]

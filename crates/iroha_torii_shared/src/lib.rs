@@ -114,6 +114,38 @@ pub mod uri {
     pub const RUNTIME_UPGRADES_CANCEL: &str = "/v1/runtime/upgrades/cancel/{id}";
 }
 
+/// Canonical Torii error envelope returned for HTTP API failures.
+#[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
+pub struct ErrorEnvelope {
+    /// Stable error code string.
+    pub code: String,
+    /// Human-readable error detail.
+    pub message: String,
+}
+
+impl ErrorEnvelope {
+    /// Construct a new error envelope.
+    #[must_use]
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+
+    /// Stable error code string.
+    #[must_use]
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    /// Human-readable error detail.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
 /// Supported Torii API versions and defaults exposed over `/v1/api/versions`.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
 pub struct ApiVersionInfo {
@@ -157,6 +189,18 @@ pub struct ProofRetentionStatus {
     pub total_prunable: u64,
     /// Per-backend retention snapshots.
     pub backends: Vec<ProofRetentionBackendStatus>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ErrorEnvelope;
+
+    #[test]
+    fn error_envelope_new_sets_fields() {
+        let envelope = ErrorEnvelope::new("test_code", "test message");
+        assert_eq!(envelope.code(), "test_code");
+        assert_eq!(envelope.message(), "test message");
+    }
 }
 
 /// Iroha Connect protocol types (WalletConnect‑style overlay).

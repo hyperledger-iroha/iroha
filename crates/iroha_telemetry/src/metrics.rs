@@ -15622,10 +15622,7 @@ mod test {
 
     use std::time::Duration;
 
-    use norito::{
-        codec::Encode,
-        json::{self, Value},
-    };
+    use norito::json::{self, Value};
 
     use super::*;
 

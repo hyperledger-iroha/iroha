@@ -49,11 +49,12 @@ test("bootstrapConnectPreviewSession registers by default", async () => {
     client,
     fixedPreviewOptions(),
   );
-  assert.ok(result.preview.sidHex.startsWith("0x"));
+  assert.match(result.preview.sidBase64Url, /^[A-Za-z0-9_-]+$/);
+  assert.equal(result.preview.sidBase64Url.includes("="), false);
   assert.equal(result.session?.token_app, "app-token");
   assert.equal(result.tokens?.wallet, "wallet-token");
   assert.equal(client.calls.length, 1);
-  assert.equal(client.calls[0].sid, result.preview.sidHex);
+  assert.equal(client.calls[0].sid, result.preview.sidBase64Url);
   assert.equal(client.calls[0].node, "torii.devnet.example");
 });
 
@@ -64,7 +65,7 @@ test("bootstrapConnectPreviewSession honours overrides and can skip registration
     register: false,
     sessionOptions: { node: "torii.override" },
   });
-  assert.ok(result.preview.sidHex.startsWith("0x"));
+  assert.match(result.preview.sidBase64Url, /^[A-Za-z0-9_-]+$/);
   assert.equal(result.session, null);
   assert.equal(result.tokens, null);
   assert.equal(client.calls.length, 0);
@@ -75,5 +76,5 @@ test("bootstrapConnectPreviewSession honours overrides and can skip registration
   });
   assert.equal(client.calls.length, 1);
   assert.equal(client.calls[0].node, "torii.override");
-  assert.equal(registered.session?.sid, registered.preview.sidHex);
+  assert.equal(registered.session?.sid, registered.preview.sidBase64Url);
 });

@@ -221,6 +221,8 @@ fn test_get_merkle_compact_syscall() {
     let mut out_root = [0u8; 32];
     vm.memory.load_bytes(root_out, &mut out_root).unwrap();
     let leaf_idx = (addr / 32) as u32;
+    let mask = (1u64 << depth) - 1;
+    assert_eq!(dirs as u64, (leaf_idx as u64) & mask);
     let siblings: Vec<Option<HashOf<[u8; 32]>>> = path
         .iter()
         .take(depth)

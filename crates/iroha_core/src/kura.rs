@@ -62,6 +62,7 @@ impl From<CommittedBlock> for Arc<SignedBlock> {
 const INDEX_FILE_NAME: &str = "blocks.index";
 const DATA_FILE_NAME: &str = "blocks.data";
 const HASHES_FILE_NAME: &str = "blocks.hashes";
+const COUNT_FILE_NAME: &str = "blocks.count.norito";
 const PIPELINE_DIR_NAME: &str = "pipeline";
 const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
 const PIPELINE_SIDECARS_INDEX_FILE: &str = "sidecars.index";
@@ -429,6 +430,7 @@ impl MergeLedgerLog {
             }
 
             file.try_io(|f| f.set_len(new_len))?;
+            file.try_io(|f| f.sync_data())?;
             file.try_io(|f| f.seek(SeekFrom::End(0)))?;
             self.entries = entries;
         } else {
@@ -706,6 +708,16 @@ impl Kura {
                 continue;
             }
             std::fs::rename(&old_dir, &new_dir).map_err(|err| Error::IO(err, old_dir.clone()))?;
+            let new_parent = new_dir.parent();
+            let old_parent = old_dir.parent();
+            if let Some(parent) = new_parent {
+                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+            }
+            if let Some(parent) = old_parent {
+                if Some(parent) != new_parent {
+                    sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+                }
+            }
 
             {
                 let mut plain_text = self.block_plain_text_path.lock();
@@ -770,6 +782,16 @@ impl Kura {
             create_dir_all_with_context(&retired_root)?;
             let dest = unique_retired_path(&retired_root, &current.merge_segment, Some("log"));
             std::fs::rename(&new_path, &dest).map_err(|err| Error::IO(err, new_path.clone()))?;
+            let dest_parent = dest.parent();
+            let new_parent = new_path.parent();
+            if let Some(parent) = dest_parent {
+                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+            }
+            if let Some(parent) = new_parent {
+                if Some(parent) != dest_parent {
+                    sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+                }
+            }
             iroha_logger::info!(
                 lane = %current.lane_id.as_u32(),
                 alias = current.alias,
@@ -780,6 +802,16 @@ impl Kura {
         }
 
         std::fs::rename(&old_path, &new_path).map_err(|err| Error::IO(err, old_path.clone()))?;
+        let new_parent = new_path.parent();
+        let old_parent = old_path.parent();
+        if let Some(parent) = new_parent {
+            sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        }
+        if let Some(parent) = old_parent {
+            if Some(parent) != new_parent {
+                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+            }
+        }
 
         {
             let mut active_merge = self.active_merge_path.lock();
@@ -858,6 +890,16 @@ impl Kura {
             let dest = unique_retired_path(&retired_blocks_root, &entry.kura_segment, None::<&str>);
             std::fs::rename(&blocks_dir, &dest)
                 .map_err(|err| Error::IO(err, blocks_dir.clone()))?;
+            let dest_parent = dest.parent();
+            let blocks_parent = blocks_dir.parent();
+            if let Some(parent) = dest_parent {
+                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+            }
+            if let Some(parent) = blocks_parent {
+                if Some(parent) != dest_parent {
+                    sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+                }
+            }
             iroha_logger::info!(
                 lane = %entry.lane_id.as_u32(),
                 alias = entry.alias,
@@ -871,6 +913,16 @@ impl Kura {
             let dest = unique_retired_path(&retired_merge_root, &entry.merge_segment, Some("log"));
             std::fs::rename(&merge_path, &dest)
                 .map_err(|err| Error::IO(err, merge_path.clone()))?;
+            let dest_parent = dest.parent();
+            let merge_parent = merge_path.parent();
+            if let Some(parent) = dest_parent {
+                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+            }
+            if let Some(parent) = merge_parent {
+                if Some(parent) != dest_parent {
+                    sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+                }
+            }
             iroha_logger::info!(
                 lane = %entry.lane_id.as_u32(),
                 alias = entry.alias,
@@ -925,7 +977,7 @@ impl Kura {
     #[iroha_logger::log(skip_all, name = "kura_init")]
     fn init(block_store: &mut BlockStore, mode: InitMode) -> Result<(BlockData, ChainValidation)> {
         let block_index_count: usize = block_store
-            .read_index_count()?
+            .read_durable_index_count()?
             .try_into()
             .expect("INTERNAL BUG: block index count exceeds usize::MAX");
 
@@ -963,10 +1015,19 @@ impl Kura {
         block_store: &mut BlockStore,
         block_index_count: usize,
     ) -> Result<ChainValidation, Error> {
-        let block_hashes_count = block_store
+        let mut block_hashes_count: usize = block_store
             .read_hashes_count()?
             .try_into()
             .expect("INTERNAL BUG: block hashes count exceeds usize::MAX");
+        if block_hashes_count > block_index_count {
+            warn!(
+                hashes_count = block_hashes_count,
+                index_count = block_index_count,
+                "hashes file longer than index; truncating to durable count"
+            );
+            block_store.truncate_hashes_to_count(block_index_count as u64)?;
+            block_hashes_count = block_index_count;
+        }
         if block_hashes_count == block_index_count {
             let mut block_indices = vec![BlockIndex::default(); block_index_count];
             block_store.read_block_indices(0, &mut block_indices)?;
@@ -1261,12 +1322,10 @@ impl Kura {
                 "kura writer acquired block_store for batch"
             );
             let end_height = start_height + blocks_to_be_written.len();
-            if let Err(error) = block_store_guard.write_index_count(start_height as u64) {
-                error!(?error, "Failed to write index count");
-                panic!("Kura has encountered a fatal IO error.");
-            }
-
-            if let Err(error) = block_store_guard.append_block_batch(&blocks_to_be_written) {
+            let start_height_u64 = u64::try_from(start_height).expect("start height fits in u64");
+            if let Err(error) =
+                block_store_guard.append_block_batch_at(start_height_u64, &blocks_to_be_written)
+            {
                 error!(?error, "Failed to store block batch");
                 panic!("Kura has encountered a fatal IO error.");
             }
@@ -1482,28 +1541,55 @@ impl Kura {
             return Ok(0);
         }
         let dir = store_dir.join(PIPELINE_DIR_NAME);
-        let pipeline_data = Self::file_len_or_zero(&dir.join(PIPELINE_SIDECARS_DATA_FILE))?;
-        let pipeline_index = Self::file_len_or_zero(&dir.join(PIPELINE_SIDECARS_INDEX_FILE))?;
-        let roster_data = Self::file_len_or_zero(&dir.join(ROSTER_SIDECARS_DATA_FILE))?;
-        let roster_index = Self::file_len_or_zero(&dir.join(ROSTER_SIDECARS_INDEX_FILE))?;
-        Ok(pipeline_data
-            .saturating_add(pipeline_index)
-            .saturating_add(roster_data)
-            .saturating_add(roster_index))
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(0),
+            Err(err) => return Err(Error::IO(err, dir)),
+        };
+        let mut total = 0u64;
+        for entry in entries {
+            let entry = entry.map_err(|err| Error::IO(err, dir.clone()))?;
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .map_err(|err| Error::IO(err, path.clone()))?;
+            if file_type.is_file() {
+                let len = entry
+                    .metadata()
+                    .map_err(|err| Error::IO(err, path.clone()))?
+                    .len();
+                total = total.saturating_add(len);
+            }
+        }
+        Ok(total)
     }
 
     fn block_store_bytes(blocks_dir: &Path) -> Result<u64> {
         if blocks_dir.as_os_str().is_empty() {
             return Ok(0);
         }
-        let data = Self::file_len_or_zero(&blocks_dir.join(DATA_FILE_NAME))?;
-        let index = Self::file_len_or_zero(&blocks_dir.join(INDEX_FILE_NAME))?;
-        let hashes = Self::file_len_or_zero(&blocks_dir.join(HASHES_FILE_NAME))?;
+        let entries = match std::fs::read_dir(blocks_dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(0),
+            Err(err) => return Err(Error::IO(err, blocks_dir.to_path_buf())),
+        };
+        let mut files = 0u64;
+        for entry in entries {
+            let entry = entry.map_err(|err| Error::IO(err, blocks_dir.to_path_buf()))?;
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .map_err(|err| Error::IO(err, path.clone()))?;
+            if file_type.is_file() {
+                let len = entry
+                    .metadata()
+                    .map_err(|err| Error::IO(err, path.clone()))?
+                    .len();
+                files = files.saturating_add(len);
+            }
+        }
         let sidecars = Self::sidecar_bytes(blocks_dir)?;
-        Ok(data
-            .saturating_add(index)
-            .saturating_add(hashes)
-            .saturating_add(sidecars))
+        Ok(files.saturating_add(sidecars))
     }
 
     fn blocks_root_bytes(root: &Path) -> Result<u64> {
@@ -1567,13 +1653,39 @@ impl Kura {
         used = used.saturating_add(Self::merge_root_bytes(&merge_root)?);
         used = used.saturating_add(Self::blocks_root_bytes(&retired_blocks_root)?);
         used = used.saturating_add(Self::merge_root_bytes(&retired_merge_root)?);
-        used = used.saturating_add(Self::file_len_or_zero(&CommitRosterJournal::journal_path(
-            &self.store_root,
-        ))?);
-        if let Some(path) = self.block_plain_text_path.lock().clone() {
-            used = used.saturating_add(Self::file_len_or_zero(&path)?);
-        }
+        let roster_journal = CommitRosterJournal::journal_path(&self.store_root);
+        used = used.saturating_add(Self::file_len_or_zero(&roster_journal)?);
+        used = used.saturating_add(Self::file_len_or_zero(
+            &roster_journal.with_extension("norito.tmp"),
+        )?);
         Ok(used)
+    }
+
+    fn purge_retired_storage(&self) -> bool {
+        if self.store_root.as_os_str().is_empty() {
+            return false;
+        }
+        let retired_root = self.store_root.join("retired");
+        if !retired_root.exists() {
+            return false;
+        }
+        match std::fs::remove_dir_all(&retired_root) {
+            Ok(()) => {
+                info!(
+                    path = %retired_root.display(),
+                    "purged retired Kura segments to reclaim disk budget"
+                );
+                true
+            }
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %retired_root.display(),
+                    "failed to purge retired Kura segments while reclaiming disk budget"
+                );
+                false
+            }
+        }
     }
 
     fn pending_block_bytes(&self, persisted_count: usize, unindexed_bytes: u64) -> Result<u64> {
@@ -1618,7 +1730,7 @@ impl Kura {
 
         let (persisted_count, unindexed_bytes) = {
             let mut block_store = self.block_store.lock();
-            let persisted = usize::try_from(block_store.read_index_count()?)?;
+            let persisted = usize::try_from(block_store.read_durable_index_count()?)?;
             let persisted_u64 = persisted as u64;
             let indexed_data_len = if persisted == 0 {
                 0
@@ -1640,12 +1752,23 @@ impl Kura {
 
         let used = self.kura_disk_usage_bytes()?;
         let pending_bytes = self.pending_block_bytes(persisted_count, unindexed_bytes)?;
-        let required = used
+        let mut required = used
             .saturating_add(pending_bytes)
             .saturating_add(block_required)
             .saturating_add(merge_entry_bytes);
 
         if required > self.max_disk_usage_bytes {
+            let mut used = used;
+            if self.purge_retired_storage() {
+                used = self.kura_disk_usage_bytes()?;
+                required = used
+                    .saturating_add(pending_bytes)
+                    .saturating_add(block_required)
+                    .saturating_add(merge_entry_bytes);
+                if required <= self.max_disk_usage_bytes {
+                    return Ok(());
+                }
+            }
             return Err(Error::StorageBudgetExceeded {
                 limit: self.max_disk_usage_bytes,
                 used,
@@ -1771,6 +1894,8 @@ pub struct BlockStore {
     read_scratch: Vec<u8>,
     data_mmap: Option<MemoryMirror>,
     data_mmap_len: u64,
+    commit_marker_count: u64,
+    commit_marker_pending: Option<u64>,
 }
 
 impl Debug for BlockStore {
@@ -1790,6 +1915,8 @@ impl Debug for BlockStore {
                 &self.data_mmap.as_ref().map(MemoryMirror::kind),
             )
             .field("mmap_len", &self.data_mmap_len)
+            .field("commit_marker_count", &self.commit_marker_count)
+            .field("commit_marker_pending", &self.commit_marker_pending)
             .finish()
     }
 }
@@ -1897,6 +2024,25 @@ impl BlockIndex {
             start: read_u64(file, buff)?,
             length: read_u64(file, buff)?,
         })
+    }
+}
+
+#[derive(Debug, Clone, Encode, Decode)]
+struct BlockStoreCommitMarker {
+    /// Marker format version (v1).
+    version: u32,
+    /// Count of blocks that are fully durable on disk.
+    count: u64,
+}
+
+impl BlockStoreCommitMarker {
+    const VERSION: u32 = 1;
+
+    fn new(count: u64) -> Self {
+        Self {
+            version: Self::VERSION,
+            count,
+        }
     }
 }
 
@@ -2384,6 +2530,197 @@ impl Kura {
         })
     }
 
+    fn recover_indexed_sidecar_artifacts(data_path: &Path, index_path: &Path, kind: &str) {
+        let temp_data_path = data_path.with_extension("norito.tmp");
+        let temp_index_path = index_path.with_extension("index.tmp");
+        let temp_index_exists = temp_index_path.exists();
+        let temp_data_exists = temp_data_path.exists();
+        let index_promoted = if temp_index_exists {
+            let data_len = if temp_data_exists {
+                std::fs::metadata(&temp_data_path).map(|meta| meta.len())
+            } else {
+                std::fs::metadata(data_path).map(|meta| meta.len())
+            };
+            let should_promote = match data_len {
+                Ok(data_len) => Self::sidecar_index_sane(&temp_index_path, data_len, kind),
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        ?temp_index_path,
+                        ?data_path,
+                        kind,
+                        "failed to read sidecar data length for temp index validation"
+                    );
+                    false
+                }
+            };
+            if should_promote {
+                Self::promote_sidecar_temp(&temp_index_path, index_path, kind, "index")
+            } else {
+                warn!(
+                    ?temp_index_path,
+                    kind, "refusing to promote invalid sidecar temp index"
+                );
+                false
+            }
+        } else {
+            false
+        };
+        if temp_data_exists {
+            if temp_index_exists {
+                if index_promoted {
+                    Self::promote_sidecar_temp(&temp_data_path, data_path, kind, "data");
+                } else {
+                    warn!(
+                        ?temp_data_path,
+                        kind,
+                        "sidecar temp data exists but index promotion failed; leaving temp data"
+                    );
+                }
+            } else {
+                warn!(
+                    ?temp_data_path,
+                    kind, "sidecar temp data exists without temp index; ignoring temp data"
+                );
+            }
+        }
+    }
+
+    fn promote_sidecar_temp(temp_path: &Path, main_path: &Path, kind: &str, label: &str) -> bool {
+        if !temp_path.exists() {
+            return false;
+        }
+        if let Err(err) = std::fs::rename(temp_path, main_path) {
+            if main_path.exists() {
+                if let Err(remove_err) = std::fs::remove_file(main_path) {
+                    warn!(
+                        ?remove_err,
+                        ?main_path,
+                        kind,
+                        label,
+                        "failed to remove sidecar file before promoting temp"
+                    );
+                    return false;
+                }
+                if let Err(err) = std::fs::rename(temp_path, main_path) {
+                    warn!(
+                        ?err,
+                        ?temp_path,
+                        ?main_path,
+                        kind,
+                        label,
+                        "failed to promote sidecar temp file after removal"
+                    );
+                    return false;
+                }
+            } else {
+                warn!(
+                    ?err,
+                    ?temp_path,
+                    ?main_path,
+                    kind,
+                    label,
+                    "failed to promote sidecar temp file"
+                );
+                return false;
+            }
+        }
+        if let Some(parent) = main_path.parent() {
+            if let Err(err) = sync_dir(parent) {
+                warn!(
+                    ?err,
+                    ?parent,
+                    kind,
+                    label,
+                    "failed to sync sidecar parent after temp promotion"
+                );
+            }
+        }
+        true
+    }
+
+    fn sidecar_index_sane(index_path: &Path, data_len: u64, kind: &str) -> bool {
+        let mut index = match std::fs::File::open(index_path) {
+            Ok(file) => file,
+            Err(err) => {
+                warn!(?err, ?index_path, kind, "failed to open sidecar temp index");
+                return false;
+            }
+        };
+        let index_len = match index.metadata() {
+            Ok(meta) => meta.len(),
+            Err(err) => {
+                warn!(?err, ?index_path, kind, "failed to stat sidecar temp index");
+                return false;
+            }
+        };
+        if index_len == 0 {
+            warn!(?index_path, kind, "sidecar temp index is empty");
+            return false;
+        }
+        if index_len % PIPELINE_INDEX_ENTRY_SIZE_U64 != 0 {
+            warn!(
+                len = index_len,
+                ?index_path,
+                kind,
+                "sidecar temp index length misaligned"
+            );
+            return false;
+        }
+        let entries = index_len / PIPELINE_INDEX_ENTRY_SIZE_U64;
+        let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
+        for _ in 0..entries {
+            if let Err(err) = index.read_exact(&mut buf) {
+                warn!(
+                    ?err,
+                    ?index_path,
+                    kind,
+                    "failed to read sidecar temp index entry"
+                );
+                return false;
+            }
+            let entry = SidecarIndexEntry::from_bytes(buf);
+            if entry.len == 0 {
+                continue;
+            }
+            if entry.len > STRICT_INIT_MAX_BLOCK_BYTES {
+                warn!(
+                    len = entry.len,
+                    limit = STRICT_INIT_MAX_BLOCK_BYTES,
+                    ?index_path,
+                    kind,
+                    "sidecar temp index entry length exceeds limit"
+                );
+                return false;
+            }
+            let entry_end = match entry.offset.checked_add(entry.len) {
+                Some(end) => end,
+                None => {
+                    warn!(
+                        offset = entry.offset,
+                        len = entry.len,
+                        ?index_path,
+                        kind,
+                        "sidecar temp index entry overflows offset"
+                    );
+                    return false;
+                }
+            };
+            if entry_end > data_len {
+                warn!(
+                    offset = entry.offset,
+                    len = entry.len,
+                    data_len,
+                    ?index_path,
+                    kind,
+                    "sidecar temp index entry points past data file"
+                );
+                return false;
+            }
+        }
+        true
+    }
+
     #[allow(clippy::too_many_lines)]
     fn append_indexed_sidecar(
         data_path: &Path,
@@ -2397,6 +2734,8 @@ impl Kura {
             iroha_logger::warn!(height, kind, "refusing to store sidecar for zero height");
             return false;
         }
+
+        Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind);
 
         let mut index = match std::fs::OpenOptions::new()
             .create(true)
@@ -2751,6 +3090,8 @@ impl Kura {
         let data_path = dir.join(data_file);
         let index_path = dir.join(index_file);
 
+        Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, kind);
+
         let mut index = std::fs::File::open(&index_path).ok()?;
         let index_meta = index.metadata().ok()?;
         let index_len = index_meta.len();
@@ -2787,6 +3128,17 @@ impl Kura {
         let entry = SidecarIndexEntry::from_bytes(entry_buf);
         if entry.len == 0 {
             iroha_logger::debug!(height, ?index_path, kind, "empty sidecar length; skipping");
+            return None;
+        }
+        if entry.len > STRICT_INIT_MAX_BLOCK_BYTES {
+            iroha_logger::warn!(
+                height,
+                len = entry.len,
+                limit = STRICT_INIT_MAX_BLOCK_BYTES,
+                ?index_path,
+                kind,
+                "sidecar length exceeds limit; skipping"
+            );
             return None;
         }
         let len_usize = if let Ok(len) = usize::try_from(entry.len) {
@@ -2893,16 +3245,19 @@ impl Kura {
                 return false;
             }
         };
-        if index_meta.len() % PIPELINE_INDEX_ENTRY_SIZE_U64 != 0 {
+        let index_len = index_meta.len();
+        let remainder = index_len % PIPELINE_INDEX_ENTRY_SIZE_U64;
+        let aligned_len = index_len - remainder;
+        if remainder != 0 {
             iroha_logger::warn!(
-                len = index_meta.len(),
+                len = index_len,
+                aligned_len,
                 ?index_path,
                 kind,
-                "sidecar index length misaligned; refusing to prune"
+                "sidecar index length misaligned; ignoring trailing bytes"
             );
-            return false;
         }
-        let total_entries = index_meta.len() / PIPELINE_INDEX_ENTRY_SIZE_U64;
+        let total_entries = aligned_len / PIPELINE_INDEX_ENTRY_SIZE_U64;
         let retention_u64 = retention.get() as u64;
         if total_entries <= retention_u64 {
             return true;
@@ -2923,6 +3278,13 @@ impl Kura {
             Ok(file) => file,
             Err(err) => {
                 iroha_logger::warn!(?err, ?data_path, kind, "failed to open sidecar store");
+                return false;
+            }
+        };
+        let data_len = match data.metadata() {
+            Ok(meta) => meta.len(),
+            Err(err) => {
+                iroha_logger::warn!(?err, ?data_path, kind, "failed to stat sidecar store");
                 return false;
             }
         };
@@ -2972,16 +3334,83 @@ impl Kura {
                 continue;
             }
 
+            if entry.len > STRICT_INIT_MAX_BLOCK_BYTES {
+                iroha_logger::warn!(
+                    len = entry.len,
+                    limit = STRICT_INIT_MAX_BLOCK_BYTES,
+                    kind,
+                    "sidecar payload length exceeds limit during prune; dropping entry"
+                );
+                if let Err(err) = new_index.write_all(&empty_entry) {
+                    iroha_logger::warn!(
+                        ?err,
+                        ?temp_index_path,
+                        kind,
+                        "failed to write pruned sidecar index entry"
+                    );
+                    return false;
+                }
+                continue;
+            }
             let len = if let Ok(len) = usize::try_from(entry.len) {
                 len
             } else {
                 iroha_logger::warn!(
                     len = entry.len,
                     kind,
-                    "sidecar payload length exceeds usize during prune"
+                    "sidecar payload length exceeds usize during prune; dropping entry"
                 );
-                return false;
+                if let Err(err) = new_index.write_all(&empty_entry) {
+                    iroha_logger::warn!(
+                        ?err,
+                        ?temp_index_path,
+                        kind,
+                        "failed to write pruned sidecar index entry"
+                    );
+                    return false;
+                }
+                continue;
             };
+            let entry_end = match entry.offset.checked_add(entry.len) {
+                Some(end) => end,
+                None => {
+                    iroha_logger::warn!(
+                        offset = entry.offset,
+                        len = entry.len,
+                        kind,
+                        "sidecar payload range overflow during prune; dropping entry"
+                    );
+                    if let Err(err) = new_index.write_all(&empty_entry) {
+                        iroha_logger::warn!(
+                            ?err,
+                            ?temp_index_path,
+                            kind,
+                            "failed to write pruned sidecar index entry"
+                        );
+                        return false;
+                    }
+                    continue;
+                }
+            };
+            if entry_end > data_len {
+                iroha_logger::warn!(
+                    offset = entry.offset,
+                    len = entry.len,
+                    data_len,
+                    kind,
+                    "sidecar payload past data file during prune; dropping entry"
+                );
+                if let Err(err) = new_index.write_all(&empty_entry) {
+                    iroha_logger::warn!(
+                        ?err,
+                        ?temp_index_path,
+                        kind,
+                        "failed to write pruned sidecar index entry"
+                    );
+                    return false;
+                }
+                continue;
+            }
             if let Err(err) = data.seek(SeekFrom::Start(entry.offset)) {
                 iroha_logger::warn!(
                     ?err,
@@ -3074,28 +3503,81 @@ impl Kura {
         drop(index);
 
         if let Err(err) = std::fs::rename(&temp_data_path, data_path) {
-            iroha_logger::warn!(
-                ?err,
-                ?temp_data_path,
-                ?data_path,
-                kind,
-                "failed to replace sidecar store with pruned data"
-            );
-            let _ = std::fs::remove_file(&temp_data_path);
-            let _ = std::fs::remove_file(&temp_index_path);
-            return false;
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                if let Err(remove_err) = std::fs::remove_file(data_path) {
+                    iroha_logger::warn!(
+                        ?remove_err,
+                        ?data_path,
+                        kind,
+                        "failed to remove sidecar store before pruned replace"
+                    );
+                    return false;
+                }
+                if let Err(rename_err) = std::fs::rename(&temp_data_path, data_path) {
+                    iroha_logger::warn!(
+                        ?rename_err,
+                        ?temp_data_path,
+                        ?data_path,
+                        kind,
+                        "failed to replace sidecar store after removal"
+                    );
+                    return false;
+                }
+            } else {
+                iroha_logger::warn!(
+                    ?err,
+                    ?temp_data_path,
+                    ?data_path,
+                    kind,
+                    "failed to replace sidecar store with pruned data"
+                );
+                let _ = std::fs::remove_file(&temp_data_path);
+                let _ = std::fs::remove_file(&temp_index_path);
+                return false;
+            }
         }
         if let Err(err) = std::fs::rename(&temp_index_path, index_path) {
-            iroha_logger::warn!(
-                ?err,
-                ?temp_index_path,
-                ?index_path,
-                kind,
-                "failed to replace sidecar index with pruned entries"
-            );
-            let _ = std::fs::remove_file(&temp_data_path);
-            let _ = std::fs::remove_file(&temp_index_path);
-            return false;
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                if let Err(remove_err) = std::fs::remove_file(index_path) {
+                    iroha_logger::warn!(
+                        ?remove_err,
+                        ?index_path,
+                        kind,
+                        "failed to remove sidecar index before pruned replace"
+                    );
+                    return false;
+                }
+                if let Err(rename_err) = std::fs::rename(&temp_index_path, index_path) {
+                    iroha_logger::warn!(
+                        ?rename_err,
+                        ?temp_index_path,
+                        ?index_path,
+                        kind,
+                        "failed to replace sidecar index after removal"
+                    );
+                    iroha_logger::warn!(
+                        ?temp_index_path,
+                        kind,
+                        "leaving temp index for sidecar recovery"
+                    );
+                    return false;
+                }
+            } else {
+                iroha_logger::warn!(
+                    ?err,
+                    ?temp_index_path,
+                    ?index_path,
+                    kind,
+                    "failed to replace sidecar index with pruned entries"
+                );
+                let _ = std::fs::remove_file(&temp_data_path);
+                iroha_logger::warn!(
+                    ?temp_index_path,
+                    kind,
+                    "leaving temp index for sidecar recovery"
+                );
+                return false;
+            }
         }
         if let Some(parent) = data_path.parent() {
             if let Err(err) = sync_dir(parent) {
@@ -3162,6 +3644,8 @@ impl BlockStore {
             read_scratch: Vec::new(),
             data_mmap: None,
             data_mmap_len: 0,
+            commit_marker_count: 0,
+            commit_marker_pending: None,
         }
     }
 
@@ -3187,6 +3671,256 @@ impl BlockStore {
             self.hashes_file = Some(FileWrap::open_read_write(path)?);
         }
         Ok(self.hashes_file.as_mut().expect("handle just initialised"))
+    }
+
+    fn commit_marker_path(&self) -> PathBuf {
+        self.path_to_blockchain.join(COUNT_FILE_NAME)
+    }
+
+    fn read_commit_marker(&mut self) -> Result<Option<BlockStoreCommitMarker>> {
+        let path = self.commit_marker_path();
+        if path.as_os_str().is_empty() {
+            return Ok(None);
+        }
+        let tmp_path = path.with_extension("norito.tmp");
+        let mut main_invalid = false;
+        match std::fs::read(&path) {
+            Ok(bytes) => match norito::decode_from_bytes::<BlockStoreCommitMarker>(&bytes) {
+                Ok(marker) => {
+                    if marker.version == BlockStoreCommitMarker::VERSION {
+                        return Ok(Some(marker));
+                    }
+                    warn!(
+                        version = marker.version,
+                        "unsupported block store marker version; ignoring"
+                    );
+                    main_invalid = true;
+                }
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "failed to decode block store marker; ignoring corrupted marker"
+                    );
+                    main_invalid = true;
+                }
+            },
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => return Err(Error::IO(err, path)),
+        }
+
+        if main_invalid {
+            if let Err(err) = std::fs::remove_file(&path) {
+                warn!(
+                    ?err,
+                    path = %path.display(),
+                    "failed to remove corrupted block store marker"
+                );
+            }
+        }
+
+        match std::fs::read(&tmp_path) {
+            Ok(bytes) => match norito::decode_from_bytes::<BlockStoreCommitMarker>(&bytes) {
+                Ok(marker) => {
+                    if marker.version != BlockStoreCommitMarker::VERSION {
+                        warn!(
+                            version = marker.version,
+                            "unsupported block store temp marker version; ignoring"
+                        );
+                        return Ok(None);
+                    }
+                    warn!(
+                        path = %tmp_path.display(),
+                        "recovered block store marker from temp file"
+                    );
+                    self.write_commit_marker(marker.count)?;
+                    Ok(Some(marker))
+                }
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        path = %tmp_path.display(),
+                        "failed to decode temp block store marker"
+                    );
+                    let _ = std::fs::remove_file(&tmp_path);
+                    Ok(None)
+                }
+            },
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(Error::IO(err, tmp_path)),
+        }
+    }
+
+    fn write_commit_marker(&mut self, count: u64) -> Result<()> {
+        let path = self.commit_marker_path();
+        if path.as_os_str().is_empty() {
+            return Ok(());
+        }
+        let marker = BlockStoreCommitMarker::new(count);
+        let bytes = norito::to_bytes(&marker).map_err(Error::NoritoFrame)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        }
+        let tmp_path = path.with_extension("norito.tmp");
+        {
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp_path)
+                .map_err(|err| Error::IO(err, tmp_path.clone()))?;
+            file.write_all(&bytes)
+                .and_then(|_| file.flush())
+                .and_then(|_| file.sync_data())
+                .map_err(|err| Error::IO(err, tmp_path.clone()))?;
+        }
+        if let Err(err) = std::fs::rename(&tmp_path, &path) {
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                std::fs::remove_file(&path).map_err(|err| Error::IO(err, path.clone()))?;
+                std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
+            } else {
+                return Err(Error::IO(err, path.clone()));
+            }
+        }
+        if let Some(parent) = path.parent() {
+            sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        }
+        Ok(())
+    }
+
+    fn align_hashes_len(&mut self) -> Result<u64> {
+        if self.path_to_blockchain.as_os_str().is_empty() {
+            return Ok(0);
+        }
+        let hashes_file = self.ensure_hashes_file()?;
+        let len = hashes_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
+        let aligned = len - (len % SIZE_OF_BLOCK_HASH);
+        if aligned != len {
+            warn!(
+                len,
+                aligned, "block hashes length misaligned; truncating trailing bytes"
+            );
+            hashes_file.try_io(|file| file.set_len(aligned))?;
+        }
+        Ok(aligned / SIZE_OF_BLOCK_HASH)
+    }
+
+    fn data_backed_count(&mut self, mut candidate: u64) -> Result<u64> {
+        if candidate == 0 {
+            return Ok(0);
+        }
+        let data_len = self.data_file_len()?;
+        if data_len == 0 {
+            return Ok(0);
+        }
+        let initial = candidate;
+        while candidate > 0 {
+            match self.read_block_index(candidate - 1) {
+                Ok(index) => {
+                    let end = match index.start.checked_add(index.length) {
+                        Some(end) => end,
+                        None => {
+                            candidate = candidate.saturating_sub(1);
+                            continue;
+                        }
+                    };
+                    if index.length == 0
+                        || index.length > STRICT_INIT_MAX_BLOCK_BYTES
+                        || end > data_len
+                    {
+                        candidate = candidate.saturating_sub(1);
+                        continue;
+                    }
+                    break;
+                }
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        candidate,
+                        "failed to read block index while reconciling data length; truncating"
+                    );
+                    candidate = 0;
+                    break;
+                }
+            }
+        }
+        if candidate != initial {
+            warn!(
+                initial,
+                candidate,
+                data_len,
+                "block store data shorter than index; truncating durable count"
+            );
+        }
+        Ok(candidate)
+    }
+
+    fn init_commit_marker(&mut self) -> Result<()> {
+        if self.path_to_blockchain.as_os_str().is_empty() {
+            return Ok(());
+        }
+
+        let logical_count = {
+            let index_file = self.ensure_index_file()?;
+            let len = index_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
+            let aligned = len - (len % BlockIndex::SIZE);
+            if aligned != len {
+                warn!(
+                    len,
+                    aligned, "block index length misaligned; truncating trailing bytes"
+                );
+                index_file.try_io(|file| file.set_len(aligned))?;
+            }
+            aligned / BlockIndex::SIZE
+        };
+        self.align_hashes_len()?;
+        let data_backed_count = self.data_backed_count(logical_count)?;
+        if matches!(self.fsync.mode, FsyncMode::Off) {
+            self.write_commit_marker(data_backed_count)?;
+            self.truncate_hashes_to_count(data_backed_count)?;
+            self.truncate_data_to_index(data_backed_count)?;
+            self.commit_marker_count = data_backed_count;
+            self.commit_marker_pending = None;
+            return Ok(());
+        }
+
+        let mut durable_count = match self.read_commit_marker()? {
+            Some(marker) => marker.count,
+            None => {
+                self.write_commit_marker(data_backed_count)?;
+                data_backed_count
+            }
+        };
+
+        if durable_count > data_backed_count {
+            warn!(
+                durable_count,
+                data_backed_count,
+                "block store marker exceeds data-backed count; truncating marker"
+            );
+            durable_count = data_backed_count;
+            self.write_commit_marker(durable_count)?;
+        }
+        if logical_count < durable_count {
+            warn!(
+                logical_count,
+                durable_count, "block store marker exceeds index length; truncating marker"
+            );
+            durable_count = logical_count;
+            self.write_commit_marker(durable_count)?;
+        }
+
+        if logical_count > durable_count {
+            self.commit_marker_count = durable_count;
+            self.commit_marker_pending = None;
+            self.prune(durable_count)?;
+        }
+
+        self.truncate_hashes_to_count(durable_count)?;
+        self.truncate_data_to_index(durable_count)?;
+
+        self.commit_marker_count = durable_count;
+        self.commit_marker_pending = None;
+        Ok(())
     }
 
     fn drop_cached_handles(&mut self) {
@@ -3218,12 +3952,23 @@ impl BlockStore {
             return Ok(());
         }
 
-        // Sync index last so the index length reflects only fully-durable data/hashes.
+        // Sync index last so the commit marker only advances after data/hashes/index are durable.
         self.sync_target(FsyncTarget::Data, Self::ensure_data_file)?;
         self.sync_target(FsyncTarget::Hashes, Self::ensure_hashes_file)?;
         self.sync_target(FsyncTarget::Index, Self::ensure_index_file)?;
 
+        self.commit_pending_marker()?;
         self.fsync.clear();
+        Ok(())
+    }
+
+    fn commit_pending_marker(&mut self) -> Result<()> {
+        let Some(count) = self.commit_marker_pending else {
+            return Ok(());
+        };
+        self.write_commit_marker(count)?;
+        self.commit_marker_count = count;
+        self.commit_marker_pending = None;
         Ok(())
     }
 
@@ -3414,10 +4159,27 @@ impl BlockStore {
     /// Note that if there is an error, you can be quite sure all
     /// other read and write operations will also fail.
     #[allow(clippy::integer_division)]
-    pub fn read_index_count(&mut self) -> Result<u64> {
+    fn read_index_count_from_len(&mut self) -> Result<u64> {
         let index_file = self.ensure_index_file()?;
         let len = index_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
         Ok(len / BlockIndex::SIZE)
+    }
+
+    /// Return the logical index count based on the index file length.
+    #[allow(clippy::integer_division)]
+    pub fn read_index_count(&mut self) -> Result<u64> {
+        self.read_index_count_from_len()
+    }
+
+    /// Return the durable index count as recorded by the commit marker.
+    pub fn read_durable_index_count(&mut self) -> Result<u64> {
+        if self.path_to_blockchain.as_os_str().is_empty() {
+            return Ok(0);
+        }
+        if matches!(self.fsync.mode, FsyncMode::Off) {
+            return self.read_index_count_from_len();
+        }
+        Ok(self.commit_marker_count)
     }
 
     /// Read a series of block hashes from the block hashes file
@@ -3471,6 +4233,52 @@ impl BlockStore {
         let hashes_file = self.ensure_hashes_file()?;
         let len = hashes_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
         Ok(len / SIZE_OF_BLOCK_HASH)
+    }
+
+    fn truncate_hashes_to_count(&mut self, count: u64) -> Result<()> {
+        if self.path_to_blockchain.as_os_str().is_empty() {
+            return Ok(());
+        }
+        let hashes_file = self.ensure_hashes_file()?;
+        let new_len = count.saturating_mul(SIZE_OF_BLOCK_HASH);
+        let current_len = hashes_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
+        if new_len < current_len {
+            hashes_file.try_io(|file| file.set_len(new_len))?;
+        }
+        Ok(())
+    }
+
+    fn truncate_data_to_index(&mut self, count: u64) -> Result<()> {
+        if self.path_to_blockchain.as_os_str().is_empty() {
+            return Ok(());
+        }
+        if count == 0 {
+            self.invalidate_data_mmap();
+            let data_file = self.ensure_data_file()?;
+            data_file.try_io(|file| file.set_len(0))?;
+            return Ok(());
+        }
+        let last_index = match self.read_block_index(count.saturating_sub(1)) {
+            Ok(index) => index,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    count, "failed to read last block index while trimming data file"
+                );
+                return Ok(());
+            }
+        };
+        let target_len = last_index.start.saturating_add(last_index.length);
+        let current_len = {
+            let data_file = self.ensure_data_file()?;
+            data_file.try_io(|file| file.metadata().map(|meta| meta.len()))?
+        };
+        if current_len > target_len {
+            self.invalidate_data_mmap();
+            let data_file = self.ensure_data_file()?;
+            data_file.try_io(|file| file.set_len(target_len))?;
+        }
+        Ok(())
     }
 
     /// Return the current size of the block data file in bytes.
@@ -3645,6 +4453,8 @@ impl BlockStore {
             })?;
         }
         self.drop_cached_handles();
+        self.init_commit_marker()?;
+        self.drop_cached_handles();
         Ok(())
     }
 
@@ -3667,14 +4477,22 @@ impl BlockStore {
     ///
     /// # Errors
     /// Propagates I/O and encoding errors.
-    #[allow(clippy::too_many_lines)]
     pub fn append_block_batch(&mut self, blocks: &[Arc<SignedBlock>]) -> Result<()> {
+        let start_height = self.read_index_count()?;
+        self.append_block_batch_at(start_height, blocks)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn append_block_batch_at(
+        &mut self,
+        start_height: u64,
+        blocks: &[Arc<SignedBlock>],
+    ) -> Result<()> {
         if blocks.is_empty() {
             return Ok(());
         }
 
         self.invalidate_data_mmap();
-        let start_height = self.read_index_count()?;
         debug!(
             start_height,
             batch_len = blocks.len(),
@@ -3783,7 +4601,7 @@ impl BlockStore {
             new_hashes_len, "append_block_batch wrote hashes"
         );
 
-        // Write the index after data + hashes so the index length acts as the commit marker.
+        // Write the index after data + hashes so the commit marker can safely advance.
         let index_file = self.ensure_index_file()?;
         let new_index_len = (start_height + blocks.len() as u64) * BlockIndex::SIZE;
         index_file.try_io(|file| {
@@ -3801,6 +4619,11 @@ impl BlockStore {
             new_index_len, "append_block_batch wrote index entries"
         );
 
+        let end_height = start_height + blocks.len() as u64;
+        self.commit_marker_pending = Some(
+            self.commit_marker_pending
+                .map_or(end_height, |pending| pending.max(end_height)),
+        );
         self.mark_fsync_pending();
         if matches!(self.fsync.mode, FsyncMode::On)
             || (matches!(self.fsync.mode, FsyncMode::Batched)
@@ -3809,11 +4632,7 @@ impl BlockStore {
             self.flush_pending_fsync(false)?;
         }
 
-        debug!(
-            start_height,
-            end_height = start_height + blocks.len() as u64,
-            "append_block_batch complete"
-        );
+        debug!(start_height, end_height, "append_block_batch complete");
         Ok(())
     }
 
@@ -3835,6 +4654,7 @@ impl BlockStore {
     pub fn prune(&mut self, height: u64) -> Result<()> {
         self.invalidate_data_mmap();
         let last_block_index: Option<BlockIndex>;
+        let pruned_index_count;
 
         {
             let mut file =
@@ -3845,10 +4665,12 @@ impl BlockStore {
 
             last_block_index = if new_len > 0 {
                 let actual_height = new_len / BlockIndex::SIZE;
+                pruned_index_count = actual_height;
                 file.try_io(|f| f.seek(SeekFrom::Start((actual_height - 1) * BlockIndex::SIZE)))?;
                 let mut buff = [0; 8];
                 Some(file.try_io(|f| BlockIndex::read(f, &mut buff))?)
             } else {
+                pruned_index_count = 0;
                 None
             };
         }
@@ -3867,6 +4689,10 @@ impl BlockStore {
             let new_len = last_block_index.map_or(0, |x| x.start + x.length).min(len);
             file.try_io(|f| f.set_len(new_len))?;
         }
+
+        self.commit_marker_pending = None;
+        self.commit_marker_count = self.commit_marker_count.min(pruned_index_count);
+        self.write_commit_marker(self.commit_marker_count)?;
 
         Ok(())
     }
@@ -4830,6 +5656,53 @@ mod tests {
     }
 
     #[test]
+    fn kura_disk_usage_includes_temp_and_debug_files() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: true,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) =
+            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+
+        let base = kura.kura_disk_usage_bytes().expect("base usage");
+        let blocks_dir = RuntimeLaneConfig::default()
+            .primary()
+            .blocks_dir(temp_dir.path());
+
+        let debug_path = kura
+            .block_plain_text_path
+            .lock()
+            .clone()
+            .expect("debug path");
+        std::fs::write(&debug_path, [0u8; 7]).expect("write debug blocks");
+
+        let temp_marker = blocks_dir
+            .join(COUNT_FILE_NAME)
+            .with_extension("norito.tmp");
+        std::fs::write(&temp_marker, [0u8; 5]).expect("write temp marker");
+
+        let pipeline_dir = blocks_dir.join(PIPELINE_DIR_NAME);
+        std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
+        let temp_sidecar = pipeline_dir
+            .join(PIPELINE_SIDECARS_DATA_FILE)
+            .with_extension("norito.tmp");
+        std::fs::write(&temp_sidecar, [0u8; 3]).expect("write temp sidecar");
+
+        let updated = kura.kura_disk_usage_bytes().expect("usage with extras");
+        let extra = 7u64 + 5 + 3;
+        assert_eq!(updated, base.saturating_add(extra));
+    }
+
+    #[test]
     fn store_block_rejects_when_other_lane_storage_exceeds_budget() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let store_root = temp_dir.path().to_path_buf();
@@ -4867,6 +5740,38 @@ mod tests {
             .store_block(block)
             .expect_err("lane 1 bytes should exceed budget");
         assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
+    }
+
+    #[test]
+    fn store_block_reclaims_retired_storage_when_budget_exceeded() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let budget_limit = Kura::block_required_bytes(&block).expect("block bytes");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::base::util::Bytes(budget_limit),
+            blocks_in_memory: BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) =
+            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+
+        let retired_root = temp_dir.path().join("retired").join("blocks");
+        std::fs::create_dir_all(&retired_root).expect("create retired dir");
+        std::fs::write(retired_root.join("stale.bin"), [0u8; 1]).expect("seed retired file");
+
+        kura.store_block(block)
+            .expect("store block after retired purge");
+        assert!(
+            !temp_dir.path().join("retired").exists(),
+            "retired storage should be purged"
+        );
     }
 
     #[test]
@@ -5282,6 +6187,50 @@ mod tests {
             let hash = block_store.read_block_hashes(idx as u64, 1).unwrap();
             assert_eq!(hash, vec![block.hash()]);
         }
+    }
+
+    #[test]
+    fn append_block_batch_at_rewrites_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut block_store = BlockStore::new(dir.path());
+        block_store.create_files_if_they_do_not_exist().unwrap();
+
+        let leader = KeyPair::random();
+        let block1: Arc<SignedBlock> = Arc::new(ValidBlock::new_dummy(leader.private_key()).into());
+        let block2: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                header.set_prev_block_hash(Some(block1.hash()));
+            })
+            .into(),
+        );
+        block_store
+            .append_block_batch(&[block1.clone(), block2.clone()])
+            .unwrap();
+
+        let replacement: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                header.set_prev_block_hash(Some(block1.hash()));
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into(),
+        );
+        assert_ne!(replacement.hash(), block2.hash(), "replacement must differ");
+
+        block_store
+            .append_block_batch_at(1, &[replacement.clone()])
+            .unwrap();
+
+        assert_eq!(block_store.read_index_count().unwrap(), 2);
+        assert_eq!(block_store.read_hashes_count().unwrap(), 2);
+        let hash = block_store.read_block_hashes(1, 1).unwrap();
+        assert_eq!(hash, vec![replacement.hash()]);
+
+        let BlockIndex { start, length } = block_store.read_block_index(1).unwrap();
+        let len: usize = length.try_into().expect("block length fits in usize");
+        let mut bytes = vec![0_u8; len];
+        block_store.read_block_data(start, &mut bytes).unwrap();
+        let decoded = decode_framed_signed_block(&bytes).expect("decode replaced block");
+        assert_eq!(decoded.hash(), replacement.hash());
     }
 
     #[test]
@@ -5935,6 +6884,180 @@ mod tests {
     }
 
     #[test]
+    fn pipeline_sidecar_promotes_temp_index_on_read() {
+        use iroha_config::base::WithOrigin;
+        let temp_dir = TempDir::new().unwrap();
+        let (kura, _count) = Kura::new(
+            &Config {
+                init_mode: InitMode::Strict,
+                store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: BLOCKS_IN_MEMORY,
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity:
+                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: iroha_config::kura::FsyncMode::Batched,
+                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                block_sync_roster_retention:
+                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention:
+                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .unwrap();
+
+        let block_hash = store_dummy_blocks(&kura, 1)[0];
+        let sidecar = PipelineRecoverySidecar::new_v1(
+            1,
+            block_hash,
+            PipelineDagSnapshot {
+                fingerprint: [0u8; 32],
+                key_count: 0,
+            },
+            Vec::new(),
+        );
+        let payload = sidecar.encode_framed().expect("encode sidecar");
+
+        let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
+        pipeline_dir.push(PIPELINE_DIR_NAME);
+        fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
+        let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
+        let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+        fs::write(&data_path, &payload).expect("write sidecar data");
+        std::fs::File::create(&index_path).expect("create empty index");
+
+        let temp_index_path = index_path.with_extension("index.tmp");
+        let entry = SidecarIndexEntry {
+            offset: 0,
+            len: payload.len() as u64,
+        }
+        .to_bytes();
+        let mut temp = std::fs::File::create(&temp_index_path).expect("create temp index");
+        temp.write_all(&entry).expect("write temp index entry");
+        temp.flush().expect("flush temp index");
+        temp.sync_data().expect("sync temp index");
+
+        let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
+        assert_eq!(got.block_hash, block_hash);
+        assert!(!temp_index_path.exists(), "temp index should be promoted");
+        let index_len = std::fs::metadata(&index_path)
+            .expect("index metadata")
+            .len();
+        assert_eq!(index_len, PIPELINE_INDEX_ENTRY_SIZE_U64);
+    }
+
+    #[test]
+    fn pipeline_sidecar_ignores_corrupt_temp_index() {
+        use iroha_config::base::WithOrigin;
+        let temp_dir = TempDir::new().unwrap();
+        let (kura, _count) = Kura::new(
+            &Config {
+                init_mode: InitMode::Strict,
+                store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: BLOCKS_IN_MEMORY,
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity:
+                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: iroha_config::kura::FsyncMode::Batched,
+                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                block_sync_roster_retention:
+                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention:
+                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .unwrap();
+
+        let block_hash = store_dummy_blocks(&kura, 1)[0];
+        let sidecar = PipelineRecoverySidecar::new_v1(
+            1,
+            block_hash,
+            PipelineDagSnapshot {
+                fingerprint: [0u8; 32],
+                key_count: 0,
+            },
+            Vec::new(),
+        );
+        kura.write_pipeline_metadata(&sidecar);
+
+        let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
+        pipeline_dir.push(PIPELINE_DIR_NAME);
+        let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+        let temp_index_path = index_path.with_extension("index.tmp");
+        std::fs::write(&temp_index_path, [0u8; 3]).expect("write corrupt temp index");
+
+        let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
+        assert_eq!(got.block_hash, block_hash);
+        assert!(
+            temp_index_path.exists(),
+            "corrupt temp index should not be promoted"
+        );
+    }
+
+    #[test]
+    fn pipeline_sidecar_ignores_orphaned_temp_data() {
+        use iroha_config::base::WithOrigin;
+        let temp_dir = TempDir::new().unwrap();
+        let (kura, _count) = Kura::new(
+            &Config {
+                init_mode: InitMode::Strict,
+                store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: BLOCKS_IN_MEMORY,
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity:
+                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: iroha_config::kura::FsyncMode::Batched,
+                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                block_sync_roster_retention:
+                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention:
+                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .unwrap();
+
+        let hashes = store_dummy_blocks(&kura, 2);
+        let sidecar = PipelineRecoverySidecar::new_v1(
+            1,
+            hashes[0],
+            PipelineDagSnapshot {
+                fingerprint: [0u8; 32],
+                key_count: 0,
+            },
+            Vec::new(),
+        );
+        kura.write_pipeline_metadata(&sidecar);
+
+        let temp_sidecar = PipelineRecoverySidecar::new_v1(
+            1,
+            hashes[1],
+            PipelineDagSnapshot {
+                fingerprint: [1u8; 32],
+                key_count: 1,
+            },
+            Vec::new(),
+        );
+        let payload = temp_sidecar.encode_framed().expect("encode temp sidecar");
+
+        let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
+        pipeline_dir.push(PIPELINE_DIR_NAME);
+        let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
+        let temp_data_path = data_path.with_extension("norito.tmp");
+        fs::write(&temp_data_path, &payload).expect("write temp data");
+
+        let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
+        assert_eq!(got.block_hash, hashes[0]);
+    }
+
+    #[test]
     fn pipeline_sidecar_rejects_height_mismatch() {
         use iroha_config::base::WithOrigin;
         let temp_dir = TempDir::new().unwrap();
@@ -6372,6 +7495,49 @@ mod tests {
     }
 
     #[test]
+    fn sidecar_reader_rejects_oversized_payloads() {
+        let temp_dir = TempDir::new().unwrap();
+        let store_root = temp_dir.path().join("kura");
+        let kura = Kura::new(
+            &Config {
+                init_mode: InitMode::Strict,
+                store_dir: iroha_config::base::WithOrigin::inline(store_root),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: BLOCKS_IN_MEMORY,
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity:
+                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: iroha_config::kura::FsyncMode::Batched,
+                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                block_sync_roster_retention:
+                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention:
+                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .unwrap()
+        .0;
+
+        let mut dir = kura.store_dir().expect("store dir");
+        dir.push(PIPELINE_DIR_NAME);
+        std::fs::create_dir_all(&dir).expect("create pipeline dir");
+        let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
+        let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+
+        std::fs::write(&data_path, &[]).expect("create sidecar data file");
+        let entry = SidecarIndexEntry {
+            offset: 0,
+            len: STRICT_INIT_MAX_BLOCK_BYTES + 1,
+        }
+        .to_bytes();
+        std::fs::write(&index_path, entry).expect("write oversized index entry");
+
+        assert!(kura.read_pipeline_metadata(1).is_none());
+    }
+
+    #[test]
     fn pipeline_sidecar_ignores_invalid_prev_entry() {
         use iroha_config::base::WithOrigin;
 
@@ -6484,6 +7650,117 @@ mod tests {
         assert_eq!(entry1.len, payload1.len() as u64);
         assert_eq!(entry2.offset, payload1.len() as u64);
         assert_eq!(entry2.len, payload2.len() as u64);
+    }
+
+    #[test]
+    fn sidecar_prune_truncates_misaligned_index() {
+        let temp_dir = TempDir::new().unwrap();
+        let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
+        let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
+        let retention = NonZeroUsize::new(2).expect("non-zero retention");
+
+        let payloads = (1_u64..=3)
+            .map(|height| norito::to_bytes(&DummySidecar { height }).expect("encode dummy sidecar"))
+            .collect::<Vec<_>>();
+        let mut entries = Vec::new();
+        let mut data = std::fs::File::create(&data_path).expect("create data");
+        let mut offset = 0u64;
+        for payload in &payloads {
+            data.write_all(payload).expect("write payload");
+            entries.push(SidecarIndexEntry {
+                offset,
+                len: payload.len() as u64,
+            });
+            offset = offset.saturating_add(payload.len() as u64);
+        }
+
+        let mut index = std::fs::File::create(&index_path).expect("create index");
+        for entry in &entries {
+            index.write_all(&entry.to_bytes()).expect("write entry");
+        }
+        index.write_all(&[0u8; 3]).expect("write padding");
+
+        assert!(
+            Kura::prune_indexed_sidecars(&data_path, &index_path, retention, "dummy sidecar"),
+            "prune should tolerate misaligned index"
+        );
+
+        let index_len = fs::metadata(&index_path).expect("index metadata").len();
+        assert_eq!(
+            index_len,
+            3 * PIPELINE_INDEX_ENTRY_SIZE_U64,
+            "expected aligned index after prune"
+        );
+
+        let mut index = std::fs::File::open(&index_path).expect("index exists");
+        let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
+        let mut pruned_entries = Vec::new();
+        for _ in 0..3 {
+            index.read_exact(&mut buf).expect("read entry");
+            pruned_entries.push(SidecarIndexEntry::from_bytes(buf));
+        }
+
+        assert_eq!(pruned_entries[0].len, 0);
+        assert!(pruned_entries[1].len > 0);
+        assert!(pruned_entries[2].len > 0);
+        assert_eq!(pruned_entries[1].offset, 0);
+        assert_eq!(pruned_entries[2].offset, pruned_entries[1].len);
+
+        let mut data = std::fs::File::open(&data_path).expect("data exists");
+        for (idx, expected_height) in [2_u64, 3_u64].into_iter().enumerate() {
+            let entry = &pruned_entries[idx + 1];
+            let len = usize::try_from(entry.len).expect("len fits in usize");
+            let mut payload = vec![0u8; len];
+            data.seek(SeekFrom::Start(entry.offset))
+                .expect("seek to payload");
+            data.read_exact(&mut payload).expect("read payload");
+            let decoded: DummySidecar =
+                norito::decode_from_bytes(&payload).expect("decode dummy sidecar");
+            assert_eq!(decoded.height, expected_height);
+        }
+    }
+
+    #[test]
+    fn sidecar_prune_skips_entries_past_data_len() {
+        let temp_dir = TempDir::new().unwrap();
+        let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
+        let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
+        let retention = NonZeroUsize::new(1).expect("non-zero retention");
+
+        let payload1 = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode sidecar");
+        fs::write(&data_path, &payload1).expect("write payload");
+
+        let entry1 = SidecarIndexEntry {
+            offset: 0,
+            len: payload1.len() as u64,
+        };
+        let entry2 = SidecarIndexEntry {
+            offset: payload1.len() as u64 + 8,
+            len: 4,
+        };
+        let mut index = std::fs::File::create(&index_path).expect("create index");
+        index.write_all(&entry1.to_bytes()).expect("write entry1");
+        index.write_all(&entry2.to_bytes()).expect("write entry2");
+
+        assert!(
+            Kura::prune_indexed_sidecars(&data_path, &index_path, retention, "dummy sidecar"),
+            "prune should drop invalid entries"
+        );
+
+        let mut index = std::fs::File::open(&index_path).expect("index exists");
+        let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
+        index.read_exact(&mut buf).expect("read entry1");
+        let entry1 = SidecarIndexEntry::from_bytes(buf);
+        index.read_exact(&mut buf).expect("read entry2");
+        let entry2 = SidecarIndexEntry::from_bytes(buf);
+
+        assert_eq!(entry1.len, 0);
+        assert_eq!(entry2.len, 0);
+        assert_eq!(
+            fs::metadata(&data_path).expect("data metadata").len(),
+            0,
+            "invalid kept entry should be dropped from data file"
+        );
     }
 
     #[test]
@@ -7133,6 +8410,210 @@ mod tests {
     }
 
     #[test]
+    fn commit_marker_prunes_excess_entries_on_init() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let mut blocks = DummyBlocks::new();
+        for _ in 0..3 {
+            store.append_block_to_chain(&blocks.next()).unwrap();
+        }
+
+        store.write_commit_marker(1).unwrap();
+        drop(store);
+
+        let mut reopened = BlockStore::new(&blocks_dir);
+        reopened.create_files_if_they_do_not_exist().unwrap();
+
+        assert_eq!(reopened.read_index_count().unwrap(), 1);
+        assert_eq!(reopened.read_hashes_count().unwrap(), 1);
+        assert_eq!(reopened.read_durable_index_count().unwrap(), 1);
+        let marker = reopened.read_commit_marker().unwrap().expect("marker");
+        assert_eq!(marker.count, 1);
+
+        let last = reopened.read_block_index(0).unwrap();
+        let data_len = reopened.data_file_len().unwrap();
+        assert_eq!(data_len, last.start + last.length);
+    }
+
+    #[test]
+    fn commit_marker_truncates_hashes_tail_on_init() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let mut blocks = DummyBlocks::new();
+        for _ in 0..2 {
+            store.append_block_to_chain(&blocks.next()).unwrap();
+        }
+
+        let hashes_path = blocks_dir.join(HASHES_FILE_NAME);
+        let hashes_file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&hashes_path)
+            .unwrap();
+        hashes_file.set_len(3 * SIZE_OF_BLOCK_HASH).unwrap();
+        drop(store);
+
+        let mut reopened = BlockStore::new(&blocks_dir);
+        reopened.create_files_if_they_do_not_exist().unwrap();
+        assert_eq!(reopened.read_index_count().unwrap(), 2);
+        assert_eq!(reopened.read_hashes_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn commit_marker_overwrites_existing_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        store.write_commit_marker(1).unwrap();
+        store.write_commit_marker(2).unwrap();
+
+        let marker = store.read_commit_marker().unwrap().expect("marker");
+        assert_eq!(marker.count, 2);
+        assert!(blocks_dir.join(COUNT_FILE_NAME).exists());
+    }
+
+    #[test]
+    fn commit_marker_corruption_falls_back_to_index_count() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let mut blocks = DummyBlocks::new();
+        for _ in 0..2 {
+            store.append_block_to_chain(&blocks.next()).unwrap();
+        }
+
+        let marker_path = blocks_dir.join(COUNT_FILE_NAME);
+        std::fs::write(&marker_path, b"corrupt").unwrap();
+        drop(store);
+
+        let mut reopened = BlockStore::new(&blocks_dir);
+        reopened.create_files_if_they_do_not_exist().unwrap();
+        assert_eq!(reopened.read_durable_index_count().unwrap(), 2);
+        let marker = reopened.read_commit_marker().unwrap().expect("marker");
+        assert_eq!(marker.count, 2);
+    }
+
+    #[test]
+    fn commit_marker_corruption_falls_back_to_data_backed_count() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let mut blocks = DummyBlocks::new();
+        for _ in 0..2 {
+            store.append_block_to_chain(&blocks.next()).unwrap();
+        }
+
+        let first = store.read_block_index(0).unwrap();
+        let first_end = first.start + first.length;
+        drop(store);
+
+        let data_path = blocks_dir.join(DATA_FILE_NAME);
+        let data_file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&data_path)
+            .unwrap();
+        data_file.set_len(first_end).unwrap();
+
+        let marker_path = blocks_dir.join(COUNT_FILE_NAME);
+        std::fs::write(&marker_path, b"corrupt").unwrap();
+
+        let mut reopened = BlockStore::new(&blocks_dir);
+        reopened.create_files_if_they_do_not_exist().unwrap();
+        assert_eq!(reopened.read_durable_index_count().unwrap(), 1);
+        assert_eq!(reopened.read_index_count().unwrap(), 1);
+        assert_eq!(reopened.read_hashes_count().unwrap(), 1);
+
+        let last = reopened.read_block_index(0).unwrap();
+        let data_len = reopened.data_file_len().unwrap();
+        assert_eq!(data_len, last.start + last.length);
+    }
+
+    #[test]
+    fn index_misalignment_truncates_on_init() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let mut blocks = DummyBlocks::new();
+        for _ in 0..2 {
+            store.append_block_to_chain(&blocks.next()).unwrap();
+        }
+
+        let index_path = blocks_dir.join(INDEX_FILE_NAME);
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&index_path)
+            .unwrap();
+        file.write_all(&[0u8; 3]).unwrap();
+        drop(store);
+
+        let mut reopened = BlockStore::new(&blocks_dir);
+        reopened.create_files_if_they_do_not_exist().unwrap();
+        let len = reopened.index_file_len().unwrap();
+        assert_eq!(len % BlockIndex::SIZE, 0);
+        assert_eq!(reopened.read_index_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn hashes_misalignment_truncates_on_init() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let mut blocks = DummyBlocks::new();
+        for _ in 0..2 {
+            store.append_block_to_chain(&blocks.next()).unwrap();
+        }
+
+        let hashes_path = blocks_dir.join(HASHES_FILE_NAME);
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&hashes_path)
+            .unwrap();
+        file.write_all(&[0u8; 3]).unwrap();
+        drop(store);
+
+        let mut reopened = BlockStore::new(&blocks_dir);
+        reopened.create_files_if_they_do_not_exist().unwrap();
+        let len = reopened.hashes_file_len().unwrap();
+        assert_eq!(len % SIZE_OF_BLOCK_HASH, 0);
+        assert_eq!(reopened.read_hashes_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn prune_does_not_advance_commit_marker() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let block = DummyBlocks::new().next();
+        store.append_block_to_chain(block.as_ref()).unwrap();
+
+        let marker = store.read_commit_marker().unwrap().expect("marker");
+        assert_eq!(marker.count, 1);
+
+        store.prune(5).unwrap();
+
+        let marker_after = store.read_commit_marker().unwrap().expect("marker");
+        assert_eq!(marker_after.count, 1);
+        assert_eq!(store.read_index_count().unwrap(), 1);
+    }
+
+    #[test]
     fn batched_fsync_waits_until_interval_elapses() {
         let temp_dir = TempDir::new().expect("temp dir");
         let mut store = BlockStore::with_fsync(
@@ -7184,6 +8665,47 @@ mod tests {
         assert!(
             store.next_fsync_wait().is_none(),
             "immediate fsync should not schedule a wait"
+        );
+    }
+
+    #[test]
+    fn commit_marker_write_failure_keeps_pending() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store =
+            BlockStore::with_fsync(&blocks_dir, FsyncMode::Batched, Duration::from_millis(10));
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let block = DummyBlocks::new().next();
+        store
+            .append_block_to_chain(block.as_ref())
+            .expect("append block");
+
+        assert!(
+            store.commit_marker_pending.is_some(),
+            "expected pending commit marker before flush"
+        );
+        assert!(
+            store.fsync_pending_for_tests(),
+            "fsync should be pending before flush"
+        );
+
+        let tmp_marker = blocks_dir
+            .join(COUNT_FILE_NAME)
+            .with_extension("norito.tmp");
+        std::fs::create_dir_all(&tmp_marker).expect("create tmp marker directory");
+
+        store
+            .flush_pending_fsync(true)
+            .expect_err("flush should fail when commit marker temp is a directory");
+
+        assert!(
+            store.commit_marker_pending.is_some(),
+            "commit marker should remain pending after failure"
+        );
+        assert!(
+            store.fsync_pending_for_tests(),
+            "fsync should remain pending after commit marker failure"
         );
     }
 }

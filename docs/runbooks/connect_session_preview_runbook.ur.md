@@ -48,10 +48,10 @@ translation_last_reviewed: 2026-01-01
      walletBundle: "dev.sora.example.wallet",
      register: true,
    });
-   console.log("sid", preview.sidHex, "ws url", preview.webSocketUrl);
+   console.log("sid", preview.sidBase64Url, "ws url", preview.webSocketUrl);
    ```
    - `register: false` کو QR/deep-link کے dry-run کیلئے سیٹ کریں۔
-   - واپس ملنے والا `sidHex`، deeplink URLs، اور `tokens` blob کو شواہد فولڈر میں محفوظ کریں؛ گورننس ریویو میں ان artefacts کی توقع ہوتی ہے۔
+   - واپس ملنے والا `sidBase64Url`، deeplink URLs، اور `tokens` blob کو شواہد فولڈر میں محفوظ کریں؛ گورننس ریویو میں ان artefacts کی توقع ہوتی ہے۔
 3. **راز تقسیم کریں۔** deeplink URI کو والٹ آپریٹر کے ساتھ شیئر کریں (Swift dApp sample، Android wallet، یا QA harness)۔ چیٹ میں raw tokens کبھی پیسٹ نہ کریں؛ enablement پیکٹ میں درج encrypted vault استعمال کریں۔
 
 ## 3. سیشن چلائیں
@@ -60,8 +60,9 @@ translation_last_reviewed: 2026-01-01
    ```swift
    let connectURL = URL(string: preview.webSocketUrl)!
    let client = ConnectClient(url: connectURL)
-   let session = ConnectSession(sid: Data(hex: preview.sidHex), client: client)
-   let recorder = ConnectReplayRecorder(sessionID: Data(hex: preview.sidHex))
+   let sid: Data = /* decode preview.sidBase64Url into raw bytes using your harness helper */
+   let session = ConnectSession(sessionID: sid, client: client)
+   let recorder = ConnectReplayRecorder(sessionID: sid)
    session.addObserver(ConnectEventObserver(queue: .main) { event in
        logger.info("connect event", metadata: ["kind": "\(event.kind)"])
    })
@@ -90,7 +91,7 @@ translation_last_reviewed: 2026-01-01
 
 1. **اسٹیجڈ سیشنز حذف کریں۔** ہمیشہ پری ویو سیشنز حذف کریں تاکہ کیو ڈیپتھ الارمز بامعنی رہیں:
    ```js
-   await client.deleteConnectSession(preview.sidHex);
+   await client.deleteConnectSession(preview.sidBase64Url);
    ```
    صرف Swift ٹیسٹ رنز میں بھی یہی endpoint Rust/CLI helper سے کال کریں۔
 2. **جرنلز صاف کریں۔** کسی بھی persisted queue journals (`ApplicationSupport/ConnectQueue/<sid>.to`, IndexedDB stores وغیرہ) کو حذف کریں تاکہ اگلا رن صاف شروع ہو۔ اگر replay مسئلہ ڈیبگ کرنا ہو تو حذف کرنے سے پہلے فائل ہیش ریکارڈ کریں۔

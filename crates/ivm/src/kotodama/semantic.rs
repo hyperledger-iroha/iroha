@@ -698,18 +698,64 @@ fn analyze_statement(
             bind_tuple_fields_rec(&mut out, vars, name, &expr, &expr.ty);
             Ok(out)
         }
-        Statement::AssignExpr { target, value } => {
+        Statement::AssignExpr { target, op, value } => {
             // support map indexing and simple variable rebinding
             match target {
                 Expr::Index { target: map, index } => {
                     let map_t = analyze_expr(map, vars)?;
                     let key_t = analyze_expr(index, vars)?;
-                    let val_t = analyze_expr(value, vars)?;
                     match map_t.ty.clone() {
                         Type::Map(k, v) => {
                             ensure_assignable(&k, &key_t.ty)?;
-                            ensure_assignable(&v, &val_t.ty)?;
                             ensure_in_memory_map_word_types(&map_t)?;
+                            if *op == AssignOp::Set {
+                                let val_t = analyze_expr(value, vars)?;
+                                ensure_assignable(&v, &val_t.ty)?;
+                                return Ok(vec![TypedStatement::MapSet {
+                                    map: map_t,
+                                    key: key_t,
+                                    value: val_t,
+                                }]);
+                            }
+                            let rhs_t = analyze_expr(value, vars)?;
+                            ensure_assignable(&Type::Int, &v)?;
+                            ensure_assignable(&Type::Int, &rhs_t.ty)?;
+                            ensure_assignable(&v, &Type::Int)?;
+                            let mut out = Vec::new();
+                            let (_key_name, key_stmt, key_ident) =
+                                bind_internal_temp(vars, "key", key_t);
+                            out.push(key_stmt);
+                            let map_expr = if typed_map_expr_is_state(&map_t) {
+                                map_t
+                            } else {
+                                let (_map_name, map_stmt, map_ident) =
+                                    bind_internal_temp(vars, "map", map_t);
+                                out.push(map_stmt);
+                                map_ident
+                            };
+                            let map_get = TypedExpr {
+                                expr: ExprKind::Index {
+                                    target: Box::new(map_expr.clone()),
+                                    index: Box::new(key_ident.clone()),
+                                },
+                                ty: (*v).clone(),
+                            };
+                            let bin_op =
+                                assign_op_to_binary(*op).expect("compound op maps to binary op");
+                            let value_expr = TypedExpr {
+                                expr: ExprKind::Binary {
+                                    op: bin_op,
+                                    left: Box::new(map_get),
+                                    right: Box::new(rhs_t),
+                                },
+                                ty: Type::Int,
+                            };
+                            out.push(TypedStatement::MapSet {
+                                map: map_expr,
+                                key: key_ident,
+                                value: value_expr,
+                            });
+                            return Ok(out);
                         }
                         other => {
                             return Err(SemanticError {
@@ -720,11 +766,6 @@ fn analyze_statement(
                             });
                         }
                     }
-                    Ok(vec![TypedStatement::MapSet {
-                        map: map_t,
-                        key: key_t,
-                        value: val_t,
-                    }])
                 }
                 Expr::Ident(name) => {
                     // Simple compound assignment lowering: rebind SSA name
@@ -747,14 +788,40 @@ fn analyze_statement(
                         });
                     }
                     apply_map_new_type_hint(&mut expr, &expected);
-                    ensure_assignable(&expected, &expr.ty)?;
-                    vars.insert(name.clone(), expr.ty.clone());
+                    if *op == AssignOp::Set {
+                        ensure_assignable(&expected, &expr.ty)?;
+                        vars.insert(name.clone(), expr.ty.clone());
+                        let mut out = Vec::new();
+                        out.push(TypedStatement::Let {
+                            name: name.clone(),
+                            value: expr.clone(),
+                        });
+                        bind_tuple_fields_rec(&mut out, vars, name, &expr, &expr.ty);
+                        return Ok(out);
+                    }
+                    ensure_assignable(&Type::Int, &expected)?;
+                    ensure_assignable(&Type::Int, &expr.ty)?;
+                    ensure_assignable(&expected, &Type::Int)?;
+                    let left = TypedExpr {
+                        expr: ExprKind::Ident(name.clone()),
+                        ty: expected.clone(),
+                    };
+                    let bin_op = assign_op_to_binary(*op).expect("compound op maps to binary op");
+                    let value_expr = TypedExpr {
+                        expr: ExprKind::Binary {
+                            op: bin_op,
+                            left: Box::new(left),
+                            right: Box::new(expr),
+                        },
+                        ty: Type::Int,
+                    };
+                    vars.insert(name.clone(), value_expr.ty.clone());
                     let mut out = Vec::new();
                     out.push(TypedStatement::Let {
                         name: name.clone(),
-                        value: expr.clone(),
+                        value: value_expr.clone(),
                     });
-                    bind_tuple_fields_rec(&mut out, vars, name, &expr, &expr.ty);
+                    bind_tuple_fields_rec(&mut out, vars, name, &value_expr, &value_expr.ty);
                     Ok(out)
                 }
                 _ => {
@@ -970,10 +1037,8 @@ fn analyze_statement(
             }
             // Accept bounded forms: `.take(n)` and `.range(start, n)`
             // Desugar to a typed for-each with the base map expression and rely on
-            // the current IR lowering which performs a deterministic two-iteration walk.
-            // The semantic layer keeps track of the literal bound even though the
-            // downstream lowering still clamps to two iterations. Once dynamic bounds
-            // are supported end-to-end we can remove that limitation.
+            // IR lowering to enforce deterministic bounds. Non-state maps clamp to a
+            // single entry; state maps honor the literal bound (defaulting to 2 when omitted).
             if let Expr::Call { name, args } = map {
                 if name == "take" && args.len() == 2 {
                     // Analyze base map expression and infer key/value types
@@ -998,32 +1063,33 @@ fn analyze_statement(
                         Expr::Number(n) if *n >= 0 => Some(*n as usize),
                         _ => None,
                     };
-                    if literal_bound.is_none() {
-                        return Err(SemanticError{ message: "E_UNBOUNDED_ITERATION: `.take(n)` requires a positive integer literal for now".into() });
+                    if let Some(bound) = literal_bound {
+                        if bound > 1 && !map_expr_is_state(&args[0]) {
+                            return Err(SemanticError {
+                                message: "E_MAP_BOUNDS: in-memory Map iteration supports at most 1 element; reduce the bound or move the map into `state`.".into(),
+                            });
+                        }
+                        // E_ITER_MUTATION: forbid structural modifications to the iterated map inside the loop body
+                        if let Expr::Ident(map_name) = &args[0]
+                            && block_mutates_map(&body_t, map_name)
+                        {
+                            return Err(SemanticError { message: "E_ITER_MUTATION: structural modifications to the iterated map are forbidden during iteration".into() });
+                        }
+                        return Ok(vec![TypedStatement::ForEachMap {
+                            key: key.clone(),
+                            value: value.clone(),
+                            map: base_map,
+                            body: body_t,
+                            start: 0,
+                            bound: Some(bound),
+                            #[cfg(feature = "kotodama_dynamic_bounds")]
+                            dyn_count: None,
+                            #[cfg(feature = "kotodama_dynamic_bounds")]
+                            dyn_start: None,
+                        }]);
                     }
-                    if literal_bound.unwrap() > 1 && !map_expr_is_state(&args[0]) {
-                        return Err(SemanticError {
-                            message: "E_MAP_BOUNDS: in-memory Map iteration supports at most 1 element; reduce the bound or move the map into `state`.".into(),
-                        });
-                    }
-                    // E_ITER_MUTATION: forbid structural modifications to the iterated map inside the loop body
-                    if let Expr::Ident(map_name) = &args[0]
-                        && block_mutates_map(&body_t, map_name)
-                    {
-                        return Err(SemanticError { message: "E_ITER_MUTATION: structural modifications to the iterated map are forbidden during iteration".into() });
-                    }
-                    return Ok(vec![TypedStatement::ForEachMap {
-                        key: key.clone(),
-                        value: value.clone(),
-                        map: base_map,
-                        body: body_t,
-                        start: 0,
-                        bound: literal_bound,
-                        #[cfg(feature = "kotodama_dynamic_bounds")]
-                        dyn_count: None,
-                        #[cfg(feature = "kotodama_dynamic_bounds")]
-                        dyn_start: None,
-                    }]);
+                    #[cfg(not(feature = "kotodama_dynamic_bounds"))]
+                    return Err(SemanticError{ message: "E_UNBOUNDED_ITERATION: `.take(n)` requires a positive integer literal for now".into() });
                 }
                 #[cfg(feature = "kotodama_dynamic_bounds")]
                 if name == "take" && args.len() == 2 {
@@ -1125,49 +1191,49 @@ fn analyze_statement(
                     let body_t =
                         analyze_block(body, &mut local_vars, expected_ret, loop_depth + 1)?;
                     let start = match &args[1] {
-                        Expr::Number(n) if *n >= 0 => *n as usize,
-                        _ => {
-                            return Err(SemanticError{ message: "E_UNBOUNDED_ITERATION: `.range(start, end)` requires non-negative integer literals for now".into() });
-                        }
+                        Expr::Number(n) if *n >= 0 => Some(*n as usize),
+                        _ => None,
                     };
                     // Interpret second numeric as end; compute n = end - start
                     let end = match &args[2] {
-                        Expr::Number(n) if *n >= 0 => *n as usize,
-                        _ => {
-                            return Err(SemanticError{ message: "E_UNBOUNDED_ITERATION: `.range(start, end)` requires non-negative integer literals for now".into() });
-                        }
+                        Expr::Number(n) if *n >= 0 => Some(*n as usize),
+                        _ => None,
                     };
-                    if end < start {
-                        return Err(SemanticError {
-                            message:
-                                "E_UNBOUNDED_ITERATION: `.range(start, end)` requires end >= start"
+                    if let (Some(start), Some(end)) = (start, end) {
+                        if end < start {
+                            return Err(SemanticError {
+                                message:
+                                    "E_UNBOUNDED_ITERATION: `.range(start, end)` requires end >= start"
+                                        .into(),
+                            });
+                        }
+                        if !map_expr_is_state(&args[0]) && (start != 0 || (end - start) > 1) {
+                            return Err(SemanticError {
+                                message: "E_MAP_BOUNDS: in-memory Map iteration supports at most 1 element starting at index 0; reduce the range or move the map into `state`."
                                     .into(),
-                        });
+                            });
+                        }
+                        let static_bound = Some(end - start);
+                        if let Expr::Ident(map_name) = &args[0]
+                            && block_mutates_map(&body_t, map_name)
+                        {
+                            return Err(SemanticError { message: "E_ITER_MUTATION: structural modifications to the iterated map are forbidden during iteration".into() });
+                        }
+                        return Ok(vec![TypedStatement::ForEachMap {
+                            key: key.clone(),
+                            value: value.clone(),
+                            map: base_map,
+                            body: body_t,
+                            start,
+                            bound: static_bound,
+                            #[cfg(feature = "kotodama_dynamic_bounds")]
+                            dyn_count: None,
+                            #[cfg(feature = "kotodama_dynamic_bounds")]
+                            dyn_start: None,
+                        }]);
                     }
-                    if !map_expr_is_state(&args[0]) && (start != 0 || (end - start) > 1) {
-                        return Err(SemanticError {
-                            message: "E_MAP_BOUNDS: in-memory Map iteration supports at most 1 element starting at index 0; reduce the range or move the map into `state`."
-                                .into(),
-                        });
-                    }
-                    let static_bound = Some(end - start);
-                    if let Expr::Ident(map_name) = &args[0]
-                        && block_mutates_map(&body_t, map_name)
-                    {
-                        return Err(SemanticError { message: "E_ITER_MUTATION: structural modifications to the iterated map are forbidden during iteration".into() });
-                    }
-                    return Ok(vec![TypedStatement::ForEachMap {
-                        key: key.clone(),
-                        value: value.clone(),
-                        map: base_map,
-                        body: body_t,
-                        start,
-                        bound: static_bound,
-                        #[cfg(feature = "kotodama_dynamic_bounds")]
-                        dyn_count: None,
-                        #[cfg(feature = "kotodama_dynamic_bounds")]
-                        dyn_start: None,
-                    }]);
+                    #[cfg(not(feature = "kotodama_dynamic_bounds"))]
+                    return Err(SemanticError{ message: "E_UNBOUNDED_ITERATION: `.range(start, end)` requires non-negative integer literals for now".into() });
                 }
                 #[cfg(feature = "kotodama_dynamic_bounds")]
                 if name == "range" && args.len() == 3 {
@@ -3414,6 +3480,50 @@ fn ensure_assignable(expected: &Type, actual: &Type) -> Result<(), SemanticError
     }
 }
 
+fn assign_op_to_binary(op: AssignOp) -> Option<BinaryOp> {
+    match op {
+        AssignOp::Set => None,
+        AssignOp::Add => Some(BinaryOp::Add),
+        AssignOp::Sub => Some(BinaryOp::Sub),
+        AssignOp::Mul => Some(BinaryOp::Mul),
+        AssignOp::Div => Some(BinaryOp::Div),
+        AssignOp::Mod => Some(BinaryOp::Mod),
+    }
+}
+
+fn fresh_internal_name(vars: &HashMap<String, Type>, base: &str) -> String {
+    let mut idx = 0usize;
+    loop {
+        let name = if idx == 0 {
+            format!("__koto_{base}")
+        } else {
+            format!("__koto_{base}_{idx}")
+        };
+        if !vars.contains_key(&name) && !is_state_identifier(&name) {
+            return name;
+        }
+        idx = idx.saturating_add(1);
+    }
+}
+
+fn bind_internal_temp(
+    vars: &mut HashMap<String, Type>,
+    base: &str,
+    value: TypedExpr,
+) -> (String, TypedStatement, TypedExpr) {
+    let name = fresh_internal_name(vars, base);
+    vars.insert(name.clone(), value.ty.clone());
+    let stmt = TypedStatement::Let {
+        name: name.clone(),
+        value: value.clone(),
+    };
+    let ident = TypedExpr {
+        expr: ExprKind::Ident(name.clone()),
+        ty: value.ty.clone(),
+    };
+    (name, stmt, ident)
+}
+
 pub(crate) fn resolve_struct_type(ty: &Type) -> Type {
     if let Type::Opaque(name) = ty {
         STRUCT_ENV.with(|env| {
@@ -4078,6 +4188,100 @@ mod tests {
     use super::*;
     use crate::kotodama::parser::parse;
 
+    fn count_calls_expr(expr: &TypedExpr, name: &str) -> usize {
+        match &expr.expr {
+            ExprKind::Call {
+                name: call_name,
+                args,
+            } => {
+                let hits = if call_name == name { 1 } else { 0 };
+                hits + args
+                    .iter()
+                    .map(|arg| count_calls_expr(arg, name))
+                    .sum::<usize>()
+            }
+            ExprKind::Binary { left, right, .. } => {
+                count_calls_expr(left, name) + count_calls_expr(right, name)
+            }
+            ExprKind::Unary { expr, .. } => count_calls_expr(expr, name),
+            ExprKind::Conditional {
+                cond,
+                then_expr,
+                else_expr,
+            } => {
+                count_calls_expr(cond, name)
+                    + count_calls_expr(then_expr, name)
+                    + count_calls_expr(else_expr, name)
+            }
+            ExprKind::Tuple(items) => items.iter().map(|item| count_calls_expr(item, name)).sum(),
+            ExprKind::Member { object, .. } => count_calls_expr(object, name),
+            ExprKind::Index { target, index } => {
+                count_calls_expr(target, name) + count_calls_expr(index, name)
+            }
+            ExprKind::Number(_) | ExprKind::Bool(_) | ExprKind::String(_) | ExprKind::Ident(_) => 0,
+        }
+    }
+
+    fn count_calls_block(block: &TypedBlock, name: &str) -> usize {
+        block
+            .statements
+            .iter()
+            .map(|stmt| count_calls_stmt(stmt, name))
+            .sum()
+    }
+
+    fn count_calls_stmt(stmt: &TypedStatement, name: &str) -> usize {
+        match stmt {
+            TypedStatement::Let { value, .. } => count_calls_expr(value, name),
+            TypedStatement::Expr(expr) => count_calls_expr(expr, name),
+            TypedStatement::Return(Some(expr)) => count_calls_expr(expr, name),
+            TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => 0,
+            TypedStatement::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                count_calls_expr(cond, name)
+                    + count_calls_block(then_branch, name)
+                    + else_branch
+                        .as_ref()
+                        .map(|block| count_calls_block(block, name))
+                        .unwrap_or(0)
+            }
+            TypedStatement::While { cond, body } => {
+                count_calls_expr(cond, name) + count_calls_block(body, name)
+            }
+            TypedStatement::For {
+                init,
+                cond,
+                step,
+                body,
+                ..
+            } => {
+                init.as_ref()
+                    .map(|stmt| count_calls_stmt(stmt, name))
+                    .unwrap_or(0)
+                    + cond
+                        .as_ref()
+                        .map(|expr| count_calls_expr(expr, name))
+                        .unwrap_or(0)
+                    + step
+                        .as_ref()
+                        .map(|stmt| count_calls_stmt(stmt, name))
+                        .unwrap_or(0)
+                    + count_calls_block(body, name)
+            }
+            TypedStatement::ForEachMap { map, body, .. } => {
+                count_calls_expr(map, name) + count_calls_block(body, name)
+            }
+            TypedStatement::MapSet { map, key, value } => {
+                count_calls_expr(map, name)
+                    + count_calls_expr(key, name)
+                    + count_calls_expr(value, name)
+            }
+        }
+    }
+
     #[test]
     fn return_type_match() {
         let ok1 = analyze(&parse("fn f() -> bool { return true; } ").unwrap());
@@ -4177,6 +4381,36 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "kotodama_dynamic_bounds")]
+    #[test]
+    fn dynamic_map_take_accepts_non_literal_bounds() {
+        let program = parse(
+            "state M: Map<int, int>; \
+             fn main(n: int) { \
+                 for (k, v) in M.take(n) { \
+                     let _x = v; \
+                 } \
+             }",
+        )
+        .expect("parse dynamic take");
+        analyze(&program).expect("dynamic take should be accepted with feature");
+    }
+
+    #[cfg(feature = "kotodama_dynamic_bounds")]
+    #[test]
+    fn dynamic_map_range_accepts_non_literal_bounds() {
+        let program = parse(
+            "state M: Map<int, int>; \
+             fn main(start: int, end: int) { \
+                 for (k, v) in M.range(start, end) { \
+                     let _x = v; \
+                 } \
+             }",
+        )
+        .expect("parse dynamic range");
+        analyze(&program).expect("dynamic range should be accepted with feature");
+    }
+
     #[test]
     fn state_map_alias_is_rejected() {
         let program = parse(
@@ -4220,6 +4454,26 @@ mod tests {
         let program = parse("fn f() { let x = 1; x[0] = 2; }").expect("parse map assignment");
         let err = analyze(&program).expect_err("non-map assignment should error");
         assert!(err.message.contains("map assignment expects Map<K,V>"));
+    }
+
+    #[test]
+    fn compound_map_assignment_evaluates_index_once() {
+        let program = parse(
+            "fn next() -> int { return 1; } \
+             fn f(m: Map<int, int>) { m[next()] += 1; }",
+        )
+        .expect("parse compound assignment");
+        let typed = analyze(&program).expect("analyze compound assignment");
+        let func = typed
+            .items
+            .iter()
+            .find_map(|item| match item {
+                TypedItem::Function(f) if f.name == "f" => Some(f),
+                _ => None,
+            })
+            .expect("function f present");
+        let count = count_calls_block(&func.body, "next");
+        assert_eq!(count, 1, "index expression should be evaluated once");
     }
 
     #[test]

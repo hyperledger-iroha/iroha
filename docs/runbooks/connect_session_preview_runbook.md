@@ -45,10 +45,10 @@ evidence for `status.md`.
      walletBundle: "dev.sora.example.wallet",
      register: true,
    });
-   console.log("sid", preview.sidHex, "ws url", preview.webSocketUrl);
+   console.log("sid", preview.sidBase64Url, "ws url", preview.webSocketUrl);
    ```
    - Set `register: false` to dry-run QR/deep-link scenarios.
-   - Persist the returned `sidHex`, deeplink URLs, and `tokens` blob in the
+   - Persist the returned `sidBase64Url`, deeplink URLs, and `tokens` blob in the
      evidence folder; the governance review expects these artefacts.
 3. **Distribute secrets.** Share the deeplink URI with the wallet operator
    (swift dApp sample, Android wallet, or QA harness). Never paste raw tokens
@@ -60,8 +60,9 @@ evidence for `status.md`.
    ```swift
    let connectURL = URL(string: preview.webSocketUrl)!
    let client = ConnectClient(url: connectURL)
-   let session = ConnectSession(sid: Data(hex: preview.sidHex), client: client)
-   let recorder = ConnectReplayRecorder(sessionID: Data(hex: preview.sidHex))
+   let sid: Data = /* decode preview.sidBase64Url into raw bytes using your harness helper */
+   let session = ConnectSession(sessionID: sid, client: client)
+   let recorder = ConnectReplayRecorder(sessionID: sid)
    session.addObserver(ConnectEventObserver(queue: .main) { event in
        logger.info("connect event", metadata: ["kind": "\(event.kind)"])
    })
@@ -109,7 +110,7 @@ evidence for `status.md`.
 1. **Delete staged sessions.** Always delete preview sessions so queue depth
    alarms remain meaningful:
    ```js
-   await client.deleteConnectSession(preview.sidHex);
+   await client.deleteConnectSession(preview.sidBase64Url);
    ```
    For Swift-only test runs, call the same endpoint through the Rust/CLI helper.
 2. **Purge journals.** Remove any persisted queue journals

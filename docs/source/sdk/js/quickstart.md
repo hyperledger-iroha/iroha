@@ -648,7 +648,7 @@ import WebSocket from "ws";
 import { ToriiClient } from "@iroha/iroha-js";
 
 const torii = new ToriiClient(process.env.IROHA_TORII_URL);
-const session = await torii.createConnectSession({ sid: preview.sidHex });
+const session = await torii.createConnectSession({ sid: preview.sidBase64Url });
 
 const socket = torii.openConnectWebSocket({
   sid: session.sid,

@@ -2916,7 +2916,7 @@ pub struct QueryOptions {
 #[allow(dead_code)]
 /// Request body for creating a Connect session.
 pub struct ConnectSessionRequest {
-    /// Required client-provided session id (base64url or hex, 32 bytes after decode).
+    /// Required client-provided session id (base64url, no padding; 32 bytes after decode).
     ///
     /// Note: The server no longer generates a fallback `sid`. Clients must
     /// compute a session identifier (e.g.,
@@ -2952,72 +2952,28 @@ pub async fn handle_connect_session(
 ) -> Result<JsonBody<ConnectSessionResponse>, crate::Error> {
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
     use rand::{rand_core::TryRngCore as _, rngs::OsRng};
-    // Require client-provided `sid` (base64url or hex)
-    let sid_bytes: [u8; 32] = if let Some(s) = &req.sid {
-        // Accept base64url or hex for sid
-        if let Ok(v) = B64.decode(s) {
-            if v.len() == 32 {
-                let mut out = [0u8; 32];
-                out.copy_from_slice(&v);
-                out
-            } else {
-                return Err(crate::Error::Query(
-                    iroha_data_model::ValidationFail::QueryFailed(
-                        iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                            "malformed request".into(),
-                        ),
-                    ),
-                ));
-            }
-        } else {
-            let v = {
-                let ss = s.trim_start_matches("0x");
-                if ss.len() % 2 != 0 {
-                    return Err(crate::Error::Query(
-                        iroha_data_model::ValidationFail::QueryFailed(
-                            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                                "malformed request".into(),
-                            ),
-                        ),
-                    ));
-                }
-                let mut out = Vec::with_capacity(ss.len() / 2);
-                let mut i = 0;
-                while i < ss.len() {
-                    let byte = u8::from_str_radix(&ss[i..i + 2], 16).map_err(|_| {
-                        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                                "malformed request".into(),
-                            ),
-                        ))
-                    })?;
-                    out.push(byte);
-                    i += 2;
-                }
-                out
-            };
+    // Require client-provided `sid` (base64url, no padding).
+    let malformed = || {
+        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "malformed request".into(),
+            ),
+        ))
+    };
+    let sid_bytes: [u8; 32] = match req.sid.as_deref() {
+        Some(s) => {
+            let v = B64.decode(s).map_err(|_| malformed())?;
             if v.len() != 32 {
-                return Err(crate::Error::Query(
-                    iroha_data_model::ValidationFail::QueryFailed(
-                        iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                            "malformed request".into(),
-                        ),
-                    ),
-                ));
+                return Err(malformed());
             }
             let mut out = [0u8; 32];
             out.copy_from_slice(&v);
             out
         }
-    } else {
-        // Reject missing sid: client must supply one.
-        return Err(crate::Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "malformed request".into(),
-                ),
-            ),
-        ));
+        None => {
+            // Reject missing sid: client must supply one.
+            return Err(malformed());
+        }
     };
     // Generate one-time tokens (32 bytes each)
     let mut t_app = [0u8; 32];
@@ -3058,7 +3014,7 @@ pub async fn handle_connect_session(
 #[derive(Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
 /// Query parameters for WebSocket Connect endpoint
 pub struct ConnectWsQuery {
-    /// Session identifier (base64url)
+    /// Session identifier (base64url, no padding)
     pub sid: String,
     /// Role name: "app" or "wallet"
     pub role: String,
@@ -3102,6 +3058,21 @@ mod connect_session_tests {
         assert!(resp.0.token_app.len() > 0 && resp.0.token_wallet.len() > 0);
         assert!(resp.0.wallet_uri.contains(&sid_str));
         assert!(resp.0.app_uri.contains(&sid_str));
+    }
+
+    #[tokio::test]
+    async fn connect_session_rejects_hex_sid() {
+        let chain_id: std::sync::Arc<iroha_data_model::ChainId> =
+            std::sync::Arc::new("testnet".parse().unwrap());
+        let sid_hex = hex::encode([9u8; 32]);
+        let req = ConnectSessionRequest {
+            sid: Some(sid_hex),
+            node: None,
+        };
+        let err = handle_connect_session(chain_id.clone(), NoritoJson(req))
+            .await
+            .err();
+        assert!(err.is_some(), "expected error when sid is hex");
     }
 }
 
@@ -12194,6 +12165,10 @@ const ENDPOINT_REPO_AGREEMENTS_LIST: &str = "/v1/repo/agreements";
 #[cfg(feature = "app_api")]
 const ENDPOINT_REPO_AGREEMENTS_QUERY: &str = "/v1/repo/agreements/query";
 #[cfg(feature = "app_api")]
+const ENDPOINT_ASSET_DEFINITIONS_LIST: &str = "/v1/assets/definitions";
+#[cfg(feature = "app_api")]
+const ENDPOINT_ASSET_DEFINITIONS_QUERY: &str = "/v1/assets/definitions/query";
+#[cfg(feature = "app_api")]
 const ENDPOINT_OFFLINE_ALLOWANCES_LIST: &str = "/v1/offline/allowances";
 #[cfg(feature = "app_api")]
 const ENDPOINT_OFFLINE_ALLOWANCES_QUERY: &str = "/v1/offline/allowances/query";
@@ -12226,6 +12201,10 @@ const ENDPOINT_OFFLINE_RECEIPTS_QUERY: &str = "/v1/offline/receipts/query";
 pub const ENDPOINT_ASSET_HOLDERS: &str = "/v1/assets/{definition_id}/holders";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ASSET_HOLDERS_QUERY: &str = "/v1/assets/{definition_id}/holders/query";
+#[cfg(feature = "app_api")]
+const ENDPOINT_NFTS_LIST: &str = "/v1/nfts";
+#[cfg(feature = "app_api")]
+const ENDPOINT_NFTS_QUERY: &str = "/v1/nfts/query";
 #[cfg(feature = "app_api")]
 const ENDPOINT_KAIGI_RELAYS: &str = "/v1/kaigi/relays";
 #[cfg(feature = "app_api")]
@@ -24072,8 +24051,8 @@ pub struct OfflineTransferListParams {
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineTransferProofRequest {
-    /// Bundle identifier (hex, case-insensitive).
-    pub bundle_id_hex: String,
+    /// Transfer payload used to build proof requests.
+    pub transfer: OfflineToOnlineTransfer,
     /// Proof request kind (`sum`, `counter`, `replay`).
     pub kind: String,
     /// Optional counter checkpoint supplied by the caller.
@@ -25288,6 +25267,8 @@ pub async fn handle_v1_repo_agreements(
     let selectors = compile_repo_sort_spec(&sort_spec);
     let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
     record_address_format_selection(&telemetry, ENDPOINT_REPO_AGREEMENTS_LIST, address_format);
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_REPO_AGREEMENTS_LIST)?;
 
     let mapped_iter = iter.filter_map({
         let selectors = selectors.clone();
@@ -25303,7 +25284,8 @@ pub async fn handle_v1_repo_agreements(
         }
     });
 
-    let (items, total) = collect_page_streaming(mapped_iter, p.offset, p.limit, None);
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
     let mut arr = Vec::with_capacity(items.len());
     for entry in &items {
         let value = norito::json::to_value(&entry.dto).map_err(norito_internal_error)?;
@@ -25353,6 +25335,17 @@ pub async fn handle_v1_repo_agreements_query(
     let selectors = compile_repo_sort_spec(&envelope.sort);
     let address_format = AddressFormatPreference::from_param(envelope.address_format.as_deref())?;
     record_address_format_selection(&telemetry, ENDPOINT_REPO_AGREEMENTS_QUERY, address_format);
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(
+        envelope.pagination.limit,
+        envelope.pagination.offset,
+        cap,
+        ENDPOINT_REPO_AGREEMENTS_QUERY,
+    )?;
+    let limits = app_query_limits();
+    let fetch_size = limits
+        .clamp_fetch_size(envelope.fetch_size)
+        .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
 
     let mapped_iter = iter.filter_map({
         let selectors = selectors.clone();
@@ -25368,12 +25361,8 @@ pub async fn handle_v1_repo_agreements_query(
         }
     });
 
-    let (items, total) = collect_page_streaming(
-        mapped_iter,
-        envelope.pagination.offset,
-        envelope.pagination.limit,
-        envelope.fetch_size,
-    );
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
     let mut arr = Vec::with_capacity(items.len());
     for entry in &items {
         let value = norito::json::to_value(&entry.dto).map_err(norito_internal_error)?;
@@ -25995,6 +25984,423 @@ mod pagination_enforcement_tests {
         };
 
         let err = handle_v1_domains_query(state, NoritoJson(envelope)).await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn assets_definitions_list_rejects_limit_zero() {
+        let state = test_state();
+        let params = ListFilterParams {
+            filter: None,
+            limit: Some(0),
+            offset: 0,
+            sort: None,
+            address_format: None,
+        };
+
+        let err = handle_v1_assets_definitions(state, crate::NoritoQuery(params)).await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn assets_definitions_query_rejects_limit_zero() {
+        let state = test_state();
+        let envelope = crate::filter::QueryEnvelope {
+            query: None,
+            filter: None,
+            select: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(0),
+                offset: 0,
+            },
+            fetch_size: None,
+            address_format: None,
+        };
+
+        let err = handle_v1_assets_definitions_query(state, NoritoJson(envelope)).await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn repo_agreements_list_rejects_limit_zero() {
+        let state = test_state();
+        let params = ListFilterParams {
+            filter: None,
+            limit: Some(0),
+            offset: 0,
+            sort: None,
+            address_format: None,
+        };
+
+        let err = handle_v1_repo_agreements(
+            state,
+            crate::NoritoQuery(params),
+            MaybeTelemetry::disabled(),
+            false,
+        )
+        .await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn repo_agreements_query_rejects_limit_zero() {
+        let state = test_state();
+        let envelope = crate::filter::QueryEnvelope {
+            query: None,
+            filter: None,
+            select: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(0),
+                offset: 0,
+            },
+            fetch_size: None,
+            address_format: None,
+        };
+
+        let err = handle_v1_repo_agreements_query(
+            state,
+            NoritoJson(envelope),
+            MaybeTelemetry::disabled(),
+            false,
+        )
+        .await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn nfts_list_rejects_limit_zero() {
+        let state = test_state();
+        let params = ListFilterParams {
+            filter: None,
+            limit: Some(0),
+            offset: 0,
+            sort: None,
+            address_format: None,
+        };
+
+        let err = handle_v1_nfts(state, crate::NoritoQuery(params)).await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn nfts_query_rejects_limit_zero() {
+        let state = test_state();
+        let envelope = crate::filter::QueryEnvelope {
+            query: None,
+            filter: None,
+            select: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(0),
+                offset: 0,
+            },
+            fetch_size: None,
+            address_format: None,
+        };
+
+        let err = handle_v1_nfts_query(state, NoritoJson(envelope)).await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn offline_allowances_list_rejects_limit_zero() {
+        let state = test_state();
+        let params = OfflineAllowanceListParams {
+            limit: Some(0),
+            ..Default::default()
+        };
+
+        let err = handle_v1_offline_allowances(
+            state,
+            crate::NoritoQuery(params),
+            MaybeTelemetry::disabled(),
+            false,
+        )
+        .await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn offline_allowances_query_rejects_limit_zero() {
+        let state = test_state();
+        let envelope = crate::filter::QueryEnvelope {
+            query: None,
+            filter: None,
+            select: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(0),
+                offset: 0,
+            },
+            fetch_size: None,
+            address_format: None,
+        };
+
+        let err = handle_v1_offline_allowances_query(
+            state,
+            NoritoJson(envelope),
+            MaybeTelemetry::disabled(),
+            false,
+        )
+        .await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn offline_revocations_list_rejects_limit_zero() {
+        let state = test_state();
+        let params = ListFilterParams {
+            limit: Some(0),
+            ..Default::default()
+        };
+
+        let err = handle_v1_offline_revocations(
+            state,
+            crate::NoritoQuery(params),
+            MaybeTelemetry::disabled(),
+            false,
+        )
+        .await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn offline_revocations_query_rejects_limit_zero() {
+        let state = test_state();
+        let envelope = crate::filter::QueryEnvelope {
+            query: None,
+            filter: None,
+            select: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(0),
+                offset: 0,
+            },
+            fetch_size: None,
+            address_format: None,
+        };
+
+        let err = handle_v1_offline_revocations_query(
+            state,
+            NoritoJson(envelope),
+            MaybeTelemetry::disabled(),
+            false,
+        )
+        .await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn offline_transfers_list_rejects_limit_zero() {
+        let state = test_state();
+        let params = OfflineTransferListParams {
+            limit: Some(0),
+            ..Default::default()
+        };
+
+        let err = handle_v1_offline_transfers(
+            state,
+            crate::NoritoQuery(params),
+            MaybeTelemetry::disabled(),
+            false,
+        )
+        .await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn offline_transfers_query_rejects_limit_zero() {
+        let state = test_state();
+        let envelope = crate::filter::QueryEnvelope {
+            query: None,
+            filter: None,
+            select: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(0),
+                offset: 0,
+            },
+            fetch_size: None,
+            address_format: None,
+        };
+
+        let err = handle_v1_offline_transfers_query(
+            state,
+            NoritoJson(envelope),
+            MaybeTelemetry::disabled(),
+            false,
+        )
+        .await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn offline_receipts_list_rejects_limit_zero() {
+        let state = test_state();
+        let params = OfflineReceiptListParams {
+            limit: Some(0),
+            ..Default::default()
+        };
+
+        let err = handle_v1_offline_receipts(
+            state,
+            crate::NoritoQuery(params),
+            MaybeTelemetry::disabled(),
+            false,
+        )
+        .await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn offline_receipts_query_rejects_limit_zero() {
+        let state = test_state();
+        let envelope = crate::filter::QueryEnvelope {
+            query: None,
+            filter: None,
+            select: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(0),
+                offset: 0,
+            },
+            fetch_size: None,
+            address_format: None,
+        };
+
+        let err = handle_v1_offline_receipts_query(
+            state,
+            NoritoJson(envelope),
+            MaybeTelemetry::disabled(),
+            false,
+        )
+        .await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn offline_summaries_list_rejects_limit_zero() {
+        let state = test_state();
+        let params = ListFilterParams {
+            limit: Some(0),
+            ..Default::default()
+        };
+
+        let err = handle_v1_offline_summaries(
+            state,
+            crate::NoritoQuery(params),
+            MaybeTelemetry::disabled(),
+            false,
+        )
+        .await;
+
+        match err {
+            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("expected pagination error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn offline_summaries_query_rejects_limit_zero() {
+        let state = test_state();
+        let envelope = crate::filter::QueryEnvelope {
+            query: None,
+            filter: None,
+            select: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(0),
+                offset: 0,
+            },
+            fetch_size: None,
+            address_format: None,
+        };
+
+        let err = handle_v1_offline_summaries_query(
+            state,
+            NoritoJson(envelope),
+            MaybeTelemetry::disabled(),
+            false,
+        )
+        .await;
 
         match err {
             Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
@@ -28489,6 +28895,9 @@ pub async fn handle_v1_assets_definitions(
 
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_asset_definition_sort_spec(&sort_spec);
+    let cap = app_query_page_cap(&state);
+    let pagination =
+        enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ASSET_DEFINITIONS_LIST)?;
 
     let filter_expr = p
         .filter
@@ -28521,7 +28930,8 @@ pub async fn handle_v1_assets_definitions(
             Some((key, projected))
         }
     });
-    let (items, total) = collect_page_streaming(mapped_iter, p.offset, p.limit, None);
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
 
     let mut arr = Vec::with_capacity(items.len());
     for it in &items {
@@ -28564,6 +28974,17 @@ pub async fn handle_v1_assets_definitions_query(
     .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
 
     let selectors = compile_asset_definition_sort_spec(&envelope.sort);
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(
+        envelope.pagination.limit,
+        envelope.pagination.offset,
+        cap,
+        ENDPOINT_ASSET_DEFINITIONS_QUERY,
+    )?;
+    let limits = app_query_limits();
+    let fetch_size = limits
+        .clamp_fetch_size(envelope.fetch_size)
+        .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
 
     if let Some(ref expr) = envelope.filter {
         fn depth(e: &crate::filter::FilterExpr) -> usize {
@@ -28603,12 +29024,8 @@ pub async fn handle_v1_assets_definitions_query(
             Some((key, projected))
         }
     });
-    let (items, total) = collect_page_streaming(
-        mapped_iter,
-        envelope.pagination.offset,
-        envelope.pagination.limit,
-        envelope.fetch_size,
-    );
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
 
     let mut arr = Vec::with_capacity(items.len());
     for it in &items {
@@ -30292,6 +30709,9 @@ pub async fn handle_v1_offline_allowances(
 
     let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
     record_address_format_selection(&telemetry, ENDPOINT_OFFLINE_ALLOWANCES_LIST, address_format);
+    let cap = app_query_page_cap(&state);
+    let pagination =
+        enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_OFFLINE_ALLOWANCES_LIST)?;
 
     let filter_ref = filter_expr.as_ref();
     let projection_ref = filter_expr.as_ref();
@@ -30317,7 +30737,8 @@ pub async fn handle_v1_offline_allowances(
             Some((key, item))
         }
     });
-    let (items, total) = collect_page_streaming(mapped_iter, p.offset, p.limit, None);
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
@@ -30386,6 +30807,9 @@ pub async fn handle_v1_offline_revocations(
         ENDPOINT_OFFLINE_REVOCATIONS_LIST,
         address_format,
     );
+    let cap = app_query_page_cap(&state);
+    let pagination =
+        enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_OFFLINE_REVOCATIONS_LIST)?;
 
     let filter_ref = filter_expr.as_ref();
     let projection_ref = filter_expr.as_ref();
@@ -30407,7 +30831,8 @@ pub async fn handle_v1_offline_revocations(
             Some((key, item))
         }
     });
-    let (items, total) = collect_page_streaming(mapped_iter, p.offset, p.limit, None);
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
@@ -30480,6 +30905,17 @@ pub async fn handle_v1_offline_allowances_query(
         ENDPOINT_OFFLINE_ALLOWANCES_QUERY,
         address_format,
     );
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(
+        envelope.pagination.limit,
+        envelope.pagination.offset,
+        cap,
+        ENDPOINT_OFFLINE_ALLOWANCES_QUERY,
+    )?;
+    let limits = app_query_limits();
+    let fetch_size = limits
+        .clamp_fetch_size(envelope.fetch_size)
+        .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
 
     let filter_ref = envelope.filter.as_ref();
     let projection_ref = envelope.filter.as_ref();
@@ -30501,12 +30937,8 @@ pub async fn handle_v1_offline_allowances_query(
             Some((key, item))
         }
     });
-    let (items, total) = collect_page_streaming(
-        mapped_iter,
-        envelope.pagination.offset,
-        envelope.pagination.limit,
-        envelope.fetch_size,
-    );
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
@@ -31012,6 +31444,17 @@ pub async fn handle_v1_offline_revocations_query(
         ENDPOINT_OFFLINE_REVOCATIONS_QUERY,
         address_format,
     );
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(
+        envelope.pagination.limit,
+        envelope.pagination.offset,
+        cap,
+        ENDPOINT_OFFLINE_REVOCATIONS_QUERY,
+    )?;
+    let limits = app_query_limits();
+    let fetch_size = limits
+        .clamp_fetch_size(envelope.fetch_size)
+        .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
 
     let filter_ref = envelope.filter.as_ref();
     let projection_ref = envelope.filter.as_ref();
@@ -31033,12 +31476,8 @@ pub async fn handle_v1_offline_revocations_query(
             Some((key, item))
         }
     });
-    let (items, total) = collect_page_streaming(
-        mapped_iter,
-        envelope.pagination.offset,
-        envelope.pagination.limit,
-        envelope.fetch_size,
-    );
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
@@ -31103,6 +31542,9 @@ pub async fn handle_v1_offline_summaries(
 
     let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
     record_address_format_selection(&telemetry, ENDPOINT_OFFLINE_SUMMARIES_LIST, address_format);
+    let cap = app_query_page_cap(&state);
+    let pagination =
+        enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_OFFLINE_SUMMARIES_LIST)?;
 
     let filter_ref = filter_expr.as_ref();
     let projection_ref = filter_expr.as_ref();
@@ -31124,7 +31566,8 @@ pub async fn handle_v1_offline_summaries(
             Some((key, item))
         }
     });
-    let (items, total) = collect_page_streaming(mapped_iter, p.offset, p.limit, None);
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
@@ -31182,6 +31625,17 @@ pub async fn handle_v1_offline_summaries_query(
 
     let address_format = AddressFormatPreference::from_param(envelope.address_format.as_deref())?;
     record_address_format_selection(&telemetry, ENDPOINT_OFFLINE_SUMMARIES_QUERY, address_format);
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(
+        envelope.pagination.limit,
+        envelope.pagination.offset,
+        cap,
+        ENDPOINT_OFFLINE_SUMMARIES_QUERY,
+    )?;
+    let limits = app_query_limits();
+    let fetch_size = limits
+        .clamp_fetch_size(envelope.fetch_size)
+        .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
 
     let selectors = compile_offline_summary_sort_spec(&envelope.sort);
     let filter_ref = envelope.filter.as_ref();
@@ -31204,12 +31658,8 @@ pub async fn handle_v1_offline_summaries_query(
             Some((key, item))
         }
     });
-    let (items, total) = collect_page_streaming(
-        mapped_iter,
-        envelope.pagination.offset,
-        envelope.pagination.limit,
-        envelope.fetch_size,
-    );
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
@@ -32354,6 +32804,9 @@ pub async fn handle_v1_offline_transfers(
 
     let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
     record_address_format_selection(&telemetry, ENDPOINT_OFFLINE_TRANSFERS_LIST, address_format);
+    let cap = app_query_page_cap(&state);
+    let pagination =
+        enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_OFFLINE_TRANSFERS_LIST)?;
 
     let filter_ref = filter_expr.as_ref();
     let projection_ref = filter_expr.as_ref();
@@ -32379,7 +32832,8 @@ pub async fn handle_v1_offline_transfers(
             Some((key, item))
         }
     });
-    let (items, total) = collect_page_streaming(mapped_iter, p.offset, p.limit, None);
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
@@ -32451,6 +32905,17 @@ pub async fn handle_v1_offline_transfers_query(
 
     let address_format = AddressFormatPreference::from_param(envelope.address_format.as_deref())?;
     record_address_format_selection(&telemetry, ENDPOINT_OFFLINE_TRANSFERS_QUERY, address_format);
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(
+        envelope.pagination.limit,
+        envelope.pagination.offset,
+        cap,
+        ENDPOINT_OFFLINE_TRANSFERS_QUERY,
+    )?;
+    let limits = app_query_limits();
+    let fetch_size = limits
+        .clamp_fetch_size(envelope.fetch_size)
+        .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
 
     let filter_ref = envelope.filter.as_ref();
     let projection_ref = envelope.filter.as_ref();
@@ -32472,12 +32937,8 @@ pub async fn handle_v1_offline_transfers_query(
             Some((key, item))
         }
     });
-    let (items, total) = collect_page_streaming(
-        mapped_iter,
-        envelope.pagination.offset,
-        envelope.pagination.limit,
-        envelope.fetch_size,
-    );
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
@@ -32588,6 +33049,9 @@ pub async fn handle_v1_offline_receipts(
 
     let address_format = AddressFormatPreference::from_param(p.address_format.as_deref())?;
     record_address_format_selection(&telemetry, ENDPOINT_OFFLINE_RECEIPTS_LIST, address_format);
+    let cap = app_query_page_cap(&state);
+    let pagination =
+        enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_OFFLINE_RECEIPTS_LIST)?;
 
     let controller_filter = canonicalize_query_account_literal(
         "controller_id",
@@ -32696,7 +33160,8 @@ pub async fn handle_v1_offline_receipts(
         }
     });
 
-    let (items, total) = collect_page_streaming(mapped_iter, p.offset, p.limit, None);
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
     if total == 0 && filter_expr.is_some() && p.filter.is_some() {
         // Surface invalid filter literals that were silently dropped.
         if p.filter
@@ -32765,6 +33230,17 @@ pub async fn handle_v1_offline_receipts_query(
 
     let address_format = AddressFormatPreference::from_param(envelope.address_format.as_deref())?;
     record_address_format_selection(&telemetry, ENDPOINT_OFFLINE_RECEIPTS_QUERY, address_format);
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(
+        envelope.pagination.limit,
+        envelope.pagination.offset,
+        cap,
+        ENDPOINT_OFFLINE_RECEIPTS_QUERY,
+    )?;
+    let limits = app_query_limits();
+    let fetch_size = limits
+        .clamp_fetch_size(envelope.fetch_size)
+        .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
 
     let filter_ref = envelope.filter.as_ref();
     let mapped_iter = iter.flat_map({
@@ -32813,12 +33289,8 @@ pub async fn handle_v1_offline_receipts_query(
         }
     });
 
-    let (items, total) = collect_page_streaming(
-        mapped_iter,
-        envelope.pagination.offset,
-        envelope.pagination.limit,
-        envelope.fetch_size,
-    );
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
     json_response(&OfflineReceiptListResponse {
         items,
         total: total as u64,
@@ -32896,50 +33368,33 @@ pub async fn handle_v1_offline_bundle_proof_status(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_offline_transfer_proof(
-    state: Arc<CoreState>,
+    _state: Arc<CoreState>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         OfflineTransferProofRequest,
     >,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse, Error> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{
-        dsl::CompoundPredicate, offline::prelude::FindOfflineToOnlineTransferById,
-    };
-
-    let bundle_id = parse_hash_hex(&req.bundle_id_hex, "bundle_id_hex")?;
     let kind = OfflineProofRequestKind::from_str(req.kind.as_str()).map_err(|err| {
         conversion_error(format!("invalid proof request kind `{}`: {err}", req.kind))
     })?;
 
-    let state_view = state.view();
-    let mut results = ValidQuery::execute(
-        FindOfflineToOnlineTransferById::new(bundle_id),
-        CompoundPredicate::PASS,
-        &state_view,
-    )
-    .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?
-    .collect::<Vec<_>>();
-    let record = results.pop().ok_or_else(|| {
-        conversion_error(format!(
-            "offline transfer `{}` not found",
-            req.bundle_id_hex
-        ))
-    })?;
+    let transfer = &req.transfer;
 
     match kind {
         OfflineProofRequestKind::Sum => {
-            let payload = record.to_proof_request_sum().map_err(proof_request_error)?;
+            let payload = transfer
+                .to_proof_request_sum()
+                .map_err(proof_request_error)?;
             json_response(&payload)
         }
         OfflineProofRequestKind::Counter => {
             let checkpoint = match req.counter_checkpoint {
                 Some(value) => value,
-                None => record
+                None => transfer
                     .counter_checkpoint_hint()
                     .map_err(proof_request_error)?,
             };
-            let payload = record
+            let payload = transfer
                 .to_proof_request_counter(checkpoint)
                 .map_err(proof_request_error)?;
             json_response(&payload)
@@ -32955,7 +33410,7 @@ pub async fn handle_v1_offline_transfer_proof(
                 .ok_or_else(|| missing_field_error("replay_log_tail_hex"))?;
             let replay_log_head = parse_hash_hex(head_hex, "replay_log_head_hex")?;
             let replay_log_tail = parse_hash_hex(tail_hex, "replay_log_tail_hex")?;
-            let payload = record
+            let payload = transfer
                 .to_proof_request_replay(replay_log_head, replay_log_tail)
                 .map_err(proof_request_error)?;
             json_response(&payload)
@@ -33846,6 +34301,8 @@ pub async fn handle_v1_nfts(
 
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_nft_sort_spec(&sort_spec);
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_NFTS_LIST)?;
 
     let filter_expr = p
         .filter
@@ -33878,7 +34335,8 @@ pub async fn handle_v1_nfts(
             Some((key, projected))
         }
     });
-    let (items, total) = collect_page_streaming(mapped_iter, p.offset, p.limit, None);
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
 
     let mut arr = Vec::with_capacity(items.len());
     for it in &items {
@@ -33917,6 +34375,17 @@ pub async fn handle_v1_nfts_query(
         .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
 
     let selectors = compile_nft_sort_spec(&envelope.sort);
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(
+        envelope.pagination.limit,
+        envelope.pagination.offset,
+        cap,
+        ENDPOINT_NFTS_QUERY,
+    )?;
+    let limits = app_query_limits();
+    let fetch_size = limits
+        .clamp_fetch_size(envelope.fetch_size)
+        .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
 
     if let Some(ref expr) = envelope.filter {
         fn depth(e: &crate::filter::FilterExpr) -> usize {
@@ -33956,12 +34425,8 @@ pub async fn handle_v1_nfts_query(
             Some((key, projected))
         }
     });
-    let (items, total) = collect_page_streaming(
-        mapped_iter,
-        envelope.pagination.offset,
-        envelope.pagination.limit,
-        envelope.fetch_size,
-    );
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
 
     let mut arr = Vec::with_capacity(items.len());
     for it in &items {

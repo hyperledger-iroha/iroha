@@ -1,4 +1,4 @@
-#![doc = "Negative SM2 verification vectors modelled after `BouncyCastle` and `GmSSL` suites."]
+//! Negative SM2 verification vectors modelled after `BouncyCastle` and `GmSSL` suites.
 #![cfg(feature = "sm")]
 
 #[path = "sm2_negative_vector_fixture.rs"]

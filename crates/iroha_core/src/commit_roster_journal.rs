@@ -7,7 +7,7 @@
 use std::{
     collections::{BTreeMap, btree_map::Entry},
     fs,
-    io::Write,
+    io::{self, Write},
     num::NonZeroUsize,
     path::{Path, PathBuf},
 };
@@ -158,24 +158,25 @@ impl CommitRosterJournal {
             return Ok(journal);
         }
 
-        let (persisted, read_path) = if path.exists() {
-            match Self::load_persisted(&path) {
-                Ok(persisted) => (persisted, path.clone()),
-                Err(err) => {
-                    if tmp_path.exists() {
-                        match Self::load_persisted(&tmp_path) {
-                            Ok(persisted) => (persisted, tmp_path.clone()),
-                            Err(_) => return Err(err),
-                        }
-                    } else {
-                        return Err(err);
-                    }
-                }
-            }
-        } else if tmp_path.exists() {
-            (Self::load_persisted(&tmp_path)?, tmp_path.clone())
+        let main = if path.exists() {
+            Some(Self::load_persisted(&path))
         } else {
-            return Ok(journal);
+            None
+        };
+        let tmp = if tmp_path.exists() {
+            Some(Self::load_persisted(&tmp_path))
+        } else {
+            None
+        };
+
+        let (persisted, read_path) = match (tmp, main) {
+            (None, None) => return Ok(journal),
+            (Some(Ok(persisted)), _) => (persisted, tmp_path.clone()),
+            (Some(Err(_)), Some(Ok(persisted))) => (persisted, path.clone()),
+            (Some(Err(tmp_err)), None) => return Err(tmp_err),
+            (None, Some(Ok(persisted))) => (persisted, path.clone()),
+            (None, Some(Err(err))) => return Err(err),
+            (Some(Err(_)), Some(Err(err))) => return Err(err),
         };
 
         for entry in persisted.entries {
@@ -366,10 +367,25 @@ impl CommitRosterJournal {
                     source,
                 })?;
         }
-        fs::rename(&tmp_path, &self.path).map_err(|source| CommitRosterJournalError::Write {
-            path: self.path.clone(),
-            source,
-        })?;
+        if let Err(source) = fs::rename(&tmp_path, &self.path) {
+            if source.kind() == io::ErrorKind::AlreadyExists {
+                fs::remove_file(&self.path).map_err(|source| CommitRosterJournalError::Write {
+                    path: self.path.clone(),
+                    source,
+                })?;
+                fs::rename(&tmp_path, &self.path).map_err(|source| {
+                    CommitRosterJournalError::Write {
+                        path: self.path.clone(),
+                        source,
+                    }
+                })?;
+            } else {
+                return Err(CommitRosterJournalError::Write {
+                    path: self.path.clone(),
+                    source,
+                });
+            }
+        }
         if let Some(parent) = self.path.parent() {
             sync_dir(parent).map_err(|source| CommitRosterJournalError::Write {
                 path: parent.to_path_buf(),
@@ -413,7 +429,7 @@ fn sync_dir(path: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, path::Path};
+    use std::{fs::File, io::Write, num::NonZeroU64, path::Path};
 
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_data_model::{
@@ -512,6 +528,76 @@ mod tests {
                 stake_snapshot: None,
             }
         );
+    }
+
+    #[test]
+    fn journal_persist_overwrites_existing_file() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let (cert1, checkpoint1) = cert_with_height(1, 1);
+        let (cert2, checkpoint2) = cert_with_height(2, 1);
+
+        let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
+        journal.upsert(cert1.clone(), checkpoint1, None);
+        journal.persist().expect("persist first journal");
+
+        let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
+        journal.upsert(cert2.clone(), checkpoint2.clone(), None);
+        journal.persist().expect("persist second journal");
+
+        let loaded = CommitRosterJournal::load(path, retention(4)).expect("load journal");
+        assert!(
+            loaded.get(cert1.height, cert1.subject_block_hash).is_none(),
+            "old entry should be overwritten"
+        );
+        let snapshot = loaded
+            .get(cert2.height, cert2.subject_block_hash)
+            .expect("new entry should exist");
+        assert_eq!(snapshot.commit_certificate, cert2);
+        assert_eq!(snapshot.validator_checkpoint, checkpoint2);
+    }
+
+    #[test]
+    fn journal_prefers_temp_over_main() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let tmp_path = path.with_extension("norito.tmp");
+
+        let (cert1, checkpoint1) = cert_with_height(1, 1);
+        let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
+        journal.upsert(cert1.clone(), checkpoint1.clone(), None);
+        journal.persist().expect("persist main journal");
+
+        let (cert2, checkpoint2) = cert_with_height(2, 1);
+        let payload = PersistedCommitRosters {
+            version: CommitRosterJournal::JOURNAL_VERSION,
+            entries: vec![
+                CommitRosterRecord {
+                    height: cert1.height,
+                    block_hash: cert1.subject_block_hash,
+                    commit_certificate: cert1.clone(),
+                    validator_checkpoint: checkpoint1.clone(),
+                    stake_snapshot: None,
+                },
+                CommitRosterRecord {
+                    height: cert2.height,
+                    block_hash: cert2.subject_block_hash,
+                    commit_certificate: cert2.clone(),
+                    validator_checkpoint: checkpoint2.clone(),
+                    stake_snapshot: None,
+                },
+            ],
+        };
+        let bytes = to_bytes(&payload).expect("encode temp journal");
+        let mut file = File::create(&tmp_path).expect("create temp journal");
+        file.write_all(&bytes).expect("write temp journal");
+        file.flush().expect("flush temp journal");
+        file.sync_data().expect("sync temp journal");
+
+        let loaded = CommitRosterJournal::load(path.clone(), retention(4)).expect("load journal");
+        assert!(loaded.get(cert2.height, cert2.subject_block_hash).is_some());
+        assert!(loaded.get(cert1.height, cert1.subject_block_hash).is_some());
+        assert!(!tmp_path.exists(), "temp journal should be promoted");
     }
 
     #[test]

@@ -596,7 +596,9 @@ pub struct ConnectFrameV1 {
     pub sid: [u8; 32],
     /// Logical direction of the message.
     pub dir: Dir,
-    /// Monotonic per‑direction sequence number starting from 1.
+    /// Monotonic per‑direction sequence number starting from 1 for each sender.
+    /// Server events use a separate server-side sequence and do not advance
+    /// app/wallet ciphertext sequencing.
     pub seq: u64,
     /// Frame payload: control or encrypted content.
     pub kind: FrameKind,

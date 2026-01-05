@@ -671,8 +671,8 @@ fn offline_paths() -> Map {
         "/v1/offline/transfers/proof".to_owned(),
         Value::Object(json_post_operation(
             "Offline",
-            "Submit an offline transfer proof bundle.",
-            "Submit offline transfer proof metadata for verification.",
+            "Build offline transfer proof requests.",
+            "Generate FASTPQ witness payloads from a transfer payload.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -4192,7 +4192,9 @@ fn content_paths() -> Map {
             operation.insert(
                 "description".into(),
                 Value::String(
-                    "Fetch content bundle bytes (path captures the remaining path segments)."
+                    "Fetch content bundle bytes (path captures the remaining path segments). \
+Role- or sponsor-gated bundles require canonical request headers \
+(`X-Iroha-Account`, `X-Iroha-Signature`)."
                         .to_owned(),
                 ),
             );

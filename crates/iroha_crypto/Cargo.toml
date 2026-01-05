@@ -28,7 +28,7 @@ sm_proptest = []
 # Backend selection:
 # - bls-backend-blstrs: pure Rust blstrs backend (no arkworks)
 # - default (no bls-backend-blstrs): w3f-bls backend
-bls = ["bls-backend-w3f", "dep:blstrs", "dep:group"]
+bls = ["bls-backend-w3f", "dep:blstrs", "dep:group", "dep:pairing"]
 bls-backend-blstrs = ["bls", "dep:blstrs", "dep:group", "dep:subtle", "dep:pairing", "dep:w3f-bls"]
 # Baseline backend (enabled when bls is set and bls-backend-blstrs is NOT set)
 bls-backend-w3f = ["bls", "dep:w3f-bls"]
@@ -147,6 +147,11 @@ build-support = { path = "../build-support" }
 name = "bls-variant-detect"
 path = "src/bin/bls_variant_detect.rs"
 required-features = ["bls", "bls-backend-blstrs"]
+
+[[bin]]
+name = "bls_check"
+path = "src/bin/bls_check.rs"
+required-features = ["bls"]
 
 [[bin]]
 name = "gost_perf_check"

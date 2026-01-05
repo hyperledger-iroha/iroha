@@ -113,7 +113,7 @@ export function hashSignedTransaction(signedTransaction, options = {}) {
 /**
  * Re-sign a Norito-encoded transaction with the provided Ed25519 private key.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
- * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey 32-byte seed.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey 32- or 64-byte Ed25519 key.
  * @returns {Buffer}
  */
 export function resignSignedTransaction(signedTransaction, privateKey) {
@@ -123,8 +123,8 @@ export function resignSignedTransaction(signedTransaction, privateKey) {
   }
   const txBuffer = toBuffer(signedTransaction);
   const keyBuffer = toBuffer(privateKey);
-  if (keyBuffer.byteLength !== 32) {
-    throw new Error("private key seed must be 32 bytes (Ed25519)");
+  if (keyBuffer.byteLength !== 32 && keyBuffer.byteLength !== 64) {
+    throw new Error("private key must be a 32- or 64-byte Ed25519 key");
   }
   return Buffer.from(native.signTransaction(txBuffer, keyBuffer));
 }

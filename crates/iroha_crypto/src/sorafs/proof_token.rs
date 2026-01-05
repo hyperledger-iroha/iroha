@@ -13,7 +13,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use blake3::Hasher;
-use ed25519_dalek::{SIGNATURE_LENGTH, Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{SIGNATURE_LENGTH, Signature, Signer, SigningKey, VerifyingKey};
 use rand::{CryptoRng, RngCore};
 use thiserror::Error;
 
@@ -363,11 +363,15 @@ impl ProofToken {
     ///
     /// # Errors
     ///
-    /// Returns [`VerificationError::InvalidSignature`] when verification fails.
+    /// Returns [`VerificationError::InvalidSignature`] when verification fails. Uses strict
+    /// Ed25519 verification and rejects weak public keys and non-canonical signatures.
     pub fn verify_signature(&self, verifying_key: &VerifyingKey) -> Result<(), VerificationError> {
+        if verifying_key.is_weak() {
+            return Err(VerificationError::InvalidSignature);
+        }
         let message = signing_message(&self.body_without_signature());
         verifying_key
-            .verify(&message, &self.signature)
+            .verify_strict(&message, &self.signature)
             .map_err(|_| VerificationError::InvalidSignature)
     }
 
@@ -552,9 +556,15 @@ fn base64_decoded_capacity(encoded_len: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use curve25519_dalek::{
+        edwards::EdwardsPoint,
+        traits::{Identity, IsIdentity},
+    };
     use ed25519_dalek::SigningKey;
+    use ed25519_dalek::Verifier as _;
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
+    use sha2::{Digest, Sha512};
 
     use super::*;
 
@@ -629,5 +639,79 @@ mod tests {
         bytes[offset] ^= 0x01;
         let decoded = ProofToken::decode(&bytes).unwrap();
         assert!(decoded.verify_signature(&verifying).is_err());
+    }
+
+    #[test]
+    fn verify_signature_rejects_low_order_public_key_signatures() {
+        const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+
+        fn hash_mod_order(
+            r: &EdwardsPoint,
+            pk_bytes: &[u8; 32],
+            msg: &[u8],
+            order: usize,
+        ) -> usize {
+            let mut h = Sha512::new();
+            h.update(r.compress().as_bytes());
+            h.update(pk_bytes);
+            h.update(msg);
+            let k = curve25519_dalek::scalar::Scalar::from_hash(h);
+            (k.to_bytes()[0] as usize) % order
+        }
+
+        let pk = VerifyingKey::from_bytes(&ED25519_SMALL_ORDER_POINT)
+            .expect("low-order public key should parse");
+        let a_point = pk.to_edwards();
+        let mut order = 1usize;
+        let mut acc = a_point;
+        while !acc.is_identity() {
+            acc = acc + a_point;
+            order += 1;
+            assert!(order <= 8, "torsion order exceeded expected bound");
+        }
+
+        let mut torsion_points = Vec::with_capacity(order);
+        let mut acc = EdwardsPoint::identity();
+        for _ in 0..order {
+            torsion_points.push(acc);
+            acc = acc + a_point;
+        }
+
+        let mut token = ProofToken {
+            token_id: [0u8; 16],
+            moderation: ModerationAction::Block,
+            issued_at: 0,
+            expires_at: None,
+            entry_ids: vec!["denylist/entry".to_string()],
+            blinded_digest: [0u8; 32],
+            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+        };
+
+        for counter in 0u32..2048 {
+            token.token_id[..4].copy_from_slice(&counter.to_le_bytes());
+            let message = signing_message(&token.body_without_signature());
+
+            for (m, r_point) in torsion_points.iter().enumerate() {
+                let k_mod = hash_mod_order(r_point, pk.as_bytes(), &message, order);
+                let expected_m = (order - k_mod) % order;
+                if m == expected_m {
+                    let mut sig = [0u8; SIGNATURE_LENGTH];
+                    sig[..32].copy_from_slice(r_point.compress().as_bytes());
+                    token.signature = Signature::from_bytes(&sig);
+                    pk.verify(&message, &token.signature)
+                        .expect("non-strict verify accepts low-order signature");
+                    assert!(
+                        token.verify_signature(&pk).is_err(),
+                        "strict verification must reject low-order signature"
+                    );
+                    return;
+                }
+            }
+        }
+
+        panic!("failed to forge low-order proof token signature");
     }
 }

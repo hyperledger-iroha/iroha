@@ -74,7 +74,6 @@ const UAID_MANIFEST_STATUS_VALUES = new Set(["Pending", "Active", "Expired", "Re
 const VERIFYING_KEY_STATUS_VALUES = new Set([
   "Proposed",
   "Active",
-  "Deprecated",
   "Withdrawn",
 ]);
 const VERIFYING_KEY_STATUS_ALIASES = new Map(
@@ -1507,29 +1506,6 @@ export class ToriiClient {
   }
 
   /**
-   * Deprecate a verifying key (`POST /v1/zk/vk/deprecate`).
-   * @param {ToriiVerifyingKeyDeprecatePayload} payload
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<void>}
-   */
-  async deprecateVerifyingKey(payload, options = {}) {
-    const body = JSON.stringify(normalizeVerifyingKeyDeprecatePayload(payload));
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "deprecateVerifyingKey",
-    );
-    const response = await this._request("POST", "/v1/zk/vk/deprecate", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body,
-      signal,
-    });
-    await this._expectStatus(response, [202]);
-  }
-
-  /**
    * Evaluate the mock alias VOPRF helper (`POST /v1/aliases/voprf/evaluate`).
    * @param {string} blindedElementHex hex-encoded blinded element.
    * @returns {Promise<import("./index").AliasVoprfEvaluateResponse>}
@@ -1830,8 +1806,8 @@ export class ToriiClient {
   async pinSorafsManifest(input) {
     const record = ensureRecord(input ?? {}, "pinSorafsManifest input");
     const manifestValue =
-      record.manifest_b64 ?? record.manifestB64 ?? record.manifest;
-    const payloadValue = record.payload_b64 ?? record.payloadB64 ?? record.payload;
+      record.manifest_b64;
+    const payloadValue = record.payload_b64;
     const manifestB64 = normalizeRequiredBase64Payload(
       manifestValue,
       "pinSorafsManifest.manifest",
@@ -1893,7 +1869,7 @@ export class ToriiClient {
       { allowZero: false },
     );
     const providerId =
-      record.provider_id_hex ?? record.providerIdHex ?? record.providerId ?? null;
+      record.provider_id_hex ?? null;
     const body = {
       manifest_id_hex: manifestIdHex,
       offset,
@@ -2028,7 +2004,6 @@ export class ToriiClient {
       opts.ticketLabel ??
       opts.ticket_label ??
       manifest.manifest_hash_hex ??
-      manifest.manifestHashHex ??
       manifest.storage_ticket_hex;
     const paths = await persistDaManifestBundle(manifest, outputDir, label);
     return { manifest, paths, outputDir };
@@ -2117,7 +2092,7 @@ export class ToriiClient {
     const record = ensureRecord(options ?? {}, "fetchDaPayloadViaGateway options");
     const { signal } = normalizeSignalOption(record, "fetchDaPayloadViaGateway");
     const providers = normalizeDaGatewayProviders(
-      record.gatewayProviders ?? record.providers,
+      record.gatewayProviders,
       "fetchDaPayloadViaGateway.gatewayProviders",
     );
     let manifestBundle = record.manifestBundle ?? null;
@@ -2139,10 +2114,7 @@ export class ToriiClient {
   const manifestIdSource =
     record.manifestIdHex ??
     record.manifest_id_hex ??
-    manifestBundle.manifest_hash_hex ??
-    manifestBundle.manifest_id_hex ??
-    manifestBundle.blob_hash_hex ??
-    manifestBundle.blobHash;
+    manifestBundle.manifest_hash_hex;
     const manifestIdHex = normalizeHex32String(
       manifestIdSource,
       "fetchDaPayloadViaGateway.manifestIdHex",
@@ -2152,25 +2124,24 @@ export class ToriiClient {
       record.planJson ??
       record.chunkPlan ??
       record.chunk_plan ??
-      manifestBundle.chunk_plan ??
-      manifestBundle.chunkPlan;
+      manifestBundle.chunk_plan;
     const { planJson, planObject } = normaliseChunkPlanPayload(
       chunkPlanInput,
       "fetchDaPayloadViaGateway.chunkPlan",
     );
 
     const chunkerHandle = normaliseChunkerHandle(
-      record.chunkerHandle ?? record.chunker_handle,
+      record.chunkerHandle,
       manifestBundle,
       "fetchDaPayloadViaGateway",
     );
 
     const proofSummaryOptions = normalizeProofSummaryOption(
-      record.proofSummary ?? record.proof_summary,
+      record.proofSummary,
       "fetchDaPayloadViaGateway.proofSummary",
     );
 
-    const fetchOptions = record.fetchOptions ?? record.gatewayOptions ?? {};
+    const fetchOptions = record.fetchOptions ?? {};
     const gatewayResult = await this._sorafsGatewayFetch(
       manifestIdHex,
       chunkerHandle,
@@ -2245,15 +2216,15 @@ export class ToriiClient {
   async proveDaAvailabilityToDir(options = {}) {
     const record = ensureRecord(options ?? {}, "proveDaAvailabilityToDir options");
     const outputDir = await resolveDaOutputDir(
-      record.outputDir ?? record.output_dir,
+      record.outputDir,
       DA_PROVE_ARTIFACT_PREFIX,
     );
     const providers = normalizeDaGatewayProviders(
-      record.gatewayProviders ?? record.providers,
+      record.gatewayProviders,
       "proveDaAvailabilityToDir.gatewayProviders",
     );
 
-    let manifest = record.manifestBundle ?? record.manifest_bundle ?? null;
+    let manifest = record.manifestBundle ?? null;
     if (!manifest) {
       const ticket =
         record.storageTicketHex ??
@@ -2274,12 +2245,11 @@ export class ToriiClient {
       record.label ??
       record.ticketLabel ??
       record.ticket_label ??
-      manifest.storage_ticket_hex ??
-      manifest.storageTicketHex;
+      manifest.storage_ticket_hex;
     const manifestPaths = await persistDaManifestBundle(manifest, outputDir, label);
 
     const fetchOptions =
-      record.fetchOptions ?? record.gatewayOptions ?? record.fetch_options ?? {};
+      record.fetchOptions ?? {};
     const scoreboardPath =
       normalizeOptionalPathInput(
         record.scoreboardPath ??
@@ -2295,7 +2265,7 @@ export class ToriiClient {
 
     const session = await this.fetchDaPayloadViaGateway({
       manifestBundle: manifest,
-      chunkerHandle: record.chunkerHandle ?? record.chunker_handle,
+      chunkerHandle: record.chunkerHandle,
       gatewayProviders: providers,
       fetchOptions: mergedFetchOptions,
       proofSummary: record.proofSummary ?? true,
@@ -2368,12 +2338,12 @@ export class ToriiClient {
     );
     const payload = {
       uptime_secs: ToriiClient._normalizeUnsignedInteger(
-        record.uptime_secs ?? record.uptimeSecs,
+        record.uptime_secs,
         "submitSorafsUptimeObservation.uptimeSecs",
         { allowZero: false },
       ),
       observed_secs: ToriiClient._normalizeUnsignedInteger(
-        record.observed_secs ?? record.observedSecs,
+        record.observed_secs,
         "submitSorafsUptimeObservation.observedSecs",
         { allowZero: false },
       ),
@@ -2413,7 +2383,7 @@ export class ToriiClient {
     );
     const payload = {
       challenge_b64: normalizeRequiredBase64Payload(
-        record.challenge_b64 ?? record.challengeB64 ?? record.challenge,
+        record.challenge_b64,
         "recordSorafsPorChallenge.challenge",
       ),
     };
@@ -2456,7 +2426,7 @@ export class ToriiClient {
     );
     const payload = {
       proof_b64: normalizeRequiredBase64Payload(
-        record.proof_b64 ?? record.proofB64 ?? record.proof,
+        record.proof_b64,
         "recordSorafsPorProof.proof",
       ),
     };
@@ -2495,7 +2465,7 @@ export class ToriiClient {
     );
     const payload = {
       verdict_b64: normalizeRequiredBase64Payload(
-        record.verdict_b64 ?? record.verdictB64 ?? record.verdict,
+        record.verdict_b64,
         "recordSorafsPorVerdict.verdict",
       ),
     };
@@ -5940,6 +5910,74 @@ export class ToriiClient {
   }
 
   /**
+   * Issue a signed offline certificate (`POST /v1/offline/certificates/issue`).
+   * @param {ToriiOfflineWalletCertificateDraft} certificateDraft
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineCertificateIssueResponse>}
+   */
+  async issueOfflineCertificate(certificateDraft, options = {}) {
+    const normalizedDraft = normalizeOfflineCertificateDraft(
+      certificateDraft,
+      "issueOfflineCertificate.certificate",
+    );
+    const { signal } = normalizeSignalOnlyOption(options, "issueOfflineCertificate");
+    const response = await this._request("POST", "/v1/offline/certificates/issue", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ certificate: normalizedDraft }),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("offline certificate issue response missing JSON body");
+    }
+    return normalizeOfflineCertificateIssueResponse(payload, "offline certificate issue response");
+  }
+
+  /**
+   * Issue a renewal certificate (`POST /v1/offline/certificates/{certificate_id_hex}/renew/issue`).
+   * @param {string} certificateIdHex
+   * @param {ToriiOfflineWalletCertificateDraft} certificateDraft
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineCertificateIssueResponse>}
+   */
+  async issueOfflineCertificateRenewal(certificateIdHex, certificateDraft, options = {}) {
+    const normalizedId = normalizeHex32String(
+      certificateIdHex,
+      "issueOfflineCertificateRenewal.certificateIdHex",
+    );
+    const normalizedDraft = normalizeOfflineCertificateDraft(
+      certificateDraft,
+      "issueOfflineCertificateRenewal.certificate",
+    );
+    const { signal } = normalizeSignalOnlyOption(options, "issueOfflineCertificateRenewal");
+    const response = await this._request(
+      "POST",
+      `/v1/offline/certificates/${encodeURIComponent(normalizedId)}/renew/issue`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ certificate: normalizedDraft }),
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("offline certificate renew issue response missing JSON body");
+    }
+    return normalizeOfflineCertificateIssueResponse(
+      payload,
+      "offline certificate renew issue response",
+    );
+  }
+
+  /**
    * Fetch aggregated offline rejection counters (`GET /v1/offline/rejections`).
    * Returns null when telemetry outputs are disabled for the active profile.
    * @param {{telemetryProfile?: string, signal?: AbortSignal}} [options]
@@ -7824,7 +7862,7 @@ export class ToriiClient {
       return null;
     }
     const record = requirePlainObjectOption(auth, `${context} options`);
-    const rawAccountId = record.accountId ?? record.account_id;
+    const rawAccountId = record.accountId;
     if (rawAccountId === undefined || rawAccountId === null) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
@@ -7834,7 +7872,7 @@ export class ToriiClient {
     }
     const accountId = ToriiClient._normalizeAccountId(rawAccountId, `${context}.accountId`);
     const privateKey = ToriiClient._normalizePrivateKey(
-      record.privateKey ?? record.private_key,
+      record.privateKey,
       `${context}.privateKey`,
     );
     return { accountId, privateKey };
@@ -9200,20 +9238,12 @@ function normalizeHealthSnapshot(payload, context) {
     return { status: requireNonEmptyString(payload, context) };
   }
   const record = ensureRecord(payload, context);
-  const source =
-    record.status ?? record.state ?? record.health ?? record.result ?? record.ok;
+  const source = record.status;
   const status = requireNonEmptyString(
     source == null ? "" : String(source),
     `${context}.status`,
   );
-  if (
-    typeof record.status === "string" &&
-    record.status === status &&
-    !("state" in record) &&
-    !("health" in record) &&
-    !("result" in record) &&
-    !("ok" in record)
-  ) {
+  if (typeof record.status === "string" && record.status === status) {
     return record;
   }
   return { ...record, status };
@@ -9309,7 +9339,7 @@ function normalizeTimeStatusResponse(payload) {
   const rtt = {
     buckets,
     sumMs: ToriiClient._normalizeUnsignedInteger(
-      rttRecord.sum_ms ?? rttRecord.sumMs ?? 0,
+      rttRecord.sum_ms ?? 0,
       "time status response.rtt.sum_ms",
       { allowZero: true },
     ),
@@ -9950,28 +9980,28 @@ function parseSumeragiStatusPayload(payload) {
   const record = ensureRecord(payload, "sumeragi status payload");
   const normalized = { ...record };
   normalized.mode_tag = requireNonEmptyString(
-    record.mode_tag ?? record.modeTag ?? "",
+    record.mode_tag ?? "",
     "sumeragi.mode_tag",
   );
   normalized.staged_mode_tag =
-    record.staged_mode_tag == null && record.stagedModeTag == null
+    record.staged_mode_tag == null
       ? null
       : requireNonEmptyString(
-          record.staged_mode_tag ?? record.stagedModeTag,
+          record.staged_mode_tag,
           "sumeragi.staged_mode_tag",
         );
   normalized.staged_mode_activation_height =
-    record.staged_mode_activation_height == null && record.stagedModeActivationHeight == null
+    record.staged_mode_activation_height == null
       ? null
       : coerceInteger(
-          record.staged_mode_activation_height ?? record.stagedModeActivationHeight,
+          record.staged_mode_activation_height,
           "sumeragi.staged_mode_activation_height",
         );
   normalized.mode_activation_lag_blocks =
-    record.mode_activation_lag_blocks == null && record.modeActivationLagBlocks == null
+    record.mode_activation_lag_blocks == null
       ? null
       : coerceInteger(
-          record.mode_activation_lag_blocks ?? record.modeActivationLagBlocks,
+          record.mode_activation_lag_blocks,
           "sumeragi.mode_activation_lag_blocks",
         );
   normalized.consensus_caps = record.consensus_caps
@@ -10633,7 +10663,7 @@ function parseGovernanceUnlockStats(payload) {
 
 function normalizeGovernanceCouncilCurrentResponse(payload) {
   const record = ensureRecord(payload, "governance council current response");
-  const derivedRaw = record.derived_by ?? record.derivedBy ?? "Vrf";
+  const derivedRaw = record.derived_by ?? "Vrf";
   const derivedBy =
     String(derivedRaw).trim().toLowerCase() === "fallback" ? "Fallback" : "Vrf";
   return {
@@ -10651,7 +10681,7 @@ function normalizeGovernanceCouncilCurrentResponse(payload) {
       "governance council current response.alternates",
     ),
     candidate_count: ToriiClient._normalizeUnsignedInteger(
-      record.candidate_count ?? record.candidateCount ?? 0,
+      record.candidate_count ?? 0,
       "governance council current response.candidate_count",
       { allowZero: true },
     ),
@@ -10680,7 +10710,7 @@ function normalizeGovernanceCouncilMembers(value, context) {
     const record = ensureRecord(entry, `${context}[${index}]`);
     return {
       account_id: ToriiClient._normalizeAccountId(
-        record.account_id ?? record.accountId,
+        record.account_id,
         `${context}[${index}].account_id`,
       ),
     };
@@ -10697,14 +10727,14 @@ function normalizeGovernanceCouncilDeriveRequest(input, context = "governanceDer
   };
   if (record.committee_size !== undefined || record.committeeSize !== undefined) {
     payload.committee_size = ToriiClient._normalizeUnsignedInteger(
-      record.committee_size ?? record.committeeSize,
+      record.committee_size,
       `${context}.committee_size`,
       { allowZero: false },
     );
   }
   if (record.alternate_size !== undefined || record.alternateSize !== undefined) {
     payload.alternate_size = ToriiClient._normalizeUnsignedInteger(
-      record.alternate_size ?? record.alternateSize,
+      record.alternate_size,
       `${context}.alternate_size`,
       { allowZero: false },
     );
@@ -10737,41 +10767,29 @@ function normalizeGovernanceCouncilCandidate(input, context) {
   const record = ensureRecord(input, context);
   const candidate = {
     account_id: ToriiClient._normalizeAccountId(
-      record.account_id ?? record.accountId,
+      record.account_id,
       `${context}.account_id`,
     ),
     variant: normalizeGovernanceCouncilVariant(record.variant, `${context}.variant`),
   };
-  const pkValue =
-    record.pk_b64 ??
-    record.pkB64 ??
-    record.public_key_b64 ??
-    record.publicKeyB64 ??
-    record.pk ??
-    record.publicKey;
+  const pkValue = record.pk_b64;
   if (pkValue === undefined || pkValue === null) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
-      `${context}.pk is required`,
-      `${normalizeErrorPath(context)}.pk`,
+      `${context}.pk_b64 is required`,
+      `${normalizeErrorPath(context)}.pk_b64`,
     );
   }
-  candidate.pk_b64 = normalizeRequiredBase64Payload(pkValue, `${context}.pk`);
-  const proofValue =
-    record.proof_b64 ??
-    record.proofB64 ??
-    record.signature_b64 ??
-    record.signatureB64 ??
-    record.proof ??
-    record.signature;
+  candidate.pk_b64 = normalizeRequiredBase64Payload(pkValue, `${context}.pk_b64`);
+  const proofValue = record.proof_b64;
   if (proofValue === undefined || proofValue === null) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
-      `${context}.proof is required`,
-      `${normalizeErrorPath(context)}.proof`,
+      `${context}.proof_b64 is required`,
+      `${normalizeErrorPath(context)}.proof_b64`,
     );
   }
-  candidate.proof_b64 = normalizeRequiredBase64Payload(proofValue, `${context}.proof`);
+  candidate.proof_b64 = normalizeRequiredBase64Payload(proofValue, `${context}.proof_b64`);
   return candidate;
 }
 
@@ -10796,7 +10814,7 @@ function normalizeGovernanceCouncilDeriveResponse(
   context = "governance council derive response",
 ) {
   const record = ensureRecord(payload, context);
-  const derivedRaw = record.derived_by ?? record.derivedBy ?? "Vrf";
+  const derivedRaw = record.derived_by ?? "Vrf";
   const derivedBy =
     String(derivedRaw).trim().toLowerCase() === "fallback" ? "Fallback" : "Vrf";
   return {
@@ -10809,10 +10827,7 @@ function normalizeGovernanceCouncilDeriveResponse(
       `${context}.alternates`,
     ),
     total_candidates: ToriiClient._normalizeUnsignedInteger(
-      record.total_candidates ??
-        record.totalCandidates ??
-        record.candidate_count ??
-        record.candidateCount,
+      record.total_candidates,
       `${context}.total_candidates`,
       { allowZero: true },
     ),
@@ -10831,8 +10846,8 @@ function normalizeGovernanceCouncilPersistRequest(input) {
     "governancePersistCouncil payload",
   );
   const record = ensureRecord(input, "governancePersistCouncil payload");
-  const authorityValue = record.authority ?? record.account;
-  const privateKeyValue = record.private_key ?? record.privateKey;
+  const authorityValue = record.authority;
+  const privateKeyValue = record.private_key;
   if (authorityValue === undefined && privateKeyValue === undefined) {
     return base;
   }
@@ -10865,7 +10880,7 @@ function normalizeGovernanceCouncilReplaceRequest(input) {
   const record = ensureRecord(input ?? {}, "governanceReplaceCouncil payload");
   const body = {
     missing: ToriiClient._normalizeAccountId(
-      record.missing ?? record.member ?? record.account_id ?? record.accountId,
+      record.missing,
       "governanceReplaceCouncil.missing",
     ),
   };
@@ -10884,7 +10899,7 @@ function normalizeGovernanceCouncilReplaceRequest(input) {
   }
   if (record.private_key !== undefined || record.privateKey !== undefined) {
     body.private_key = requireNonEmptyString(
-      record.private_key ?? record.privateKey,
+      record.private_key,
       "governanceReplaceCouncil.privateKey",
     );
   }
@@ -10943,7 +10958,7 @@ function buildGovernanceCouncilAuditQuery(options = {}) {
 
 function normalizeGovernanceCouncilAuditResponse(payload) {
   const record = ensureRecord(payload, "governance council audit response");
-  const derivedRaw = record.derived_by ?? record.derivedBy ?? "Vrf";
+  const derivedRaw = record.derived_by ?? "Vrf";
   const derivedBy =
     String(derivedRaw).trim().toLowerCase() === "fallback" ? "Fallback" : "Vrf";
   return {
@@ -10953,25 +10968,25 @@ function normalizeGovernanceCouncilAuditResponse(payload) {
       { allowZero: true },
     ),
     seed_hex: normalizeArbitraryHex(
-      record.seed_hex ?? record.seedHex,
+      record.seed_hex,
       "governance council audit response.seed_hex",
     ),
     beacon_hex: normalizeHex32String(
-      record.beacon_hex ?? record.beaconHex,
+      record.beacon_hex,
       "governance council audit response.beacon_hex",
     ),
     members_count: ToriiClient._normalizeUnsignedInteger(
-      record.members_count ?? record.membersCount ?? 0,
+      record.members_count ?? 0,
       "governance council audit response.members_count",
       { allowZero: true },
     ),
     candidate_count: ToriiClient._normalizeUnsignedInteger(
-      record.candidate_count ?? record.candidateCount ?? 0,
+      record.candidate_count ?? 0,
       "governance council audit response.candidate_count",
       { allowZero: true },
     ),
     alternates_count: ToriiClient._normalizeUnsignedInteger(
-      record.alternates_count ?? record.alternatesCount ?? 0,
+      record.alternates_count ?? 0,
       "governance council audit response.alternates_count",
       { allowZero: true },
     ),
@@ -10982,7 +10997,7 @@ function normalizeGovernanceCouncilAuditResponse(payload) {
     ),
     derived_by: derivedBy,
     chain_id: requireNonEmptyString(
-      record.chain_id ?? record.chainId,
+      record.chain_id,
       "governance council audit response.chain_id",
     ),
   };
@@ -11050,13 +11065,13 @@ function normalizeNodeSmCapabilities(value, context) {
   const record = ensureRecord(value ?? {}, context);
   return {
     enabled: coerceBoolean(record.enabled, `${context}.enabled`),
-    defaultHash: optionalString(record.default_hash ?? record.defaultHash, `${context}.default_hash`),
+    defaultHash: optionalString(record.default_hash, `${context}.default_hash`),
     allowedSigning: parseStringArray(
-      record.allowed_signing ?? record.allowedSigning,
+      record.allowed_signing,
       `${context}.allowed_signing`,
     ),
     sm2DistIdDefault: optionalString(
-      record.sm2_distid_default ?? record.sm2DistIdDefault,
+      record.sm2_distid_default,
       `${context}.sm2_distid_default`,
     ),
     opensslPreview: coerceBoolean(record.openssl_preview ?? false, `${context}.openssl_preview`),
@@ -11068,23 +11083,23 @@ function normalizeNodeSmAcceleration(value, context) {
   const record = ensureRecord(value ?? {}, context);
   return {
     scalar: coerceBoolean(record.scalar ?? true, `${context}.scalar`),
-    neonSm3: coerceBoolean(record.neon_sm3 ?? record.neonSm3 ?? false, `${context}.neon_sm3`),
-    neonSm4: coerceBoolean(record.neon_sm4 ?? record.neonSm4 ?? false, `${context}.neon_sm4`),
+    neonSm3: coerceBoolean(record.neon_sm3 ?? false, `${context}.neon_sm3`),
+    neonSm4: coerceBoolean(record.neon_sm4 ?? false, `${context}.neon_sm4`),
     policy: requireNonEmptyString(record.policy ?? "", `${context}.policy`),
   };
 }
 
 function normalizeNodeCurveCapabilities(value, context) {
   const record = ensureRecord(value ?? {}, context);
-  const rawVersion = record.registry_version ?? record.registryVersion;
+  const rawVersion = record.registry_version;
   const registryVersion =
     rawVersion === undefined || rawVersion === null
       ? 1
       : ToriiClient._normalizeUnsignedInteger(rawVersion, `${context}.registry_version`, {
           allowZero: false,
         });
-  const allowedRaw = record.allowed_curve_ids ?? record.allowedCurveIds ?? [];
-  const bitmapRaw = record.allowed_curve_bitmap ?? record.allowedCurveBitmap ?? [];
+  const allowedRaw = record.allowed_curve_ids ?? [];
+  const bitmapRaw = record.allowed_curve_bitmap ?? [];
   return {
     registryVersion,
     allowedCurveIds: parseIntegerArray(allowedRaw, `${context}.allowed_curve_ids`),
@@ -11095,14 +11110,14 @@ function normalizeNodeCurveCapabilities(value, context) {
 function normalizeConfigurationSnapshot(payload) {
   const record = ensureRecord(payload, "configuration response");
   const publicKeyHex = requireNonEmptyString(
-    record.public_key ?? record.publicKey,
+    record.public_key,
     "configuration response.public_key",
   );
   const logger = normalizeConfigurationLogger(record.logger, "configuration response.logger");
   const network = normalizeConfigurationNetwork(record.network, "configuration response.network");
   const queue = normalizeConfigurationQueue(record.queue, "configuration response.queue");
   const confidentialGas = normalizeConfigurationConfidentialGas(
-    record.confidential_gas ?? record.confidentialGas,
+    record.confidential_gas,
     "configuration response.confidential_gas",
   );
   const transport = normalizeConfigurationTransport(
@@ -11133,19 +11148,19 @@ function normalizeConfigurationNetwork(value, context) {
   const record = ensureRecord(value ?? {}, context);
   return {
     blockGossipSize: ToriiClient._normalizeUnsignedInteger(
-      record.block_gossip_size ?? record.blockGossipSize,
+      record.block_gossip_size,
       `${context}.block_gossip_size`,
     ),
     blockGossipPeriodMs: ToriiClient._normalizeUnsignedInteger(
-      record.block_gossip_period_ms ?? record.blockGossipPeriodMs,
+      record.block_gossip_period_ms,
       `${context}.block_gossip_period_ms`,
     ),
     transactionGossipSize: ToriiClient._normalizeUnsignedInteger(
-      record.transaction_gossip_size ?? record.transactionGossipSize,
+      record.transaction_gossip_size,
       `${context}.transaction_gossip_size`,
     ),
     transactionGossipPeriodMs: ToriiClient._normalizeUnsignedInteger(
-      record.transaction_gossip_period_ms ?? record.transactionGossipPeriodMs,
+      record.transaction_gossip_period_ms,
       `${context}.transaction_gossip_period_ms`,
     ),
   };
@@ -11170,27 +11185,27 @@ function normalizeConfigurationConfidentialGas(value, context) {
   const record = ensureRecord(value, context);
   return {
     proofBase: ToriiClient._normalizeUnsignedInteger(
-      record.proof_base ?? record.proofBase,
+      record.proof_base,
       `${context}.proof_base`,
       { allowZero: true },
     ),
     perPublicInput: ToriiClient._normalizeUnsignedInteger(
-      record.per_public_input ?? record.perPublicInput,
+      record.per_public_input,
       `${context}.per_public_input`,
       { allowZero: true },
     ),
     perProofByte: ToriiClient._normalizeUnsignedInteger(
-      record.per_proof_byte ?? record.perProofByte,
+      record.per_proof_byte,
       `${context}.per_proof_byte`,
       { allowZero: true },
     ),
     perNullifier: ToriiClient._normalizeUnsignedInteger(
-      record.per_nullifier ?? record.perNullifier,
+      record.per_nullifier,
       `${context}.per_nullifier`,
       { allowZero: true },
     ),
     perCommitment: ToriiClient._normalizeUnsignedInteger(
-      record.per_commitment ?? record.perCommitment,
+      record.per_commitment,
       `${context}.per_commitment`,
       { allowZero: true },
     ),
@@ -11203,11 +11218,11 @@ function normalizeConfigurationTransport(value, context) {
   }
   const record = ensureRecord(value, context);
   const noritoRpc = normalizeConfigurationTransportNoritoRpc(
-    record.norito_rpc ?? record.noritoRpc,
+    record.norito_rpc,
     `${context}.norito_rpc`,
   );
   const streaming = normalizeConfigurationTransportStreaming(
-    record.streaming ?? record.streamingTransport,
+    record.streaming,
     `${context}.streaming`,
   );
   return { noritoRpc, streaming };
@@ -11222,11 +11237,11 @@ function normalizeConfigurationTransportNoritoRpc(value, context) {
     enabled: coerceBoolean(record.enabled ?? false, `${context}.enabled`),
     stage: requireNonEmptyString(record.stage ?? "", `${context}.stage`),
     requireMtls: coerceBoolean(
-      record.require_mtls ?? record.requireMtls ?? false,
+      record.require_mtls ?? false,
       `${context}.require_mtls`,
     ),
     canaryAllowlistSize: ToriiClient._normalizeUnsignedInteger(
-      record.canary_allowlist_size ?? record.canaryAllowlistSize ?? 0,
+      record.canary_allowlist_size ?? 0,
       `${context}.canary_allowlist_size`,
       { allowZero: true },
     ),
@@ -11247,7 +11262,7 @@ function normalizeConfigurationTransportStreaming(value, context) {
 
 function normalizeConfigurationStreamingSoranet(value, context) {
   const record = ensureRecord(value ?? {}, context);
-  const paddingRaw = record.padding_budget_ms ?? record.paddingBudgetMs ?? null;
+  const paddingRaw = record.padding_budget_ms ?? null;
   const paddingBudgetMs =
     paddingRaw === null
       ? null
@@ -11259,28 +11274,28 @@ function normalizeConfigurationStreamingSoranet(value, context) {
   return {
     enabled: coerceBoolean(record.enabled ?? false, `${context}.enabled`),
     streamTag: requireNonEmptyString(
-      record.stream_tag ?? record.streamTag ?? "",
+      record.stream_tag ?? "",
       `${context}.stream_tag`,
     ),
     exitMultiaddr: requireNonEmptyString(
-      record.exit_multiaddr ?? record.exitMultiaddr ?? "",
+      record.exit_multiaddr ?? "",
       `${context}.exit_multiaddr`,
     ),
     paddingBudgetMs,
     accessKind: requireNonEmptyString(
-      record.access_kind ?? record.accessKind ?? "",
+      record.access_kind ?? "",
       `${context}.access_kind`,
     ),
     garCategory: requireNonEmptyString(
-      record.gar_category ?? record.garCategory ?? "",
+      record.gar_category ?? "",
       `${context}.gar_category`,
     ),
     channelSalt: requireNonEmptyString(
-      record.channel_salt ?? record.channelSalt ?? "",
+      record.channel_salt ?? "",
       `${context}.channel_salt`,
     ),
     provisionSpoolDir: requireNonEmptyString(
-      record.provision_spool_dir ?? record.provisionSpoolDir ?? "",
+      record.provision_spool_dir ?? "",
       `${context}.provision_spool_dir`,
     ),
   };
@@ -11298,22 +11313,22 @@ function normalizeConfigurationNexus(value, context) {
 function normalizeConfigurationNexusAxt(value, context) {
   const record = ensureRecord(value ?? {}, context);
   const slotLengthMs = ToriiClient._normalizeUnsignedInteger(
-    record.slot_length_ms ?? record.slotLengthMs,
+    record.slot_length_ms,
     `${context}.slot_length_ms`,
     { allowZero: false },
   );
   const maxClockSkewMs = ToriiClient._normalizeUnsignedInteger(
-    record.max_clock_skew_ms ?? record.maxClockSkewMs ?? 0,
+    record.max_clock_skew_ms ?? 0,
     `${context}.max_clock_skew_ms`,
     { allowZero: true },
   );
   const proofCacheTtlSlots = ToriiClient._normalizeUnsignedInteger(
-    record.proof_cache_ttl_slots ?? record.proofCacheTtlSlots,
+    record.proof_cache_ttl_slots,
     `${context}.proof_cache_ttl_slots`,
     { allowZero: false },
   );
   const replayRetentionSlots = ToriiClient._normalizeUnsignedInteger(
-    record.replay_retention_slots ?? record.replayRetentionSlots,
+    record.replay_retention_slots,
     `${context}.replay_retention_slots`,
     { allowZero: false },
   );
@@ -11344,7 +11359,7 @@ function normalizeRuntimeAbiHashResponse(payload) {
   const record = ensureRecord(payload, "runtime abi hash response");
   return {
     policy: requireNonEmptyString(record.policy, "runtime abi hash response.policy"),
-    abiHashHex: requireHexString(record.abi_hash_hex ?? record.abi_hash ?? "", "runtime abi hash response.abi_hash_hex"),
+    abiHashHex: requireHexString(record.abi_hash_hex ?? "", "runtime abi hash response.abi_hash_hex"),
   };
 }
 
@@ -11356,7 +11371,7 @@ function normalizeRuntimeMetricsResponse(payload) {
   );
   return {
     activeAbiVersionsCount: ToriiClient._normalizeUnsignedInteger(
-      record.active_abi_versions_count ?? record.activeAbiVersionsCount ?? 0,
+      record.active_abi_versions_count ?? 0,
       "runtime metrics response.active_abi_versions_count",
       { allowZero: true },
     ),
@@ -11673,7 +11688,7 @@ function normalizeSnsPayment(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const assetId = requireNonEmptyString(record.asset_id, `${context}.asset_id`);
   const gross = ToriiClient._normalizeUnsignedInteger(record.gross_amount, `${context}.gross_amount`);
-  const netRaw = record.net_amount ?? record.gross_amount;
+  const netRaw = record.net_amount;
   const net = ToriiClient._normalizeUnsignedInteger(netRaw, `${context}.net_amount`, { allowZero: true });
   const settlementTx = record.settlement_tx;
   if (settlementTx === undefined || settlementTx === null) {
@@ -11846,12 +11861,12 @@ function normalizeSnsNameStatus(payload, context) {
     return { status: payload };
   }
   const record = ensureRecord(payload ?? {}, context);
-  const status = requireNonEmptyString(record.status ?? record.kind ?? record.type ?? payload, `${context}.status`);
+  const status = requireNonEmptyString(record.status ?? "", `${context}.status`);
   if (!SNS_NAME_STATUS_VALUES.has(status)) {
     throw new TypeError(`${context}.status must be one of ${Array.from(SNS_NAME_STATUS_VALUES).join(", ")}`);
   }
   if (status === "Frozen") {
-    const frozen = ensureRecord(record.detail ?? record.frozen ?? record, `${context}.frozen`);
+    const frozen = ensureRecord(record.detail ?? {}, `${context}.frozen`);
     return {
       status,
       reason: requireNonEmptyString(frozen.reason, `${context}.frozen.reason`),
@@ -11861,7 +11876,7 @@ function normalizeSnsNameStatus(payload, context) {
     };
   }
   if (status === "Tombstoned") {
-    const tombstone = ensureRecord(record.detail ?? record.tombstone ?? record, `${context}.tombstone`);
+    const tombstone = ensureRecord(record.detail ?? {}, `${context}.tombstone`);
     return {
       status,
       reason: requireNonEmptyString(tombstone.reason, `${context}.tombstone.reason`),
@@ -11906,7 +11921,7 @@ function normalizeSnsGovernanceCaseCreatePayload(payload) {
     normalized.selector = selector;
   }
 
-  const disputeType = record.dispute_type ?? record.disputeType;
+  const disputeType = record.dispute_type;
   if (disputeType !== undefined && disputeType !== null) {
     handledKeys.add("dispute_type");
     handledKeys.add("disputeType");
@@ -12204,9 +12219,9 @@ function normalizeSnsCaseExportOptions(options) {
 function normalizeSnsGovernanceCaseExportResponse(payload) {
   const record = ensureRecord(payload ?? {}, "sns governance case export response");
   const cases = normalizeSnsGovernanceCaseList(record.cases, "sns governance case export response.cases");
-  const nextSinceRaw = record.next_since ?? record.nextSince;
-  const nextCursorRaw = record.next_cursor ?? record.nextCursor;
-  const totalCountRaw = record.total_count ?? record.totalCount;
+  const nextSinceRaw = record.next_since;
+  const nextCursorRaw = record.next_cursor;
+  const totalCountRaw = record.total_count;
   const nextSince =
     nextSinceRaw === undefined || nextSinceRaw === null
       ? null
@@ -12275,9 +12290,9 @@ function normalizeSnsGovernanceCase(payload, context) {
 
 function normalizeSnsGovernanceCaseSelector(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
-  const suffixRaw = record.suffix_id ?? record.suffixId;
-  const labelRaw = record.label ?? record.label_id ?? record.labelId;
-  const globalFormRaw = record.global_form ?? record.globalForm;
+  const suffixRaw = record.suffix_id;
+  const labelRaw = record.label;
+  const globalFormRaw = record.global_form;
   const suffixId = ToriiClient._normalizeUnsignedInteger(
     suffixRaw,
     `${context}.suffix_id`,
@@ -12476,9 +12491,9 @@ function normalizeStringList(value, context) {
 
 function normalizeExplorerNftRecord(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
-  const id = requireNonEmptyString(record.id ?? record.nft_id ?? "", `${context}.id`);
+  const id = requireNonEmptyString(record.id ?? "", `${context}.id`);
   const ownedBy = requireNonEmptyString(
-    record.owned_by ?? record.ownedBy ?? "",
+    record.owned_by ?? "",
     `${context}.owned_by`,
   );
   const metadata =
@@ -12525,21 +12540,21 @@ function normalizeExplorerBlocksPage(payload) {
 function normalizeExplorerAccountQrResponse(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const canonicalId = requireNonEmptyString(
-    record.canonical_id ?? record.canonicalId ?? "",
+    record.canonical_id ?? "",
     `${context}.canonical_id`,
   );
   const literal = requireNonEmptyString(record.literal ?? "", `${context}.literal`);
-  const addressFormatRaw = record.address_format ?? record.addressFormat ?? "ih58";
+  const addressFormatRaw = record.address_format ?? "ih58";
   const addressFormat =
     ToriiClient._normalizeAddressFormatOption(addressFormatRaw, `${context}.address_format`) ??
     "ih58";
   const networkPrefix = ToriiClient._normalizeUnsignedInteger(
-    record.network_prefix ?? record.networkPrefix ?? 0,
+    record.network_prefix ?? 0,
     `${context}.network_prefix`,
     { allowZero: false },
   );
   const errorCorrection = requireNonEmptyString(
-    record.error_correction ?? record.errorCorrection ?? "",
+    record.error_correction ?? "",
     `${context}.error_correction`,
   );
   const modules = ToriiClient._normalizeUnsignedInteger(
@@ -12548,7 +12563,7 @@ function normalizeExplorerAccountQrResponse(payload, context) {
     { allowZero: false },
   );
   const qrVersion = ToriiClient._normalizeUnsignedInteger(
-    record.qr_version ?? record.qrVersion ?? 0,
+    record.qr_version ?? 0,
     `${context}.qr_version`,
     { allowZero: false },
   );
@@ -12572,17 +12587,17 @@ function normalizeExplorerPaginationMeta(payload, context) {
       allowZero: false,
     }),
     perPage: ToriiClient._normalizeUnsignedInteger(
-      record.per_page ?? record.perPage ?? 1,
+      record.per_page ?? 1,
       `${context}.per_page`,
       { allowZero: false },
     ),
     totalPages: ToriiClient._normalizeUnsignedInteger(
-      record.total_pages ?? record.totalPages ?? 0,
+      record.total_pages ?? 0,
       `${context}.total_pages`,
       { allowZero: true },
     ),
     totalItems: ToriiClient._normalizeUnsignedInteger(
-      record.total_items ?? record.totalItems ?? 0,
+      record.total_items ?? 0,
       `${context}.total_items`,
       { allowZero: true },
     ),
@@ -12591,15 +12606,15 @@ function normalizeExplorerPaginationMeta(payload, context) {
 
 function normalizeExplorerBlockRecord(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
-  const prevBlockHashRaw = record.prev_block_hash ?? record.prevBlockHash ?? null;
-  const transactionsHashRaw = record.transactions_hash ?? record.transactionsHash ?? null;
+  const prevBlockHashRaw = record.prev_block_hash ?? null;
+  const transactionsHashRaw = record.transactions_hash ?? null;
   return {
-    hash: requireHexString(record.hash ?? record.block_hash ?? "", `${context}.hash`),
+    hash: requireHexString(record.hash ?? "", `${context}.hash`),
     height: ToriiClient._normalizeUnsignedInteger(record.height ?? 1, `${context}.height`, {
       allowZero: false,
     }),
     createdAt: requireNonEmptyString(
-      record.created_at ?? record.createdAt ?? "",
+      record.created_at ?? "",
       `${context}.created_at`,
     ),
     prevBlockHash:
@@ -12611,12 +12626,12 @@ function normalizeExplorerBlockRecord(payload, context) {
         ? null
         : requireHexString(transactionsHashRaw, `${context}.transactions_hash`),
     transactionsRejected: ToriiClient._normalizeUnsignedInteger(
-      record.transactions_rejected ?? record.transactionsRejected ?? 0,
+      record.transactions_rejected ?? 0,
       `${context}.transactions_rejected`,
       { allowZero: true },
     ),
     transactionsTotal: ToriiClient._normalizeUnsignedInteger(
-      record.transactions_total ?? record.transactionsTotal ?? 0,
+      record.transactions_total ?? 0,
       `${context}.transactions_total`,
       { allowZero: true },
     ),
@@ -12636,9 +12651,9 @@ function normalizeRuntimeUpgradesListResponse(payload) {
 
 function normalizeRuntimeUpgradeListItem(value, index, context) {
   const record = ensureRecord(value, `${context}[${index}]`);
-  const idHex = requireHexString(record.id_hex ?? record.idHex ?? "", `${context}[${index}].id_hex`);
+  const idHex = requireHexString(record.id_hex ?? "", `${context}[${index}].id_hex`);
   const normalizedRecord = normalizeRuntimeUpgradeRecord(
-    record.record ?? record.runtime_upgrade ?? record.runtimeUpgrade,
+    record.record,
     `${context}[${index}].record`,
   );
   return { idHex, record: normalizedRecord };
@@ -12651,7 +12666,7 @@ function normalizeRuntimeUpgradeRecord(value, context) {
     status: normalizeRuntimeUpgradeStatus(record.status, `${context}.status`),
     proposer: requireNonEmptyString(record.proposer, `${context}.proposer`),
     createdHeight: ToriiClient._normalizeUnsignedInteger(
-      record.created_height ?? record.createdHeight,
+      record.created_height,
       `${context}.created_height`,
       { allowZero: true },
     ),
@@ -12664,29 +12679,29 @@ function normalizeRuntimeUpgradeManifest(value, context) {
     name: requireNonEmptyString(record.name, `${context}.name`),
     description: requireNonEmptyString(record.description, `${context}.description`),
     abiVersion: ToriiClient._normalizeUnsignedInteger(
-      record.abi_version ?? record.abiVersion,
+      record.abi_version,
       `${context}.abi_version`,
       { allowZero: false },
     ),
     abiHashHex: requireHexString(
-      record.abi_hash ?? record.abi_hash_hex ?? record.abiHashHex ?? "",
+      record.abi_hash ?? "",
       `${context}.abi_hash`,
     ),
     addedSyscalls: parseIntegerArray(
-      record.added_syscalls ?? record.addedSyscalls,
+      record.added_syscalls,
       `${context}.added_syscalls`,
     ),
     addedPointerTypes: parseIntegerArray(
-      record.added_pointer_types ?? record.addedPointerTypes,
+      record.added_pointer_types,
       `${context}.added_pointer_types`,
     ),
     startHeight: ToriiClient._normalizeUnsignedInteger(
-      record.start_height ?? record.startHeight,
+      record.start_height,
       `${context}.start_height`,
       { allowZero: true },
     ),
     endHeight: ToriiClient._normalizeUnsignedInteger(
-      record.end_height ?? record.endHeight,
+      record.end_height,
       `${context}.end_height`,
       { allowZero: true },
     ),
@@ -12717,11 +12732,10 @@ function normalizeRuntimeUpgradeStatus(value, context) {
 
 function normalizeRuntimeUpgradeManifestPayload(value, context) {
   const record = ensureRecord(value, context);
-  const abiVersion =
-    record.abi_version ?? record.abiVersion ?? record.targetVersion ?? record.version;
-  const abiHashValue = record.abi_hash ?? record.abiHash ?? record.abi_hash_hex ?? record.abiHashHex;
-  const startValue = record.start_height ?? record.startHeight;
-  const endValue = record.end_height ?? record.endHeight;
+  const abiVersion = record.abi_version;
+  const abiHashValue = record.abi_hash;
+  const startValue = record.start_height;
+  const endValue = record.end_height;
   if (abiVersion === undefined || abiVersion === null) {
     throw new TypeError(`${context}.abi_version is required`);
   }
@@ -12744,7 +12758,7 @@ function normalizeRuntimeUpgradeManifestPayload(value, context) {
   return {
     name: requireNonEmptyString(record.name, `${context}.name`),
     description: requireNonEmptyString(
-      record.description ?? record.desc ?? record.details,
+      record.description,
       `${context}.description`,
     ),
     abi_version: ToriiClient._normalizeUnsignedInteger(
@@ -12754,11 +12768,11 @@ function normalizeRuntimeUpgradeManifestPayload(value, context) {
     ),
     abi_hash: normalizeHex32String(abiHashValue, `${context}.abi_hash`),
     added_syscalls: parseIntegerArray(
-      record.added_syscalls ?? record.addedSyscalls ?? [],
+      record.added_syscalls ?? [],
       `${context}.added_syscalls`,
     ),
     added_pointer_types: parseIntegerArray(
-      record.added_pointer_types ?? record.addedPointerTypes ?? [],
+      record.added_pointer_types ?? [],
       `${context}.added_pointer_types`,
     ),
     start_height: startHeight,
@@ -13555,14 +13569,11 @@ const BASE64URL_BODY_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 function normalizeConnectSid(value, name) {
   const trimmed = requireNonEmptyString(value, name);
-  if (isHexSid(trimmed)) {
-    return trimmed;
-  }
   const { body, padding } = splitBase64Url(trimmed);
   if (!body || !BASE64URL_BODY_PATTERN.test(body)) {
     throw connectSidTypeError(name);
   }
-  if (padding && padding !== "=" && padding !== "==") {
+  if (padding) {
     throw connectSidTypeError(name);
   }
   let decoded;
@@ -13578,15 +13589,7 @@ function normalizeConnectSid(value, name) {
 }
 
 function connectSidTypeError(name) {
-  return new TypeError(`${name} must be a 32-byte base64url or hex string`);
-}
-
-function isHexSid(value) {
-  const hasPrefix = value.startsWith("0x") || value.startsWith("0X");
-  const hex = hasPrefix ? value.slice(2) : value;
-  return (
-    hex.length === CONNECT_SID_BYTES * 2 && /^[0-9a-fA-F]+$/.test(hex)
-  );
+  return new TypeError(`${name} must be a 32-byte base64url string (no padding)`);
 }
 
 function splitBase64Url(value) {
@@ -13796,7 +13799,7 @@ function formatSorafsEvaluation(evaluation) {
 function normalizeAuthorityCredentials(source, context) {
   const record = ensureRecord(source, context);
   const authority = requireNonEmptyString(
-    record.authority ?? record.account,
+    record.authority,
     `${context}.authority`,
   );
   const privateKey = resolveAuthorityPrivateKey(record, context);
@@ -13807,26 +13810,22 @@ function normalizeAuthorityCredentials(source, context) {
 }
 
 function resolveAuthorityPrivateKey(record, context) {
-  const direct = record.private_key ?? record.privateKey;
+  const direct = record.private_key;
   if (direct !== undefined && direct !== null) {
     if (typeof direct === "string") {
       return requireNonEmptyString(direct, `${context}.privateKey`);
     }
     return formatAuthorityPrivateKeyBytes(direct, record, context);
   }
-  const multihash = record.private_key_multihash ?? record.privateKeyMultihash;
+  const multihash = record.private_key_multihash;
   if (multihash !== undefined && multihash !== null) {
     return requireNonEmptyString(multihash, `${context}.privateKeyMultihash`);
   }
-  const hexInput = record.private_key_hex ?? record.privateKeyHex;
+  const hexInput = record.private_key_hex;
   if (hexInput !== undefined && hexInput !== null) {
     return formatAuthorityPrivateKeyHex(hexInput, record, context, "privateKeyHex");
   }
-  const bytesInput =
-    record.private_key_bytes ??
-    record.privateKeyBytes ??
-    record.private_key_seed ??
-    record.privateKeySeed;
+  const bytesInput = record.private_key_bytes;
   if (bytesInput !== undefined && bytesInput !== null) {
     return formatAuthorityPrivateKeyBytes(bytesInput, record, context);
   }
@@ -13840,11 +13839,10 @@ function formatAuthorityPrivateKeyBytes(value, record, context) {
 
 function formatAuthorityPrivateKeyHex(value, record, context, label) {
   const hex = normalizeHex32String(value, `${context}.${label}`);
-  const algorithm =
-    record.private_key_algorithm ?? record.privateKeyAlgorithm ?? "ed25519";
+  const algorithm = record.private_key_algorithm ?? "ed25519";
   const normalizedAlgorithm = requireNonEmptyString(
     algorithm,
-    `${context}.privateKeyAlgorithm`,
+    `${context}.private_key_algorithm`,
   );
   return `${normalizedAlgorithm}:${hex}`;
 }
@@ -13861,47 +13859,45 @@ function normalizeManifestPayload(manifest, context) {
     access_set_hints: null,
     entrypoints: null,
   };
-  if ("code_hash" in manifest || "codeHash" in manifest) {
+  if ("code_hash" in manifest) {
     normalized.code_hash = normalizeOptionalHex32(
-      manifest.code_hash ?? manifest.codeHash,
-      `${context}.codeHash`,
+      manifest.code_hash,
+      `${context}.code_hash`,
     );
   }
-  if ("abi_hash" in manifest || "abiHash" in manifest) {
+  if ("abi_hash" in manifest) {
     normalized.abi_hash = normalizeOptionalHex32(
-      manifest.abi_hash ?? manifest.abiHash,
-      `${context}.abiHash`,
+      manifest.abi_hash,
+      `${context}.abi_hash`,
     );
   }
-  if ("compiler_fingerprint" in manifest || "compilerFingerprint" in manifest) {
-    const fingerprint =
-      manifest.compiler_fingerprint ?? manifest.compilerFingerprint ?? null;
+  if ("compiler_fingerprint" in manifest) {
+    const fingerprint = manifest.compiler_fingerprint ?? null;
     normalized.compiler_fingerprint =
       fingerprint === null
         ? null
-        : requireNonEmptyString(fingerprint, `${context}.compilerFingerprint`);
+        : requireNonEmptyString(fingerprint, `${context}.compiler_fingerprint`);
   }
-  if ("features_bitmap" in manifest || "featuresBitmap" in manifest) {
-    const features =
-      manifest.features_bitmap ?? manifest.featuresBitmap ?? null;
+  if ("features_bitmap" in manifest) {
+    const features = manifest.features_bitmap ?? null;
     normalized.features_bitmap =
       features === null
         ? null
         : ToriiClient._normalizeUnsignedInteger(
             features,
-            `${context}.featuresBitmap`,
+            `${context}.features_bitmap`,
             { allowZero: true },
           );
   }
-  if ("access_set_hints" in manifest || "accessSetHints" in manifest) {
-    const hints = manifest.access_set_hints ?? manifest.accessSetHints;
+  if ("access_set_hints" in manifest) {
+    const hints = manifest.access_set_hints;
     normalized.access_set_hints =
       hints === null
         ? null
-        : normalizeAccessSetHintsPayload(hints, `${context}.accessSetHints`);
+        : normalizeAccessSetHintsPayload(hints, `${context}.access_set_hints`);
   }
-  if ("entrypoints" in manifest || "entryPoints" in manifest) {
-    const entries = manifest.entrypoints ?? manifest.entryPoints;
+  if ("entrypoints" in manifest) {
+    const entries = manifest.entrypoints;
     if (entries === null) {
       normalized.entrypoints = null;
     } else if (!Array.isArray(entries)) {
@@ -13932,10 +13928,10 @@ function normalizeAccessSetHintsPayload(payload, context) {
     );
   };
   return {
-    read_keys: normalizeKeys(record.read_keys ?? record.readKeys, `${context}.readKeys`),
+    read_keys: normalizeKeys(record.read_keys, `${context}.read_keys`),
     write_keys: normalizeKeys(
-      record.write_keys ?? record.writeKeys,
-      `${context}.writeKeys`,
+      record.write_keys,
+      `${context}.write_keys`,
     ),
   };
 }
@@ -14068,6 +14064,20 @@ function parseHashLiteralToHex(literal, name) {
     throw new TypeError(`${name} has invalid checksum; expected ${expected}`);
   }
   return body.toLowerCase();
+}
+
+function formatHashLiteral(bodyHex) {
+  const upper = bodyHex.toUpperCase();
+  const checksum = computeHashLiteralCrc("hash", upper);
+  return `hash:${upper}#${checksum}`;
+}
+
+function normalizeOptionalHashLiteral(value, name) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const hex = normalizeHashLike32(value, name);
+  return formatHashLiteral(hex);
 }
 
 function computeHashLiteralCrc(tag, body) {
@@ -14276,7 +14286,7 @@ function normalizeRegisterContractCodeRequest(input) {
   const record = ensureRecord(input, "registerContractCode request");
   const credentials = normalizeAuthorityCredentials(record, "registerContractCode");
   const manifest = normalizeManifestPayload(record.manifest, "registerContractCode.manifest");
-  const codeBytes = record.code_bytes ?? record.codeBytes;
+  const codeBytes = record.code_bytes;
   const payload = {
     ...credentials,
     manifest,
@@ -14324,15 +14334,15 @@ function normalizeRevokeSpaceDirectoryManifestRequest(input) {
     "revokeSpaceDirectoryManifest",
   );
   const uaid = normalizeUaidLiteral(
-    record.uaid ?? record.uaid_literal ?? record.uaidLiteral,
+    record.uaid,
     "revokeSpaceDirectoryManifest.uaid",
   );
   const dataspace = ToriiClient._normalizeUnsignedInteger(
-    record.dataspace ?? record.dataspace_id ?? record.dataspaceId,
+    record.dataspace,
     "revokeSpaceDirectoryManifest.dataspace",
   );
   const revokedEpoch = ToriiClient._normalizeUnsignedInteger(
-    record.revoked_epoch ?? record.revokedEpoch,
+    record.revoked_epoch,
     "revokeSpaceDirectoryManifest.revokedEpoch",
     { allowZero: true },
   );
@@ -14358,7 +14368,7 @@ function normalizeDeployContractRequest(input) {
   const payload = {
     ...credentials,
     code_b64: normalizeRequiredBase64Payload(
-      record.code_b64 ?? record.codeB64 ?? record.code,
+      record.code_b64,
       "deployContract.codeB64",
     ),
   };
@@ -14374,11 +14384,11 @@ function normalizeDeployContractResponse(payload) {
   return {
     ok: Boolean(record.ok),
     code_hash_hex: normalizeHex32String(
-      record.code_hash_hex ?? record.codeHashHex,
+      record.code_hash_hex,
       "deployContract.response.code_hash_hex",
     ),
     abi_hash_hex: normalizeHex32String(
-      record.abi_hash_hex ?? record.abiHashHex,
+      record.abi_hash_hex,
       "deployContract.response.abi_hash_hex",
     ),
   };
@@ -14391,11 +14401,11 @@ function normalizeDeployContractInstanceRequest(input) {
     ...credentials,
     namespace: requireNonEmptyString(record.namespace, "deployContractInstance.namespace"),
     contract_id: requireNonEmptyString(
-      record.contract_id ?? record.contractId,
+      record.contract_id,
       "deployContractInstance.contractId",
     ),
     code_b64: normalizeRequiredBase64Payload(
-      record.code_b64 ?? record.codeB64 ?? record.code,
+      record.code_b64,
       "deployContractInstance.codeB64",
     ),
   };
@@ -14412,7 +14422,7 @@ function normalizeDeployContractInstanceRequest(input) {
 function normalizeGovernanceFinalizePayload(input) {
   const record = ensureRecord(input, "governanceFinalizeReferendum payload");
   const referendumId =
-    record.referendum_id ?? record.referendumId ?? record.referendumID;
+    record.referendum_id;
   if (referendumId === undefined || referendumId === null) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
@@ -14420,7 +14430,7 @@ function normalizeGovernanceFinalizePayload(input) {
       "governanceFinalizeReferendum.referendum_id",
     );
   }
-  const proposalId = record.proposal_id ?? record.proposalId;
+  const proposalId = record.proposal_id;
   if (proposalId === undefined || proposalId === null) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
@@ -14444,11 +14454,11 @@ function normalizeGovernanceEnactPayload(input) {
   const record = ensureRecord(input, "governanceEnactProposal payload");
   const payload = {
     proposal_id: normalizeHex32String(
-      record.proposal_id ?? record.proposalId,
+      record.proposal_id,
       "governanceEnactProposal.proposal_id",
     ),
   };
-  const preimageValue = record.preimage_hash ?? record.preimageHash;
+  const preimageValue = record.preimage_hash;
   if (preimageValue !== undefined && preimageValue !== null) {
     payload.preimage_hash = normalizeHex32String(
       preimageValue,
@@ -14456,7 +14466,7 @@ function normalizeGovernanceEnactPayload(input) {
     );
   }
   const windowValue =
-    record.window ?? record.at_window ?? record.atWindow ?? record.windowBounds;
+    record.window;
   if (windowValue !== undefined && windowValue !== null) {
     payload.window = normalizeGovernanceWindow(
       windowValue,
@@ -14468,8 +14478,8 @@ function normalizeGovernanceEnactPayload(input) {
 
 function normalizeGovernanceWindow(value, name) {
   const record = ensureRecord(value, name);
-  const lowerValue = record.lower ?? record.from ?? record.start;
-  const upperValue = record.upper ?? record.to ?? record.end;
+  const lowerValue = record.lower;
+  const upperValue = record.upper;
   if (lowerValue === undefined || upperValue === undefined) {
     const basePath = normalizeErrorPath(name);
     if (lowerValue === undefined) {
@@ -14506,17 +14516,17 @@ function normalizeGovernanceDraftResponse(
   context = "governance draft response",
 ) {
   const record = ensureRecord(payload, context);
-  const instructionsValue = record.tx_instructions ?? record.txInstructions ?? [];
+  const instructionsValue = record.tx_instructions ?? [];
   if (!Array.isArray(instructionsValue)) {
     throw new TypeError(`${context}.tx_instructions must be an array`);
   }
   const txInstructions = instructionsValue.map((entry, index) => {
     const item = ensureRecord(entry, `${context}.tx_instructions[${index}]`);
     const wireId = requireNonEmptyString(
-      item.wire_id ?? item.wireId,
+      item.wire_id,
       `${context}.tx_instructions[${index}].wire_id`,
     );
-    const payloadHexValue = item.payload_hex ?? item.payloadHex;
+    const payloadHexValue = item.payload_hex;
     const normalizedPayload =
       payloadHexValue === undefined || payloadHexValue === null
         ? null
@@ -14528,7 +14538,7 @@ function normalizeGovernanceDraftResponse(
       ? { wire_id: wireId }
       : { wire_id: wireId, payload_hex: normalizedPayload };
   });
-  let proposalId = record.proposal_id ?? record.proposalId ?? null;
+  let proposalId = record.proposal_id ?? null;
   if (proposalId !== null && proposalId !== undefined) {
     proposalId = normalizeHex32String(proposalId, `${context}.proposal_id`);
   } else {
@@ -14567,13 +14577,13 @@ function normalizeTriggerMutationResponse(
 ) {
   const record = ensureRecord(payload, context);
   const base = normalizeGovernanceDraftResponse(record, context);
-  let triggerId = record.trigger_id ?? record.triggerId ?? null;
+  let triggerId = record.trigger_id ?? null;
   if (triggerId !== null && triggerId !== undefined) {
     triggerId = requireNonEmptyString(triggerId, `${context}.trigger_id`);
   } else {
     triggerId = null;
   }
-  const messageValue = record.message ?? record.error ?? null;
+  const messageValue = record.message ?? null;
   const message =
     messageValue === null || messageValue === undefined
       ? null
@@ -14614,24 +14624,24 @@ function normalizeGovernanceBallotResponse(payload, context) {
 function normalizeGovernanceDeployContractProposalPayload(input) {
   const record = ensureRecord(input, "governanceProposeDeployContract payload");
   const namespace = requireNonEmptyString(
-    record.namespace ?? record.ns,
+    record.namespace,
     "governanceProposeDeployContract.namespace",
   );
   const contractId = requireNonEmptyString(
-    record.contract_id ?? record.contractId,
+    record.contract_id,
     "governanceProposeDeployContract.contractId",
   );
   const abiVersion = requireNonEmptyString(
-    record.abi_version ?? record.abiVersion ?? "1",
+    record.abi_version ?? "1",
     "governanceProposeDeployContract.abiVersion",
   );
   const codeHashValue =
-    record.code_hash ?? record.codeHash ?? record.code_hash_hex ?? record.codeHashHex;
+    record.code_hash;
   if (codeHashValue === undefined || codeHashValue === null) {
     throw new TypeError("governanceProposeDeployContract.code_hash is required");
   }
   const abiHashValue =
-    record.abi_hash ?? record.abiHash ?? record.abi_hash_hex ?? record.abiHashHex;
+    record.abi_hash;
   if (abiHashValue === undefined || abiHashValue === null) {
     throw new TypeError("governanceProposeDeployContract.abi_hash is required");
   }
@@ -14643,14 +14653,14 @@ function normalizeGovernanceDeployContractProposalPayload(input) {
     abi_hash: normalizeHashLike32(abiHashValue, "governanceProposeDeployContract.abi_hash"),
   };
   const windowValue =
-    record.window ?? record.windowBounds ?? record.at_window ?? record.atWindow;
+    record.window;
   if (windowValue !== undefined && windowValue !== null) {
     payload.window = normalizeGovernanceWindow(
       windowValue,
       "governanceProposeDeployContract.window",
     );
   }
-  const modeValue = record.mode ?? record.voting_mode ?? record.votingMode;
+  const modeValue = record.mode;
   if (modeValue !== undefined && modeValue !== null) {
     payload.mode = normalizeGovernanceVotingMode(
       modeValue,
@@ -14680,24 +14690,24 @@ function normalizeGovernanceVotingMode(value, name) {
 
 function normalizeGovernancePlainBallotPayload(input) {
   const record = ensureRecord(input, "governanceSubmitPlainBallot payload");
-  const direction = record.direction ?? record.Direction;
+  const direction = record.direction;
   const payload = {
     authority: requireNonEmptyString(
       record.authority,
       "governanceSubmitPlainBallot.authority",
     ),
     chain_id: requireNonEmptyString(
-      record.chain_id ?? record.chainId,
+      record.chain_id,
       "governanceSubmitPlainBallot.chainId",
     ),
     referendum_id: requireNonEmptyString(
-      record.referendum_id ?? record.referendumId,
+      record.referendum_id,
       "governanceSubmitPlainBallot.referendumId",
     ),
     owner: requireNonEmptyString(record.owner, "governanceSubmitPlainBallot.owner"),
     amount: normalizeNumericString(record.amount, "governanceSubmitPlainBallot.amount"),
     duration_blocks: ToriiClient._normalizeUnsignedInteger(
-      record.duration_blocks ?? record.durationBlocks,
+      record.duration_blocks,
       "governanceSubmitPlainBallot.durationBlocks",
       { allowZero: false },
     ),
@@ -14731,15 +14741,15 @@ function normalizeGovernanceZkBallotPayload(input) {
       "governanceSubmitZkBallot.authority",
     ),
     chain_id: requireNonEmptyString(
-      record.chain_id ?? record.chainId,
+      record.chain_id,
       "governanceSubmitZkBallot.chainId",
     ),
     election_id: requireNonEmptyString(
-      record.election_id ?? record.electionId,
+      record.election_id,
       "governanceSubmitZkBallot.electionId",
     ),
     proof_b64: normalizeRequiredBase64Payload(
-      record.proof_b64 ?? record.proofB64 ?? record.proof,
+      record.proof_b64,
       "governanceSubmitZkBallot.proofB64",
     ),
   };
@@ -14757,11 +14767,11 @@ function normalizeGovernanceZkBallotV1Payload(input) {
       "governanceSubmitZkBallotV1.authority",
     ),
     chain_id: requireNonEmptyString(
-      record.chain_id ?? record.chainId,
+      record.chain_id,
       "governanceSubmitZkBallotV1.chainId",
     ),
     election_id: requireNonEmptyString(
-      record.election_id ?? record.electionId,
+      record.election_id,
       "governanceSubmitZkBallotV1.electionId",
     ),
     backend: requireNonEmptyString(
@@ -14769,13 +14779,13 @@ function normalizeGovernanceZkBallotV1Payload(input) {
       "governanceSubmitZkBallotV1.backend",
     ),
     envelope_b64: normalizeRequiredBase64Payload(
-      record.envelope_b64 ?? record.envelopeB64 ?? record.envelope,
+      record.envelope_b64,
       "governanceSubmitZkBallotV1.envelopeB64",
     ),
   };
-  if (record.root_hint_hex ?? record.rootHintHex) {
+  if (record.root_hint_hex) {
     payload.root_hint_hex = normalizeHex32String(
-      record.root_hint_hex ?? record.rootHintHex,
+      record.root_hint_hex,
       "governanceSubmitZkBallotV1.rootHintHex",
     );
   }
@@ -14785,9 +14795,9 @@ function normalizeGovernanceZkBallotV1Payload(input) {
       "governanceSubmitZkBallotV1.owner",
     );
   }
-  if (record.salt_hex ?? record.saltHex) {
+  if (record.salt_hex) {
     payload.salt_hex = normalizeHex32String(
-      record.salt_hex ?? record.saltHex,
+      record.salt_hex,
       "governanceSubmitZkBallotV1.saltHex",
     );
   }
@@ -14802,11 +14812,11 @@ function normalizeGovernanceZkBallotProofPayload(input) {
       "governanceSubmitZkBallotProofV1.authority",
     ),
     chain_id: requireNonEmptyString(
-      record.chain_id ?? record.chainId,
+      record.chain_id,
       "governanceSubmitZkBallotProofV1.chainId",
     ),
     election_id: requireNonEmptyString(
-      record.election_id ?? record.electionId,
+      record.election_id,
       "governanceSubmitZkBallotProofV1.electionId",
     ),
     ballot: ensureRecord(record.ballot, "governanceSubmitZkBallotProofV1.ballot"),
@@ -14829,15 +14839,15 @@ function normalizeDeployContractInstanceResponse(payload) {
     ok: Boolean(record.ok),
     namespace: requireNonEmptyString(record.namespace, "deployContractInstance.namespace"),
     contract_id: requireNonEmptyString(
-      record.contract_id ?? record.contractId,
+      record.contract_id,
       "deployContractInstance.contractId",
     ),
     code_hash_hex: normalizeHex32String(
-      record.code_hash_hex ?? record.codeHashHex,
+      record.code_hash_hex,
       "deployContractInstance.code_hash_hex",
     ),
     abi_hash_hex: normalizeHex32String(
-      record.abi_hash_hex ?? record.abiHashHex,
+      record.abi_hash_hex,
       "deployContractInstance.abi_hash_hex",
     ),
   };
@@ -14853,11 +14863,11 @@ function normalizeActivateContractInstanceRequest(input) {
       "activateContractInstance.namespace",
     ),
     contract_id: requireNonEmptyString(
-      record.contract_id ?? record.contractId,
+      record.contract_id,
       "activateContractInstance.contractId",
     ),
     code_hash: normalizeHex32String(
-      record.code_hash ?? record.codeHash,
+      record.code_hash,
       "activateContractInstance.codeHash",
     ),
   };
@@ -14875,7 +14885,7 @@ function normalizeContractCallRequest(input) {
   const credentials = normalizeAuthorityCredentials(record, "contractCall");
   const namespace = requireNonEmptyString(record.namespace, "contractCall.namespace");
   const contractId = requireNonEmptyString(
-    record.contract_id ?? record.contractId,
+    record.contract_id,
     "contractCall.contractId",
   );
   const normalized = {
@@ -14892,14 +14902,14 @@ function normalizeContractCallRequest(input) {
   if (record.payload !== undefined) {
     normalized.payload = cloneJsonValue(record.payload, "contractCall.payload");
   }
-  const gasAsset = record.gas_asset_id ?? record.gasAssetId;
+  const gasAsset = record.gas_asset_id;
   if (gasAsset !== undefined && gasAsset !== null) {
     normalized.gas_asset_id = requireNonEmptyString(
       gasAsset,
       "contractCall.gasAssetId",
     );
   }
-  const gasLimit = record.gas_limit ?? record.gasLimit;
+  const gasLimit = record.gas_limit;
   if (gasLimit !== undefined && gasLimit !== null) {
     normalized.gas_limit = ToriiClient._normalizeUnsignedInteger(
       gasLimit,
@@ -14919,19 +14929,19 @@ function normalizeContractCallResponse(payload) {
       "contractCall response.namespace",
     ),
     contract_id: requireNonEmptyString(
-      record.contract_id ?? record.contractId,
+      record.contract_id,
       "contractCall response.contract_id",
     ),
     code_hash_hex: normalizeHex32String(
-      record.code_hash_hex ?? record.codeHashHex,
+      record.code_hash_hex,
       "contractCall response.code_hash_hex",
     ),
     abi_hash_hex: normalizeHex32String(
-      record.abi_hash_hex ?? record.abiHashHex,
+      record.abi_hash_hex,
       "contractCall response.abi_hash_hex",
     ),
     tx_hash_hex: normalizeHex32String(
-      record.tx_hash_hex ?? record.txHashHex,
+      record.tx_hash_hex,
       "contractCall response.tx_hash_hex",
     ),
     entrypoint:
@@ -14951,23 +14961,22 @@ function normalizeContractManifestResponse(payload) {
     "contract manifest response.manifest",
   );
   const accessHints =
-    manifestRecord.access_set_hints ?? manifestRecord.accessSetHints ?? null;
+    manifestRecord.access_set_hints ?? null;
   const entrypointsValue =
-    manifestRecord.entrypoints ?? manifestRecord.entryPoints ?? null;
+    manifestRecord.entrypoints ?? null;
   return {
     manifest: {
       code_hash: normalizeOptionalHex32(
-        manifestRecord.code_hash ?? manifestRecord.codeHash,
+        manifestRecord.code_hash,
         "manifest.code_hash",
       ),
       abi_hash: normalizeOptionalHex32(
-        manifestRecord.abi_hash ?? manifestRecord.abiHash,
+        manifestRecord.abi_hash,
         "manifest.abi_hash",
       ),
       compiler_fingerprint:
-        manifestRecord.compiler_fingerprint ?? manifestRecord.compilerFingerprint ?? null,
-      features_bitmap:
-        manifestRecord.features_bitmap ?? manifestRecord.featuresBitmap ?? null,
+        manifestRecord.compiler_fingerprint ?? null,
+      features_bitmap: manifestRecord.features_bitmap ?? null,
       access_set_hints:
         accessHints === null
           ? null
@@ -14991,7 +15000,7 @@ function normalizeContractCodeBytesResponse(payload) {
   const record = ensureRecord(payload, "contract code bytes response");
   return {
     code_b64: normalizeRequiredBase64Payload(
-      record.code_b64 ?? record.codeB64,
+      record.code_b64,
       "contractCodeBytes.code_b64",
     ),
   };
@@ -15021,7 +15030,7 @@ function normalizeManifestEntrypointsPayload(value, name) {
             `${name}[${index}].permission`,
           );
     const kind = normalizeManifestEntrypointKind(
-      record.kind ?? record.type,
+      record.kind,
       `${name}[${index}].kind`,
     );
     return {
@@ -15111,17 +15120,17 @@ function normalizeContractInstanceListResponse(payload) {
     const item = ensureRecord(entry, `contract instances response.instances[${index}]`);
     return {
       contract_id: requireNonEmptyString(
-        item.contract_id ?? item.contractId,
+        item.contract_id,
         `contractInstances.instances[${index}].contract_id`,
       ),
       code_hash_hex: normalizeHex32String(
-        item.code_hash_hex ?? item.codeHashHex,
+        item.code_hash_hex,
         `contractInstances.instances[${index}].code_hash_hex`,
       ),
     };
   });
   const limitValue =
-    record.limit ?? record.page_size ?? instances.length ?? 0;
+    record.limit ?? instances.length ?? 0;
   return {
     namespace: requireNonEmptyString(record.namespace ?? "", "contractInstances.namespace"),
     total: ToriiClient._normalizeUnsignedInteger(
@@ -15153,7 +15162,7 @@ function normalizeAliasResolutionResponse(
     ? normalizeIban(alias, `${context}.alias`)
     : alias;
   const accountId = ToriiClient._requireAccountId(
-    record.account_id ?? record.accountId,
+    record.account_id,
     `${context}.account_id`,
   );
   const result = {
@@ -15165,7 +15174,7 @@ function normalizeAliasResolutionResponse(
       allowZero: true,
     });
   }
-  const sourceValue = record.source ?? record.source_kind ?? record.sourceKind;
+  const sourceValue = record.source;
   if (sourceValue !== undefined && sourceValue !== null) {
     result.source = requireNonEmptyString(sourceValue, `${context}.source`);
   }
@@ -15312,14 +15321,14 @@ function buildSorafsPorStatusParams(options = {}) {
     "getSorafsPorStatus options",
   );
   const params = {};
-  const manifest = record.manifest ?? record.manifestHex;
+  const manifest = record.manifest;
   if (manifest !== undefined && manifest !== null) {
     params.manifest = requireHexString(
       manifest,
       "sorafsPorStatus.manifestHex",
     );
   }
-  const provider = record.provider ?? record.providerHex;
+  const provider = record.provider;
   if (provider !== undefined && provider !== null) {
     params.provider = requireHexString(
       provider,
@@ -15346,7 +15355,7 @@ function buildSorafsPorStatusParams(options = {}) {
       { allowZero: false },
     );
   }
-  const pageToken = record.page_token ?? record.pageToken ?? record.pageTokenHex;
+  const pageToken = record.page_token;
   if (pageToken !== undefined && pageToken !== null) {
     params.page_token = requireHexString(
       pageToken,
@@ -15366,14 +15375,14 @@ function buildSorafsPorExportParams(options = {}) {
   const params = {};
   if (record.start_epoch !== undefined || record.startEpoch !== undefined) {
     params.start_epoch = ToriiClient._normalizeUnsignedInteger(
-      record.start_epoch ?? record.startEpoch,
+      record.start_epoch,
       "sorafsPorExport.startEpoch",
       { allowZero: false },
     );
   }
   if (record.end_epoch !== undefined || record.endEpoch !== undefined) {
     params.end_epoch = ToriiClient._normalizeUnsignedInteger(
-      record.end_epoch ?? record.endEpoch,
+      record.end_epoch,
       "sorafsPorExport.endEpoch",
       { allowZero: false },
     );
@@ -15635,11 +15644,11 @@ function normalizeSorafsAliasListResponse(
 function normalizeSorafsAliasRecord(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   return {
-    alias: requireNonEmptyString(record.alias ?? record.alias_label, `${context}.alias`),
+    alias: requireNonEmptyString(record.alias, `${context}.alias`),
     namespace: requireNonEmptyString(record.namespace, `${context}.namespace`),
     name: requireNonEmptyString(record.name, `${context}.name`),
     manifest_digest_hex: normalizeHex32String(
-      record.manifest_digest_hex ?? record.digest_hex,
+      record.manifest_digest_hex,
       `${context}.manifest_digest_hex`,
     ),
     bound_by: ToriiClient._requireAccountId(record.bound_by, `${context}.bound_by`),
@@ -15746,7 +15755,7 @@ function normalizeSorafsReplicationOrderRecord(payload, context) {
   return {
     order_id_hex: normalizeHex32String(record.order_id_hex, `${context}.order_id_hex`),
     manifest_digest_hex: normalizeHex32String(
-      record.manifest_digest_hex ?? record.manifestDigestHex,
+      record.manifest_digest_hex,
       `${context}.manifest_digest_hex`,
     ),
     issued_by: ToriiClient._requireAccountId(record.issued_by, `${context}.issued_by`),
@@ -15808,15 +15817,15 @@ function normalizeSorafsPinResponse(payload, context = "sorafs pin response") {
   const record = ensureRecord(payload ?? {}, context);
   return {
     manifest_id_hex: normalizeHex32String(
-      record.manifest_id_hex ?? record.manifestIdHex ?? "",
+      record.manifest_id_hex ?? "",
       `${context}.manifest_id_hex`,
     ),
     payload_digest_hex: normalizeHex32String(
-      record.payload_digest_hex ?? record.payloadDigestHex ?? "",
+      record.payload_digest_hex ?? "",
       `${context}.payload_digest_hex`,
     ),
     content_length: ToriiClient._normalizeUnsignedInteger(
-      record.content_length ?? record.contentLength,
+      record.content_length,
       `${context}.content_length`,
       { allowZero: true },
     ),
@@ -15832,18 +15841,18 @@ function normalizeSorafsPinRegisterResponse(
     record.alias === undefined || record.alias === null
       ? null
       : normalizeSorafsPinAliasRequest(record.alias, `${context}.alias`);
-  const successorValue = record.successor_of_hex ?? record.successorOfHex ?? null;
+  const successorValue = record.successor_of_hex ?? null;
   return {
     manifest_digest_hex: normalizeHex32String(
-      record.manifest_digest_hex ?? record.manifestDigestHex,
+      record.manifest_digest_hex,
       `${context}.manifest_digest_hex`,
     ),
     chunker_handle: requireNonEmptyString(
-      record.chunker_handle ?? record.chunkerHandle,
+      record.chunker_handle,
       `${context}.chunker_handle`,
     ),
     submitted_epoch: ToriiClient._normalizeUnsignedInteger(
-      record.submitted_epoch ?? record.submittedEpoch,
+      record.submitted_epoch,
       `${context}.submitted_epoch`,
       { allowZero: true },
     ),
@@ -15870,10 +15879,7 @@ function normalizePipelineTransactionStatus(
   const kind = kindValue == null ? "Unknown" : String(kindValue);
   const contentRecord = ensureRecord(record.content, `${context}.content`);
   const hash = normalizeHex32String(
-    contentRecord.hash ??
-      contentRecord.hash_hex ??
-      contentRecord.hashHex ??
-      "",
+    contentRecord.hash ?? "",
     `${context}.content.hash`,
   );
   const statusRecord = ensureRecord(
@@ -15905,14 +15911,14 @@ function normalizePipelineTransactionStatus(
 function normalizePipelineRecoverySidecar(payload, context = "pipeline recovery response") {
   const record = ensureRecord(payload ?? {}, context);
   const format = requireNonEmptyString(
-    record.format ?? record.version ?? "",
+    record.format ?? "",
     `${context}.format`,
   );
   const height = ToriiClient._normalizeUnsignedInteger(record.height, `${context}.height`, {
     allowZero: true,
   });
   const dag = normalizePipelineDagSnapshot(record.dag, `${context}.dag`);
-  const rawTxs = record.txs ?? record.transactions ?? [];
+  const rawTxs = record.txs ?? [];
   if (!Array.isArray(rawTxs)) {
     throw new TypeError(`${context}.txs must be an array`);
   }
@@ -15930,11 +15936,11 @@ function normalizePipelineDagSnapshot(payload, context = "pipeline recovery dag"
   const record = ensureRecord(payload ?? {}, context);
   return {
     fingerprintHex: normalizeHex32String(
-      record.fingerprint ?? record.fingerprint_hex ?? record.fingerprintHex ?? "",
+      record.fingerprint ?? "",
       `${context}.fingerprint`,
     ),
     keyCount: ToriiClient._normalizeUnsignedInteger(
-      record.key_count ?? record.keyCount,
+      record.key_count,
       `${context}.key_count`,
       { allowZero: true },
     ),
@@ -15945,7 +15951,7 @@ function normalizePipelineTxSnapshot(payload, context = "pipeline recovery tx") 
   const record = ensureRecord(payload ?? {}, context);
   return {
     hashHex: normalizeHex32String(
-      record.hash ?? record.hash_hex ?? record.hashHex ?? "",
+      record.hash ?? "",
       `${context}.hash`,
     ),
     reads: normalizeStringArray(record.reads ?? [], `${context}.reads`),
@@ -15957,7 +15963,7 @@ function normalizeSorafsFetchResponse(payload, context = "sorafs fetch response"
   const record = ensureRecord(payload ?? {}, context);
   return {
     manifest_id_hex: normalizeHex32String(
-      record.manifest_id_hex ?? record.manifestIdHex ?? "",
+      record.manifest_id_hex ?? "",
       `${context}.manifest_id_hex`,
     ),
     offset: ToriiClient._normalizeUnsignedInteger(
@@ -15971,7 +15977,7 @@ function normalizeSorafsFetchResponse(payload, context = "sorafs fetch response"
       { allowZero: true },
     ),
     data_b64: normalizeRequiredBase64Payload(
-      record.data_b64 ?? record.dataB64,
+      record.data_b64,
       `${context}.data_b64`,
     ),
   };
@@ -16008,37 +16014,37 @@ function normalizeSorafsManifestResponse(
   const record = ensureRecord(payload ?? {}, context);
   return {
     manifest_id_hex: normalizeHex32String(
-      record.manifest_id_hex ?? record.manifestIdHex ?? "",
+      record.manifest_id_hex ?? "",
       `${context}.manifest_id_hex`,
     ),
     manifest_b64: normalizeRequiredBase64Payload(
-      record.manifest_b64 ?? record.manifestB64,
+      record.manifest_b64,
       `${context}.manifest_b64`,
     ),
     manifest_digest_hex: normalizeHex32String(
-      record.manifest_digest_hex ?? record.manifestDigestHex ?? "",
+      record.manifest_digest_hex ?? "",
       `${context}.manifest_digest_hex`,
     ),
     payload_digest_hex: normalizeHex32String(
-      record.payload_digest_hex ?? record.payloadDigestHex ?? "",
+      record.payload_digest_hex ?? "",
       `${context}.payload_digest_hex`,
     ),
     content_length: ToriiClient._normalizeUnsignedInteger(
-      record.content_length ?? record.contentLength,
+      record.content_length,
       `${context}.content_length`,
       { allowZero: true },
     ),
     chunk_count: ToriiClient._normalizeUnsignedInteger(
-      record.chunk_count ?? record.chunkCount,
+      record.chunk_count,
       `${context}.chunk_count`,
       { allowZero: true },
     ),
     chunk_profile_handle: requireNonEmptyString(
-      record.chunk_profile_handle ?? record.chunkProfileHandle ?? "",
+      record.chunk_profile_handle ?? "",
       `${context}.chunk_profile_handle`,
     ),
     stored_at_unix_secs: ToriiClient._normalizeUnsignedInteger(
-      record.stored_at_unix_secs ?? record.storedAtUnixSecs,
+      record.stored_at_unix_secs,
       `${context}.stored_at_unix_secs`,
       { allowZero: true },
     ),
@@ -16047,7 +16053,7 @@ function normalizeSorafsManifestResponse(
 
 function buildSorafsPinRegisterPayload(record, context) {
   const credentials = normalizeAuthorityCredentials(record, context);
-  const chunkerInput = record.chunker ?? record.chunker_handle ?? record.chunkerHandle;
+  const chunkerInput = record.chunker;
   if (!chunkerInput || typeof chunkerInput !== "object") {
     throw new TypeError(`${context}.chunker is required`);
   }
@@ -16074,13 +16080,13 @@ function buildSorafsPinRegisterPayload(record, context) {
     `${context}.chunker.multihashCode`,
     { allowZero: true },
   );
-  const pinPolicySource = record.pinPolicy ?? record.pin_policy;
+  const pinPolicySource = record.pinPolicy;
   if (!pinPolicySource || typeof pinPolicySource !== "object") {
     throw new TypeError(`${context}.pinPolicy is required`);
   }
   const pinPolicy = normalizeSorafsPinPolicyRequest(pinPolicySource, `${context}.pinPolicy`);
   const manifestDigestHex = normalizeHex32String(
-    record.manifestDigestHex ?? record.manifest_digest_hex,
+    record.manifestDigestHex,
     `${context}.manifestDigestHex`,
   );
   const chunkDigestHex = normalizeHex32String(
@@ -16091,7 +16097,7 @@ function buildSorafsPinRegisterPayload(record, context) {
     `${context}.chunkDigestSha3_256Hex`,
   );
   const submittedEpoch = ToriiClient._normalizeUnsignedInteger(
-    record.submittedEpoch ?? record.submitted_epoch,
+    record.submittedEpoch,
     `${context}.submittedEpoch`,
     { allowZero: true },
   );
@@ -16112,8 +16118,8 @@ function buildSorafsPinRegisterPayload(record, context) {
     record.alias ??
     (record.aliasNamespace || record.aliasName || record.aliasProof
       ? {
-          namespace: record.aliasNamespace ?? record.alias_namespace,
-          name: record.aliasName ?? record.alias_name,
+          namespace: record.aliasNamespace,
+          name: record.aliasName,
           proof:
             record.aliasProof ??
             record.alias_proof ??
@@ -16125,7 +16131,7 @@ function buildSorafsPinRegisterPayload(record, context) {
     payload.alias = normalizeSorafsPinAliasRequest(aliasInput, `${context}.alias`);
   }
   const successorHex =
-    record.successorOfHex ?? record.successor_of_hex ?? record.successor ?? null;
+    record.successorOfHex ?? null;
   if (successorHex !== undefined && successorHex !== null) {
     payload.successor_of_hex = normalizeHex32String(
       successorHex,
@@ -16138,16 +16144,16 @@ function buildSorafsPinRegisterPayload(record, context) {
 function normalizeSorafsPinPolicyRequest(value, context) {
   const record = ensureRecord(value ?? {}, context);
   const minReplicas = ToriiClient._normalizeUnsignedInteger(
-    record.minReplicas ?? record.min_replicas,
+    record.minReplicas,
     `${context}.minReplicas`,
   );
   const retentionEpoch = ToriiClient._normalizeUnsignedInteger(
-    record.retentionEpoch ?? record.retention_epoch ?? 0,
+    record.retentionEpoch ?? 0,
     `${context}.retentionEpoch`,
     { allowZero: true },
   );
   const storageClass = normalizeSorafsStorageClass(
-    record.storageClass ?? record.storage_class ?? record.storage,
+    record.storageClass,
     `${context}.storageClass`,
   );
   return {
@@ -16204,11 +16210,11 @@ function normalizeDaSamplingPlan(payload, context = "da manifest response.sampli
   }
   const record = ensureRecord(payload, context);
   const assignmentHash = normalizeHex32String(
-    record.assignment_hash ?? record.assignmentHash ?? "",
+    record.assignment_hash ?? "",
     `${context}.assignment_hash`,
   );
   const sampleWindow = ToriiClient._normalizeUnsignedInteger(
-    record.sample_window ?? record.sampleWindow,
+    record.sample_window,
     `${context}.sample_window`,
     { allowZero: true },
   );
@@ -16226,11 +16232,11 @@ function normalizeDaSamplingPlan(payload, context = "da manifest response.sampli
         { allowZero: true },
       ),
       role: requireNonEmptyString(
-        entry.role ?? entry.chunk_role ?? entry.chunkRole ?? "",
+        entry.role ?? "",
         `${context}.samples[${idx}].role`,
       ),
       group: ToriiClient._normalizeUnsignedInteger(
-        entry.group ?? entry.group_id ?? entry.groupId ?? 0,
+        entry.group ?? 0,
         `${context}.samples[${idx}].group`,
         { allowZero: true },
       ),
@@ -16246,45 +16252,34 @@ function normalizeDaSamplingPlan(payload, context = "da manifest response.sampli
 function normalizeDaManifestFetchResponse(payload, context = "da manifest response") {
   const record = ensureRecord(payload ?? {}, context);
   const storageTicketHex = normalizeHex32String(
-    record.storage_ticket ?? record.storageTicket ?? "",
+    record.storage_ticket ?? "",
     `${context}.storage_ticket`,
   );
-  const manifestHashSource =
-    record.manifest_hash ??
-    record.manifestHash ??
-    record.manifest_id_hex ??
-    record.manifestIdHex ??
-    record.blob_hash ??
-    record.blobHash ??
-    "";
   const manifestHashHex = normalizeHex32String(
-    manifestHashSource,
+    record.manifest_hash ?? "",
     `${context}.manifest_hash`,
   );
   const manifestB64 = normalizeRequiredBase64Payload(
-    record.manifest_norito ??
-      record.manifestNorito ??
-      record.manifest_b64 ??
-      record.manifestB64,
+    record.manifest_norito,
     `${context}.manifest_norito`,
   );
   return {
     storage_ticket_hex: storageTicketHex,
     client_blob_id_hex: normalizeHex32String(
-      record.client_blob_id ?? record.clientBlobId ?? "",
+      record.client_blob_id ?? "",
       `${context}.client_blob_id`,
     ),
     manifest_hash_hex: manifestHashHex,
     blob_hash_hex: normalizeHex32String(
-      record.blob_hash ?? record.blobHash ?? "",
+      record.blob_hash ?? "",
       `${context}.blob_hash`,
     ),
     chunk_root_hex: normalizeHex32String(
-      record.chunk_root ?? record.chunkRoot ?? "",
+      record.chunk_root ?? "",
       `${context}.chunk_root`,
     ),
     lane_id: ToriiClient._normalizeUnsignedInteger(
-      record.lane_id ?? record.laneId,
+      record.lane_id,
       `${context}.lane_id`,
       { allowZero: true },
     ),
@@ -16294,20 +16289,19 @@ function normalizeDaManifestFetchResponse(payload, context = "da manifest respon
       { allowZero: true },
     ),
     manifest_len: ToriiClient._normalizeUnsignedInteger(
-      record.manifest_len ?? record.manifestLen ?? 0,
+      record.manifest_len ?? 0,
       `${context}.manifest_len`,
       { allowZero: true },
     ),
     manifest_b64: manifestB64,
     manifest_bytes: Buffer.from(manifestB64, "base64"),
     manifest_json:
-      record.manifest ?? record.manifest_json ?? record.manifestJson ?? null,
-    chunk_plan: record.chunk_plan ?? record.chunkPlan ?? null,
+      record.manifest ?? null,
+    chunk_plan: record.chunk_plan ?? null,
     sampling_plan: normalizeDaSamplingPlan(
-      record.sampling_plan ?? record.samplingPlan ?? null,
+      record.sampling_plan ?? null,
       `${context}.sampling_plan`,
     ),
-    manifest_id_hex: manifestHashHex,
   };
 }
 
@@ -16326,31 +16320,23 @@ async function persistDaManifestBundle(manifestBundle, outputDir, labelInput) {
   const label = sanitizeTicketLabel(
     labelInput ??
       manifestBundle.manifest_hash_hex ??
-      manifestBundle.manifestHashHex ??
-      manifestBundle.storage_ticket_hex ??
-      manifestBundle.storageTicketHex,
+      manifestBundle.storage_ticket_hex,
     "manifest ticket label",
   );
   const manifestPath = pathModule.join(outputDir, `manifest_${label}.norito`);
   const manifestJsonPath = pathModule.join(outputDir, `manifest_${label}.json`);
   const chunkPlanPath = pathModule.join(outputDir, `chunk_plan_${label}.json`);
-  const samplingPlanPath =
-    manifestBundle.sampling_plan || manifestBundle.samplingPlan
-      ? pathModule.join(outputDir, `sampling_plan_${label}.json`)
-      : null;
+  const samplingPlanPath = manifestBundle.sampling_plan
+    ? pathModule.join(outputDir, `sampling_plan_${label}.json`)
+    : null;
 
   await fs.mkdir(outputDir, { recursive: true });
   await writeBufferFile(manifestPath, manifestBundle.manifest_bytes);
   await writeJsonFile(manifestJsonPath, manifestBundle.manifest_json ?? {});
-  const chunkPlan = normalizeChunkPlanForPersistence(
-    manifestBundle.chunk_plan ?? manifestBundle.chunkPlan,
-  );
+  const chunkPlan = normalizeChunkPlanForPersistence(manifestBundle.chunk_plan);
   await writeJsonFile(chunkPlanPath, chunkPlan);
   if (samplingPlanPath) {
-    await writeJsonFile(
-      samplingPlanPath,
-      manifestBundle.sampling_plan ?? manifestBundle.samplingPlan,
-    );
+    await writeJsonFile(samplingPlanPath, manifestBundle.sampling_plan);
   }
 
   return {
@@ -16581,11 +16567,11 @@ function normalizeProofSummaryOption(value, context) {
   }
   const record = ensureRecord(value, context);
   const sampleCount =
-    record.sampleCount ?? record.sample_count ?? undefined;
+    record.sampleCount ?? undefined;
   const sampleSeed =
-    record.sampleSeed ?? record.sample_seed ?? undefined;
+    record.sampleSeed ?? undefined;
   const leafIndexes =
-    record.leafIndexes ?? record.leaf_indexes ?? undefined;
+    record.leafIndexes ?? undefined;
   const normalized = {};
   if (sampleCount !== undefined) {
     normalized.sampleCount = sampleCount;
@@ -16699,7 +16685,7 @@ function normalizeDaGatewayProviders(value, context) {
   return value.map((entry, index) => {
     const record = ensureRecord(entry, `${context}[${index}]`);
     const name = requireNonEmptyString(
-      record.name ?? record.alias ?? record.label ?? record.provider,
+      record.name,
       `${context}[${index}].name`,
     ).trim();
     const providerIdHex = normalizeHex32String(
@@ -16710,7 +16696,7 @@ function normalizeDaGatewayProviders(value, context) {
       `${context}[${index}].providerIdHex`,
     );
     const baseUrl = requireNonEmptyString(
-      record.baseUrl ?? record.base_url,
+      record.baseUrl,
       `${context}[${index}].baseUrl`,
     );
     const streamTokenB64 = requireNonEmptyString(
@@ -16721,7 +16707,7 @@ function normalizeDaGatewayProviders(value, context) {
       `${context}[${index}].streamTokenB64`,
     );
     const privacyEventsUrl =
-      record.privacyEventsUrl ?? record.privacy_events_url ?? null;
+      record.privacyEventsUrl ?? null;
     return {
       name,
       providerIdHex,
@@ -16745,48 +16731,48 @@ function normalizeDaIngestResponse(payload, context = "da ingest response") {
 function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
   const record = ensureRecord(payload ?? {}, context);
   const clientBlobId = decodeDaDigestTuple(
-    record.client_blob_id ?? record.clientBlobId,
+    record.client_blob_id,
     32,
     `${context}.client_blob_id`,
   );
   const blobHash = decodeDaDigestTuple(
-    record.blob_hash ?? record.blobHash,
+    record.blob_hash,
     32,
     `${context}.blob_hash`,
   );
   const chunkRoot = decodeDaDigestTuple(
-    record.chunk_root ?? record.chunkRoot,
+    record.chunk_root,
     32,
     `${context}.chunk_root`,
   );
   const manifestHash = decodeDaDigestTuple(
-    record.manifest_hash ?? record.manifestHash,
+    record.manifest_hash,
     32,
     `${context}.manifest_hash`,
   );
   const storageTicket = decodeDaDigestTuple(
-    record.storage_ticket ?? record.storageTicket,
+    record.storage_ticket,
     32,
     `${context}.storage_ticket`,
   );
-  const stripeLayoutRecord = record.stripe_layout ?? record.stripeLayout;
+  const stripeLayoutRecord = record.stripe_layout;
   const stripeLayout = (() => {
     if (stripeLayoutRecord === null || stripeLayoutRecord === undefined) {
       return { total_stripes: 0, shards_per_stripe: 0, row_parity_stripes: 0 };
     }
     const layout = ensureRecord(stripeLayoutRecord, `${context}.stripe_layout`);
     const totalStripes = ToriiClient._normalizeUnsignedInteger(
-      layout.total_stripes ?? layout.totalStripes ?? 0,
+      layout.total_stripes ?? 0,
       `${context}.stripe_layout.total_stripes`,
       { allowZero: true },
     );
     const shardsPerStripe = ToriiClient._normalizeUnsignedInteger(
-      layout.shards_per_stripe ?? layout.shardsPerStripe ?? 0,
+      layout.shards_per_stripe ?? 0,
       `${context}.stripe_layout.shards_per_stripe`,
       { allowZero: true },
     );
     const rowParityStripes = ToriiClient._normalizeUnsignedInteger(
-      layout.row_parity_stripes ?? layout.rowParityStripes ?? 0,
+      layout.row_parity_stripes ?? 0,
       `${context}.stripe_layout.row_parity_stripes`,
       { allowZero: true },
     );
@@ -16796,7 +16782,7 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
       row_parity_stripes: rowParityStripes,
     };
   })();
-  const pdpCommitment = record.pdp_commitment ?? record.pdpCommitment ?? null;
+  const pdpCommitment = record.pdp_commitment ?? null;
   let pdpCommitmentBytes = null;
   if (pdpCommitment !== null && pdpCommitment !== undefined) {
     if (typeof pdpCommitment !== "string") {
@@ -16808,7 +16794,7 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
     client_blob_id_hex: bufferToUpperHex(clientBlobId),
     client_blob_id_bytes: clientBlobId,
     lane_id: ToriiClient._normalizeUnsignedInteger(
-      record.lane_id ?? record.laneId,
+      record.lane_id,
       `${context}.lane_id`,
       { allowZero: true },
     ),
@@ -16829,16 +16815,16 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
     pdp_commitment_b64: pdpCommitment ?? null,
     pdp_commitment_bytes: pdpCommitmentBytes,
     queued_at_unix: ToriiClient._normalizeUnsignedInteger(
-      record.queued_at_unix ?? record.queuedAtUnix,
+      record.queued_at_unix,
       `${context}.queued_at_unix`,
       { allowZero: true },
     ),
     operator_signature_hex: normalizeUpperHex(
-      record.operator_signature ?? record.operatorSignature ?? "",
+      record.operator_signature ?? "",
       `${context}.operator_signature`,
     ),
     rent_quote: normalizeDaRentQuote(
-      record.rent_quote ?? record.rentQuote ?? null,
+      record.rent_quote ?? null,
       `${context}.rent_quote`,
     ),
   };
@@ -16851,27 +16837,27 @@ function normalizeDaRentQuote(payload, context = "da rent quote") {
   const record = ensureRecord(payload, context);
   return {
     base_rent_micro: normalizeMicroAmount(
-      record.base_rent ?? record.baseRent,
+      record.base_rent,
       `${context}.base_rent`,
     ),
     protocol_reserve_micro: normalizeMicroAmount(
-      record.protocol_reserve ?? record.protocolReserve,
+      record.protocol_reserve,
       `${context}.protocol_reserve`,
     ),
     provider_reward_micro: normalizeMicroAmount(
-      record.provider_reward ?? record.providerReward,
+      record.provider_reward,
       `${context}.provider_reward`,
     ),
     pdp_bonus_micro: normalizeMicroAmount(
-      record.pdp_bonus ?? record.pdpBonus,
+      record.pdp_bonus,
       `${context}.pdp_bonus`,
     ),
     potr_bonus_micro: normalizeMicroAmount(
-      record.potr_bonus ?? record.potrBonus,
+      record.potr_bonus,
       `${context}.potr_bonus`,
     ),
     egress_credit_per_gib_micro: normalizeMicroAmount(
-      record.egress_credit_per_gib ?? record.egressCreditPerGib,
+      record.egress_credit_per_gib,
       `${context}.egress_credit_per_gib`,
     ),
   };
@@ -16941,12 +16927,12 @@ function normalizeSorafsUptimeObservationResponse(
   return {
     status: requireNonEmptyString(record.status, `${context}.status`),
     uptime_secs: ToriiClient._normalizeUnsignedInteger(
-      record.uptime_secs ?? record.uptimeSecs,
+      record.uptime_secs,
       `${context}.uptime_secs`,
       { allowZero: true },
     ),
     observed_secs: ToriiClient._normalizeUnsignedInteger(
-      record.observed_secs ?? record.observedSecs,
+      record.observed_secs,
       `${context}.observed_secs`,
       { allowZero: true },
     ),
@@ -17041,7 +17027,7 @@ function normalizePeerListResponse(payload, context = "peer list response") {
       `${context}[${index}].id`,
     );
     const publicKeyHex = normalizeHex32String(
-      idRecord.public_key ?? idRecord.publicKey,
+      idRecord.public_key,
       `${context}[${index}].id.public_key`,
     );
     return {
@@ -17065,7 +17051,7 @@ function normalizeTelemetryPeerInfo(value, context) {
   const url = requireNonEmptyString(record.url, `${context}.url`);
   const connected = requireBooleanLike(record.connected, `${context}.connected`);
   const telemetryUnsupported = requireBooleanLike(
-    record.telemetry_unsupported ?? record.telemetryUnsupported ?? false,
+    record.telemetry_unsupported ?? false,
     `${context}.telemetry_unsupported`,
   );
   const configValue = record.config ?? null;
@@ -17096,11 +17082,11 @@ function normalizeTelemetryPeerConfig(value, context) {
   const record = ensureRecord(value, context);
   const config = {
     publicKey: requireNonEmptyString(
-      record.public_key ?? record.publicKey ?? "",
+      record.public_key ?? "",
       `${context}.public_key`,
     ),
   };
-  const queueCapacity = record.queue_capacity ?? record.queueCapacity;
+  const queueCapacity = record.queue_capacity;
   if (queueCapacity !== undefined && queueCapacity !== null) {
     config.queueCapacity = ToriiClient._normalizeUnsignedInteger(
       queueCapacity,
@@ -17108,7 +17094,7 @@ function normalizeTelemetryPeerConfig(value, context) {
       { allowZero: true },
     );
   }
-  const blockSize = record.network_block_gossip_size ?? record.networkBlockGossipSize;
+  const blockSize = record.network_block_gossip_size;
   if (blockSize !== undefined && blockSize !== null) {
     config.networkBlockGossipSize = ToriiClient._normalizeUnsignedInteger(
       blockSize,
@@ -17116,7 +17102,7 @@ function normalizeTelemetryPeerConfig(value, context) {
       { allowZero: true },
     );
   }
-  const txSize = record.network_tx_gossip_size ?? record.networkTxGossipSize;
+  const txSize = record.network_tx_gossip_size;
   if (txSize !== undefined && txSize !== null) {
     config.networkTxGossipSize = ToriiClient._normalizeUnsignedInteger(
       txSize,
@@ -17125,14 +17111,14 @@ function normalizeTelemetryPeerConfig(value, context) {
     );
   }
   const blockPeriod = normalizeExplorerDurationMs(
-    record.network_block_gossip_period ?? record.networkBlockGossipPeriod,
+    record.network_block_gossip_period,
     `${context}.network_block_gossip_period`,
   );
   if (blockPeriod !== undefined) {
     config.networkBlockGossipPeriodMs = blockPeriod;
   }
   const txPeriod = normalizeExplorerDurationMs(
-    record.network_tx_gossip_period ?? record.networkTxGossipPeriod,
+    record.network_tx_gossip_period,
     `${context}.network_tx_gossip_period`,
   );
   if (txPeriod !== undefined) {
@@ -17186,15 +17172,15 @@ function normalizeKaigiRelaySummaryList(payload) {
 
 function normalizeKaigiRelaySummary(payload, context) {
   const record = ensureRecord(payload, context);
-  const relayId = requireNonEmptyString(record.relay_id ?? record.relayId, `${context}.relay_id`);
-  const domain = requireNonEmptyString(record.domain ?? record.domain_id, `${context}.domain`);
+  const relayId = requireNonEmptyString(record.relay_id, `${context}.relay_id`);
+  const domain = requireNonEmptyString(record.domain, `${context}.domain`);
   const bandwidthClass = ToriiClient._normalizeUnsignedInteger(
-    record.bandwidth_class ?? record.bandwidthClass ?? 0,
+    record.bandwidth_class ?? 0,
     `${context}.bandwidth_class`,
     { allowZero: true },
   );
   const hpkeFingerprint = normalizeHex32String(
-    record.hpke_fingerprint_hex ?? record.hpkeFingerprintHex,
+    record.hpke_fingerprint_hex,
     `${context}.hpke_fingerprint_hex`,
   );
   let status = null;
@@ -17227,7 +17213,7 @@ function normalizeKaigiRelayDetail(payload) {
   const record = ensureRecord(payload ?? {}, "kaigi relay detail");
   const relaySummary = normalizeKaigiRelaySummary(record.relay, "kaigi relay detail.relay");
   const hpkePublicKey = requireNonEmptyString(
-    record.hpke_public_key_b64 ?? record.hpkePublicKeyB64,
+    record.hpke_public_key_b64,
     "kaigi relay detail.hpke_public_key_b64",
   );
   let reportedCall = null;
@@ -17235,11 +17221,11 @@ function normalizeKaigiRelayDetail(payload) {
     const callRecord = ensureRecord(record.reported_call, "kaigi relay detail.reported_call");
     reportedCall = {
       domain_id: requireNonEmptyString(
-        callRecord.domain_id ?? callRecord.domain ?? callRecord.domainId,
+        callRecord.domain_id,
         "kaigi relay detail.reported_call.domain_id",
       ),
       call_name: requireNonEmptyString(
-        callRecord.call_name ?? callRecord.name ?? callRecord.callName,
+        callRecord.call_name,
         "kaigi relay detail.reported_call.call_name",
       ),
     };
@@ -17247,7 +17233,7 @@ function normalizeKaigiRelayDetail(payload) {
   let reportedBy = null;
   if (record.reported_by !== undefined && record.reported_by !== null) {
     reportedBy = requireNonEmptyString(
-      record.reported_by ?? record.reportedBy,
+      record.reported_by,
       "kaigi relay detail.reported_by",
     );
   }
@@ -17273,7 +17259,7 @@ function normalizeKaigiRelayDomainMetrics(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   return {
     domain: requireNonEmptyString(
-      record.domain ?? record.domain_id ?? record.domainId,
+      record.domain,
       `${context}.domain`,
     ),
     registrations_total: ToriiClient._normalizeUnsignedInteger(
@@ -17344,11 +17330,11 @@ function normalizeKaigiRelayEventData(payload) {
   const record = ensureRecord(payload, "kaigi relay event");
   const kind = requireNonEmptyString(record.kind, "kaigi relay event.kind").toLowerCase();
   const domain = requireNonEmptyString(
-    record.domain ?? record.domain_id,
+    record.domain,
     "kaigi relay event.domain",
   );
   const relayId = requireNonEmptyString(
-    record.relay_id ?? record.relay,
+    record.relay_id,
     "kaigi relay event.relay_id",
   );
   if (!KAIGI_EVENT_KIND_VALUES.has(kind)) {
@@ -17360,12 +17346,12 @@ function normalizeKaigiRelayEventData(payload) {
       domain,
       relay_id: relayId,
       bandwidth_class: ToriiClient._normalizeUnsignedInteger(
-        record.bandwidth_class ?? record.bandwidthClass ?? 0,
+        record.bandwidth_class ?? 0,
         "kaigi relay event.bandwidth_class",
         { allowZero: true },
       ),
       hpke_fingerprint_hex: normalizeHex32String(
-        record.hpke_fingerprint_hex ?? record.hpkeFingerprintHex,
+        record.hpke_fingerprint_hex,
         "kaigi relay event.hpke_fingerprint_hex",
       ),
     };
@@ -17379,11 +17365,11 @@ function normalizeKaigiRelayEventData(payload) {
   }
   const callRecord = ensureRecord(record.call, "kaigi relay event.call");
   const callDomain = requireNonEmptyString(
-    callRecord.domain ?? callRecord.domain_id,
+    callRecord.domain,
     "kaigi relay event.call.domain",
   );
   const callName = requireNonEmptyString(
-    callRecord.name ?? callRecord.call_name,
+    callRecord.name,
     "kaigi relay event.call.name",
   );
   return {
@@ -17392,7 +17378,7 @@ function normalizeKaigiRelayEventData(payload) {
     relay_id: relayId,
     status: statusValue,
     reported_at_ms: ToriiClient._normalizeUnsignedInteger(
-      record.reported_at_ms ?? record.reportedAtMs ?? 0,
+      record.reported_at_ms ?? 0,
       "kaigi relay event.reported_at_ms",
       { allowZero: true },
     ),
@@ -17675,19 +17661,19 @@ function normalizeRepoAgreement(entry, context) {
     record.custodian === undefined || record.custodian === null
       ? null
       : requireNonEmptyString(record.custodian, `${context}.custodian`);
-  const rateBps = Number(record.rate_bps ?? record.rateBps ?? 0);
+  const rateBps = Number(record.rate_bps ?? 0);
   const maturityTimestampMs = ToriiClient._normalizeUnsignedInteger(
-    record.maturity_timestamp_ms ?? record.maturityTimestampMs ?? 0,
+    record.maturity_timestamp_ms ?? 0,
     `${context}.maturity_timestamp_ms`,
     { allowZero: true },
   );
   const initiatedTimestampMs = ToriiClient._normalizeUnsignedInteger(
-    record.initiated_timestamp_ms ?? record.initiatedTimestampMs ?? 0,
+    record.initiated_timestamp_ms ?? 0,
     `${context}.initiated_timestamp_ms`,
     { allowZero: true },
   );
   const lastMarginCheckTimestampMs = ToriiClient._normalizeUnsignedInteger(
-    record.last_margin_check_timestamp_ms ?? record.lastMarginCheckTimestampMs ?? 0,
+    record.last_margin_check_timestamp_ms ?? 0,
     `${context}.last_margin_check_timestamp_ms`,
     { allowZero: true },
   );
@@ -17710,7 +17696,7 @@ function normalizeRepoLeg(value, context) {
   const record = ensureRecord(value, context);
   return {
     assetDefinitionId: requireNonEmptyString(
-      record.asset_definition_id ?? record.assetDefinitionId,
+      record.asset_definition_id,
       `${context}.asset_definition_id`,
     ),
     quantity: requireNonEmptyString(record.quantity, `${context}.quantity`),
@@ -17721,9 +17707,9 @@ function normalizeRepoLeg(value, context) {
 function normalizeRepoGovernance(value, context) {
   const record = ensureRecord(value, context);
   return {
-    haircutBps: Number(record.haircut_bps ?? record.haircutBps ?? 0),
+    haircutBps: Number(record.haircut_bps ?? 0),
     marginFrequencySecs: ToriiClient._normalizeUnsignedInteger(
-      record.margin_frequency_secs ?? record.marginFrequencySecs ?? 0,
+      record.margin_frequency_secs ?? 0,
       `${context}.margin_frequency_secs`,
       { allowZero: true },
     ),
@@ -17758,16 +17744,16 @@ function normalizeAttachmentMetadataRecord(value, context) {
   const record = ensureRecord(value, context);
   const id = requireNonEmptyString(record.id, `${context}.id`);
   const contentType = requireNonEmptyString(
-    pickOverride(record, "content_type", "contentType"),
+    record.content_type,
     `${context}.content_type`,
   );
   const size = ToriiClient._normalizeUnsignedInteger(
-    pickOverride(record, "size", "size"),
+    record.size,
     `${context}.size`,
     { allowZero: true },
   );
   const createdMs = ToriiClient._normalizeUnsignedInteger(
-    pickOverride(record, "created_ms", "createdMs"),
+    record.created_ms,
     `${context}.created_ms`,
     { allowZero: true },
   );
@@ -17926,17 +17912,17 @@ function normalizeVerifyingKeyId(payload, context) {
 
 function normalizeVerifyingKeyRecord(payload, context) {
   const record = ensureRecord(payload, context);
-  const gasSchedule = record.gas_schedule_id ?? record.gasScheduleId ?? null;
-  const metadataCid = record.metadata_uri_cid ?? record.metadataUriCid ?? null;
-  const vkBytesCid = record.vk_bytes_cid ?? record.vkBytesCid ?? null;
+  const gasSchedule = record.gas_schedule_id ?? null;
+  const metadataCid = record.metadata_uri_cid ?? null;
+  const vkBytesCid = record.vk_bytes_cid ?? null;
   const inlinePayload =
-    record.key ?? record.inline_key ?? record.inlineKey ?? null;
+    record.key ?? null;
   return {
     version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
       allowZero: false,
     }),
     circuit_id: requireNonEmptyString(
-      record.circuit_id ?? record.circuitId,
+      record.circuit_id,
       `${context}.circuit_id`,
     ),
     backend: requireNonEmptyString(record.backend, `${context}.backend`),
@@ -17945,23 +17931,23 @@ function normalizeVerifyingKeyRecord(payload, context) {
         ? null
         : requireNonEmptyString(record.curve, `${context}.curve`),
     public_inputs_schema_hash: requireNonEmptyString(
-      record.public_inputs_schema_hash ?? record.publicInputsSchemaHash,
+      record.public_inputs_schema_hash,
       `${context}.public_inputs_schema_hash`,
     ),
     commitment_hex: requireHexString(
-      record.commitment ?? record.commitment_hex ?? record.commitmentHex,
+      record.commitment,
       `${context}.commitment_hex`,
     ),
     vk_len: ToriiClient._normalizeUnsignedInteger(
-      record.vk_len ?? record.vkLen,
+      record.vk_len,
       `${context}.vk_len`,
       { allowZero: false },
     ),
     max_proof_bytes:
-      record.max_proof_bytes === undefined && record.maxProofBytes === undefined
+      record.max_proof_bytes === undefined || record.max_proof_bytes === null
         ? null
         : ToriiClient._normalizeUnsignedInteger(
-            record.max_proof_bytes ?? record.maxProofBytes,
+            record.max_proof_bytes,
             `${context}.max_proof_bytes`,
             { allowZero: false },
           ),
@@ -17972,26 +17958,18 @@ function normalizeVerifyingKeyRecord(payload, context) {
     vk_bytes_cid:
       vkBytesCid === null ? null : requireNonEmptyString(vkBytesCid, `${context}.vk_bytes_cid`),
     activation_height:
-      record.activation_height === undefined && record.activationHeight === undefined
+      record.activation_height === undefined || record.activation_height === null
         ? null
         : ToriiClient._normalizeUnsignedInteger(
-            record.activation_height ?? record.activationHeight,
+            record.activation_height,
             `${context}.activation_height`,
             { allowZero: true },
           ),
-    deprecation_height:
-      record.deprecation_height === undefined && record.deprecationHeight === undefined
-        ? null
-        : ToriiClient._normalizeUnsignedInteger(
-            record.deprecation_height ?? record.deprecationHeight,
-            `${context}.deprecation_height`,
-            { allowZero: true },
-          ),
     withdraw_height:
-      record.withdraw_height === undefined && record.withdrawHeight === undefined
+      record.withdraw_height === undefined || record.withdraw_height === null
         ? null
         : ToriiClient._normalizeUnsignedInteger(
-            record.withdraw_height ?? record.withdrawHeight,
+            record.withdraw_height,
             `${context}.withdraw_height`,
             { allowZero: true },
           ),
@@ -18006,7 +17984,7 @@ function normalizeVerifyingKeyInline(value, context) {
   }
   const record = ensureRecord(value, context);
   const backend = requireNonEmptyString(record.backend, `${context}.backend`);
-  const bytesValue = record.bytes_b64 ?? record.bytes ?? record.bytesB64;
+  const bytesValue = record.bytes_b64;
   return {
     backend,
     bytes_b64: normalizeRequiredBase64Payload(bytesValue, `${context}.bytes_b64`),
@@ -18031,8 +18009,8 @@ function normalizeVerifyingKeyStatusValue(value, context, { optional = false } =
 function normalizeVerifyingKeyRegisterPayload(input) {
   const record = ensureRecord(input, "registerVerifyingKey payload");
   const authorityValue =
-    record.authority ?? record.account ?? record.account_id ?? record.accountId;
-  const privateKeyValue = record.private_key ?? record.privateKey;
+    record.authority;
+  const privateKeyValue = record.private_key;
   const payload = {
     authority: ToriiClient._normalizeAccountId(
       authorityValue,
@@ -18047,7 +18025,7 @@ function normalizeVerifyingKeyRegisterPayload(input) {
       { allowZero: false },
     ),
     circuit_id: requireNonEmptyString(
-      record.circuit_id ?? record.circuitId,
+      record.circuit_id,
       "registerVerifyingKey.circuitId",
     ),
     public_inputs_schema_hash_hex: requireHexString(
@@ -18058,7 +18036,7 @@ function normalizeVerifyingKeyRegisterPayload(input) {
       "registerVerifyingKey.publicInputsSchemaHashHex",
     ),
     gas_schedule_id: requireNonEmptyString(
-      record.gas_schedule_id ?? record.gasScheduleId,
+      record.gas_schedule_id,
       "registerVerifyingKey.gasScheduleId",
     ),
   };
@@ -18069,8 +18047,8 @@ function normalizeVerifyingKeyRegisterPayload(input) {
 function normalizeVerifyingKeyUpdatePayload(input) {
   const record = ensureRecord(input, "updateVerifyingKey payload");
   const authorityValue =
-    record.authority ?? record.account ?? record.account_id ?? record.accountId;
-  const privateKeyValue = record.private_key ?? record.privateKey;
+    record.authority;
+  const privateKeyValue = record.private_key;
   const payload = {
     authority: ToriiClient._normalizeAccountId(
       authorityValue,
@@ -18085,7 +18063,7 @@ function normalizeVerifyingKeyUpdatePayload(input) {
       { allowZero: false },
     ),
     circuit_id: requireNonEmptyString(
-      record.circuit_id ?? record.circuitId,
+      record.circuit_id,
       "updateVerifyingKey.circuitId",
     ),
     public_inputs_schema_hash_hex: requireHexString(
@@ -18096,7 +18074,7 @@ function normalizeVerifyingKeyUpdatePayload(input) {
       "updateVerifyingKey.publicInputsSchemaHashHex",
     ),
   };
-  const gasSchedule = record.gas_schedule_id ?? record.gasScheduleId;
+  const gasSchedule = record.gas_schedule_id;
   if (gasSchedule !== undefined && gasSchedule !== null) {
     payload.gas_schedule_id = requireNonEmptyString(
       gasSchedule,
@@ -18107,31 +18085,12 @@ function normalizeVerifyingKeyUpdatePayload(input) {
   return payload;
 }
 
-function normalizeVerifyingKeyDeprecatePayload(input) {
-  const record = ensureRecord(input, "deprecateVerifyingKey payload");
-  const authorityValue =
-    record.authority ?? record.account ?? record.account_id ?? record.accountId;
-  const privateKeyValue = record.private_key ?? record.privateKey;
-  return {
-    authority: ToriiClient._normalizeAccountId(
-      authorityValue,
-      "deprecateVerifyingKey.authority",
-    ),
-    private_key: requireNonEmptyString(
-      privateKeyValue,
-      "deprecateVerifyingKey.privateKey",
-    ),
-    backend: requireNonEmptyString(record.backend, "deprecateVerifyingKey.backend"),
-    name: requireNonEmptyString(record.name, "deprecateVerifyingKey.name"),
-  };
-}
-
 function assignVerifyingKeyOptionalFields(record, payload, context) {
   const curveValue = record.curve;
   if (curveValue !== undefined && curveValue !== null) {
     payload.curve = requireNonEmptyString(curveValue, `${context}.curve`);
   }
-  const maxProofBytes = record.max_proof_bytes ?? record.maxProofBytes;
+  const maxProofBytes = record.max_proof_bytes;
   if (maxProofBytes !== undefined && maxProofBytes !== null) {
     payload.max_proof_bytes = ToriiClient._normalizeUnsignedInteger(
       maxProofBytes,
@@ -18139,21 +18098,21 @@ function assignVerifyingKeyOptionalFields(record, payload, context) {
       { allowZero: false },
     );
   }
-  const metadataCid = record.metadata_uri_cid ?? record.metadataUriCid;
+  const metadataCid = record.metadata_uri_cid;
   if (metadataCid !== undefined && metadataCid !== null) {
     payload.metadata_uri_cid = requireNonEmptyString(
       metadataCid,
       `${context}.metadataUriCid`,
     );
   }
-  const vkBytesCid = record.vk_bytes_cid ?? record.vkBytesCid;
+  const vkBytesCid = record.vk_bytes_cid;
   if (vkBytesCid !== undefined && vkBytesCid !== null) {
     payload.vk_bytes_cid = requireNonEmptyString(
       vkBytesCid,
       `${context}.vkBytesCid`,
     );
   }
-  const activationHeight = record.activation_height ?? record.activationHeight;
+  const activationHeight = record.activation_height;
   if (activationHeight !== undefined && activationHeight !== null) {
     payload.activation_height = ToriiClient._normalizeUnsignedInteger(
       activationHeight,
@@ -18161,15 +18120,7 @@ function assignVerifyingKeyOptionalFields(record, payload, context) {
       { allowZero: true },
     );
   }
-  const deprecationHeight = record.deprecation_height ?? record.deprecationHeight;
-  if (deprecationHeight !== undefined && deprecationHeight !== null) {
-    payload.deprecation_height = ToriiClient._normalizeUnsignedInteger(
-      deprecationHeight,
-      `${context}.deprecationHeight`,
-      { allowZero: true },
-    );
-  }
-  const withdrawHeight = record.withdraw_height ?? record.withdrawHeight;
+  const withdrawHeight = record.withdraw_height;
   if (withdrawHeight !== undefined && withdrawHeight !== null) {
     payload.withdraw_height = ToriiClient._normalizeUnsignedInteger(
       withdrawHeight,
@@ -18177,7 +18128,7 @@ function assignVerifyingKeyOptionalFields(record, payload, context) {
       { allowZero: true },
     );
   }
-  const commitmentValue = record.commitment_hex ?? record.commitmentHex ?? record.commitment;
+  const commitmentValue = record.commitment_hex;
   if (commitmentValue !== undefined && commitmentValue !== null) {
     payload.commitment_hex = requireHexString(
       commitmentValue,
@@ -18197,7 +18148,7 @@ function assignVerifyingKeyOptionalFields(record, payload, context) {
     record.verifyingKeyBytes ??
     record.bytes ??
     record.inlineKeyBytes;
-  const lenValue = record.vk_len ?? record.verifyingKeyLength ?? record.vkLen;
+  const lenValue = record.vk_len;
   if (bytesValue !== undefined && bytesValue !== null) {
     const { base64, length } = normalizeVerifyingKeyBytesValue(
       bytesValue,
@@ -18289,28 +18240,28 @@ function normalizeProverReportRecord(value, context) {
       ? null
       : requireNonEmptyString(record.error, `${context}.error`);
   const contentType = requireNonEmptyString(
-    record.content_type ?? record.contentType,
+    record.content_type,
     `${context}.content_type`,
   );
   const size = ToriiClient._normalizeUnsignedInteger(record.size, `${context}.size`, {
     allowZero: true,
   });
   const createdMs = ToriiClient._normalizeUnsignedInteger(
-    record.created_ms ?? record.createdMs,
+    record.created_ms,
     `${context}.created_ms`,
     { allowZero: true },
   );
   const processedMs = ToriiClient._normalizeUnsignedInteger(
-    record.processed_ms ?? record.processedMs,
+    record.processed_ms,
     `${context}.processed_ms`,
     { allowZero: true },
   );
   const latencyMs = ToriiClient._normalizeUnsignedInteger(
-    record.latency_ms ?? record.latencyMs ?? 0,
+    record.latency_ms ?? 0,
     `${context}.latency_ms`,
     { allowZero: true },
   );
-  const zkTags = record.zk1_tags ?? record.zk1Tags;
+  const zkTags = record.zk1_tags;
   const normalizedTags =
     zkTags === undefined || zkTags === null
       ? null
@@ -18330,14 +18281,14 @@ function normalizeProverReportRecord(value, context) {
 
 function normalizeSumeragiEvidenceListResponse(payload) {
   const record = ensureRecord(payload, "sumeragi evidence response");
-  const rawItems = pickOverride(record, "items", "items");
+  const rawItems = record.items;
   if (!Array.isArray(rawItems)) {
     throw new TypeError("sumeragi evidence response.items must be an array");
   }
   const items = rawItems.map((item, index) =>
     normalizeSumeragiEvidenceRecord(item, `sumeragi evidence response.items[${index}]`),
   );
-  const totalValue = pickOverride(record, "total", "total");
+  const totalValue = record.total;
   const total =
     totalValue === undefined || totalValue === null
       ? items.length
@@ -18350,49 +18301,57 @@ function normalizeSumeragiEvidenceListResponse(payload) {
 
 function normalizeSumeragiEvidenceRecord(value, context) {
   const record = ensureRecord(value, context);
-  const kind = requireNonEmptyString(pickOverride(record, "kind", "kind"), `${context}.kind`);
+  const kind = requireNonEmptyString(record.kind, `${context}.kind`);
   const base = {
     kind,
     recorded_height: requireNonNegativeIntegerLike(
-      pickOverride(record, "recorded_height", "recordedHeight"),
+      record.recorded_height,
       `${context}.recorded_height`,
     ),
     recorded_view: requireNonNegativeIntegerLike(
-      pickOverride(record, "recorded_view", "recordedView"),
+      record.recorded_view,
       `${context}.recorded_view`,
     ),
     recorded_ms: requireNonNegativeIntegerLike(
-      pickOverride(record, "recorded_ms", "recordedMs"),
+      record.recorded_ms,
       `${context}.recorded_ms`,
     ),
   };
-  if (kind === "DoublePrepare" || kind === "DoubleCommit") {
-    const phase = requireEvidencePhase(pickOverride(record, "phase", "phase"), `${context}.phase`);
+  if (
+    kind === "DoublePrepare" ||
+    kind === "DoubleCommit" ||
+    kind === "DoublePrevote" ||
+    kind === "DoublePrecommit"
+  ) {
+    const phase = requireEvidencePhase(
+      pickOverride(record, "phase", "phase"),
+      `${context}.phase`,
+    );
     return {
       ...base,
       phase,
       height: requireNonNegativeIntegerLike(
-        pickOverride(record, "height", "height"),
+        record.height,
         `${context}.height`,
       ),
       view: requireNonNegativeIntegerLike(
-        pickOverride(record, "view", "view"),
+        record.view,
         `${context}.view`,
       ),
       epoch: requireNonNegativeIntegerLike(
-        pickOverride(record, "epoch", "epoch"),
+        record.epoch,
         `${context}.epoch`,
       ),
       signer: requireNonEmptyString(
-        pickOverride(record, "signer", "signer"),
+        record.signer,
         `${context}.signer`,
       ),
       block_hash_1: requireHexString(
-        pickOverride(record, "block_hash_1", "blockHash1"),
+        record.block_hash_1,
         `${context}.block_hash_1`,
       ),
       block_hash_2: requireHexString(
-        pickOverride(record, "block_hash_2", "blockHash2"),
+        record.block_hash_2,
         `${context}.block_hash_2`,
       ),
     };
@@ -18401,35 +18360,35 @@ function normalizeSumeragiEvidenceRecord(value, context) {
     return {
       ...base,
       height: requireNonNegativeIntegerLike(
-        pickOverride(record, "height", "height"),
+        record.height,
         `${context}.height`,
       ),
       view: requireNonNegativeIntegerLike(
-        pickOverride(record, "view", "view"),
+        record.view,
         `${context}.view`,
       ),
       epoch: requireNonNegativeIntegerLike(
-        pickOverride(record, "epoch", "epoch"),
+        record.epoch,
         `${context}.epoch`,
       ),
       signer: requireNonEmptyString(
-        pickOverride(record, "signer", "signer"),
+        record.signer,
         `${context}.signer`,
       ),
       block_hash: requireHexString(
-        pickOverride(record, "block_hash", "blockHash"),
+        record.block_hash,
         `${context}.block_hash`,
       ),
       parent_state_root: requireHexString(
-        pickOverride(record, "parent_state_root", "parentStateRoot"),
+        record.parent_state_root,
         `${context}.parent_state_root`,
       ),
       post_state_root_1: requireHexString(
-        pickOverride(record, "post_state_root_1", "postStateRoot1"),
+        record.post_state_root_1,
         `${context}.post_state_root_1`,
       ),
       post_state_root_2: requireHexString(
-        pickOverride(record, "post_state_root_2", "postStateRoot2"),
+        record.post_state_root_2,
         `${context}.post_state_root_2`,
       ),
     };
@@ -18438,27 +18397,27 @@ function normalizeSumeragiEvidenceRecord(value, context) {
     return {
       ...base,
       height: requireNonNegativeIntegerLike(
-        pickOverride(record, "height", "height"),
+        record.height,
         `${context}.height`,
       ),
       view: requireNonNegativeIntegerLike(
-        pickOverride(record, "view", "view"),
+        record.view,
         `${context}.view`,
       ),
       epoch: requireNonNegativeIntegerLike(
-        pickOverride(record, "epoch", "epoch"),
+        record.epoch,
         `${context}.epoch`,
       ),
       subject_block_hash: requireHexString(
-        pickOverride(record, "subject_block_hash", "subjectBlockHash"),
+        record.subject_block_hash,
         `${context}.subject_block_hash`,
       ),
       phase: requireEvidencePhase(
-        pickOverride(record, "phase", "phase"),
+        record.phase,
         `${context}.phase`,
       ),
       reason: requireNonEmptyString(
-        pickOverride(record, "reason", "reason"),
+        record.reason,
         `${context}.reason`,
       ),
     };
@@ -18467,32 +18426,32 @@ function normalizeSumeragiEvidenceRecord(value, context) {
     return {
       ...base,
       height: requireNonNegativeIntegerLike(
-        pickOverride(record, "height", "height"),
+        record.height,
         `${context}.height`,
       ),
       view: requireNonNegativeIntegerLike(
-        pickOverride(record, "view", "view"),
+        record.view,
         `${context}.view`,
       ),
       epoch: requireNonNegativeIntegerLike(
-        pickOverride(record, "epoch", "epoch"),
+        record.epoch,
         `${context}.epoch`,
       ),
       subject_block_hash: requireHexString(
-        pickOverride(record, "subject_block_hash", "subjectBlockHash"),
+        record.subject_block_hash,
         `${context}.subject_block_hash`,
       ),
       payload_hash: requireHexString(
-        pickOverride(record, "payload_hash", "payloadHash"),
+        record.payload_hash,
         `${context}.payload_hash`,
       ),
       reason: requireNonEmptyString(
-        pickOverride(record, "reason", "reason"),
+        record.reason,
         `${context}.reason`,
       ),
     };
   }
-  const detailValue = pickOverride(record, "detail", "detail");
+  const detailValue = record.detail;
   if (detailValue === undefined || detailValue === null) {
     return base;
   }
@@ -18522,10 +18481,19 @@ function normalizeListItemWithId(value, context) {
   return { ...record, id };
 }
 
+function rejectAliasField(record, context, aliasKey, canonicalKey) {
+  if (Object.prototype.hasOwnProperty.call(record, aliasKey)) {
+    throw new TypeError(
+      `${context}.${aliasKey} is not supported; use ${canonicalKey}`,
+    );
+  }
+}
+
 function normalizeAccountAssetListItem(value, context) {
   const record = ensureRecord(value, context);
+  rejectAliasField(record, context, "assetId", "asset_id");
   const assetId = requireNonEmptyString(
-    record.asset_id ?? record.assetId,
+    record.asset_id,
     `${context}.asset_id`,
   );
   if (typeof record.quantity !== "string") {
@@ -18537,7 +18505,6 @@ function normalizeAccountAssetListItem(value, context) {
     asset_id: assetId,
     quantity,
   };
-  delete normalized.assetId;
   return normalized;
 }
 
@@ -18561,8 +18528,9 @@ function normalizeContractInstanceOrder(value, context) {
 
 function normalizeAssetHolderListItem(value, context) {
   const record = ensureRecord(value, context);
+  rejectAliasField(record, context, "accountId", "account_id");
   const accountId = requireNonEmptyString(
-    record.account_id ?? record.accountId,
+    record.account_id,
     `${context}.account_id`,
   );
   if (typeof record.quantity !== "string") {
@@ -18574,25 +18542,27 @@ function normalizeAssetHolderListItem(value, context) {
     account_id: accountId,
     quantity,
   };
-  delete normalized.accountId;
   return normalized;
 }
 
 function normalizeAccountTransactionListItem(value, context) {
   const record = ensureRecord(value, context);
+  rejectAliasField(record, context, "entrypointHash", "entrypoint_hash");
+  rejectAliasField(record, context, "resultOk", "result_ok");
+  rejectAliasField(record, context, "timestampMs", "timestamp_ms");
   const entrypointHash = requireNonEmptyString(
-    record.entrypoint_hash ?? record.entrypointHash,
+    record.entrypoint_hash,
     `${context}.entrypoint_hash`,
   );
   const resultOk = requireBooleanLike(
-    record.result_ok ?? record.resultOk,
+    record.result_ok,
     `${context}.result_ok`,
   );
   let authorityValue = record.authority;
   if (authorityValue !== undefined && authorityValue !== null) {
     authorityValue = requireNonEmptyString(authorityValue, `${context}.authority`);
   }
-  let timestampValue = record.timestamp_ms ?? record.timestampMs;
+  let timestampValue = record.timestamp_ms;
   if (timestampValue !== undefined && timestampValue !== null) {
     timestampValue = ToriiClient._normalizeUnsignedInteger(
       timestampValue,
@@ -18615,9 +18585,6 @@ function normalizeAccountTransactionListItem(value, context) {
   } else {
     delete normalized.timestamp_ms;
   }
-  delete normalized.entrypointHash;
-  delete normalized.resultOk;
-  delete normalized.timestampMs;
   return normalized;
 }
 
@@ -18631,7 +18598,7 @@ function normalizeTriggerUpsertPayload(input) {
   const record = ensureRecord(input, "registerTrigger payload");
   const payload = cloneJsonValue(record, "registerTrigger.payload");
   const id = requireNonEmptyString(
-    record.id ?? record.trigger_id ?? record.triggerId,
+    record.id,
     "registerTrigger.id",
   );
   payload.id = id;
@@ -18740,40 +18707,40 @@ function normalizeOfflineAllowanceListResponse(payload, context) {
 function normalizeOfflineAllowanceListItem(value, context) {
   const record = ensureRecord(value, context);
   const certificateId = requireNonEmptyString(
-    record.certificate_id_hex ?? record.certificateIdHex,
+    record.certificate_id_hex,
     `${context}.certificate_id_hex`,
   );
   const controllerId = ToriiClient._requireAccountId(
-    record.controller_id ?? record.controllerId,
+    record.controller_id,
     `${context}.controller_id`,
   );
   const controllerDisplay = requireNonEmptyString(
-    record.controller_display ?? record.controllerDisplay,
+    record.controller_display,
     `${context}.controller_display`,
   );
   const assetId = requireNonEmptyString(
-    record.asset_id ?? record.assetId,
+    record.asset_id,
     `${context}.asset_id`,
   );
   const registeredAt = ToriiClient._normalizeUnsignedInteger(
-    record.registered_at_ms ?? record.registeredAtMs,
+    record.registered_at_ms,
     `${context}.registered_at_ms`,
     { allowZero: true },
   );
   const expiresAt = ToriiClient._normalizeUnsignedInteger(
-    record.expires_at_ms ??
-      record.expiresAtMs ??
-      record.certificate_expires_at_ms ??
-      record.certificateExpiresAtMs,
+    record.expires_at_ms,
     `${context}.expires_at_ms`,
     { allowZero: true },
   );
-  const policyExpiresAt = ToriiClient._normalizeUnsignedInteger(
-    record.policy_expires_at_ms ?? record.policyExpiresAtMs,
-    `${context}.policy_expires_at_ms`,
-    { allowZero: true },
-  );
-  const refreshAtRaw = record.refresh_at_ms ?? record.refreshAtMs;
+  const policyExpiresAt =
+    record.policy_expires_at_ms === undefined || record.policy_expires_at_ms === null
+      ? expiresAt
+      : ToriiClient._normalizeUnsignedInteger(
+          record.policy_expires_at_ms,
+          `${context}.policy_expires_at_ms`,
+          { allowZero: true },
+        );
+  const refreshAtRaw = record.refresh_at_ms;
   const refreshAt =
     refreshAtRaw === undefined || refreshAtRaw === null
       ? null
@@ -18781,43 +18748,46 @@ function normalizeOfflineAllowanceListItem(value, context) {
           refreshAtRaw,
           `${context}.refresh_at_ms`,
           { allowZero: true },
-        );
+  );
   const verdictHex = normalizeOptionalHexString(
-    record.verdict_id_hex ?? record.verdictIdHex,
+    record.verdict_id_hex,
     `${context}.verdict_id_hex`,
   );
   const attestationNonceHex = normalizeOptionalHexString(
-    record.attestation_nonce_hex ?? record.attestationNonceHex,
+    record.attestation_nonce_hex,
     `${context}.attestation_nonce_hex`,
   );
   const deadlineKind =
     ToriiClient._normalizeOptionalString(
-      record.deadline_kind ?? record.deadlineKind,
+      record.deadline_kind,
       `${context}.deadline_kind`,
     ) ?? null;
   const deadlineState =
     ToriiClient._normalizeOptionalString(
-      record.deadline_state ?? record.deadlineState,
+      record.deadline_state,
       `${context}.deadline_state`,
     ) ?? null;
   const deadlineMs = coerceOptionalInt(
-    record.deadline_ms ?? record.deadlineMs,
+    record.deadline_ms,
     `${context}.deadline_ms`,
   );
   const deadlineMsRemaining = coerceOptionalInt(
-    record.deadline_ms_remaining ?? record.deadlineMsRemaining,
+    record.deadline_ms_remaining,
     `${context}.deadline_ms_remaining`,
   );
   const allowanceRecord = ensureRecord(record.record, `${context}.record`);
+  const integrityMetadataSource =
+    allowanceRecord.metadata ?? allowanceRecord.certificate?.metadata;
+  const integrityMetadataContext =
+    allowanceRecord.metadata === undefined || allowanceRecord.metadata === null
+      ? `${context}.record.certificate.metadata`
+      : `${context}.record.metadata`;
   const integrityMetadata = normalizeOfflineIntegrityMetadata(
-    allowanceRecord.metadata,
-    `${context}.record.metadata`,
+    integrityMetadataSource,
+    integrityMetadataContext,
   );
   const remainingAmount = normalizeAmountLike(
-    record.remaining_amount ??
-      record.remainingAmount ??
-      allowanceRecord.remaining_amount ??
-      allowanceRecord.remainingAmount,
+    record.remaining_amount ?? allowanceRecord.remaining_amount,
     `${context}.remaining_amount`,
   );
   return {
@@ -18867,6 +18837,20 @@ function normalizeOfflineIntegrityMetadata(rawMetadata, context) {
       provisioned,
     };
   }
+  if (normalizedPolicy === "play_integrity") {
+    const playIntegrity = normalizePlayIntegrityMetadata(metadata, context);
+    return {
+      policy: normalizedPolicy,
+      play_integrity: playIntegrity,
+    };
+  }
+  if (normalizedPolicy === "hms_safety_detect") {
+    const safetyDetect = normalizeHmsSafetyDetectMetadata(metadata, context);
+    return {
+      policy: normalizedPolicy,
+      hms_safety_detect: safetyDetect,
+    };
+  }
   return { policy: normalizedPolicy };
 }
 
@@ -18910,6 +18894,198 @@ function normalizeProvisionedIntegrityMetadata(metadata, context) {
   };
 }
 
+function normalizePlayIntegrityMetadata(metadata, context) {
+  const projectNumber = ToriiClient._normalizeUnsignedInteger(
+    metadata["android.play_integrity.cloud_project_number"],
+    `${context}["android.play_integrity.cloud_project_number"]`,
+    { allowZero: false },
+  );
+  const environment = requireNonEmptyString(
+    metadata["android.play_integrity.environment"],
+    `${context}["android.play_integrity.environment"]`,
+  );
+  const packageNames = normalizeStringArray(
+    metadata["android.play_integrity.package_names"],
+    `${context}["android.play_integrity.package_names"]`,
+  );
+  const signingDigests = normalizeStringArray(
+    metadata["android.play_integrity.signing_digests_sha256"],
+    `${context}["android.play_integrity.signing_digests_sha256"]`,
+  );
+  const allowedAppVerdicts = normalizeStringArray(
+    metadata["android.play_integrity.allowed_app_verdicts"],
+    `${context}["android.play_integrity.allowed_app_verdicts"]`,
+  );
+  const allowedDeviceVerdicts = normalizeStringArray(
+    metadata["android.play_integrity.allowed_device_verdicts"],
+    `${context}["android.play_integrity.allowed_device_verdicts"]`,
+  );
+  const maxTokenAgeRaw = metadata["android.play_integrity.max_token_age_ms"];
+  const maxTokenAgeMs =
+    maxTokenAgeRaw === undefined || maxTokenAgeRaw === null
+      ? null
+      : ToriiClient._normalizeUnsignedInteger(
+          maxTokenAgeRaw,
+          `${context}["android.play_integrity.max_token_age_ms"]`,
+          { allowZero: true },
+        );
+  return {
+    cloud_project_number: projectNumber,
+    environment,
+    package_names: packageNames,
+    signing_digests_sha256: signingDigests,
+    allowed_app_verdicts: allowedAppVerdicts,
+    allowed_device_verdicts: allowedDeviceVerdicts,
+    max_token_age_ms: maxTokenAgeMs,
+  };
+}
+
+function normalizeHmsSafetyDetectMetadata(metadata, context) {
+  const appId = requireNonEmptyString(
+    metadata["android.hms_safety_detect.app_id"],
+    `${context}["android.hms_safety_detect.app_id"]`,
+  );
+  const packageNames = normalizeStringArray(
+    metadata["android.hms_safety_detect.package_names"],
+    `${context}["android.hms_safety_detect.package_names"]`,
+  );
+  const signingDigests = normalizeStringArray(
+    metadata["android.hms_safety_detect.signing_digests_sha256"],
+    `${context}["android.hms_safety_detect.signing_digests_sha256"]`,
+  );
+  const requiredEvaluations = normalizeStringArray(
+    metadata["android.hms_safety_detect.required_evaluations"] ?? [],
+    `${context}["android.hms_safety_detect.required_evaluations"]`,
+  );
+  const maxTokenAgeRaw = metadata["android.hms_safety_detect.max_token_age_ms"];
+  const maxTokenAgeMs =
+    maxTokenAgeRaw === undefined || maxTokenAgeRaw === null
+      ? null
+      : ToriiClient._normalizeUnsignedInteger(
+          maxTokenAgeRaw,
+          `${context}["android.hms_safety_detect.max_token_age_ms"]`,
+          { allowZero: true },
+        );
+  return {
+    app_id: appId,
+    package_names: packageNames,
+    signing_digests_sha256: signingDigests,
+    required_evaluations: requiredEvaluations,
+    max_token_age_ms: maxTokenAgeMs,
+  };
+}
+
+function normalizeOfflineCertificateIssueResponse(payload, context) {
+  const record = ensureRecord(payload, context);
+  const certificateIdHex = normalizeHex32String(
+    record.certificate_id_hex,
+    `${context}.certificate_id_hex`,
+  );
+  const certificate = ensureRecord(record.certificate, `${context}.certificate`);
+  return { certificate_id_hex: certificateIdHex, certificate };
+}
+
+function normalizeOfflineCertificateDraft(draft, context) {
+  const record = ensureRecord(draft, context);
+  const controller = ToriiClient._normalizeAccountId(
+    record.controller,
+    `${context}.controller`,
+  );
+  const allowance = ensureRecord(record.allowance, `${context}.allowance`);
+  const asset = requireNonEmptyString(allowance.asset, `${context}.allowance.asset`);
+  const amount = normalizeAmountLike(
+    allowance.amount,
+    `${context}.allowance.amount`,
+  );
+  const commitment = normalizeOfflineBytesArray(
+    allowance.commitment,
+    `${context}.allowance.commitment`,
+  );
+  const spendPublicKey = requireNonEmptyString(
+    record.spend_public_key,
+    `${context}.spend_public_key`,
+  );
+  const attestationReport = normalizeOfflineBytesArray(
+    record.attestation_report,
+    `${context}.attestation_report`,
+  );
+  const issuedAtMs = ToriiClient._normalizeUnsignedInteger(
+    record.issued_at_ms,
+    `${context}.issued_at_ms`,
+    { allowZero: true },
+  );
+  const expiresAtMs = ToriiClient._normalizeUnsignedInteger(
+    record.expires_at_ms,
+    `${context}.expires_at_ms`,
+    { allowZero: true },
+  );
+  const policy = ensureRecord(record.policy, `${context}.policy`);
+  const maxBalance = normalizeAmountLike(
+    policy.max_balance,
+    `${context}.policy.max_balance`,
+  );
+  const maxTxValue = normalizeAmountLike(
+    policy.max_tx_value,
+    `${context}.policy.max_tx_value`,
+  );
+  const policyExpiresAtMs = ToriiClient._normalizeUnsignedInteger(
+    policy.expires_at_ms,
+    `${context}.policy.expires_at_ms`,
+    { allowZero: true },
+  );
+  const metadataRaw = record.metadata ?? {};
+  const metadata = isPlainObject(metadataRaw)
+    ? metadataRaw
+    : ensureRecord(metadataRaw, `${context}.metadata`);
+  const verdictId = normalizeOptionalHashLiteral(
+    record.verdict_id,
+    `${context}.verdict_id`,
+  );
+  const attestationNonce = normalizeOptionalHashLiteral(
+    record.attestation_nonce,
+    `${context}.attestation_nonce`,
+  );
+  const refreshAtMs =
+    record.refresh_at_ms ?? null;
+  const normalizedRefreshAtMs =
+    refreshAtMs === null
+      ? null
+      : ToriiClient._normalizeUnsignedInteger(
+          refreshAtMs,
+          `${context}.refresh_at_ms`,
+          { allowZero: true },
+        );
+  return {
+    controller,
+    allowance: {
+      asset,
+      amount,
+      commitment,
+    },
+    spend_public_key: spendPublicKey,
+    attestation_report: attestationReport,
+    issued_at_ms: issuedAtMs,
+    expires_at_ms: expiresAtMs,
+    policy: {
+      max_balance: maxBalance,
+      max_tx_value: maxTxValue,
+      expires_at_ms: policyExpiresAtMs,
+    },
+    metadata,
+    verdict_id: verdictId,
+    attestation_nonce: attestationNonce,
+    refresh_at_ms: normalizedRefreshAtMs,
+  };
+}
+
+function normalizeOfflineBytesArray(value, context) {
+  if (value === undefined || value === null) {
+    throw new TypeError(`${context} must be provided`);
+  }
+  const buffer = toBuffer(value);
+  return Array.from(buffer.values());
+}
+
 function normalizeOfflineSummaryListResponse(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const rawItems = record.items ?? [];
@@ -18934,35 +19110,35 @@ function normalizeOfflineSummaryListResponse(payload, context) {
 function normalizeOfflineSummaryListItem(value, context) {
   const record = ensureRecord(value, context);
   const certificateId = requireNonEmptyString(
-    record.certificate_id_hex ?? record.certificateIdHex,
+    record.certificate_id_hex,
     `${context}.certificate_id_hex`,
   );
   const controllerId = ToriiClient._requireAccountId(
-    record.controller_id ?? record.controllerId,
+    record.controller_id,
     `${context}.controller_id`,
   );
   const controllerDisplay = requireNonEmptyString(
-    record.controller_display ?? record.controllerDisplay,
+    record.controller_display,
     `${context}.controller_display`,
   );
   const summaryHash = requireNonEmptyString(
-    record.summary_hash_hex ?? record.summaryHashHex,
+    record.summary_hash_hex,
     `${context}.summary_hash_hex`,
   );
   const appleCounters = normalizeCounterMap(
-    record.apple_key_counters ?? record.appleKeyCounters,
+    record.apple_key_counters,
     `${context}.apple_key_counters`,
   );
   const androidCounters = normalizeCounterMap(
-    record.android_series_counters ?? record.androidSeriesCounters,
+    record.android_series_counters,
     `${context}.android_series_counters`,
   );
   const policyCounters = normalizeCounterMap(
-    record.policy_key_counters ?? record.policyKeyCounters,
+    record.policy_key_counters,
     `${context}.policy_key_counters`,
   );
   const counterTotals = normalizeCounterTotals(
-    record.counter_totals ?? record.counterTotals,
+    record.counter_totals,
     `${context}.counter_totals`,
   );
   const metadataRecord =
@@ -18998,16 +19174,16 @@ function normalizeCounterTotals(value, context) {
     return null;
   }
   const record = ensureRecord(value, context);
-  const normalizeField = (snake, camel) =>
-    ToriiClient._normalizeUnsignedInteger(record[snake] ?? record[camel], `${context}.${snake}`, {
+  const normalizeField = (snake) =>
+    ToriiClient._normalizeUnsignedInteger(record[snake], `${context}.${snake}`, {
       allowZero: true,
     });
   return {
-    total_counters: normalizeField("total_counters", "totalCounters"),
-    total_weight: normalizeField("total_weight", "totalWeight"),
-    apple: normalizeField("apple", "apple"),
-    android: normalizeField("android", "android"),
-    policy: normalizeField("policy", "policy"),
+    total_counters: normalizeField("total_counters"),
+    total_weight: normalizeField("total_weight"),
+    apple: normalizeField("apple"),
+    android: normalizeField("android"),
+    policy: normalizeField("policy"),
   };
 }
 
@@ -19035,66 +19211,63 @@ function normalizeOfflineTransferListResponse(payload, context) {
 function normalizeOfflineTransferListItem(value, context) {
   const record = ensureRecord(value, context);
   const bundleId = requireNonEmptyString(
-    record.bundle_id_hex ?? record.bundleIdHex,
+    record.bundle_id_hex,
     `${context}.bundle_id_hex`,
   );
   const controllerId = ToriiClient._requireAccountId(
-    record.controller_id ?? record.controllerId,
+    record.controller_id,
     `${context}.controller_id`,
   );
   const controllerDisplay = requireNonEmptyString(
-    record.controller_display ?? record.controllerDisplay,
+    record.controller_display,
     `${context}.controller_display`,
   );
   const receiverId = ToriiClient._requireAccountId(
-    record.receiver_id ?? record.receiverId,
+    record.receiver_id,
     `${context}.receiver_id`,
   );
   const receiverDisplay = requireNonEmptyString(
-    record.receiver_display ?? record.receiverDisplay,
+    record.receiver_display,
     `${context}.receiver_display`,
   );
   const depositAccountId = ToriiClient._requireAccountId(
-    record.deposit_account_id ?? record.depositAccountId,
+    record.deposit_account_id,
     `${context}.deposit_account_id`,
   );
   const depositDisplay = requireNonEmptyString(
-    record.deposit_account_display ?? record.depositAccountDisplay,
+    record.deposit_account_display,
     `${context}.deposit_account_display`,
   );
   let assetId = null;
   if (record.asset_id !== undefined && record.asset_id !== null) {
     assetId = requireNonEmptyString(record.asset_id, `${context}.asset_id`);
-  } else if (record.assetId !== undefined && record.assetId !== null) {
-    assetId = requireNonEmptyString(record.assetId, `${context}.asset_id`);
   }
   const receiptCount = ToriiClient._normalizeUnsignedInteger(
-    record.receipt_count ?? record.receiptCount,
+    record.receipt_count,
     `${context}.receipt_count`,
     { allowZero: true },
   );
   const totalAmount = requireNonEmptyString(
-    record.total_amount ?? record.totalAmount,
+    record.total_amount,
     `${context}.total_amount`,
   );
   const claimedDelta = requireNonEmptyString(
-    record.claimed_delta ?? record.claimedDelta,
+    record.claimed_delta,
     `${context}.claimed_delta`,
   );
-  const statusValue = record.status ?? record.status;
-  const status = requireNonEmptyString(statusValue, `${context}.status`);
+  const status = requireNonEmptyString(record.status, `${context}.status`);
   const recordedAtMs = ToriiClient._normalizeUnsignedInteger(
-    record.recorded_at_ms ?? record.recordedAtMs,
+    record.recorded_at_ms,
     `${context}.recorded_at_ms`,
     { allowZero: true },
   );
   const recordedAtHeight = ToriiClient._normalizeUnsignedInteger(
-    record.recorded_at_height ?? record.recordedAtHeight,
+    record.recorded_at_height,
     `${context}.recorded_at_height`,
     { allowZero: true },
   );
   let archivedAtHeight = null;
-  const archivedRaw = record.archived_at_height ?? record.archivedAtHeight;
+  const archivedRaw = record.archived_at_height;
   if (archivedRaw !== undefined && archivedRaw !== null) {
     archivedAtHeight = ToriiClient._normalizeUnsignedInteger(
       archivedRaw,
@@ -19102,9 +19275,9 @@ function normalizeOfflineTransferListItem(value, context) {
       { allowZero: true },
     );
   }
-  const certIdRaw = record.certificate_id_hex ?? record.certificateIdHex;
+  const certIdRaw = record.certificate_id_hex;
   const certificateId = certIdRaw ? ToriiClient._normalizeOptionalString(certIdRaw, `${context}.certificate_id_hex`) : undefined;
-  const certExpiresRaw = record.certificate_expires_at_ms ?? record.certificateExpiresAtMs;
+  const certExpiresRaw = record.certificate_expires_at_ms;
   const certificateExpiresAtMs =
     certExpiresRaw === undefined || certExpiresRaw === null
       ? null
@@ -19113,7 +19286,7 @@ function normalizeOfflineTransferListItem(value, context) {
           `${context}.certificate_expires_at_ms`,
           { allowZero: true },
         );
-  const policyExpiresRaw = record.policy_expires_at_ms ?? record.policyExpiresAtMs;
+  const policyExpiresRaw = record.policy_expires_at_ms;
   const policyExpiresAtMs =
     policyExpiresRaw === undefined || policyExpiresRaw === null
       ? null
@@ -19122,7 +19295,7 @@ function normalizeOfflineTransferListItem(value, context) {
           `${context}.policy_expires_at_ms`,
           { allowZero: true },
         );
-  const refreshRaw = record.refresh_at_ms ?? record.refreshAtMs;
+  const refreshRaw = record.refresh_at_ms;
   const refreshAtMs =
     refreshRaw === undefined || refreshRaw === null
       ? null
@@ -19131,22 +19304,20 @@ function normalizeOfflineTransferListItem(value, context) {
           `${context}.refresh_at_ms`,
           { allowZero: true },
         );
-  const verdictIdRaw = record.verdict_id_hex ?? record.verdictIdHex;
+  const verdictIdRaw = record.verdict_id_hex;
   const verdictId = verdictIdRaw
     ? ToriiClient._normalizeOptionalString(verdictIdRaw, `${context}.verdict_id_hex`)
     : undefined;
-  const nonceRaw = record.attestation_nonce_hex ?? record.attestationNonceHex;
+  const nonceRaw = record.attestation_nonce_hex;
   const attestationNonce = nonceRaw
     ? ToriiClient._normalizeOptionalString(nonceRaw, `${context}.attestation_nonce_hex`)
     : undefined;
-  const platformPolicyRaw =
-    record.platform_policy ?? record.platformPolicy ?? null;
+  const platformPolicyRaw = record.platform_policy ?? null;
   const platformPolicy =
     platformPolicyRaw === undefined || platformPolicyRaw === null
       ? null
       : requireNonEmptyString(platformPolicyRaw, `${context}.platform_policy`);
-  const tokenSnapshotRaw =
-    record.platform_token_snapshot ?? record.platformTokenSnapshot ?? null;
+  const tokenSnapshotRaw = record.platform_token_snapshot ?? null;
   const platformTokenSnapshot =
     tokenSnapshotRaw === undefined || tokenSnapshotRaw === null
       ? null
@@ -19154,7 +19325,7 @@ function normalizeOfflineTransferListItem(value, context) {
           tokenSnapshotRaw,
           `${context}.platform_token_snapshot`,
         );
-  const verdictSnapshotRaw = record.verdict_snapshot ?? record.verdictSnapshot ?? null;
+  const verdictSnapshotRaw = record.verdict_snapshot ?? null;
   const verdictSnapshot =
     verdictSnapshotRaw === undefined || verdictSnapshotRaw === null
       ? null
@@ -19162,7 +19333,7 @@ function normalizeOfflineTransferListItem(value, context) {
           verdictSnapshotRaw,
           `${context}.verdict_snapshot`,
         );
-  const transitionsRaw = record.status_transitions ?? record.statusTransitions ?? [];
+  const transitionsRaw = record.status_transitions ?? [];
   if (!Array.isArray(transitionsRaw)) {
     throw new TypeError(`${context}.status_transitions must be an array`);
   }
@@ -19208,11 +19379,11 @@ function normalizeOfflineTransferListItem(value, context) {
 function normalizeOfflinePlatformTokenSnapshot(value, context) {
   const record = ensureRecord(value, context);
   const policy = requireNonEmptyString(
-    record.policy ?? record.policy_label ?? record.policyLabel,
+    record.policy,
     `${context}.policy`,
   );
   const attestationJwsB64 = requireNonEmptyString(
-    record.attestation_jws_b64 ?? record.attestationJwsB64,
+    record.attestation_jws_b64,
     `${context}.attestation_jws_b64`,
   );
   return {
@@ -19224,21 +19395,19 @@ function normalizeOfflinePlatformTokenSnapshot(value, context) {
 function normalizeOfflineVerdictSnapshot(value, context) {
   const record = ensureRecord(value, context);
   const certificateId = requireNonEmptyString(
-    record.certificate_id ?? record.certificateId,
+    record.certificate_id,
     `${context}.certificate_id`,
   );
   let verdictId = null;
   if (record.verdict_id !== undefined && record.verdict_id !== null) {
     verdictId = requireNonEmptyString(record.verdict_id, `${context}.verdict_id`);
-  } else if (record.verdictId !== undefined && record.verdictId !== null) {
-    verdictId = requireNonEmptyString(record.verdictId, `${context}.verdict_id`);
   }
   let attestationNonce = null;
-  const nonceRaw = record.attestation_nonce ?? record.attestationNonce;
+  const nonceRaw = record.attestation_nonce;
   if (nonceRaw !== undefined && nonceRaw !== null) {
     attestationNonce = requireNonEmptyString(nonceRaw, `${context}.attestation_nonce`);
   }
-  const refreshRaw = record.refresh_at_ms ?? record.refreshAtMs;
+  const refreshRaw = record.refresh_at_ms;
   const refreshAtMs =
     refreshRaw === undefined || refreshRaw === null
       ? null
@@ -19246,12 +19415,12 @@ function normalizeOfflineVerdictSnapshot(value, context) {
           allowZero: true,
         });
   const certificateExpiresAtMs = ToriiClient._normalizeUnsignedInteger(
-    record.certificate_expires_at_ms ?? record.certificateExpiresAtMs,
+    record.certificate_expires_at_ms,
     `${context}.certificate_expires_at_ms`,
     { allowZero: true },
   );
   const policyExpiresAtMs = ToriiClient._normalizeUnsignedInteger(
-    record.policy_expires_at_ms ?? record.policyExpiresAtMs,
+    record.policy_expires_at_ms,
     `${context}.policy_expires_at_ms`,
     { allowZero: true },
   );
@@ -19269,11 +19438,11 @@ function normalizeOfflineStatusTransition(value, context) {
   const record = ensureRecord(value, context);
   const status = requireNonEmptyString(record.status, `${context}.status`);
   const transitionedAtMs = ToriiClient._normalizeUnsignedInteger(
-    record.transitioned_at_ms ?? record.transitionedAtMs,
+    record.transitioned_at_ms,
     `${context}.transitioned_at_ms`,
     { allowZero: true },
   );
-  const snapshotRaw = record.verdict_snapshot ?? record.verdictSnapshot ?? null;
+  const snapshotRaw = record.verdict_snapshot ?? null;
   const verdictSnapshot =
     snapshotRaw === undefined || snapshotRaw === null
       ? null
@@ -19306,19 +19475,19 @@ function normalizeOfflineRevocationListResponse(payload, context) {
 function normalizeOfflineRevocationItem(value, context) {
   const record = ensureRecord(value, context);
   const verdictId = requireNonEmptyString(
-    record.verdict_id_hex ?? record.verdictIdHex,
+    record.verdict_id_hex,
     `${context}.verdict_id_hex`,
   ).toLowerCase();
   const issuerId = ToriiClient._requireAccountId(
-    record.issuer_id ?? record.issuerId,
+    record.issuer_id,
     `${context}.issuer_id`,
   );
   const issuerDisplay = requireNonEmptyString(
-    record.issuer_display ?? record.issuerDisplay,
+    record.issuer_display,
     `${context}.issuer_display`,
   );
   const revokedAt = ToriiClient._normalizeUnsignedInteger(
-    record.revoked_at_ms ?? record.revokedAtMs,
+    record.revoked_at_ms,
     `${context}.revoked_at_ms`,
     { allowZero: true },
   );
@@ -19373,42 +19542,29 @@ function normalizeOfflineRejectionStatsItem(value, context) {
 
 function normalizeConnectSessionResponse(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
-  const sidValue =
-    record.sid ??
-    record.session_id ??
-    record.sessionId ??
-    record.SID ??
-    null;
-  const sid = normalizeConnectSid(sidValue, `${context}.sid`);
+  const sid = normalizeConnectSid(record.sid, `${context}.sid`);
   const walletUri = requireNonEmptyString(
-    pickOverride(record, "wallet_uri", "walletUri"),
+    record.wallet_uri,
     `${context}.wallet_uri`,
   );
   const appUri = requireNonEmptyString(
-    pickOverride(record, "app_uri", "appUri"),
+    record.app_uri,
     `${context}.app_uri`,
   );
   const tokenApp = requireNonEmptyString(
-    pickOverride(record, "token_app", "tokenApp"),
+    record.token_app,
     `${context}.token_app`,
   );
   const tokenWallet = requireNonEmptyString(
-    pickOverride(record, "token_wallet", "tokenWallet"),
+    record.token_wallet,
     `${context}.token_wallet`,
   );
   const recognized = new Set([
     "sid",
-    "SID",
-    "session_id",
-    "sessionId",
     "wallet_uri",
-    "walletUri",
     "app_uri",
-    "appUri",
     "token_app",
-    "tokenApp",
     "token_wallet",
-    "tokenWallet",
   ]);
   const extra = extractExtraFields(record, recognized);
   return {
@@ -19424,30 +19580,17 @@ function normalizeConnectSessionResponse(payload, context) {
 
 function normalizeConnectAppRecord(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
-  const appId =
-    record.app_id ??
-    record.id ??
-    record.appId ??
-    record.ID ??
-    record.identifier;
-  const normalizedId = requireNonEmptyString(appId, `${context}.app_id`);
+  const normalizedId = requireNonEmptyString(record.app_id, `${context}.app_id`);
   const displayName = optionalString(
-    pickOverride(record, "display_name", "displayName"),
+    record.display_name,
     `${context}.display_name`,
   );
-  const description = optionalString(
-    pickOverride(record, "description", "description"),
-    `${context}.description`,
-  );
+  const description = optionalString(record.description, `${context}.description`);
   const iconUrl = optionalString(
-    pickOverride(record, "icon_url", "iconUrl"),
+    record.icon_url,
     `${context}.icon_url`,
   );
-  const namespaceSource =
-    record.namespaces ??
-    record.allowed_namespaces ??
-    record.allowedNamespaces ??
-    [];
+  const namespaceSource = record.namespaces ?? [];
   const namespaces = parseStringArray(
     namespaceSource ?? [],
     `${context}.namespaces`,
@@ -19461,18 +19604,10 @@ function normalizeConnectAppRecord(payload, context) {
   const policy = ToriiClient._requirePlainObject(policyRaw, `${context}.policy`);
   const recognized = new Set([
     "app_id",
-    "id",
-    "appId",
-    "ID",
-    "identifier",
     "display_name",
-    "displayName",
     "description",
     "icon_url",
-    "iconUrl",
     "namespaces",
-    "allowed_namespaces",
-    "allowedNamespaces",
     "metadata",
     "policy",
   ]);
@@ -19492,7 +19627,7 @@ function normalizeConnectAppRecord(payload, context) {
 
 function normalizeConnectAppRegistryPage(payload) {
   const record = ensureRecord(payload ?? {}, "connect app registry response");
-  const rawItems = record.items ?? record.apps ?? [];
+  const rawItems = record.items ?? [];
   if (!Array.isArray(rawItems)) {
     throw new TypeError("connect app registry response.items must be an array");
   }
@@ -19507,13 +19642,13 @@ function normalizeConnectAppRegistryPage(payload) {
       { allowZero: true },
     );
   }
-  let cursor = record.next_cursor ?? record.cursor ?? record.next ?? null;
+  let cursor = record.next_cursor ?? null;
   if (cursor !== null && cursor !== undefined) {
     cursor = requireNonEmptyString(cursor, "connect app registry response.next_cursor");
   } else {
     cursor = null;
   }
-  const recognized = new Set(["items", "apps", "total", "next_cursor", "cursor", "next"]);
+  const recognized = new Set(["items", "total", "next_cursor"]);
   const extra = extractExtraFields(record, recognized);
   return {
     items,
@@ -19550,70 +19685,56 @@ function normalizeConnectAppPolicyControls(payload, context) {
   const policyPayload =
     record.policy && typeof record.policy === "object" ? record.policy : record;
   const relayEnabled = optionalBoolean(
-    pickOverride(policyPayload, "relay_enabled", "relayEnabled"),
+    policyPayload.relay_enabled,
     `${context}.relay_enabled`,
   );
   const wsMaxSessions = coerceOptionalInt(
-    pickOverride(policyPayload, "ws_max_sessions", "wsMaxSessions"),
+    policyPayload.ws_max_sessions,
     `${context}.ws_max_sessions`,
   );
   const wsPerIpMaxSessions = coerceOptionalInt(
-    pickOverride(policyPayload, "ws_per_ip_max_sessions", "wsPerIpMaxSessions"),
+    policyPayload.ws_per_ip_max_sessions,
     `${context}.ws_per_ip_max_sessions`,
   );
   const wsRatePerIpPerMin = coerceOptionalInt(
-    pickOverride(policyPayload, "ws_rate_per_ip_per_min", "wsRatePerIpPerMin"),
+    policyPayload.ws_rate_per_ip_per_min,
     `${context}.ws_rate_per_ip_per_min`,
   );
   const sessionTtlMs = coerceOptionalInt(
-    pickOverride(policyPayload, "session_ttl_ms", "sessionTtlMs"),
+    policyPayload.session_ttl_ms,
     `${context}.session_ttl_ms`,
   );
   const frameMaxBytes = coerceOptionalInt(
-    pickOverride(policyPayload, "frame_max_bytes", "frameMaxBytes"),
+    policyPayload.frame_max_bytes,
     `${context}.frame_max_bytes`,
   );
   const sessionBufferMaxBytes = coerceOptionalInt(
-    pickOverride(
-      policyPayload,
-      "session_buffer_max_bytes",
-      "sessionBufferMaxBytes",
-    ),
+    policyPayload.session_buffer_max_bytes,
     `${context}.session_buffer_max_bytes`,
   );
   const pingIntervalMs = coerceOptionalInt(
-    pickOverride(policyPayload, "ping_interval_ms", "pingIntervalMs"),
+    policyPayload.ping_interval_ms,
     `${context}.ping_interval_ms`,
   );
   const pingMissTolerance = coerceOptionalInt(
-    pickOverride(policyPayload, "ping_miss_tolerance", "pingMissTolerance"),
+    policyPayload.ping_miss_tolerance,
     `${context}.ping_miss_tolerance`,
   );
   const pingMinIntervalMs = coerceOptionalInt(
-    pickOverride(policyPayload, "ping_min_interval_ms", "pingMinIntervalMs"),
+    policyPayload.ping_min_interval_ms,
     `${context}.ping_min_interval_ms`,
   );
   const recognized = new Set([
     "relay_enabled",
-    "relayEnabled",
     "ws_max_sessions",
-    "wsMaxSessions",
     "ws_per_ip_max_sessions",
-    "wsPerIpMaxSessions",
     "ws_rate_per_ip_per_min",
-    "wsRatePerIpPerMin",
     "session_ttl_ms",
-    "sessionTtlMs",
     "frame_max_bytes",
-    "frameMaxBytes",
     "session_buffer_max_bytes",
-    "sessionBufferMaxBytes",
     "ping_interval_ms",
-    "pingIntervalMs",
     "ping_miss_tolerance",
-    "pingMissTolerance",
     "ping_min_interval_ms",
-    "pingMinIntervalMs",
   ]);
   const extra = extractExtraFields(policyPayload, recognized);
   return {
@@ -19670,50 +19791,43 @@ function toConnectAppPolicyPayload(updates, context) {
 
 function normalizeConnectAdmissionManifest(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
-  const manifest =
-    record.manifest && typeof record.manifest === "object"
-      ? ensureRecord(record.manifest, `${context}.manifest`)
-      : record;
-  const rawEntries = manifest.entries ?? manifest.apps ?? [];
+  const rawEntries = record.entries ?? [];
   if (!Array.isArray(rawEntries)) {
     throw new TypeError(`${context}.entries must be an array`);
   }
   const entries = rawEntries.map((entry, index) =>
     normalizeConnectAdmissionManifestEntry(entry, `${context}.entries[${index}]`),
   );
-  const version = coerceOptionalInt(manifest.version, `${context}.version`);
+  const version = coerceOptionalInt(record.version, `${context}.version`);
   const manifestHash = optionalString(
-    pickOverride(manifest, "manifest_hash", "manifestHash"),
+    record.manifest_hash,
     `${context}.manifest_hash`,
   );
   const updatedAt = optionalString(
-    pickOverride(manifest, "updated_at", "updatedAt"),
+    record.updated_at,
     `${context}.updated_at`,
   );
   const recognized = new Set([
     "entries",
-    "apps",
     "version",
     "manifest_hash",
-    "manifestHash",
     "updated_at",
-    "updatedAt",
   ]);
-  const extra = extractExtraFields(manifest, recognized);
+  const extra = extractExtraFields(record, recognized);
   return {
     version,
     entries,
     manifestHash,
     updatedAt,
     extra,
-    raw: manifest,
+    raw: record,
   };
 }
 
 function normalizeConnectAdmissionManifestEntry(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const appId = requireNonEmptyString(
-    record.app_id ?? record.appId ?? record.id,
+    record.app_id,
     `${context}.app_id`,
   );
   const namespaces = parseStringArray(record.namespaces ?? [], `${context}.namespaces`);
@@ -19722,7 +19836,7 @@ function normalizeConnectAdmissionManifestEntry(payload, context) {
     `${context}.metadata`,
   );
   const policy = ToriiClient._requirePlainObject(record.policy ?? {}, `${context}.policy`);
-  const recognized = new Set(["app_id", "appId", "id", "namespaces", "metadata", "policy"]);
+  const recognized = new Set(["app_id", "namespaces", "metadata", "policy"]);
   const extra = extractExtraFields(record, recognized);
   return {
     appId,
@@ -19830,11 +19944,11 @@ function normalizeConnectStatusSnapshot(payload, context) {
 function normalizeConnectPerIpSessions(payload, context) {
   const record = ensureRecord(payload, context);
   const ip = requireNonEmptyString(
-    record.ip ?? record.address ?? record.remote_ip,
+    record.ip,
     `${context}.ip`,
   );
   const sessions = ToriiClient._normalizeUnsignedInteger(
-    record.sessions ?? record.count,
+    record.sessions,
     `${context}.sessions`,
     { allowZero: true },
   );
@@ -19845,51 +19959,51 @@ function normalizeConnectStatusPolicySnapshot(payload, context) {
   const record = ensureRecord(payload, context);
   return {
     wsMaxSessions: ToriiClient._normalizeUnsignedInteger(
-      record.ws_max_sessions ?? record.wsMaxSessions,
+      record.ws_max_sessions,
       `${context}.ws_max_sessions`,
       { allowZero: true },
     ),
     wsPerIpMaxSessions: ToriiClient._normalizeUnsignedInteger(
-      record.ws_per_ip_max_sessions ?? record.wsPerIpMaxSessions,
+      record.ws_per_ip_max_sessions,
       `${context}.ws_per_ip_max_sessions`,
       { allowZero: true },
     ),
     wsRatePerIpPerMin: ToriiClient._normalizeUnsignedInteger(
-      record.ws_rate_per_ip_per_min ?? record.wsRatePerIpPerMin,
+      record.ws_rate_per_ip_per_min,
       `${context}.ws_rate_per_ip_per_min`,
       { allowZero: true },
     ),
     sessionTtlMs: ToriiClient._normalizeUnsignedInteger(
-      record.session_ttl_ms ?? record.sessionTtlMs,
+      record.session_ttl_ms,
       `${context}.session_ttl_ms`,
       { allowZero: true },
     ),
     frameMaxBytes: ToriiClient._normalizeUnsignedInteger(
-      record.frame_max_bytes ?? record.frameMaxBytes,
+      record.frame_max_bytes,
       `${context}.frame_max_bytes`,
       { allowZero: true },
     ),
     sessionBufferMaxBytes: ToriiClient._normalizeUnsignedInteger(
-      record.session_buffer_max_bytes ?? record.sessionBufferMaxBytes,
+      record.session_buffer_max_bytes,
       `${context}.session_buffer_max_bytes`,
       { allowZero: true },
     ),
     relayEnabled: requireBooleanLike(
-      record.relay_enabled ?? record.relayEnabled,
+      record.relay_enabled,
       `${context}.relay_enabled`,
     ),
     heartbeatIntervalMs: ToriiClient._normalizeUnsignedInteger(
-      record.heartbeat_interval_ms ?? record.heartbeatIntervalMs,
+      record.heartbeat_interval_ms,
       `${context}.heartbeat_interval_ms`,
       { allowZero: true },
     ),
     heartbeatMissTolerance: ToriiClient._normalizeUnsignedInteger(
-      record.heartbeat_miss_tolerance ?? record.heartbeatMissTolerance,
+      record.heartbeat_miss_tolerance,
       `${context}.heartbeat_miss_tolerance`,
       { allowZero: true },
     ),
     heartbeatMinIntervalMs: ToriiClient._normalizeUnsignedInteger(
-      record.heartbeat_min_interval_ms ?? record.heartbeatMinIntervalMs,
+      record.heartbeat_min_interval_ms,
       `${context}.heartbeat_min_interval_ms`,
       { allowZero: true },
     ),

@@ -1570,20 +1570,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
         semantic::ExprKind::Call { name, args } => {
             match name.as_str() {
                 "encode_int" => {
-                    if let semantic::ExprKind::Number(n) = &args[0].expr {
-                        let t = ctx.new_temp();
-                        ctx.current_instr(Instr::DataRef {
-                            dest: t,
-                            kind: DataRefKind::NoritoBytes,
-                            value: n.to_string(),
-                        });
-                        t
-                    } else {
-                        let v = lower_expr(ctx, &args[0], vars);
-                        let d = ctx.new_temp();
-                        ctx.current_instr(Instr::EncodeInt { dest: d, value: v });
-                        d
-                    }
+                    let v = lower_expr(ctx, &args[0], vars);
+                    let d = ctx.new_temp();
+                    ctx.current_instr(Instr::EncodeInt { dest: d, value: v });
+                    d
                 }
                 "decode_int" => {
                     let b = lower_expr(ctx, &args[0], vars);
@@ -3508,6 +3498,35 @@ mod tests {
         }
         assert!(saw_encode, "expected EncodeInt before Info");
         assert!(saw_info, "expected Info instruction");
+    }
+
+    #[test]
+    fn lower_encode_int_literal_uses_encode_int() {
+        let src = "fn f() { let _b = encode_int(7); }";
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed);
+        let f = &ir.functions[0];
+        let mut saw_encode = false;
+        let mut saw_literal = false;
+        for bb in &f.blocks {
+            for instr in &bb.instrs {
+                match instr {
+                    Instr::EncodeInt { .. } => saw_encode = true,
+                    Instr::DataRef { kind, value, .. }
+                        if *kind == DataRefKind::NoritoBytes && value == "7" =>
+                    {
+                        saw_literal = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(saw_encode, "expected EncodeInt for literal encode_int");
+        assert!(
+            !saw_literal,
+            "unexpected literal NoritoBytes dataref for encode_int"
+        );
     }
 
     #[test]

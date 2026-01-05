@@ -252,7 +252,6 @@ class ConnectSid:
     """Deterministic Connect session identifier plus helper encodings."""
 
     sid_bytes: bytes
-    sid_hex: str
     sid_base64url: str
     nonce: bytes
 
@@ -264,7 +263,6 @@ class ConnectSessionPreview:
     chain_id: str
     node: Optional[str]
     sid_bytes: bytes
-    sid_hex: str
     sid_base64url: str
     nonce: bytes
     app_key_pair: ConnectKeyPair
@@ -1053,7 +1051,7 @@ class ConnectSessionState:
         """Convert the state into a JSON-friendly dictionary."""
 
         return {
-            "sid_hex": self.sid.hex(),
+            "sid_base64url": _to_base64url(self.sid),
             "next_sequence": {
                 "app_to_wallet": self.next_sequence_app_to_wallet,
                 "wallet_to_app": self.next_sequence_wallet_to_app,
@@ -1070,13 +1068,17 @@ class ConnectSessionState:
 
         if not isinstance(payload, Mapping):
             raise TypeError("ConnectSessionState payload must be a mapping")
-        sid_hex = payload.get("sid_hex")
-        if not isinstance(sid_hex, str) or not sid_hex:
-            raise TypeError("ConnectSessionState payload must include string sid_hex")
+        sid_base64url = payload.get("sid_base64url")
+        if not isinstance(sid_base64url, str) or not sid_base64url:
+            raise TypeError("ConnectSessionState payload must include string sid_base64url")
         try:
-            sid = bytes.fromhex(sid_hex)
+            sid = _from_base64url(sid_base64url)
         except ValueError as exc:  # pragma: no cover - defensive
-            raise ValueError("ConnectSessionState sid_hex must be valid hex") from exc
+            raise ValueError(
+                "ConnectSessionState sid_base64url must be valid base64url"
+            ) from exc
+        if len(sid) != _SID_LENGTH:
+            raise ValueError("ConnectSessionState sid_base64url must decode to 32 bytes")
 
         next_sequence = payload.get("next_sequence", {})
         if not isinstance(next_sequence, Mapping):
@@ -1260,11 +1262,9 @@ def generate_connect_sid(
     hasher.update(public_key)
     hasher.update(nonce_bytes)
     digest = hasher.digest()[:_SID_LENGTH]
-    sid_hex = f"0x{digest.hex()}"
     sid_base64url = _to_base64url(digest)
     return ConnectSid(
         sid_bytes=bytes(digest),
-        sid_hex=sid_hex,
         sid_base64url=sid_base64url,
         nonce=nonce_bytes,
     )
@@ -1293,7 +1293,6 @@ def create_connect_session_preview(
         chain_id=normalized_chain,
         node=normalized_node,
         sid_bytes=sid.sid_bytes,
-        sid_hex=sid.sid_hex,
         sid_base64url=sid.sid_base64url,
         nonce=sid.nonce,
         app_key_pair=key_pair,
@@ -1324,7 +1323,7 @@ def bootstrap_connect_preview_session(
     )
     if not register:
         return ConnectPreviewBootstrapResult(preview=preview, session=None, tokens=None)
-    payload: Dict[str, Any] = {"sid": preview.sid_hex}
+    payload: Dict[str, Any] = {"sid": preview.sid_base64url}
     if session_options is not None:
         if not isinstance(session_options, Mapping):
             raise TypeError("session_options must be a mapping when provided")
@@ -1378,6 +1377,17 @@ def _normalize_optional_string(value: Optional[str], field: str) -> Optional[str
 def _to_base64url(data: bytes) -> str:
     encoded = base64.urlsafe_b64encode(data)
     return encoded.rstrip(b"=").decode("ascii")
+
+def _from_base64url(value: str) -> bytes:
+    normalized = _require_non_empty_string(value, "sid_base64url")
+    if "=" in normalized:
+        raise ValueError("sid_base64url must not include padding")
+    remainder = len(normalized) % 4
+    if remainder == 1:
+        raise ValueError("sid_base64url has invalid length")
+    if remainder:
+        normalized = normalized + "=" * (4 - remainder)
+    return base64.urlsafe_b64decode(normalized.encode("ascii"))
 
 
 def _read_session_token(obj: Any, primary: str) -> str:

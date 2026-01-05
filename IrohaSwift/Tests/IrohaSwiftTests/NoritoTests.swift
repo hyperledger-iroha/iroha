@@ -103,6 +103,7 @@ private struct NoritoFixtureHeader {
 
     init?(data: Data) {
         let headerLength = 4 + 1 + 1 + 16 + 1 + 8 + 8 + 1
+        let maxHeaderPadding = 64
         guard data.count >= headerLength else { return nil }
 
         let headerBytes = [UInt8](data.prefix(headerLength))
@@ -123,6 +124,16 @@ private struct NoritoFixtureHeader {
         self.checksum = UInt64(littleEndian: rawChecksum)
 
         self.flags = headerBytes[39]
-        self.payload = data.dropFirst(headerLength)
+        let paddingLen = data.count - headerLength - Int(payloadLength)
+        if paddingLen < 0 || paddingLen > maxHeaderPadding {
+            return nil
+        }
+        if paddingLen > 0 {
+            let padding = data[headerLength..<(headerLength + paddingLen)]
+            if padding.contains(where: { $0 != 0 }) {
+                return nil
+            }
+        }
+        self.payload = data.dropFirst(headerLength + paddingLen)
     }
 }

@@ -24,6 +24,13 @@ use norito::{
     to_bytes,
 };
 
+/// Default capability mask used by streaming integration tests.
+pub const BASE_CAPABILITIES: CapabilityFlags = CapabilityFlags::from_bits(
+    CapabilityFlags::FEATURE_FEEDBACK_HINTS
+        | CapabilityFlags::FEATURE_PRIVACY_PROVIDER
+        | CapabilityFlags::FEATURE_ENTROPY_BUNDLED,
+);
+
 /// Deterministic Norito Streaming vector exercised by the end-to-end integration test.
 #[derive(Clone)]
 pub struct StreamingTestVector {
@@ -398,7 +405,7 @@ pub fn bundled_test_vector_with_frames(
 }
 
 fn build_manifest(segment: &EncodedSegment) -> ManifestV1 {
-    use norito::streaming::{CapabilityFlags, FecScheme, Multiaddr, StreamMetadata};
+    use norito::streaming::{FecScheme, Multiaddr, StreamMetadata};
 
     let params = BaselineManifestParams {
         stream_id: fill_hash(0x31),
@@ -412,7 +419,7 @@ fn build_manifest(segment: &EncodedSegment) -> ManifestV1 {
             access_policy_id: None,
             tags: vec!["nsc".into(), "baseline".into()],
         },
-        capabilities: CapabilityFlags::from_bits(0b0111),
+        capabilities: BASE_CAPABILITIES,
         signature: fill_signature(0x41),
         fec_suite: FecScheme::Rs12_10,
         neural_bundle: None,
@@ -455,7 +462,7 @@ pub fn make_peer(key_pair: &KeyPair, port: u16) -> Peer {
 /// Create a streaming handle with default capabilities suited for the tests.
 #[must_use]
 pub fn streaming_handle() -> StreamingHandle {
-    let flags = CapabilityFlags::from_bits(0b0111);
+    let flags = BASE_CAPABILITIES;
     let mut codec = actual::StreamingCodec::from_defaults();
     codec.rans_tables_path = repo_rans_tables_path();
     StreamingHandle::new()
@@ -476,7 +483,7 @@ pub fn bundled_streaming_handle_with_accel(
     bundle_width: u8,
     accel: actual::BundleAcceleration,
 ) -> StreamingHandle {
-    let flags = CapabilityFlags::from_bits(0b0111);
+    let flags = BASE_CAPABILITIES;
     let mut codec = actual::StreamingCodec::from_defaults();
     codec.rans_tables_path = repo_rans_tables_path();
     codec.entropy_mode = EntropyMode::RansBundled;
@@ -841,11 +848,7 @@ mod tests {
             .record_transport_capabilities(&viewer_peer, CapabilityRole::Viewer, resolution)
             .expect("record viewer transport capabilities");
         handle
-            .record_negotiated_capabilities(
-                &viewer_peer,
-                CapabilityRole::Viewer,
-                CapabilityFlags::from_bits(0b0111),
-            )
+            .record_negotiated_capabilities(&viewer_peer, CapabilityRole::Viewer, BASE_CAPABILITIES)
             .expect("record viewer negotiated capabilities");
 
         let announce = manifest_announce_for_viewer(&handle, &viewer_peer, vector.manifest.clone())
@@ -858,7 +861,7 @@ mod tests {
         let handle = bundled_streaming_handle(4);
         let (_publisher, viewer) = test_keypairs();
         let viewer_peer = make_peer(&viewer, 12_346);
-        let negotiated = CapabilityFlags::from_bits(0b0111);
+        let negotiated = BASE_CAPABILITIES;
         let max_chunk_len = 4096;
         let resolution = seed_viewer_negotiation(&handle, &viewer_peer, negotiated, max_chunk_len);
         assert_eq!(
@@ -894,7 +897,7 @@ mod tests {
         let (_publisher, viewer) = test_keypairs();
         let viewer_peer = make_peer(&viewer, 12_347);
         let vector = bundled_test_vector();
-        let negotiated = CapabilityFlags::from_bits(0b0111);
+        let negotiated = BASE_CAPABILITIES.remove(CapabilityFlags::FEATURE_ENTROPY_BUNDLED);
         seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
 
         let err = manifest_announce_for_viewer(&handle, &viewer_peer, vector.manifest.clone())
@@ -911,8 +914,7 @@ mod tests {
         let (_publisher, viewer) = test_keypairs();
         let viewer_peer = make_peer(&viewer, 12_348);
         let vector = bundled_test_vector();
-        let negotiated =
-            CapabilityFlags::from_bits(0b0111 | CapabilityFlags::FEATURE_ENTROPY_BUNDLED);
+        let negotiated = BASE_CAPABILITIES;
         seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
 
         let err = manifest_announce_for_viewer(&handle, &viewer_peer, vector.manifest.clone())
@@ -929,11 +931,7 @@ mod tests {
         let (_publisher, viewer) = test_keypairs();
         let viewer_peer = make_peer(&viewer, 12_349);
         let vector = bundled_test_vector();
-        let negotiated = CapabilityFlags::from_bits(
-            0b0111
-                | CapabilityFlags::FEATURE_ENTROPY_BUNDLED
-                | CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD,
-        );
+        let negotiated = BASE_CAPABILITIES.insert(CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD);
         seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
 
         let announce = manifest_announce_for_viewer(&handle, &viewer_peer, vector.manifest.clone())
@@ -961,8 +959,7 @@ mod tests {
         let (_publisher, viewer) = test_keypairs();
         let viewer_peer = make_peer(&viewer, 12_350);
         let vector = bundled_test_vector();
-        let negotiated =
-            CapabilityFlags::from_bits(0b0111 | CapabilityFlags::FEATURE_ENTROPY_BUNDLED);
+        let negotiated = BASE_CAPABILITIES;
         seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
 
         let err = manifest_announce_for_viewer(&handle, &viewer_peer, vector.manifest.clone())
@@ -979,11 +976,7 @@ mod tests {
         let (_publisher, viewer) = test_keypairs();
         let viewer_peer = make_peer(&viewer, 12_351);
         let vector = bundled_test_vector();
-        let negotiated = CapabilityFlags::from_bits(
-            0b0111
-                | CapabilityFlags::FEATURE_ENTROPY_BUNDLED
-                | CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU,
-        );
+        let negotiated = BASE_CAPABILITIES.insert(CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU);
         seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
 
         let err = manifest_announce_for_viewer(&handle, &viewer_peer, vector.manifest.clone())
@@ -1006,11 +999,7 @@ mod tests {
         let (_publisher, viewer) = test_keypairs();
         let viewer_peer = make_peer(&viewer, 12_352);
         let vector = bundled_test_vector();
-        let negotiated = CapabilityFlags::from_bits(
-            0b0111
-                | CapabilityFlags::FEATURE_ENTROPY_BUNDLED
-                | CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU,
-        );
+        let negotiated = BASE_CAPABILITIES.insert(CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU);
         seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
 
         let announce = manifest_announce_for_viewer(&handle, &viewer_peer, vector.manifest.clone())
@@ -1037,10 +1026,8 @@ mod tests {
         let (_publisher, viewer) = test_keypairs();
         let viewer_peer = make_peer(&viewer, 12_353);
         let vector = bundled_test_vector();
-        let negotiated = CapabilityFlags::from_bits(
-            0b0111
-                | CapabilityFlags::FEATURE_ENTROPY_BUNDLED
-                | CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD
+        let negotiated = BASE_CAPABILITIES.insert(
+            CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD
                 | CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU,
         );
         seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
@@ -1075,10 +1062,8 @@ mod tests {
         let (_publisher, viewer) = test_keypairs();
         let viewer_peer = make_peer(&viewer, 12_354);
         let vector = bundled_test_vector();
-        let negotiated = CapabilityFlags::from_bits(
-            0b0111
-                | CapabilityFlags::FEATURE_ENTROPY_BUNDLED
-                | CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD
+        let negotiated = BASE_CAPABILITIES.insert(
+            CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD
                 | CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU,
         );
         seed_viewer_negotiation(&handle, &viewer_peer, negotiated, vector.max_chunk_len());
@@ -1108,10 +1093,8 @@ mod tests {
         let (_publisher, hybrid_viewer) = test_keypairs();
         let hybrid_peer = make_peer(&hybrid_viewer, 12_356);
 
-        let negotiated_hybrid = CapabilityFlags::from_bits(
-            0b0111
-                | CapabilityFlags::FEATURE_ENTROPY_BUNDLED
-                | CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD
+        let negotiated_hybrid = BASE_CAPABILITIES.insert(
+            CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD
                 | CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU,
         );
         seed_viewer_negotiation(
@@ -1158,11 +1141,7 @@ mod tests {
         let gpu_peer = make_peer(&gpu_viewer, 12_358);
         let cpu_peer = make_peer(&cpu_viewer, 12_359);
 
-        let negotiated_gpu = CapabilityFlags::from_bits(
-            0b0111
-                | CapabilityFlags::FEATURE_ENTROPY_BUNDLED
-                | CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU,
-        );
+        let negotiated_gpu = BASE_CAPABILITIES.insert(CapabilityFlags::FEATURE_BUNDLE_ACCEL_GPU);
         seed_viewer_negotiation(&handle, &gpu_peer, negotiated_gpu, vector.max_chunk_len());
         let gpu_manifest =
             manifest_announce_for_viewer(&handle, &gpu_peer, vector.manifest.clone())
@@ -1182,11 +1161,7 @@ mod tests {
             "GPU manifests must not leak CPU acceleration bits"
         );
 
-        let cpu_caps = CapabilityFlags::from_bits(
-            0b0111
-                | CapabilityFlags::FEATURE_ENTROPY_BUNDLED
-                | CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD,
-        );
+        let cpu_caps = BASE_CAPABILITIES.insert(CapabilityFlags::FEATURE_BUNDLE_ACCEL_CPU_SIMD);
         seed_viewer_negotiation(&handle, &cpu_peer, cpu_caps, vector.max_chunk_len());
         let err = manifest_announce_for_viewer(&handle, &cpu_peer, vector.manifest.clone())
             .expect_err("GPU handle must reject CPU-only viewers");

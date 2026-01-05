@@ -180,7 +180,9 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
             privateKey: "ed0120deadbeef",
             transfer: .object(["bundle_id": .string("aa")])
         )
-        let proofRequest = ToriiOfflineTransferProofRequest(bundleIdHex: "aa", kind: "counter", counterCheckpoint: 1)
+        let proofRequest = ToriiOfflineTransferProofRequest(transfer: .object(["bundle_id": .string("aa")]),
+                                                            kind: "counter",
+                                                            counterCheckpoint: 1)
         let draft = OfflineWalletCertificateDraft(
             controller: "alice@wonderland",
             allowance: OfflineAllowanceCommitment(assetId: assetId,
@@ -237,7 +239,8 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
             ExpectedRequest(method: "POST", path: "/v1/offline/transfers/proof", responseBody: proofPayload, assertBody: { data in
                 let body = try XCTUnwrap(data)
                 let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
-                XCTAssertEqual(json["bundle_id_hex"] as? String, "aa")
+                XCTAssertNil(json["bundle_id_hex"])
+                XCTAssertNotNil(json["transfer"] as? [String: Any])
             })
         ]
 

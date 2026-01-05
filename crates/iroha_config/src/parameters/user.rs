@@ -960,7 +960,7 @@ impl Root {
             chain_discriminant: self.chain_discriminant,
         };
 
-        Ok(actual::Root {
+        let mut root = actual::Root {
             common: peer,
             network,
             genesis,
@@ -998,7 +998,9 @@ impl Root {
             crypto,
             settlement,
             confidential,
-        })
+        };
+        root.apply_storage_budget();
+        Ok(root)
     }
 }
 
@@ -12167,13 +12169,13 @@ pub struct Connect {
         default = "defaults::connect::WS_MAX_SESSIONS"
     )]
     pub ws_max_sessions: usize,
-    /// Max concurrent WS sessions per remote IP.
+    /// Max concurrent WS sessions per remote IP (0 disables the per-IP cap).
     #[config(
         env = "CONNECT_WS_PER_IP_MAX_SESSIONS",
         default = "defaults::connect::WS_PER_IP_MAX_SESSIONS"
     )]
     pub ws_per_ip_max_sessions: usize,
-    /// Per-IP WS handshake rate (requests per minute).
+    /// Per-IP WS handshake rate (requests per minute, 0 disables rate limiting).
     #[config(
         env = "CONNECT_WS_RATE_PER_IP_PER_MIN",
         default = "defaults::connect::WS_RATE_PER_IP_PER_MIN"
@@ -14215,6 +14217,32 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             actual.transaction_gossiper.dataspace.restricted_target_cap,
             defaults::network::TX_GOSSIP_RESTRICTED_TARGET_CAP
         );
+    }
+
+    #[test]
+    fn storage_budget_applies_after_parse() {
+        let mut table = base_table();
+        let nexus = table
+            .entry("nexus")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("nexus table");
+        let mut storage = Table::new();
+        storage.insert("max_disk_usage_bytes".into(), Value::Integer(1_000));
+        storage.insert("max_wsv_memory_bytes".into(), Value::Integer(256));
+        let mut weights = Table::new();
+        weights.insert("kura_blocks_bps".into(), Value::Integer(10_000));
+        weights.insert("wsv_snapshots_bps".into(), Value::Integer(0));
+        weights.insert("sorafs_bps".into(), Value::Integer(0));
+        weights.insert("soranet_spool_bps".into(), Value::Integer(0));
+        weights.insert("soravpn_spool_bps".into(), Value::Integer(0));
+        storage.insert("disk_budget_weights".into(), Value::Table(weights));
+        nexus.insert("storage".into(), Value::Table(storage));
+
+        let actual = load_root(table);
+        assert_eq!(actual.kura.max_disk_usage_bytes.get(), 1_000);
+        assert!(actual.tiered_state.enabled);
+        assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 256);
     }
 
     #[test]

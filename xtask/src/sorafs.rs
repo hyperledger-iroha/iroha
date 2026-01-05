@@ -6600,14 +6600,6 @@ fn scoreboard_entry_is_eligible(entry: &Value) -> bool {
     }
 }
 
-fn scoreboard_entry_reason(entry: &Value) -> Option<&str> {
-    entry
-        .get("eligibility")
-        .and_then(Value::as_object)
-        .and_then(|obj| obj.get("reason"))
-        .and_then(Value::as_str)
-}
-
 struct SummaryStats {
     active_providers: HashSet<String>,
     chunk_receipt_providers: HashSet<String>,

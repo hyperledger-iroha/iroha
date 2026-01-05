@@ -16,8 +16,7 @@ use iroha_p2p::streaming::{
     quic::{Error as QuicError, TransportConfigSettings},
 };
 use norito::streaming::{
-    CapabilityFlags, CapabilityReport, CapabilityRole, ChunkAcknowledgeFrame, ControlFrame,
-    TransportCapabilities,
+    CapabilityReport, CapabilityRole, ChunkAcknowledgeFrame, ControlFrame, TransportCapabilities,
 };
 use streaming::{
     StreamingTestVector, baseline_test_vector, make_peer, manifest_announce_for_viewer,
@@ -232,7 +231,7 @@ async fn run_viewer(
             ambisonics: false,
             max_channels: 2,
         },
-        feature_bits: CapabilityFlags::from_bits(0b0111),
+        feature_bits: streaming::BASE_CAPABILITIES,
         max_datagram_size: max_size,
         dplpmtud: true,
     };

@@ -43,6 +43,49 @@ const SM2_GENERATOR_X_BYTES: [u8; 32] =
     hex!("32C4AE2C1F1981195F9904466A39C9948FE30BBFF2660BE1715A4589334C74C7");
 const SM2_GENERATOR_Y_BYTES: [u8; 32] =
     hex!("BC3736A2F4F6779C59BDCEE36B692153D0A9877CC62A474002DF32E52139F0A0");
+const SM2_DISTID_LEN_BYTES: usize = 2;
+const SM2_PRIVATE_KEY_LEN: usize = 32;
+const SM2_PUBLIC_KEY_UNCOMPRESSED_LEN: usize = 65;
+
+fn validate_distid(distid: &str) -> Result<(), ParseError> {
+    let bit_len = distid
+        .len()
+        .checked_mul(8)
+        .ok_or_else(|| ParseError("SM2 distinguishing identifier length overflowed".into()))?;
+    u16::try_from(bit_len)
+        .map_err(|_| ParseError("SM2 distinguishing identifier exceeds 65535 bits".into()))?;
+    Ok(())
+}
+
+fn distid_len_prefix(distid: &str) -> Result<[u8; SM2_DISTID_LEN_BYTES], ParseError> {
+    validate_distid(distid)?;
+    let len = u16::try_from(distid.len())
+        .map_err(|_| ParseError("SM2 distinguishing identifier length exceeds u16".into()))?;
+    Ok(len.to_be_bytes())
+}
+
+fn split_sm2_payload(payload: &[u8]) -> Result<(String, &[u8]), ParseError> {
+    if payload.len() < SM2_DISTID_LEN_BYTES {
+        return Err(ParseError(
+            "SM2 payload missing distid length prefix".into(),
+        ));
+    }
+    let len_bytes: [u8; SM2_DISTID_LEN_BYTES] = payload[..SM2_DISTID_LEN_BYTES]
+        .try_into()
+        .expect("slice length checked");
+    let distid_len = u16::from_be_bytes(len_bytes) as usize;
+    let expected = SM2_DISTID_LEN_BYTES
+        .checked_add(distid_len)
+        .ok_or_else(|| ParseError("SM2 distid length overflowed".into()))?;
+    if payload.len() < expected {
+        return Err(ParseError("SM2 payload truncated distid".into()));
+    }
+    let distid_bytes = &payload[SM2_DISTID_LEN_BYTES..expected];
+    let distid = std::str::from_utf8(distid_bytes)
+        .map_err(|_| ParseError("SM2 distid must be valid UTF-8".into()))?;
+    validate_distid(distid)?;
+    Ok((distid.to_owned(), &payload[expected..]))
+}
 
 #[cfg(feature = "sm-ffi-openssl")]
 fn map_openssl_sm_error(context: &str, err: OpenSslSmError) -> Error {
@@ -178,8 +221,11 @@ impl Sm2PublicKey {
     }
 
     /// Override the global default distinguishing identifier used when callers omit one.
-    pub fn set_default_distid(distid: impl Into<String>) {
+    pub fn set_default_distid(distid: impl Into<String>) -> Result<(), ParseError> {
+        let distid = distid.into();
+        validate_distid(&distid)?;
         Self::write_default_distid(distid);
+        Ok(())
     }
 
     pub(crate) fn from_verifying_key(key: VerifyingKey) -> Self {
@@ -191,7 +237,9 @@ impl Sm2PublicKey {
     /// # Errors
     /// Returns [`ParseError`] when the provided bytes are not a valid SM2 point.
     pub fn from_sec1_bytes(distid: impl AsRef<str>, bytes: &[u8]) -> Result<Self, ParseError> {
-        VerifyingKey::from_sec1_bytes(distid.as_ref(), bytes)
+        let distid = distid.as_ref();
+        validate_distid(distid)?;
+        VerifyingKey::from_sec1_bytes(distid, bytes)
             .map(Self)
             .map_err(|_| ParseError("invalid SM2 public key".to_owned()))
     }
@@ -209,6 +257,11 @@ impl Sm2PublicKey {
     /// Export the public key as SEC1 bytes.
     pub fn to_sec1_bytes(&self, compressed: bool) -> Vec<u8> {
         self.0.to_encoded_point(compressed).as_bytes().to_vec()
+    }
+
+    /// Return the distinguishing identifier embedded in this verifying key.
+    pub fn distid(&self) -> &str {
+        self.0.distid()
     }
 
     /// Construct a public key from a PEM-encoded `SubjectPublicKeyInfo` document.
@@ -247,15 +300,18 @@ impl Sm2PublicKey {
             .map(|der| encode_pem("PUBLIC KEY", &der))
     }
 
-    /// Format as an algorithm-prefixed multihash string (e.g., `sm2:...`).
+    /// Format as an algorithm-prefixed multihash string (e.g., `sm2:...`),
+    /// embedding the distinguishing identifier alongside the SEC1 payload.
     ///
     /// # Panics
     /// Panics if the public key cannot be encoded into SEC1 form, which indicates inconsistent key material.
     #[cfg(not(feature = "ffi_import"))]
     #[must_use]
     pub fn to_prefixed_string(&self) -> String {
-        let encoded = self.0.to_encoded_point(false);
-        crate::multihash::encode_public_key_prefixed(Algorithm::Sm2, encoded.as_bytes())
+        let sec1 = self.to_sec1_bytes(false);
+        let payload = encode_sm2_public_key_payload(self.distid(), &sec1)
+            .expect("SM2 key generated internally must encode to a prefixed multihash");
+        crate::multihash::encode_public_key_prefixed(Algorithm::Sm2, &payload)
             .expect("SM2 key generated internally must encode to a prefixed multihash")
     }
 
@@ -336,7 +392,7 @@ impl Sm2PublicKey {
 
 impl PartialEq for Sm2PublicKey {
     fn eq(&self, other: &Self) -> bool {
-        self.to_sec1_bytes(false) == other.to_sec1_bytes(false)
+        self.distid() == other.distid() && self.to_sec1_bytes(false) == other.to_sec1_bytes(false)
     }
 }
 
@@ -359,11 +415,13 @@ impl Sm2PrivateKey {
         if secret.len() != 32 {
             return Err(ParseError("SM2 private key must be 32 bytes".into()));
         }
+        let distid = distid.into();
+        validate_distid(&distid)?;
         let mut buf = [0u8; 32];
         buf.copy_from_slice(secret);
         SecretKey::from_slice(&buf).map_err(|_| ParseError("invalid SM2 private key".into()))?;
         Ok(Self {
-            distid: distid.into(),
+            distid,
             secret: Secret::new(Zeroizing::new(buf)),
         })
     }
@@ -380,13 +438,16 @@ impl Sm2PrivateKey {
     }
 
     /// Generate a random SM2 private key using the provided RNG.
-    pub fn random<R>(distid: impl Into<String>, rng: &mut R) -> Self
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when the distinguishing identifier is invalid.
+    pub fn random<R>(distid: impl Into<String>, rng: &mut R) -> Result<Self, ParseError>
     where
         R: CryptoRng + RngCore,
     {
         let distid = distid.into();
         let secret = SecretKey::random(rng);
-        Self::from_secret_key(distid, &secret).expect("random SM2 key is valid")
+        Self::from_secret_key(distid, &secret)
     }
 
     /// Deterministically derive an SM2 private key from an arbitrary seed.
@@ -475,6 +536,67 @@ impl Sm2PrivateKey {
         buf.copy_from_slice(bytes.as_ref());
         Self::new(distid, buf)
     }
+}
+
+/// Encode an SM2 public key payload with an explicit distinguishing identifier.
+///
+/// Layout: `distid_len (u16 BE)` || `distid bytes` || `SEC1 uncompressed (65 bytes)`.
+pub fn encode_sm2_public_key_payload(distid: &str, sec1: &[u8]) -> Result<Vec<u8>, ParseError> {
+    if sec1.len() != SM2_PUBLIC_KEY_UNCOMPRESSED_LEN {
+        return Err(ParseError(format!(
+            "SM2 public key must be {SM2_PUBLIC_KEY_UNCOMPRESSED_LEN} bytes"
+        )));
+    }
+    let prefix = distid_len_prefix(distid)?;
+    let mut out =
+        Vec::with_capacity(SM2_DISTID_LEN_BYTES + distid.len() + SM2_PUBLIC_KEY_UNCOMPRESSED_LEN);
+    out.extend_from_slice(&prefix);
+    out.extend_from_slice(distid.as_bytes());
+    out.extend_from_slice(sec1);
+    Ok(out)
+}
+
+/// Encode an SM2 private key payload with an explicit distinguishing identifier.
+///
+/// Layout: `distid_len (u16 BE)` || `distid bytes` || `secret (32 bytes)`.
+pub fn encode_sm2_private_key_payload(distid: &str, secret: &[u8]) -> Result<Vec<u8>, ParseError> {
+    if secret.len() != SM2_PRIVATE_KEY_LEN {
+        return Err(ParseError(format!(
+            "SM2 private key must be {SM2_PRIVATE_KEY_LEN} bytes"
+        )));
+    }
+    let prefix = distid_len_prefix(distid)?;
+    let mut out = Vec::with_capacity(SM2_DISTID_LEN_BYTES + distid.len() + SM2_PRIVATE_KEY_LEN);
+    out.extend_from_slice(&prefix);
+    out.extend_from_slice(distid.as_bytes());
+    out.extend_from_slice(secret);
+    Ok(out)
+}
+
+/// Decode an SM2 public key payload that embeds the distinguishing identifier.
+pub fn decode_sm2_public_key_payload(payload: &[u8]) -> Result<Sm2PublicKey, ParseError> {
+    let (distid, rest) = split_sm2_payload(payload)?;
+    if rest.len() != SM2_PUBLIC_KEY_UNCOMPRESSED_LEN {
+        return Err(ParseError(format!(
+            "SM2 public key payload must be {SM2_PUBLIC_KEY_UNCOMPRESSED_LEN} bytes"
+        )));
+    }
+    let key = Sm2PublicKey::from_sec1_bytes(&distid, rest)?;
+    if key.to_sec1_bytes(false) != rest {
+        return Err(ParseError("non-canonical SM2 public key encoding".into()));
+    }
+    Ok(key)
+}
+
+/// Decode an SM2 private key payload that embeds the distinguishing identifier.
+pub fn decode_sm2_private_key_payload(payload: &[u8]) -> Result<Sm2PrivateKey, ParseError> {
+    let (distid, rest) = split_sm2_payload(payload)?;
+    if rest.len() != SM2_PRIVATE_KEY_LEN {
+        return Err(ParseError(format!(
+            "SM2 private key payload must be {SM2_PRIVATE_KEY_LEN} bytes"
+        )));
+    }
+    Sm2PrivateKey::from_bytes(distid, rest)
 }
 
 impl PartialEq for Sm2PrivateKey {
@@ -632,7 +754,8 @@ impl Sm2Signature {
     /// Parse a DER-encoded SM2 signature (`SEQUENCE { INTEGER r, INTEGER s }`).
     ///
     /// # Errors
-    /// Returns [`ParseError`] when the DER structure is malformed or the decoded signature is invalid.
+    /// Returns [`ParseError`] when the DER structure is malformed, uses a non-canonical INTEGER
+    /// encoding, or the decoded signature is invalid.
     pub fn from_der(bytes: &[u8]) -> Result<Self, ParseError> {
         if bytes.len() < 2 || bytes[0] != 0x30 {
             return Err(ParseError("SM2 DER signature must start with 0x30".into()));
@@ -690,6 +813,17 @@ fn parse_der_integer(bytes: &[u8], cursor: &mut usize) -> Result<[u8; 32], Parse
     }
     let slice = &bytes[*cursor..*cursor + len];
     *cursor += len;
+
+    if slice[0] & 0x80 != 0 {
+        return Err(ParseError(
+            "SM2 DER signature INTEGER must be non-negative".into(),
+        ));
+    }
+    if len > 1 && slice[0] == 0x00 && slice[1] & 0x80 == 0 {
+        return Err(ParseError(
+            "SM2 DER signature INTEGER has non-canonical leading zero".into(),
+        ));
+    }
 
     let value = if slice[0] == 0 { &slice[1..] } else { slice };
     if value.len() > 32 {
@@ -2813,7 +2947,7 @@ mod tests {
     #[test]
     fn sm2_public_key_pem_roundtrip() {
         let mut rng = OsRng;
-        let private = Sm2PrivateKey::random("custom-distid", &mut rng);
+        let private = Sm2PrivateKey::random("custom-distid", &mut rng).expect("valid distid");
         let public = private.public_key();
         let pem = public
             .to_public_key_pem()
@@ -2845,7 +2979,7 @@ mod tests {
     fn sm2_compute_z_aligns_with_signing_key() {
         let mut rng = OsRng;
         let distid = "device:alpha";
-        let private = Sm2PrivateKey::random(distid, &mut rng);
+        let private = Sm2PrivateKey::random(distid, &mut rng).expect("valid distid");
         let public = private.public_key();
         let za = public.compute_z(distid).expect("compute ZA");
 
@@ -2998,7 +3132,8 @@ mod tests {
     #[test]
     fn sm2_random_private_key_roundtrip() {
         let mut rng = OsRng;
-        let private = Sm2PrivateKey::random(Sm2PublicKey::DEFAULT_DISTID, &mut rng);
+        let private =
+            Sm2PrivateKey::random(Sm2PublicKey::DEFAULT_DISTID, &mut rng).expect("valid distid");
         let message = b"random sm2";
         let signature = private.sign(message);
         let public = private.public_key();
@@ -3010,9 +3145,31 @@ mod tests {
     #[test]
     fn sm2_default_distid_can_be_overridden() {
         let original = Sm2PublicKey::default_distid();
-        Sm2PublicKey::set_default_distid("override-distid");
+        Sm2PublicKey::set_default_distid("override-distid").expect("valid distid should set");
         assert_eq!(Sm2PublicKey::default_distid(), "override-distid");
-        Sm2PublicKey::set_default_distid(original);
+        Sm2PublicKey::set_default_distid(original).expect("restore distid");
+    }
+
+    #[test]
+    fn sm2_default_distid_rejects_invalid_value() {
+        let original = Sm2PublicKey::default_distid();
+        let distid = "a".repeat(8192);
+        assert!(
+            Sm2PublicKey::set_default_distid(distid).is_err(),
+            "expected invalid distid to be rejected"
+        );
+        assert_eq!(Sm2PublicKey::default_distid(), original);
+    }
+
+    #[test]
+    fn sm2_public_key_equality_includes_distid() {
+        let secret = [0x44u8; 32];
+        let a = Sm2PrivateKey::new("distid-a", secret).expect("sm2 key a");
+        let b = Sm2PrivateKey::new("distid-b", secret).expect("sm2 key b");
+        let pk_a = a.public_key();
+        let pk_b = b.public_key();
+        assert_eq!(pk_a.to_sec1_bytes(false), pk_b.to_sec1_bytes(false));
+        assert_ne!(pk_a, pk_b);
     }
 
     #[test]
@@ -3026,6 +3183,52 @@ mod tests {
             original.public_key().to_sec1_bytes(false),
             restored.public_key().to_sec1_bytes(false)
         );
+    }
+
+    #[test]
+    fn sm2_payload_roundtrip_preserves_distid() {
+        let distid = "payload-distid";
+        let private = Sm2PrivateKey::from_seed(distid, b"payload-seed").expect("seeded key");
+        let public = private.public_key();
+
+        let sec1 = public.to_sec1_bytes(false);
+        let public_payload =
+            encode_sm2_public_key_payload(distid, &sec1).expect("encode public payload");
+        let decoded_public =
+            decode_sm2_public_key_payload(&public_payload).expect("decode public payload");
+        assert_eq!(decoded_public.to_sec1_bytes(false), sec1);
+        assert_eq!(decoded_public.distid(), distid);
+
+        let secret = private.secret_bytes();
+        let private_payload =
+            encode_sm2_private_key_payload(distid, &secret).expect("encode private payload");
+        let decoded_private =
+            decode_sm2_private_key_payload(&private_payload).expect("decode private payload");
+        assert_eq!(decoded_private.secret_bytes(), secret);
+        assert_eq!(decoded_private.distid(), distid);
+    }
+
+    #[test]
+    fn sm2_distid_length_overflow_is_rejected() {
+        let distid = "a".repeat(8192);
+        let secret = [0x11u8; 32];
+        assert!(
+            Sm2PrivateKey::from_bytes(distid.clone(), &secret).is_err(),
+            "expected oversized distid to be rejected"
+        );
+        let key = Sm2PrivateKey::from_seed("short-distid", b"seed").expect("seeded key");
+        let sec1 = key.public_key().to_sec1_bytes(false);
+        assert!(
+            Sm2PublicKey::from_sec1_bytes(&distid, &sec1).is_err(),
+            "expected oversized distid to be rejected"
+        );
+    }
+
+    #[test]
+    fn sm2_random_rejects_invalid_distid() {
+        let mut rng = OsRng;
+        let distid = "a".repeat(8192);
+        assert!(Sm2PrivateKey::random(distid, &mut rng).is_err());
     }
 
     #[cfg(not(feature = "ffi_import"))]
@@ -3043,9 +3246,10 @@ mod tests {
             "prefixed multihash must include sm2 prefix"
         );
 
-        let encoded = public.to_sec1_bytes(false);
+        let sec1 = public.to_sec1_bytes(false);
+        let payload = encode_sm2_public_key_payload(public.distid(), &sec1).expect("SM2 payload");
         let general =
-            PublicKey::from_bytes(Algorithm::Sm2, &encoded).expect("construct public key wrapper");
+            PublicKey::from_bytes(Algorithm::Sm2, &payload).expect("construct public key wrapper");
         assert_eq!(prefixed, general.to_prefixed_string());
     }
 
@@ -3064,7 +3268,7 @@ mod tests {
     fn sm2_signature_der_handles_high_bit_components() {
         let mut rng = OsRng;
         for attempt in 0..1024usize {
-            let private = Sm2PrivateKey::random("interop-highbit", &mut rng);
+            let private = Sm2PrivateKey::random("interop-highbit", &mut rng).expect("valid distid");
             let message = format!("attempt-{attempt}").into_bytes();
             let signature = private.sign(&message);
             if signature.r[0] & 0x80 != 0 || signature.s[0] & 0x80 != 0 {
@@ -3075,5 +3279,65 @@ mod tests {
             }
         }
         panic!("failed to produce SM2 signature with high-bit component after 1024 attempts");
+    }
+
+    #[test]
+    fn sm2_signature_der_rejects_non_canonical_leading_zero() {
+        let der = hex::decode(ANNEX_SIG_DER_HEX).expect("DER hex");
+        let r_start = 4;
+        let r_end = r_start + 32;
+        let s_start = r_end + 2;
+        let s_end = s_start + 32;
+        let r = &der[r_start..r_end];
+        let s = &der[s_start..s_end];
+
+        let seq_len = der[1].checked_add(1).expect("sequence length fits");
+        let mut non_canonical = Vec::with_capacity(der.len() + 1);
+        non_canonical.push(0x30);
+        non_canonical.push(seq_len);
+        non_canonical.push(0x02);
+        non_canonical.push(0x21);
+        non_canonical.push(0x00);
+        non_canonical.extend_from_slice(r);
+        non_canonical.push(0x02);
+        non_canonical.push(0x20);
+        non_canonical.extend_from_slice(s);
+
+        assert!(Sm2Signature::from_der(&non_canonical).is_err());
+    }
+
+    #[test]
+    fn sm2_signature_der_rejects_negative_integer_encoding() {
+        let mut r = [0u8; 32];
+        r[0] = 0x80;
+        let mut s = [0u8; 32];
+        s[31] = 0x01;
+
+        let mut der = Vec::with_capacity(70);
+        der.push(0x30);
+        der.push(0x44);
+        der.push(0x02);
+        der.push(0x20);
+        der.extend_from_slice(&r);
+        der.push(0x02);
+        der.push(0x20);
+        der.extend_from_slice(&s);
+
+        assert!(Sm2Signature::from_der(&der).is_err());
+    }
+
+    #[test]
+    fn sm2_signature_der_rejects_negative_single_byte_integer() {
+        let mut der = Vec::with_capacity(8);
+        der.push(0x30);
+        der.push(0x06);
+        der.push(0x02);
+        der.push(0x01);
+        der.push(0x80);
+        der.push(0x02);
+        der.push(0x01);
+        der.push(0x01);
+
+        assert!(Sm2Signature::from_der(&der).is_err());
     }
 }

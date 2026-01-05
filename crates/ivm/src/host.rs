@@ -603,6 +603,13 @@ impl IVMHost for DefaultHost {
                 Self::expect_tlv(vm, 11, PointerType::AccountId)?;
                 Ok(0)
             }
+            crate::syscalls::SYSCALL_NFT_TRANSFER_ASSET => {
+                // r10=&AccountId(from), r11=&NftId, r12=&AccountId(to)
+                Self::expect_tlv(vm, 10, PointerType::AccountId)?;
+                Self::expect_tlv(vm, 11, PointerType::NftId)?;
+                Self::expect_tlv(vm, 12, PointerType::AccountId)?;
+                Ok(0)
+            }
             crate::syscalls::SYSCALL_TRANSFER_ASSET => {
                 if self.fastpq_batch_active {
                     self.push_fastpq_batch_entry(vm)

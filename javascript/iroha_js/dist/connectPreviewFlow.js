@@ -72,7 +72,7 @@ export async function bootstrapConnectPreviewSession(toriiClient, options = {}) 
   const sessionOverrides = normalizeSessionOptions(options.sessionOptions ?? null);
   const sessionInput = {
     ...sessionOverrides,
-    sid: preview.sidHex,
+    sid: preview.sidBase64Url,
   };
   if (
     (sessionInput.node === undefined || sessionInput.node === null) &&

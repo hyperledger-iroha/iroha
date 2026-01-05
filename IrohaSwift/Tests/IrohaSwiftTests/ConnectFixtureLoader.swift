@@ -10,16 +10,14 @@ struct ConnectFixtureBundle {
 }
 
 struct ConnectFixtureSession: Decodable {
-    let sidHex: String
-    let sidBase64: String
+    let sidBase64Url: String
     let webSocketURL: String
     let toriiBaseURL: String
     let connectPolicyHash: String
     let notes: String?
 
     enum CodingKeys: String, CodingKey {
-        case sidHex = "sid_hex"
-        case sidBase64 = "sid_base64"
+        case sidBase64Url = "sid_base64url"
         case webSocketURL = "web_socket_url"
         case toriiBaseURL = "torii_base_url"
         case connectPolicyHash = "connect_policy_hash"
@@ -54,7 +52,7 @@ struct ConnectFixtureScenario: Decodable {
 
     let scenario: String
     let toriiBuild: String
-    let sidBase64: String
+    let sidBase64Url: String
     let description: String
     let frames: [Frame]
     let events: [Event]
@@ -62,7 +60,7 @@ struct ConnectFixtureScenario: Decodable {
     enum CodingKeys: String, CodingKey {
         case scenario
         case toriiBuild = "torii_build"
-        case sidBase64 = "sid_base64"
+        case sidBase64Url = "sid_base64url"
         case description
         case frames
         case events

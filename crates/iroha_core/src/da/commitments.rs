@@ -54,8 +54,8 @@ pub enum DaSpoolError {
 ///
 /// # Errors
 ///
-/// Returns a [`DaSpoolError`] if the spool directory cannot be read, a
-/// commitment file fails to decode, or an I/O error occurs while loading files.
+/// Returns a [`DaSpoolError`] if the spool directory cannot be read. Individual
+/// commitment files that fail to read or decode are skipped with a warning.
 pub fn load_commitment_bundle(
     spool_dir: &Path,
 ) -> Result<Option<DaCommitmentBundle>, DaSpoolError> {
@@ -85,15 +85,24 @@ pub fn load_commitment_bundle(
         let bytes = match std::fs::read(&path) {
             Ok(buf) => buf,
             Err(source) => {
-                warn!(?source, path = %path.display(), "failed to read DA commitment file");
-                return Err(DaSpoolError::ReadFile { path, source });
+                warn!(
+                    ?source,
+                    path = %path.display(),
+                    "failed to read DA commitment file; skipping"
+                );
+                continue;
             }
         };
 
         match decode_from_bytes::<DaCommitmentRecord>(&bytes) {
             Ok(record) => records.push(record),
             Err(source) => {
-                return Err(DaSpoolError::Decode { path, source });
+                warn!(
+                    ?source,
+                    path = %path.display(),
+                    "failed to decode DA commitment file; skipping"
+                );
+                continue;
             }
         }
     }
@@ -113,7 +122,7 @@ pub fn load_commitment_bundle(
 ///
 /// # Errors
 ///
-/// Propagates [`DaSpoolError`] when commitment files cannot be decoded or accessed.
+/// Propagates [`DaSpoolError`] when the spool directory cannot be read.
 pub fn load_commitment_store(spool_dir: &Path) -> Result<DaCommitmentStore, DaSpoolError> {
     match load_commitment_bundle(spool_dir)? {
         Some(bundle) => Ok(DaCommitmentStore::from_bundle(&bundle.commitments)),
@@ -210,5 +219,28 @@ mod tests {
             .get_by_lane_epoch_sequence(1, 1, 1)
             .expect("commitment present");
         assert_eq!(fetched.commitment.storage_ticket, record.storage_ticket);
+    }
+
+    #[test]
+    fn commitment_bundle_skips_corrupt_entries() {
+        let dir = tempdir().expect("tempdir");
+        let record = sample_record(1, 1);
+        let bytes = to_bytes(&record).expect("encode record");
+
+        let valid_path = dir
+            .path()
+            .join("da-commitment-00000001-0000000000000001-0000000000000001-ok.norito");
+        let corrupt_path = dir
+            .path()
+            .join("da-commitment-00000001-0000000000000001-0000000000000002-bad.norito");
+
+        std::fs::write(valid_path, bytes).expect("write valid");
+        std::fs::write(corrupt_path, b"corrupt").expect("write corrupt");
+
+        let bundle = load_commitment_bundle(dir.path())
+            .expect("load bundle")
+            .expect("bundle present");
+        assert_eq!(bundle.commitments.len(), 1);
+        assert_eq!(bundle.commitments[0], record);
     }
 }

@@ -220,6 +220,7 @@ Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
 Utility builtins
 - `info(string|int)`: emits a structured event/message via OUTPUT.
 - `hash(blob) -> Blob*`: returns a Norito-encoded hash as Blob.
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` and `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: inline ISI builders; all arguments must be compile-time literals (string literals or pointer constructors from literals). `nullifier32` and `inputs32` must be exactly 32 bytes (raw string or `0x` hex), and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `pointer_to_norito(ptr) -> NoritoBytes*`: wraps an existing pointer-ABI TLV as NoritoBytes for storage or transport.
 - `isqrt(int) -> int`: integer square root (`floor(sqrt(x))`) implemented as an IVM opcode.

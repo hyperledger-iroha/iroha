@@ -480,7 +480,7 @@ mod tests {
         let existing_peer = PeerId::new(existing_kp.public_key().clone());
         let existing_pop = iroha_crypto::bls_normal_pop_prove(existing_kp.private_key())
             .expect("generate BLS PoP");
-        let mut genesis_file = tempfile::NamedTempFile::new().expect("create temp genesis file");
+        let genesis_file = tempfile::NamedTempFile::new().expect("create temp genesis file");
         let manifest = GenesisBuilder::new_without_executor(
             ChainId::from("topology-override"),
             PathBuf::from("."),

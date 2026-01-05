@@ -2311,11 +2311,24 @@ impl StreamingHandle {
             }
         }
         let tmp_path = snapshot_temp_path(path);
-        fs::write(&tmp_path, &bytes)?;
-        if path.exists() {
-            let _ = fs::remove_file(path);
+        {
+            let mut file = fs::File::create(&tmp_path)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
         }
-        fs::rename(&tmp_path, path)?;
+        if let Err(err) = fs::rename(&tmp_path, path) {
+            if err.kind() == io::ErrorKind::AlreadyExists {
+                fs::remove_file(path)?;
+                fs::rename(&tmp_path, path)?;
+            } else {
+                return Err(err.into());
+            }
+        }
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                sync_dir(parent)?;
+            }
+        }
         Ok(())
     }
 
@@ -2354,23 +2367,58 @@ impl StreamingHandle {
         path: P,
     ) -> Result<(), StreamingSnapshotError> {
         let path = path.as_ref();
-        let bytes = match fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(err) => return Err(StreamingSnapshotError::Io(err)),
-        };
+        let tmp_path = snapshot_temp_path(path);
+        let tmp_bytes = read_snapshot_bytes(&tmp_path)?;
+        let main_bytes = read_snapshot_bytes(path)?;
+        if tmp_bytes.is_none() && main_bytes.is_none() {
+            return Ok(());
+        }
         let encryptor = self
             .snapshot_encryptor
             .as_ref()
             .ok_or(StreamingSnapshotError::MissingEncryptionKey)?;
-        let plaintext = encryptor.decrypt_easy(SNAPSHOT_AAD, &bytes)?;
-        let file = decode_snapshot_plaintext(&plaintext)?;
-        if file.version != SNAPSHOT_VERSION {
-            return Err(StreamingSnapshotError::UnsupportedVersion {
-                found: file.version,
-            });
+        let mut tmp_error = None;
+        let mut selected = None;
+        let mut used_tmp = false;
+
+        if let Some(bytes) = tmp_bytes.as_deref() {
+            match decode_snapshot_bytes(bytes, encryptor) {
+                Ok(file) => {
+                    used_tmp = true;
+                    selected = Some(file);
+                }
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        path = %tmp_path.display(),
+                        "streaming snapshot temp file is not usable"
+                    );
+                    tmp_error = Some(err);
+                }
+            }
         }
-        self.restore_snapshots(file.entries)?;
+
+        if selected.is_none() {
+            if let Some(bytes) = main_bytes.as_deref() {
+                selected = Some(decode_snapshot_bytes(bytes, encryptor)?);
+            }
+        }
+
+        if let Some(file) = selected {
+            if used_tmp {
+                warn!(
+                    path = %tmp_path.display(),
+                    "streaming snapshot temp file detected; promoting"
+                );
+                promote_snapshot_temp(&tmp_path, path);
+            }
+            self.restore_snapshots(file.entries)?;
+            return Ok(());
+        }
+
+        if let Some(err) = tmp_error {
+            return Err(err);
+        }
         Ok(())
     }
 
@@ -2684,6 +2732,75 @@ fn snapshot_temp_path(path: &Path) -> PathBuf {
     path.with_added_extension("tmp")
 }
 
+fn read_snapshot_bytes(path: &Path) -> Result<Option<Vec<u8>>, StreamingSnapshotError> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(StreamingSnapshotError::Io(err)),
+    }
+}
+
+fn decode_snapshot_bytes(
+    bytes: &[u8],
+    encryptor: &SymmetricEncryptor<ChaCha20Poly1305>,
+) -> Result<StreamingSnapshotFile, StreamingSnapshotError> {
+    let plaintext = encryptor.decrypt_easy(SNAPSHOT_AAD, bytes)?;
+    let file = decode_snapshot_plaintext(&plaintext)?;
+    if file.version != SNAPSHOT_VERSION {
+        return Err(StreamingSnapshotError::UnsupportedVersion {
+            found: file.version,
+        });
+    }
+    Ok(file)
+}
+
+fn promote_snapshot_temp(tmp_path: &Path, main_path: &Path) {
+    let promoted = match fs::rename(tmp_path, main_path) {
+        Ok(()) => true,
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+            if let Err(remove_err) = fs::remove_file(main_path) {
+                warn!(
+                    ?remove_err,
+                    path = %main_path.display(),
+                    "failed to remove streaming snapshot before promotion"
+                );
+                false
+            } else if let Err(rename_err) = fs::rename(tmp_path, main_path) {
+                warn!(
+                    ?rename_err,
+                    path = %tmp_path.display(),
+                    "failed to promote streaming snapshot temp file after removal"
+                );
+                false
+            } else {
+                true
+            }
+        }
+        Err(err) => {
+            warn!(
+                ?err,
+                path = %tmp_path.display(),
+                "failed to promote streaming snapshot temp file"
+            );
+            false
+        }
+    };
+
+    if promoted {
+        if let Some(parent) = main_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                if let Err(err) = sync_dir(parent) {
+                    warn!(
+                        ?err,
+                        path = %parent.display(),
+                        "failed to sync streaming snapshot directory"
+                    );
+                }
+            }
+        }
+    }
+}
+
 fn decode_snapshot_plaintext(
     plaintext: &[u8],
 ) -> Result<StreamingSnapshotFile, StreamingSnapshotError> {
@@ -2703,6 +2820,11 @@ fn decode_snapshot_plaintext(
             Ok(value)
         })
         .map_err(StreamingSnapshotError::Codec)
+}
+
+fn sync_dir(path: &Path) -> io::Result<()> {
+    let file = fs::File::open(path)?;
+    file.sync_all()
 }
 
 /// Abstraction over the transport used to deliver streaming control frames.
@@ -5885,6 +6007,104 @@ mod tests {
             restored_handle.transport_capabilities_hash(viewer_peer.id()),
             Some(resolution.capabilities_hash()),
             "restored handle retains transport capability hash"
+        );
+    }
+
+    #[test]
+    fn snapshot_load_promotes_temp_file() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let snapshot_path = dir.path().join("sessions.norito");
+
+        let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let viewer_keys = KeyPair::random();
+        let publisher_peer = make_peer(&publisher_keys, 18001);
+        let viewer_peer = make_peer(&viewer_keys, 18002);
+        let session_id = hash_with(0x5A);
+        let suite = EncryptionSuite::X25519ChaCha20Poly1305(hash_with(0x6B));
+        let resolution = sample_resolution();
+
+        let material = StreamingKeyMaterial::new(publisher_keys.clone())
+            .expect("publisher material requires ed25519");
+        let publisher_key = snapshot_session_key(&material);
+        let publisher_handle = StreamingHandle::with_key_material(material.clone())
+            .with_snapshot_path(snapshot_path.clone())
+            .with_snapshot_encryption_key(&publisher_key)
+            .expect("configure snapshot encryption key");
+        let viewer_key = snapshot_session_key(&material);
+        let viewer_handle = StreamingHandle::new()
+            .with_snapshot_encryption_key(&viewer_key)
+            .expect("configure viewer snapshot encryption key");
+
+        let publisher_update = publisher_handle
+            .build_key_update(
+                &viewer_peer,
+                CapabilityRole::Publisher,
+                &KeyUpdateSpec {
+                    session_id,
+                    suite: &suite,
+                    protocol_version: 1,
+                    key_counter: 1,
+                },
+                publisher_keys.private_key(),
+            )
+            .expect("publisher key update");
+        let publisher_frame = ControlFrame::KeyUpdate(publisher_update);
+        viewer_handle
+            .process_control_frame(&publisher_peer, &publisher_frame)
+            .expect("viewer processes key update");
+
+        let viewer_update = viewer_handle
+            .build_key_update(
+                &publisher_peer,
+                CapabilityRole::Viewer,
+                &KeyUpdateSpec {
+                    session_id,
+                    suite: &suite,
+                    protocol_version: 1,
+                    key_counter: 2,
+                },
+                viewer_keys.private_key(),
+            )
+            .expect("viewer key update");
+        let viewer_frame = ControlFrame::KeyUpdate(viewer_update);
+        publisher_handle
+            .process_control_frame(&viewer_peer, &viewer_frame)
+            .expect("publisher processes viewer key update");
+
+        publisher_handle
+            .record_transport_capabilities(&viewer_peer, CapabilityRole::Publisher, resolution)
+            .expect("publisher records capabilities");
+        viewer_handle
+            .record_transport_capabilities(&publisher_peer, CapabilityRole::Viewer, resolution)
+            .expect("viewer records capabilities");
+        let negotiated =
+            CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED | 0b101);
+        publisher_handle
+            .record_negotiated_capabilities(&viewer_peer, CapabilityRole::Publisher, negotiated)
+            .expect("publisher records features");
+        viewer_handle
+            .record_negotiated_capabilities(&publisher_peer, CapabilityRole::Viewer, negotiated)
+            .expect("viewer records features");
+
+        publisher_handle
+            .persist_snapshots()
+            .expect("persist streaming snapshots");
+        let tmp_path = snapshot_temp_path(&snapshot_path);
+        fs::rename(&snapshot_path, &tmp_path).expect("move snapshot to temp");
+
+        let restored_key = snapshot_session_key(&material);
+        let restored_handle = StreamingHandle::with_key_material(material)
+            .with_snapshot_path(snapshot_path.clone())
+            .with_snapshot_encryption_key(&restored_key)
+            .expect("configure restored snapshot encryption key");
+        restored_handle
+            .load_snapshots_from_path(&snapshot_path)
+            .expect("load streaming snapshots from temp");
+        assert!(snapshot_path.exists(), "snapshot file should be promoted");
+        assert!(!tmp_path.exists(), "temp snapshot file should be removed");
+        assert!(
+            restored_handle.transport_keys(viewer_peer.id()).is_some(),
+            "restored handle should retain transport keys"
         );
     }
 

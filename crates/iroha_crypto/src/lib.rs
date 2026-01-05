@@ -210,7 +210,8 @@ impl KeyPair {
             Algorithm::Sm2 => {
                 let mut rng = sm2::elliptic_curve::rand_core::OsRng;
                 let private =
-                    sm::Sm2PrivateKey::random(sm::Sm2PublicKey::default_distid(), &mut rng);
+                    sm::Sm2PrivateKey::random(sm::Sm2PublicKey::default_distid(), &mut rng)
+                        .expect("sm2 default distid must be valid");
                 let public_key = PublicKey::new(PublicKeyFull::Sm2(private.public_key()));
                 let private_key = PrivateKey(Box::new(Secret::new(PrivateKeyInner::Sm2(private))));
                 KeyPair {
@@ -224,7 +225,10 @@ impl KeyPair {
 
 #[ffi_impl_opaque]
 impl KeyPair {
-    /// Derive a key pair from a seed using pRNG
+    /// Derive a key pair from seed material.
+    ///
+    /// Ed25519 uses the seed directly when 32 bytes are provided; other lengths are
+    /// hashed with SHA-256 to obtain a canonical 32-byte seed.
     pub fn from_seed(seed: Vec<u8>, algorithm: Algorithm) -> Self {
         match algorithm {
             Algorithm::Ed25519 => {
@@ -487,10 +491,13 @@ impl PublicKeyFull {
             #[cfg(feature = "ml-dsa")]
             Algorithm::MlDsa => {
                 use pqcrypto_dilithium::dilithium3 as dilithium;
+                use pqcrypto_traits::sign::PublicKey as _;
                 if payload.len() != dilithium::public_key_bytes() {
                     return Err(ParseError("invalid ML-DSA public key length".to_string()));
                 }
-                Ok(PublicKeyFull::MlDsa(payload.to_vec()))
+                let pk = dilithium::PublicKey::from_bytes(payload)
+                    .map_err(|_| ParseError("invalid ML-DSA public key".to_string()))?;
+                Ok(PublicKeyFull::MlDsa(pk.as_bytes().to_vec()))
             }
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA
@@ -510,10 +517,7 @@ impl PublicKeyFull {
                 bls::BlsSmall::parse_public_key(payload).map(PublicKeyFull::BlsSmall)
             }
             #[cfg(feature = "sm")]
-            Algorithm::Sm2 => {
-                Sm2PublicKey::from_sec1_bytes(Sm2PublicKey::default_distid(), payload)
-                    .map(PublicKeyFull::Sm2)
-            }
+            Algorithm::Sm2 => sm::decode_sm2_public_key_payload(payload).map(PublicKeyFull::Sm2),
         }
     }
 
@@ -535,7 +539,11 @@ impl PublicKeyFull {
             #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
             Self::BlsSmall(key) => key.to_bytes().to_const_vec(),
             #[cfg(feature = "sm")]
-            Self::Sm2(key) => key.to_sec1_bytes(false).to_const_vec(),
+            Self::Sm2(key) => {
+                sm::encode_sm2_public_key_payload(key.distid(), &key.to_sec1_bytes(false))
+                    .expect("SM2 public key payload must be encodable")
+                    .to_const_vec()
+            }
         }
     }
 
@@ -735,13 +743,25 @@ pub fn bls_small_verify_batch_deterministic(
 ///
 /// # Errors
 /// Returns `Err(Error::BadSignature)` if any signature/public key fails to parse or verify,
-/// or if input slice lengths are inconsistent.
+/// or if input slice lengths are inconsistent. Public keys must be unique.
 #[cfg(feature = "bls")]
 pub fn bls_normal_verify_aggregate_same_message(
     message: &[u8],
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
+    if signatures.len() != public_keys.len() || signatures.is_empty() {
+        return Err(Error::BadSignature);
+    }
+    {
+        use std::collections::BTreeSet;
+        let mut seen = BTreeSet::new();
+        for &pk in public_keys {
+            if !seen.insert(pk) {
+                return Err(Error::BadSignature);
+            }
+        }
+    }
     // Preferred: aggregate-style helper; internal path may be per-sig today.
     if let Ok(()) =
         signature::bls::verify_aggregate_same_message_normal(message, signatures, public_keys)
@@ -749,9 +769,6 @@ pub fn bls_normal_verify_aggregate_same_message(
         Ok(())
     } else {
         // Fallback: per-signature
-        if signatures.len() != public_keys.len() || signatures.is_empty() {
-            return Err(Error::BadSignature);
-        }
         for (s, pk) in signatures.iter().zip(public_keys.iter()) {
             let vk = signature::bls::BlsNormal::parse_public_key(pk)?;
             signature::bls::BlsNormal::verify(message, s, &vk)?;
@@ -772,15 +789,27 @@ pub fn bls_normal_verify_aggregate_multi_message(
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
+    {
+        use std::collections::BTreeSet;
+        if messages.len() != signatures.len()
+            || signatures.len() != public_keys.len()
+            || messages.is_empty()
+        {
+            return Err(Error::BadSignature);
+        }
+        let mut seen = BTreeSet::new();
+        for &msg in messages {
+            if !seen.insert(msg) {
+                return Err(Error::BadSignature);
+            }
+        }
+    }
     if let Ok(()) =
         signature::bls::verify_aggregate_multi_message_normal(messages, signatures, public_keys)
     {
         return Ok(());
     }
 
-    if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
-        return Err(Error::BadSignature);
-    }
     for ((m, s), pk) in messages
         .iter()
         .zip(signatures.iter())
@@ -805,15 +834,27 @@ pub fn bls_normal_verify_aggregate_multi_message(
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
+    {
+        use std::collections::BTreeSet;
+        if messages.len() != signatures.len()
+            || signatures.len() != public_keys.len()
+            || messages.is_empty()
+        {
+            return Err(Error::BadSignature);
+        }
+        let mut seen = BTreeSet::new();
+        for &msg in messages {
+            if !seen.insert(msg) {
+                return Err(Error::BadSignature);
+            }
+        }
+    }
     // Prefer pairing-product helper; on failure, fall back to per-signature verify
     if let Ok(()) =
         signature::bls::verify_aggregate_multi_message_normal(messages, signatures, public_keys)
     {
         Ok(())
     } else {
-        if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
-            return Err(Error::BadSignature);
-        }
         for ((m, s), pk) in messages
             .iter()
             .zip(signatures.iter())
@@ -840,8 +881,20 @@ pub fn bls_small_verify_aggregate_multi_message(
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
-    if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
-        return Err(Error::BadSignature);
+    {
+        use std::collections::BTreeSet;
+        if messages.len() != signatures.len()
+            || signatures.len() != public_keys.len()
+            || messages.is_empty()
+        {
+            return Err(Error::BadSignature);
+        }
+        let mut seen = BTreeSet::new();
+        for &msg in messages {
+            if !seen.insert(msg) {
+                return Err(Error::BadSignature);
+            }
+        }
     }
     for ((m, s), pk) in messages
         .iter()
@@ -867,14 +920,26 @@ pub fn bls_small_verify_aggregate_multi_message(
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
+    {
+        use std::collections::BTreeSet;
+        if messages.len() != signatures.len()
+            || signatures.len() != public_keys.len()
+            || messages.is_empty()
+        {
+            return Err(Error::BadSignature);
+        }
+        let mut seen = BTreeSet::new();
+        for &msg in messages {
+            if !seen.insert(msg) {
+                return Err(Error::BadSignature);
+            }
+        }
+    }
     if let Ok(()) =
         signature::bls::verify_aggregate_multi_message_small(messages, signatures, public_keys)
     {
         Ok(())
     } else {
-        if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
-            return Err(Error::BadSignature);
-        }
         for ((m, s), pk) in messages
             .iter()
             .zip(signatures.iter())
@@ -891,21 +956,30 @@ pub fn bls_small_verify_aggregate_multi_message(
 ///
 /// # Errors
 /// Returns `Err(Error::BadSignature)` if any signature/public key fails to parse or verify,
-/// or if input slice lengths are inconsistent.
+/// or if input slice lengths are inconsistent. Public keys must be unique.
 #[cfg(feature = "bls")]
 pub fn bls_small_verify_aggregate_same_message(
     message: &[u8],
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
+    if signatures.len() != public_keys.len() || signatures.is_empty() {
+        return Err(Error::BadSignature);
+    }
+    {
+        use std::collections::BTreeSet;
+        let mut seen = BTreeSet::new();
+        for &pk in public_keys {
+            if !seen.insert(pk) {
+                return Err(Error::BadSignature);
+            }
+        }
+    }
     if let Ok(()) =
         signature::bls::verify_aggregate_same_message_small(message, signatures, public_keys)
     {
         Ok(())
     } else {
-        if signatures.len() != public_keys.len() || signatures.is_empty() {
-            return Err(Error::BadSignature);
-        }
         for (s, pk) in signatures.iter().zip(public_keys.iter()) {
             let vk = signature::bls::BlsSmall::parse_public_key(pk)?;
             signature::bls::BlsSmall::verify(message, s, &vk)?;
@@ -1741,10 +1815,7 @@ impl PrivateKey {
                     .map(|secret| PrivateKeyInner::Gost { algorithm, secret })
             }
             #[cfg(feature = "sm")]
-            Algorithm::Sm2 => {
-                sm::Sm2PrivateKey::from_bytes(sm::Sm2PublicKey::default_distid(), payload)
-                    .map(PrivateKeyInner::Sm2)
-            }
+            Algorithm::Sm2 => sm::decode_sm2_private_key_payload(payload).map(PrivateKeyInner::Sm2),
             #[cfg(feature = "bls")]
             Algorithm::BlsNormal => {
                 bls::BlsNormal::parse_private_key(payload).map(PrivateKeyInner::BlsNormal)
@@ -1802,7 +1873,10 @@ impl PrivateKey {
             #[cfg(feature = "gost")]
             PrivateKeyInner::Gost { secret, .. } => secret.as_bytes().to_vec(),
             #[cfg(feature = "sm")]
-            PrivateKeyInner::Sm2(key) => key.secret_bytes().to_vec(),
+            PrivateKeyInner::Sm2(key) => {
+                sm::encode_sm2_private_key_payload(key.distid(), &key.secret_bytes())
+                    .expect("SM2 private key payload must be encodable")
+            }
             #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
             PrivateKeyInner::BlsNormal(key) => key.to_bytes().clone(),
             #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
@@ -2376,6 +2450,25 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ml-dsa")]
+    fn ml_dsa_public_key_parse_rejects_invalid_length() {
+        use pqcrypto_dilithium::dilithium3 as dilithium;
+        use pqcrypto_traits::sign::PublicKey as _;
+
+        let (pk, _) = dilithium::keypair();
+        let parsed = PublicKey::from_bytes(Algorithm::MlDsa, pk.as_bytes());
+        assert!(parsed.is_ok(), "expected valid ML-DSA public key bytes");
+
+        let mut bad = pk.as_bytes().to_vec();
+        bad.push(0x00);
+        let err = PublicKey::from_bytes(Algorithm::MlDsa, &bad).unwrap_err();
+        assert!(
+            err.0.contains("invalid ML-DSA public key length"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
     #[cfg(feature = "rand")]
     fn key_pair_serialize_deserialize_consistent() {
         struct ExposedKeyPair {
@@ -2605,7 +2698,8 @@ mod tests {
         let private = Sm2PrivateKey::new(Sm2PublicKey::DEFAULT_DISTID, [0x42; 32])
             .expect("construct SM2 private key");
         let sm2_pk = private.public_key();
-        let payload = sm2_pk.to_sec1_bytes(false);
+        let sec1 = sm2_pk.to_sec1_bytes(false);
+        let payload = sm::encode_sm2_public_key_payload(sm2_pk.distid(), &sec1).expect("payload");
         let pk = PublicKey::from_bytes(Algorithm::Sm2, &payload).expect("construct SM2 key");
 
         let canonical = pk.to_string();
@@ -2616,7 +2710,7 @@ mod tests {
         );
         assert!(
             canonical.ends_with(&payload_hex),
-            "SM2 multihash should embed SEC1 payload"
+            "SM2 multihash should embed payload bytes"
         );
 
         let prefixed = pk.to_prefixed_string();

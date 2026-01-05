@@ -35,7 +35,7 @@ use iroha::da::{
 };
 use iroha_crypto::{
     Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature, derive_keyset_from_slice,
-    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
+    sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
 #[cfg(test)]
 use iroha_data_model::da::types::DaRentQuote;
@@ -150,7 +150,6 @@ use sorafs_orchestrator::{
 };
 use tokio::runtime::Runtime;
 
-const ED25519_SEED_LENGTH: usize = 32;
 const SM2_PRIVATE_KEY_LENGTH: usize = 32;
 const SM2_PUBLIC_KEY_LENGTH: usize = 65;
 const SM2_SIGNATURE_LENGTH: usize = Sm2Signature::LENGTH;
@@ -177,7 +176,7 @@ pub struct JsKeyPair {
     pub algorithm: String,
     /// Raw public key bytes.
     pub public_key: Buffer,
-    /// Raw private key bytes (seed + public concatenation).
+    /// Raw private key bytes (ed25519 seed material).
     pub private_key: Buffer,
     /// Optional distinguishing identifier for algorithms that require it (SM2).
     pub distid: Option<String>,
@@ -493,7 +492,6 @@ pub fn blake3_hash_bytes(payload: Uint8Array) -> napi::Result<Buffer> {
 pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
     let keypair = if let Some(seed) = seed {
         let bytes = seed.to_vec();
-        ensure_seed_length(&bytes)?;
         KeyPair::from_seed(bytes, Algorithm::Ed25519)
     } else {
         KeyPair::random_with_algorithm(Algorithm::Ed25519)
@@ -510,7 +508,7 @@ pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
     })
 }
 
-/// Derive an Ed25519 public key from a private key seed.
+/// Derive an Ed25519 public key from a private key seed or keypair payload.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs typed arrays require owned values at the boundary
 pub fn ed25519_public_key_from_private(private_key: Uint8Array) -> napi::Result<Buffer> {
@@ -529,19 +527,24 @@ pub fn sm2_default_distid() -> String {
 
 /// Generate an SM2 key pair using `iroha_crypto` defaults.
 #[napi]
-pub fn sm2_keypair(distid: Option<String>) -> JsKeyPair {
+pub fn sm2_keypair(distid: Option<String>) -> napi::Result<JsKeyPair> {
     let distid = sm2_distid_arg(distid);
     let mut rng = OsRng;
-    let private = Sm2PrivateKey::random(distid.clone(), &mut rng);
+    let private = Sm2PrivateKey::random(distid.clone(), &mut rng).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("failed to generate SM2 key pair: {err}"),
+        )
+    })?;
     let public = private.public_key();
     let private_bytes = private.secret_bytes();
     let public_bytes = public.to_sec1_bytes(false);
-    JsKeyPair {
+    Ok(JsKeyPair {
         algorithm: "sm2".to_owned(),
         public_key: Buffer::from(public_bytes),
         private_key: Buffer::from(private_bytes.to_vec()),
         distid: Some(distid),
-    }
+    })
 }
 
 /// Derive an SM2 key pair deterministically from a seed.
@@ -588,7 +591,10 @@ pub fn sm2_keypair_from_private(
 /// Compute the canonical multihash string for an SM2 public key.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
-pub fn sm2_public_key_multihash(public_key: Uint8Array) -> napi::Result<String> {
+pub fn sm2_public_key_multihash(
+    public_key: Uint8Array,
+    distid: Option<String>,
+) -> napi::Result<String> {
     let payload = public_key.as_ref();
     if payload.len() != SM2_PUBLIC_KEY_LENGTH {
         return Err(napi::Error::new(
@@ -599,7 +605,11 @@ pub fn sm2_public_key_multihash(public_key: Uint8Array) -> napi::Result<String> 
             ),
         ));
     }
-    PublicKey::from_bytes(Algorithm::Sm2, payload)
+    let distid = sm2_distid_arg(distid);
+    let _ = parse_sm2_public_key(Some(distid.clone()), payload)?;
+    let encoded = encode_sm2_public_key_payload(&distid, payload)
+        .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))?;
+    PublicKey::from_bytes(Algorithm::Sm2, &encoded)
         .map(|pk| pk.to_string())
         .map_err(norito_to_napi)
 }
@@ -927,8 +937,9 @@ pub fn sm2_fixture_from_seed(
     let secret_hex = hex::encode_upper(private.secret_bytes());
     let public_bytes = public.to_sec1_bytes(false);
     let public_hex = hex::encode_upper(&public_bytes);
-    let public_key =
-        PublicKey::from_bytes(Algorithm::Sm2, &public_bytes).map_err(norito_to_napi)?;
+    let payload =
+        encode_sm2_public_key_payload(distid.as_str(), &public_bytes).map_err(norito_to_napi)?;
+    let public_key = PublicKey::from_bytes(Algorithm::Sm2, &payload).map_err(norito_to_napi)?;
     let multihash = public_key.to_string();
     let prefixed = public_key.to_prefixed_string();
     let za = public.compute_z(distid.as_str()).map_err(norito_to_napi)?;
@@ -951,16 +962,6 @@ pub fn sm2_fixture_from_seed(
         r: r_hex,
         s: s_hex,
     })
-}
-
-fn ensure_seed_length(seed: &[u8]) -> napi::Result<()> {
-    if seed.len() != ED25519_SEED_LENGTH {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "ed25519 seed must be 32 bytes",
-        ));
-    }
-    Ok(())
 }
 
 fn sm2_distid_arg(distid: Option<String>) -> String {

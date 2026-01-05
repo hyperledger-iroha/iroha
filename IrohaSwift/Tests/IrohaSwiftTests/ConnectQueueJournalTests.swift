@@ -193,6 +193,35 @@ final class ConnectQueueJournalTests: XCTestCase {
         }
     }
 
+    func testReadsRecordWithHeaderPadding() throws {
+        let tmp = makeTemporaryDirectory()
+        let sessionID = Data("padded-record".utf8)
+        let storage = ConnectQueueStorage(sessionID: sessionID,
+                                          configuration: .init(rootDirectory: tmp),
+                                          fileManager: .default)
+        try storage.ensureSessionDirectory()
+        let record = try ConnectJournalRecord(direction: .appToWallet,
+                                              sequence: 7,
+                                              payloadHash: Data(repeating: 0x22, count: 32),
+                                              ciphertext: Data([0xAB, 0xCD]),
+                                              receivedAtMs: 1,
+                                              expiresAtMs: 10_000)
+        let envelope = try record.encodeEnvelope()
+        let headerLen = ConnectJournalRecord.headerLength
+        var padded = Data()
+        padded.append(envelope.prefix(headerLen))
+        padded.append(Data(repeating: 0, count: 8))
+        padded.append(envelope.dropFirst(headerLen))
+        try padded.write(to: storage.appQueueURL)
+
+        let journal = ConnectQueueJournal(sessionID: sessionID,
+                                          configuration: .init(rootDirectory: tmp),
+                                          fileManager: .default)
+        let records = try journal.records(direction: .appToWallet, nowMs: 0)
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?.sequence, record.sequence)
+    }
+
     func testRejectsFileWithTooManyRecords() throws {
         let tmp = makeTemporaryDirectory()
         let sessionID = Data("too-many-records".utf8)

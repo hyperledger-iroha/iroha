@@ -19,8 +19,9 @@ individual files directly from Torii.
 - **Serve**: Torii exposes `GET /v1/content/{bundle}/{path}`. Responses stream
   directly from the chunk store with `ETag` = file hash, `Accept-Ranges: bytes`,
   Range support, and Cache-Control derived from the manifest. Reads honour the
-  manifest auth mode: role-gated responses require `?account=`, sponsor-gated
-  responses require `?uaid=`, and missing/expired bundles return 404.
+  manifest auth mode: role-gated and sponsor-gated responses require canonical
+  request headers (`X-Iroha-Account`, `X-Iroha-Signature`) for the signed
+  account; missing/expired bundles return 404.
 - **CLI**: `iroha content publish --bundle <path.tar>` (or `--root <dir>`) now
   auto-generates a manifest, emits optional `--manifest-out/--bundle-out`, and
   accepts `--auth`, `--cache-max-age-secs`, `--dataspace`, `--lane`, `--immutable`,

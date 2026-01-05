@@ -26,6 +26,8 @@ Notes:
 
 - `CONNECT_SESSION_TTL_MS` and `CONNECT_DEDUPE_TTL_MS` use duration literals in user config and
   map to actual `session_ttl` and `dedupe_ttl` fields.
+- `CONNECT_WS_PER_IP_MAX_SESSIONS=0` disables the per-IP session cap.
+- `CONNECT_WS_RATE_PER_IP_PER_MIN=0` disables the per-IP handshake rate limiter.
 - Heartbeat enforcement clamps the configured interval to the browser-friendly minimum (`ping_min_interval_ms`);
   the server tolerates `ping_miss_tolerance` consecutive missed pongs before closing the WebSocket and
   increments the `connect.ping_miss_total` metric.

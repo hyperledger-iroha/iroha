@@ -44,10 +44,10 @@ translation_last_reviewed: 2026-01-01
      walletBundle: "dev.sora.example.wallet",
      register: true,
    });
-   console.log("sid", preview.sidHex, "ws url", preview.webSocketUrl);
+   console.log("sid", preview.sidBase64Url, "ws url", preview.webSocketUrl);
    ```
    - Установите `register: false` для dry-run сценариев QR/deep-link.
-   - Сохраните возвращенные `sidHex`, URL deeplink и blob `tokens` в папку доказательств; ревью governance ожидает эти артефакты.
+   - Сохраните возвращенные `sidBase64Url`, URL deeplink и blob `tokens` в папку доказательств; ревью governance ожидает эти артефакты.
 3. **Распределите секреты.** Передайте deeplink URI оператору кошелька (Swift dApp sample, Android wallet или QA harness). Никогда не вставляйте сырые токены в чат; используйте зашифрованное хранилище, описанное в enablement packet.
 
 ## 3. Ведение сессии
@@ -56,8 +56,9 @@ translation_last_reviewed: 2026-01-01
    ```swift
    let connectURL = URL(string: preview.webSocketUrl)!
    let client = ConnectClient(url: connectURL)
-   let session = ConnectSession(sid: Data(hex: preview.sidHex), client: client)
-   let recorder = ConnectReplayRecorder(sessionID: Data(hex: preview.sidHex))
+   let sid: Data = /* decode preview.sidBase64Url into raw bytes using your harness helper */
+   let session = ConnectSession(sessionID: sid, client: client)
+   let recorder = ConnectReplayRecorder(sessionID: sid)
    session.addObserver(ConnectEventObserver(queue: .main) { event in
        logger.info("connect event", metadata: ["kind": "\(event.kind)"])
    })
@@ -86,7 +87,7 @@ translation_last_reviewed: 2026-01-01
 
 1. **Удалите подготовленные сессии.** Всегда удаляйте превью-сессии, чтобы алерты глубины очереди оставались значимыми:
    ```js
-   await client.deleteConnectSession(preview.sidHex);
+   await client.deleteConnectSession(preview.sidBase64Url);
    ```
    Для прогонов только Swift вызовите тот же endpoint через helper Rust/CLI.
 2. **Очистите журналы.** Удалите любые сохраненные журналы очереди (`ApplicationSupport/ConnectQueue/<sid>.to`, хранилища IndexedDB и т.д.), чтобы следующий прогон стартовал чисто. Зафиксируйте хэш файла перед удалением, если нужно отлаживать проблему replay.

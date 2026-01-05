@@ -1,4 +1,4 @@
-#![doc = "Shared helpers for SM2 negative vector fixtures sourced from upstream suites."]
+//! Shared helpers for SM2 negative vector fixtures sourced from upstream suites.
 #![cfg(feature = "sm")]
 
 use hex::decode;

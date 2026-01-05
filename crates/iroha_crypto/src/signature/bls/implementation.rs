@@ -1,5 +1,7 @@
 use core::marker::PhantomData;
-use std::{borrow::ToOwned as _, string::ToString as _, sync::Mutex, vec, vec::Vec};
+use std::{
+    borrow::ToOwned as _, collections::BTreeSet, string::ToString as _, sync::Mutex, vec, vec::Vec,
+};
 
 use sha2::Sha256;
 use w3f_bls::{
@@ -138,11 +140,25 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
 
     pub fn verify(
         message: &[u8],
-        signature: &[u8],
+        signature_bytes: &[u8],
         pk: &PublicKey<C::Engine>,
     ) -> Result<(), Error> {
-        let signature = w3f_bls::Signature::<C::Engine>::from_bytes(signature)
+        let identity_pk = PublicKey::<C::Engine>(Default::default());
+        if pk.to_bytes() == identity_pk.to_bytes() {
+            return Err(ParseError("BLS public key is identity".to_string()).into());
+        }
+
+        let signature = w3f_bls::Signature::<C::Engine>::from_bytes(signature_bytes)
             .map_err(|_| ParseError("Failed to parse signature.".to_owned()))?;
+        let canonical = signature.to_bytes();
+        if canonical.as_slice() != signature_bytes {
+            return Err(ParseError("non-canonical BLS signature encoding".to_string()).into());
+        }
+        let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
+        if canonical == identity_sig {
+            return Err(ParseError("BLS signature is identity".to_string()).into());
+        }
+
         let message = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
 
         if !signature.verify(&message, pk) {
@@ -165,27 +181,44 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         if signatures.is_empty() || signatures.len() != public_keys.len() {
             return Err(Error::BadSignature);
         }
+        let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
+        let parse_signature = |bytes: &[u8]| -> Result<BlsSignature<C::Engine>, Error> {
+            let sig = BlsSignature::<C::Engine>::from_bytes(bytes)
+                .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
+            let canonical = sig.to_bytes();
+            if canonical.as_slice() != bytes {
+                return Err(ParseError("non-canonical BLS signature encoding".to_string()).into());
+            }
+            if canonical == identity_sig {
+                return Err(ParseError("BLS signature is identity".to_string()).into());
+            }
+            Ok(sig)
+        };
+
         // Parse and aggregate signatures
         let mut sig_it = signatures.iter();
         let first_sig_bytes = sig_it.next().ok_or(Error::BadSignature)?;
-        let first_sig = BlsSignature::<C::Engine>::from_bytes(first_sig_bytes)
-            .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
+        let first_sig = parse_signature(first_sig_bytes)?;
         let mut agg_sig_group = first_sig.0;
         for s in sig_it {
-            let sig = BlsSignature::<C::Engine>::from_bytes(s)
-                .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
+            let sig = parse_signature(s)?;
             agg_sig_group.add_assign(&sig.0);
         }
 
-        // Parse and aggregate public keys
+        // Parse and aggregate public keys; enforce unique signers.
+        let mut seen_pks: BTreeSet<Vec<u8>> = BTreeSet::new();
         let mut pk_it = public_keys.iter();
         let first_pk_bytes = pk_it.next().ok_or(Error::BadSignature)?;
-        let first_pk = PublicKey::<C::Engine>::from_bytes(first_pk_bytes)
-            .map_err(|e| ParseError(e.to_string()))?;
+        let first_pk = Self::parse_public_key(first_pk_bytes)?;
+        if !seen_pks.insert(first_pk.to_bytes()) {
+            return Err(Error::BadSignature);
+        }
         let mut agg_pk_group = first_pk.0;
         for pk in pk_it {
-            let pk =
-                PublicKey::<C::Engine>::from_bytes(pk).map_err(|e| ParseError(e.to_string()))?;
+            let pk = Self::parse_public_key(pk)?;
+            if !seen_pks.insert(pk.to_bytes()) {
+                return Err(Error::BadSignature);
+            }
             agg_pk_group.add_assign(&pk.0);
         }
 
@@ -206,14 +239,25 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         if signatures.is_empty() {
             return Err(Error::BadSignature);
         }
+        let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
+        let parse_signature = |bytes: &[u8]| -> Result<BlsSignature<C::Engine>, Error> {
+            let sig = BlsSignature::<C::Engine>::from_bytes(bytes)
+                .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
+            let canonical = sig.to_bytes();
+            if canonical.as_slice() != bytes {
+                return Err(ParseError("non-canonical BLS signature encoding".to_string()).into());
+            }
+            if canonical == identity_sig {
+                return Err(ParseError("BLS signature is identity".to_string()).into());
+            }
+            Ok(sig)
+        };
         let mut sig_it = signatures.iter();
         let first_sig_bytes = sig_it.next().ok_or(Error::BadSignature)?;
-        let first_sig = BlsSignature::<C::Engine>::from_bytes(first_sig_bytes)
-            .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
+        let first_sig = parse_signature(first_sig_bytes)?;
         let mut agg_sig_group = first_sig.0;
         for s in sig_it {
-            let sig = BlsSignature::<C::Engine>::from_bytes(s)
-                .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
+            let sig = parse_signature(s)?;
             agg_sig_group.add_assign(&sig.0);
         }
         Ok(BlsSignature::<C::Engine>(agg_sig_group).to_bytes())
@@ -233,15 +277,28 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         }
         let sig = BlsSignature::<C::Engine>::from_bytes(aggregated_signature)
             .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
-        // Aggregate public keys
+        let canonical = sig.to_bytes();
+        if canonical.as_slice() != aggregated_signature {
+            return Err(ParseError("non-canonical BLS signature encoding".to_string()).into());
+        }
+        let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
+        if canonical == identity_sig {
+            return Err(ParseError("BLS signature is identity".to_string()).into());
+        }
+        // Aggregate public keys; enforce unique signers.
+        let mut seen_pks: BTreeSet<Vec<u8>> = BTreeSet::new();
         let mut pk_it = public_keys.iter();
         let first_pk_bytes = pk_it.next().ok_or(Error::BadSignature)?;
-        let first_pk = PublicKey::<C::Engine>::from_bytes(first_pk_bytes)
-            .map_err(|e| ParseError(e.to_string()))?;
+        let first_pk = Self::parse_public_key(first_pk_bytes)?;
+        if !seen_pks.insert(first_pk.to_bytes()) {
+            return Err(Error::BadSignature);
+        }
         let mut agg_pk_group = first_pk.0;
         for pk in pk_it {
-            let pk =
-                PublicKey::<C::Engine>::from_bytes(pk).map_err(|e| ParseError(e.to_string()))?;
+            let pk = Self::parse_public_key(pk)?;
+            if !seen_pks.insert(pk.to_bytes()) {
+                return Err(Error::BadSignature);
+            }
             agg_pk_group.add_assign(&pk.0);
         }
         let agg_pk = PublicKey::<C::Engine>(agg_pk_group);
@@ -253,11 +310,27 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     }
 
     pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey<C::Engine>, ParseError> {
-        PublicKey::from_bytes(payload).map_err(|err| ParseError(err.to_string()))
+        let key = PublicKey::from_bytes(payload).map_err(|err| ParseError(err.to_string()))?;
+        let canonical = key.to_bytes();
+        if canonical.as_slice() != payload {
+            return Err(ParseError(
+                "non-canonical BLS public key encoding".to_string(),
+            ));
+        }
+        let identity = PublicKey::<C::Engine>(Default::default());
+        if canonical == identity.to_bytes() {
+            return Err(ParseError("BLS public key is identity".to_string()));
+        }
+        Ok(key)
     }
 
     pub fn parse_private_key(payload: &[u8]) -> Result<ManagedSecretKey<C>, ParseError> {
-        ManagedSecretKey::from_bytes(payload)
+        let key = ManagedSecretKey::from_bytes(payload)?;
+        let identity = PublicKey::<C::Engine>(Default::default());
+        if key.public_key().to_bytes() == identity.to_bytes() {
+            return Err(ParseError("BLS secret key is zero".to_string()));
+        }
+        Ok(key)
     }
 }
 
@@ -277,6 +350,15 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             || messages.is_empty()
         {
             return Err(Error::BadSignature);
+        }
+        {
+            use std::collections::BTreeSet;
+            let mut seen = BTreeSet::new();
+            for &msg in messages {
+                if !seen.insert(msg) {
+                    return Err(Error::BadSignature);
+                }
+            }
         }
 
         #[cfg(feature = "bls-multi-pairing")]
@@ -303,6 +385,21 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
 
         #[cfg(all(feature = "bls", not(feature = "bls-multi-pairing")))]
         {
+            let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
+            let parse_signature = |bytes: &[u8]| -> Result<BlsSignature<C::Engine>, Error> {
+                let sig = BlsSignature::<C::Engine>::from_bytes(bytes)
+                    .map_err(|_| ParseError("Failed to parse signature.".to_owned()))?;
+                let canonical = sig.to_bytes();
+                if canonical.as_slice() != bytes {
+                    return Err(
+                        ParseError("non-canonical BLS signature encoding".to_string()).into(),
+                    );
+                }
+                if canonical == identity_sig {
+                    return Err(ParseError("BLS signature is identity".to_string()).into());
+                }
+                Ok(sig)
+            };
             let mut aggregated_group = <C::Engine as EngineBLS>::SignatureGroup::default();
             let mut decoded_messages = Vec::with_capacity(messages.len());
             let mut decoded_public_keys = Vec::with_capacity(messages.len());
@@ -312,12 +409,10 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
                 .zip(signatures.iter())
                 .zip(public_keys.iter())
             {
-                let signature = BlsSignature::<C::Engine>::from_bytes(signature_bytes)
-                    .map_err(|_| ParseError("Failed to parse signature.".to_owned()))?;
+                let signature = parse_signature(signature_bytes)?;
                 aggregated_group += signature.0;
 
-                let public_key = PublicKey::<C::Engine>::from_bytes(public_key_bytes)
-                    .map_err(|err| ParseError(err.to_string()))?;
+                let public_key = Self::parse_public_key(public_key_bytes)?;
                 decoded_public_keys.push(public_key);
                 decoded_messages.push(w3f_bls::Message::new(MESSAGE_CONTEXT, message));
             }
@@ -365,7 +460,8 @@ impl<'a, E: EngineBLS> w3f_bls::Signed for &'a MultiMessageBatch<E> {
     type E = E;
     type M = &'a w3f_bls::Message;
     type PKG = &'a PublicKey<E>;
-    type PKnM = Zip<std::slice::Iter<'a, w3f_bls::Message>, std::slice::Iter<'a, PublicKey<E>>>;
+    type PKnM =
+        std::iter::Zip<std::slice::Iter<'a, w3f_bls::Message>, std::slice::Iter<'a, PublicKey<E>>>;
 
     fn signature(&self) -> BlsSignature<E> {
         BlsSignature(self.signature.0)
@@ -397,11 +493,17 @@ pub(super) fn verify_aggregate_multi_message_normal_blstrs(
         let mut arr = [0u8; 48];
         arr.copy_from_slice(bytes);
         let ct = G1Affine::from_compressed(&arr);
-        if ct.is_some().into() {
-            Some(ct.unwrap())
-        } else {
-            None
+        if !bool::from(ct.is_some()) {
+            return None;
         }
+        let point = ct.unwrap();
+        if point.is_identity().into() {
+            return None;
+        }
+        if point.to_compressed() != arr {
+            return None;
+        }
+        Some(point)
     }
     fn to_g2(bytes: &[u8]) -> Option<G2Affine> {
         if bytes.len() != 96 {
@@ -410,11 +512,17 @@ pub(super) fn verify_aggregate_multi_message_normal_blstrs(
         let mut arr = [0u8; 96];
         arr.copy_from_slice(bytes);
         let ct = G2Affine::from_compressed(&arr);
-        if ct.is_some().into() {
-            Some(ct.unwrap())
-        } else {
-            None
+        if !bool::from(ct.is_some()) {
+            return None;
         }
+        let point = ct.unwrap();
+        if point.is_identity().into() {
+            return None;
+        }
+        if point.to_compressed() != arr {
+            return None;
+        }
+        Some(point)
     }
 
     // Hash-to-curve to G2, using standard IETF ciphersuite with context prefix
@@ -471,11 +579,17 @@ pub(super) fn verify_aggregate_multi_message_small_blstrs(
         let mut arr = [0u8; 48];
         arr.copy_from_slice(bytes);
         let ct = G1Affine::from_compressed(&arr);
-        if ct.is_some().into() {
-            Some(ct.unwrap())
-        } else {
-            None
+        if !bool::from(ct.is_some()) {
+            return None;
         }
+        let point = ct.unwrap();
+        if point.is_identity().into() {
+            return None;
+        }
+        if point.to_compressed() != arr {
+            return None;
+        }
+        Some(point)
     }
     fn to_g2(bytes: &[u8]) -> Option<G2Affine> {
         if bytes.len() != 96 {
@@ -484,11 +598,17 @@ pub(super) fn verify_aggregate_multi_message_small_blstrs(
         let mut arr = [0u8; 96];
         arr.copy_from_slice(bytes);
         let ct = G2Affine::from_compressed(&arr);
-        if ct.is_some().into() {
-            Some(ct.unwrap())
-        } else {
-            None
+        if !bool::from(ct.is_some()) {
+            return None;
         }
+        let point = ct.unwrap();
+        if point.is_identity().into() {
+            return None;
+        }
+        if point.to_compressed() != arr {
+            return None;
+        }
+        Some(point)
     }
 
     // Hash-to-curve to G1 for small variant

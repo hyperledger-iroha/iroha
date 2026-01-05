@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "generated_at": "2027-05-05T00:00:00Z",
   "entries": [
     {
@@ -205,17 +205,18 @@
       "algorithm": "sm2",
       "status": "reserved",
       "feature": "sm",
-      "public_key_encoding": "SEC1-compressed SM2 point",
+      "public_key_encoding": "DistID length (u16 BE) + DistID bytes + SEC1 uncompressed SM2 point",
       "signature_encoding": "64-byte canonical r||s",
       "notes": [
         "Reserved for the SM2 rollout.",
         "Requires the `sm` feature before use."
       ],
       "validation": {
-        "public_key_bytes": 33,
+        "public_key_bytes": null,
         "signature_bytes": 64,
         "checks": [
-          "Decode the SEC1-compressed point and reject invalid encodings before invoking the SM2 verifier.",
+          "Decode the DistID length prefix (u16 BE), validate the DistID bytes, and ensure the remaining payload is 65 bytes before parsing the point.",
+          "Parse the SEC1 uncompressed point and reject invalid encodings before invoking the SM2 verifier.",
           "Apply the configured DistID to the verification context and reject signatures that do not bind to it.",
           "Require canonical 32-byte r and s limbs and ensure curve id 0x0F is present in crypto.allowed_curve_ids before admission."
         ]

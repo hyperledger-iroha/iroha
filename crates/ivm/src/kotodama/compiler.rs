@@ -157,6 +157,10 @@ fn emit_store64(code: &mut Vec<u8>, base: u8, rs: u8, offset: i64, scratch: u8) 
     push_word(code, encode_store64_rv(scratch, rs, 0));
 }
 
+fn stack_slot_offset_bytes(offset: usize) -> i64 {
+    8i64 + offset as i64
+}
+
 fn reserve_pointer_literal_stub(code: &mut Vec<u8>) -> usize {
     let start = code.len();
     for _ in 0..POINTER_STUB_LEN {
@@ -388,7 +392,7 @@ mod tests {
     use super::{
         Compiler, CompilerOptions, DEFAULT_MAX_CYCLES, WIDE_IMM_MAX, emit_addi, emit_load64,
         emit_store64, patch_pointer_literal_stub, pointer_type_for_kind,
-        reserve_pointer_literal_stub,
+        reserve_pointer_literal_stub, stack_slot_offset_bytes,
     };
     use crate::{IVM, ProgramMetadata, encoding, instruction, pointer_abi::PointerType};
 
@@ -461,6 +465,14 @@ mod tests {
             word,
             encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 7, 6, 0)
         );
+    }
+
+    #[test]
+    fn stack_slot_offsets_do_not_truncate_large_offsets() {
+        let offset = i16::MAX as usize + 2048;
+        let bytes = stack_slot_offset_bytes(offset);
+        assert_eq!(bytes, 8i64 + offset as i64);
+        assert!(bytes > i16::MAX as i64);
     }
 
     #[test]
@@ -828,6 +840,18 @@ impl Compiler {
                     if let ir::Instr::Const { dest, value } = instr {
                         int_const_map.insert((func_idx, *dest), *value);
                     }
+                    if let ir::Instr::Unary {
+                        dest,
+                        op: UnaryOp::Neg,
+                        operand,
+                    } = instr
+                    {
+                        if let Some(value) = int_const_map.get(&(func_idx, *operand)).copied() {
+                            if let Some(neg) = value.checked_neg() {
+                                int_const_map.insert((func_idx, *dest), neg);
+                            }
+                        }
+                    }
                     if let ir::Instr::DataRef { dest, kind, value } = instr {
                         // Track typed refs in string_map keyed by temp; kind is handled at use sites
                         string_map.insert((func_idx, *dest), value.clone());
@@ -878,11 +902,13 @@ impl Compiler {
             }
         }
 
-        // Propagate string literals (pure `String` temps) across call boundaries so callee parameters inherit literal metadata.
+        // Propagate string literals across call boundaries so callee parameters inherit literal metadata
+        // only when every call site agrees on the same literal value.
         let mut fn_index_by_name: HashMap<&str, usize> = HashMap::new();
         for (idx, func) in ir_prog.functions.iter().enumerate() {
             fn_index_by_name.insert(&func.name, idx);
         }
+        let mut literal_param_conflicts: HashSet<(usize, ir::Temp)> = HashSet::new();
         for (caller_idx, func) in ir_prog.functions.iter().enumerate() {
             for bb in &func.blocks {
                 for instr in &bb.instrs {
@@ -897,25 +923,53 @@ impl Compiler {
                         let callee = &ir_prog.functions[callee_idx];
                         let count = usize::min(args.len(), callee.params.len());
                         for (i, &arg_temp) in args.iter().take(count).enumerate() {
-                            if string_literal_temps.contains(&(caller_idx, arg_temp))
-                                && let Some(value) =
-                                    string_map.get(&(caller_idx, arg_temp)).cloned()
-                                && let Some(&param_temp) = param_temp_map.get(&(callee_idx, i))
-                            {
-                                string_map.entry((callee_idx, param_temp)).or_insert(value);
-                                string_literal_temps.insert((callee_idx, param_temp));
+                            let Some(&param_temp) = param_temp_map.get(&(callee_idx, i)) else {
                                 continue;
+                            };
+                            let param_key = (callee_idx, param_temp);
+                            if literal_param_conflicts.contains(&param_key) {
+                                continue;
+                            }
+                            let arg_has_literal = string_literal_temps
+                                .contains(&(caller_idx, arg_temp))
+                                || dataref_kind_map.contains_key(&(caller_idx, arg_temp));
+                            let Some(value) = string_map.get(&(caller_idx, arg_temp)).cloned()
+                            else {
+                                if string_map.contains_key(&param_key) {
+                                    string_map.remove(&param_key);
+                                    string_literal_temps.remove(&param_key);
+                                    dataref_kind_map.remove(&param_key);
+                                    literal_param_conflicts.insert(param_key);
+                                }
+                                continue;
+                            };
+                            if !arg_has_literal {
+                                if string_map.contains_key(&param_key) {
+                                    string_map.remove(&param_key);
+                                    string_literal_temps.remove(&param_key);
+                                    dataref_kind_map.remove(&param_key);
+                                    literal_param_conflicts.insert(param_key);
+                                }
+                                continue;
+                            }
+                            if let Some(existing) = string_map.get(&param_key) {
+                                if existing != &value {
+                                    string_map.remove(&param_key);
+                                    string_literal_temps.remove(&param_key);
+                                    dataref_kind_map.remove(&param_key);
+                                    literal_param_conflicts.insert(param_key);
+                                    continue;
+                                }
+                            } else {
+                                string_map.insert(param_key, value);
+                            }
+                            if string_literal_temps.contains(&(caller_idx, arg_temp)) {
+                                string_literal_temps.insert(param_key);
                             }
                             if let Some(kind) =
                                 dataref_kind_map.get(&(caller_idx, arg_temp)).copied()
-                                && let Some(value) =
-                                    string_map.get(&(caller_idx, arg_temp)).cloned()
-                                && let Some(&param_temp) = param_temp_map.get(&(callee_idx, i))
                             {
-                                string_map.entry((callee_idx, param_temp)).or_insert(value);
-                                dataref_kind_map
-                                    .entry((callee_idx, param_temp))
-                                    .or_insert(kind);
+                                dataref_kind_map.insert(param_key, kind);
                             }
                         }
                     }
@@ -1009,27 +1063,26 @@ impl Compiler {
                 if let Some(r) = alloc.regs.get(t) {
                     *r as u8
                 } else if let Some(off) = alloc.stack.get(t) {
-                    let total = 8i32 + (*off as i32);
-                    emit_load64(code, scratch, sp, total as i64, Some(scratch));
+                    let total = stack_slot_offset_bytes(*off);
+                    emit_load64(code, scratch, sp, total, Some(scratch));
                     scratch
                 } else {
                     0
                 }
             };
-            let dst_reg = |t: &ir::Temp| -> (u8, bool, i16) {
+            let dst_reg = |t: &ir::Temp| -> (u8, bool, i64) {
                 if let Some(r) = alloc.regs.get(t) {
                     (*r as u8, false, 0)
                 } else if let Some(off) = alloc.stack.get(t) {
-                    (scratchd, true, (8 + *off) as i16)
+                    (scratchd, true, stack_slot_offset_bytes(*off))
                 } else {
                     (scratchd, false, 0)
                 }
             };
             let spill_back =
-                |_: &ir::Temp, from: u8, spilled: bool, imm: i16, code: &mut Vec<u8>| {
+                |_: &ir::Temp, from: u8, spilled: bool, offset: i64, code: &mut Vec<u8>| {
                     if spilled {
-                        let total = imm as i32;
-                        emit_store64(code, sp, from, total as i64, scratch2);
+                        emit_store64(code, sp, from, offset, scratch2);
                     }
                 };
 

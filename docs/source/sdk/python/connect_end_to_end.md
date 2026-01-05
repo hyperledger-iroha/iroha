@@ -149,7 +149,7 @@ sid_material = generate_connect_sid(
     app_public_key=b"\x01" * 32,
     nonce=b"\x02" * 16,
 )
-print("SID (hex):", sid_material.sid_hex)
+print("SID (base64url):", sid_material.sid_base64url)
 
 # Build deeplinks + key pair without registering the session.
 preview = create_connect_session_preview(
@@ -165,7 +165,7 @@ result = bootstrap_connect_preview_session(
     chain_id="dev-chain",
     node="https://torii.dev.example",
 )
-print("Torii SID:", result.preview.sid_hex)
+print("Torii SID:", result.preview.sid_base64url)
 print("Wallet token:", result.tokens.wallet if result.tokens else None)
 ```
 

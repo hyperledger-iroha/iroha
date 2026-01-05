@@ -1,5 +1,5 @@
+//! Interop matrix covering SM2/SM3/SM4 against OpenSSL and Tongsuo CLIs.
 #![cfg(feature = "sm")]
-#![doc = "Interop matrix covering SM2/SM3/SM4 against OpenSSL and Tongsuo CLIs."]
 
 use std::{
     env, fs,

@@ -1,7 +1,7 @@
 //! Minimal Iroha Connect app-side example.
 //!
 //! - Creates a session via Torii POST /v1/connect/session
-//! - Connects to WS with token=... as app role
+//! - Connects to WS with Authorization bearer token as app role
 //! - Uses `connect_sdk` to seal a `SignRequestTx` payload and send as a frame
 //! - Optional: send encrypted Close/Reject instead via --action close|reject
 //!
@@ -35,6 +35,10 @@ use norito::derive::JsonDeserialize;
 use norito::json;
 #[cfg(feature = "connect")]
 use reqwest::Client;
+#[cfg(feature = "connect")]
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+#[cfg(feature = "connect")]
+use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 #[cfg(feature = "connect")]
 use tokio_tungstenite::tungstenite::{Bytes, Message};
 
@@ -79,10 +83,14 @@ async fn run_connect_app() -> anyhow::Result<()> {
     println!("sid={sid} token_app={token_app} token_wallet={token_wallet}");
 
     let ws_url = format!(
-        "{}/v1/connect/ws?sid={sid}&role={role}&token={token_app}",
+        "{}/v1/connect/ws?sid={sid}&role={role}",
         node.replace("http", "ws")
     );
-    let (mut ws, _resp) = tokio_tungstenite::connect_async(&ws_url).await?;
+    let mut request = ws_url.into_client_request()?;
+    request
+        .headers_mut()
+        .insert(AUTHORIZATION, format!("Bearer {token_app}").parse()?);
+    let (mut ws, _resp) = tokio_tungstenite::connect_async(request).await?;
     println!("WS connected");
 
     let sid_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD

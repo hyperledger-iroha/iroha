@@ -2,6 +2,10 @@ import XCTest
 @testable import IrohaSwift
 
 final class ConnectClientTests: XCTestCase {
+    private final class RequestBox: @unchecked Sendable {
+        var request: URLRequest?
+    }
+
     private func requireConnectCodec() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCodecAvailable,
                       "NoritoBridge connect codec unavailable")
@@ -124,8 +128,7 @@ final class ConnectClientTests: XCTestCase {
         let base = URL(string: "https://torii.example/api")!
         let url = try ConnectClient.makeWebSocketURL(baseURL: base,
                                                      sid: "session-123",
-                                                     role: .app,
-                                                     token: "token-abc")
+                                                     role: .app)
         let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
         XCTAssertEqual(components.scheme, "wss")
         XCTAssertEqual(components.host, "torii.example")
@@ -133,17 +136,54 @@ final class ConnectClientTests: XCTestCase {
         let items = try XCTUnwrap(components.queryItems)
         XCTAssertTrue(items.contains(where: { $0.name == "sid" && $0.value == "session-123" }))
         XCTAssertTrue(items.contains(where: { $0.name == "role" && $0.value == "app" }))
-        XCTAssertTrue(items.contains(where: { $0.name == "token" && $0.value == "token-abc" }))
+        XCTAssertFalse(items.contains(where: { $0.name == "token" }))
     }
 
     func testBuildsConnectWebSocketURLRejectsEmptySid() {
         XCTAssertThrowsError(try ConnectClient.makeWebSocketURL(baseURL: URL(string: "http://localhost")!,
                                                                 sid: " ",
-                                                                role: .wallet,
-                                                                token: "token")) { error in
+                                                                role: .wallet)) { error in
             guard case ToriiClientError.invalidPayload = error else {
                 return XCTFail("expected invalidPayload, got \(error)")
             }
         }
+    }
+
+    func testBuildsConnectWebSocketRequestAddsAuthorization() throws {
+        let base = URL(string: "https://torii.example")!
+        let request = try ConnectClient.makeWebSocketRequest(baseURL: base,
+                                                             sid: "session-abc",
+                                                             role: .wallet,
+                                                             token: "token-xyz")
+        let auth = request.value(forHTTPHeaderField: "Authorization")
+        XCTAssertEqual(auth, "Bearer token-xyz")
+    }
+
+    func testBuildsConnectWebSocketRequestRejectsEmptyToken() {
+        XCTAssertThrowsError(try ConnectClient.makeWebSocketRequest(baseURL: URL(string: "http://localhost")!,
+                                                                    sid: "session-123",
+                                                                    role: .app,
+                                                                    token: " ")) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("expected invalidPayload, got \(error)")
+            }
+        }
+    }
+
+    func testInitWithRequestUsesFactory() {
+        let box = RequestBox()
+        let stub = StubWebSocketTask()
+        let factory = ConnectWebSocketFactory { request in
+            box.request = request
+            return stub
+        }
+        let url = URL(string: "wss://example.test")!
+        var request = URLRequest(url: url)
+        request.setValue("Bearer token-123", forHTTPHeaderField: "Authorization")
+
+        _ = ConnectClient(request: request, webSocketFactory: factory)
+
+        XCTAssertEqual(box.request?.url, url)
+        XCTAssertEqual(box.request?.value(forHTTPHeaderField: "Authorization"), "Bearer token-123")
     }
 }

@@ -180,7 +180,6 @@ def _preview_summary_payload(result: ConnectPreviewBootstrapResult) -> Dict[str,
     payload: Dict[str, Any] = {
         "chain_id": preview.chain_id,
         "node": preview.node,
-        "sid_hex": preview.sid_hex,
         "sid_base64url": preview.sid_base64url,
         "nonce_hex": preview.nonce.hex(),
         "wallet_uri": preview.wallet_uri,
@@ -215,7 +214,6 @@ def _print_preview_result(result: ConnectPreviewBootstrapResult) -> None:
     print(f"  Chain ID:       {preview.chain_id}")
     if preview.node:
         print(f"  Node:           {preview.node}")
-    print(f"  SID (hex):      {preview.sid_hex}")
     print(f"  SID (base64url): {preview.sid_base64url}")
     print(f"  Wallet URI:     {preview.wallet_uri}")
     print(f"  App URI:        {preview.app_uri}")

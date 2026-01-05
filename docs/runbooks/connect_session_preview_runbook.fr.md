@@ -44,10 +44,10 @@ Ce runbook documente la procedure end-to-end pour preparer, valider et demantele
      walletBundle: "dev.sora.example.wallet",
      register: true,
    });
-   console.log("sid", preview.sidHex, "ws url", preview.webSocketUrl);
+   console.log("sid", preview.sidBase64Url, "ws url", preview.webSocketUrl);
    ```
    - Mettez `register: false` pour des scenarios QR/deep-link en dry-run.
-   - Conservez le `sidHex` retourne, les URL deeplink, et le blob `tokens` dans le dossier de preuves; la revue de gouvernance attend ces artefacts.
+   - Conservez le `sidBase64Url` retourne, les URL deeplink, et le blob `tokens` dans le dossier de preuves; la revue de gouvernance attend ces artefacts.
 3. **Distribuer les secrets.** Partagez l'URI deeplink avec l'operateur wallet (sample dApp Swift, wallet Android, ou harness QA). Ne collez jamais les tokens bruts dans le chat; utilisez le coffre chiffre documente dans le packet d'enablement.
 
 ## 3. Piloter la session
@@ -56,8 +56,9 @@ Ce runbook documente la procedure end-to-end pour preparer, valider et demantele
    ```swift
    let connectURL = URL(string: preview.webSocketUrl)!
    let client = ConnectClient(url: connectURL)
-   let session = ConnectSession(sid: Data(hex: preview.sidHex), client: client)
-   let recorder = ConnectReplayRecorder(sessionID: Data(hex: preview.sidHex))
+   let sid: Data = /* decode preview.sidBase64Url into raw bytes using your harness helper */
+   let session = ConnectSession(sessionID: sid, client: client)
+   let recorder = ConnectReplayRecorder(sessionID: sid)
    session.addObserver(ConnectEventObserver(queue: .main) { event in
        logger.info("connect event", metadata: ["kind": "\(event.kind)"])
    })
@@ -86,7 +87,7 @@ Ce runbook documente la procedure end-to-end pour preparer, valider et demantele
 
 1. **Supprimez les sessions en staging.** Supprimez toujours les sessions de preview pour que les alarmes de profondeur de file restent utiles:
    ```js
-   await client.deleteConnectSession(preview.sidHex);
+   await client.deleteConnectSession(preview.sidBase64Url);
    ```
    Pour les runs Swift uniquement, appelez le meme endpoint via le helper Rust/CLI.
 2. **Purgez les journaux.** Supprimez tout journal de file persistant (`ApplicationSupport/ConnectQueue/<sid>.to`, stores IndexedDB, etc.) afin que le prochain run demarre proprement. Enregistrez le hash du fichier avant suppression si vous devez depanner un probleme de replay.

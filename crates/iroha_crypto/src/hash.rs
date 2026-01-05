@@ -282,9 +282,18 @@ impl<T> norito::core::NoritoSerialize for HashOf<T> {
 
 impl<'de, T> norito::core::NoritoDeserialize<'de> for HashOf<T> {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("HashOf decode")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
         #[allow(unsafe_code)]
         let bytes = unsafe { &*core::ptr::from_ref(archived).cast::<[u8; Hash::LENGTH]>() };
-        Self(Hash::prehashed(*bytes), PhantomData)
+        if !Hash::is_lsb_1(bytes) {
+            return Err(norito::core::Error::Message("invalid hash lsb".into()));
+        }
+        Ok(Self(Hash::prehashed(*bytes), PhantomData))
     }
 }
 
@@ -369,9 +378,15 @@ impl<T: IntoSchema> IntoSchema for HashOf<T> {
 // packed sequences and option fields with Norito's strict-safe path.
 impl<'a, T> norito::core::DecodeFromSlice<'a> for HashOf<T> {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let mut cursor = std::io::Cursor::new(bytes);
-        let v: Self = <Self as norito::codec::Decode>::decode(&mut cursor)?;
-        Ok((v, bytes.len()))
+        if bytes.len() < Hash::LENGTH {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        let mut buf = [0u8; Hash::LENGTH];
+        buf.copy_from_slice(&bytes[..Hash::LENGTH]);
+        if !Hash::is_lsb_1(&buf) {
+            return Err(norito::core::Error::Message("invalid hash lsb".into()));
+        }
+        Ok((HashOf(Hash::prehashed(buf), PhantomData), Hash::LENGTH))
     }
 }
 
@@ -419,6 +434,29 @@ mod tests {
         let bytes = original.encode();
         let decoded = HashOf::<()>::decode(&mut &bytes[..]).expect("failed to decode HashOf");
         assert_eq!(original, decoded);
+    }
+
+    #[test]
+    fn hash_of_decode_rejects_invalid_lsb() {
+        use norito::codec::Decode;
+
+        let mut bytes = [0u8; Hash::LENGTH];
+        bytes[Hash::LENGTH - 1] = 0x00;
+        let err = HashOf::<()>::decode(&mut &bytes[..]);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn hash_of_decode_from_slice_consumes_fixed_length() {
+        let original = HashOf::<()>::from_untyped_unchecked(Hash::prehashed([2; Hash::LENGTH]));
+        let hash: Hash = original.into();
+        let mut bytes: Vec<u8> = <[u8; Hash::LENGTH]>::from(hash).to_vec();
+        bytes.extend_from_slice(&[0xAA, 0xBB]);
+
+        let (_decoded, used) =
+            <HashOf<()> as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
+                .expect("decode from slice");
+        assert_eq!(used, Hash::LENGTH);
     }
 
     #[test]

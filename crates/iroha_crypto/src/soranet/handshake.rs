@@ -4526,11 +4526,8 @@ impl<'a> MessageCursor<'a> {
 #[cfg(test)]
 mod tests {
     use rand::{SeedableRng, rngs::StdRng};
-    use rand_chacha::ChaCha20Rng;
 
     use super::*;
-    use crate::Algorithm;
-
     #[test]
     fn update_suite_list_sets_required_flag() {
         let suites = [HandshakeSuite::Nk3PqForwardSecure];

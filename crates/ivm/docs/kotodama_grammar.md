@@ -189,6 +189,7 @@ Built-in calls recognized by the semantic layer (arity and types enforced):
  - Iroha helpers (samples/dev): `create_nfts_for_all_users()`, `set_execution_depth(value)`, `set_account_detail(account, key, value)`.
  - Durable state helpers (host): `host::state_get(name_path) -> Blob`, `host::state_set(name_path, norito_bytes_value)`, `host::state_del(name_path)`.
  - Encoding helpers (WIP): `encode_int(int) -> Blob`, `decode_int(Blob) -> int`.
+- Inline ZK ISI builders (literal-only): `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk)`, `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk)`. All arguments must be compile-time literals (string literals or pointer constructors from literals). `nullifier32` and `inputs32` must be exactly 32 bytes (raw string or `0x` hex), and `amount` must be non-negative.
 - Path builder (host): `host::path_map_key(base: Name, key: int) -> Name` builds canonical `"<base>/<key>"`.
  - VRF helpers: `vrf_verify(input, pk, proof, variant) -> Blob`, `vrf_verify_batch(batch: Blob) -> Blob` (returns 0 on failure). [Implemented]
  - Pointer utilities: `schema_info(schema: Name) -> Json {id,version}`, `pointer_to_norito(ptr)` (wrap any pointer-ABI TLV into NoritoBytes for state storage or replay). [Implemented]

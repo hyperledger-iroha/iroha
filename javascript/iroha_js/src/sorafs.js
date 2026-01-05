@@ -1,6 +1,7 @@
 import { getNativeBinding } from "./native.js";
 
 const NORITO_HEADER_LENGTH = 40;
+const MAX_HEADER_PADDING = 64;
 const MAX_SAFE_NORITO_LENGTH = BigInt(Number.MAX_SAFE_INTEGER);
 const utf8Decoder =
   typeof TextDecoder === "function" ? new TextDecoder("utf-8", { fatal: true }) : null;
@@ -215,11 +216,22 @@ function decodeReplicationOrderFallback(buffer) {
       throw new Error("replication order payload is too large to decode in pure JS");
     }
     const payloadLength = Number(declaredLength);
-    const available = buffer.length - NORITO_HEADER_LENGTH;
-    if (available < payloadLength) {
+    const paddingLen = buffer.length - NORITO_HEADER_LENGTH - payloadLength;
+    if (paddingLen < 0) {
       throw new Error("replication order payload is truncated");
     }
-    const payload = buffer.slice(NORITO_HEADER_LENGTH, NORITO_HEADER_LENGTH + payloadLength);
+    if (paddingLen > MAX_HEADER_PADDING) {
+      throw new Error("replication order payload contains trailing bytes");
+    }
+    if (paddingLen > 0) {
+      for (let i = 0; i < paddingLen; i += 1) {
+        if (buffer[NORITO_HEADER_LENGTH + i] !== 0) {
+          throw new Error("replication order payload contains non-zero padding");
+        }
+      }
+    }
+    const payloadStart = NORITO_HEADER_LENGTH + paddingLen;
+    const payload = buffer.slice(payloadStart, payloadStart + payloadLength);
     const reader = new NoritoChunkReader(payload, "replication order");
     const schemaVersion = readU8Chunk(reader.readChunk("schema_version"), "schema_version");
     const orderIdHex = toHex(reader.readChunk("order_id"), 32, "order_id_hex");

@@ -1,3 +1,5 @@
+//! Core Norito functionality tests.
+
 use std::io::Write;
 
 use byteorder::{ByteOrder, LittleEndian};
@@ -136,6 +138,13 @@ fn schema_mismatch() {
         from_bytes::<B>(&bytes),
         Err(Error::SchemaMismatch)
     ));
+}
+
+#[test]
+fn core_decode_rejects_schema_mismatch() {
+    let bytes = to_bytes(&123u32).unwrap();
+    let err = decode_from_bytes::<i32>(&bytes).expect_err("schema mismatch must error");
+    assert!(matches!(err, Error::SchemaMismatch));
 }
 
 #[test]

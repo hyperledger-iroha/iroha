@@ -647,6 +647,7 @@ macro_rules! self_test {
     };
 }
 
+#[allow(unused_imports)]
 use self_test;
 
 // The following struct is inserted only during generation of the documentation in order to exploit doc-tests.

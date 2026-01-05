@@ -29,7 +29,7 @@ fixtures.
 | `0x0C` (12) | `gost3410-2012-256-paramset-c` | `gost` | Reserved | 64-byte little-endian TC26 param set C point | Reserved for future governance approval. |
 | `0x0D` (13) | `gost3410-2012-512-paramset-a` | `gost` | Reserved | 128-byte little-endian TC26 param set A point | Reserved pending demand for 512-bit GOST curves. |
 | `0x0E` (14) | `gost3410-2012-512-paramset-b` | `gost` | Reserved | 128-byte little-endian TC26 param set B point | Reserved pending demand for 512-bit GOST curves. |
-| `0x0F` (15) | `sm2` | `sm` | Reserved | 33-byte SEC1-compressed SM2 key | Becomes available when the `sm` feature graduates from preview. |
+| `0x0F` (15) | `sm2` | `sm` | Reserved | DistID length (u16 BE) + DistID bytes + 65-byte SEC1 uncompressed SM2 key | Becomes available when the `sm` feature graduates from preview. |
 
 > **Placeholder semantics:** Identifier `0x03` exists so provisioning and
 > capability negotiation can advertise upcoming GOST support without leaking a
@@ -111,13 +111,14 @@ payload. The steps below should be treated as mandatory validation logic:
 | `gost3410-2012-256-paramset-c` | `0x0C` | 64 | 64 | Same validation as param set A but using the TC26 C domain parameters. |
 | `gost3410-2012-512-paramset-a` | `0x0D` | 128 | 128 | Interpret `(x||y)` as 64-byte limbs, ensure `< p`, reject the identity point, and require 64-byte `r`/`s` limbs for signatures. |
 | `gost3410-2012-512-paramset-b` | `0x0E` | 128 | 128 | Same validation as param set A but using the TC26 B 512-bit domain parameters. |
-| `sm2` | `0x0F` | 33 | 64 | Decode the SEC1-compressed point, enforce GM/T 0003 subgroup rules, apply the configured DistID, and require canonical `(r, s)` limbs per SM2. |
+| `sm2` | `0x0F` | 2 + distid + 65 | 64 | Decode distid length (u16 BE), validate the DistID bytes, parse the SEC1 uncompressed point, enforce GM/T 0003 subgroup rules, apply the configured DistID, and require canonical `(r, s)` limbs per SM2. |
 
 Each row maps to the `validation` object inside
 [`address_curve_registry.json`](address_curve_registry.json). Tooling that
 consumes the JSON export can rely on the `public_key_bytes`,
 `signature_bytes`, and `checks` fields to automate the same validation steps
-described above.
+described above; variable-length encodings (for example SM2) set
+`public_key_bytes` to null and document the length rule in `checks`.
 ## Requesting a New Curve Identifier
 
 1. Draft the algorithm specification (encoding, validation, error handling) and
