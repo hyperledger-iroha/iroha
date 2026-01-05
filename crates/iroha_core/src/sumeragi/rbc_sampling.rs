@@ -15,6 +15,7 @@ use super::{
 const MAX_PROOF_HEIGHT: usize = 16; // supports up to 2^16 leaves
 
 /// Sampled chunk proof with payload bytes, digest, and Merkle path information.
+#[derive(Debug)]
 pub struct ChunkSample {
     /// Index of the chunk within the session payload.
     pub index: u32,
@@ -27,6 +28,7 @@ pub struct ChunkSample {
 }
 
 /// Aggregated proof response describing the session metadata and sampled chunks.
+#[derive(Debug)]
 pub struct SessionSample {
     /// Block hash associated with the session key.
     pub block_hash: HashOf<BlockHeader>,

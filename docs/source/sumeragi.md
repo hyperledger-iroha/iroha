@@ -754,7 +754,7 @@ and `/v1/sumeragi/telemetry`’s `vrf` section for dashboards.
 
 ### DA availability matrix (`da_enabled`, advisory)
 
-Build-line policy: v3 uses `sumeragi.da_enabled` as the single DA/RBC switch. In this first release, Iroha v3 deployments are expected to keep DA/RBC enabled; the runtime honors the on-chain value and applies no override, so operators must set it correctly.
+Build-line policy: v3 uses `sumeragi.da_enabled` as the single DA/RBC switch. In this first release, Iroha v3 deployments must keep DA/RBC enabled; the runtime honors the on-chain value and applies no override, and the node refuses to start if `sumeragi.da_enabled` is false.
 
 - **DA/RBC enabled (`da_enabled=true`)** — availability evidence is tracked (advisory); commits proceed without waiting:
   - Missing availability evidence sets `status.da_gate.reason = missing_local_data`; `status.da_gate.missing_local_data_total` increments on every transition into this state (unless an RBC `READY` quorum is already present and records availability).

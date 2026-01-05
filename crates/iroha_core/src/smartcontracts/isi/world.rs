@@ -3793,26 +3793,10 @@ pub mod isi {
 
     fn ensure_runtime_upgrade_abi_version(
         manifest: &iroha_data_model::runtime::RuntimeUpgradeManifest,
-        state_transaction: &StateTransaction<'_, '_>,
+        _state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        // Runtime upgrades in the first release keep ABI v1 fixed; no version bumping is allowed.
         policy_for_abi_version(manifest.abi_version)?;
-        let max_active = state_transaction
-            .world
-            .runtime_upgrades
-            .iter()
-            .filter_map(|(_, rec)| match rec.status {
-                iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(_) => {
-                    Some(rec.manifest.abi_version)
-                }
-                _ => None,
-            })
-            .max()
-            .unwrap_or(1);
-        if manifest.abi_version <= max_active {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "abi_version must be strictly greater than any active version".into(),
-            ));
-        }
         Ok(())
     }
 

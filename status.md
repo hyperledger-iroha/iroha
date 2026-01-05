@@ -1,7 +1,13 @@
 # Status
 
 ## Latest Updates
-- ABI: enforce v1-only acceptance across admission/runtime upgrades and CLI/Torii helpers; update runtime-upgrade/contract docs and adjust tests (future v2 cases are now ignored with TODOs).
+- Sumeragi: hydrate existing RBC sessions on duplicate `BlockCreated` and emit precommit/exec votes with per-height epochs to avoid cross-epoch drops; add regression tests.
+- Irohad: remove the DA/RBC override for Iroha 3 so `sumeragi.da_enabled` is enforced by config validation; update docs and tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/assignments in unrelated modules).
+- Core: silence unused warnings in Norito AoS helpers and Sumeragi commit/pacemaker paths, derive `Debug` for RBC sampling payloads, and add missing unit tests for Kura sidecar height mismatch cases.
+- Tests: `cargo test -p iroha_core` (timed out after 240s; multiple test failures still pending).
+- ABI/runtime upgrades: keep ABI v1 fixed (no version bumps), allow v1 runtime upgrades without ABI increments, re-enable runtime-upgrade admission tests, and update runtime-upgrade docs/translations.
 - Integration tests: ensure genesis peers always receive a genesis file to prevent empty-storage startup failures.
 - Sumeragi: drop votes/QCs with mismatched epochs (commit + exec paths) to avoid cross-epoch pollution; add regression tests.
 - Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/vars in unrelated modules).

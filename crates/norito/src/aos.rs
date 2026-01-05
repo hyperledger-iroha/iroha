@@ -21,6 +21,7 @@
 
 use crate::core::Error;
 
+#[cfg(feature = "compact-len")]
 const MAX_VARINT_BYTES: usize = 10;
 
 #[inline]

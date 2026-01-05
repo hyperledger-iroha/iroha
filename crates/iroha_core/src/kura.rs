@@ -5934,6 +5934,7 @@ mod tests {
         assert_eq!(got.format_label(), "pipeline.recovery.v1");
     }
 
+    #[test]
     fn pipeline_sidecar_rejects_height_mismatch() {
         use iroha_config::base::WithOrigin;
         let temp_dir = TempDir::new().unwrap();
@@ -6552,6 +6553,7 @@ mod tests {
         assert_eq!(got.roster_snapshot(), Some(roster));
     }
 
+    #[test]
     fn roster_sidecar_rejects_height_mismatch() {
         use iroha_config::base::WithOrigin;
         let temp_dir = TempDir::new().unwrap();
