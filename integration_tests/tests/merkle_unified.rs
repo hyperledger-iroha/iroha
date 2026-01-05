@@ -9,11 +9,13 @@ fn byte_merkle_roots_and_proofs_match_across_crates() {
     let data: Vec<u8> = (0..150u32).map(|i| (i % 251) as u8).collect();
 
     // Build via iroha_crypto
-    let tree_crypto: MerkleTree<[u8; 32]> = MerkleTree::from_byte_chunks(&data, 32);
+    let tree_crypto: MerkleTree<[u8; 32]> =
+        MerkleTree::from_byte_chunks(&data, 32).expect("valid chunk");
     let root_crypto: HashOf<MerkleTree<[u8; 32]>> = tree_crypto.root().unwrap();
 
     // Build via IVM re-export (type alias to the same canonical type)
-    let tree_ivm: ivm::MerkleTree<[u8; 32]> = ivm::MerkleTree::from_byte_chunks(&data, 32);
+    let tree_ivm: ivm::MerkleTree<[u8; 32]> =
+        ivm::MerkleTree::from_byte_chunks(&data, 32).expect("valid chunk");
     let root_ivm = tree_ivm.root().unwrap();
 
     assert_eq!(root_crypto, root_ivm, "roots must match across crates");

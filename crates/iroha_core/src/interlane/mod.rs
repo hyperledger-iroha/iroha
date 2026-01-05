@@ -242,7 +242,7 @@ mod tests {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&[0_u8; 32]);
         bytes.extend_from_slice(&[1_u8; 32]);
-        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&bytes, 32);
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&bytes, 32).expect("valid chunk");
         let root = tree.root().expect("merkle root");
         let proof = tree.get_proof(0).expect("merkle proof");
         let first_leaf_raw = *tree.leaves().next().expect("leaf iterator");
@@ -300,6 +300,7 @@ mod tests {
                 PrivacyWitness::Merkle(MerkleWitness::from_leaf_bytes(
                     [2_u8; 32],
                     MerkleTree::<[u8; 32]>::from_byte_chunks(&[2_u8; 32], 32)
+                        .expect("valid chunk")
                         .get_proof(0)
                         .unwrap(),
                 )),
@@ -316,6 +317,7 @@ mod tests {
                 PrivacyWitness::Merkle(MerkleWitness::from_leaf_bytes(
                     [0_u8; 32],
                     MerkleTree::<[u8; 32]>::from_byte_chunks(&[0_u8; 32], 32)
+                        .expect("valid chunk")
                         .get_proof(0)
                         .unwrap(),
                 )),

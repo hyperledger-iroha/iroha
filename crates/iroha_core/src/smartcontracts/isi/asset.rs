@@ -55,7 +55,7 @@ pub mod isi {
             }
             *quantity = candidate;
             if (**asset).is_zero() {
-                assert!(self.assets.remove(id.clone()).is_some());
+                assert!(self.remove_asset_and_metadata(id).is_some());
             }
             Ok(())
         }

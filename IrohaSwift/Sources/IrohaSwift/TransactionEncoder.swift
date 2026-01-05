@@ -190,7 +190,7 @@ enum SwiftTransactionEncoderError: Error, LocalizedError, Sendable {
 }
 
 struct SwiftTransactionEncoder {
-    private static let signedTransactionType = "iroha_data_model::transaction::SignedTransaction"
+    private static let signedTransactionType = "iroha_data_model::transaction::signed::SignedTransaction"
 
     private static func bridgeOrThrow(_ body: () throws -> NativeSignedTransaction?) throws -> NativeSignedTransaction {
         guard NoritoNativeBridge.shared.isAvailable else {
@@ -207,6 +207,12 @@ struct SwiftTransactionEncoder {
     }
 
     private static func wrap(native: NativeSignedTransaction) -> SignedTransactionEnvelope {
+        if let framed = noritoDecodeFrame(native.signedBytes) {
+            return SignedTransactionEnvelope(norito: native.signedBytes,
+                                             signedTransaction: framed.payload,
+                                             payload: nil,
+                                             transactionHash: native.hash)
+        }
         let norito = noritoEncode(typeName: signedTransactionType,
                                   payload: native.signedBytes,
                                   flags: 0x04)

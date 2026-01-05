@@ -132,6 +132,7 @@ final class ToriiDaClientTests: XCTestCase {
             "storage_ticket": String(repeating: "1", count: 64),
             "client_blob_id": String(repeating: "2", count: 64),
             "blob_hash": String(repeating: "3", count: 64),
+            "manifest_hash": String(repeating: "5", count: 64),
             "chunk_root": String(repeating: "4", count: 64),
             "lane_id": 7,
             "epoch": 1,
