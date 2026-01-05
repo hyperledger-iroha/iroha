@@ -117,6 +117,23 @@ fn bls_normal_preaggregated_same_message_roundtrip() {
 }
 
 #[test]
+fn bls_normal_same_message_rejects_duplicate_public_keys() {
+    let (pk, sk) = BlsNormal::keypair(KeyGenOption::Random);
+    let msg = b"dup-pk-same-message".to_vec();
+    let sig = BlsNormal::sign(&msg, &sk);
+    let pk_bytes = pk.to_bytes();
+
+    let sig_refs: Vec<&[u8]> = vec![sig.as_slice(), sig.as_slice()];
+    let pk_refs: Vec<&[u8]> = vec![pk_bytes.as_slice(), pk_bytes.as_slice()];
+    assert!(bls_normal_verify_aggregate_same_message(&msg, &sig_refs, &pk_refs).is_err());
+
+    let aggregate = bls_normal_aggregate_signatures(&sig_refs).expect("aggregate ok");
+    assert!(
+        bls_normal_verify_preaggregated_same_message(&msg, &aggregate, &pk_refs).is_err()
+    );
+}
+
+#[test]
 fn bls_small_same_message_aggregate_ok_and_fail() {
     let (pk1, sk1) = BlsSmall::keypair(KeyGenOption::Random);
     let (pk2, sk2) = BlsSmall::keypair(KeyGenOption::Random);
@@ -141,6 +158,18 @@ fn bls_small_same_message_aggregate_ok_and_fail() {
         bls_small_verify_aggregate_same_message(&msg, &broken_refs, &pk_refs).is_err(),
         "broken aggregate must fail"
     );
+}
+
+#[test]
+fn bls_small_same_message_rejects_duplicate_public_keys() {
+    let (pk, sk) = BlsSmall::keypair(KeyGenOption::Random);
+    let msg = b"dup-pk-same-message-small".to_vec();
+    let sig = BlsSmall::sign(&msg, &sk);
+    let pk_bytes = pk.to_bytes();
+
+    let sig_refs: Vec<&[u8]> = vec![sig.as_slice(), sig.as_slice()];
+    let pk_refs: Vec<&[u8]> = vec![pk_bytes.as_slice(), pk_bytes.as_slice()];
+    assert!(bls_small_verify_aggregate_same_message(&msg, &sig_refs, &pk_refs).is_err());
 }
 
 #[test]

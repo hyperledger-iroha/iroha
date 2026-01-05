@@ -737,13 +737,25 @@ pub fn bls_small_verify_batch_deterministic(
 ///
 /// # Errors
 /// Returns `Err(Error::BadSignature)` if any signature/public key fails to parse or verify,
-/// or if input slice lengths are inconsistent.
+/// or if input slice lengths are inconsistent. Public keys must be unique.
 #[cfg(feature = "bls")]
 pub fn bls_normal_verify_aggregate_same_message(
     message: &[u8],
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
+    if signatures.len() != public_keys.len() || signatures.is_empty() {
+        return Err(Error::BadSignature);
+    }
+    {
+        use std::collections::BTreeSet;
+        let mut seen = BTreeSet::new();
+        for &pk in public_keys {
+            if !seen.insert(pk) {
+                return Err(Error::BadSignature);
+            }
+        }
+    }
     // Preferred: aggregate-style helper; internal path may be per-sig today.
     if let Ok(()) =
         signature::bls::verify_aggregate_same_message_normal(message, signatures, public_keys)
@@ -751,9 +763,6 @@ pub fn bls_normal_verify_aggregate_same_message(
         Ok(())
     } else {
         // Fallback: per-signature
-        if signatures.len() != public_keys.len() || signatures.is_empty() {
-            return Err(Error::BadSignature);
-        }
         for (s, pk) in signatures.iter().zip(public_keys.iter()) {
             let vk = signature::bls::BlsNormal::parse_public_key(pk)?;
             signature::bls::BlsNormal::verify(message, s, &vk)?;
@@ -941,21 +950,30 @@ pub fn bls_small_verify_aggregate_multi_message(
 ///
 /// # Errors
 /// Returns `Err(Error::BadSignature)` if any signature/public key fails to parse or verify,
-/// or if input slice lengths are inconsistent.
+/// or if input slice lengths are inconsistent. Public keys must be unique.
 #[cfg(feature = "bls")]
 pub fn bls_small_verify_aggregate_same_message(
     message: &[u8],
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
+    if signatures.len() != public_keys.len() || signatures.is_empty() {
+        return Err(Error::BadSignature);
+    }
+    {
+        use std::collections::BTreeSet;
+        let mut seen = BTreeSet::new();
+        for &pk in public_keys {
+            if !seen.insert(pk) {
+                return Err(Error::BadSignature);
+            }
+        }
+    }
     if let Ok(()) =
         signature::bls::verify_aggregate_same_message_small(message, signatures, public_keys)
     {
         Ok(())
     } else {
-        if signatures.len() != public_keys.len() || signatures.is_empty() {
-            return Err(Error::BadSignature);
-        }
         for (s, pk) in signatures.iter().zip(public_keys.iter()) {
             let vk = signature::bls::BlsSmall::parse_public_key(pk)?;
             signature::bls::BlsSmall::verify(message, s, &vk)?;

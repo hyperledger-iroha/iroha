@@ -1,8 +1,18 @@
 # Status
 
 ## Latest Updates
+- DA spool readers: skip unreadable/corrupt commitment/pin‑intent/receipt files with warnings for partial‑write tolerance; add regression coverage for corrupt entries.
+- Tests: not run (not requested).
+- Kura/WSV: sync parent directories after lane storage relabel/retire renames to harden crash consistency for lane segment moves.
+- Tests: not run (not requested).
+- Offline proofs: add CLI regression coverage ensuring `offline transfer proof` runs without Torii config and emits a proof request from local bundle input.
+- Crypto: import `ed25519_dalek::Verifier` in the Ed25519 test module to satisfy the trait method in low-order key tests.
+- Snapshot tests: mark `snapshot_write_overwrites_existing_files` async to align with `tokio::test` usage.
+- Tests: not run (per request).
+- DA shard cursors: persist journals via temp file + dir sync, recover from temp when main is missing/corrupt, and add regression coverage for temp promotion/fallback.
+- Tests: not run (not requested).
 - Streaming fixtures: standardize Norito streaming integration-test capability flags (explicit feature bits + bundled entropy), refresh baseline/bundled golden snapshots, and remove unused imports in streaming helpers, `norito` core, and ed25519 signatures.
-- Tests: `cargo test -p integration_tests --test norito_streaming_end_to_end baseline_snapshot_matches_golden_fixture -- --nocapture` (timed out after 120s; waiting on build directory lock); `cargo test -p integration_tests --test norito_streaming_end_to_end bundled_snapshot_matches_golden_fixture -- --nocapture` (failed before fixture update; used to capture snapshot output); `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p integration_tests --test norito_streaming_end_to_end streaming::tests::baseline_snapshot_matches_golden_fixture -- --nocapture`; `cargo test -p integration_tests --test norito_streaming_end_to_end streaming::tests::bundled_snapshot_matches_golden_fixture -- --nocapture`; `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
 - Crypto/BLS: make `Choice` conversions explicit in BLS/VRF helpers, gate the BLS fixture test by feature, and switch SM/ML-DSA/SM2 test crates to inner doc comments; add VRF invalid-length regression tests and include `pairing` in the `bls` feature.
 - Norito: restrict `ArchivedBox` to sized payloads and remove a stray fixed-offset write in `copy_from_payload` that referenced a missing writer.
 - Tests: `cargo test -p iroha_torii --test connect_gating`; `cargo test -p iroha_crypto --features bls vrf_to_g`; `cargo test -p norito copy_from_payload_allows_zero_len`.
@@ -1089,3 +1099,5 @@
 - Translated the Android partner SLA discovery notes template across all locales in `docs/examples`.
 - Normalized block-sync QC signer indices using peer mappings across rotated topologies (including NPoS PRF rotations) and added coverage for NPoS view-rotation QC validation.
 - Switched Ed25519 verification to strict checks (reject low-order keys/signatures), hardened batch verification for low-order points, and added a regression that demonstrates low-order key forgery is now rejected.
+- Enforced low-S canonical secp256k1 signatures (signer normalizes, verifier rejects high-S) and added a regression to prove high-S malleability no longer verifies.
+- Rejected duplicate public keys in BLS same-message aggregate verification (including pre-aggregated checks) with new regressions for both normal and small variants.

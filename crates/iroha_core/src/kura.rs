@@ -707,6 +707,16 @@ impl Kura {
                 continue;
             }
             std::fs::rename(&old_dir, &new_dir).map_err(|err| Error::IO(err, old_dir.clone()))?;
+            let new_parent = new_dir.parent();
+            let old_parent = old_dir.parent();
+            if let Some(parent) = new_parent {
+                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+            }
+            if let Some(parent) = old_parent {
+                if Some(parent) != new_parent {
+                    sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+                }
+            }
 
             {
                 let mut plain_text = self.block_plain_text_path.lock();
@@ -771,6 +781,16 @@ impl Kura {
             create_dir_all_with_context(&retired_root)?;
             let dest = unique_retired_path(&retired_root, &current.merge_segment, Some("log"));
             std::fs::rename(&new_path, &dest).map_err(|err| Error::IO(err, new_path.clone()))?;
+            let dest_parent = dest.parent();
+            let new_parent = new_path.parent();
+            if let Some(parent) = dest_parent {
+                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+            }
+            if let Some(parent) = new_parent {
+                if Some(parent) != dest_parent {
+                    sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+                }
+            }
             iroha_logger::info!(
                 lane = %current.lane_id.as_u32(),
                 alias = current.alias,
@@ -781,6 +801,16 @@ impl Kura {
         }
 
         std::fs::rename(&old_path, &new_path).map_err(|err| Error::IO(err, old_path.clone()))?;
+        let new_parent = new_path.parent();
+        let old_parent = old_path.parent();
+        if let Some(parent) = new_parent {
+            sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        }
+        if let Some(parent) = old_parent {
+            if Some(parent) != new_parent {
+                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+            }
+        }
 
         {
             let mut active_merge = self.active_merge_path.lock();
@@ -859,6 +889,16 @@ impl Kura {
             let dest = unique_retired_path(&retired_blocks_root, &entry.kura_segment, None::<&str>);
             std::fs::rename(&blocks_dir, &dest)
                 .map_err(|err| Error::IO(err, blocks_dir.clone()))?;
+            let dest_parent = dest.parent();
+            let blocks_parent = blocks_dir.parent();
+            if let Some(parent) = dest_parent {
+                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+            }
+            if let Some(parent) = blocks_parent {
+                if Some(parent) != dest_parent {
+                    sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+                }
+            }
             iroha_logger::info!(
                 lane = %entry.lane_id.as_u32(),
                 alias = entry.alias,
@@ -872,6 +912,16 @@ impl Kura {
             let dest = unique_retired_path(&retired_merge_root, &entry.merge_segment, Some("log"));
             std::fs::rename(&merge_path, &dest)
                 .map_err(|err| Error::IO(err, merge_path.clone()))?;
+            let dest_parent = dest.parent();
+            let merge_parent = merge_path.parent();
+            if let Some(parent) = dest_parent {
+                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+            }
+            if let Some(parent) = merge_parent {
+                if Some(parent) != dest_parent {
+                    sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+                }
+            }
             iroha_logger::info!(
                 lane = %entry.lane_id.as_u32(),
                 alias = entry.alias,

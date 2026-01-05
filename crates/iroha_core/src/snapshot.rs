@@ -1364,7 +1364,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_write_overwrites_existing_files() {
+    async fn snapshot_write_overwrites_existing_files() {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();

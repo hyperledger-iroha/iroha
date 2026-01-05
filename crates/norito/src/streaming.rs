@@ -4225,6 +4225,14 @@ pub mod codec {
                 }
                 return Ok(None);
             };
+            if audio_cfg.frame_samples == 0 {
+                return Err(CodecError::Audio(AudioCodecError::InvalidSampleCount(
+                    AudioEncoderSampleCountMismatchInfo {
+                        expected: 1,
+                        found: 0,
+                    },
+                )));
+            }
 
             let samples = audio_pcm.ok_or(CodecError::AudioTrackMissing)?;
             let channels = audio_cfg.channel_count();

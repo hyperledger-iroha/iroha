@@ -1675,7 +1675,9 @@ mod tests {
         },
         prelude::AccountId,
     };
+    use iroha::config::Config;
     use iroha_crypto::{Hash, PublicKey, Signature};
+    use iroha_i18n::{Bundle, Language, Localizer};
     use norito::json::Value;
     use std::{collections::BTreeMap, path::PathBuf, str::FromStr};
     use tempfile::tempdir;
@@ -1735,6 +1737,61 @@ mod tests {
             only_missing_verdict: false,
             audit_log: None,
             summary: false,
+        }
+    }
+
+    struct ProofContext {
+        cfg: Config,
+        json_outputs: Vec<String>,
+        i18n: Localizer,
+    }
+
+    impl ProofContext {
+        fn new() -> Self {
+            Self {
+                cfg: crate::fallback_config(),
+                json_outputs: Vec::new(),
+                i18n: Localizer::new(Bundle::Cli, Language::English),
+            }
+        }
+    }
+
+    impl RunContext for ProofContext {
+        fn config(&self) -> &Config {
+            &self.cfg
+        }
+
+        fn transaction_metadata(&self) -> Option<&Metadata> {
+            None
+        }
+
+        fn input_instructions(&self) -> bool {
+            false
+        }
+
+        fn output_instructions(&self) -> bool {
+            false
+        }
+
+        fn i18n(&self) -> &Localizer {
+            &self.i18n
+        }
+
+        fn print_data<T>(&mut self, data: &T) -> Result<()>
+        where
+            T: JsonSerialize + ?Sized,
+        {
+            let json = norito::json::to_json_pretty(data).map_err(|err| eyre!(err.to_string()))?;
+            self.json_outputs.push(json);
+            Ok(())
+        }
+
+        fn println(&mut self, _data: impl std::fmt::Display) -> Result<()> {
+            Ok(())
+        }
+
+        fn client_from_config(&self) -> iroha::client::Client {
+            panic!("client_from_config should not be called for proof command");
         }
     }
 
@@ -1968,6 +2025,29 @@ mod tests {
             }
             _ => panic!("expected counter proof request"),
         }
+    }
+
+    #[test]
+    fn transfer_proof_command_does_not_require_client_config() {
+        let transfer = sample_transfer_record(None).transfer;
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("bundle.json");
+        let bytes = norito::json::to_vec(&transfer).expect("encode bundle json");
+        std::fs::write(&path, bytes).expect("write bundle json");
+
+        let args = TransferProofArgs {
+            bundle: path,
+            encoding: BundleEncoding::Json,
+            kind: ProofRequestKindArg::Sum,
+            counter_checkpoint: None,
+            replay_log_head: None,
+            replay_log_tail: None,
+        };
+        let mut context = ProofContext::new();
+        TransferCommand::Proof(args)
+            .run(&mut context)
+            .expect("proof command");
+        assert_eq!(context.json_outputs.len(), 1);
     }
 
     #[test]

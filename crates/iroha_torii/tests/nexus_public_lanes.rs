@@ -36,21 +36,13 @@ use iroha_data_model::{
 };
 use iroha_primitives::{json::Json, numeric::Numeric};
 use iroha_torii::Torii;
-use norito::{
-    derive::NoritoDeserialize,
-    json::{self, Value},
-};
+use iroha_torii_shared::ErrorEnvelope;
+use norito::json::{self, Value};
 use tokio::sync::{broadcast, watch};
 use tower::ServiceExt as _;
 
 #[path = "fixtures.rs"]
 mod fixtures;
-
-#[derive(Debug, NoritoDeserialize)]
-struct ErrorPayload {
-    code: String,
-    message: String,
-}
 
 fn enable_nexus(state: &mut State, escrow: &AccountId) {
     let mut nexus = state.nexus_snapshot();
@@ -184,7 +176,7 @@ async fn nexus_public_lane_endpoints_reject_when_nexus_disabled() {
 
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let payload =
-        norito::core::decode_from_bytes::<ErrorPayload>(&body).expect("decode error payload");
+        norito::core::decode_from_bytes::<ErrorEnvelope>(&body).expect("decode error payload");
     assert_eq!(payload.code, "nexus_disabled");
     assert!(
         payload.message.contains("nexus.enabled=true"),
@@ -215,7 +207,7 @@ async fn da_commitments_reject_when_nexus_disabled() {
 
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let payload =
-        norito::core::decode_from_bytes::<ErrorPayload>(&body).expect("decode error payload");
+        norito::core::decode_from_bytes::<ErrorEnvelope>(&body).expect("decode error payload");
     assert_eq!(payload.code, "nexus_disabled");
     assert!(
         payload.message.contains("nexus.enabled=true"),
