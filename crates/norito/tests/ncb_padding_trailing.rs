@@ -1,13 +1,13 @@
 //! NCB padding, bitset, and trailing byte validation tests.
 
 use norito::columnar::{
-    EnumBorrow, encode_ncb_u64_bytes_bool, encode_ncb_u64_bytes_u32_bool,
-    encode_ncb_u64_enum_bool, encode_ncb_u64_optstr_bool, encode_ncb_u64_optu32_bool,
-    encode_ncb_u64_str_bool, encode_ncb_u64_str_u32_bool, encode_ncb_u64_u32_bool,
-    encode_opt_str_column, encode_opt_u32_column, view_ncb_u64_bytes_bool,
-    view_ncb_u64_bytes_u32_bool, view_ncb_u64_enum_bool, view_ncb_u64_optstr_bool,
-    view_ncb_u64_optu32_bool, view_ncb_u64_str_bool, view_ncb_u64_str_u32_bool,
-    view_ncb_u64_u32_bool, view_opt_str_column, view_opt_u32_column,
+    EnumBorrow, encode_ncb_u64_bytes_bool, encode_ncb_u64_bytes_u32_bool, encode_ncb_u64_enum_bool,
+    encode_ncb_u64_optstr_bool, encode_ncb_u64_optu32_bool, encode_ncb_u64_str_bool,
+    encode_ncb_u64_str_u32_bool, encode_ncb_u64_u32_bool, encode_opt_str_column,
+    encode_opt_u32_column, view_ncb_u64_bytes_bool, view_ncb_u64_bytes_u32_bool,
+    view_ncb_u64_enum_bool, view_ncb_u64_optstr_bool, view_ncb_u64_optu32_bool,
+    view_ncb_u64_str_bool, view_ncb_u64_str_u32_bool, view_ncb_u64_u32_bool, view_opt_str_column,
+    view_opt_u32_column,
 };
 
 fn with_trailing(mut body: Vec<u8>) -> Vec<u8> {
@@ -34,32 +34,37 @@ fn ncb_views_reject_trailing_bytes() {
     let rows_enum = vec![(1u64, EnumBorrow::Name("a"), true)];
 
     assert!(view_ncb_u64_str_bool(&with_trailing(encode_ncb_u64_str_bool(&rows_str))).is_err());
-    assert!(view_ncb_u64_bytes_bool(&with_trailing(encode_ncb_u64_bytes_bool(&rows_bytes)))
-        .is_err());
-    assert!(view_ncb_u64_u32_bool(&with_trailing(encode_ncb_u64_u32_bool(
-        &rows_u32, false, false
-    )))
-    .is_err());
-    assert!(view_ncb_u64_str_u32_bool(&with_trailing(encode_ncb_u64_str_u32_bool(
-        &rows_str_u32
-    )))
-    .is_err());
-    assert!(view_ncb_u64_bytes_u32_bool(&with_trailing(encode_ncb_u64_bytes_u32_bool(
-        &rows_bytes_u32
-    )))
-    .is_err());
-    assert!(view_ncb_u64_optstr_bool(&with_trailing(encode_ncb_u64_optstr_bool(
-        &rows_optstr
-    )))
-    .is_err());
-    assert!(view_ncb_u64_optu32_bool(&with_trailing(encode_ncb_u64_optu32_bool(
-        &rows_optu32
-    )))
-    .is_err());
-    assert!(view_ncb_u64_enum_bool(&with_trailing(encode_ncb_u64_enum_bool(
-        &rows_enum, false, false, false
-    )))
-    .is_err());
+    assert!(
+        view_ncb_u64_bytes_bool(&with_trailing(encode_ncb_u64_bytes_bool(&rows_bytes))).is_err()
+    );
+    assert!(
+        view_ncb_u64_u32_bool(&with_trailing(encode_ncb_u64_u32_bool(
+            &rows_u32, false, false
+        )))
+        .is_err()
+    );
+    assert!(
+        view_ncb_u64_str_u32_bool(&with_trailing(encode_ncb_u64_str_u32_bool(&rows_str_u32)))
+            .is_err()
+    );
+    assert!(
+        view_ncb_u64_bytes_u32_bool(&with_trailing(encode_ncb_u64_bytes_u32_bool(
+            &rows_bytes_u32
+        )))
+        .is_err()
+    );
+    assert!(
+        view_ncb_u64_optstr_bool(&with_trailing(encode_ncb_u64_optstr_bool(&rows_optstr))).is_err()
+    );
+    assert!(
+        view_ncb_u64_optu32_bool(&with_trailing(encode_ncb_u64_optu32_bool(&rows_optu32))).is_err()
+    );
+    assert!(
+        view_ncb_u64_enum_bool(&with_trailing(encode_ncb_u64_enum_bool(
+            &rows_enum, false, false, false
+        )))
+        .is_err()
+    );
 }
 
 #[test]
@@ -73,11 +78,9 @@ fn ncb_views_reject_bitset_padding_bits() {
     let rows_optu32 = vec![(1u64, Some(7u32), true)];
     let rows_enum = vec![(1u64, EnumBorrow::Name("a"), true)];
 
-    assert!(view_ncb_u64_str_bool(&set_padding_bits(encode_ncb_u64_str_bool(&rows_str)))
-        .is_err());
+    assert!(view_ncb_u64_str_bool(&set_padding_bits(encode_ncb_u64_str_bool(&rows_str))).is_err());
     assert!(
-        view_ncb_u64_bytes_bool(&set_padding_bits(encode_ncb_u64_bytes_bool(&rows_bytes)))
-            .is_err()
+        view_ncb_u64_bytes_bool(&set_padding_bits(encode_ncb_u64_bytes_bool(&rows_bytes))).is_err()
     );
     assert!(
         view_ncb_u64_u32_bool(&set_padding_bits(encode_ncb_u64_u32_bool(
@@ -105,10 +108,12 @@ fn ncb_views_reject_bitset_padding_bits() {
         view_ncb_u64_optu32_bool(&set_padding_bits(encode_ncb_u64_optu32_bool(&rows_optu32)))
             .is_err()
     );
-    assert!(view_ncb_u64_enum_bool(&set_padding_bits(encode_ncb_u64_enum_bool(
-        &rows_enum, false, false, false
-    )))
-    .is_err());
+    assert!(
+        view_ncb_u64_enum_bool(&set_padding_bits(encode_ncb_u64_enum_bool(
+            &rows_enum, false, false, false
+        )))
+        .is_err()
+    );
 }
 
 #[test]

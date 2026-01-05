@@ -28,7 +28,17 @@ fn archive_view_rejects_trailing_bytes() {
     let bytes = to_bytes(&payload).expect("serialize payload");
     let view = from_bytes_view(&bytes).expect("view");
     let err = view
-        .decode::<TrailingDecoder>()
+        .decode_unchecked::<TrailingDecoder>()
         .expect_err("trailing bytes must error");
     assert!(matches!(err, Error::LengthMismatch));
+}
+
+#[test]
+fn archive_view_rejects_schema_mismatch() {
+    let bytes = to_bytes(&42u32).expect("serialize payload");
+    let view = from_bytes_view(&bytes).expect("view");
+    let err = view
+        .decode::<i32>()
+        .expect_err("schema mismatch must error");
+    assert!(matches!(err, Error::SchemaMismatch));
 }

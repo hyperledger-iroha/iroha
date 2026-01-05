@@ -179,8 +179,8 @@ mod ecdsa_secp256k1 {
         }
 
         pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey, ParseError> {
-            let key = PublicKey::from_sec1_bytes(payload)
-                .map_err(|err| ParseError(err.to_string()))?;
+            let key =
+                PublicKey::from_sec1_bytes(payload).map_err(|err| ParseError(err.to_string()))?;
             let canonical = key.to_sec1_bytes();
             if canonical.as_ref() != payload {
                 return Err(ParseError(

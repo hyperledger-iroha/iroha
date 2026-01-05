@@ -1,5 +1,5 @@
+//! Cross-check SM2 signatures against OpenSSL.
 #![cfg(feature = "sm")]
-#![doc = "Cross-check SM2 signatures against OpenSSL."]
 
 use std::{fs::File, io::Write as _, path::Path, process::Command};
 

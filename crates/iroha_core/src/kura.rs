@@ -2481,19 +2481,13 @@ impl Kura {
             } else {
                 warn!(
                     ?temp_data_path,
-                    kind,
-                    "sidecar temp data exists without temp index; ignoring temp data"
+                    kind, "sidecar temp data exists without temp index; ignoring temp data"
                 );
             }
         }
     }
 
-    fn promote_sidecar_temp(
-        temp_path: &Path,
-        main_path: &Path,
-        kind: &str,
-        label: &str,
-    ) -> bool {
+    fn promote_sidecar_temp(temp_path: &Path, main_path: &Path, kind: &str, label: &str) -> bool {
         if !temp_path.exists() {
             return false;
         }
@@ -3251,32 +3245,81 @@ impl Kura {
         drop(index);
 
         if let Err(err) = std::fs::rename(&temp_data_path, data_path) {
-            iroha_logger::warn!(
-                ?err,
-                ?temp_data_path,
-                ?data_path,
-                kind,
-                "failed to replace sidecar store with pruned data"
-            );
-            let _ = std::fs::remove_file(&temp_data_path);
-            let _ = std::fs::remove_file(&temp_index_path);
-            return false;
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                if let Err(remove_err) = std::fs::remove_file(data_path) {
+                    iroha_logger::warn!(
+                        ?remove_err,
+                        ?data_path,
+                        kind,
+                        "failed to remove sidecar store before pruned replace"
+                    );
+                    return false;
+                }
+                if let Err(rename_err) = std::fs::rename(&temp_data_path, data_path) {
+                    iroha_logger::warn!(
+                        ?rename_err,
+                        ?temp_data_path,
+                        ?data_path,
+                        kind,
+                        "failed to replace sidecar store after removal"
+                    );
+                    return false;
+                }
+            } else {
+                iroha_logger::warn!(
+                    ?err,
+                    ?temp_data_path,
+                    ?data_path,
+                    kind,
+                    "failed to replace sidecar store with pruned data"
+                );
+                let _ = std::fs::remove_file(&temp_data_path);
+                let _ = std::fs::remove_file(&temp_index_path);
+                return false;
+            }
         }
         if let Err(err) = std::fs::rename(&temp_index_path, index_path) {
-            iroha_logger::warn!(
-                ?err,
-                ?temp_index_path,
-                ?index_path,
-                kind,
-                "failed to replace sidecar index with pruned entries"
-            );
-            let _ = std::fs::remove_file(&temp_data_path);
-            iroha_logger::warn!(
-                ?temp_index_path,
-                kind,
-                "leaving temp index for sidecar recovery"
-            );
-            return false;
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                if let Err(remove_err) = std::fs::remove_file(index_path) {
+                    iroha_logger::warn!(
+                        ?remove_err,
+                        ?index_path,
+                        kind,
+                        "failed to remove sidecar index before pruned replace"
+                    );
+                    return false;
+                }
+                if let Err(rename_err) = std::fs::rename(&temp_index_path, index_path) {
+                    iroha_logger::warn!(
+                        ?rename_err,
+                        ?temp_index_path,
+                        ?index_path,
+                        kind,
+                        "failed to replace sidecar index after removal"
+                    );
+                    iroha_logger::warn!(
+                        ?temp_index_path,
+                        kind,
+                        "leaving temp index for sidecar recovery"
+                    );
+                    return false;
+                }
+            } else {
+                iroha_logger::warn!(
+                    ?err,
+                    ?temp_index_path,
+                    ?index_path,
+                    kind,
+                    "failed to replace sidecar index with pruned entries"
+                );
+                let _ = std::fs::remove_file(&temp_data_path);
+                iroha_logger::warn!(
+                    ?temp_index_path,
+                    kind,
+                    "leaving temp index for sidecar recovery"
+                );
+                return false;
+            }
         }
         if let Some(parent) = data_path.parent() {
             if let Err(err) = sync_dir(parent) {
@@ -3472,7 +3515,14 @@ impl BlockStore {
                 .and_then(|_| file.sync_data())
                 .map_err(|err| Error::IO(err, tmp_path.clone()))?;
         }
-        std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
+        if let Err(err) = std::fs::rename(&tmp_path, &path) {
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                std::fs::remove_file(&path).map_err(|err| Error::IO(err, path.clone()))?;
+                std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
+            } else {
+                return Err(Error::IO(err, path.clone()));
+            }
+        }
         if let Some(parent) = path.parent() {
             sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
         }
@@ -3491,8 +3541,7 @@ impl BlockStore {
             if aligned != len {
                 warn!(
                     len,
-                    aligned,
-                    "block index length misaligned; truncating trailing bytes"
+                    aligned, "block index length misaligned; truncating trailing bytes"
                 );
                 index_file.try_io(|file| file.set_len(aligned))?;
             }
@@ -7815,6 +7864,21 @@ mod tests {
     }
 
     #[test]
+    fn commit_marker_overwrites_existing_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        store.write_commit_marker(1).unwrap();
+        store.write_commit_marker(2).unwrap();
+
+        let marker = store.read_commit_marker().unwrap().expect("marker");
+        assert_eq!(marker.count, 2);
+        assert!(blocks_dir.join(COUNT_FILE_NAME).exists());
+    }
+
+    #[test]
     fn commit_marker_corruption_falls_back_to_index_count() {
         let temp_dir = TempDir::new().unwrap();
         let blocks_dir = primary_blocks_dir(&temp_dir);
@@ -7943,11 +8007,8 @@ mod tests {
     fn commit_marker_write_failure_keeps_pending() {
         let temp_dir = TempDir::new().expect("temp dir");
         let blocks_dir = primary_blocks_dir(&temp_dir);
-        let mut store = BlockStore::with_fsync(
-            &blocks_dir,
-            FsyncMode::Batched,
-            Duration::from_millis(10),
-        );
+        let mut store =
+            BlockStore::with_fsync(&blocks_dir, FsyncMode::Batched, Duration::from_millis(10));
         store.create_files_if_they_do_not_exist().unwrap();
 
         let block = DummyBlocks::new().next();

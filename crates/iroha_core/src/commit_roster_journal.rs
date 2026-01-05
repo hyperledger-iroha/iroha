@@ -7,7 +7,7 @@
 use std::{
     collections::{BTreeMap, btree_map::Entry},
     fs,
-    io::Write,
+    io::{self, Write},
     num::NonZeroUsize,
     path::{Path, PathBuf},
 };
@@ -367,10 +367,25 @@ impl CommitRosterJournal {
                     source,
                 })?;
         }
-        fs::rename(&tmp_path, &self.path).map_err(|source| CommitRosterJournalError::Write {
-            path: self.path.clone(),
-            source,
-        })?;
+        if let Err(source) = fs::rename(&tmp_path, &self.path) {
+            if source.kind() == io::ErrorKind::AlreadyExists {
+                fs::remove_file(&self.path).map_err(|source| CommitRosterJournalError::Write {
+                    path: self.path.clone(),
+                    source,
+                })?;
+                fs::rename(&tmp_path, &self.path).map_err(|source| {
+                    CommitRosterJournalError::Write {
+                        path: self.path.clone(),
+                        source,
+                    }
+                })?;
+            } else {
+                return Err(CommitRosterJournalError::Write {
+                    path: self.path.clone(),
+                    source,
+                });
+            }
+        }
         if let Some(parent) = self.path.parent() {
             sync_dir(parent).map_err(|source| CommitRosterJournalError::Write {
                 path: parent.to_path_buf(),
@@ -516,6 +531,33 @@ mod tests {
     }
 
     #[test]
+    fn journal_persist_overwrites_existing_file() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let (cert1, checkpoint1) = cert_with_height(1, 1);
+        let (cert2, checkpoint2) = cert_with_height(2, 1);
+
+        let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
+        journal.upsert(cert1.clone(), checkpoint1, None);
+        journal.persist().expect("persist first journal");
+
+        let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
+        journal.upsert(cert2.clone(), checkpoint2.clone(), None);
+        journal.persist().expect("persist second journal");
+
+        let loaded = CommitRosterJournal::load(path, retention(4)).expect("load journal");
+        assert!(
+            loaded.get(cert1.height, cert1.subject_block_hash).is_none(),
+            "old entry should be overwritten"
+        );
+        let snapshot = loaded
+            .get(cert2.height, cert2.subject_block_hash)
+            .expect("new entry should exist");
+        assert_eq!(snapshot.commit_certificate, cert2);
+        assert_eq!(snapshot.validator_checkpoint, checkpoint2);
+    }
+
+    #[test]
     fn journal_prefers_temp_over_main() {
         let dir = tempdir().expect("tempdir");
         let path = CommitRosterJournal::journal_path(dir.path());
@@ -553,12 +595,8 @@ mod tests {
         file.sync_data().expect("sync temp journal");
 
         let loaded = CommitRosterJournal::load(path.clone(), retention(4)).expect("load journal");
-        assert!(loaded
-            .get(cert2.height, cert2.subject_block_hash)
-            .is_some());
-        assert!(loaded
-            .get(cert1.height, cert1.subject_block_hash)
-            .is_some());
+        assert!(loaded.get(cert2.height, cert2.subject_block_hash).is_some());
+        assert!(loaded.get(cert1.height, cert1.subject_block_hash).is_some());
         assert!(!tmp_path.exists(), "temp journal should be promoted");
     }
 

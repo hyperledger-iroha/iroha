@@ -1578,15 +1578,13 @@ public struct ToriiOfflineSettlementSubmitResponse: Decodable, Sendable, Equatab
 }
 
 public struct ToriiOfflineTransferProofRequest: Encodable, Sendable {
-    public let bundleIdHex: String?
-    public let transfer: ToriiJSONValue?
+    public let transfer: ToriiJSONValue
     public let kind: String
     public let counterCheckpoint: UInt64?
     public let replayLogHeadHex: String?
     public let replayLogTailHex: String?
 
     private enum CodingKeys: String, CodingKey {
-        case bundleIdHex = "bundle_id_hex"
         case transfer
         case kind
         case counterCheckpoint = "counter_checkpoint"
@@ -1594,25 +1592,11 @@ public struct ToriiOfflineTransferProofRequest: Encodable, Sendable {
         case replayLogTailHex = "replay_log_tail_hex"
     }
 
-    public init(bundleIdHex: String,
-                kind: String,
-                counterCheckpoint: UInt64? = nil,
-                replayLogHeadHex: String? = nil,
-                replayLogTailHex: String? = nil) {
-        self.bundleIdHex = bundleIdHex
-        self.transfer = nil
-        self.kind = kind
-        self.counterCheckpoint = counterCheckpoint
-        self.replayLogHeadHex = replayLogHeadHex
-        self.replayLogTailHex = replayLogTailHex
-    }
-
     public init(transfer: ToriiJSONValue,
                 kind: String,
                 counterCheckpoint: UInt64? = nil,
                 replayLogHeadHex: String? = nil,
                 replayLogTailHex: String? = nil) {
-        self.bundleIdHex = nil
         self.transfer = transfer
         self.kind = kind
         self.counterCheckpoint = counterCheckpoint

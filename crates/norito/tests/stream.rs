@@ -123,7 +123,8 @@ fn stream_vec_collect_rejects_nonzero_padding() {
     serialize_into(&mut buf, &data, Compression::None).unwrap();
     let payload_len = {
         let mut bytes = [0u8; 8];
-        bytes.copy_from_slice(&buf[norito::core::Header::SIZE - 17..norito::core::Header::SIZE - 9]);
+        bytes
+            .copy_from_slice(&buf[norito::core::Header::SIZE - 17..norito::core::Header::SIZE - 9]);
         u64::from_le_bytes(bytes) as usize
     };
     let padding = buf.len() - norito::core::Header::SIZE - payload_len;
@@ -143,7 +144,8 @@ fn deserialize_stream_rejects_nonzero_padding() {
     serialize_into(&mut buf, &data, Compression::None).unwrap();
     let payload_len = {
         let mut bytes = [0u8; 8];
-        bytes.copy_from_slice(&buf[norito::core::Header::SIZE - 17..norito::core::Header::SIZE - 9]);
+        bytes
+            .copy_from_slice(&buf[norito::core::Header::SIZE - 17..norito::core::Header::SIZE - 9]);
         u64::from_le_bytes(bytes) as usize
     };
     let padding = buf.len() - norito::core::Header::SIZE - payload_len;

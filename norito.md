@@ -28,6 +28,11 @@ Alignment padding:
 - Padding length must be the exact alignment padding required for the type and
   padding bytes must be zero. Extra bytes are rejected.
 
+Schema enforcement:
+- Typed decoders must reject payloads whose header schema hash does not match
+  the expected type. `ArchiveView::decode` performs this check; use
+  `ArchiveView::decode_unchecked` only for raw inspection tools.
+
 ## Header Flags
 
 These flags are ORed into the final header byte. Unknown bits are rejected.

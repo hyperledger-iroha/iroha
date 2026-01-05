@@ -392,8 +392,7 @@ impl Sm2PublicKey {
 
 impl PartialEq for Sm2PublicKey {
     fn eq(&self, other: &Self) -> bool {
-        self.distid() == other.distid()
-            && self.to_sec1_bytes(false) == other.to_sec1_bytes(false)
+        self.distid() == other.distid() && self.to_sec1_bytes(false) == other.to_sec1_bytes(false)
     }
 }
 
@@ -2948,8 +2947,7 @@ mod tests {
     #[test]
     fn sm2_public_key_pem_roundtrip() {
         let mut rng = OsRng;
-        let private = Sm2PrivateKey::random("custom-distid", &mut rng)
-            .expect("valid distid");
+        let private = Sm2PrivateKey::random("custom-distid", &mut rng).expect("valid distid");
         let public = private.public_key();
         let pem = public
             .to_public_key_pem()
@@ -2981,8 +2979,7 @@ mod tests {
     fn sm2_compute_z_aligns_with_signing_key() {
         let mut rng = OsRng;
         let distid = "device:alpha";
-        let private = Sm2PrivateKey::random(distid, &mut rng)
-            .expect("valid distid");
+        let private = Sm2PrivateKey::random(distid, &mut rng).expect("valid distid");
         let public = private.public_key();
         let za = public.compute_z(distid).expect("compute ZA");
 
@@ -3135,8 +3132,8 @@ mod tests {
     #[test]
     fn sm2_random_private_key_roundtrip() {
         let mut rng = OsRng;
-        let private = Sm2PrivateKey::random(Sm2PublicKey::DEFAULT_DISTID, &mut rng)
-            .expect("valid distid");
+        let private =
+            Sm2PrivateKey::random(Sm2PublicKey::DEFAULT_DISTID, &mut rng).expect("valid distid");
         let message = b"random sm2";
         let signature = private.sign(message);
         let public = private.public_key();
@@ -3148,8 +3145,7 @@ mod tests {
     #[test]
     fn sm2_default_distid_can_be_overridden() {
         let original = Sm2PublicKey::default_distid();
-        Sm2PublicKey::set_default_distid("override-distid")
-            .expect("valid distid should set");
+        Sm2PublicKey::set_default_distid("override-distid").expect("valid distid should set");
         assert_eq!(Sm2PublicKey::default_distid(), "override-distid");
         Sm2PublicKey::set_default_distid(original).expect("restore distid");
     }
@@ -3272,8 +3268,7 @@ mod tests {
     fn sm2_signature_der_handles_high_bit_components() {
         let mut rng = OsRng;
         for attempt in 0..1024usize {
-            let private = Sm2PrivateKey::random("interop-highbit", &mut rng)
-                .expect("valid distid");
+            let private = Sm2PrivateKey::random("interop-highbit", &mut rng).expect("valid distid");
             let message = format!("attempt-{attempt}").into_bytes();
             let signature = private.sign(&message);
             if signature.r[0] & 0x80 != 0 || signature.s[0] & 0x80 != 0 {

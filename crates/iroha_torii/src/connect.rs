@@ -1721,13 +1721,8 @@ mod tests {
         let before_activity = Instant::now() - Duration::from_secs(10);
         *session.last_activity.lock().await = before_activity;
 
-        bus.notify_close(
-            session.clone(),
-            sid,
-            proto::Role::Wallet,
-            "test close",
-        )
-        .await;
+        bus.notify_close(session.clone(), sid, proto::Role::Wallet, "test close")
+            .await;
 
         let close_frame = timeout(Duration::from_millis(50), wallet_inbox.recv())
             .await

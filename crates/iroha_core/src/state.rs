@@ -24999,8 +24999,7 @@ mod tests {
 
         let original = Sm2PublicKey::default_distid();
         let _guard = DistidGuard(original.clone());
-        Sm2PublicKey::set_default_distid("pre-existing".to_owned())
-            .expect("distid must be valid");
+        Sm2PublicKey::set_default_distid("pre-existing".to_owned()).expect("distid must be valid");
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();

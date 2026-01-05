@@ -6,7 +6,7 @@ use curve25519_dalek::edwards::EdwardsPoint;
 #[cfg(feature = "ecc-batch")]
 use curve25519_dalek::{constants, scalar::Scalar, traits::IsIdentity};
 use ed25519_dalek::Signature;
-use signature::{Signer as _, Verifier as _};
+use signature::Signer as _;
 
 #[cfg(feature = "rand")]
 use crate::rng::os_rng;
@@ -103,7 +103,8 @@ impl Ed25519Sha512 {
 
     pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey) -> Result<(), Error> {
         let s = Signature::try_from(signature).map_err(|e| ParseError(e.to_string()))?;
-        pk.verify(message, &s).map_err(|_| Error::BadSignature)
+        pk.verify_strict(message, &s)
+            .map_err(|_| Error::BadSignature)
     }
 
     /// Deterministic batch verification helper.
@@ -246,6 +247,9 @@ fn verify_batch_with_seed(
         let a_point = CompressedEdwardsY(*pk.as_bytes())
             .decompress()
             .ok_or(Error::BadSignature)?;
+        if r_point.is_small_order() || a_point.is_small_order() {
+            return Err(Error::BadSignature);
+        }
         r_points.push(r_point);
         a_points.push(a_point);
     }
@@ -298,6 +302,12 @@ mod test {
     use crate::{
         Algorithm, Error, KeyGenOption, PrivateKey, PublicKey, secrecy::Secret, signature::ed25519,
     };
+    use curve25519_dalek::{
+        edwards::EdwardsPoint,
+        scalar::Scalar,
+        traits::{Identity, IsIdentity},
+    };
+    use sha2::{Digest, Sha512};
 
     const MESSAGE_1: &[u8] = b"This is a dummy message for use with tests";
     const SIGNATURE_1: &str = "451b5b8e8725321541954997781de51f4142e4a56bab68d24f6a6b92615de5eefb74134138315859a32c7cf5fe5a488bc545e2e08e5eedfd1fb10188d532d808";
@@ -508,5 +518,64 @@ mod test {
         let pks_r_arr: [&[u8]; 2] = [pk2.as_bytes(), pk1.as_bytes()];
         Ed25519Sha512::verify_batch_deterministic(&msgs_r, &sigs_r, &pks_r_arr, seed)
             .expect("batch verify ok rev");
+    }
+
+    #[test]
+    fn verify_rejects_low_order_public_key_signatures() {
+        fn hash_mod_order(
+            r: &EdwardsPoint,
+            pk_bytes: &[u8; 32],
+            msg: &[u8],
+            order: usize,
+        ) -> usize {
+            let mut h = Sha512::new();
+            h.update(r.compress().as_bytes());
+            h.update(pk_bytes);
+            h.update(msg);
+            let k = Scalar::from_hash(h);
+            (k.to_bytes()[0] as usize) % order
+        }
+
+        fn find_forged_signature(pk: &ed25519_dalek::VerifyingKey) -> (Vec<u8>, [u8; 64]) {
+            let a_point = pk.to_edwards();
+            let mut order = 1usize;
+            let mut acc = a_point;
+            while !acc.is_identity() {
+                acc = acc + a_point;
+                order += 1;
+                assert!(order <= 8, "torsion order exceeded expected bound");
+            }
+
+            let mut torsion_points = Vec::with_capacity(order);
+            let mut acc = EdwardsPoint::identity();
+            for _ in 0..order {
+                torsion_points.push(acc);
+                acc = acc + a_point;
+            }
+
+            for counter in 0u32..512 {
+                let msg = format!("iroha-low-order-{counter}").into_bytes();
+                for (m, r_point) in torsion_points.iter().enumerate() {
+                    let k_mod = hash_mod_order(r_point, pk.as_bytes(), &msg, order);
+                    let expected_m = (order - k_mod) % order;
+                    if m == expected_m {
+                        let mut sig = [0u8; 64];
+                        sig[..32].copy_from_slice(r_point.compress().as_bytes());
+                        return (msg, sig);
+                    }
+                }
+            }
+
+            panic!("failed to forge low-order signature");
+        }
+
+        let pk = ed25519_dalek::VerifyingKey::from_bytes(&ED25519_SMALL_ORDER_POINT)
+            .expect("low-order public key should parse");
+        let (message, sig_bytes) = find_forged_signature(&pk);
+        let signature = Signature::from_bytes(&sig_bytes);
+        pk.verify(&message, &signature)
+            .expect("non-strict verify accepts low-order key signature");
+        let err = Ed25519Sha512::verify(&message, &sig_bytes, &pk);
+        assert!(matches!(err, Err(Error::BadSignature)));
     }
 }

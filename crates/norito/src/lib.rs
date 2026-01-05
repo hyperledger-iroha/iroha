@@ -59,8 +59,9 @@ pub mod schema;
 pub mod streaming;
 // Expose heuristics configuration helpers for hosts
 pub use core::{
-    Archived, Compression, CompressionConfig, Error, NoritoDeserialize, NoritoSerialize,
-    crc64_fallback, default_encode_flags, from_bytes, from_compressed_bytes, hardware_crc64,
+    Archived, ArchivedBox, Compression, CompressionConfig, Error, NoritoDeserialize,
+    NoritoSerialize, crc64_fallback, default_encode_flags, from_bytes, from_compressed_bytes,
+    hardware_crc64,
     heuristics::{
         Heuristics as HeuristicsConfig, get as get_heuristics,
         select_layout_flags_for_size_with as select_layout_flags_with,

@@ -13,8 +13,7 @@ struct DistIdGuard(String);
 
 impl Drop for DistIdGuard {
     fn drop(&mut self) {
-        Sm2PublicKey::set_default_distid(self.0.clone())
-            .expect("restore default distid");
+        Sm2PublicKey::set_default_distid(self.0.clone()).expect("restore default distid");
     }
 }
 
@@ -60,8 +59,7 @@ fn sm2_signatures_are_deterministic() {
     let fixture = load_fixture();
 
     let original_distid = Sm2PublicKey::default_distid();
-    Sm2PublicKey::set_default_distid(fixture.distid.clone())
-        .expect("override distid");
+    Sm2PublicKey::set_default_distid(fixture.distid.clone()).expect("override distid");
     let _guard = DistIdGuard(original_distid);
 
     let seed = <[u8; 32]>::from_hex(&fixture.seed_hex).expect("fixture seed should yield 32 bytes");

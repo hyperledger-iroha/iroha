@@ -1,3 +1,4 @@
+//! Compression-related Norito roundtrips and corruption coverage.
 #![allow(clippy::manual_div_ceil)]
 use iroha_schema::IntoSchema;
 use norito::core::*;
@@ -57,6 +58,15 @@ fn no_compression() {
     let archived = from_compressed_bytes::<Data>(&bytes).unwrap();
     let decoded = <Data as NoritoDeserialize>::deserialize(&archived);
     assert_eq!(decoded.d, 3);
+}
+
+#[test]
+fn compressed_vec_roundtrip() {
+    let payload: Vec<u32> = (0..128).collect();
+    let bytes = to_compressed_bytes(&payload, Some(CompressionConfig { level: 1 })).unwrap();
+    let archived = from_compressed_bytes::<Vec<u32>>(&bytes).unwrap();
+    let decoded = <Vec<u32> as NoritoDeserialize>::deserialize(&archived);
+    assert_eq!(decoded, payload);
 }
 
 #[test]

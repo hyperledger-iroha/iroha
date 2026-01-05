@@ -6011,6 +6011,104 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_load_promotes_temp_file() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let snapshot_path = dir.path().join("sessions.norito");
+
+        let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let viewer_keys = KeyPair::random();
+        let publisher_peer = make_peer(&publisher_keys, 18001);
+        let viewer_peer = make_peer(&viewer_keys, 18002);
+        let session_id = hash_with(0x5A);
+        let suite = EncryptionSuite::X25519ChaCha20Poly1305(hash_with(0x6B));
+        let resolution = sample_resolution();
+
+        let material = StreamingKeyMaterial::new(publisher_keys.clone())
+            .expect("publisher material requires ed25519");
+        let publisher_key = snapshot_session_key(&material);
+        let publisher_handle = StreamingHandle::with_key_material(material.clone())
+            .with_snapshot_path(snapshot_path.clone())
+            .with_snapshot_encryption_key(&publisher_key)
+            .expect("configure snapshot encryption key");
+        let viewer_key = snapshot_session_key(&material);
+        let viewer_handle = StreamingHandle::new()
+            .with_snapshot_encryption_key(&viewer_key)
+            .expect("configure viewer snapshot encryption key");
+
+        let publisher_update = publisher_handle
+            .build_key_update(
+                &viewer_peer,
+                CapabilityRole::Publisher,
+                &KeyUpdateSpec {
+                    session_id,
+                    suite: &suite,
+                    protocol_version: 1,
+                    key_counter: 1,
+                },
+                publisher_keys.private_key(),
+            )
+            .expect("publisher key update");
+        let publisher_frame = ControlFrame::KeyUpdate(publisher_update);
+        viewer_handle
+            .process_control_frame(&publisher_peer, &publisher_frame)
+            .expect("viewer processes key update");
+
+        let viewer_update = viewer_handle
+            .build_key_update(
+                &publisher_peer,
+                CapabilityRole::Viewer,
+                &KeyUpdateSpec {
+                    session_id,
+                    suite: &suite,
+                    protocol_version: 1,
+                    key_counter: 2,
+                },
+                viewer_keys.private_key(),
+            )
+            .expect("viewer key update");
+        let viewer_frame = ControlFrame::KeyUpdate(viewer_update);
+        publisher_handle
+            .process_control_frame(&viewer_peer, &viewer_frame)
+            .expect("publisher processes viewer key update");
+
+        publisher_handle
+            .record_transport_capabilities(&viewer_peer, CapabilityRole::Publisher, resolution)
+            .expect("publisher records capabilities");
+        viewer_handle
+            .record_transport_capabilities(&publisher_peer, CapabilityRole::Viewer, resolution)
+            .expect("viewer records capabilities");
+        let negotiated =
+            CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED | 0b101);
+        publisher_handle
+            .record_negotiated_capabilities(&viewer_peer, CapabilityRole::Publisher, negotiated)
+            .expect("publisher records features");
+        viewer_handle
+            .record_negotiated_capabilities(&publisher_peer, CapabilityRole::Viewer, negotiated)
+            .expect("viewer records features");
+
+        publisher_handle
+            .persist_snapshots()
+            .expect("persist streaming snapshots");
+        let tmp_path = snapshot_temp_path(&snapshot_path);
+        fs::rename(&snapshot_path, &tmp_path).expect("move snapshot to temp");
+
+        let restored_key = snapshot_session_key(&material);
+        let restored_handle = StreamingHandle::with_key_material(material)
+            .with_snapshot_path(snapshot_path.clone())
+            .with_snapshot_encryption_key(&restored_key)
+            .expect("configure restored snapshot encryption key");
+        restored_handle
+            .load_snapshots_from_path(&snapshot_path)
+            .expect("load streaming snapshots from temp");
+        assert!(snapshot_path.exists(), "snapshot file should be promoted");
+        assert!(!tmp_path.exists(), "temp snapshot file should be removed");
+        assert!(
+            restored_handle.transport_keys(viewer_peer.id()).is_some(),
+            "restored handle should retain transport keys"
+        );
+    }
+
+    #[test]
     fn snapshot_session_key_derivation_is_deterministic() {
         let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let material = StreamingKeyMaterial::new(key_pair.clone()).expect("material created");

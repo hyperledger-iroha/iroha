@@ -24080,10 +24080,8 @@ pub struct OfflineTransferListParams {
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineTransferProofRequest {
-    /// Optional bundle identifier (hex, case-insensitive) for on-ledger lookup.
-    pub bundle_id_hex: Option<String>,
-    /// Optional transfer payload to build proof requests before admission.
-    pub transfer: Option<OfflineToOnlineTransfer>,
+    /// Transfer payload used to build proof requests.
+    pub transfer: OfflineToOnlineTransfer,
     /// Proof request kind (`sum`, `counter`, `replay`).
     pub kind: String,
     /// Optional counter checkpoint supplied by the caller.
@@ -33399,60 +33397,23 @@ pub async fn handle_v1_offline_bundle_proof_status(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_offline_transfer_proof(
-    state: Arc<CoreState>,
+    _state: Arc<CoreState>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         OfflineTransferProofRequest,
     >,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse, Error> {
-    use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{
-        dsl::CompoundPredicate, offline::prelude::FindOfflineToOnlineTransferById,
-    };
-
     let kind = OfflineProofRequestKind::from_str(req.kind.as_str()).map_err(|err| {
         conversion_error(format!("invalid proof request kind `{}`: {err}", req.kind))
     })?;
 
-    let bundle_id_hex = req.bundle_id_hex.clone();
-    let bundle_id = bundle_id_hex
-        .as_deref()
-        .map(|hex| parse_hash_hex(hex, "bundle_id_hex"))
-        .transpose()?;
-
-    let record;
-    let transfer = if let Some(transfer) = req.transfer.as_ref() {
-        if let Some(bundle_id) = bundle_id {
-            if transfer.bundle_id != bundle_id {
-                return Err(conversion_error(format!(
-                    "bundle_id_hex `{}` does not match transfer bundle_id",
-                    bundle_id_hex.as_deref().unwrap_or_default()
-                )));
-            }
-        }
-        transfer
-    } else {
-        let bundle_id = bundle_id.ok_or_else(|| missing_field_error("bundle_id_hex or transfer"))?;
-        let state_view = state.view();
-        let mut results = ValidQuery::execute(
-            FindOfflineToOnlineTransferById::new(bundle_id),
-            CompoundPredicate::PASS,
-            &state_view,
-        )
-        .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?
-        .collect::<Vec<_>>();
-        record = results.pop().ok_or_else(|| {
-            conversion_error(format!(
-                "offline transfer `{}` not found",
-                bundle_id_hex.as_deref().unwrap_or_default()
-            ))
-        })?;
-        &record.transfer
-    };
+    let transfer = &req.transfer;
 
     match kind {
         OfflineProofRequestKind::Sum => {
-            let payload = transfer.to_proof_request_sum().map_err(proof_request_error)?;
+            let payload = transfer
+                .to_proof_request_sum()
+                .map_err(proof_request_error)?;
             json_response(&payload)
         }
         OfflineProofRequestKind::Counter => {
