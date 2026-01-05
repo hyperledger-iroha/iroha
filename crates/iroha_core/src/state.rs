@@ -4137,6 +4137,9 @@ pub struct StateBlock<'state> {
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this block.
     pub chain_id: iroha_data_model::ChainId,
+    /// `NPoS` PRF seed derived from the pre-block world state at this height.
+    #[allow(dead_code)]
+    pre_block_npos_seed: [u8; 32],
     /// Accumulated settlement receipts for transactions in this block.
     settlement_accumulator: crate::settlement::SettlementAccumulator,
     /// Transfer transcripts recorded for each transaction hash (for FASTPQ witness plumbing).
@@ -11578,10 +11581,16 @@ impl State {
     pub fn block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
-        // Determine per-block gas limit before taking block locks.
-        let gas_limit_per_block = {
+        // Determine pre-block consensus seed and per-block gas limit before taking block locks.
+        let (gas_limit_per_block, pre_block_npos_seed) = {
             let world_view = self.world.view();
-            gas_limit_from_parameters(world_view.parameters())
+            let gas_limit_per_block = gas_limit_from_parameters(world_view.parameters());
+            let pre_block_npos_seed = crate::sumeragi::npos_seed_for_height_from_world(
+                &world_view,
+                &self.chain_id,
+                curr_block.height().get(),
+            );
+            (gas_limit_per_block, pre_block_npos_seed)
         };
         #[cfg(feature = "telemetry")]
         {
@@ -11611,6 +11620,7 @@ impl State {
             settlement: self.settlement.clone(),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
+            pre_block_npos_seed,
             settlement_accumulator: crate::settlement::SettlementAccumulator::default(),
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),
@@ -11948,9 +11958,15 @@ impl State {
             self.rewind_da_indexes_to_height(target_height)
                 .expect("failed to rewind DA indexes from Kura");
         }
-        let gas_limit_per_block = {
+        let (gas_limit_per_block, pre_block_npos_seed) = {
             let world_view = self.world.view();
-            gas_limit_from_parameters(world_view.parameters())
+            let gas_limit_per_block = gas_limit_from_parameters(world_view.parameters());
+            let pre_block_npos_seed = crate::sumeragi::npos_seed_for_height_from_world(
+                &world_view,
+                &self.chain_id,
+                curr_block.height().get(),
+            );
+            (gas_limit_per_block, pre_block_npos_seed)
         };
         StateBlock {
             state_ref: self,
@@ -11975,6 +11991,7 @@ impl State {
             settlement: self.settlement.clone(),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
+            pre_block_npos_seed,
             settlement_accumulator: crate::settlement::SettlementAccumulator::default(),
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),

@@ -473,6 +473,14 @@ mod tests {
     }
 
     #[test]
+    fn decode_all_rejects_length_mismatch() {
+        let data = b"length mismatch".to_vec();
+        let encoded = encode_all(data.clone(), 1).expect("encode");
+        let result = decode_all(&encoded, (data.len() as u64).saturating_sub(1));
+        assert!(matches!(result, Err(crate::core::Error::LengthMismatch)));
+    }
+
+    #[test]
     fn availability_probe_runs() {
         // Should simply return a boolean without panicking
         let _ = available();

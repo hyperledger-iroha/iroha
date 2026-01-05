@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/runtime_upgrades.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bb2077856de0420cb6ce7f04939caa6348e22c22bee93189a22a8596c71c7cbc
+source_hash: ee7142a82f21e646d4d71844adbf779d180e5647
 source_last_modified: "2025-12-04T06:31:08.260928+00:00"
 translation_last_reviewed: 2026-01-01
 ---
@@ -15,24 +15,26 @@ translation_last_reviewed: 2026-01-01
 
 # Runtime upgrades (IVM + Host) — بغیر downtime، بغیر hardfork
 
-یہ دستاویز IVM/host کی نئی صلاحیتوں (مثلاً نئے syscalls اور pointer-ABI types) کو متعارف کرانے کیلئے
-ایک deterministic اور governance-controlled میکانزم بیان کرتی ہے، بغیر نیٹ ورک روکے یا nodes کو
-hardfork کئے۔ Nodes پہلے سے binaries رول آؤٹ کرتے ہیں؛ activation آن چین ایک محدود height window
-کے اندر coordinated ہوتی ہے۔ پرانے contracts بغیر تبدیلی کے چلتے رہتے ہیں؛ نئی صلاحیتیں ABI version
-اور policy سے gate ہوتی ہیں۔
+یہ دستاویز runtime upgrades کو نیٹ ورک روکے بغیر اور hardfork کے بغیر rollout کرنے کیلئے ایک
+deterministic اور governance-controlled میکانزم بیان کرتی ہے۔ Nodes پہلے سے binaries رول آؤٹ
+کرتے ہیں؛ activation آن چین ایک محدود height window کے اندر coordinated ہوتی ہے۔ پرانے
+contracts بغیر تبدیلی کے چلتے رہتے ہیں؛ host ABI surface v1 پر فکس رہتی ہے۔
+
+نوٹ (پہلا ریلیز): ABI v1 فکس ہے اور ABI version بڑھانے کا کوئی پلان نہیں۔ runtime upgrade manifests کو `abi_version = 1` رکھنا ہوگا، اور `added_syscalls`/`added_pointer_types` خالی ہوں گی۔
 
 Goals
 - مقررہ height window میں deterministic activation اور idempotent application۔
-- متعدد ABI versions کا coexistence؛ existing binaries کبھی نہ توڑنا۔
+- ABI v1 کی استحکام برقرار رکھنا؛ runtime upgrades host ABI surface نہیں بدلتے۔
 - Admission اور execution guardrails تاکہ pre-activation payloads نیا behavior enable نہ کر سکیں۔
 - Operator-friendly rollout جس میں capability visibility اور واضح failure modes ہوں۔
 
 Non-Goals
+- نئی ABI versions متعارف کرنا یا syscall/pointer-type surfaces بڑھانا (اس ریلیز میں scope سے باہر)۔
 - موجودہ syscall numbers یا pointer-type IDs کو بدلنا (منع ہے)۔
 - updated binaries deploy کئے بغیر nodes کو live patch کرنا۔
 
 Definitions
-- ABI Version: `ProgramMetadata.abi_version` میں اعلان کردہ چھوٹا integer جو `SyscallPolicy` اور pointer-type allowlist منتخب کرتا ہے۔
+- ABI Version: `ProgramMetadata.abi_version` میں اعلان کردہ چھوٹا integer جو `SyscallPolicy` اور pointer-type allowlist منتخب کرتا ہے۔ پہلے ریلیز میں `1` پر فکس۔
 - ABI Hash: مخصوص version کیلئے ABI surface کا deterministic digest: syscall list (numbers+shapes)، pointer-type IDs/allowlist، اور policy flags؛ اسے `ivm::syscalls::compute_abi_hash` compute کرتا ہے۔
 - Syscall Policy: host mapping جو طے کرتی ہے کہ دی گئی ABI version اور host policy کیلئے syscall number allowed ہے یا نہیں۔
 - Activation Window: half-open block-height interval `[start, end)` جس میں activation ٹھیک ایک بار `start` پر معتبر ہوتی ہے۔
@@ -43,7 +45,7 @@ State Objects (Data Model)
 - `RuntimeUpgradeManifest` fields:
   - `name: String` — human-readable label۔
   - `description: String` — operators کیلئے مختصر وضاحت۔
-  - `abi_version: u16` — target ABI version جو activate ہو گی۔
+  - `abi_version: u16` — target ABI version جو activate ہو گی (پہلے ریلیز میں 1 ہونا چاہیے)۔
   - `abi_hash: [u8; 32]` — target policy کیلئے canonical ABI hash۔
   - `added_syscalls: Vec<u16>` — syscall numbers جو اس version کے ساتھ valid ہوتے ہیں۔
   - `added_pointer_types: Vec<u16>` — pointer-type identifiers جو upgrade میں شامل ہوں گے۔
@@ -61,7 +63,7 @@ State Objects (Data Model)
   - `algorithm: String` — digest algorithm identifier۔
   - `digest: Vec<u8>` — raw digest bytes (JSON میں base64)۔
 <!-- END RUNTIME UPGRADE TYPES -->
-  - Invariants: `end_height > start_height`; `abi_version` کسی بھی active version سے strictly زیادہ ہو؛ `abi_hash` کو `ivm::syscalls::compute_abi_hash(policy_for(abi_version))` کے برابر ہونا چاہیے؛ `added_*` کو نئی ABI policy اور پچھلی active policy کے درمیان بالکل additive delta بتانا چاہیے؛ موجودہ numbers/IDs کو کبھی remove یا renumber نہ کریں۔
+  - Invariants: `end_height > start_height`; `abi_version` کو `1` ہونا چاہیے؛ `abi_hash` کو `ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)` کے برابر ہونا چاہیے؛ `added_*` خالی ہونا چاہیے؛ موجودہ numbers/IDs کو کبھی remove یا renumber نہ کریں۔
 
 Storage Layout
 - `world.runtime_upgrades`: MVCC map جس کی key `RuntimeUpgradeId.0` (raw 32-byte hash) ہے اور values canonical Norito `RuntimeUpgradeRecord` payloads میں encoded ہیں۔ entries blocks کے درمیان persist رہتی ہیں؛ commits idempotent اور replay-safe ہیں۔
@@ -74,7 +76,7 @@ Instructions (ISI)
   - Canonical encoding: manifest bytes کو `RuntimeUpgradeManifest::canonical_bytes()` سے match ہونا چاہیے؛ non-canonical encodings reject ہوں گے۔
 - ActivateRuntimeUpgrade { id: RuntimeUpgradeId }
   - Preconditions: matching Proposed record موجود ہو؛ `current_height` کو `manifest.start_height` کے برابر ہونا چاہیے؛ `current_height < manifest.end_height`۔
-  - Effects: record کو `ActivatedAt(current_height)` پر flip کریں؛ `abi_version` کو active ABI set میں شامل کریں۔
+  - Effects: record کو `ActivatedAt(current_height)` پر flip کریں؛ active ABI set پہلی ریلیز میں `{1}` رہتا ہے۔
   - Idempotent: اسی height پر replays no-op ہیں؛ دیگر heights deterministically reject ہوتی ہیں۔
 - CancelRuntimeUpgrade { id: RuntimeUpgradeId }
   - Preconditions: status Proposed ہو اور `current_height < manifest.start_height`۔
@@ -84,9 +86,8 @@ Events (Data Events)
 - RuntimeUpgradeEvent::{Proposed { id, manifest }, Activated { id, abi_version, at_height }, Canceled { id }}
 
 Admission Rules
-- Contract Admission: `ProgramMetadata.abi_version = v` والے manifests کیلئے:
-  - Activation سے پہلے `v`: `IvmAdmissionError::AbiVersionNotActive { v }` کے ساتھ reject کریں۔
-  - Activation کے بعد: `abi_hash(v)` دوبارہ compute کریں اور payload/manifest سے equality ضروری ہے؛ ورنہ `IvmAdmissionError::ManifestAbiHashMismatch` کے ساتھ reject کریں۔
+- Contract Admission: پہلے ریلیز میں صرف `ProgramMetadata.abi_version = 1` قبول ہے؛ باقی اقدار `IvmAdmissionError::UnsupportedAbiVersion` کے ساتھ reject ہوتی ہیں۔
+  - ABI v1 کیلئے `abi_hash(1)` دوبارہ compute کریں اور payload/manifest سے مطابقت مانگیں؛ ورنہ `IvmAdmissionError::ManifestAbiHashMismatch` کے ساتھ reject کریں۔
 - Transaction Admission: `ProposeRuntimeUpgrade`/`ActivateRuntimeUpgrade`/`CancelRuntimeUpgrade` کیلئے مناسب permissions (root/sudo) درکار ہیں؛ window overlap constraints پوری ہونی چاہئیں۔
 
 Provenance Enforcement
@@ -105,20 +106,19 @@ Provenance Enforcement
 Execution Rules
 - VM Host Policy: program execution کے دوران `ProgramMetadata.abi_version` سے `SyscallPolicy` derive کریں۔ اس version کیلئے unknown syscalls `VMError::UnknownSyscall` پر map ہوتے ہیں۔
 - Pointer-ABI: allowlist `ProgramMetadata.abi_version` سے derive ہوتی ہے؛ اس version کیلئے allowlist سے باہر types decode/validation میں reject ہوتے ہیں۔
-- Host Switching: ہر block active ABI set دوبارہ compute کرتا ہے؛ activation transaction commit ہونے کے بعد اسی block کی بعد والی transactions نئی policy observe کرتی ہیں ( `runtime_upgrade_admission::activation_allows_new_abi_in_same_block` سے validate)۔
+- Host Switching: ہر block active ABI set دوبارہ compute کرتا ہے؛ پہلی ریلیز میں یہ `{1}` رہتا ہے، مگر activation record ہوتی ہے اور idempotent ہے ( `runtime_upgrade_admission::activation_allows_v1_in_same_block` سے validate)۔
   - Syscall policy binding: `CoreHost` transaction کی declared ABI version پڑھتا ہے اور `ivm::syscalls::is_syscall_allowed`/`is_type_allowed_for_policy` کو per-block `SyscallPolicy` کے خلاف enforce کرتا ہے۔ host transaction-scoped VM instance reuse کرتا ہے، لہذا mid-block activations محفوظ ہیں — بعد والی transactions updated policy observe کرتی ہیں جبکہ پہلے والی اپنی original version پر رہتی ہیں۔
 
 Determinism & Safety Invariants
 - Activation صرف `start_height` پر ہوتی ہے اور idempotent ہے؛ `start_height` سے نیچے reorgs deterministic طور پر دوبارہ apply ہوتے ہیں جب block دوبارہ آ جائے۔
-- موجودہ ABI versions ہمیشہ active رہتی ہیں؛ نئی versions صرف active set کو extend کرتی ہیں۔
+- Active ABI set پہلی ریلیز میں `{1}` پر فکس ہے۔
 - کوئی dynamic negotiation consensus یا execution order پر اثر نہیں ڈالتی؛ capability gossip صرف informational ہے۔
 
 Operator Rollout (No Downtime)
-1) ایسا node binary deploy کریں جو نئی ABI version (`v+1`) support کرے مگر اسے activate نہ کرے۔
-2) telemetry سے fleet capability دیکھیں (nodes کا فیصد جو `v+1` support announce کرتے ہیں)۔
+1) ایسا node binary deploy کریں جو نیا runtime artifact شامل کرے اور ABI v1 برقرار رکھے۔
+2) telemetry سے fleet readiness دیکھیں۔
 3) `ProposeRuntimeUpgrade` ایک مناسب طور پر آگے window کے ساتھ submit کریں (مثلاً `H+N`)۔
-4) `start_height` پر `ActivateRuntimeUpgrade` شامل block کا حصہ بن کر خودکار طور پر execute ہوتی ہے اور host active set flip ہو جاتا ہے؛ جن nodes نے upgrade نہیں کیا وہ پرانے contracts کیلئے کام کرتے رہیں گے مگر `v+1` programs کی admission/execution reject کریں گے۔
-5) activation کے بعد `v+1` کو target کرتے ہوئے contracts recompile/deploy کریں۔
+4) `start_height` پر `ActivateRuntimeUpgrade` شامل block کا حصہ بن کر execute ہوتی ہے اور activation ریکارڈ ہوتی ہے؛ ABI v1 پر رہتی ہے۔
 
 Torii & CLI
 - Torii
@@ -141,7 +141,7 @@ Core Query API
   - `FindActiveAbiVersions` Norito-encoded struct `{ active_versions: [u16], default_compile_target: u16 }` واپس کرتا ہے۔
   - مثال: `docs/source/samples/find_active_abi_versions.md` (type/fields اور JSON example)۔
 
-Required Code Changes (by crate)
+Implementation Notes (صرف v1)
 - iroha_data_model
   - `RuntimeUpgradeManifest`, `RuntimeUpgradeRecord`, instruction enums, events، اور JSON/Norito codecs کو roundtrip tests کے ساتھ شامل کریں۔
 - iroha_core
@@ -151,12 +151,11 @@ Required Code Changes (by crate)
   - Syscall policy mapping: active ABI set کو VM host constructor تک پہنچائیں؛ determinism کیلئے execution start پر block height استعمال کریں۔
   - Tests: activation window idempotency، overlap rejections، pre/post admission behavior۔
 - ivm
-  - `ABI_V2` (example) define کریں جس کی policy `abi_syscall_list()` extend کرے؛ `is_syscall_allowed(policy, number)` mapping؛ pointer-type policy extension۔
-  - Golden tests دوبارہ compute اور pin کریں: `abi_syscall_list_golden.rs`, `abi_hash_versions.rs`, `pointer_type_ids_golden.rs`۔
+  - ABI surface v1 پر فکس ہے؛ syscall lists اور ABI hashes golden tests سے pin ہیں۔
 - iroha_cli / iroha_torii
   - اوپر listed endpoints اور commands شامل کریں؛ manifests کیلئے Norito JSON helpers؛ بنیادی integration tests۔
 - Kotodama compiler
-  - `abi_version = v+1` targeting کی اجازت دیں؛ منتخب version کیلئے درست `abi_hash` کو `.to` manifests میں embed کریں۔
+  - `abi_version = 1` emit کریں اور canonical v1 `abi_hash` کو `.to` manifests میں embed کریں۔
 
 Telemetry
 - `runtime.active_abi_versions` gauge اور `runtime.upgrade_events_total{kind}` counter شامل کریں۔
@@ -167,8 +166,8 @@ Security Considerations
 - `abi_hash` interface surface کو pin کرتا ہے تاکہ binaries کے درمیان silent drift نہ ہو۔
 
 Acceptance Criteria (Conformance)
-- Pre-activation, nodes `abi_version = v+1` کے ساتھ code کو deterministically reject کرتے ہیں۔
-- Post-activation at `start_height`, nodes `v+1` کو accept/execute کرتے ہیں؛ پرانے programs بغیر تبدیلی کے چلتے رہتے ہیں۔
+- Nodes `abi_version != 1` کے ساتھ code کو ہر وقت deterministically reject کرتے ہیں۔
+- Runtime upgrades ABI policy نہیں بدلتے؛ موجودہ programs v1 کے ساتھ بغیر تبدیلی کے چلتے رہتے ہیں۔
 - ABI hashes اور syscall lists کیلئے golden tests x86-64/ARM64 پر پاس ہوں۔
 - Activation idempotent ہے اور reorgs میں محفوظ ہے۔
 

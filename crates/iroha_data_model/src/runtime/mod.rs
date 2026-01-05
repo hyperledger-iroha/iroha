@@ -273,7 +273,9 @@ pub fn render_runtime_upgrade_types_markdown_section() -> String {
     out.push_str("- `RuntimeUpgradeManifest` fields:\n");
     out.push_str("  - `name: String` — human-readable label.\n");
     out.push_str("  - `description: String` — short description for operators.\n");
-    out.push_str("  - `abi_version: u16` — target ABI version to activate.\n");
+    out.push_str(
+        "  - `abi_version: u16` — target ABI version to activate (must be 1 in the first release).\n",
+    );
     out.push_str("  - `abi_hash: [u8; 32]` — canonical ABI hash for the target policy.\n");
     out.push_str(
         "  - `added_syscalls: Vec<u16>` — syscall numbers that become valid with this version.\n",
@@ -395,9 +397,9 @@ mod tests {
     /// Manifest and record Norito payloads must roundtrip without losing proposer metadata.
     fn encode_decode_manifest_and_record() {
         let manifest = RuntimeUpgradeManifest {
-            name: "ABI V2".to_string(),
-            description: "Activate ABI v2".to_string(),
-            abi_version: 2,
+            name: "ABI V1".to_string(),
+            description: "Activate ABI v1".to_string(),
+            abi_version: 1,
             abi_hash: [0x11; 32],
             added_syscalls: vec![4001, 4002],
             added_pointer_types: vec![0x0101, 0x0102],
@@ -435,9 +437,9 @@ mod tests {
     fn signature_payload_excludes_provenance_signatures() {
         let kp = KeyPair::random();
         let mut manifest = RuntimeUpgradeManifest {
-            name: "ABI V2".to_string(),
-            description: "Activate ABI v2".to_string(),
-            abi_version: 2,
+            name: "ABI V1".to_string(),
+            description: "Activate ABI v1".to_string(),
+            abi_version: 1,
             abi_hash: [0x11; 32],
             added_syscalls: vec![4001],
             added_pointer_types: vec![0x0101],

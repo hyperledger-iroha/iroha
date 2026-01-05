@@ -3745,6 +3745,47 @@ async fn commit_pipeline_uses_commit_certificate_roster_for_validation() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_uses_epoch_for_height_when_emitting_votes() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.epoch_length_blocks = 2;
+    let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = 3u64;
+    let view = 0u64;
+    let block = sample_block(height, u32::try_from(view).expect("view fits u32"), None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.validation_status = ValidationStatus::Valid;
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    actor.pending.last_commit_pipeline_run = Instant::now() - Duration::from_secs(10);
+
+    let expected_epoch = actor.epoch_for_height(height);
+    assert_eq!(expected_epoch, 1, "epoch length should yield epoch 1");
+    assert_ne!(
+        expected_epoch,
+        actor.current_epoch(),
+        "test should cross the epoch boundary"
+    );
+
+    actor.process_commit_candidates();
+
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let commit_topology = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+    let topology = super::network_topology::Topology::new(commit_topology);
+    let vote = actor.local_precommit_vote_for(height, view, expected_epoch, &topology);
+    assert!(
+        vote.is_some(),
+        "precommit vote should be recorded with the epoch derived from height"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn finalize_pending_block_requires_commit_certificate() {
     let mut harness = test_actor_harness(1).await;
 
@@ -5313,6 +5354,44 @@ async fn handle_vote_drops_nonextending_precommit_for_known_block() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn handle_vote_drops_epoch_mismatch() {
+    let mut harness = test_actor_harness(2).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(1).max(1);
+    let view = 0_u64;
+    let expected_epoch = actor.epoch_for_height(height);
+    let mismatched_epoch = expected_epoch.saturating_add(1);
+
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAC; 32]));
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let chain = actor.common_config.chain.clone();
+
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch: mismatched_epoch,
+        highest_cert: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
+
+    let before = actor.vote_log.len();
+    actor.handle_vote(vote);
+    assert_eq!(
+        actor.vote_log.len(),
+        before,
+        "votes with mismatched epochs should be dropped"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn prune_precommit_votes_conflicting_with_lock_drops_known_conflicts() {
     let mut harness = test_actor_harness(2).await;
     let actor = &mut harness.actor;
@@ -5456,6 +5535,45 @@ async fn handle_exec_vote_accepts_stale_view_when_block_pending() {
     assert!(
         recorded,
         "stale exec vote should be recorded for pending block"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_exec_vote_drops_epoch_mismatch() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(1).max(1);
+    let view = 0_u64;
+    let expected_epoch = actor.epoch_for_height(height);
+    let mismatched_epoch = expected_epoch.saturating_add(1);
+
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAD; 32]));
+    let mut vote = crate::sumeragi::consensus::ExecVote {
+        block_hash,
+        parent_state_root: Hash::prehashed([0x10; 32]),
+        post_state_root: Hash::prehashed([0x11; 32]),
+        height,
+        view,
+        epoch: mismatched_epoch,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let chain = actor.common_config.chain.clone();
+    let preimage =
+        crate::sumeragi::consensus::bls_preimage::exec_vote(&chain, actor.mode_tag(), &vote);
+    let signature = Signature::new(actor.common_config.key_pair.private_key(), &preimage);
+    vote.bls_sig = signature.payload().to_vec();
+
+    let before = actor.exec_vote_log.len();
+    actor.handle_exec_vote(vote);
+    assert_eq!(
+        actor.exec_vote_log.len(),
+        before,
+        "exec votes with mismatched epochs should be dropped"
     );
 
     harness.shutdown.send();
@@ -5791,6 +5909,43 @@ async fn handle_precommit_vote_uses_roster_snapshot_after_topology_change() {
     assert!(
         recorded,
         "precommit vote should use the persisted roster after topology change"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_qc_drops_epoch_mismatch() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(1).max(1);
+    let view = 0_u64;
+    let expected_epoch = actor.epoch_for_height(height);
+    let mismatched_epoch = expected_epoch.saturating_add(1);
+
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAE; 32]));
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let chain = actor.common_config.chain.clone();
+    let qc = qc_with_bitmap(
+        &chain,
+        block_hash,
+        height,
+        view,
+        mismatched_epoch,
+        vec![0b0000_1111],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    let before = actor.qc_cache.len();
+    actor.handle_qc(qc).expect("handle qc");
+    assert_eq!(
+        actor.qc_cache.len(),
+        before,
+        "QCs with mismatched epochs should be dropped"
     );
 
     harness.shutdown.send();
@@ -10641,6 +10796,7 @@ fn synthesize_commit_certificate_accepts_valid_roster() {
         &block,
         &roster,
         PERMISSIONED_TAG,
+        0,
         iroha_config::parameters::actual::ConsensusMode::Permissioned,
     )
     .expect("certificate should be synthesized");
@@ -11193,6 +11349,48 @@ async fn handle_execution_qc_persists_valid_qc() {
         stored.bls_aggregate_signature,
         qc.aggregate.bls_aggregate_signature
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_execution_qc_drops_epoch_mismatch() {
+    let mut config = test_sumeragi_config();
+    config.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, config, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(1).max(1);
+    let view = 0_u64;
+    let expected_epoch = actor.epoch_for_height(height);
+    let mismatched_epoch = expected_epoch.saturating_add(1);
+
+    let chain_id = actor.common_config.chain.clone();
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAF; 32]));
+    let parent_root = Hash::prehashed([0xB1; 32]);
+    let post_root = Hash::prehashed([0xC1; 32]);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let qc = exec_qc_with_bitmap(
+        &chain_id,
+        block_hash,
+        parent_root,
+        post_root,
+        height,
+        view,
+        mismatched_epoch,
+        vec![0b0000_0111],
+        &topology,
+        &harness.key_pairs,
+    );
+
+    let before = actor.execution_qc_cache.len();
+    actor.handle_execution_qc(qc).expect("handle execution qc");
+    assert_eq!(
+        actor.execution_qc_cache.len(),
+        before,
+        "ExecutionQCs with mismatched epochs should be dropped"
+    );
+
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -14297,6 +14495,38 @@ async fn exec_vote_emission_uses_view_aligned_signer() {
         )
         .is_ok()
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn exec_vote_emission_uses_epoch_for_height() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.epoch_length_blocks = 2;
+    let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = 3u64;
+    let view = 0u64;
+    let block = sample_block(height, u32::try_from(view).expect("view fits u32"), None);
+    let block_hash = block.hash();
+    let witness = crate::sumeragi::consensus::ExecWitness::default();
+
+    actor.emit_exec_artifacts(block_hash, height, view, witness);
+
+    let expected_epoch = actor.epoch_for_height(height);
+    assert_ne!(
+        expected_epoch,
+        actor.current_epoch(),
+        "test should cross the epoch boundary"
+    );
+    let vote = actor
+        .exec_vote_log
+        .values()
+        .find(|vote| vote.block_hash == block_hash && vote.height == height && vote.view == view)
+        .expect("exec vote recorded");
+    assert_eq!(vote.epoch, expected_epoch);
+
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -17587,6 +17817,82 @@ async fn stale_block_created_accepted_under_da() {
         actor.pending.pending_blocks.contains_key(&block_hash),
         "stale BlockCreated should be accepted under DA"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn duplicate_block_created_hydrates_existing_rbc_session() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let height = 1u64;
+    let view = 0u64;
+    let block = sample_block(height, u32::try_from(view).expect("view fits u32"), None);
+    let block_hash = block.hash();
+
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let session_key = Actor::session_key(&block_hash, height, view);
+    let epoch = actor.current_epoch();
+    let seeded = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        actor.config.rbc_chunk_max_bytes,
+        epoch,
+    )
+    .expect("rbc session");
+    assert!(
+        seeded.total_chunks() > 0,
+        "payload should split into at least one chunk"
+    );
+    let expected_root = seeded.chunk_root().expect("chunk root");
+    let init_session = RbcSession::new(
+        seeded.total_chunks(),
+        Some(payload_hash),
+        Some(expected_root),
+        epoch,
+    )
+    .expect("init session");
+
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(session_key, init_session);
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block.clone(), payload_hash, height, view),
+    );
+
+    let before = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&session_key)
+        .expect("session")
+        .received_chunks();
+    assert_eq!(before, 0, "session should start without payload chunks");
+
+    actor
+        .handle_block_created(super::message::BlockCreated { block })
+        .expect("handle duplicate BlockCreated");
+
+    let session = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&session_key)
+        .expect("session");
+    assert_eq!(
+        session.received_chunks(),
+        session.total_chunks(),
+        "duplicate BlockCreated should hydrate the existing RBC session"
+    );
+    assert!(!session.is_invalid(), "hydrated session should stay valid");
 
     harness.shutdown.send();
 }
@@ -23962,6 +24268,66 @@ fn sample_proposal(
         },
         payload_hash: Hash::prehashed([0x55; 32]),
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn conflicting_vote_does_not_override_first() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(1);
+    let view = 0;
+    let epoch = actor.current_epoch();
+    let chain_id = actor.chain_id.clone();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let block_hash_a =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB1; Hash::LENGTH]));
+    let block_hash_b =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB2; Hash::LENGTH]));
+
+    let mut vote_a = crate::sumeragi::consensus::Vote {
+        phase: crate::sumeragi::consensus::Phase::Commit,
+        block_hash: block_hash_a,
+        height,
+        view,
+        epoch,
+        highest_cert: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(&mut vote_a, &chain_id, &topology, &harness.key_pairs);
+    actor.handle_vote(vote_a.clone());
+
+    let mut vote_b = crate::sumeragi::consensus::Vote {
+        phase: crate::sumeragi::consensus::Phase::Commit,
+        block_hash: block_hash_b,
+        height,
+        view,
+        epoch,
+        highest_cert: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(&mut vote_b, &chain_id, &topology, &harness.key_pairs);
+    actor.handle_vote(vote_b);
+
+    let key = (
+        crate::sumeragi::consensus::Phase::Commit,
+        height,
+        view,
+        epoch,
+        0,
+    );
+    let stored = actor.vote_log.get(&key).expect("vote recorded");
+    assert_eq!(
+        stored.block_hash, block_hash_a,
+        "conflicting vote should not override the first vote"
+    );
+
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]

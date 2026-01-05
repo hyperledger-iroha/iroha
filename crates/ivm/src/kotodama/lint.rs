@@ -131,7 +131,7 @@ fn lint_unused_state(program: &Program, warnings: &mut Vec<LintWarning>) {
                 }
                 record_expr_idents(value, &state_lookup, &mut used);
             }
-            Statement::AssignExpr { target, value } => {
+            Statement::AssignExpr { target, value, .. } => {
                 record_expr_idents(target, &state_lookup, &mut used);
                 record_expr_idents(value, &state_lookup, &mut used);
             }
@@ -358,7 +358,7 @@ fn lint_unused_parameters(program: &Program, warnings: &mut Vec<LintWarning>) {
                         }
                         record_expr_idents(value, &lookup, &mut used);
                     }
-                    Statement::AssignExpr { target, value } => {
+                    Statement::AssignExpr { target, value, .. } => {
                         record_expr_idents(target, &lookup, &mut used);
                         record_expr_idents(value, &lookup, &mut used);
                     }
@@ -594,7 +594,7 @@ fn collect_pointer_literals_from_stmt(
         Statement::Assign { value, .. } => {
             collect_pointer_literals_from_expr(value, constructors, counts);
         }
-        Statement::AssignExpr { target, value } => {
+        Statement::AssignExpr { target, value, .. } => {
             collect_pointer_literals_from_expr(target, constructors, counts);
             collect_pointer_literals_from_expr(value, constructors, counts);
         }

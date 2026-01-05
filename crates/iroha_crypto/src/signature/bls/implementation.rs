@@ -1,11 +1,6 @@
 use core::marker::PhantomData;
 use std::{
-    borrow::ToOwned as _,
-    collections::BTreeSet,
-    string::ToString as _,
-    sync::Mutex,
-    vec,
-    vec::Vec,
+    borrow::ToOwned as _, collections::BTreeSet, string::ToString as _, sync::Mutex, vec, vec::Vec,
 };
 
 use sha2::Sha256;

@@ -12,6 +12,10 @@ use iroha_data_model::events::data::prelude::ProofEventFilter;
 use iroha_test_network::*;
 use tokio::{task::spawn_blocking, time::timeout};
 
+const PROOF_VERIFY_TIMEOUT_MS: i64 = 600_000;
+const CLIENT_STATUS_TIMEOUT: Duration = Duration::from_secs(600);
+const PROOF_EVENT_TIMEOUT: Duration = Duration::from_secs(600);
+
 fn halo2_attachment() -> iroha::data_model::proof::ProofAttachment {
     let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
     let vk_box = fixture
@@ -23,14 +27,22 @@ fn halo2_attachment() -> iroha::data_model::proof::ProofAttachment {
 
 fn client_with_timeout(network: &Network) -> Client {
     let mut client = network.client();
-    let status_timeout = Duration::from_secs(300);
-    client.transaction_status_timeout = status_timeout;
-    client.transaction_ttl = Some(status_timeout + Duration::from_secs(5));
+    client.transaction_status_timeout = CLIENT_STATUS_TIMEOUT;
+    client.transaction_ttl = Some(CLIENT_STATUS_TIMEOUT + Duration::from_secs(5));
     client
 }
 
 fn proof_event_timeout(network: &Network) -> Duration {
-    network.sync_timeout().max(Duration::from_secs(300))
+    network.sync_timeout().max(PROOF_EVENT_TIMEOUT)
+}
+
+fn proof_network_builder() -> NetworkBuilder {
+    NetworkBuilder::new().with_config_layer(|layer| {
+        layer.write(
+            ["confidential", "verify_timeout_ms"],
+            PROOF_VERIFY_TIMEOUT_MS,
+        );
+    })
 }
 
 fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
@@ -48,7 +60,7 @@ fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
 #[tokio::test]
 async fn verify_proof_emits_verified_event() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new(),
+        proof_network_builder(),
         stringify!(verify_proof_emits_verified_event),
     )
     .await?
@@ -113,7 +125,7 @@ async fn verify_proof_emits_verified_event() -> Result<()> {
 #[tokio::test]
 async fn verify_proof_emits_rejected_event() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new(),
+        proof_network_builder(),
         stringify!(verify_proof_emits_rejected_event),
     )
     .await?

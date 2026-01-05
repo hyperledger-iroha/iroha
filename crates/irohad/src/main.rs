@@ -3002,14 +3002,22 @@ description = "lane overrides should be rejected when nexus is disabled"
     }
 
     #[test]
-    fn iroha3_forces_da_on() {
+    fn iroha3_rejects_da_disabled() {
         let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
             .expect("default config");
         config.sumeragi.da_enabled = false;
 
-        enforce_build_line(BuildLine::Iroha3, &mut config).expect("should sanitize");
-
-        assert!(config.sumeragi.da_enabled);
+        let err = enforce_build_line(BuildLine::Iroha3, &mut config)
+            .expect_err("iroha3 should reject DA-disabled config");
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("sumeragi.da_enabled"),
+            "error should point at sumeragi.da_enabled: {rendered}"
+        );
+        assert!(
+            !config.sumeragi.da_enabled,
+            "DA override should not mutate the config"
+        );
     }
 
     #[test]
@@ -3505,11 +3513,13 @@ fn apply_norito_config(cfg: &Config) {
 /// Enforce build-line specific Sumeragi DA/RBC policy:
 /// - Iroha 2 honours the configured flags (defaults keep DA/RBC off).
 /// - Iroha 3 always requires DA with RBC.
-fn enforce_da_rbc_policy(build_line: BuildLine, config: &mut Config) {
+fn enforce_da_rbc_policy(build_line: BuildLine, config: &Config) -> ReportResult<(), MainError> {
     if build_line.is_iroha3() && !config.sumeragi.da_enabled {
-        config.sumeragi.da_enabled = true;
-        log_config_warning("Iroha 3 build requires DA; overriding sumeragi.da_enabled=true");
+        return Err(Report::new(MainError::Config).attach(
+            "Iroha 3 requires DA/RBC; set sumeragi.da_enabled=true in the configuration",
+        ));
     }
+    Ok(())
 }
 
 fn validate_config(config: &Config) -> ReportResult<(), ConfigError> {
@@ -3995,7 +4005,7 @@ fn run_main(build_line: BuildLine) -> ReportResult<(), MainError> {
 }
 
 fn enforce_build_line(build_line: BuildLine, config: &mut Config) -> ReportResult<(), MainError> {
-    enforce_da_rbc_policy(build_line, config);
+    enforce_da_rbc_policy(build_line, config)?;
 
     if build_line.is_iroha3() {
         return Ok(());

@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/runtime_upgrades.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bb2077856de0420cb6ce7f04939caa6348e22c22bee93189a22a8596c71c7cbc
+source_hash: ee7142a82f21e646d4d71844adbf779d180e5647
 source_last_modified: "2025-12-04T06:31:08.260928+00:00"
 translation_last_reviewed: 2026-01-01
 ---
@@ -15,20 +15,23 @@ translation_last_reviewed: 2026-01-01
 
 # שדרוגי Runtime (IVM + Host) — ללא השבתה, ללא Hardfork
 
-מסמך זה מגדיר מנגנון דטרמיניסטי ומבוקר-ממשל להוספת יכולות IVM/host חדשות (למשל syscalls חדשים וסוגי pointer-ABI) ללא עצירת הרשת או hardfork. הצמתים מפיצים בינארים מראש; ההפעלה מתואמת on-chain בתוך חלון גובה תחום. חוזים ישנים ממשיכים לפעול ללא שינוי; יכולות חדשות מוגנות לפי גרסת ABI ומדיניות.
+מסמך זה מגדיר מנגנון דטרמיניסטי ומבוקר-ממשל לפריסת שדרוגי runtime ללא עצירת הרשת או hardfork. הצמתים מפיצים בינארים מראש; ההפעלה מתואמת on-chain בתוך חלון גובה תחום. חוזים ישנים ממשיכים לפעול ללא שינוי; משטח ה-ABI של ה-host נשאר קבוע על v1.
+
+הערה (מהדורה ראשונה): ABI v1 קבוע ואין תכנון להעלאת גרסאות ABI. מניפסטים של שדרוג runtime חייבים להגדיר `abi_version = 1`, ו-`added_syscalls`/`added_pointer_types` חייבים להיות ריקים.
 
 מטרות
 - הפעלה דטרמיניסטית בחלון גובה מתוזמן עם יישום אידמפוטנטי.
-- דו-קיום של מספר גרסאות ABI; לעולם לא לשבור בינארים קיימים.
+- לשמור על יציבות ABI v1; שדרוגי runtime אינם משנים את משטח ה-ABI של ה-host.
 - סייגי קבלה וביצוע כך ש-payloads לפני ההפעלה לא יפעילו התנהגות חדשה.
 - פריסה ידידותית למפעילים עם שקיפות יכולות ומצבי כשל ברורים.
 
 לא-מטרות
+- הוספת גרסאות ABI חדשות או הרחבת משטחי syscalls/סוגי pointer (מחוץ לתחום במהדורה זו).
 - שינוי מספרי syscall קיימים או מזהי סוגי pointer (אסור).
 - תיקון צמתים בלייב ללא פריסת בינארים מעודכנים.
 
 הגדרות
-- גרסת ABI: מספר קטן המוצהר ב-`ProgramMetadata.abi_version` הבוחר `SyscallPolicy` ורשימת allowlist של סוגי pointer.
+- גרסת ABI: מספר קטן המוצהר ב-`ProgramMetadata.abi_version` הבוחר `SyscallPolicy` ורשימת allowlist של סוגי pointer. במהדורה הראשונה קבוע ל-`1`.
 - ABI Hash: digest דטרמיניסטי של משטח ה-ABI עבור גרסה נתונה: רשימת syscalls (מספרים+מבנים), מזהי סוגי pointer/allowlist ודגלי מדיניות; מחושב על ידי `ivm::syscalls::compute_abi_hash`.
 - Syscall Policy: מיפוי host שמחליט האם מספר syscall מותר עבור גרסת ABI ומדיניות host נתונות.
 - חלון הפעלה: מקטע גובה בלוק חצי-פתוח `[start, end)` שבו ההפעלה תקפה בדיוק פעם אחת ב-`start`.
@@ -39,7 +42,7 @@ translation_last_reviewed: 2026-01-01
 - שדות `RuntimeUpgradeManifest`:
   - `name: String` — תווית קריאה לבני אדם.
   - `description: String` — תיאור קצר למפעילים.
-  - `abi_version: u16` — גרסת ABI יעד להפעלה.
+  - `abi_version: u16` — גרסת ABI יעד להפעלה (חייבת להיות 1 במהדורה הראשונה).
   - `abi_hash: [u8; 32]` — hash ABI קנוני למדיניות היעד.
   - `added_syscalls: Vec<u16>` — מספרי syscall שנעשים תקפים עם גרסה זו.
   - `added_pointer_types: Vec<u16>` — מזהי סוגי pointer שנוספו בשדרוג.
@@ -57,7 +60,7 @@ translation_last_reviewed: 2026-01-01
   - `algorithm: String` — מזהה אלגוריתם digest.
   - `digest: Vec<u8>` — bytes גולמיים של digest (base64 ב-JSON).
 <!-- END RUNTIME UPGRADE TYPES -->
-  - אינוואריאנטים: `end_height > start_height`; `abi_version` גדול строго מכל גרסה פעילה; `abi_hash` חייב להיות שווה ל-`ivm::syscalls::compute_abi_hash(policy_for(abi_version))`; `added_*` חייב לרשום בדיוק את הדלתא האדיטיבית בין מדיניות ה-ABI החדשה לקודמת; מספרים/IDs קיימים אסור להסיר או למספר מחדש.
+  - אינוואריאנטים: `end_height > start_height`; `abi_version` חייב להיות `1`; `abi_hash` חייב להיות שווה ל-`ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)`; `added_*` חייב להיות ריק; מספרים/IDs קיימים אסור להסיר או למספר מחדש.
 
 פריסת אחסון
 - `world.runtime_upgrades`: מפת MVCC עם מפתח `RuntimeUpgradeId.0` (hash גולמי של 32 בתים) וערכים המקודדים כ-payloads Norito קנוניים מסוג `RuntimeUpgradeRecord`. הרשומות נשמרות בין בלוקים; commits אידמפוטנטיים ובטוחים ל-replay.
@@ -70,7 +73,7 @@ translation_last_reviewed: 2026-01-01
   - קידוד קנוני: bytes של manifest חייבים להתאים ל-`RuntimeUpgradeManifest::canonical_bytes()`; קידודים לא קנוניים נדחים.
 - ActivateRuntimeUpgrade { id: RuntimeUpgradeId }
   - תנאי קדם: קיים Proposed תואם; `current_height` חייב להיות `manifest.start_height`; `current_height < manifest.end_height`.
-  - אפקטים: שינוי record ל-`ActivatedAt(current_height)`; הוספת `abi_version` לסט ABI הפעיל.
+  - אפקטים: שינוי record ל-`ActivatedAt(current_height)`; סט ABI פעיל נשאר `{1}` במהדורה הראשונה.
   - אידמפוטנטי: replays בגובה זהה הם no-op; גבהים אחרים נדחים דטרמיניסטית.
 - CancelRuntimeUpgrade { id: RuntimeUpgradeId }
   - תנאי קדם: הסטטוס Proposed ו-`current_height < manifest.start_height`.
@@ -80,9 +83,8 @@ translation_last_reviewed: 2026-01-01
 - RuntimeUpgradeEvent::{Proposed { id, manifest }, Activated { id, abi_version, at_height }, Canceled { id }}
 
 כללי קבלה
-- קבלת חוזים: עבור manifests עם `ProgramMetadata.abi_version = v`:
-  - לפני הפעלת `v`: דחייה עם `IvmAdmissionError::AbiVersionNotActive { v }`.
-  - אחרי הפעלה: לחשב מחדש `abi_hash(v)` ולדרוש התאמה ל-payload/manifest; אחרת דחייה עם `IvmAdmissionError::ManifestAbiHashMismatch`.
+- קבלת חוזים: במהדורה הראשונה מתקבל רק `ProgramMetadata.abi_version = 1`; ערכים אחרים נדחים עם `IvmAdmissionError::UnsupportedAbiVersion`.
+  - עבור ABI v1, מחשבים מחדש `abi_hash(1)` ודורשים התאמה ל-payload/manifest כאשר מסופק; אחרת דחייה עם `IvmAdmissionError::ManifestAbiHashMismatch`.
 - קבלת טרנזקציות: ההוראות `ProposeRuntimeUpgrade`/`ActivateRuntimeUpgrade`/`CancelRuntimeUpgrade` דורשות הרשאות מתאימות (root/sudo); חייבות לעמוד במגבלות חפיפה של חלונות.
 
 אכיפת provenance
@@ -101,20 +103,19 @@ translation_last_reviewed: 2026-01-01
 כללי ביצוע
 - מדיניות Host VM: בזמן הרצת תוכנית, גוזרים `SyscallPolicy` מתוך `ProgramMetadata.abi_version`. syscalls לא ידועים לגרסה זו ממופים ל-`VMError::UnknownSyscall`.
 - Pointer-ABI: allowlist נגזרת מ-`ProgramMetadata.abi_version`; סוגים מחוץ ל-allowlist עבור גרסה זו נדחים בזמן decode/validation.
-- החלפת Host: כל בלוק מחשב מחדש את סט ה-ABI הפעיל; לאחר commit של טרנזקציית הפעלה, טרנזקציות מאוחרות באותו בלוק רואות את המדיניות החדשה (נבדק ע"י `runtime_upgrade_admission::activation_allows_new_abi_in_same_block`).
+- החלפת Host: כל בלוק מחשב מחדש את סט ה-ABI הפעיל; במהדורה הראשונה הוא נשאר `{1}`, אך ההפעלה נרשמת ואידמפוטנטית (נבדק ע"י `runtime_upgrade_admission::activation_allows_v1_in_same_block`).
   - קשירת מדיניות syscall: `CoreHost` קורא את גרסת ה-ABI המוצהרת בטרנזקציה ומיישם `ivm::syscalls::is_syscall_allowed`/`is_type_allowed_for_policy` מול `SyscallPolicy` פר-בלוק. ה-host ממחזר את מופע ה-VM בטווח הטרנזקציה, ולכן הפעלות באמצע בלוק בטוחות - טרנזקציות מאוחרות רואות מדיניות מעודכנת בעוד הקודמות ממשיכות עם גרסה מקורית.
 
 אינוואריאנטים של דטרמיניזם ובטיחות
 - ההפעלה מתרחשת רק ב-`start_height` והיא אידמפוטנטית; reorgs מתחת ל-`start_height` מיישמים מחדש דטרמיניסטית כשהבלוק חוזר.
-- גרסאות ABI קיימות נשארות פעילות ללא הגבלה; גרסאות חדשות רק מרחיבות את הסט הפעיל.
+- סט ה-ABI הפעיל קבוע ל-`{1}` במהדורה הראשונה.
 - אין משא ומתן דינמי שמשפיע על קונצנזוס או סדר ביצוע; gossip של יכולות הוא מידע בלבד.
 
 רולאאוט מפעיל (ללא השבתה)
-1) לפרוס בינארי צומת שתומך ב-ABI החדש (`v+1`) אך אינו מפעיל אותו.
-2) לצפות ביכולת הצי באמצעות טלמטריה (אחוז צמתים שמכריזים תמיכה ב-`v+1`).
+1) לפרוס בינארי צומת הכולל ארטיפקט runtime חדש תוך שמירה על ABI v1.
+2) לצפות במוכנות הצי באמצעות טלמטריה.
 3) לשלוח `ProposeRuntimeUpgrade` עם חלון שמקדים מספיק (למשל `H+N`).
-4) ב-`start_height`, `ActivateRuntimeUpgrade` מופעל אוטומטית כחלק מהבלוק ונועל את סט ה-host הפעיל; צמתים שלא עודכנו ימשיכו לפעול לחוזים ישנים אך ידחו קבלה/ביצוע של תוכניות `v+1`.
-5) לאחר ההפעלה, לקמפל/לפרוס חוזים שמכוונים ל-`v+1`.
+4) ב-`start_height`, `ActivateRuntimeUpgrade` מופעל כחלק מהבלוק ומרשום את ההפעלה; ה-ABI נשאר v1.
 
 Torii ו-CLI
 - Torii
@@ -137,7 +138,7 @@ API לשאילתות ליבה
   - `FindActiveAbiVersions` מחזיר מבנה Norito `{ active_versions: [u16], default_compile_target: u16 }`.
   - דוגמה: `docs/source/samples/find_active_abi_versions.md` (סוג/שדות ודוגמת JSON).
 
-שינויים נדרשים בקוד (לפי crate)
+הערות יישום (v1 בלבד)
 - iroha_data_model
   - הוספת `RuntimeUpgradeManifest`, `RuntimeUpgradeRecord`, enums של הוראות, אירועים, ומקודדי JSON/Norito עם בדיקות roundtrip.
 - iroha_core
@@ -147,12 +148,11 @@ API לשאילתות ליבה
   - Syscall policy mapping: העברת סט ABI פעיל ל-VM host constructor; הבטחת דטרמיניזם באמצעות שימוש בגובה הבלוק בתחילת הביצוע.
   - Tests: אידמפוטנטיות חלון ההפעלה, דחיות חפיפה, התנהגות קבלה לפני/אחרי.
 - ivm
-  - הגדרת `ABI_V2` (דוגמה) עם מדיניות: הרחבת `abi_syscall_list()`; מיפוי `is_syscall_allowed(policy, number)`; הרחבת מדיניות סוגי pointer.
-  - חישוב מחדש וקיבוע golden tests: `abi_syscall_list_golden.rs`, `abi_hash_versions.rs`, `pointer_type_ids_golden.rs`.
+  - משטח ה-ABI קבוע על v1; רשימות syscalls ו-ABI hashes מקובעות ע"י golden tests.
 - iroha_cli / iroha_torii
   - הוספת endpoints ופקודות המפורטים לעיל; helpers של Norito JSON ל-manifests; בדיקות אינטגרציה בסיסיות.
 - Kotodama compiler
-  - לאפשר targeting של `abi_version = v+1`; לשבץ את `abi_hash` הנכון עבור הגרסה שנבחרה ב-manifests `.to`.
+  - להפיק `abi_version = 1` ולשבץ `abi_hash` קנוני של v1 ב-manifests `.to`.
 
 Telemetria
 - הוספת gauge `runtime.active_abi_versions` ו-counter `runtime.upgrade_events_total{kind}`.
@@ -163,8 +163,8 @@ Telemetria
 - `abi_hash` מקבע את משטח הממשק כדי למנוע drift שקט בין בינארים.
 
 קריטריוני קבלה (Conformance)
-- לפני ההפעלה, צמתים דוחים דטרמיניסטית קוד עם `abi_version = v+1`.
-- לאחר ההפעלה ב-`start_height`, צמתים מקבלים ומבצעים `v+1`; תוכניות ישנות ממשיכות לפעול ללא שינוי.
+- צמתים דוחים דטרמיניסטית קוד עם `abi_version != 1` בכל זמן.
+- שדרוגי runtime אינם משנים את מדיניות ה-ABI; תוכניות קיימות ממשיכות לפעול ללא שינוי עם v1.
 - golden tests עבור ABI hashes ורשימות syscalls עוברים על x86-64/ARM64.
 - ההפעלה אידמפוטנטית ובטוחה תחת reorgs.
 

@@ -1115,6 +1115,19 @@ impl Actor {
         {
             return Ok(());
         }
+        let expected_epoch = self.epoch_for_height(qc.height);
+        if qc.epoch != expected_epoch {
+            warn!(
+                height = qc.height,
+                view = qc.view,
+                epoch = qc.epoch,
+                expected_epoch,
+                phase = ?qc.phase,
+                block = %qc.subject_block_hash,
+                "dropping QC with mismatched epoch"
+            );
+            return Ok(());
+        }
         let (consensus_mode, mode_tag, prf_seed) =
             self.consensus_context_for_height(qc.height);
         let commit_topology = if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
@@ -1446,6 +1459,18 @@ impl Actor {
                 );
                 return Ok(());
             }
+        }
+        let expected_epoch = self.epoch_for_height(qc.height);
+        if qc.epoch != expected_epoch {
+            warn!(
+                height = qc.height,
+                view = qc.view,
+                epoch = qc.epoch,
+                expected_epoch,
+                block = %qc.subject_block_hash,
+                "dropping ExecutionQC with mismatched epoch"
+            );
+            return Ok(());
         }
         self.record_phase_sample(PipelinePhase::CollectExec, qc.height, qc.view);
         let (consensus_mode, mode_tag, prf_seed) =

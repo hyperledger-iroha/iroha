@@ -149,11 +149,9 @@ mod normal {
             )
             .is_err()
         );
-        let aggregate = BlsImpl::<NormalConfiguration>::aggregate_signatures(&[
-            sig.as_slice(),
-            sig.as_slice(),
-        ])
-        .expect("aggregate signatures");
+        let aggregate =
+            BlsImpl::<NormalConfiguration>::aggregate_signatures(&[sig.as_slice(), sig.as_slice()])
+                .expect("aggregate signatures");
         assert!(
             BlsImpl::<NormalConfiguration>::verify_preaggregated_same_message(
                 msg,
@@ -339,11 +337,9 @@ mod small {
             )
             .is_err()
         );
-        let aggregate = BlsImpl::<SmallConfiguration>::aggregate_signatures(&[
-            sig.as_slice(),
-            sig.as_slice(),
-        ])
-        .expect("aggregate signatures");
+        let aggregate =
+            BlsImpl::<SmallConfiguration>::aggregate_signatures(&[sig.as_slice(), sig.as_slice()])
+                .expect("aggregate signatures");
         assert!(
             BlsImpl::<SmallConfiguration>::verify_preaggregated_same_message(
                 msg,

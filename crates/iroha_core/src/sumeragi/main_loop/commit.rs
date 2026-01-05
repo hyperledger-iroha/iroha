@@ -1693,7 +1693,6 @@ impl Actor {
             .collect();
         pending_hashes
             .sort_by(|(h1, v1, hash1), (h2, v2, hash2)| (h1, v1, hash1).cmp(&(h2, v2, hash2)));
-        let current_epoch = self.current_epoch();
         for (pending_height, pending_view, hash) in pending_hashes {
             let block_start = Instant::now();
             let validation_start = Instant::now();
@@ -1809,7 +1808,8 @@ impl Actor {
             let pending_age_ms = pending_age.as_millis();
             let gate = recompute_da_gate_status(&mut pending, da_enabled, missing_local_data);
             let kura_ready = pending.kura_retry_due(now);
-            let commit_epoch = pending.commit_certificate_epoch.unwrap_or(current_epoch);
+            let vote_epoch = self.epoch_for_height(pending_height);
+            let commit_epoch = pending.commit_certificate_epoch.unwrap_or(vote_epoch);
             let ready_to_finalize = pending.commit_certificate_seen && kura_ready;
             if pending.kura_aborted {
                 warn!(
@@ -1928,7 +1928,7 @@ impl Actor {
                     hash,
                     pending_height,
                     pending_view,
-                    current_epoch,
+                    vote_epoch,
                     &topology,
                     parent_hash,
                 ) {
@@ -1936,7 +1936,7 @@ impl Actor {
                     if let Some(vote) = self.local_precommit_vote_for(
                         pending_height,
                         pending_view,
-                        current_epoch,
+                        vote_epoch,
                         &topology,
                     ) {
                         self.maybe_broadcast_block_sync_update_for_precommit_vote(&pending, &vote);
@@ -2559,7 +2559,7 @@ impl Actor {
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let epoch = match consensus_mode {
             ConsensusMode::Permissioned => 0,
-            ConsensusMode::Npos => self.epoch_manager.as_ref().map_or(0, EpochManager::epoch),
+            ConsensusMode::Npos => self.epoch_for_height(height),
         };
 
         let topology_peers = self.roster_for_vote_with_mode(
@@ -3545,7 +3545,7 @@ impl Actor {
                 subject_block_hash: block.hash(),
                 height,
                 view: u64::from(block.header().view_change_index()),
-                epoch: self.current_epoch(),
+                epoch: self.epoch_for_height(height),
             };
             if self
                 .materialize_qc_for_header(qc_header, &commit_topology)

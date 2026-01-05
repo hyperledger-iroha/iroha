@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/runtime_upgrades.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bb2077856de0420cb6ce7f04939caa6348e22c22bee93189a22a8596c71c7cbc
+source_hash: ee7142a82f21e646d4d71844adbf779d180e5647
 source_last_modified: "2025-12-04T06:31:08.260928+00:00"
 translation_last_reviewed: 2026-01-01
 ---
@@ -15,23 +15,25 @@ translation_last_reviewed: 2026-01-01
 
 # ترقيات Runtime (IVM + Host) — بدون توقف، بدون Hardfork
 
-يحدد هذا المستند الية حتمية تتحكم بها الحوكمة لإضافة قدرات IVM/host جديدة (مثل syscalls جديدة
-وانواع pointer-ABI) دون ايقاف الشبكة او عمل hardfork للعقد. تقوم العقد بنشر الثنائيات مسبقا؛
-ويتم تنسيق التفعيل على السلسلة ضمن نافذة ارتفاع محدودة. العقود القديمة تستمر دون تغيير؛ اما
-القدرات الجديدة فمقيدة حسب نسخة ABI والسياسة.
+يحدد هذا المستند الية حتمية تتحكم بها الحوكمة لطرح ترقيات runtime دون ايقاف الشبكة او عمل hardfork
+للعقد. تقوم العقد بنشر الثنائيات مسبقا؛ ويتم تنسيق التفعيل على السلسلة ضمن نافذة ارتفاع محدودة.
+العقود القديمة تستمر دون تغيير؛ سطح ABI للمضيف ثابت على v1.
+
+ملاحظة (الاصدار الاول): ABI v1 ثابت ولا توجد خطط لزيادة نسخة ABI. يجب ان تضبط manifests الخاصة بترقية runtime القيمة `abi_version = 1`، ويجب ان تكون `added_syscalls`/`added_pointer_types` فارغة.
 
 الاهداف
 - تفعيل حتمي ضمن نافذة ارتفاع مجدولة مع تطبيق idempotent.
-- تعايش عدة نسخ ABI بدون كسر الثنائيات الموجودة.
+- الحفاظ على استقرار ABI v1؛ ترقيات runtime لا تغير سطح ABI للمضيف.
 - حواجز قبول وتنفيذ تمنع payloads قبل التفعيل من تمكين سلوك جديد.
 - طرح ملائم للمشغلين مع رؤية للقدرات وانماط فشل واضحة.
 
 غير الاهداف
+- ادخال نسخ ABI جديدة او توسيع اسطح syscalls/انواع المؤشرات (خارج نطاق هذا الاصدار).
 - تغيير ارقام syscalls الحالية او معرفات انواع المؤشرات (محظور).
 - ترقيع العقد مباشرة دون نشر ثنائيات محدثة.
 
 التعريفات
-- نسخة ABI: عدد صغير يعلن في `ProgramMetadata.abi_version` ويختار `SyscallPolicy` وقائمة allowlist لانواع المؤشرات.
+- نسخة ABI: عدد صغير يعلن في `ProgramMetadata.abi_version` ويختار `SyscallPolicy` وقائمة allowlist لانواع المؤشرات. في الاصدار الاول ثابتة على `1`.
 - ABI Hash: digest حتمي لسطح ABI لنسخة معينة: قائمة syscalls (ارقام+اشكال)، معرفات/allowlist لانواع المؤشرات ورايات السياسة؛ يحسب بواسطة `ivm::syscalls::compute_abi_hash`.
 - Syscall Policy: تعيين في المضيف يقرر ما اذا كان رقم syscall مسموحا لنسخة ABI وسياسة مضيف محددتين.
 - Activation Window: فترة ارتفاع كتلة نصف مفتوحة `[start, end)` حيث يكون التفعيل صالحا مرة واحدة عند `start`.
@@ -42,7 +44,7 @@ translation_last_reviewed: 2026-01-01
 - حقول `RuntimeUpgradeManifest`:
   - `name: String` — تسمية مقروءة.
   - `description: String` — وصف قصير للمشغلين.
-  - `abi_version: u16` — نسخة ABI المستهدفة للتفعيل.
+  - `abi_version: u16` — نسخة ABI المستهدفة للتفعيل (يجب ان تكون 1 في الاصدار الاول).
   - `abi_hash: [u8; 32]` — hash ABI الكانوني للسياسة المستهدفة.
   - `added_syscalls: Vec<u16>` — ارقام syscalls التي تصبح صالحة مع هذه النسخة.
   - `added_pointer_types: Vec<u16>` — معرفات انواع المؤشرات المضافة بالترقية.
@@ -60,7 +62,7 @@ translation_last_reviewed: 2026-01-01
   - `algorithm: String` — معرف خوارزمية digest.
   - `digest: Vec<u8>` — بايتات digest الخام (base64 في JSON).
 <!-- END RUNTIME UPGRADE TYPES -->
-  - الثوابت: `end_height > start_height`; `abi_version` اكبر بشكل صارم من اي نسخة فعالة; `abi_hash` يجب ان يساوي `ivm::syscalls::compute_abi_hash(policy_for(abi_version))`; `added_*` يجب ان تسرد بالضبط الفرق الاضافي بين سياسة ABI الجديدة والسابقة الفعالة; لا يجوز حذف او اعادة ترقيم الارقام/المعرفات الموجودة.
+  - الثوابت: `end_height > start_height`; `abi_version` يجب ان يكون `1`; `abi_hash` يجب ان يساوي `ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)`; `added_*` يجب ان تكون فارغة; لا يجوز حذف او اعادة ترقيم الارقام/المعرفات الموجودة.
 
 تخطيط التخزين
 - `world.runtime_upgrades`: خريطة MVCC بمفتاح `RuntimeUpgradeId.0` (hash خام بطول 32 بايت) مع قيم مرمزة كـ Norito canonical `RuntimeUpgradeRecord`. السجلات تبقى عبر الكتل؛ وعمليات commit idempotent وآمنة من اعادة التشغيل.
@@ -73,7 +75,7 @@ translation_last_reviewed: 2026-01-01
   - الترميز الكانوني: بايتات الـ manifest يجب ان تطابق `RuntimeUpgradeManifest::canonical_bytes()`؛ الترميزات غير الكانونية مرفوضة.
 - ActivateRuntimeUpgrade { id: RuntimeUpgradeId }
   - الشروط المسبقة: سجل Proposed مطابق موجود; `current_height` يجب ان يساوي `manifest.start_height`; `current_height < manifest.end_height`.
-  - التأثيرات: تحويل السجل الى `ActivatedAt(current_height)`؛ اضافة `abi_version` الى مجموعة ABI الفعالة.
+  - التأثيرات: تحويل السجل الى `ActivatedAt(current_height)`؛ مجموعة ABI الفعالة تبقى `{1}` في الاصدار الاول.
   - idempotent: اعادة التنفيذ في نفس الارتفاع لا اثر له؛ ارتفاعات اخرى ترفض بشكل حتمي.
 - CancelRuntimeUpgrade { id: RuntimeUpgradeId }
   - الشروط المسبقة: الحالة Proposed و `current_height < manifest.start_height`.
@@ -83,9 +85,8 @@ translation_last_reviewed: 2026-01-01
 - RuntimeUpgradeEvent::{Proposed { id, manifest }, Activated { id, abi_version, at_height }, Canceled { id }}
 
 قواعد القبول
-- قبول العقود: للـ manifests التي فيها `ProgramMetadata.abi_version = v`:
-  - قبل تفعيل `v`: رفض مع `IvmAdmissionError::AbiVersionNotActive { v }`.
-  - بعد التفعيل: اعادة حساب `abi_hash(v)` واشتراط المساواة مع payload/manifest؛ والا رفض بـ `IvmAdmissionError::ManifestAbiHashMismatch`.
+- قبول العقود: في الاصدار الاول يقبل فقط `ProgramMetadata.abi_version = 1`؛ القيم الاخرى ترفض مع `IvmAdmissionError::UnsupportedAbiVersion`.
+  - لــ ABI v1، يعاد حساب `abi_hash(1)` ويشترط التطابق مع payload/manifest عند توفره؛ والا يرفض بـ `IvmAdmissionError::ManifestAbiHashMismatch`.
 - قبول المعاملات: التعليمات `ProposeRuntimeUpgrade`/`ActivateRuntimeUpgrade`/`CancelRuntimeUpgrade` تتطلب صلاحيات مناسبة (root/sudo); يجب ان تلتزم بقيود تداخل النوافذ.
 
 تطبيق provenance
@@ -104,20 +105,19 @@ translation_last_reviewed: 2026-01-01
 قواعد التنفيذ
 - سياسة مضيف VM: اثناء تنفيذ البرنامج، اشتق `SyscallPolicy` من `ProgramMetadata.abi_version`. syscalls غير المعروفة لتلك النسخة تتحول الى `VMError::UnknownSyscall`.
 - Pointer-ABI: allowlist مشتقة من `ProgramMetadata.abi_version`; الانواع خارج allowlist لهذه النسخة ترفض اثناء decode/validation.
-- تبديل المضيف: كل كتلة تعيد حساب مجموعة ABI الفعالة؛ عند commit تفعيل، المعاملات اللاحقة في نفس الكتلة ترى السياسة الجديدة (موثق باختبار `runtime_upgrade_admission::activation_allows_new_abi_in_same_block`).
+- تبديل المضيف: كل كتلة تعيد حساب مجموعة ABI الفعالة؛ في الاصدار الاول تبقى `{1}`، لكن التفعيل يسجل وهو idempotent (موثق باختبار `runtime_upgrade_admission::activation_allows_v1_in_same_block`).
   - ربط سياسة syscalls: `CoreHost` يقرأ نسخة ABI المعلنة بالمعاملة ويطبق `ivm::syscalls::is_syscall_allowed`/`is_type_allowed_for_policy` مقابل `SyscallPolicy` لكل كتلة. المضيف يعيد استخدام مثيل VM المرتبط بالمعاملة، لذا التفعيل في منتصف الكتلة امن - المعاملات اللاحقة ترى السياسة المحدثة بينما السابقة تستمر بنسختها الاصلية.
 
 ثوابت الحتمية والسلامة
 - التفعيل يحدث فقط عند `start_height` وهو idempotent؛ اعادة التنظيمات تحت `start_height` تعيد التطبيق بشكل حتمي عند عودة الكتلة.
-- نسخ ABI الحالية تبقى فعالة بلا نهاية؛ النسخ الجديدة توسع المجموعة الفعالة فقط.
+- مجموعة ABI الفعالة ثابتة على `{1}` في الاصدار الاول.
 - لا تفاوض ديناميكي يؤثر على الاجماع او ترتيب التنفيذ؛ نشر القدرات معلوماتي فقط.
 
 طرح المشغل (بدون توقف)
-1) نشر ثنائية عقدة تدعم نسخة ABI الجديدة (`v+1`) دون تفعيلها.
-2) مراقبة قدرة الاسطول عبر telemetry (نسبة العقد التي تعلن دعم `v+1`).
+1) نشر ثنائية عقدة تتضمن artefact runtime الجديد مع الحفاظ على ABI v1.
+2) مراقبة جاهزية الاسطول عبر telemetry.
 3) ارسال `ProposeRuntimeUpgrade` بنافذة متقدمة كفاية (مثلا `H+N`).
-4) عند `start_height`، تنفذ `ActivateRuntimeUpgrade` تلقائيا كجزء من الكتلة وتبدل المجموعة الفعالة للمضيف؛ العقد التي لم تتحدث ستواصل تشغيل العقود القديمة لكنها سترفض قبول/تنفيذ برامج `v+1`.
-5) بعد التفعيل، اعد تجميع/نشر عقود تستهدف `v+1`.
+4) عند `start_height`، تنفذ `ActivateRuntimeUpgrade` كجزء من الكتلة وتسجيل التفعيل؛ ABI يبقى v1.
 
 Torii و CLI
 - Torii
@@ -140,7 +140,7 @@ Core Query API
   - `FindActiveAbiVersions` يعيد بنية Norito `{ active_versions: [u16], default_compile_target: u16 }`.
   - راجع المثال: `docs/source/samples/find_active_abi_versions.md` (النوع/الحقول ومثال JSON).
 
-تغييرات مطلوبة في الكود (حسب crate)
+ملاحظات التنفيذ (v1 فقط)
 - iroha_data_model
   - اضافة `RuntimeUpgradeManifest` و `RuntimeUpgradeRecord` و enums للتعليمات والاحداث و codecs JSON/Norito مع اختبارات roundtrip.
 - iroha_core
@@ -150,12 +150,11 @@ Core Query API
   - ربط سياسة syscalls: تمرير مجموعة ABI الفعالة الى منشئ VM host؛ ضمان الحتمية باستخدام ارتفاع الكتلة عند بداية التنفيذ.
   - Tests: idempotency لنافذة التفعيل، رفضات التداخل، سلوك القبول قبل/بعد.
 - ivm
-  - تعريف `ABI_V2` (مثال) مع سياسة: توسيع `abi_syscall_list()`؛ mapping `is_syscall_allowed(policy, number)`؛ توسيع سياسة انواع المؤشرات.
-  - اعادة حساب وتثبيت اختبارات golden: `abi_syscall_list_golden.rs`, `abi_hash_versions.rs`, `pointer_type_ids_golden.rs`.
+  - سطح ABI ثابت على v1؛ قوائم syscalls و ABI hashes مثبتة عبر اختبارات golden.
 - iroha_cli / iroha_torii
   - اضافة endpoints والاوامر المذكورة اعلاه؛ helpers Norito JSON للـ manifests؛ اختبارات تكامل اساسية.
 - Kotodama compiler
-  - السماح بالاستهداف `abi_version = v+1`؛ تضمين `abi_hash` الصحيح للنسخة المختارة داخل manifests `.to`.
+  - انتاج `abi_version = 1` وادراج `abi_hash` الكانوني لــ v1 داخل manifests `.to`.
 
 Telemetry
 - اضافة gauge `runtime.active_abi_versions` و counter `runtime.upgrade_events_total{kind}`.
@@ -166,8 +165,8 @@ Telemetry
 - `abi_hash` يثبت سطح الواجهة لمنع drift صامت بين الثنائيات.
 
 معايير القبول (Conformance)
-- قبل التفعيل، العقد ترفض بشكل حتمي الكود مع `abi_version = v+1`.
-- بعد التفعيل عند `start_height`، العقد تقبل وتنفذ `v+1`; البرامج القديمة تستمر دون تغيير.
+- العقد ترفض بشكل حتمي الكود مع `abi_version != 1` في كل الاوقات.
+- ترقيات runtime لا تغير سياسة ABI؛ البرامج القديمة تستمر دون تغيير مع v1.
 - اختبارات golden لــ ABI hashes وقوائم syscalls تمر على x86-64/ARM64.
 - التفعيل idempotent وآمن تحت reorgs.
 

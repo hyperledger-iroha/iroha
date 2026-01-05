@@ -6748,6 +6748,23 @@ mod tests {
         assert_eq!(decoded, value);
     }
 
+    #[cfg(feature = "compression")]
+    #[test]
+    fn from_compressed_bytes_rejects_length_mismatch() {
+        let value = vec![0u8; 64];
+        let mut bytes =
+            to_compressed_bytes(&value, Some(CompressionConfig::default())).expect("encode");
+        let len_offset = 4 + 1 + 1 + 16 + 1;
+        let mut len_bytes = [0u8; 8];
+        len_bytes.copy_from_slice(&bytes[len_offset..len_offset + 8]);
+        let len = u64::from_le_bytes(len_bytes);
+        let new_len = len.saturating_sub(1);
+        bytes[len_offset..len_offset + 8].copy_from_slice(&new_len.to_le_bytes());
+
+        let result = from_compressed_bytes::<Vec<u8>>(&bytes);
+        assert!(matches!(result, Err(Error::LengthMismatch)));
+    }
+
     #[repr(align(64))]
     struct Align64(u8);
 
