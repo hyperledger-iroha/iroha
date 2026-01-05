@@ -134,6 +134,37 @@ mod normal {
     }
 
     #[test]
+    fn aggregate_same_message_rejects_duplicate_public_keys() {
+        let (pk, sk) = BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random);
+        let msg = b"aggregate-duplicate-pk";
+        let sig = BlsImpl::<NormalConfiguration>::sign(msg, &sk);
+        let pk_bytes = pk.to_bytes();
+        let signatures: Vec<&[u8]> = vec![sig.as_slice(), sig.as_slice()];
+        let public_keys: Vec<&[u8]> = vec![pk_bytes.as_slice(), pk_bytes.as_slice()];
+        assert!(
+            BlsImpl::<NormalConfiguration>::verify_aggregate_same_message(
+                msg,
+                &signatures,
+                &public_keys
+            )
+            .is_err()
+        );
+        let aggregate = BlsImpl::<NormalConfiguration>::aggregate_signatures(&[
+            sig.as_slice(),
+            sig.as_slice(),
+        ])
+        .expect("aggregate signatures");
+        assert!(
+            BlsImpl::<NormalConfiguration>::verify_preaggregated_same_message(
+                msg,
+                &aggregate,
+                &public_keys,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn parse_public_key_rejects_identity() {
         let identity = G1Affine::identity().to_compressed();
         assert!(BlsImpl::<NormalConfiguration>::parse_public_key(identity.as_ref()).is_err());
@@ -287,6 +318,37 @@ mod small {
                 msg,
                 &signatures,
                 &public_keys
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn aggregate_same_message_rejects_duplicate_public_keys() {
+        let (pk, sk) = BlsImpl::<SmallConfiguration>::keypair(KeyGenOption::Random);
+        let msg = b"aggregate-duplicate-pk-small";
+        let sig = BlsImpl::<SmallConfiguration>::sign(msg, &sk);
+        let pk_bytes = pk.to_bytes();
+        let signatures: Vec<&[u8]> = vec![sig.as_slice(), sig.as_slice()];
+        let public_keys: Vec<&[u8]> = vec![pk_bytes.as_slice(), pk_bytes.as_slice()];
+        assert!(
+            BlsImpl::<SmallConfiguration>::verify_aggregate_same_message(
+                msg,
+                &signatures,
+                &public_keys
+            )
+            .is_err()
+        );
+        let aggregate = BlsImpl::<SmallConfiguration>::aggregate_signatures(&[
+            sig.as_slice(),
+            sig.as_slice(),
+        ])
+        .expect("aggregate signatures");
+        assert!(
+            BlsImpl::<SmallConfiguration>::verify_preaggregated_same_message(
+                msg,
+                &aggregate,
+                &public_keys,
             )
             .is_err()
         );

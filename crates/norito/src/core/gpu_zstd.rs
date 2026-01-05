@@ -417,6 +417,9 @@ pub fn decode_all(compressed: &[u8], uncompressed_size: u64) -> Result<Vec<u8>, 
             };
             if rc == 0 {
                 out.truncate(out_len);
+                if out.len() != target_len {
+                    return Err(super::Error::LengthMismatch);
+                }
                 return Ok(out);
             }
         }
@@ -434,6 +437,9 @@ pub fn decode_all(compressed: &[u8], uncompressed_size: u64) -> Result<Vec<u8>, 
             };
             if rc == 0 {
                 out.truncate(out_len);
+                if out.len() != target_len {
+                    return Err(super::Error::LengthMismatch);
+                }
                 return Ok(out);
             }
         }
@@ -443,7 +449,11 @@ pub fn decode_all(compressed: &[u8], uncompressed_size: u64) -> Result<Vec<u8>, 
     // CPU fallback
     let mut decoder = zstd::Decoder::new(compressed)?;
     let mut out = Vec::with_capacity(target_len);
-    decoder.read_to_end(&mut out)?;
+    let max_len = target_len.saturating_add(1);
+    decoder.take(max_len as u64).read_to_end(&mut out)?;
+    if out.len() != target_len {
+        return Err(super::Error::LengthMismatch);
+    }
     Ok(out)
 }
 

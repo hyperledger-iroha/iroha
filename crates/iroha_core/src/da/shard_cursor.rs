@@ -8,7 +8,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io,
+    io::{self, Write},
     path::{Path, PathBuf},
 };
 
@@ -466,26 +466,26 @@ impl DaShardCursorJournal {
 
         if let Some(persisted) = persisted {
             for entry in persisted.entries {
-            let Some(expected) = journal.mapping.get(&entry.lane_id).copied() else {
-                warn!(
-                    lane = %entry.lane_id.as_u32(),
-                    shard = %entry.shard_id.as_u32(),
-                    "dropping shard cursor: lane missing from catalog"
-                );
-                continue;
-            };
+                let Some(expected) = journal.mapping.get(&entry.lane_id).copied() else {
+                    warn!(
+                        lane = %entry.lane_id.as_u32(),
+                        shard = %entry.shard_id.as_u32(),
+                        "dropping shard cursor: lane missing from catalog"
+                    );
+                    continue;
+                };
 
-            if expected != entry.shard_id {
-                warn!(
-                    lane = %entry.lane_id.as_u32(),
-                    stored = %entry.shard_id.as_u32(),
-                    expected = %expected.as_u32(),
-                    "dropping shard cursor: lane resharded since last run"
-                );
-                continue;
-            }
+                if expected != entry.shard_id {
+                    warn!(
+                        lane = %entry.lane_id.as_u32(),
+                        stored = %entry.shard_id.as_u32(),
+                        expected = %expected.as_u32(),
+                        "dropping shard cursor: lane resharded since last run"
+                    );
+                    continue;
+                }
 
-            journal.upsert(entry);
+                journal.upsert(entry);
             }
         }
 
@@ -604,11 +604,12 @@ impl DaShardCursorJournal {
                     path: self.path.clone(),
                     source,
                 })?;
-                fs::rename(&tmp_path, &self.path)
-                    .map_err(|source| ShardCursorJournalError::Write {
+                fs::rename(&tmp_path, &self.path).map_err(|source| {
+                    ShardCursorJournalError::Write {
                         path: self.path.clone(),
                         source,
-                    })?;
+                    }
+                })?;
             } else {
                 return Err(ShardCursorJournalError::Write {
                     path: self.path.clone(),
@@ -994,6 +995,57 @@ mod tests {
         assert_eq!(cursor.shard_id, ShardId::new(0));
         assert_eq!(cursor.epoch, 1);
         assert_eq!(cursor.sequence, 2);
+    }
+
+    #[test]
+    fn journal_load_promotes_temp_file() {
+        let dir = tempdir().expect("tempdir");
+        let config = lane_config_with_mapping(0, 0);
+        let path = DaShardCursorJournal::journal_path(dir.path());
+
+        {
+            let mut journal = DaShardCursorJournal::new(&config, path.clone());
+            journal
+                .record_commitment(1, &sample_record(0, 1, 2))
+                .expect("record commitment");
+            journal.persist().expect("persist");
+        }
+
+        let tmp_path = DaShardCursorJournal::temp_path(&path);
+        fs::rename(&path, &tmp_path).expect("move journal to temp");
+
+        let loaded = DaShardCursorJournal::load(&config, path.clone()).expect("load");
+        assert!(path.exists(), "expected journal promoted to main");
+        assert!(!tmp_path.exists(), "temp journal should be removed");
+
+        let cursor = loaded.cursor_for_lane(LaneId::new(0)).expect("cursor");
+        assert_eq!((cursor.epoch, cursor.sequence), (1, 2));
+    }
+
+    #[test]
+    fn journal_load_falls_back_to_temp_on_corrupt_main() {
+        let dir = tempdir().expect("tempdir");
+        let config = lane_config_with_mapping(0, 0);
+        let path = DaShardCursorJournal::journal_path(dir.path());
+
+        {
+            let mut journal = DaShardCursorJournal::new(&config, path.clone());
+            journal
+                .record_commitment(1, &sample_record(0, 2, 3))
+                .expect("record commitment");
+            journal.persist().expect("persist");
+        }
+
+        let tmp_path = DaShardCursorJournal::temp_path(&path);
+        fs::copy(&path, &tmp_path).expect("copy journal to temp");
+        fs::write(&path, b"corrupt").expect("corrupt main journal");
+
+        let loaded = DaShardCursorJournal::load(&config, path.clone()).expect("load");
+        assert!(path.exists(), "expected journal restored to main");
+        assert!(!tmp_path.exists(), "temp journal should be removed");
+
+        let cursor = loaded.cursor_for_lane(LaneId::new(0)).expect("cursor");
+        assert_eq!((cursor.epoch, cursor.sequence), (2, 3));
     }
 
     #[test]

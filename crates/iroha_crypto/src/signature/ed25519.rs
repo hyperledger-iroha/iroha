@@ -307,6 +307,7 @@ mod test {
         scalar::Scalar,
         traits::{Identity, IsIdentity},
     };
+    use ed25519_dalek::Verifier;
     use sha2::{Digest, Sha512};
 
     const MESSAGE_1: &[u8] = b"This is a dummy message for use with tests";

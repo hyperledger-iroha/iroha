@@ -1,5 +1,5 @@
 use core::marker::PhantomData;
-use std::vec::Vec;
+use std::{collections::BTreeSet, vec::Vec};
 
 use blstrs::{G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective};
 use group::{Curve, Group as _, prime::PrimeCurveAffine};
@@ -152,6 +152,7 @@ impl<C: BlsConfiguration> BlsImpl<C> {
         if signatures.is_empty() || signatures.len() != public_keys.len() {
             return Err(Error::BadSignature);
         }
+        let mut seen_pks: BTreeSet<Vec<u8>> = BTreeSet::new();
         if C::NORMAL {
             // Aggregate sigs in G2, PKs in G1
             let mut agg_sig: Option<G2Projective> = None;
@@ -163,6 +164,9 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             let mut agg_pk: Option<G1Projective> = None;
             for pk in public_keys {
                 let pk = to_g1(pk).ok_or(Error::BadSignature)?;
+                if !seen_pks.insert(pk.to_compressed().to_vec()) {
+                    return Err(Error::BadSignature);
+                }
                 agg_pk =
                     Some(agg_pk.unwrap_or_else(G1Projective::identity) + G1Projective::from(pk));
             }
@@ -190,6 +194,9 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             let mut agg_pk: Option<G2Projective> = None;
             for pk in public_keys {
                 let pk = to_g2(pk).ok_or(Error::BadSignature)?;
+                if !seen_pks.insert(pk.to_compressed().to_vec()) {
+                    return Err(Error::BadSignature);
+                }
                 agg_pk =
                     Some(agg_pk.unwrap_or_else(G2Projective::identity) + G2Projective::from(pk));
             }
@@ -241,11 +248,15 @@ impl<C: BlsConfiguration> BlsImpl<C> {
         if public_keys.is_empty() {
             return Err(Error::BadSignature);
         }
+        let mut seen_pks: BTreeSet<Vec<u8>> = BTreeSet::new();
         if C::NORMAL {
             let sig = to_g2(aggregated_signature).ok_or(Error::BadSignature)?;
             let mut agg_pk = G1Projective::identity();
             for pk in public_keys {
                 let pk = to_g1(pk).ok_or(Error::BadSignature)?;
+                if !seen_pks.insert(pk.to_compressed().to_vec()) {
+                    return Err(Error::BadSignature);
+                }
                 agg_pk += G1Projective::from(pk);
             }
             let pk = agg_pk.to_affine();
@@ -265,6 +276,9 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             let mut agg_pk = G2Projective::identity();
             for pk in public_keys {
                 let pk = to_g2(pk).ok_or(Error::BadSignature)?;
+                if !seen_pks.insert(pk.to_compressed().to_vec()) {
+                    return Err(Error::BadSignature);
+                }
                 agg_pk += G2Projective::from(pk);
             }
             let pk = agg_pk.to_affine();

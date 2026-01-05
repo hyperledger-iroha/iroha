@@ -1,5 +1,12 @@
 use core::marker::PhantomData;
-use std::{borrow::ToOwned as _, string::ToString as _, sync::Mutex, vec, vec::Vec};
+use std::{
+    borrow::ToOwned as _,
+    collections::BTreeSet,
+    string::ToString as _,
+    sync::Mutex,
+    vec,
+    vec::Vec,
+};
 
 use sha2::Sha256;
 use w3f_bls::{
@@ -203,13 +210,20 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             agg_sig_group.add_assign(&sig.0);
         }
 
-        // Parse and aggregate public keys
+        // Parse and aggregate public keys; enforce unique signers.
+        let mut seen_pks: BTreeSet<Vec<u8>> = BTreeSet::new();
         let mut pk_it = public_keys.iter();
         let first_pk_bytes = pk_it.next().ok_or(Error::BadSignature)?;
         let first_pk = Self::parse_public_key(first_pk_bytes)?;
+        if !seen_pks.insert(first_pk.to_bytes()) {
+            return Err(Error::BadSignature);
+        }
         let mut agg_pk_group = first_pk.0;
         for pk in pk_it {
             let pk = Self::parse_public_key(pk)?;
+            if !seen_pks.insert(pk.to_bytes()) {
+                return Err(Error::BadSignature);
+            }
             agg_pk_group.add_assign(&pk.0);
         }
 
@@ -276,13 +290,20 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         if canonical == identity_sig {
             return Err(ParseError("BLS signature is identity".to_string()).into());
         }
-        // Aggregate public keys
+        // Aggregate public keys; enforce unique signers.
+        let mut seen_pks: BTreeSet<Vec<u8>> = BTreeSet::new();
         let mut pk_it = public_keys.iter();
         let first_pk_bytes = pk_it.next().ok_or(Error::BadSignature)?;
         let first_pk = Self::parse_public_key(first_pk_bytes)?;
+        if !seen_pks.insert(first_pk.to_bytes()) {
+            return Err(Error::BadSignature);
+        }
         let mut agg_pk_group = first_pk.0;
         for pk in pk_it {
             let pk = Self::parse_public_key(pk)?;
+            if !seen_pks.insert(pk.to_bytes()) {
+                return Err(Error::BadSignature);
+            }
             agg_pk_group.add_assign(&pk.0);
         }
         let agg_pk = PublicKey::<C::Engine>(agg_pk_group);

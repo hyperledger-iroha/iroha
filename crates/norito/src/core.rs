@@ -1423,7 +1423,7 @@ fn write_fixed_offsets<W: Write>(writer: &mut W, lengths: &[usize]) -> Result<()
 }
 
 fn encode_seq_payloads<W, I, F>(
-    writer: &mut W,
+    out: &mut W,
     len: usize,
     iter: I,
     mut encode_elem: F,
@@ -1433,6 +1433,7 @@ where
     I: IntoIterator,
     F: FnMut(I::Item, &mut Vec<u8>) -> Result<(), Error>,
 {
+    let writer = out;
     write_seq_len(
         writer,
         u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
@@ -5960,8 +5961,10 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
             #[cfg(all(feature = "compression", not(feature = "gpu-compression")))]
             {
                 let mut decoder = zstd::Decoder::new(compressed)?;
+                // Bound output to the declared payload length (+1 to detect overflow).
                 let mut out = Vec::with_capacity(payload_len);
-                decoder.read_to_end(&mut out)?;
+                let max_len = payload_len.saturating_add(1);
+                decoder.take(max_len as u64).read_to_end(&mut out)?;
                 out
             }
             #[cfg(not(feature = "compression"))]

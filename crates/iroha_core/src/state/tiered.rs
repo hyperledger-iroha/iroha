@@ -879,6 +879,26 @@ impl TieredStateBackend {
                         path = new_dir.display()
                     )
                 })?;
+                let archive_parent = archive.parent();
+                let new_parent = new_dir.parent();
+                if let Some(parent) = archive_parent {
+                    Self::sync_dir(parent).wrap_err_with(|| {
+                        format!(
+                            "failed to sync retired lane snapshot dir {path}",
+                            path = parent.display()
+                        )
+                    })?;
+                }
+                if let Some(parent) = new_parent {
+                    if Some(parent) != archive_parent {
+                        Self::sync_dir(parent).wrap_err_with(|| {
+                            format!(
+                                "failed to sync lane snapshot directory {path}",
+                                path = parent.display()
+                            )
+                        })?;
+                    }
+                }
             }
             fs::rename(&old_dir, &new_dir).wrap_err_with(|| {
                 format!(
@@ -887,6 +907,26 @@ impl TieredStateBackend {
                     dst = new_dir.display()
                 )
             })?;
+            let new_parent = new_dir.parent();
+            let old_parent = old_dir.parent();
+            if let Some(parent) = new_parent {
+                Self::sync_dir(parent).wrap_err_with(|| {
+                    format!(
+                        "failed to sync lane snapshot directory {path}",
+                        path = parent.display()
+                    )
+                })?;
+            }
+            if let Some(parent) = old_parent {
+                if Some(parent) != new_parent {
+                    Self::sync_dir(parent).wrap_err_with(|| {
+                        format!(
+                            "failed to sync lane snapshot directory {path}",
+                            path = parent.display()
+                        )
+                    })?;
+                }
+            }
             iroha_logger::info!(
                 lane = %current.lane_id.as_u32(),
                 alias_before = previous.alias,
@@ -955,6 +995,26 @@ impl TieredStateBackend {
                 path = dir.display()
             )
         })?;
+        let dest_parent = dest.parent();
+        let dir_parent = dir.parent();
+        if let Some(parent) = dest_parent {
+            Self::sync_dir(parent).wrap_err_with(|| {
+                format!(
+                    "failed to sync retired lane snapshot directory {path}",
+                    path = parent.display()
+                )
+            })?;
+        }
+        if let Some(parent) = dir_parent {
+            if Some(parent) != dest_parent {
+                Self::sync_dir(parent).wrap_err_with(|| {
+                    format!(
+                        "failed to sync lane snapshot directory {path}",
+                        path = parent.display()
+                    )
+                })?;
+            }
+        }
         iroha_logger::info!(
             lane = %entry.lane_id.as_u32(),
             alias = entry.alias,

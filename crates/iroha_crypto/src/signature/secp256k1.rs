@@ -27,7 +27,8 @@ impl EcdsaSecp256k1Sha256 {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::BadSignature`] if verification fails or the inputs are malformed.
+    /// Returns [`Error::BadSignature`] if verification fails, the signature is non-canonical
+    /// (high-S), or the inputs are malformed.
     pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey) -> Result<(), Error> {
         EcdsaSecp256k1Impl::verify(message, signature, pk)
     }
@@ -163,12 +164,16 @@ mod ecdsa_secp256k1 {
             let signature: k256::ecdsa::Signature = signing_key
                 .sign_prehash(&digest)
                 .expect("sha256 digest length is 32 bytes");
+            let signature = signature.normalize_s().unwrap_or(signature);
             signature.to_bytes().to_vec()
         }
 
         pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey) -> Result<(), Error> {
             let signature = k256::ecdsa::Signature::from_slice(signature)
                 .map_err(|e| Error::Signing(format!("{e:?}")))?;
+            if signature.normalize_s().is_some() {
+                return Err(Error::BadSignature);
+            }
 
             let verifying_key = k256::ecdsa::VerifyingKey::from(pk);
 
@@ -206,6 +211,7 @@ impl From<elliptic_curve::Error> for Error {
 #[cfg(test)]
 mod test {
     use amcl::secp256k1::ecp;
+    use k256::ecdsa::signature::hazmat::PrehashVerifier as _;
     use k256::elliptic_curve::sec1::ToEncodedPoint;
     use openssl::{
         bn::{BigNum, BigNumContext},
@@ -379,5 +385,36 @@ mod test {
         let (p, s) = EcdsaSecp256k1Sha256::keypair(KeyGenOption::Random);
         let signed = EcdsaSecp256k1Sha256::sign(MESSAGE_1, &s);
         EcdsaSecp256k1Sha256::verify(MESSAGE_1, &signed, &p).unwrap();
+    }
+
+    #[test]
+    fn secp256k1_rejects_high_s_signatures() {
+        let secret = private_key();
+        let (pk, sk) = EcdsaSecp256k1Sha256::keypair(KeyGenOption::FromPrivateKey(secret));
+        let message = b"secp256k1 high-s test";
+        let sig = EcdsaSecp256k1Sha256::sign(message, &sk);
+
+        let signature = k256::ecdsa::Signature::from_slice(&sig).expect("signature parse");
+        assert!(
+            signature.normalize_s().is_none(),
+            "signatures must be low-S"
+        );
+
+        let high_sig = if signature.normalize_s().is_some() {
+            signature
+        } else {
+            let (r, s) = signature.split_scalars();
+            k256::ecdsa::Signature::from_scalars(r, -s).expect("high-s signature")
+        };
+        assert!(high_sig.normalize_s().is_some());
+
+        let digest = sha2::Sha256::digest(message);
+        let verifying_key = k256::ecdsa::VerifyingKey::from(&pk);
+        verifying_key
+            .verify_prehash(&digest, &high_sig)
+            .expect("high-S signature is still valid mathematically");
+
+        let err = EcdsaSecp256k1Sha256::verify(message, high_sig.to_bytes().as_ref(), &pk);
+        assert!(matches!(err, Err(Error::BadSignature)));
     }
 }

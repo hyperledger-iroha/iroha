@@ -245,7 +245,7 @@ use iroha_data_model::{
 };
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_primitives::addr::SocketAddr;
-use iroha_torii_shared::uri;
+use iroha_torii_shared::{ErrorEnvelope, uri};
 use ivm::iso20022::{MsgError, parse_message};
 use mv::storage::StorageReadOnly;
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -14202,36 +14202,6 @@ struct QueueErrorEnvelope {
     queue: QueueErrorSnapshot,
     #[norito(skip_serializing_if = "Option::is_none")]
     retry_after_seconds: Option<u64>,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-)]
-struct ErrorEnvelope {
-    code: String,
-    message: String,
-}
-
-impl ErrorEnvelope {
-    fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-        }
-    }
-
-    fn code(&self) -> &str {
-        &self.code
-    }
-
-    fn message(&self) -> &str {
-        &self.message
-    }
 }
 
 #[allow(dead_code)]
