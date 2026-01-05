@@ -2755,7 +2755,7 @@ fn decode_snapshot_bytes(
 }
 
 fn promote_snapshot_temp(tmp_path: &Path, main_path: &Path) {
-    let mut promoted = match fs::rename(tmp_path, main_path) {
+    let promoted = match fs::rename(tmp_path, main_path) {
         Ok(()) => true,
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
             if let Err(remove_err) = fs::remove_file(main_path) {

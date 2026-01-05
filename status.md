@@ -1,6 +1,12 @@
 # Status
 
 ## Latest Updates
+- Crypto: fix Algorithm discriminant stability (explicit repr u8 values aligned with TryFrom/PublicKeyCompact/SDK docs) and gate `bls_check` behind the `bls` feature; add regression assertion for discriminant values.
+- Tests: not run (not requested).
+- Sumeragi: drop the DA/RBC devnet override so `sumeragi.da_enabled` is honored at runtime; update docs and runtime DA tests accordingly.
+- Tests: not run (not requested).
+- Genesis: align shipped genesis manifests to wire protocol v1 and refresh consensus_fingerprint values.
+- Tests: not run (not requested).
 - Norito: reject non-zero alignment padding and bitset padding bits in NCB/opt columns, enforce trailing-byte checks in NCB views, and document NCB canonicalization rules.
 - Tests: `cargo test -p norito --test ncb_padding_trailing`.
 - Offline proofs: allow `/v1/offline/transfers/proof` to accept transfer payloads pre-admission, refactor proof-request builders onto `OfflineToOnlineTransfer`, add Torii/Swift updates, and refresh docs/tests.

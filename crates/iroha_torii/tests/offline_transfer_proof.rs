@@ -40,7 +40,7 @@ async fn offline_transfer_proof_accepts_transfer_payload() {
     let app = build_harness();
     let transfer = build_transfer(42);
     let payload = norito::json!({
-        "transfer": json::to_value(&transfer).expect("transfer json"),
+        "transfer": transfer,
         "kind": "counter",
         "counter_checkpoint": 41
     });

@@ -494,6 +494,31 @@ impl Actor {
         self.roster_for_vote_with_mode(block_hash, height, view, self.consensus_mode)
     }
 
+    fn pending_chain_hashes_for_parent(
+        &self,
+        mut parent_hash: HashOf<BlockHeader>,
+        mut parent_height: u64,
+        committed_height: u64,
+    ) -> Option<BTreeMap<u64, HashOf<BlockHeader>>> {
+        if parent_height <= committed_height {
+            return None;
+        }
+        let mut hashes = BTreeMap::new();
+        loop {
+            hashes.insert(parent_height, parent_hash);
+            if parent_height <= committed_height.saturating_add(1) {
+                break;
+            }
+            let pending = self.pending.pending_blocks.get(&parent_hash)?;
+            if pending.height != parent_height {
+                return None;
+            }
+            parent_hash = pending.block.header().prev_block_hash()?;
+            parent_height = parent_height.saturating_sub(1);
+        }
+        Some(hashes)
+    }
+
     fn roster_from_commit_certificate_history(&self, height: u64) -> Option<Vec<PeerId>> {
         let parent_height = height.checked_sub(1)?;
         let cert = super::status::commit_certificate_history()
@@ -545,9 +570,17 @@ impl Actor {
         let view = self.state.view();
         let committed_height = u64::try_from(view.height()).unwrap_or(0);
         let hashes = view.block_hashes();
+        let pending_hashes = target_parent_hash.and_then(|hash| {
+            self.pending_chain_hashes_for_parent(hash, target_parent, committed_height)
+        });
         let hash_for_height = |h: u64| {
             if h == 0 {
                 return None;
+            }
+            if let Some(hashes) = pending_hashes.as_ref() {
+                if let Some(hash) = hashes.get(&h) {
+                    return Some(*hash);
+                }
             }
             if h <= committed_height {
                 let idx = usize::try_from(h.saturating_sub(1)).ok()?;
@@ -643,6 +676,16 @@ impl Actor {
             }
         }
         if height > committed_height.saturating_add(1) {
+            let parent_hash = self
+                .pending
+                .pending_blocks
+                .get(&block_hash)
+                .and_then(|pending| pending.block.header().prev_block_hash());
+            if let Some(roster) =
+                self.roster_from_commit_certificate_history_roll_forward(height, parent_hash)
+            {
+                return roster;
+            }
             if let Some(roster) = self.roster_from_commit_certificate_history(height) {
                 return roster;
             }

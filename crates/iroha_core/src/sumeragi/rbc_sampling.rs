@@ -95,10 +95,10 @@ pub fn sample_from_store(
         return Err(SamplingError::InvalidSampleCount);
     }
     let total_chunks = session.total_chunks();
-    let sample_count = count.min(total_chunks);
-    if sample_count == 0 {
+    if count == 0 || count > total_chunks {
         return Err(SamplingError::InvalidSampleCount);
     }
+    let sample_count = count;
 
     let mut rng = seed.map_or_else(
         || {
@@ -231,5 +231,52 @@ mod tests {
                 .verify_sha256(&leaf_hash, &root_typed, 16),
             "proof verifies"
         );
+    }
+
+    #[test]
+    fn sampling_rejects_request_larger_than_total_chunks() {
+        let dir = tempdir().unwrap();
+        let chain_hash = Hash::new(b"chain");
+        let manifest = SoftwareManifest::current();
+        let chunk0 = b"hello".to_vec();
+        let chunk1 = b"world".to_vec();
+        let digests: Vec<[u8; 32]> = [chunk0.clone(), chunk1.clone()]
+            .iter()
+            .map(|bytes| {
+                let digest = Sha256::digest(bytes);
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&digest);
+                arr
+            })
+            .collect();
+        let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone());
+        let root_hash = Hash::from(tree.root().expect("root"));
+
+        let mut session = RbcSession::test_new(2, None, Some(root_hash), 0);
+        session.test_note_chunk(0, chunk0.clone(), 0);
+        session.test_note_chunk(1, chunk1.clone(), 0);
+
+        let key = (
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([2; 32])),
+            6,
+            0,
+        );
+        let store = ChunkStore::new(
+            dir.path().to_path_buf(),
+            Duration::from_secs(300),
+            4,
+            1 << 20,
+            8,
+            1 << 20,
+        )
+        .expect("chunk store init");
+        store
+            .persist_session(key, &session, &chain_hash, &manifest, &[])
+            .expect("persist session");
+
+        let err = sample_from_store(dir.path(), key, &chain_hash, &manifest, 3, None)
+            .err()
+            .expect("oversized request should fail");
+        assert!(matches!(err, SamplingError::InvalidSampleCount));
     }
 }

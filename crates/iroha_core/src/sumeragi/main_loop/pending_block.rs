@@ -144,9 +144,13 @@ impl PendingBlock {
         self.last_quorum_reschedule = Some(now);
     }
 
-    pub(super) fn recompute_gate(&mut self, _da_enabled: bool) -> GateComputation {
+    pub(super) fn recompute_gate(
+        &mut self,
+        da_enabled: bool,
+        missing_local_data: bool,
+    ) -> GateComputation {
         // Availability evidence is advisory; consensus only records missing local data.
-        let gate = None;
+        let gate = da::evaluate(da_enabled, missing_local_data);
         let previous_gate = self.last_gate;
         let satisfaction = da::gate_satisfaction(previous_gate, gate);
         if let Some(satisfied) = satisfaction {
@@ -248,8 +252,9 @@ pub(super) struct DaGateStatus {
 pub(super) fn recompute_da_gate_status(
     pending: &mut PendingBlock,
     da_enabled: bool,
+    missing_local_data: bool,
 ) -> DaGateStatus {
-    let gate = pending.recompute_gate(da_enabled);
+    let gate = pending.recompute_gate(da_enabled, missing_local_data);
     DaGateStatus {
         reason: gate.current,
         satisfaction: gate.satisfaction,
