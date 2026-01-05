@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Crypto/SoraFS: reject proof tokens with empty entry lists or expiries at/before issuance during decode; add regression coverage.
+- Tests: not run (not requested).
 - Docs: resolve merge conflicts in status.md and roadmap.md.
 - Tests: not run (not requested).
 - WSV (IVM mock): clear direct permissions and role assignments on account unregister to avoid stale grants; add regression coverage.
