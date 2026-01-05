@@ -54,6 +54,7 @@ artifacts/android/attestation/*.srl
 traces/*
 .clang-module-cache/*
 .swift-build/*
+.swift_test_tmp
 npm-iroha-js.log
 javascript/npm-iroha-js.log
 javascript/iroha_js/**/*.log

@@ -10,6 +10,7 @@ use iroha_data_model::{
     consensus::{CommitCertificate, ValidatorSetCheckpoint, VrfEpochRecord},
     nexus::{LaneId, PublicLaneValidatorStatus},
     prelude::{AccountId, PeerId},
+    transaction::TransactionSubmissionReceipt,
 };
 use iroha_primitives::numeric::Numeric;
 use mv::storage::StorageReadOnly;
@@ -161,6 +162,10 @@ impl<'a> PenaltyApplier<'a> {
             }
             map
         };
+        let epoch_length_blocks = {
+            let view = self.state.view();
+            crate::sumeragi::load_npos_epoch_params(&view, self.config).epoch_length_blocks
+        };
 
         let staking_cfg = {
             let view = self.state.view();
@@ -180,9 +185,14 @@ impl<'a> PenaltyApplier<'a> {
             );
             let is_censorship =
                 matches!(record.evidence.payload, EvidencePayload::Censorship { .. });
+            let evidence_epoch = evidence_epoch(
+                &record.evidence,
+                record.recorded_at_height,
+                epoch_length_blocks,
+            );
             let prf_seed = match consensus_mode {
                 ConsensusMode::Permissioned => None,
-                ConsensusMode::Npos => epoch_seeds.get(&evidence_epoch(&record.evidence)).copied(),
+                ConsensusMode::Npos => epoch_seeds.get(&evidence_epoch).copied(),
             };
             // Prefer evidence-specific rosters to avoid misattribution after topology rotation.
             let evidence_roster =
@@ -197,12 +207,16 @@ impl<'a> PenaltyApplier<'a> {
                 continue;
             }
             let roster = roster.as_slice();
-            let offenders =
-                offender_indices(&record.evidence, roster.len(), consensus_mode, prf_seed);
+            let offenders = offender_indices(
+                &record.evidence,
+                record.recorded_at_height,
+                roster.len(),
+                consensus_mode,
+                prf_seed,
+            );
             let slash_id = Hash::new(key.clone());
             // Resolve validators before opening a write transaction to avoid re-entrant locks.
             if offenders.is_empty() {
-                // TODO: attribute censorship evidence to responsible validators before slashing.
                 if is_censorship || !self::evidence_has_legitimate_empty_offenders(&record.evidence)
                 {
                     outcome.pending = outcome.pending.saturating_add(1);
@@ -452,21 +466,43 @@ fn canonicalize_indices_for_view(
     out.into_iter().collect()
 }
 
-fn evidence_epoch(evidence: &Evidence) -> u64 {
+fn epoch_for_height(height: u64, epoch_length_blocks: u64) -> u64 {
+    if epoch_length_blocks == 0 || height == 0 {
+        0
+    } else {
+        (height - 1) / epoch_length_blocks
+    }
+}
+
+fn censorship_anchor_height(
+    receipts: &[TransactionSubmissionReceipt],
+    recorded_at_height: u64,
+) -> Option<u64> {
+    let max_receipt_height = receipts
+        .iter()
+        .map(|receipt| receipt.payload.submitted_at_height)
+        .max()?;
+    Some(max_receipt_height.min(recorded_at_height))
+}
+
+fn evidence_epoch(evidence: &Evidence, recorded_at_height: u64, epoch_length_blocks: u64) -> u64 {
     match &evidence.payload {
         EvidencePayload::DoubleVote { v1, .. } => v1.epoch,
         EvidencePayload::DoubleExecVote { v1, .. } => v1.epoch,
         EvidencePayload::InvalidProposal { proposal, .. } => proposal.header.epoch,
         EvidencePayload::InvalidCommitCertificate { certificate, .. } => certificate.epoch,
-        EvidencePayload::Censorship { .. } => {
-            // TODO: derive censorship epoch from receipt heights once the attribution policy is defined.
-            0
+        EvidencePayload::Censorship { receipts, .. } => {
+            let Some(anchor) = censorship_anchor_height(receipts, recorded_at_height) else {
+                return 0;
+            };
+            epoch_for_height(anchor, epoch_length_blocks)
         }
     }
 }
 
 fn offender_indices(
     evidence: &Evidence,
+    recorded_at_height: u64,
     topology_len: usize,
     consensus_mode: ConsensusMode,
     prf_seed: Option<[u8; 32]>,
@@ -506,9 +542,11 @@ fn offender_indices(
                 prf_seed,
             )
         }
-        EvidencePayload::Censorship { .. } => {
-            // TODO: map censorship evidence to responsible leaders once the attribution policy is defined.
-            Vec::new()
+        EvidencePayload::Censorship { receipts, .. } => {
+            let Some(anchor) = censorship_anchor_height(receipts, recorded_at_height) else {
+                return Vec::new();
+            };
+            canonicalize_indices_for_view([0], anchor, 0, topology_len, consensus_mode, prf_seed)
         }
     }
 }
@@ -827,21 +865,56 @@ mod tests {
             },
         };
 
-        let offenders = super::offender_indices(&evidence, 4, ConsensusMode::Permissioned, None);
+        let offenders = super::offender_indices(
+            &evidence,
+            proposal_height,
+            4,
+            ConsensusMode::Permissioned,
+            None,
+        );
         assert_eq!(offenders, vec![1]);
 
         let seed = [0x11_u8; 32];
         let leader = super::npos_leader_index(seed, proposal_height, proposal_view, 4)
             .expect("leader index should resolve");
-        let offenders_npos = super::offender_indices(&evidence, 4, ConsensusMode::Npos, Some(seed));
+        let offenders_npos = super::offender_indices(
+            &evidence,
+            proposal_height,
+            4,
+            ConsensusMode::Npos,
+            Some(seed),
+        );
         let expected = ValidatorIndex::try_from(leader).expect("leader index fits validator index");
         assert_eq!(offenders_npos, vec![expected]);
     }
 
     #[test]
-    fn censorship_evidence_defaults_to_empty_offenders() {
+    fn censorship_evidence_epoch_caps_to_recorded_height() {
         let key_pair = KeyPair::random();
         let tx_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xB0; 32]));
+        let payload = TransactionSubmissionReceiptPayload {
+            tx_hash,
+            submitted_at_ms: 1,
+            submitted_at_height: 10,
+            signer: key_pair.public_key().clone(),
+        };
+        let receipt = TransactionSubmissionReceipt::sign(payload, &key_pair);
+        let evidence = Evidence {
+            kind: EvidenceKind::Censorship,
+            payload: EvidencePayload::Censorship {
+                tx_hash,
+                receipts: vec![receipt],
+            },
+        };
+
+        let epoch = super::evidence_epoch(&evidence, 5, 5);
+        assert_eq!(epoch, 0);
+    }
+
+    #[test]
+    fn censorship_evidence_attributes_to_leader() {
+        let key_pair = KeyPair::random();
+        let tx_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xB1; 32]));
         let payload = TransactionSubmissionReceiptPayload {
             tx_hash,
             submitted_at_ms: 1,
@@ -857,9 +930,16 @@ mod tests {
             },
         };
 
-        assert_eq!(super::evidence_epoch(&evidence), 0);
-        let offenders = super::offender_indices(&evidence, 4, ConsensusMode::Permissioned, None);
-        assert!(offenders.is_empty());
+        let offenders = super::offender_indices(&evidence, 3, 4, ConsensusMode::Permissioned, None);
+        assert_eq!(offenders, vec![0]);
+
+        let seed = [0x11_u8; 32];
+        let expected =
+            super::npos_leader_index(seed, 2, 0, 4).expect("leader index should resolve");
+        let offenders_npos =
+            super::offender_indices(&evidence, 3, 4, ConsensusMode::Npos, Some(seed));
+        let expected_idx = ValidatorIndex::try_from(expected).expect("leader index fits");
+        assert_eq!(offenders_npos, vec![expected_idx]);
     }
 
     #[test]
@@ -1267,12 +1347,40 @@ mod tests {
     }
 
     #[test]
-    fn consensus_penalties_defer_censorship_evidence() -> Result<()> {
+    fn consensus_penalties_apply_censorship_evidence() -> Result<()> {
         let state = fresh_state();
         let mut config = test_sumeragi_config();
+        config.consensus_mode = ConsensusMode::Permissioned;
         config.npos.reconfig.activation_lag_blocks = 0;
 
         let key_pair = KeyPair::random();
+        let peer = PeerId::from(key_pair.public_key().clone());
+        {
+            let mut block = state.commit_topology.block();
+            block.get_mut().push(peer.clone());
+            block.commit();
+        }
+
+        let domain: DomainId = "test".parse().expect("domain id");
+        let validator: AccountId = AccountId::new(domain.clone(), key_pair.public_key().clone());
+        let record = iroha_data_model::nexus::PublicLaneValidatorRecord {
+            lane_id: LaneId::new(1),
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            total_stake: Numeric::new(100, 0),
+            self_stake: Numeric::new(50, 0),
+            metadata: iroha_data_model::metadata::Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_epoch: None,
+            activation_height: None,
+            last_reward_epoch: None,
+        };
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert((record.lane_id, validator.clone()), record);
+            block.commit();
+        }
+
         let tx_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xB1; 32]));
         let payload = TransactionSubmissionReceiptPayload {
             tx_hash,
@@ -1312,14 +1420,14 @@ mod tests {
             None,
         );
         let outcome = applier.apply_consensus_penalties(5)?;
-        assert_eq!(outcome.applied, 0);
-        assert_eq!(outcome.slashed, 0);
-        assert_eq!(outcome.pending, 1);
+        assert_eq!(outcome.applied, 1);
+        assert_eq!(outcome.slashed, 1);
+        assert_eq!(outcome.pending, 0);
 
         let view = state.world.consensus_evidence.view();
         let updated = view.get(&key).expect("evidence present");
-        assert!(!updated.penalty_applied);
-        assert_eq!(updated.penalty_applied_at_height, None);
+        assert!(updated.penalty_applied);
+        assert_eq!(updated.penalty_applied_at_height, Some(5));
 
         Ok(())
     }

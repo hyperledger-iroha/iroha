@@ -816,7 +816,6 @@ impl Actor {
         Ok(())
     }
 
-
     pub(super) fn build_rbc_session_from_payload(
         payload_bytes: &[u8],
         payload_hash: Hash,
@@ -1112,7 +1111,9 @@ impl Actor {
             return false;
         };
         let key = Self::session_key(block_hash, height, view);
-        if self.subsystems.da_rbc.rbc.sessions.contains_key(&key) || self.block_known_locally(*block_hash) {
+        if self.subsystems.da_rbc.rbc.sessions.contains_key(&key)
+            || self.block_known_locally(*block_hash)
+        {
             debug!(
                 height,
                 view,
@@ -1252,7 +1253,14 @@ impl Actor {
                 return Ok(());
             }
         };
-        if self.subsystems.da_rbc.rbc.sessions.insert(key, session).is_some() {
+        if self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .insert(key, session)
+            .is_some()
+        {
             warn!(?key, "replacing existing RBC session on init");
         }
         // Apply any messages that arrived before INIT once the session exists.
@@ -1487,13 +1495,8 @@ impl Actor {
         }
         let topology = crate::sumeragi::network_topology::Topology::new(topology_peers);
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(ready.height);
-        let signature_topology = super::topology_for_view(
-            &topology,
-            ready.height,
-            ready.view,
-            mode_tag,
-            prf_seed,
-        );
+        let signature_topology =
+            super::topology_for_view(&topology, ready.height, ready.view, mode_tag, prf_seed);
         let local_idx = self.local_validator_index_for_topology(&signature_topology);
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
             if let Some(existing) = session
@@ -1886,13 +1889,8 @@ impl Actor {
         }
         let topology = crate::sumeragi::network_topology::Topology::new(topology_peers);
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(deliver.height);
-        let signature_topology = super::topology_for_view(
-            &topology,
-            deliver.height,
-            deliver.view,
-            mode_tag,
-            prf_seed,
-        );
+        let signature_topology =
+            super::topology_for_view(&topology, deliver.height, deliver.view, mode_tag, prf_seed);
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
             if session.delivered
                 && session.deliver_sender == Some(deliver.sender)
@@ -2050,13 +2048,13 @@ impl Actor {
                         max_bytes = cfg.max_bytes,
                         "initialised RBC chunk store using deferred configuration"
                     );
-                    self.subsystems.da_rbc.rbc
-                        .status_handle
-                        .configure(Some(rbc_status::StoreConfig {
+                    self.subsystems.da_rbc.rbc.status_handle.configure(Some(
+                        rbc_status::StoreConfig {
                             dir: cfg.dir.clone(),
                             ttl: cfg.ttl,
                             capacity: cfg.max_sessions,
-                        }));
+                        },
+                    ));
 
                     let mut last_pressure = StorePressure::Normal {
                         sessions: 0,
@@ -2117,7 +2115,13 @@ impl Actor {
         if session.received_chunks() < total_chunks {
             return;
         }
-        if self.subsystems.da_rbc.rbc.persisted_full_sessions.contains(&key) {
+        if self
+            .subsystems
+            .da_rbc
+            .rbc
+            .persisted_full_sessions
+            .contains(&key)
+        {
             return;
         }
         if !self.ensure_rbc_chunk_store() {
@@ -2147,7 +2151,11 @@ impl Actor {
             Ok(outcome) => {
                 self.handle_rbc_store_evictions(&outcome.removed);
                 self.update_rbc_store_pressure(outcome.pressure);
-                self.subsystems.da_rbc.rbc.persisted_full_sessions.insert(key);
+                self.subsystems
+                    .da_rbc
+                    .rbc
+                    .persisted_full_sessions
+                    .insert(key);
             }
             Err(err) => {
                 warn!(?err, "failed to persist RBC session snapshot");
@@ -2174,7 +2182,11 @@ impl Actor {
                 .rbc
                 .ready_rebroadcast_last_sent
                 .remove(key);
-            self.subsystems.da_rbc.rbc.persisted_full_sessions.remove(key);
+            self.subsystems
+                .da_rbc
+                .rbc
+                .persisted_full_sessions
+                .remove(key);
             if existed {
                 debug!(
                     block_hash = ?key.0,
@@ -2230,7 +2242,11 @@ impl Actor {
             lane_backlog: session.lane_backlog_entries(),
             dataspace_backlog: session.dataspace_backlog_entries(),
         };
-        self.subsystems.da_rbc.rbc.status_handle.update(summary, SystemTime::now());
+        self.subsystems
+            .da_rbc
+            .rbc
+            .status_handle
+            .update(summary, SystemTime::now());
     }
 
     pub(super) fn session_key(

@@ -403,7 +403,7 @@ impl ChunkStore {
                     };
                     let key = persisted.key();
                     let mut effective_path = path.clone();
-                    let main_path = path.with_extension("norito");
+                    let main_path = path.with_extension("");
                     if promote_temp_session(&path, &main_path) {
                         effective_path = main_path;
                     }

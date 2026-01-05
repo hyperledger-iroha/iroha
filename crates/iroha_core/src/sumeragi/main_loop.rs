@@ -1,6 +1,5 @@
 //! The main event loop that powers sumeragi.
 #![cfg_attr(test, allow(unnameable_test_items))]
-// TODO: remove temporary allowances once NPoS scheduling and telemetry hooks are fully wired.
 use std::{
     borrow::Cow,
     cell::Cell,
@@ -92,45 +91,26 @@ use crate::{
     tx::AcceptedTransaction,
 };
 
-// Temporary lint allowances scoped to the Sumeragi submodules while NPoS scaffolding evolves.
-macro_rules! allow_scaffold_mod {
-    ($($name:ident),+ $(,)?) => {
-        $(
-            #[allow(
-                dead_code,
-                clippy::large_types_passed_by_value,
-                clippy::needless_pass_by_value,
-                clippy::unused_self,
-                clippy::unnecessary_wraps,
-                clippy::assigning_clones
-            )]
-            mod $name;
-        )+
-    };
-}
-
-allow_scaffold_mod!(
-    background,
-    block_sync,
-    commit,
-    exec_qc,
-    kura,
-    locked_qc,
-    mode,
-    pacing,
-    pending_block,
-    pending_rbc,
-    proposal_handlers,
-    proposals,
-    propose,
-    qc,
-    rbc,
-    reschedule,
-    roster,
-    validation,
-    votes,
-    vrf,
-);
+mod background;
+mod block_sync;
+mod commit;
+mod exec_qc;
+mod kura;
+mod locked_qc;
+mod mode;
+mod pacing;
+mod pending_block;
+mod pending_rbc;
+mod proposal_handlers;
+mod proposals;
+mod propose;
+mod qc;
+mod rbc;
+mod reschedule;
+mod roster;
+mod validation;
+mod votes;
+mod vrf;
 
 #[cfg(test)]
 use exec_qc::{
@@ -5082,13 +5062,24 @@ impl Actor {
             };
             let epoch_params = matches!(mode, ConsensusMode::Npos)
                 .then(|| super::load_npos_epoch_params(&view, &config));
+            let height = view.height() as u64;
+            let (epoch_seed_for_height, target_epoch, record_for_target_epoch) =
+                epoch_params.as_ref().map_or((None, 0, None), |params| {
+                    let target_epoch = if params.epoch_length_blocks > 0 && height > 0 {
+                        (height - 1) / params.epoch_length_blocks
+                    } else {
+                        0
+                    };
+                    let seed = super::npos_seed_for_height(&view, height);
+                    let record = view.world().vrf_epochs().get(&target_epoch).cloned();
+                    (Some(seed), target_epoch, record)
+                });
             let last_epoch_record = view
                 .world()
                 .vrf_epochs()
                 .iter()
                 .last()
                 .map(|(_, record)| record.clone());
-            let epoch_seed = super::latest_epoch_seed(&view);
             drop(view);
             let roster_len = commit_topology.len();
             let initial_indices = compute_roster_indices_from_topology(
@@ -5104,10 +5095,13 @@ impl Actor {
                     epoch_params.commit_deadline_offset,
                     epoch_params.reveal_deadline_offset,
                 );
-                if let Some(record) = last_epoch_record.as_ref() {
+                if let Some(record) = record_for_target_epoch.as_ref() {
                     em.restore_from_record(record);
                 } else {
-                    em.set_epoch_seed(epoch_seed);
+                    let seed =
+                        epoch_seed_for_height.expect("seed available in NPoS mode initialization");
+                    em.set_epoch_seed(seed);
+                    em.set_epoch(target_epoch);
                 }
                 apply_roster_indices_to_manager(&mut em, roster_len, initial_indices);
                 let seed = em.seed();
@@ -6167,14 +6161,6 @@ impl Actor {
             );
             return Ok(());
         }
-        if signature.view != 0 {
-            iroha_logger::warn!(
-                epoch = signature.epoch_id,
-                view = signature.view,
-                "merge signature view not supported; ignoring"
-            );
-            return Ok(());
-        }
         let signer_idx = match usize::try_from(signature.signer) {
             Ok(idx) => idx,
             Err(err) => {
@@ -6234,8 +6220,7 @@ impl Actor {
             });
 
         if let Some(candidate) = entry.candidate.as_ref() {
-            let expected =
-                crate::merge::merge_qc_message_digest(&self.chain_id, signature.view, candidate);
+            let expected = crate::merge::merge_qc_message_digest(&self.chain_id, candidate);
             if expected != signature.message_digest {
                 iroha_logger::warn!(
                     epoch = signature.epoch_id,
@@ -6301,10 +6286,8 @@ impl Actor {
         let mut ordered_keys = Vec::with_capacity(candidates.len());
 
         for candidate in candidates {
-            // TODO: Thread merge-committee view changes once merge view-change support is implemented.
-            let view = 0;
-            let message_digest =
-                crate::merge::merge_qc_message_digest(&self.chain_id, view, &candidate);
+            let view = candidate.view;
+            let message_digest = crate::merge::merge_qc_message_digest(&self.chain_id, &candidate);
             let key = MergeCommitteeKey {
                 epoch_id: candidate.epoch_id,
                 view,

@@ -12463,6 +12463,7 @@ impl State {
         loop {
             let mut lane_tips = Vec::with_capacity(lane_keys.len());
             let mut merge_hint_roots = Vec::with_capacity(lane_keys.len());
+            let mut max_view = 0u64;
 
             {
                 let relays = self.lane_relays.read();
@@ -12485,12 +12486,17 @@ impl State {
                     }
                     lane_tips.push(envelope.block_header.hash());
                     merge_hint_roots.push(*envelope.settlement_hash);
+                    let view = u64::from(envelope.block_header.view_change_index());
+                    if view > max_view {
+                        max_view = view;
+                    }
                 }
             }
 
             let global_state_root = crate::merge::reduce_merge_hint_roots(&merge_hint_roots);
             let entry = crate::merge::MergeLedgerCandidate {
                 epoch_id: next_height,
+                view: max_view,
                 lane_tips,
                 merge_hint_roots,
                 global_state_root,
@@ -12570,7 +12576,7 @@ impl State {
             });
         }
         let candidate = crate::merge::MergeLedgerCandidate::from(entry);
-        let expected = crate::merge::merge_qc_message_digest(&self.chain_id, qc.view, &candidate);
+        let expected = crate::merge::merge_qc_message_digest(&self.chain_id, &candidate);
         if expected != qc.message_digest {
             return Err(MergeLedgerCommitError::MergeQCDigestMismatch {
                 expected,
@@ -19715,13 +19721,23 @@ mod tests {
         signers: &[&KeyPair],
         signers_bitmap: Vec<u8>,
     ) -> LaneRelayEnvelope {
+        sample_lane_relay_envelope_with_view(height, lane_id, 0, signers, signers_bitmap)
+    }
+
+    fn sample_lane_relay_envelope_with_view(
+        height: u64,
+        lane_id: LaneId,
+        view: u64,
+        signers: &[&KeyPair],
+        signers_bitmap: Vec<u8>,
+    ) -> LaneRelayEnvelope {
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero height"),
             None,
             None,
             None,
             1_700_000_000_000,
-            0,
+            u32::try_from(view).expect("view index fits u32"),
         );
         let parent_state_root = Hash::new([0xBC; 4]);
         let post_state_root = Hash::new([0xAB; 4]);
@@ -20650,7 +20666,7 @@ mod tests {
             crate::merge::reduce_merge_hint_roots(&candidate.merge_hint_roots)
         );
 
-        let qc = merge_qc_for_candidate(&state, candidate, 0, &keypairs, &[0]);
+        let qc = merge_qc_for_candidate(&state, candidate, &keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate.clone(), qc);
         let committed = state
             .commit_merge_entry(entry)
@@ -20726,12 +20742,70 @@ mod tests {
             crate::merge::reduce_merge_hint_roots(&candidate.merge_hint_roots)
         );
 
-        let qc = merge_qc_for_candidate(&state, candidate, 0, &keypairs, &[0]);
+        let qc = merge_qc_for_candidate(&state, candidate, &keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate.clone(), qc);
         let committed = state
             .commit_merge_entry(entry)
             .expect("merge entry commit succeeds once lanes relayed");
         assert_eq!(committed.epoch_id, 1);
+    }
+
+    #[test]
+    fn merge_candidate_uses_max_view_change_index() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "beta".to_string(),
+                    dataspace_id: DataSpaceId::GLOBAL,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("two-lane catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(nexus)
+            .expect("apply two-lane Nexus catalog");
+
+        install_lane_manifest_registry(
+            &state,
+            &[
+                (LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone()),
+                (LaneId::new(1), DataSpaceId::GLOBAL, validator_ids),
+            ],
+        );
+        configure_commit_topology(&state, 1);
+
+        let lane0 = sample_lane_relay_envelope_with_view(
+            1,
+            LaneId::new(0),
+            1,
+            &signers,
+            signers_bitmap.clone(),
+        );
+        let lane1 =
+            sample_lane_relay_envelope_with_view(1, LaneId::new(1), 3, &signers, signers_bitmap);
+
+        state.record_lane_relay(&lane0).expect("lane0 accepted");
+        state.record_lane_relay(&lane1).expect("lane1 accepted");
+        let candidates = state.merge_entry_candidates_from_lane_relays();
+        let candidate = candidates
+            .first()
+            .expect("merge candidate computed once both lanes relayed");
+        assert_eq!(candidate.view, 3);
     }
 
     #[test]
@@ -26207,6 +26281,7 @@ mod tests {
         let global_state_root = crate::merge::reduce_merge_hint_roots(&merge_hint_roots);
         crate::merge::MergeLedgerCandidate {
             epoch_id: epoch,
+            view: 0,
             lane_tips,
             merge_hint_roots,
             global_state_root,
@@ -26313,12 +26388,10 @@ mod tests {
     fn merge_qc_for_candidate(
         state: &State,
         candidate: &crate::merge::MergeLedgerCandidate,
-        view: u64,
         keypairs: &[KeyPair],
         signers: &[usize],
     ) -> MergeQuorumCertificate {
-        let message_digest =
-            crate::merge::merge_qc_message_digest(&state.chain_id, view, candidate);
+        let message_digest = crate::merge::merge_qc_message_digest(&state.chain_id, candidate);
         let mut signers_set = BTreeSet::new();
         let mut signature_payloads = Vec::with_capacity(signers.len());
         for idx in signers {
@@ -26332,7 +26405,7 @@ mod tests {
             .expect("aggregate merge signatures");
         let signers_bitmap = merge_signers_bitmap(&signers_set, keypairs.len());
         MergeQuorumCertificate::new(
-            view,
+            candidate.view,
             candidate.epoch_id,
             signers_bitmap,
             aggregate_signature,
@@ -26390,7 +26463,7 @@ mod tests {
         let keypairs = configure_commit_topology(&state, 1);
 
         let candidate = merge_candidate_with_lanes(2, 1);
-        let mut qc = merge_qc_for_candidate(&state, &candidate, 0, &keypairs, &[0]);
+        let mut qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         qc.message_digest = Hash::new(b"wrong-digest");
         let entry = merge_entry_from_candidate(candidate, qc);
 
@@ -26411,7 +26484,7 @@ mod tests {
         let keypairs = configure_commit_topology(&state, 3);
 
         let candidate = merge_candidate_with_lanes(3, 1);
-        let qc = merge_qc_for_candidate(&state, &candidate, 0, &keypairs, &[0]);
+        let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
 
         let err = state
@@ -26431,7 +26504,7 @@ mod tests {
         let keypairs = configure_commit_topology(&state, 1);
 
         let candidate = merge_candidate_with_lanes(4, 1);
-        let mut qc = merge_qc_for_candidate(&state, &candidate, 0, &keypairs, &[0]);
+        let mut qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         if let Some(first) = qc.aggregate_signature.first_mut() {
             *first ^= 0xFF;
         }
@@ -26454,7 +26527,7 @@ mod tests {
 
         let keypairs = configure_commit_topology(&state, 1);
         let candidate = merge_candidate_with_lanes(2, 2);
-        let qc = merge_qc_for_candidate(&state, &candidate, 0, &keypairs, &[0]);
+        let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
         let epoch_id = entry.epoch_id;
         let stored = state
@@ -26488,7 +26561,7 @@ mod tests {
 
         let keypairs = configure_commit_topology(&state, 1);
         let candidate = merge_candidate_with_lanes(9, 3);
-        let qc = merge_qc_for_candidate(&state, &candidate, 0, &keypairs, &[0]);
+        let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
         let epoch = entry.epoch_id;
         state
@@ -26508,7 +26581,7 @@ mod tests {
 
         let keypairs = configure_commit_topology(&state, 1);
         let candidate = merge_candidate_with_lanes(5, 2);
-        let qc = merge_qc_for_candidate(&state, &candidate, 0, &keypairs, &[0]);
+        let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
         let stored = state
             .commit_merge_entry(entry)
@@ -26581,12 +26654,12 @@ mod tests {
         let keypairs = configure_commit_topology(&state, 1);
         state.set_merge_ledger_cache_capacity(1);
         let candidate = merge_candidate_with_lanes(3, 1);
-        let qc = merge_qc_for_candidate(&state, &candidate, 0, &keypairs, &[0]);
+        let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         state
             .commit_merge_entry(merge_entry_from_candidate(candidate, qc))
             .expect("commit first");
         let candidate = merge_candidate_with_lanes(4, 1);
-        let qc = merge_qc_for_candidate(&state, &candidate, 0, &keypairs, &[0]);
+        let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         state
             .commit_merge_entry(merge_entry_from_candidate(candidate, qc))
             .expect("commit second");

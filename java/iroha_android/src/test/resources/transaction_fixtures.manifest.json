@@ -225,7 +225,7 @@
       "time_to_live_ms": null
     },
     {
-      "authority": "ops@wonderland",
+      "authority": "34mSYnDgbaJM58rbLoif4Tkp7G3qB5SUBZUxJN24ysSLbdXav3nVJ1mQ7QQZ8C6V1PdusRJ2U@wonderland",
       "chain": "00000014",
       "encoded_file": "unregister_peer_demo.norito",
       "encoded_len": 4631,
@@ -393,14 +393,14 @@
       "time_to_live_ms": 7000
     }
   ],
-  "generated_at": "2025-12-27T11:39:32.172714Z",
+  "generated_at": "2026-01-05T19:15:32.83194Z",
   "schema": {
     "payload": "iroha.android.transaction.Payload.v1",
     "signed": "iroha.transaction.SignedTransaction.v1"
   },
   "signing_key": {
     "algorithm": "ed25519",
-    "public_key_hex": "1dd2aca3aabdac99534e8f9a59257522632aafafc4605bc38f6e24cf55af9e32",
+    "public_key_hex": "1f857fe980524a2ee4fe65e5d346f7aaadcb636a640f1d191d1c6e158607ba1e",
     "seed_hex": "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032"
   }
 }

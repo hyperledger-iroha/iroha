@@ -157,8 +157,14 @@ impl Actor {
                 view, failures, "failed to requeue some transactions after validation rejection"
             );
         }
-        self.subsystems.propose.proposal_cache.pop_proposal(height, view);
-        self.subsystems.propose.proposal_cache.pop_hint(height, view);
+        self.subsystems
+            .propose
+            .proposal_cache
+            .pop_proposal(height, view);
+        self.subsystems
+            .propose
+            .proposal_cache
+            .pop_hint(height, view);
         self.clean_rbc_sessions_for_block(hash, height);
         self.qc_cache
             .retain(|(_, cached_hash, _, _, _), _| cached_hash != &hash);

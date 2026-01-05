@@ -15,22 +15,25 @@ impl Actor {
             })
         });
         let epoch_params = super::load_npos_epoch_params(&view, &self.config);
-        let last_epoch_record = view
-            .world()
-            .vrf_epochs()
-            .iter()
-            .last()
-            .map(|(_, record)| record.clone());
+        let height = view.height() as u64;
+        let epoch_seed_for_height = super::npos_seed_for_height(&view, height);
+        let target_epoch = if epoch_params.epoch_length_blocks > 0 && height > 0 {
+            (height - 1) / epoch_params.epoch_length_blocks
+        } else {
+            0
+        };
+        let record_for_target_epoch = view.world().vrf_epochs().get(&target_epoch).cloned();
         let mut manager = EpochManager::new_from_chain(&self.common_config.chain);
         manager.set_params(
             epoch_params.epoch_length_blocks,
             epoch_params.commit_deadline_offset,
             epoch_params.reveal_deadline_offset,
         );
-        if let Some(record) = last_epoch_record.as_ref() {
+        if let Some(record) = record_for_target_epoch.as_ref() {
             manager.restore_from_record(record);
         } else {
-            manager.set_epoch_seed(super::latest_epoch_seed(&view));
+            manager.set_epoch_seed(epoch_seed_for_height);
+            manager.set_epoch(target_epoch);
         }
         let roster_len = self.effective_commit_topology().len();
         let indices = compute_roster_indices_from_topology(

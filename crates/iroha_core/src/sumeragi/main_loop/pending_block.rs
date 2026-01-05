@@ -90,6 +90,7 @@ impl PendingBlock {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn with_transactions(
         block: SignedBlock,
         payload_hash: Hash,
@@ -102,6 +103,7 @@ impl PendingBlock {
         pending
     }
 
+    #[allow(dead_code)]
     pub(super) fn take_tx_batch(&mut self) -> Option<Vec<AcceptedTransaction<'static>>> {
         self.tx_batch.take()
     }

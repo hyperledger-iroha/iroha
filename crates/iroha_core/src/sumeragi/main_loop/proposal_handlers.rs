@@ -45,12 +45,10 @@ impl Actor {
         &self,
         advert: &super::message::ConsensusParamsAdvert,
     ) -> (u64, u64) {
-        let (expected_k, expected_r) = advert
-            .membership
-            .map_or_else(
-                || self.collector_plan_params(),
-                |membership| self.collector_plan_params_for_height(membership.height),
-            );
+        let (expected_k, expected_r) = advert.membership.map_or_else(
+            || self.collector_plan_params(),
+            |membership| self.collector_plan_params_for_height(membership.height),
+        );
         (
             u64::try_from(expected_k).unwrap_or(u64::MAX),
             u64::from(expected_r),
@@ -101,7 +99,10 @@ impl Actor {
                 block = %hint.block_hash,
                 "dropping proposal hint at or below committed height"
             );
-            self.subsystems.propose.proposal_cache.prune_height_leq(state_height);
+            self.subsystems
+                .propose
+                .proposal_cache
+                .prune_height_leq(state_height);
             return Ok(());
         }
         if self.drop_stale_view(height, view, "ProposalHint") {
@@ -109,7 +110,12 @@ impl Actor {
         }
         let committed_height = self.latest_committed_qc().map_or(0, |qc| qc.height);
 
-        if let Some(existing) = self.subsystems.propose.proposal_cache.get_hint(height, view) {
+        if let Some(existing) = self
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_hint(height, view)
+        {
             let conflict = existing.block_hash != hint.block_hash
                 || existing.height != hint.height
                 || existing.view != hint.view
@@ -145,7 +151,6 @@ impl Actor {
                     return Ok(());
                 }
             }
-
         }
 
         if let Some(stored_height) = self
@@ -212,7 +217,12 @@ impl Actor {
         super::status::set_highest_qc_hash(highest_qc.subject_block_hash);
         let hint_block = hint.block_hash;
         self.subsystems.propose.proposal_cache.insert_hint(hint);
-        if self.subsystems.propose.proposals_seen.insert((height, view)) {
+        if self
+            .subsystems
+            .propose
+            .proposals_seen
+            .insert((height, view))
+        {
             iroha_logger::info!(
                 height,
                 view,
@@ -296,7 +306,8 @@ impl Actor {
                 payload = %proposal.payload_hash,
                 "dropping proposal at or below committed height"
             );
-            self.subsystems.propose
+            self.subsystems
+                .propose
                 .proposal_cache
                 .prune_height_leq(committed_height);
             return Ok(());
@@ -305,12 +316,20 @@ impl Actor {
             return Ok(());
         }
         self.note_proposal_seen(height, view, proposal.payload_hash);
-        self.subsystems.propose.proposal_cache.insert_proposal(proposal);
+        self.subsystems
+            .propose
+            .proposal_cache
+            .insert_proposal(proposal);
         Ok(())
     }
 
     pub(super) fn note_proposal_seen(&mut self, height: u64, view: u64, payload_hash: Hash) {
-        if self.subsystems.propose.proposals_seen.insert((height, view)) {
+        if self
+            .subsystems
+            .propose
+            .proposals_seen
+            .insert((height, view))
+        {
             iroha_logger::info!(
                 height,
                 view,
@@ -325,7 +344,12 @@ impl Actor {
         height: u64,
         view: u64,
     ) -> MissingProposalContext {
-        let hint_seen = self.subsystems.propose.proposal_cache.get_hint(height, view).is_some();
+        let hint_seen = self
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_hint(height, view)
+            .is_some();
         let proposal_cached = self
             .subsystems
             .propose
@@ -368,7 +392,12 @@ impl Actor {
         if height <= 1 {
             return;
         }
-        if !self.subsystems.propose.proposals_seen.contains(&(height, view)) {
+        if !self
+            .subsystems
+            .propose
+            .proposals_seen
+            .contains(&(height, view))
+        {
             let context = self.missing_proposal_context(height, view);
             iroha_logger::error!(
                 height,
@@ -417,9 +446,16 @@ impl Actor {
                 "dropping BlockCreated at or below committed height"
             );
             self.pending.pending_blocks.remove(&block_hash);
-            self.subsystems.propose.proposal_cache.pop_hint(height, view);
-            self.subsystems.propose.proposal_cache.pop_proposal(height, view);
-            self.subsystems.propose
+            self.subsystems
+                .propose
+                .proposal_cache
+                .pop_hint(height, view);
+            self.subsystems
+                .propose
+                .proposal_cache
+                .pop_proposal(height, view);
+            self.subsystems
+                .propose
                 .proposal_cache
                 .prune_height_leq(committed_height);
             self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
@@ -474,11 +510,7 @@ impl Actor {
                 );
             }
             if height > expected_height.saturating_add(1) {
-                self.request_missing_parents_for_gap(
-                    &commit_topology,
-                    None,
-                    "block_created_gap",
-                );
+                self.request_missing_parents_for_gap(&commit_topology, None, "block_created_gap");
             }
         }
         if self.pending.pending_blocks.contains_key(&block_hash) {
@@ -486,7 +518,13 @@ impl Actor {
                 let session_key = Self::session_key(&block_hash, height, view);
                 let payload_bytes = super::proposals::block_payload_bytes(&block);
                 let payload_hash = Hash::new(&payload_bytes);
-                if !self.subsystems.da_rbc.rbc.sessions.contains_key(&session_key) {
+                if !self
+                    .subsystems
+                    .da_rbc
+                    .rbc
+                    .sessions
+                    .contains_key(&session_key)
+                {
                     self.seed_rbc_session_from_block(session_key, &block, payload_hash)?;
                 }
                 self.hydrate_rbc_session_from_block(session_key, &payload_bytes, payload_hash)?;
@@ -509,7 +547,12 @@ impl Actor {
         if let Some(bundle) = block.da_commitments() {
             self.validate_da_bundle(bundle)?;
         }
-        let mut cached_hint = self.subsystems.propose.proposal_cache.get_hint(height, view).copied();
+        let mut cached_hint = self
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_hint(height, view)
+            .copied();
         if let Some(hint) = cached_hint {
             match Self::validate_block_against_hint(&block_hash, &header, &hint) {
                 Ok(()) => {}
@@ -536,7 +579,10 @@ impl Actor {
                         view,
                         "BlockCreated hint parent mismatch; dropping cached hint and continuing"
                     );
-                    self.subsystems.propose.proposal_cache.pop_hint(height, view);
+                    self.subsystems
+                        .propose
+                        .proposal_cache
+                        .pop_hint(height, view);
                     cached_hint = None;
                 }
                 Err(reason) => {
@@ -669,7 +715,13 @@ impl Actor {
         }
         let session_key = Self::session_key(&block_hash, height, view);
         if da_enabled {
-            if !self.subsystems.da_rbc.rbc.sessions.contains_key(&session_key) {
+            if !self
+                .subsystems
+                .da_rbc
+                .rbc
+                .sessions
+                .contains_key(&session_key)
+            {
                 debug!(
                     height,
                     view,
@@ -751,8 +803,13 @@ impl Actor {
             invalid_flag,
         )) = status_update
         {
-            let (lane_backlog, dataspace_backlog) =
-                self.subsystems.da_rbc.rbc.sessions.get(&session_key).map_or_else(
+            let (lane_backlog, dataspace_backlog) = self
+                .subsystems
+                .da_rbc
+                .rbc
+                .sessions
+                .get(&session_key)
+                .map_or_else(
                     || (Vec::new(), Vec::new()),
                     |session| {
                         (
@@ -775,7 +832,11 @@ impl Actor {
                 lane_backlog,
                 dataspace_backlog,
             };
-            self.subsystems.da_rbc.rbc.status_handle.update(summary, SystemTime::now());
+            self.subsystems
+                .da_rbc
+                .rbc
+                .status_handle
+                .update(summary, SystemTime::now());
             if let Some(expected_hash) = mismatch_expected {
                 debug!(
                     height,
@@ -797,8 +858,14 @@ impl Actor {
             }
         }
 
-        self.subsystems.propose.proposal_cache.pop_hint(height, view);
-        self.subsystems.propose.proposal_cache.pop_proposal(height, view);
+        self.subsystems
+            .propose
+            .proposal_cache
+            .pop_hint(height, view);
+        self.subsystems
+            .propose
+            .proposal_cache
+            .pop_proposal(height, view);
         self.clear_missing_block_request(&block_hash, MissingBlockClearReason::PayloadAvailable);
 
         // If votes or cached QCs already exist for this block, re-evaluate now that the payload is
@@ -843,8 +910,15 @@ impl Actor {
         view: u64,
         reason: String,
     ) -> Result<()> {
-        let proposal_opt = self.subsystems.propose.proposal_cache.pop_proposal(height, view);
-        self.subsystems.propose.proposal_cache.pop_hint(height, view);
+        let proposal_opt = self
+            .subsystems
+            .propose
+            .proposal_cache
+            .pop_proposal(height, view);
+        self.subsystems
+            .propose
+            .proposal_cache
+            .pop_hint(height, view);
         super::status::inc_block_created_proposal_mismatch();
         #[cfg(feature = "telemetry")]
         self.telemetry.inc_block_created_proposal_mismatch();
