@@ -865,6 +865,150 @@ fn test_sumeragi_config() -> SumeragiConfig {
     }
 }
 
+#[test]
+fn handshake_fingerprint_uses_wsv_params_for_npos() {
+    use iroha_config::{base::WithOrigin, parameters::actual::Common as CommonConfig};
+    use iroha_data_model::{
+        block::consensus::{ConsensusGenesisParams, NPOS_TAG, NposGenesisParams},
+        parameter::system::{
+            BlockParameter, Parameter, SumeragiConsensusMode, SumeragiNposParameters,
+            SumeragiParameter,
+        },
+    };
+    use iroha_p2p::ConsensusConfigCaps;
+
+    let (peer, _pop, key_pair) = bls_peer("127.0.0.1:0");
+    let trusted = trusted_with_pops(peer.clone(), Vec::new(), BTreeMap::new());
+    let common_config = CommonConfig {
+        chain: "test-chain".parse().expect("chain id parses"),
+        key_pair: key_pair.clone(),
+        peer,
+        trusted_peers: WithOrigin::inline(trusted),
+        default_account_domain_label: WithOrigin::inline(
+            iroha_config::parameters::defaults::common::default_account_domain_label(),
+        ),
+        chain_discriminant: WithOrigin::inline(
+            iroha_config::parameters::defaults::common::chain_discriminant(),
+        ),
+    };
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.epoch_length_blocks = 3;
+    consensus_cfg.npos.block_time = Duration::from_millis(1000);
+    consensus_cfg.npos.k_aggregators = 1;
+    consensus_cfg.npos.redundant_send_r = 1;
+
+    let npos_params = SumeragiNposParameters {
+        epoch_seed: [0x11; 32],
+        block_time_ms: 2000,
+        timeout_propose_ms: 250,
+        timeout_prevote_ms: 300,
+        timeout_precommit_ms: 350,
+        timeout_commit_ms: 400,
+        timeout_da_ms: 450,
+        timeout_aggregator_ms: 120,
+        k_aggregators: 5,
+        redundant_send_r: 4,
+        vrf_commit_window_blocks: 100,
+        vrf_reveal_window_blocks: 40,
+        min_self_bond: 10,
+        max_nominator_concentration_pct: 25,
+        seat_band_pct: 5,
+        max_entity_correlation_pct: 30,
+        evidence_horizon_blocks: 500,
+        activation_lag_blocks: 7,
+        epoch_length_blocks: 12,
+    };
+
+    let mut world = World::default();
+    {
+        let mut block = world.block();
+        let params = block.parameters.get_mut();
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::DaEnabled(false)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1600)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(900)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(400)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CollectorsK(3)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::RedundantSendR(2)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
+            SumeragiConsensusMode::Npos,
+        )));
+        params.set_parameter(Parameter::Sumeragi(
+            SumeragiParameter::ModeActivationHeight(0),
+        ));
+        params.set_parameter(Parameter::Block(BlockParameter::MaxTransactions(nonzero!(
+            11_u64
+        ))));
+        params.set_parameter(Parameter::Custom(npos_params.into_custom_parameter()));
+        block.commit();
+    }
+
+    let kura = Kura::blank_kura_for_testing();
+    let state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
+    let view = state.view();
+    let config_caps = ConsensusConfigCaps {
+        collectors_k: 0,
+        redundant_send_r: 0,
+        da_enabled: false,
+        require_execution_qc: false,
+        require_wsv_exec_qc: false,
+        rbc_chunk_max_bytes: 0,
+        rbc_session_ttl_ms: 0,
+        rbc_store_max_sessions: 0,
+        rbc_store_soft_sessions: 0,
+        rbc_store_max_bytes: 0,
+        rbc_store_soft_bytes: 0,
+    };
+
+    let (mode_tag, bls_domain, caps) =
+        crate::sumeragi::consensus::compute_consensus_handshake_caps_from_view(
+            &view,
+            &common_config,
+            &consensus_cfg,
+            &config_caps,
+        );
+    assert_eq!(mode_tag, NPOS_TAG.to_string());
+    assert_eq!(bls_domain, "bls-iroha2:npos-sumeragi:v1");
+
+    let expected = crate::sumeragi::consensus::compute_consensus_fingerprint_from_params(
+        &common_config.chain,
+        &ConsensusGenesisParams {
+            block_time_ms: 1600,
+            commit_time_ms: 900,
+            max_clock_drift_ms: 400,
+            collectors_k: 3,
+            redundant_send_r: 2,
+            block_max_transactions: 11,
+            da_enabled: false,
+            epoch_length_blocks: 12,
+            bls_domain: bls_domain.clone(),
+            npos: Some(NposGenesisParams {
+                block_time_ms: 2000,
+                timeout_propose_ms: 250,
+                timeout_prevote_ms: 300,
+                timeout_precommit_ms: 350,
+                timeout_commit_ms: 400,
+                timeout_da_ms: 450,
+                timeout_aggregator_ms: 120,
+                k_aggregators: 5,
+                redundant_send_r: 4,
+                vrf_commit_window_blocks: 100,
+                vrf_reveal_window_blocks: 40,
+                min_self_bond: 10,
+                max_nominator_concentration_pct: 25,
+                seat_band_pct: 5,
+                max_entity_correlation_pct: 30,
+                evidence_horizon_blocks: 500,
+                activation_lag_blocks: 7,
+            }),
+        },
+        &mode_tag,
+    );
+    assert_eq!(caps.consensus_fingerprint, expected);
+}
+
 struct TestActorHarness {
     actor: Actor,
     background_rx: std::sync::mpsc::Receiver<BackgroundPost>,
@@ -1684,14 +1828,6 @@ fn lane_config_with_manifest_policy(policy: DaManifestPolicy) -> LaneConfigSnaps
     )
     .expect("lane catalog");
     LaneConfigSnapshot::from_catalog(&catalog)
-}
-
-#[test]
-fn da_override_forces_enabled_when_disabled() {
-    let chain_id = ChainId::from("11111111-1111-1111-1111-111111111111");
-
-    assert!(super::apply_devnet_da_override(false, &chain_id));
-    assert!(super::apply_devnet_da_override(true, &chain_id));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -7424,6 +7560,7 @@ fn manifest_gate_clears_after_manifest_arrives() {
     let gate = Actor::compute_da_gate_status(
         &mut pending,
         true,
+        false,
         &mut cache,
         dir.path(),
         &lane_config,
@@ -7457,6 +7594,7 @@ fn manifest_gate_clears_after_manifest_arrives() {
     let gate = Actor::compute_da_gate_status(
         &mut pending,
         true,
+        false,
         &mut cache,
         dir.path(),
         &lane_config,
@@ -7492,6 +7630,7 @@ fn manifest_gate_recovers_after_spool_error() {
     let gate = Actor::compute_da_gate_status(
         &mut pending,
         true,
+        false,
         &mut cache,
         &broken_spool_path,
         &lane_config,
@@ -7526,6 +7665,7 @@ fn manifest_gate_recovers_after_spool_error() {
     let gate = Actor::compute_da_gate_status(
         &mut pending,
         true,
+        false,
         &mut cache,
         spool_dir.path(),
         &lane_config,
@@ -7534,6 +7674,32 @@ fn manifest_gate_recovers_after_spool_error() {
     assert!(
         gate.reason.is_none(),
         "gate should clear after spool recovers and manifest is present"
+    );
+}
+
+#[test]
+fn manifest_gate_allows_missing_local_data_without_commitments() {
+    let parent = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32]));
+    let block = sample_block(9, 1, Some(parent));
+    let payload_hash = Hash::new(block.encode());
+    let mut pending = PendingBlock::new(block, payload_hash, 9, 1);
+
+    let lane_config = LaneConfigSnapshot::default();
+    let mut cache = super::ManifestSpoolCache::default();
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let gate = Actor::compute_da_gate_status(
+        &mut pending,
+        true,
+        true,
+        &mut cache,
+        dir.path(),
+        &lane_config,
+        None,
+    );
+    assert!(
+        matches!(gate.reason, Some(GateReason::MissingLocalData)),
+        "missing local data should surface when no manifest guard applies"
     );
 }
 
@@ -12615,7 +12781,7 @@ fn runtime_da_enabled_reflects_world_parameters() {
 }
 
 #[test]
-fn runtime_da_enabled_forces_on_when_disabled() {
+fn runtime_da_enabled_honors_disabled_parameter() {
     let world = World::default();
     {
         let mut block = world.block();
@@ -12633,7 +12799,7 @@ fn runtime_da_enabled_forces_on_when_disabled() {
         ChainId::from("11111111-1111-1111-1111-111111111111"),
     );
 
-    assert!(super::sumeragi_da_enabled(&state));
+    assert!(!super::sumeragi_da_enabled(&state));
 }
 
 #[test]
@@ -14960,6 +15126,99 @@ async fn roster_for_vote_uses_commit_certificate_history_when_lagging() {
     assert_eq!(
         qc_roster, expected_roster,
         "lagging votes should use commit certificate history rosters"
+    );
+
+    status::reset_commit_certs_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn roster_for_vote_rolls_forward_with_pending_parent_chain() {
+    use crate::sumeragi::status;
+
+    status::reset_commit_certs_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let hash_height1 =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
+    let hash_height2 =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
+    {
+        let mut hashes = actor.state.block_hashes.block();
+        hashes.push(hash_height1);
+        hashes.push(hash_height2);
+        hashes.commit_for_tests();
+    }
+
+    let active_roster = actor.effective_commit_topology();
+    assert!(
+        active_roster.len() >= 2,
+        "test needs at least two validators to rotate roster"
+    );
+    let mut history_roster = active_roster.clone();
+    history_roster.rotate_left(1);
+
+    let mut signers = BTreeSet::new();
+    for idx in 0..history_roster.len() {
+        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, history_roster.len());
+    let commit_certificate = CommitCertificate {
+        phase: Phase::Commit,
+        subject_block_hash: hash_height2,
+        height: 2,
+        view: 0,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_cert: None,
+        validator_set_hash: HashOf::new(&history_roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: history_roster.clone(),
+        aggregate: CommitAggregate {
+            signers_bitmap,
+            bls_aggregate_signature: vec![0xAA; 96],
+        },
+    };
+    status::record_commit_certificate(commit_certificate);
+
+    let block_height3 = sample_block(3, 0, Some(hash_height2));
+    let hash_height3 = block_height3.hash();
+    let block_height4 = sample_block(4, 0, Some(hash_height3));
+    let hash_height4 = block_height4.hash();
+    let block_height5 = sample_block(5, 0, Some(hash_height4));
+    let hash_height5 = block_height5.hash();
+
+    let payload_hash = Hash::prehashed([0xA5; 32]);
+    actor.pending.pending_blocks.insert(
+        hash_height4,
+        PendingBlock::new(block_height4, payload_hash, 4, 0),
+    );
+    actor.pending.pending_blocks.insert(
+        hash_height5,
+        PendingBlock::new(block_height5, payload_hash, 5, 0),
+    );
+
+    let expected_roster = {
+        let mut topo = super::network_topology::Topology::new(history_roster.clone());
+        topo.block_committed(history_roster.clone(), hash_height2);
+        let roster_height3 = topo.as_ref().to_vec();
+        let mut topo = super::network_topology::Topology::new(roster_height3.clone());
+        topo.block_committed(roster_height3.clone(), hash_height3);
+        let roster_height4 = topo.as_ref().to_vec();
+        let mut topo = super::network_topology::Topology::new(roster_height4.clone());
+        topo.block_committed(roster_height4, hash_height4);
+        topo.as_ref().to_vec()
+    };
+    assert_ne!(
+        expected_roster, active_roster,
+        "pending-chain roll forward should differ from active roster"
+    );
+
+    let derived = actor.roster_for_vote(hash_height5, 5, 0);
+    assert_eq!(
+        derived, expected_roster,
+        "roster should roll forward using pending parent hashes"
     );
 
     status::reset_commit_certs_for_tests();
@@ -19954,7 +20213,7 @@ fn pending_block_recompute_gate_ignores_rbc_when_da_disabled() {
     let payload_hash = Hash::new(block.encode());
     let mut pending = PendingBlock::new(block, payload_hash, 4, 2);
 
-    pending.recompute_gate(false);
+    pending.recompute_gate(false, false);
     assert_eq!(
         pending.last_gate, None,
         "RBC flag must not gate when DA is disabled"
@@ -19970,7 +20229,7 @@ fn pending_block_qc_first_da_disabled_does_not_gate() {
 
     // DA is disabled: even if the payload has not been delivered yet and RBC is enabled,
     // the gate should remain open so the pipeline can make progress.
-    pending.recompute_gate(false);
+    pending.recompute_gate(false, false);
     assert_eq!(
         pending.last_gate, None,
         "DA-disabled deployments should not gate on payload arrival"
@@ -19984,11 +20243,61 @@ fn da_gate_status_allows_progress_when_da_disabled() {
     let payload_hash = Hash::new(block.encode());
     let mut pending = PendingBlock::new(block, payload_hash, 13, 3);
 
-    let gate = super::recompute_da_gate_status(&mut pending, false);
+    let gate = super::recompute_da_gate_status(&mut pending, false, false);
     assert_eq!(
         gate.reason, None,
         "DA-disabled deployments must not gate on RBC/availability"
     );
+}
+
+#[test]
+fn pending_block_recompute_gate_reports_missing_local_data() {
+    let parent = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x80; 32]));
+    let block = sample_block(21, 1, Some(parent));
+    let payload_hash = Hash::new(block.encode());
+    let mut pending = PendingBlock::new(block, payload_hash, 21, 1);
+
+    pending.recompute_gate(true, true);
+    assert!(
+        matches!(pending.last_gate, Some(GateReason::MissingLocalData)),
+        "DA-enabled deployments should record missing local data"
+    );
+}
+
+#[test]
+fn da_gate_status_reports_missing_local_data_when_enabled() {
+    let parent = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x81; 32]));
+    let block = sample_block(22, 0, Some(parent));
+    let payload_hash = Hash::new(block.encode());
+    let mut pending = PendingBlock::new(block, payload_hash, 22, 0);
+
+    let gate = super::recompute_da_gate_status(&mut pending, true, true);
+    assert!(
+        matches!(gate.reason, Some(GateReason::MissingLocalData)),
+        "missing local data should surface in gate status when DA is enabled"
+    );
+}
+
+#[test]
+fn rbc_deliver_duplicate_does_not_override_sender() {
+    let mut session = RbcSession::test_new(1, None, None, 0);
+    assert!(session.record_deliver(1, vec![1, 2, 3]));
+    let sender_before = session.deliver_sender;
+    let signature_before = session.deliver_signature.clone();
+
+    assert!(!session.record_deliver(2, vec![9, 9, 9]));
+    assert_eq!(session.deliver_sender, sender_before);
+    assert_eq!(session.deliver_signature, signature_before);
+    assert!(!session.is_invalid());
+}
+
+#[test]
+fn rbc_deliver_conflicting_signature_marks_invalid() {
+    let mut session = RbcSession::test_new(1, None, None, 0);
+    assert!(session.record_deliver(1, vec![1, 2, 3]));
+
+    assert!(!session.record_deliver(1, vec![4, 5, 6]));
+    assert!(session.is_invalid());
 }
 
 #[test]

@@ -1,6 +1,10 @@
 # Status
 
 ## Latest Updates
+- Sumeragi: drop the DA/RBC devnet override so `sumeragi.da_enabled` is honored at runtime; update docs and runtime DA tests accordingly.
+- Tests: not run (not requested).
+- Genesis: align shipped genesis manifests to wire protocol v1 and refresh consensus_fingerprint values.
+- Tests: not run (not requested).
 - Torii: negotiate Kaigi relay endpoint responses so JSON `Accept` headers receive JSON bodies.
 - Tests: not run (not requested).
 - Torii: update evidence decode tests to assert `DoublePrepare` now that `EvidenceKind::DoublePrevote` is removed.
