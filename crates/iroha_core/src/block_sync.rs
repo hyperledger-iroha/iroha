@@ -11,7 +11,7 @@ use iroha_config::parameters::actual::{BlockSync as Config, ConsensusMode};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::{BlockHeader, SignedBlock},
-    consensus::{CommitCertificate, ValidatorSetCheckpoint},
+    consensus::{CommitCertificate, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
     prelude::*,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
@@ -28,7 +28,7 @@ use crate::{
     sumeragi::{
         SumeragiHandle,
         consensus::{
-            NPOS_TAG, PERMISSIONED_TAG, Phase, Qc, QcAggregate, ValidatorIndex, qc_signer_count,
+            CommitAggregate, NPOS_TAG, PERMISSIONED_TAG, Phase, Qc, ValidatorIndex, qc_signer_count,
         },
         network_topology::Topology,
         stake_snapshot::CommitStakeSnapshot,
@@ -353,14 +353,16 @@ impl BlockSynchronizer {
 
     #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
     fn qc_from_signers(
+        mode_tag: &str,
+        validator_set: Vec<PeerId>,
         block_hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
         epoch: u64,
-        roster_len: usize,
         signers: BTreeSet<ValidatorIndex>,
         aggregate_signature: Vec<u8>,
     ) -> Option<Qc> {
+        let roster_len = validator_set.len();
         if roster_len == 0 {
             return None;
         }
@@ -373,12 +375,17 @@ impl BlockSynchronizer {
         }
         let signers_bitmap = Self::build_signers_bitmap(&signers, roster_len);
         Some(Qc {
-            phase: Phase::Precommit,
+            phase: Phase::Commit,
             subject_block_hash: block_hash,
             height,
             view,
             epoch,
-            aggregate: QcAggregate {
+            mode_tag: mode_tag.to_string(),
+            highest_cert: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: CommitAggregate {
                 signers_bitmap,
                 bls_aggregate_signature: aggregate_signature,
             },
@@ -403,11 +410,12 @@ impl BlockSynchronizer {
                 return None;
             }
             if let Some(qc) = Self::qc_from_signers(
+                &record.mode_tag,
+                record.validator_set.clone(),
                 block_hash,
                 record.height,
                 record.view,
                 record.epoch,
-                record.roster_len,
                 record.signers.clone(),
                 record.bls_aggregate_signature.clone(),
             ) {
@@ -559,7 +567,7 @@ mod signature_topology_tests {
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))
             .collect();
-        let topology = Topology::new(peers);
+        let topology = Topology::new(peers.clone());
         let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 2);
         let block = BlockBuilder::new(header).build_with_signature(0, keypairs[0].private_key());
 
@@ -763,9 +771,9 @@ mod prf_seed_tests {
 mod roster_metadata_tests {
     use std::sync::Arc;
 
-    use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
+    use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_data_model::{
-        block::{BlockHeader, BlockSignature},
+        block::BlockHeader,
         consensus::{CommitCertificate, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
         peer::PeerId,
     };
@@ -779,24 +787,31 @@ mod roster_metadata_tests {
         let block_hash = header.hash();
         let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer = PeerId::new(kp.public_key().clone());
-        let block_sig =
-            BlockSignature::new(0, SignatureOf::from_hash(kp.private_key(), block_hash));
         let roster = vec![peer];
+        let signers_bitmap = vec![0b0000_0001];
+        let bls_aggregate_signature = vec![0xAA; 96];
         let commit_certificate = CommitCertificate {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
             height: 1,
-            block_hash,
             view: 0,
             epoch: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            signatures: vec![block_sig.clone()],
+            aggregate: CommitAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: bls_aggregate_signature.clone(),
+            },
         };
         let checkpoint = ValidatorSetCheckpoint::new(
             1,
             block_hash,
             roster,
-            vec![block_sig],
+            signers_bitmap,
+            bls_aggregate_signature,
             VALIDATOR_SET_HASH_VERSION_V1,
             None,
         );
@@ -814,7 +829,7 @@ mod roster_metadata_tests {
             LiveQueryStore::start_test(),
         );
         let (commit_certificate, checkpoint) = sample_roster_artifacts();
-        let block_hash = commit_certificate.block_hash;
+        let block_hash = commit_certificate.subject_block_hash;
         let roster = commit_certificate.validator_set.clone();
         state.commit_roster_journal.write().upsert(
             commit_certificate.clone(),
@@ -901,30 +916,17 @@ mod qc_build_tests {
         view: u64,
         epoch: u64,
     ) -> Vec<u8> {
-        if phase == Phase::Available {
-            let vote = crate::sumeragi::consensus::AvailableVote {
-                block_hash,
-                height,
-                view,
-                epoch,
-                signer: 0,
-                bls_sig: Vec::new(),
-                signature: Vec::new(),
-            };
-            crate::sumeragi::consensus::available_vote_preimage(chain_id, mode_tag, &vote)
-        } else {
-            let vote = crate::sumeragi::consensus::Vote {
-                phase,
-                block_hash,
-                height,
-                view,
-                epoch,
-                signer: 0,
-                bls_sig: Vec::new(),
-                signature: Vec::new(),
-            };
-            crate::sumeragi::consensus::vote_preimage(chain_id, mode_tag, &vote)
-        }
+        let vote = crate::sumeragi::consensus::Vote {
+            phase,
+            block_hash,
+            height,
+            view,
+            epoch,
+            highest_cert: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        crate::sumeragi::consensus::vote_preimage(chain_id, mode_tag, &vote)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -971,7 +973,7 @@ mod qc_build_tests {
             .iter()
             .map(|kp| PeerId::new(kp.public_key().clone()))
             .collect();
-        let topology = Topology::new(peers);
+        let topology = Topology::new(peers.clone());
         let block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([1; 32]));
         let height = 1;
@@ -984,7 +986,7 @@ mod qc_build_tests {
         let aggregate = aggregate_signature_for_signers(
             &chain_id,
             mode_tag,
-            Phase::Precommit,
+            Phase::Commit,
             block_hash,
             height,
             view,
@@ -994,22 +996,24 @@ mod qc_build_tests {
             &keypairs,
         );
         let qc = BlockSynchronizer::qc_from_signers(
+            mode_tag,
+            peers.clone(),
             block_hash,
             height,
             view,
             epoch,
-            topology.as_ref().len(),
             signers.clone(),
             aggregate,
         );
         assert!(qc.is_some(), "QC should be built with quorum signers");
 
         let qc_empty = BlockSynchronizer::qc_from_signers(
+            mode_tag,
+            peers.clone(),
             block_hash,
             height,
             view,
             epoch,
-            topology.as_ref().len(),
             signers.clone(),
             Vec::new(),
         );
@@ -1021,11 +1025,12 @@ mod qc_build_tests {
         let mut partial_signers = BTreeSet::new();
         partial_signers.insert(ValidatorIndex::try_from(0).expect("index 0"));
         let partial = BlockSynchronizer::qc_from_signers(
+            mode_tag,
+            peers,
             block_hash,
             height,
             view,
             epoch,
-            topology.as_ref().len(),
             partial_signers,
             vec![0xAA; 48],
         );
@@ -1057,7 +1062,7 @@ mod qc_build_tests {
         let aggregate = aggregate_signature_for_signers(
             &chain_id,
             mode_tag,
-            Phase::Precommit,
+            Phase::Commit,
             block_hash,
             height,
             view,
@@ -1073,7 +1078,9 @@ mod qc_build_tests {
             epoch: 0,
             signers: signers.clone(),
             roster_len: topology.as_ref().len(),
+            mode_tag: mode_tag.to_string(),
             bls_aggregate_signature: aggregate.clone(),
+            validator_set: topology.as_ref().to_vec(),
         });
 
         let qc = BlockSynchronizer::block_sync_qc_for(&block).expect("cached QC should be built");
@@ -1245,7 +1252,7 @@ pub mod message {
 
         let commit_certificate = status::commit_certificate_history()
             .into_iter()
-            .find(|cert| cert.height == block_height && cert.block_hash == block_hash);
+            .find(|cert| cert.height == block_height && cert.subject_block_hash == block_hash);
         let validator_checkpoint = status::validator_checkpoint_history()
             .into_iter()
             .find(|chk| chk.height == block_height && chk.block_hash == block_hash);
@@ -1485,11 +1492,8 @@ pub mod message {
                     let Some(topology) = topology else {
                         return Some((block, qc));
                     };
-                    let mode_tag = mode_tag_for_block_sync(
-                        state_view,
-                        block_height,
-                        fallback_consensus_mode,
-                    );
+                    let mode_tag =
+                        mode_tag_for_block_sync(state_view, block_height, fallback_consensus_mode);
                     let context =
                         BlockSyncValidationContext::new(&block, &topology, state_view, mode_tag);
                     let sanitized_qc = sanitize_block_sync_qc(&block, qc, &context);
@@ -1686,8 +1690,10 @@ pub mod message {
                                 .clone_from(&metadata.validator_checkpoint);
                             msg.stake_snapshot.clone_from(&metadata.stake_snapshot);
                         }
-                        msg.qc =
-                            incoming_qc.or_else(|| BlockSynchronizer::block_sync_qc_for(&block));
+                        if msg.commit_certificate.is_none() {
+                            msg.commit_certificate = incoming_qc
+                                .or_else(|| BlockSynchronizer::block_sync_qc_for(&block));
+                        }
                         block_sync.sumeragi.incoming_block_message(
                             crate::sumeragi::message::BlockMessage::BlockSyncUpdate(msg),
                         );
@@ -1746,8 +1752,7 @@ pub mod message {
             ];
             let seen = BTreeSet::from([block1.hash(), block2.hash()]);
 
-            let selected =
-                Message::select_blocks_for_share(blocks.iter().cloned(), &seen, 10);
+            let selected = Message::select_blocks_for_share(blocks.iter().cloned(), &seen, 10);
             let heights: Vec<_> = selected
                 .iter()
                 .map(|block| block.header().height().get())
@@ -1770,8 +1775,7 @@ pub mod message {
             ];
             let seen = BTreeSet::from([block3.hash()]);
 
-            let selected =
-                Message::select_blocks_for_share(blocks.iter().cloned(), &seen, 10);
+            let selected = Message::select_blocks_for_share(blocks.iter().cloned(), &seen, 10);
             let heights: Vec<_> = selected
                 .iter()
                 .map(|block| block.header().height().get())
@@ -2093,30 +2097,17 @@ pub mod message {
             view: u64,
             epoch: u64,
         ) -> Vec<u8> {
-            if phase == Phase::Available {
-                let vote = crate::sumeragi::consensus::AvailableVote {
-                    block_hash,
-                    height,
-                    view,
-                    epoch,
-                    signer: 0,
-                    bls_sig: Vec::new(),
-                    signature: Vec::new(),
-                };
-                crate::sumeragi::consensus::available_vote_preimage(chain_id, mode_tag, &vote)
-            } else {
-                let vote = crate::sumeragi::consensus::Vote {
-                    phase,
-                    block_hash,
-                    height,
-                    view,
-                    epoch,
-                    signer: 0,
-                    bls_sig: Vec::new(),
-                    signature: Vec::new(),
-                };
-                crate::sumeragi::consensus::vote_preimage(chain_id, mode_tag, &vote)
-            }
+            let vote = crate::sumeragi::consensus::Vote {
+                phase,
+                block_hash,
+                height,
+                view,
+                epoch,
+                highest_cert: None,
+                signer: 0,
+                bls_sig: Vec::new(),
+            };
+            crate::sumeragi::consensus::vote_preimage(chain_id, mode_tag, &vote)
         }
 
         #[allow(clippy::too_many_arguments)]
@@ -2166,7 +2157,7 @@ pub mod message {
             let aggregate_signature = aggregate_signature_for_signers(
                 chain_id,
                 mode_tag,
-                Phase::Precommit,
+                Phase::Commit,
                 block_hash,
                 height,
                 view,
@@ -2176,11 +2167,12 @@ pub mod message {
                 keypairs,
             );
             BlockSynchronizer::qc_from_signers(
+                mode_tag,
+                topology.as_ref().to_vec(),
                 block_hash,
                 height,
                 view,
                 epoch,
-                topology.as_ref().len(),
                 signers,
                 aggregate_signature,
             )
@@ -2473,8 +2465,7 @@ pub mod message {
                     break;
                 }
             }
-            let (seed, view, rotated) =
-                chosen.expect("seed should yield distinct NPoS rotation");
+            let (seed, view, rotated) = chosen.expect("seed should yield distinct NPoS rotation");
 
             let state = State::new_for_testing(
                 World::new(),
@@ -2492,9 +2483,7 @@ pub mod message {
             let mut block: SignedBlock =
                 ValidBlock::new_dummy_and_modify_header(kp_a.private_key(), |header| {
                     header.set_height(height_nz);
-                    header.set_view_change_index(
-                        u32::try_from(view).expect("view fits u32"),
-                    );
+                    header.set_view_change_index(u32::try_from(view).expect("view fits u32"));
                 })
                 .into();
             let block_hash = block.hash();
@@ -2547,6 +2536,7 @@ pub mod message {
                 block.header().height().get(),
                 block.hash(),
                 roster,
+                Vec::new(),
                 Vec::new(),
                 VALIDATOR_SET_HASH_VERSION_V1,
                 None,
@@ -2711,7 +2701,7 @@ pub mod message {
             let aggregate_signature = aggregate_signature_for_signers(
                 &chain_id,
                 &mode_tag,
-                Phase::Precommit,
+                Phase::Commit,
                 block_hash,
                 block.header().height().get(),
                 u64::from(block.header().view_change_index()),
@@ -2728,7 +2718,9 @@ pub mod message {
                     epoch: 0,
                     signers: commit_signers.clone(),
                     roster_len: topology.as_ref().len(),
+                    mode_tag: mode_tag.to_string(),
                     bls_aggregate_signature: aggregate_signature.clone(),
+                    validator_set: topology.as_ref().to_vec(),
                 },
             );
             let derived_qc =
@@ -2783,7 +2775,7 @@ pub mod message {
             let aggregate_signature = aggregate_signature_for_signers(
                 &chain_id,
                 &mode_tag,
-                Phase::Precommit,
+                Phase::Commit,
                 block.hash(),
                 block.header().height().get(),
                 u64::from(block.header().view_change_index()),
@@ -2800,7 +2792,9 @@ pub mod message {
                     epoch: 0,
                     signers: recorded_signers,
                     roster_len: topology.as_ref().len(),
+                    mode_tag: mode_tag.to_string(),
                     bls_aggregate_signature: aggregate_signature.clone(),
+                    validator_set: topology.as_ref().to_vec(),
                 },
             );
             assert!(
@@ -2865,7 +2859,7 @@ pub mod message {
             let aggregate_signature = aggregate_signature_for_signers(
                 &chain_id,
                 &mode_tag,
-                Phase::Precommit,
+                Phase::Commit,
                 block.hash(),
                 block.header().height().get(),
                 u64::from(block.header().view_change_index()),
@@ -2887,7 +2881,9 @@ pub mod message {
                     epoch: 0,
                     signers: recorded_signers,
                     roster_len: topology.as_ref().len(),
+                    mode_tag: mode_tag.to_string(),
                     bls_aggregate_signature: aggregate_signature.clone(),
+                    validator_set: topology.as_ref().to_vec(),
                 },
             );
             assert!(
@@ -3070,7 +3066,7 @@ pub mod message {
             let aggregate_signature = aggregate_signature_for_signers(
                 &chain_id,
                 &mode_tag,
-                Phase::Precommit,
+                Phase::Commit,
                 block.hash(),
                 block.header().height().get(),
                 u64::from(block.header().view_change_index()),
@@ -3092,7 +3088,9 @@ pub mod message {
                     epoch: 0,
                     signers: recorded_signers,
                     roster_len: topology.as_ref().len(),
+                    mode_tag: mode_tag.to_string(),
                     bls_aggregate_signature: aggregate_signature,
+                    validator_set: topology.as_ref().to_vec(),
                 },
             );
             assert!(

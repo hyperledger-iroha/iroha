@@ -307,9 +307,9 @@ Recognised offences map one-to-one to `EvidenceKind`; the discriminants are stab
 use iroha_data_model::block::consensus::EvidenceKind;
 
 let offences = [
-    EvidenceKind::DoublePrevote,
-    EvidenceKind::DoublePrecommit,
-    EvidenceKind::InvalidQC,
+    EvidenceKind::DoublePrepare,
+    EvidenceKind::DoubleCommit,
+    EvidenceKind::InvalidCommitCertificate,
     EvidenceKind::InvalidProposal,
     EvidenceKind::DoubleExecVote,
 ];
@@ -319,9 +319,9 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrevote/DoublePrecommit** — the validator signed conflicting hashes for the same `(phase,height,view,epoch)` tuple.
+- **DoublePrepare/DoubleCommit** — the validator signed conflicting hashes for the same `(phase,height,view,epoch)` tuple.
 - **DoubleExecVote** — conflicting execution votes advertise different post-state roots.
-- **InvalidQC** — an aggregator gossiped a QC whose shape fails deterministic checks (e.g., empty signer bitmap).
+- **InvalidCommitCertificate** — an aggregator gossiped a commit certificate whose shape fails deterministic checks (e.g., empty signer bitmap).
 - **InvalidProposal** — a leader proposed a block that fails structural validation (e.g., breaks the locked-chain rule).
 
 Operators and tooling can inspect and re-broadcast payloads through:

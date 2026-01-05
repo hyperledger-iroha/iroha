@@ -6,7 +6,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::BlockHeader;
 
 use super::{
-    consensus::{ExecVote, ExecWitness, ExecutionQC, QcAggregate},
+    consensus::{CommitAggregate, ExecVote, ExecWitness, ExecutionQC},
     smt::{KvPair, compute_post_state_root},
 };
 
@@ -69,7 +69,7 @@ pub fn assemble_execution_qc(
     height: u64,
     view: u64,
     epoch: u64,
-    aggregate: QcAggregate,
+    aggregate: CommitAggregate,
 ) -> ExecutionQC {
     ExecutionQC {
         subject_block_hash,
@@ -184,7 +184,7 @@ mod tests {
     fn assemble_execution_qc_retains_fields() {
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; 32]));
         let parent_root = Hash::new([0x11; 32]);
-        let aggregate = QcAggregate {
+        let aggregate = CommitAggregate {
             signers_bitmap: vec![0xAA],
             bls_aggregate_signature: vec![0xBB],
         };

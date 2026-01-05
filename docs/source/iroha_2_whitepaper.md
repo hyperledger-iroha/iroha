@@ -62,7 +62,7 @@ An Iroha node runs several cooperating services:
   telemetry (`/v1/...` endpoints).
 - **Core (`iroha_core`)** coordinates validation, consensus, execution, governance, and state management.
 - **Sumeragi (`iroha_core::sumeragi`)** implements the NPoS-ready consensus pipeline with view changes,
-  reliable broadcast data availability, and quorum certificates (QCs). See the
+  reliable broadcast data availability, and commit certificates. See the
   [Sumeragi consensus guide](./sumeragi.md) for details.
 - **Kura (`iroha_core::kura`)** persists canonical blocks, recovery sidecars, and witness metadata on disk.
 - **World State View (`iroha_core::state`)** stores the authoritative in-memory snapshot used for validation
@@ -78,7 +78,7 @@ Iroha peers maintain an ordered topology derived from committed state. Each cons
 validating set, proxy tail, and Set B validators. Transactions are gossiped using Norito-encoded messages
 before the leader bundles them into a proposal. Reliable broadcast guarantees that blocks and supporting
 evidence reach all honest peers, ensuring data availability even under network churn. View changes rotate
-leadership when deadlines are missed, and quorum certificates ensure that every committed block carries the
+leadership when deadlines are missed, and commit certificates ensure that every committed block carries the
 canonical signature set used by all peers.
 
 ### 2.3 Cryptography
@@ -119,7 +119,7 @@ The `iroha_data_model` crate defines all ledger objects, instructions, queries, 
   permissions, and parameters while preserving determinism.
 - **Repositories (`RepoInstruction`)** allow bundling deterministic upgrade plans (executors, manifests, and
   assets) so multi-step rollouts can be managed on-chain with governance approval.
-- **Consensus artifacts**—such as quorum certificates and witness lists—reside in the data model and
+- **Consensus artifacts**—such as commit certificates and witness lists—reside in the data model and
   round-trip through golden tests to guarantee compatibility between `iroha_core`, Torii, and SDKs.
 - **Confidential registries and events** capture shielded asset descriptors, verifier keys, commitments,
   nullifiers, and event payloads (`ConfidentialEvent::{Shielded,Transferred,Unshielded}`) so confidential flows
@@ -140,7 +140,7 @@ The `iroha_data_model` crate defines all ledger objects, instructions, queries, 
    `BlockCreated` message.
 7. **Validation:** Peers in the validating set re-run stateless/stateful checks. Successful peers sign
    `BlockSigned` messages and forward them to the proxy tail.
-8. **Commit:** The proxy tail assembles a quorum certificate (QC) once it collects the canonical signature set,
+8. **Commit:** The proxy tail assembles a commit certificate once it collects the canonical signature set,
    broadcasts `BlockCommitted`, and finalises the block locally.
 9. **Application:** All peers record the block in Kura, apply state updates, emit telemetry/events, purge
    committed transactions from the mempool, and rotate topology roles.
@@ -165,7 +165,7 @@ Smart contracts run on the Iroha Virtual Machine (IVM):
 ## 6. Storage and persistence
 
 - **Kura block store** writes each finalised block as a `SignedBlockWire` payload with a Norito header, keeping
-  canonical headers, transactions, QCs, and witness data together.
+  canonical headers, transactions, commit certificates, and witness data together.
 - **World State View** keeps the authoritative state in memory for fast queries. Deterministic snapshots and
   pipeline sidecars (`pipeline/block_<height>.json`) support recovery and audits.
 - **State tiering** allows hot/cold partitioning for large deployments while preserving deterministic

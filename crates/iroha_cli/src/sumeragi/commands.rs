@@ -127,20 +127,21 @@ pub struct EvidenceSubmitArgs {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum EvidenceKindArg {
-    DoublePrevote,
-    DoublePrecommit,
+    DoublePrepare,
+    DoubleCommit,
     DoubleExecVote,
-    InvalidQc,
+    #[value(alias = "invalid-qc")]
+    InvalidCommitCertificate,
     InvalidProposal,
 }
 
 impl EvidenceKindArg {
     pub fn as_str(self) -> &'static str {
         match self {
-            EvidenceKindArg::DoublePrevote => "DoublePrevote",
-            EvidenceKindArg::DoublePrecommit => "DoublePrecommit",
+            EvidenceKindArg::DoublePrepare => "DoublePrepare",
+            EvidenceKindArg::DoubleCommit => "DoubleCommit",
             EvidenceKindArg::DoubleExecVote => "DoubleExecVote",
-            EvidenceKindArg::InvalidQc => "InvalidQC",
+            EvidenceKindArg::InvalidCommitCertificate => "InvalidCommitCertificate",
             EvidenceKindArg::InvalidProposal => "InvalidProposal",
         }
     }

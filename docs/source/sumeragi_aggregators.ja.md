@@ -32,7 +32,7 @@ translator: manual
 - バリデータは進行中の `VotingBlock` と並行して `CollectorPlan` を保持し、どのコレクタに接触したか、およびゴシップにエスカレーションしたかを記録します。
 - 冗長送信（`r`）はプランを順に進める形で決定論的に適用されます。追加コレクタが存在しない、またはすべての試行が応答なしで終了した場合、プランはゴシップフォールバックが発火したことをマークします。`collect_aggregator_gossip_total`（`/v1/sumeragi/phases`）は Prometheus カウンタと同値で、オペレーターが反復的なエスカレーションを監視できます。
 - ゴシップフォールバックは署名済みブロックと prevote をトポロジ内の全ピア（自ノードを除く）へ送信します。指定コレクタが全滅した場合でもライブネスを保証し、通常ケースでは対象を限定したまま、従来の「全てにブロードキャスト」フェイルセーフを再現します。
-- フォールバックはブロックごとに 1 回のみ発火し、ネットワークストームを避けます。ロック済み QC による提案ドロップは `block_created_dropped_by_lock_total` をインクリメントし、ヘッダー検証失敗は `block_created_hint_mismatch_total` や `block_created_proposal_mismatch_total` を上げます。`/v1/sumeragi/status` には最新の Highest/Locked QC ハッシュが含まれ、ダッシュボードで特定ブロックとドロップ急増の相関を取れます。
+- フォールバックはブロックごとに 1 回のみ発火し、ネットワークストームを避けます。ロック済み commit certificate による提案ドロップは `block_created_dropped_by_lock_total` をインクリメントし、ヘッダー検証失敗は `block_created_hint_mismatch_total` や `block_created_proposal_mismatch_total` を上げます。`/v1/sumeragi/status` には最新の Highest/Locked commit certificate ハッシュが含まれ、ダッシュボードで特定ブロックとドロップ急増の相関を取れます。
 
 ## 実装概要
 

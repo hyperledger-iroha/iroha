@@ -98,5 +98,5 @@ High-variance or mobile networks
 - Verify config: `max(sumeragi_pacemaker_backoff_multiplier)`, `max(sumeragi_pacemaker_rtt_floor_multiplier)`, `max(sumeragi_pacemaker_max_backoff_ms)`
 
 ## Determinism & Safety
-- Timers/backoff/jitter influence only when nodes trigger proposals/view-changes; they do not affect signature validity or QC rules.
+- Timers/backoff/jitter influence only when nodes trigger proposals/view-changes; they do not affect signature validity or commit-certificate rules.
 - Keep any randomness deterministic per node and per (height, view). Avoid time-of-day or OS RNG in consensus-critical paths.

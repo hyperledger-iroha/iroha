@@ -6796,7 +6796,7 @@ test("getSumeragiTelemetryTyped normalizes availability, latency, backlog, and V
             { collector_idx: "1", peer_id: "bob@test", votes_ingested: "22" },
           ],
         },
-        qc_latency_ms: [{ kind: "CollectPrevote", last_ms: "15" }],
+        qc_latency_ms: [{ kind: "CollectPrepare", last_ms: "15" }],
         rbc_backlog: {
           pending_sessions: "2",
           total_missing_chunks: "8",
@@ -9122,7 +9122,7 @@ test("listSumeragiEvidence encodes query parameters", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(
       url,
-      `${BASE_URL}/v1/sumeragi/evidence?limit=25&offset=5&kind=DoublePrevote`,
+      `${BASE_URL}/v1/sumeragi/evidence?limit=25&offset=5&kind=DoublePrepare`,
     );
     assert.equal(init.headers.Accept, "application/json");
     observedSignal = init.signal;
@@ -9133,8 +9133,8 @@ test("listSumeragiEvidence encodes query parameters", async () => {
         total: 1,
         items: [
           {
-            kind: "DoublePrevote",
-            phase: "Prevote",
+            kind: "DoublePrepare",
+            phase: "Prepare",
             height: 10,
             view: 2,
             epoch: 1,
@@ -9155,12 +9155,12 @@ test("listSumeragiEvidence encodes query parameters", async () => {
   const payload = await client.listSumeragiEvidence({
     limit: 25,
     offset: 5,
-    kind: "DoublePrevote",
+    kind: "DoublePrepare",
     signal: controller.signal,
   });
   assert.equal(payload.total, 1);
   assert.equal(payload.items.length, 1);
-  assert.equal(payload.items[0].kind, "DoublePrevote");
+  assert.equal(payload.items[0].kind, "DoublePrepare");
   controller.abort();
   assert.ok(observedSignal?.aborted);
 });
@@ -9180,7 +9180,7 @@ test("listSumeragiEvidence rejects unsupported options", async () => {
   await assert.rejects(
     () =>
       client.listSumeragiEvidence({
-        kind: "DoublePrevote",
+        kind: "DoublePrepare",
         limit: 1,
         note: "extra",
       }),
@@ -9196,8 +9196,8 @@ test("listSumeragiEvidence normalizes evidence payloads", async () => {
         total: 10,
         items: [
           {
-            kind: "DoublePrevote",
-            phase: "Prevote",
+            kind: "DoublePrepare",
+            phase: "Prepare",
             height: "42",
             view: "7",
             epoch: "3",
@@ -9223,12 +9223,12 @@ test("listSumeragiEvidence normalizes evidence payloads", async () => {
             recorded_ms: 1500,
           },
           {
-            kind: "InvalidQC",
+            kind: "InvalidCommitCertificate",
             height: 2,
             view: 3,
             epoch: 4,
             subject_block_hash: "11",
-            phase: "Available",
+            phase: "Commit",
             reason: "bad qc",
             recorded_height: 82,
             recorded_view: 4,
@@ -9262,11 +9262,11 @@ test("listSumeragiEvidence normalizes evidence payloads", async () => {
   assert.equal(payload.total, 10);
   assert.deepEqual(payload.items, [
     {
-      kind: "DoublePrevote",
+      kind: "DoublePrepare",
       recorded_height: 80,
       recorded_view: 1,
       recorded_ms: 1234,
-      phase: "Prevote",
+      phase: "Prepare",
       height: 42,
       view: 7,
       epoch: 3,
@@ -9289,7 +9289,7 @@ test("listSumeragiEvidence normalizes evidence payloads", async () => {
       post_state_root_2: "ff",
     },
     {
-      kind: "InvalidQC",
+      kind: "InvalidCommitCertificate",
       recorded_height: 82,
       recorded_view: 4,
       recorded_ms: 1600,
@@ -9297,7 +9297,7 @@ test("listSumeragiEvidence normalizes evidence payloads", async () => {
       view: 3,
       epoch: 4,
       subject_block_hash: "11",
-      phase: "Available",
+      phase: "Commit",
       reason: "bad qc",
     },
     {
@@ -9330,8 +9330,8 @@ test("listSumeragiEvidence rejects malformed payloads", async () => {
         total: 1,
         items: [
           {
-            kind: "DoublePrevote",
-            phase: "Prevote",
+            kind: "DoublePrepare",
+            phase: "Prepare",
             height: 1,
             view: 0,
             epoch: 0,
@@ -9367,7 +9367,7 @@ test("submitSumeragiEvidence posts body and returns response", async () => {
     captured = { url, init };
     return createResponse({
       status: 202,
-      jsonData: { status: "accepted", kind: "DoublePrevote" },
+      jsonData: { status: "accepted", kind: "DoublePrepare" },
       headers: { "content-type": "application/json" },
     });
   };
@@ -9379,7 +9379,7 @@ test("submitSumeragiEvidence posts body and returns response", async () => {
   assert.equal(captured.url, `${BASE_URL}/v1/sumeragi/evidence/submit`);
   assert.equal(captured.init.headers["X-API-Token"], "s3cret");
   assert.equal(JSON.parse(captured.init.body).evidence_hex, "deadbeef");
-  assert.deepEqual(response, { status: "accepted", kind: "DoublePrevote" });
+  assert.deepEqual(response, { status: "accepted", kind: "DoublePrepare" });
 });
 
 test("getMetrics returns text when requested", async () => {

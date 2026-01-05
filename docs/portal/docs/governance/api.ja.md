@@ -289,9 +289,9 @@ CastZkBallot 検証パス
 use iroha_data_model::block::consensus::EvidenceKind;
 
 let offences = [
-    EvidenceKind::DoublePrevote,
-    EvidenceKind::DoublePrecommit,
-    EvidenceKind::InvalidQC,
+    EvidenceKind::DoublePrepare,
+    EvidenceKind::DoubleCommit,
+    EvidenceKind::InvalidCommitCertificate,
     EvidenceKind::InvalidProposal,
     EvidenceKind::DoubleExecVote,
 ];
@@ -301,9 +301,9 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrevote/DoublePrecommit** - 同じ `(phase,height,view,epoch)` で矛盾するハッシュに署名。
+- **DoublePrepare/DoubleCommit** - 同じ `(phase,height,view,epoch)` で矛盾するハッシュに署名。
 - **DoubleExecVote** - 異なる post-state root を広告する実行投票の衝突。
-- **InvalidQC** - 集約者が deterministic チェックに失敗するQCをゴシップ (例: 空の署名ビットマップ)。
+- **InvalidCommitCertificate** - 集約者が deterministic チェックに失敗するcommit certificateをゴシップ (例: 空の署名ビットマップ)。
 - **InvalidProposal** - リーダが locked-chain ルールを破るなど、構造検証に失敗するブロックを提案。
 
 運用者とツールは次でペイロードを確認・再送できます:

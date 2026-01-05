@@ -161,7 +161,7 @@ merge ring はレーンコミットメントを受け入れる前に、以下を
 
 - **メトリクス:**  
   `nexus_scheduler_lane_teu_*`, `nexus_scheduler_dataspace_*`, `sumeragi_rbc_da_reschedule_total`,
-  `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_availability_qc"}`,
+  `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_local_data"}`,
   `lane_relay_invalid_total{error}`, `lane_relay_emergency_override_total{outcome}`,
   `nexus_audit_outcome_total` は `crates/iroha_telemetry/src/metrics.rs` に存在する。運用者は
   missing-availability のスパイクに警告を出し（reschedule カウンタはレガシーで常にゼロであるべき）、
@@ -174,7 +174,7 @@ merge ring はレーンコミットメントを受け入れる前に、以下を
   `dashboards/grafana/nexus_lanes.json` はレーン backlog、DA 可用性シグナル、上記の settlement 合計を表示する。
   アラート定義は以下でページングする:
   - `nexus_scheduler_dataspace_age_slots` がポリシー違反。
-  - `sumeragi_da_gate_block_total{reason="missing_availability_qc"}` が継続的に増加。
+  - `sumeragi_da_gate_block_total{reason="missing_local_data"}` が継続的に増加。
   - `total_xor_variance_micro` が過去の基準から逸脱。
 - **証拠バンドル:**  
   各リリースは `LaneBlockCommitment` のエクスポート、Grafana/Alertmanager スナップショット、

@@ -9,31 +9,41 @@ use iroha_core::{
     kura::Kura,
     query::{insert_evidence_record_for_test, store::LiveQueryStore},
     state::{State as CoreState, World},
-    sumeragi::consensus::{Evidence, EvidenceKind, EvidencePayload, Phase, Qc, QcAggregate},
+    sumeragi::consensus::{
+        CommitAggregate, CommitCertificate, Evidence, EvidenceKind, EvidencePayload, Phase,
+    },
     telemetry::StateTelemetry,
 };
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::{BlockHeader, consensus::EvidenceRecord};
+use iroha_data_model::{
+    block::{BlockHeader, consensus::EvidenceRecord},
+    consensus::VALIDATOR_SET_HASH_VERSION_V1,
+};
 use iroha_torii::handle_v1_sumeragi_evidence_count;
 use tower::ServiceExt as _; // for Router::oneshot
 
-fn make_invalid_qc_evidence(height: u64, seed: u8) -> Evidence {
+fn make_invalid_commit_certificate_evidence(height: u64, seed: u8) -> Evidence {
     let subject = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([seed; 32]));
-    let qc = Qc {
-        phase: Phase::Prevote,
+    let certificate = CommitCertificate {
+        phase: Phase::Prepare,
         subject_block_hash: subject,
         height,
         view: 0,
         epoch: 0,
-        aggregate: QcAggregate {
+        mode_tag: "test-mode".to_string(),
+        highest_cert: None,
+        validator_set_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x11; 32])),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: Vec::new(),
+        aggregate: CommitAggregate {
             signers_bitmap: vec![0x01],
             bls_aggregate_signature: Vec::new(),
         },
     };
     Evidence {
-        kind: EvidenceKind::InvalidQC,
-        payload: EvidencePayload::InvalidQc {
-            qc,
+        kind: EvidenceKind::InvalidCommitCertificate,
+        payload: EvidencePayload::InvalidCommitCertificate {
+            certificate,
             reason: "test".to_string(),
         },
     }
@@ -80,7 +90,7 @@ async fn evidence_count_endpoint_reports_increase() {
 
     // Insert two WSV-backed evidence records
     for (idx, seed) in [0x11u8, 0x22].iter().enumerate() {
-        let ev = make_invalid_qc_evidence((idx + 1) as u64, *seed);
+        let ev = make_invalid_commit_certificate_evidence((idx + 1) as u64, *seed);
         let record = EvidenceRecord {
             evidence: ev,
             recorded_at_height: (idx + 1) as u64,

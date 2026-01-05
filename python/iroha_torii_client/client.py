@@ -880,13 +880,13 @@ class SumeragiRbcDeliveryStatus:
 
 
 SUMERAGI_EVIDENCE_KIND_FILTERS = {
-    "DoublePrevote",
-    "DoublePrecommit",
+    "DoublePrepare",
+    "DoubleCommit",
     "DoubleExecVote",
-    "InvalidQC",
+    "InvalidCommitCertificate",
     "InvalidProposal",
 }
-SUMERAGI_EVIDENCE_PHASES = {"Prevote", "Precommit", "Available"}
+SUMERAGI_EVIDENCE_PHASES = {"Prepare", "Commit", "NewView"}
 
 
 @dataclass(frozen=True)
@@ -4858,7 +4858,7 @@ class ToriiClient:
             f"{context}.recorded_ms",
         )
 
-        if kind in {"DoublePrevote", "DoublePrecommit"}:
+        if kind in {"DoublePrepare", "DoubleCommit"}:
             phase_value = pick("phase", "phase")
             phase_literal = ToriiClient._require_non_empty_string(phase_value, f"{context}.phase")
             if phase_literal not in SUMERAGI_EVIDENCE_PHASES:
@@ -4907,7 +4907,7 @@ class ToriiClient:
                     f"{context}.post_state_root_2",
                 ),
             )
-        if kind == "InvalidQC":
+        if kind == "InvalidCommitCertificate":
             phase_literal = ToriiClient._require_non_empty_string(pick("phase", "phase"), f"{context}.phase")
             if phase_literal not in SUMERAGI_EVIDENCE_PHASES:
                 allowed = ", ".join(sorted(SUMERAGI_EVIDENCE_PHASES))

@@ -25,11 +25,11 @@ translation_last_reviewed: 2026-01-01
     - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
 - Метрики: gauge `sumeragi_new_view_receipts_by_hv{height,view}` отражают эти счётчики.
 - GET `/v1/sumeragi/status`
-  - Снимок индекса лидера, HighestQC/LockedQC (высоты, view, хэши subject), счётчики collector/VRF, отсрочки pacemaker, глубина очереди транзакций и здоровье хранилища RBC (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`).
+  - Снимок индекса лидера, Highest/Locked commit certificates (`highest_qc`/`locked_qc`, высоты, view, хэши subject), счётчики collector/VRF, отсрочки pacemaker, глубина очереди транзакций и здоровье хранилища RBC (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`).
 - GET `/v1/sumeragi/status/sse`
   - Поток SSE (≈1 с) того же payload, что и `/v1/sumeragi/status`, для живых дашбордов.
 - GET `/v1/sumeragi/qc`
-  - Снимок HighestQC и LockedQC; включает `subject_block_hash` для HighestQC, если известно.
+  - Снимок highest/locked commit certificates; включает `subject_block_hash` для highest commit certificate, если известно.
 - GET `/v1/sumeragi/pacemaker`
   - Таймеры/конфигурация pacemaker: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
 - GET `/v1/sumeragi/leader`
@@ -38,7 +38,7 @@ translation_last_reviewed: 2026-01-01
   - Детерминированный план коллекторов, полученный из зафиксированной топологии и on-chain параметров: экспортирует `mode`, план `(height, view)` (где `height` равен текущей высоте цепи), `collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, упорядоченный список коллекторов и `epoch_seed` (hex), когда активен NPoS.
 - GET `/v1/sumeragi/params`
   - Снимок on-chain параметров Sumeragi `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
-  - Когда `da_enabled` равно true, доказательство доступности (`AvailabilityQC` или RBC `READY`) отслеживается, но commit не ждёт его; локальный `DELIVER` RBC также не является требованием. Операторы могут подтвердить здоровье транспорта payload через endpoints RBC ниже.
+  - Когда `da_enabled` равно true, доказательство доступности (`availability evidence` или RBC `READY`) отслеживается, но commit не ждёт его; локальный `DELIVER` RBC также не является требованием. Операторы могут подтвердить здоровье транспорта payload через endpoints RBC ниже.
 - GET `/v1/sumeragi/rbc`
   - Агрегированные счётчики Reliable Broadcast: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, deliver_broadcasts_total, payload_bytes_delivered_total }`.
 - GET `/v1/sumeragi/rbc/sessions`
@@ -48,7 +48,7 @@ translation_last_reviewed: 2026-01-01
 Доказательства (аудит; вне консенсуса)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
 - GET `/v1/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
-  - Включает базовые поля (например, DoublePrevote/Precommit, InvalidQC, InvalidProposal) для инспекции.
+  - Включает базовые поля (например, DoublePrepare/Precommit, InvalidCommitCertificate, InvalidProposal) для инспекции.
   - Примеры:
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence/count | jq .`
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`

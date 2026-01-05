@@ -9,30 +9,40 @@ use iroha_core::{
     kura::Kura,
     query::{insert_evidence_record_for_test, store::LiveQueryStore},
     state::{State as CoreState, World},
-    sumeragi::consensus::{Evidence, EvidenceKind, EvidencePayload, Phase, Qc, QcAggregate, Vote},
+    sumeragi::consensus::{
+        CommitAggregate, CommitCertificate, Evidence, EvidenceKind, EvidencePayload, Phase, Vote,
+    },
     telemetry::StateTelemetry,
 };
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::{BlockHeader, consensus::EvidenceRecord};
+use iroha_data_model::{
+    block::{BlockHeader, consensus::EvidenceRecord},
+    consensus::VALIDATOR_SET_HASH_VERSION_V1,
+};
 use iroha_torii::{EvidenceListQuery, NoritoQuery, handle_v1_sumeragi_evidence_list};
 
-fn make_invalid_qc_evidence(height: u64, seed: u8) -> Evidence {
+fn make_invalid_commit_certificate_evidence(height: u64, seed: u8) -> Evidence {
     let subject = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([seed; 32]));
-    let qc = Qc {
-        phase: Phase::Prevote,
+    let certificate = CommitCertificate {
+        phase: Phase::Prepare,
         subject_block_hash: subject,
         height,
         view: 0,
         epoch: 0,
-        aggregate: QcAggregate {
+        mode_tag: "test-mode".to_string(),
+        highest_cert: None,
+        validator_set_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x11; 32])),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: Vec::new(),
+        aggregate: CommitAggregate {
             signers_bitmap: vec![0x01],
             bls_aggregate_signature: Vec::new(),
         },
     };
     Evidence {
-        kind: EvidenceKind::InvalidQC,
-        payload: EvidencePayload::InvalidQc {
-            qc,
+        kind: EvidenceKind::InvalidCommitCertificate,
+        payload: EvidencePayload::InvalidCommitCertificate {
+            certificate,
             reason: "test".to_string(),
         },
     }
@@ -47,17 +57,17 @@ fn make_double_prevote_evidence(height: u64, seed: u8) -> Evidence {
             height,
             view: 0,
             epoch: 0,
+            highest_cert: None,
             signer,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         }
     }
 
     Evidence {
-        kind: EvidenceKind::DoublePrevote,
+        kind: EvidenceKind::DoublePrepare,
         payload: EvidencePayload::DoubleVote {
-            v1: vote(height, 1, seed, Phase::Prevote),
-            v2: vote(height, 1, seed.wrapping_add(1), Phase::Prevote),
+            v1: vote(height, 1, seed, Phase::Prepare),
+            v2: vote(height, 1, seed.wrapping_add(1), Phase::Prepare),
         },
     }
 }
@@ -77,7 +87,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
 
     let records = [
         EvidenceRecord {
-            evidence: make_invalid_qc_evidence(10, 0xA1),
+            evidence: make_invalid_commit_certificate_evidence(10, 0xA1),
             recorded_at_height: 1,
             recorded_at_view: 0,
             recorded_at_ms: 10,
@@ -93,7 +103,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             penalty_applied_at_height: None,
         },
         EvidenceRecord {
-            evidence: make_invalid_qc_evidence(30, 0xC3),
+            evidence: make_invalid_commit_certificate_evidence(30, 0xC3),
             recorded_at_height: 3,
             recorded_at_view: 0,
             recorded_at_ms: 30,
@@ -135,17 +145,17 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
     assert_eq!(items.len(), 2);
     assert_eq!(
         items[0].get("kind").and_then(norito::json::Value::as_str),
-        Some("InvalidQC")
+        Some("InvalidCommitCertificate")
     );
     assert_eq!(
         items[1].get("kind").and_then(norito::json::Value::as_str),
-        Some("DoublePrevote")
+        Some("DoublePrepare")
     );
 
     let query_filtered = EvidenceListQuery {
         limit: Some(1),
         offset: Some(1),
-        kind: Some("InvalidQC".to_string()),
+        kind: Some("InvalidCommitCertificate".to_string()),
     };
     let response_filtered =
         handle_v1_sumeragi_evidence_list(State(state.clone()), NoritoQuery(query_filtered), None)

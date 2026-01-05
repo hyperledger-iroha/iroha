@@ -3719,7 +3719,7 @@ mod tests {
             defaults::kura::{BLOCKS_IN_MEMORY, FSYNC_INTERVAL, MERGE_LEDGER_CACHE_CAPACITY},
         },
     };
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf, bls_normal_pop_prove};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         ChainId, Level,
         account::Account,
@@ -3747,7 +3747,10 @@ mod tests {
         query::store::LiveQueryStore,
         smartcontracts::Registrable,
         state::State,
-        sumeragi::network_topology::Topology,
+        sumeragi::{
+            consensus::{CommitAggregate, PERMISSIONED_TAG, Phase},
+            network_topology::Topology,
+        },
     };
 
     #[test]
@@ -4808,7 +4811,10 @@ mod tests {
 
         Kura::drop_old_block(&mut block_data, 2, 2);
         assert_eq!(
-            block_data.iter().filter(|(_, block)| block.is_some()).count(),
+            block_data
+                .iter()
+                .filter(|(_, block)| block.is_some())
+                .count(),
             4,
             "no blocks should be dropped while within retention"
         );
@@ -5347,7 +5353,6 @@ mod tests {
     #[test]
     fn roster_sidecar_roundtrip() {
         use iroha_config::base::WithOrigin;
-        use iroha_data_model::block::BlockSignature;
 
         let temp_dir = TempDir::new().unwrap();
         let (kura, _count) = Kura::new(
@@ -5375,17 +5380,23 @@ mod tests {
         let roster = vec![peer];
         let block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
-        let block_sig =
-            BlockSignature::new(0, SignatureOf::from_hash(kp.private_key(), block_hash));
+        let signers_bitmap = vec![0b0000_0001];
+        let bls_aggregate_signature = vec![0xAB; 96];
         let cert = CommitCertificate {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
             height: 1,
-            block_hash,
             view: 0,
             epoch: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            signatures: vec![block_sig],
+            aggregate: CommitAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: bls_aggregate_signature.clone(),
+            },
         };
         let sidecar = RosterSidecar::new_v1(1, block_hash, Some(cert.clone()), None);
 
@@ -5408,7 +5419,6 @@ mod tests {
     #[test]
     fn roster_sidecar_roundtrip_v2_with_stake_snapshot() {
         use iroha_config::base::WithOrigin;
-        use iroha_data_model::block::BlockSignature;
 
         let temp_dir = TempDir::new().unwrap();
         let (kura, _count) = Kura::new(
@@ -5435,17 +5445,23 @@ mod tests {
         let roster = vec![peer];
         let block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAC; Hash::LENGTH]));
-        let block_sig =
-            BlockSignature::new(0, SignatureOf::from_hash(kp.private_key(), block_hash));
+        let signers_bitmap = vec![0b0000_0001];
+        let bls_aggregate_signature = vec![0xAC; 96];
         let cert = CommitCertificate {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
             height: 1,
-            block_hash,
             view: 0,
             epoch: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            signatures: vec![block_sig],
+            aggregate: CommitAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: bls_aggregate_signature.clone(),
+            },
         };
         let stake_snapshot = crate::sumeragi::stake_snapshot::CommitStakeSnapshot {
             validator_set_hash: HashOf::new(&roster),

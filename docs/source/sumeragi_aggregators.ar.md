@@ -38,7 +38,7 @@ translation_last_reviewed: 2026-01-01
 - يتم فهرسة خطط collectors بواسطة `(height, view)` ويعاد تهيئتها عند تغير الموضوع كي لا تعيد محاولات view-change القديمة استخدام الاهداف السابقة.
 - يطبق redundant send (`r`) بشكل حتمي عبر التقدم في الخطة. عندما لا تتوفر collectors لزوج `(height, view)` تعود الاصوات الى topologia commit الكاملة (باستثناء الذات) لتجنب deadlock.
 - عند تعثر quorum، يعيد مسار اعادة الجدولة بث الاصوات المخزنة عبر خطة collectors، ويعود الى topologia commit عندما تكون collectors فارغة او محلية فقط او دون quorum. هذا يوفر fallback "gossip" محدودا دون دفع كلفة broadcast كاملة في المسار السريع المستقر.
-- كل اسقاط لمقترح بسبب بوابة locked QC يزيد `block_created_dropped_by_lock_total`; مسارات فشل تحقق header ترفع `block_created_hint_mismatch_total` و `block_created_proposal_mismatch_total`، ما يساعد المشغلين على ربط fallbacks المتكررة بمشاكل صحة leader. لقطة `/v1/sumeragi/status` تصدر ايضا احدث hashes لـ Highest/Locked QC حتى تربط لوحات المتابعة قمم الاسقاط بـ hashes بلوكات محددة.
+- كل اسقاط لمقترح بسبب بوابة locked commit certificate يزيد `block_created_dropped_by_lock_total`; مسارات فشل تحقق header ترفع `block_created_hint_mismatch_total` و `block_created_proposal_mismatch_total`، ما يساعد المشغلين على ربط fallbacks المتكررة بمشاكل صحة leader. لقطة `/v1/sumeragi/status` تصدر ايضا احدث hashes لـ Highest/Locked commit certificate حتى تربط لوحات المتابعة قمم الاسقاط بـ hashes بلوكات محددة.
 
 ## ملخص التنفيذ
 

@@ -289,9 +289,9 @@ Ofensas reconhecidas mapeiam um-para-um para `EvidenceKind`; os discriminantes s
 use iroha_data_model::block::consensus::EvidenceKind;
 
 let offences = [
-    EvidenceKind::DoublePrevote,
-    EvidenceKind::DoublePrecommit,
-    EvidenceKind::InvalidQC,
+    EvidenceKind::DoublePrepare,
+    EvidenceKind::DoubleCommit,
+    EvidenceKind::InvalidCommitCertificate,
     EvidenceKind::InvalidProposal,
     EvidenceKind::DoubleExecVote,
 ];
@@ -301,9 +301,9 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrevote/DoublePrecommit** - o validador assinou hashes conflitantes para o mesmo tuple `(phase,height,view,epoch)`.
+- **DoublePrepare/DoubleCommit** - o validador assinou hashes conflitantes para o mesmo tuple `(phase,height,view,epoch)`.
 - **DoubleExecVote** - votos de execucao conflitantes anunciam roots de estado pos diferentes.
-- **InvalidQC** - um agregador gossiped um QC cuja forma falha em checagens deterministicas (ex., bitmap de signers vazio).
+- **InvalidCommitCertificate** - um agregador gossiped um commit certificate cuja forma falha em checagens deterministicas (ex., bitmap de signers vazio).
 - **InvalidProposal** - um leader prop os um bloco que falha validacao estrutural (ex., viola a regra de locked-chain).
 
 Operadores e tooling podem inspecionar e re-broadcast payloads via:

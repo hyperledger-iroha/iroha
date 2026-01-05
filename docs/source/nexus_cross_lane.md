@@ -136,7 +136,7 @@ The merge ring MUST enforce the following before accepting a lane commitment:
 
 - **Metrics:**  
   `nexus_scheduler_lane_teu_*`, `nexus_scheduler_dataspace_*`, `sumeragi_rbc_da_reschedule_total`,
-  `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_availability_qc"}`,
+  `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_local_data"}`,
   `lane_relay_invalid_total{error}`, `lane_relay_emergency_override_total{outcome}`, and
   `nexus_audit_outcome_total` already exist in `crates/iroha_telemetry/src/metrics.rs`. Operators
   should alert on missing-availability spikes (reschedule counters are legacy and should remain
@@ -146,7 +146,7 @@ The merge ring MUST enforce the following before accepting a lane commitment:
 - **Dashboards:**  
   `dashboards/grafana/nexus_lanes.json` charts lane backlog, DA availability signals, and the settlement totals exposed above. Alert definitions should page when:
   - `nexus_scheduler_dataspace_age_slots` breaches policy.
-  - `sumeragi_da_gate_block_total{reason="missing_availability_qc"}` increases persistently.
+  - `sumeragi_da_gate_block_total{reason="missing_local_data"}` increases persistently.
   - `total_xor_variance_micro` deviates from historical norms.
 - **Evidence bundles:**  
   Every release must attach `LaneBlockCommitment` exports, Grafana/Alertmanager snapshots, and the relay DA manifests under `artifacts/nexus/cross-lane/<date>/`. The bundle becomes the canonical proof set when submitting NX-4 readiness reports.

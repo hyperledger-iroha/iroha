@@ -217,22 +217,28 @@ impl Actor {
         &self,
         ctx: QcBuildContext,
         signers: &BTreeSet<ValidatorIndex>,
-        topology: &super::network_topology::Topology,
+        canonical_topology: &super::network_topology::Topology,
         aggregate_signature: Vec<u8>,
     ) -> crate::sumeragi::consensus::Qc {
-        let signers_bitmap = build_signers_bitmap(signers, topology.as_ref().len());
+        let signers_bitmap = build_signers_bitmap(signers, canonical_topology.as_ref().len());
         debug_assert!(
             !aggregate_signature.is_empty(),
             "QC aggregate signature must be non-empty"
         );
 
+        let validator_set = canonical_topology.as_ref().to_vec();
         crate::sumeragi::consensus::Qc {
             phase: ctx.phase,
             subject_block_hash: ctx.block_hash,
             height: ctx.height,
             view: ctx.view,
             epoch: ctx.epoch,
-            aggregate: crate::sumeragi::consensus::QcAggregate {
+            mode_tag: ctx.mode_tag,
+            highest_cert: ctx.highest_cert,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: crate::sumeragi::consensus::CommitAggregate {
                 signers_bitmap,
                 bls_aggregate_signature: aggregate_signature,
             },
@@ -304,7 +310,7 @@ impl Actor {
             snapshot.voting_signers,
             snapshot.total_signers,
         );
-        if deferred && !matches!(phase, crate::sumeragi::consensus::Phase::Available) {
+        if deferred {
             return;
         }
 
@@ -347,6 +353,66 @@ impl Actor {
                 return;
             }
         };
+        let highest_cert = if phase == crate::sumeragi::consensus::Phase::NewView {
+            let mut selected: Option<crate::sumeragi::consensus::CommitCertificateRef> = None;
+            for signer in &snapshot.signers {
+                let Some(vote) = self.vote_log.get(&(phase, height, view, epoch, *signer)) else {
+                    continue;
+                };
+                let Some(candidate) = vote.highest_cert else {
+                    continue;
+                };
+                if candidate.phase != crate::sumeragi::consensus::Phase::Commit {
+                    continue;
+                }
+                selected = Some(match selected {
+                    None => candidate,
+                    Some(current) => {
+                        let incoming = (candidate.height, candidate.view);
+                        let existing = (current.height, current.view);
+                        let promotes_phase = incoming == existing
+                            && candidate.phase == crate::sumeragi::consensus::Phase::Commit
+                            && current.phase != crate::sumeragi::consensus::Phase::Commit;
+                        if incoming > existing || promotes_phase {
+                            candidate
+                        } else {
+                            current
+                        }
+                    }
+                });
+            }
+            selected
+        } else {
+            None
+        };
+        if phase == crate::sumeragi::consensus::Phase::NewView && highest_cert.is_none() {
+            warn!(
+                height,
+                view,
+                block = ?block_hash,
+                "skipping NEW_VIEW certificate: highest certificate missing in votes"
+            );
+            return;
+        }
+
+        let canonical_signers = super::normalize_signer_indices_to_canonical(
+            &snapshot.signers,
+            &signature_topology,
+            &topology,
+        );
+        if canonical_signers.len() != snapshot.signers.len() {
+            warn!(
+                height,
+                view,
+                phase = ?phase,
+                block = ?block_hash,
+                signers = snapshot.signers.len(),
+                canonical = canonical_signers.len(),
+                "skipping QC: signer mapping to canonical roster incomplete"
+            );
+            return;
+        }
+
         let qc = self.build_qc_from_signers(
             QcBuildContext {
                 phase,
@@ -354,9 +420,11 @@ impl Actor {
                 height,
                 view,
                 epoch,
+                mode_tag: mode_tag.to_string(),
+                highest_cert,
             },
-            &snapshot.signers,
-            &signature_topology,
+            &canonical_signers,
+            &topology,
             aggregate_signature,
         );
 
@@ -381,15 +449,7 @@ impl Actor {
             );
             return;
         }
-        let msg = match phase {
-            crate::sumeragi::consensus::Phase::Prevote => {
-                BlockMessage::PrevoteQC(super::message::PrevoteQCMsg(qc))
-            }
-            crate::sumeragi::consensus::Phase::Precommit => {
-                BlockMessage::PrecommitQC(super::message::PrecommitQCMsg(qc))
-            }
-            crate::sumeragi::consensus::Phase::Available => BlockMessage::AvailabilityQC(qc),
-        };
+        let msg = BlockMessage::CommitCertificate(qc);
         let topology_peers = self.effective_commit_topology();
         let local_peer_id = self.common_config.peer.id().clone();
         for peer in &topology_peers {
@@ -476,29 +536,16 @@ impl Actor {
     ) -> bool {
         if !block_known && voting_signers >= required {
             crate::sumeragi::status::inc_qc_quorum_without_qc();
-            if matches!(phase, crate::sumeragi::consensus::Phase::Available) {
-                info!(
-                    height,
-                    view,
-                    phase = ?phase,
-                    block = ?block_hash,
-                    voting_signers,
-                    total_signers,
-                    required,
-                    "availability vote quorum observed without payload; aggregating QC while fetching payload"
-                );
-            } else {
-                warn!(
-                    height,
-                    view,
-                    phase = ?phase,
-                    block = ?block_hash,
-                    voting_signers,
-                    total_signers,
-                    required,
-                    "quorum of votes observed but block payload missing; deferring QC aggregation"
-                );
-            }
+            warn!(
+                height,
+                view,
+                phase = ?phase,
+                block = ?block_hash,
+                voting_signers,
+                total_signers,
+                required,
+                "quorum of votes observed but block payload missing; deferring QC aggregation"
+            );
         }
 
         let deferred = if block_known {
@@ -513,15 +560,6 @@ impl Actor {
                 signature_topology,
             )
         };
-        if deferred && matches!(phase, crate::sumeragi::consensus::Phase::Available) {
-            iroha_logger::debug!(
-                height,
-                view,
-                phase = ?phase,
-                block = ?block_hash,
-                "continuing availability QC aggregation while payload fetch is in-flight"
-            );
-        }
         deferred
     }
 
@@ -533,14 +571,14 @@ impl Actor {
         view: u64,
         epoch: u64,
     ) -> bool {
-        if !matches!(phase, crate::sumeragi::consensus::Phase::Precommit) {
+        if !matches!(phase, crate::sumeragi::consensus::Phase::Commit) {
             return true;
         }
         let Some(lock) = self.locked_qc else {
             return true;
         };
         let candidate = crate::sumeragi::consensus::QcHeaderRef {
-            phase: crate::sumeragi::consensus::Phase::Precommit,
+            phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_hash,
             height,
             view,
@@ -634,7 +672,7 @@ impl Actor {
             height,
             view,
             epoch,
-            aggregate: crate::sumeragi::consensus::QcAggregate {
+            aggregate: crate::sumeragi::consensus::CommitAggregate {
                 signers_bitmap,
                 bls_aggregate_signature: aggregate_signature,
             },
@@ -820,7 +858,7 @@ impl Actor {
         qc: &crate::sumeragi::consensus::Qc,
         block_known: bool,
     ) -> bool {
-        if block_known && qc.phase == crate::sumeragi::consensus::Phase::Precommit {
+        if block_known && qc.phase == crate::sumeragi::consensus::Phase::Commit {
             let queue_len = self.queue.tx_len();
             let pending_nonempty = self.has_nonempty_pending_at_height(qc.height);
             if let Some(tx_count) = self.block_tx_count(qc.subject_block_hash) {
@@ -844,7 +882,7 @@ impl Actor {
         qc: &crate::sumeragi::consensus::Qc,
         block_known: bool,
     ) {
-        self.record_phase_sample(PipelinePhase::CollectPrevote, qc.height, qc.view);
+        self.record_phase_sample(PipelinePhase::CollectPrepare, qc.height, qc.view);
         if block_known {
             let qc_ref = Self::qc_to_header_ref(qc);
             let should_update = self.highest_qc.is_none_or(|current| {
@@ -879,7 +917,7 @@ impl Actor {
         block_known: bool,
         allow_nonextending: bool,
     ) -> bool {
-        self.record_phase_sample(PipelinePhase::CollectPrecommit, qc.height, qc.view);
+        self.record_phase_sample(PipelinePhase::CollectCommit, qc.height, qc.view);
         let qc_ref = Self::qc_to_header_ref(qc);
         if let Some(lock) = self.locked_qc {
             if self.block_known_locally(lock.subject_block_hash) {
@@ -938,7 +976,7 @@ impl Actor {
                 let existing = (current.height, current.view);
                 incoming > existing
                     || (incoming == existing
-                        && current.phase != crate::sumeragi::consensus::Phase::Precommit)
+                        && current.phase != crate::sumeragi::consensus::Phase::Commit)
             });
             if should_update {
                 super::status::set_highest_qc(qc.height, qc.view);
@@ -972,6 +1010,48 @@ impl Actor {
         true
     }
 
+    pub(super) fn process_new_view_qc(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        signers: &[ValidatorIndex],
+    ) {
+        let Some(highest) = qc.highest_cert else {
+            warn!(
+                height = qc.height,
+                view = qc.view,
+                block = %qc.subject_block_hash,
+                "ignoring NEW_VIEW certificate missing highest certificate reference"
+            );
+            return;
+        };
+        if highest.phase != crate::sumeragi::consensus::Phase::Commit {
+            warn!(
+                height = qc.height,
+                view = qc.view,
+                highest_height = highest.height,
+                highest_view = highest.view,
+                phase = ?highest.phase,
+                "ignoring NEW_VIEW certificate with non-commit highest certificate"
+            );
+            return;
+        }
+        if qc.height != highest.height.saturating_add(1) {
+            warn!(
+                height = qc.height,
+                view = qc.view,
+                highest_height = highest.height,
+                "ignoring NEW_VIEW certificate with mismatched height"
+            );
+            return;
+        }
+        for signer in signers {
+            self.subsystems
+                .propose
+                .new_view_tracker
+                .record(qc.height, qc.view, *signer, highest);
+        }
+    }
+
     pub(super) fn prune_precommit_votes_conflicting_with_lock(
         &mut self,
         lock: crate::sumeragi::consensus::QcHeaderRef,
@@ -979,14 +1059,14 @@ impl Actor {
         let mut drop_keys = Vec::new();
         let mut drop_blocks: BTreeSet<(HashOf<BlockHeader>, u64)> = BTreeSet::new();
         for (key, vote) in &self.vote_log {
-            if vote.phase != crate::sumeragi::consensus::Phase::Precommit {
+            if vote.phase != crate::sumeragi::consensus::Phase::Commit {
                 continue;
             }
             if !self.block_known_locally(vote.block_hash) {
                 continue;
             }
             let candidate = crate::sumeragi::consensus::QcHeaderRef {
-                phase: crate::sumeragi::consensus::Phase::Precommit,
+                phase: crate::sumeragi::consensus::Phase::Commit,
                 subject_block_hash: vote.block_hash,
                 height: vote.height,
                 view: vote.view,
@@ -1010,11 +1090,11 @@ impl Actor {
         }
         self.qc_signer_tally
             .retain(|(phase, hash, height, _, _), _| {
-                *phase != crate::sumeragi::consensus::Phase::Precommit
+                *phase != crate::sumeragi::consensus::Phase::Commit
                     || !drop_blocks.contains(&(*hash, *height))
             });
         self.qc_cache.retain(|(phase, hash, height, _, _), _| {
-            *phase != crate::sumeragi::consensus::Phase::Precommit
+            *phase != crate::sumeragi::consensus::Phase::Commit
                 || !drop_blocks.contains(&(*hash, *height))
         });
 
@@ -1026,57 +1106,32 @@ impl Actor {
         );
     }
 
-    pub(super) fn process_availability_qc(
-        &mut self,
-        qc: &crate::sumeragi::consensus::Qc,
-        block_known: bool,
-    ) {
-        self.record_phase_sample(PipelinePhase::CollectDa, qc.height, qc.view);
-        if block_known
-            && let Some(pending) = self.pending.pending_blocks.get_mut(&qc.subject_block_hash)
-        {
-            pending.mark_availability_qc(qc.view);
-            let msg = BlockMessage::BlockCreated(super::message::BlockCreated {
-                block: pending.block.clone(),
-            });
-            let topology_peers = self.effective_commit_topology();
-            let local_peer_id = self.common_config.peer.id().clone();
-            for peer in &topology_peers {
-                if peer == &local_peer_id {
-                    continue;
-                }
-                self.schedule_background(BackgroundRequest::Post {
-                    peer: peer.clone(),
-                    msg: msg.clone(),
-                });
-            }
-        } else if !block_known {
-            debug!(
-                height = qc.height,
-                view = qc.view,
-                hash = %qc.subject_block_hash,
-                "availability QC arrived before block payload; awaiting block delivery"
-            );
-        }
-    }
-
     #[allow(clippy::too_many_lines)]
     pub(super) fn handle_qc(&mut self, qc: crate::sumeragi::consensus::Qc) -> Result<()> {
-        // Prevote QCs are view-scoped; availability/precommit QCs can safely arrive after a
-        // local view change and still unlock progress, so don't drop them as stale.
-        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Prevote)
+        // Prepare certificates are view-scoped; commit/new-view certificates can safely arrive
+        // after a local view change and still unlock progress, so don't drop them as stale.
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Prepare)
             && self.drop_stale_view(qc.height, qc.view, "QC")
         {
             return Ok(());
         }
         let (consensus_mode, mode_tag, prf_seed) =
             self.consensus_context_for_height(qc.height);
-        let commit_topology = self.roster_for_vote_with_mode(
-            qc.subject_block_hash,
-            qc.height,
-            qc.view,
-            consensus_mode,
-        );
+        let commit_topology = if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
+            self.roster_for_new_view_with_mode(
+                qc.subject_block_hash,
+                qc.height,
+                qc.view,
+                consensus_mode,
+            )
+        } else {
+            self.roster_for_vote_with_mode(
+                qc.subject_block_hash,
+                qc.height,
+                qc.view,
+                consensus_mode,
+            )
+        };
         if commit_topology.is_empty() {
             debug!(
                 height = qc.height,
@@ -1098,9 +1153,7 @@ impl Actor {
         let validation = match validation {
             Ok(outcome) => outcome,
             Err(err) => {
-                if let Some(outcome) = self.recover_available_qc_from_rbc(&qc, &topology, &err) {
-                    outcome
-                } else if let Some(outcome) = self.recover_qc_from_aggregate(&qc, &topology, &err) {
+                if let Some(outcome) = self.recover_qc_from_aggregate(&qc, &topology, &err) {
                     outcome
                 } else {
                     record_qc_validation_error(self.telemetry_handle(), &err);
@@ -1128,7 +1181,7 @@ impl Actor {
             missing_votes, 0,
             "QC validation should fail when votes are missing"
         );
-        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Precommit) {
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             let signer_set: BTreeSet<_> = signer_indices.iter().copied().collect();
             crate::sumeragi::status::record_precommit_signers(
                 crate::sumeragi::status::PrecommitSignerRecord {
@@ -1139,6 +1192,8 @@ impl Actor {
                     signers: signer_set,
                     bls_aggregate_signature: qc.aggregate.bls_aggregate_signature.clone(),
                     roster_len: topology.as_ref().len(),
+                    mode_tag: mode_tag.to_string(),
+                    validator_set: topology.as_ref().to_vec(),
                 },
             );
         }
@@ -1152,9 +1207,9 @@ impl Actor {
         #[cfg(feature = "telemetry")]
         if let Some(telemetry) = self.telemetry_handle() {
             let phase_label = match qc.phase {
-                crate::sumeragi::consensus::Phase::Prevote => "prevote",
-                crate::sumeragi::consensus::Phase::Precommit => "precommit",
-                crate::sumeragi::consensus::Phase::Available => "available",
+                crate::sumeragi::consensus::Phase::Prepare => "prepare",
+                crate::sumeragi::consensus::Phase::Commit => "commit",
+                crate::sumeragi::consensus::Phase::NewView => "new_view",
             };
             telemetry.note_qc_signer_counts(phase_label, present_signers, signer_indices.len());
         }
@@ -1166,7 +1221,7 @@ impl Actor {
         }
 
         let block_known = self.block_known_locally(qc.subject_block_hash);
-        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Precommit) {
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             iroha_logger::debug!(
                 height = qc.height,
                 view = qc.view,
@@ -1263,20 +1318,23 @@ impl Actor {
         }
 
         let accepted = match qc.phase {
-            crate::sumeragi::consensus::Phase::Prevote => {
+            crate::sumeragi::consensus::Phase::Prepare => {
                 self.process_prevote_qc(&qc, block_known);
                 true
             }
-            crate::sumeragi::consensus::Phase::Precommit => {
+            crate::sumeragi::consensus::Phase::Commit => {
                 self.process_precommit_qc(&qc, block_known, false)
             }
-            crate::sumeragi::consensus::Phase::Available => {
-                self.process_availability_qc(&qc, block_known);
+            crate::sumeragi::consensus::Phase::NewView => {
+                self.process_new_view_qc(&qc, &signer_indices);
                 true
             }
         };
         if !accepted {
             return Ok(());
+        }
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+            super::status::record_commit_certificate(qc.clone());
         }
         self.qc_cache.insert(
             (
@@ -1297,90 +1355,14 @@ impl Actor {
             cache_len = self.qc_cache.len(),
             "cached validated QC"
         );
-        if block_known {
-            if let Some(highest) = self.highest_qc {
-                self.maybe_broadcast_new_view(highest, None, None);
-            }
-        } else if let Some(lock) = self.locked_qc {
+        if !block_known {
+            if let Some(lock) = self.locked_qc {
             // Keep status in sync if we cleared an unknown lock earlier.
-            super::status::set_locked_qc(lock.height, lock.view, Some(lock.subject_block_hash));
+                super::status::set_locked_qc(lock.height, lock.view, Some(lock.subject_block_hash));
+            }
         }
         self.process_commit_candidates();
         Ok(())
-    }
-
-    fn recover_available_qc_from_rbc(
-        &self,
-        qc: &crate::sumeragi::consensus::Qc,
-        topology: &super::network_topology::Topology,
-        err: &QcValidationError,
-    ) -> Option<QcValidationOutcome> {
-        if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Available) {
-            return None;
-        }
-        let QcValidationError::MissingVotes { .. } = err else {
-            return None;
-        };
-        if !self.block_known_locally(qc.subject_block_hash) {
-            debug!(
-                height = qc.height,
-                view = qc.view,
-                block = %qc.subject_block_hash,
-                "skipping RBC-ready QC recovery: block not known locally"
-            );
-            return None;
-        }
-        let session_key = Self::session_key(&qc.subject_block_hash, qc.height, qc.view);
-        let session = self.subsystems.da_rbc.rbc.sessions.get(&session_key)?;
-        let ready_signers: BTreeSet<_> = session
-            .ready_signatures
-            .iter()
-            .map(|entry| entry.sender)
-            .collect();
-        let required = topology.min_votes_for_commit();
-        if ready_signers.len() < required {
-            debug!(
-                height = qc.height,
-                view = qc.view,
-                block = %qc.subject_block_hash,
-                ready = ready_signers.len(),
-                required,
-                "skipping RBC-ready QC recovery: READY quorum insufficient"
-            );
-            return None;
-        }
-        let roster_len = topology.as_ref().len();
-        let parsed_signers = qc_signer_indices(qc, roster_len, roster_len).ok()?;
-        if !parsed_signers
-            .voting
-            .iter()
-            .all(|signer| ready_signers.contains(signer))
-        {
-            debug!(
-                height = qc.height,
-                view = qc.view,
-                block = %qc.subject_block_hash,
-                ready = ?ready_signers,
-                qc_signers = ?parsed_signers.voting,
-                "skipping RBC-ready QC recovery: QC bitmap not covered by READY quorum"
-            );
-            return None;
-        }
-
-        info!(
-            height = qc.height,
-            view = qc.view,
-            block = %qc.subject_block_hash,
-            ready_signers = ready_signers.len(),
-            qc_signers = parsed_signers.voting.len(),
-            required,
-            "accepting availability QC reconstructed from RBC READY quorum"
-        );
-        Some(QcValidationOutcome {
-            signers: parsed_signers.voting.into_iter().collect(),
-            missing_votes: 0,
-            present_signers: parsed_signers.present.len(),
-        })
     }
 
     pub(super) fn recover_qc_from_aggregate(
@@ -1393,17 +1375,12 @@ impl Actor {
             return None;
         };
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
-        let signature_topology =
+        let _signature_topology =
             super::topology_for_view(topology, qc.height, qc.view, mode_tag, prf_seed);
-        if !qc_aggregate_consistent(
-            qc,
-            &signature_topology,
-            &self.common_config.chain,
-            mode_tag,
-        ) {
+        if !qc_aggregate_consistent(qc, topology, &self.common_config.chain, mode_tag) {
             return None;
         }
-        let roster_len = signature_topology.as_ref().len();
+        let roster_len = topology.as_ref().len();
         let parsed_signers = qc_signer_indices(qc, roster_len, roster_len).ok()?;
         info!(
             height = qc.height,
@@ -1516,7 +1493,7 @@ impl Actor {
             }
         };
         self.defer_qc_if_block_missing(
-            crate::sumeragi::consensus::Phase::Precommit,
+            crate::sumeragi::consensus::Phase::Commit,
             subject,
             qc.height,
             qc.view,
@@ -1527,17 +1504,6 @@ impl Actor {
             self.persist_execution_qc(&qc)?;
         }
         self.execution_qc_cache.insert(subject, qc);
-        Ok(())
-    }
-
-    pub(super) fn handle_witness_qc(
-        &mut self,
-        qc: crate::sumeragi::consensus::WitnessAvailQC,
-    ) -> Result<()> {
-        if self.drop_stale_view(qc.height, qc.view, "WitnessAvailQC") {
-            return Ok(());
-        }
-        self.record_phase_sample(PipelinePhase::CollectWitness, qc.height, qc.view);
         Ok(())
     }
 

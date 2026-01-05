@@ -23,12 +23,12 @@ translation_last_reviewed: 2025-12-28
 
 - **Grafana (`dashboards/grafana/nexus_lanes.json`)** — “Nexus Lane Finality & Oracles” を公開。パネルは以下を追跡します。
   - `histogram_quantile()` による `iroha_slot_duration_ms`（p50/p95/p99）と最新サンプルのゲージ。
-  - `iroha_da_quorum_ratio` と `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m])` による DA churn。
+  - `iroha_da_quorum_ratio` と `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])` による DA churn。
   - オラクル関連: `iroha_oracle_price_local_per_xor`, `iroha_oracle_staleness_seconds`, `iroha_oracle_twap_window_seconds`, `iroha_oracle_haircut_basis_points`。
   - 決済バッファパネル（`iroha_settlement_buffer_xor`）は `LaneBlockCommitment` レシート由来のレーン別デビットを表示。
 - **アラートルール** — `ans3.md` の Slot/DA SLO 条項を再利用。以下でページング:
   - スロット時間 p95 > 1000 ms が 5 m ウィンドウで 2 回連続、
-  - DA クォーラム比 < 0.95 または `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m]) > 0`、
+  - DA クォーラム比 < 0.95 または `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m]) > 0`、
   - オラクル staleness > 90 s または TWAP 窓 ≠ 60 s、
   - 決済バッファ < 25 %（soft）/ 10 %（hard）※メトリクス有効化後。
 
@@ -39,7 +39,7 @@ translation_last_reviewed: 2025-12-28
 | `histogram_quantile(0.95, iroha_slot_duration_ms)` | ≤ 1000 ms（hard）、950 ms warning | ダッシュボードパネル、または `scripts/telemetry/check_slot_duration.py`（`--json-out artifacts/nx18/slot_summary.json`）を chaos 実行時の Prometheus export に対して実行。 |
 | `iroha_slot_duration_ms_latest` | 最新スロット。quantile が正常でも > 1100 ms なら調査。 | インシデント起票時に値を添付。 |
 | `iroha_da_quorum_ratio` | 30 m 移動窓で ≥ 0.95。 | ブロックコミット中の DA reschedule から派生。 |
-| `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m])` | chaos リハ以外では 0 を維持。 | 持続的な増加は `missing-availability warning` と扱う。 |
+| `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])` | chaos リハ以外では 0 を維持。 | 持続的な増加は `missing-availability warning` と扱う。 |
 
 各 reschedule は `kind = "missing-availability warning"` の Torii pipeline warning も発火します。メトリクスのスパイクと一緒にイベントを回収し、該当ブロックヘッダ、リトライ回数、requeue カウンタをバリデータログを追わずに特定してください。【crates/iroha_core/src/sumeragi/main_loop.rs:5164】
 | `iroha_oracle_staleness_seconds` | ≤ 60 s。75 s でアラート。 | 60 s TWAP フィードの陳腐化。 |

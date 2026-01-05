@@ -110,7 +110,7 @@ High-variance یا mobile networks
 - Verify config: `max(sumeragi_pacemaker_backoff_multiplier)`, `max(sumeragi_pacemaker_rtt_floor_multiplier)`, `max(sumeragi_pacemaker_max_backoff_ms)`
 
 ## حتمیت اور سیفٹی
-- Timers/backoff/jitter صرف اس بات پر اثر ڈالتے ہیں کہ nodes کب proposals/view-changes trigger کریں؛ signatures کی validity یا QC rules پر اثر نہیں پڑتا۔
+- Timers/backoff/jitter صرف اس بات پر اثر ڈالتے ہیں کہ nodes کب proposals/view-changes trigger کریں؛ signatures کی validity یا commit certificate rules پر اثر نہیں پڑتا۔
 - کوئی بھی randomness ہر node اور (height, view) کیلئے deterministic رکھیں۔ time-of-day یا OS RNG کو consensus-critical paths میں استعمال نہ کریں۔
 
 </div>

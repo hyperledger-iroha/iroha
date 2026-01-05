@@ -38,7 +38,7 @@ translation_last_reviewed: 2026-01-01
 - Collector plans کو `(height, view)` سے key کیا جاتا ہے اور subject بدلتے ہی reinitialize کیا جاتا ہے تاکہ stale view-change retries پرانے collector targets دوبارہ استعمال نہ کریں۔
 - Redundant send (`r`) deterministically پلان میں آگے بڑھ کر apply ہوتا ہے۔ جب `(height, view)` کیلئے کوئی collector دستیاب نہ ہو تو votes full commit topology (self کو چھوڑ کر) پر fallback کرتے ہیں تاکہ deadlock سے بچا جا سکے۔
 - جب quorum رک جائے تو reschedule path cached votes کو collector plan کے ذریعے rebroadcast کرتا ہے، اور collectors خالی ہوں، صرف local ہوں یا quorum سے کم ہوں تو commit topology پر fallback کرتا ہے۔ یہ bounded "gossip" fallback دیتا ہے بغیر steady-state fast path پر مکمل broadcast کی لاگت دیے۔
-- Locked QC gate کی وجہ سے ہر proposal drop پر `block_created_dropped_by_lock_total` بڑھتا ہے؛ header validation کی ناکامیوں سے `block_created_hint_mismatch_total` اور `block_created_proposal_mismatch_total` بڑھتے ہیں، جس سے operators repeated fallbacks کو leader correctness مسائل سے جوڑ سکتے ہیں۔ `/v1/sumeragi/status` snapshot تازہ ترین Highest/Locked QC hashes بھی دکھاتا ہے تاکہ dashboards drop spikes کو مخصوص block hashes سے correlate کر سکیں۔
+- Locked commit certificate gate کی وجہ سے ہر proposal drop پر `block_created_dropped_by_lock_total` بڑھتا ہے؛ header validation کی ناکامیوں سے `block_created_hint_mismatch_total` اور `block_created_proposal_mismatch_total` بڑھتے ہیں، جس سے operators repeated fallbacks کو leader correctness مسائل سے جوڑ سکتے ہیں۔ `/v1/sumeragi/status` snapshot تازہ ترین Highest/Locked commit certificate hashes بھی دکھاتا ہے تاکہ dashboards drop spikes کو مخصوص block hashes سے correlate کر سکیں۔
 
 ## Implementation summary
 

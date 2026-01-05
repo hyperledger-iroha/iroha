@@ -258,8 +258,7 @@ mod tests {
         block::{
             BlockHeader, BlockSignature, SignedBlock,
             consensus::{
-                ConsensusBlockHeader, LaneBlockCommitment, NewView, Phase, Proposal, Qc,
-                QcAggregate, QcHeaderRef, RbcChunk, Vote,
+                CommitAggregate, ConsensusBlockHeader, LaneBlockCommitment, Proposal, RbcChunk,
             },
         },
         consensus::VrfEpochRecord,
@@ -273,7 +272,7 @@ mod tests {
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
-        sumeragi::{consensus::ValidatorIndex, view_change::ProofBuilder},
+        sumeragi::consensus::{Phase, QcHeaderRef, ValidatorIndex, Vote},
     };
 
     const TEST_CHANNEL_CAP: usize = 16;
@@ -364,17 +363,17 @@ mod tests {
 
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
         let vote = Vote {
-            phase: Phase::Prevote,
+            phase: Phase::Prepare,
             block_hash,
             height: 1,
             view: 0,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
         vote_tx
-            .send(BlockMessage::PrevoteVote(message::PrevoteVoteMsg(vote)))
+            .send(BlockMessage::CommitVote(vote))
             .expect("send prevote");
 
         let proposal = Proposal {
@@ -386,14 +385,13 @@ mod tests {
                 height: 1,
                 view: 0,
                 epoch: 0,
-                highest_qc: QcHeaderRef {
+                highest_cert: QcHeaderRef {
                     height: 0,
                     view: 0,
                     epoch: 0,
                     subject_block_hash: block_hash,
-                    phase: Phase::Prevote,
+                    phase: Phase::Prepare,
                 },
-                avail_qc_ref: None,
             },
             payload_hash: Hash::new(b"payload"),
         };
@@ -454,17 +452,17 @@ mod tests {
 
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
         let vote = Vote {
-            phase: Phase::Prevote,
+            phase: Phase::Prepare,
             block_hash,
             height: 1,
             view: 0,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
         vote_tx
-            .send(BlockMessage::PrevoteVote(message::PrevoteVoteMsg(vote)))
+            .send(BlockMessage::CommitVote(vote))
             .expect("send prevote");
 
         let proposal = Proposal {
@@ -476,14 +474,13 @@ mod tests {
                 height: 1,
                 view: 0,
                 epoch: 0,
-                highest_qc: QcHeaderRef {
+                highest_cert: QcHeaderRef {
                     height: 0,
                     view: 0,
                     epoch: 0,
                     subject_block_hash: block_hash,
-                    phase: Phase::Prevote,
+                    phase: Phase::Prepare,
                 },
-                avail_qc_ref: None,
             },
             payload_hash: Hash::new(b"payload"),
         };
@@ -898,7 +895,7 @@ mod tests {
         };
 
         let base_key: VoteDedupKey = (
-            SumeragiHandle::phase_id(crate::sumeragi::consensus::Phase::Prevote),
+            SumeragiHandle::phase_id(crate::sumeragi::consensus::Phase::Prepare),
             make_hash(0),
             1,
             0,
@@ -1117,18 +1114,18 @@ mod tests {
         );
 
         let vote = crate::sumeragi::consensus::Vote {
-            phase: crate::sumeragi::consensus::Phase::Precommit,
+            phase: crate::sumeragi::consensus::Phase::Commit,
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(
                 iroha_crypto::Hash::prehashed([1u8; 32]),
             ),
             height: 3,
             view: 0,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
-        let msg = BlockMessage::PrecommitVote(message::PrecommitVoteMsg(vote.clone()));
+        let msg = BlockMessage::CommitVote(vote.clone());
 
         handle.incoming_block_message(msg.clone());
         handle.incoming_block_message(msg);
@@ -1136,7 +1133,7 @@ mod tests {
         let received: Vec<_> = vote_rx.try_iter().collect();
         assert_eq!(received.len(), 1);
         let only = received.into_iter().next().expect("one message");
-        assert!(matches!(only, BlockMessage::PrecommitVote(_)));
+        assert!(matches!(only, BlockMessage::CommitVote(_)));
     }
 
     #[test]
@@ -1176,11 +1173,32 @@ mod tests {
         };
         assert!(!handle.try_incoming_block_message(BlockMessage::RbcChunk(rbc_chunk)));
 
-        let keypair = KeyPair::from_seed(b"view-change".to_vec(), Algorithm::Ed25519);
-        let proof = ProofBuilder::new(block_hash, 0).sign(&keypair);
+        let v1 = Vote {
+            phase: Phase::Prepare,
+            block_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            highest_cert: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let v2 = Vote {
+            phase: Phase::Prepare,
+            block_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            highest_cert: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let evidence = crate::sumeragi::consensus::Evidence {
+            kind: crate::sumeragi::consensus::EvidenceKind::DoublePrepare,
+            payload: crate::sumeragi::consensus::EvidencePayload::DoubleVote { v1, v2 },
+        };
         assert!(
-            !handle
-                .try_incoming_consensus_control_flow_message(ControlFlow::ViewChangeProof(proof))
+            !handle.try_incoming_consensus_control_flow_message(ControlFlow::Evidence(evidence))
         );
 
         let header = BlockHeader {
@@ -1946,14 +1964,13 @@ mod tests {
             view: 0,
             epoch: 0,
             subject_block_hash: parent_hash,
-            phase: crate::sumeragi::consensus::Phase::Prevote,
+            phase: crate::sumeragi::consensus::Phase::Prepare,
         };
         let hint = crate::sumeragi::message::ProposalHint {
             block_hash,
             height: 2,
             view: 0,
-            highest_qc: qc,
-            avail_qc_ref: None,
+            highest_cert: qc,
         };
 
         handle.incoming_block_message(BlockMessage::ProposalHint(hint));
@@ -2074,7 +2091,7 @@ mod tests {
             height: 2,
             view: 0,
             epoch: 0,
-            aggregate: QcAggregate {
+            aggregate: CommitAggregate {
                 signers_bitmap: Vec::new(),
                 bls_aggregate_signature: Vec::new(),
             },
@@ -2216,7 +2233,7 @@ mod tests {
     impl WorkerActor for RecordingActor {
         fn on_block_message(&mut self, msg: BlockMessage) -> Result<()> {
             let label = match msg {
-                BlockMessage::PrevoteVote(_) => "vote",
+                BlockMessage::CommitVote(_) => "vote",
                 BlockMessage::RbcChunk(_) => "rbc",
                 BlockMessage::Proposal(_) => "payload",
                 BlockMessage::ConsensusParams(_) => "block",
@@ -2288,7 +2305,7 @@ mod tests {
     impl WorkerActor for RecordingActorWithTick {
         fn on_block_message(&mut self, msg: BlockMessage) -> Result<()> {
             let label = match msg {
-                BlockMessage::PrevoteVote(_) => "vote",
+                BlockMessage::CommitVote(_) => "vote",
                 BlockMessage::RbcChunk(_) => "rbc",
                 BlockMessage::Proposal(_) => "payload",
                 BlockMessage::ConsensusParams(_) => "block",
@@ -2328,7 +2345,7 @@ mod tests {
     impl WorkerActor for SlowVoteActor {
         fn on_block_message(&mut self, msg: BlockMessage) -> Result<()> {
             match msg {
-                BlockMessage::PrevoteVote(_) => {
+                BlockMessage::CommitVote(_) => {
                     std::thread::sleep(self.vote_sleep);
                     self.events.push("vote");
                 }
@@ -2392,14 +2409,13 @@ mod tests {
                     height: 1,
                     view: 0,
                     epoch: 0,
-                    highest_qc: QcHeaderRef {
+                    highest_cert: QcHeaderRef {
                         height: 0,
                         view: 0,
                         epoch: 0,
                         subject_block_hash: block_hash,
-                        phase: Phase::Prevote,
+                        phase: Phase::Prepare,
                     },
-                    avail_qc_ref: None,
                 },
                 payload_hash: Hash::new(b"payload"),
             };
@@ -2426,17 +2442,17 @@ mod tests {
 
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
         let vote = Vote {
-            phase: Phase::Prevote,
+            phase: Phase::Prepare,
             block_hash,
             height: 1,
             view: 0,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
         vote_tx
-            .send(BlockMessage::PrevoteVote(message::PrevoteVoteMsg(vote)))
+            .send(BlockMessage::CommitVote(vote))
             .expect("send prevote");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
 
@@ -2462,14 +2478,13 @@ mod tests {
                 height: 1,
                 view: 0,
                 epoch: 0,
-                highest_qc: QcHeaderRef {
+                highest_cert: QcHeaderRef {
                     height: 0,
                     view: 0,
                     epoch: 0,
                     subject_block_hash: block_hash,
-                    phase: Phase::Prevote,
+                    phase: Phase::Prepare,
                 },
-                avail_qc_ref: None,
             },
             payload_hash: Hash::new(b"payload"),
         };
@@ -2555,17 +2570,17 @@ mod tests {
 
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
         let vote = Vote {
-            phase: Phase::Prevote,
+            phase: Phase::Prepare,
             block_hash,
             height: 1,
             view: 0,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
         vote_tx
-            .send(BlockMessage::PrevoteVote(message::PrevoteVoteMsg(vote)))
+            .send(BlockMessage::CommitVote(vote))
             .expect("send prevote");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
 
@@ -2591,14 +2606,13 @@ mod tests {
                 height: 1,
                 view: 0,
                 epoch: 0,
-                highest_qc: QcHeaderRef {
+                highest_cert: QcHeaderRef {
                     height: 0,
                     view: 0,
                     epoch: 0,
                     subject_block_hash: block_hash,
-                    phase: Phase::Prevote,
+                    phase: Phase::Prepare,
                 },
-                avail_qc_ref: None,
             },
             payload_hash: Hash::new(b"payload"),
         };
@@ -2736,17 +2750,17 @@ mod tests {
 
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
         let vote = Vote {
-            phase: Phase::Prevote,
+            phase: Phase::Prepare,
             block_hash,
             height: 1,
             view: 0,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
         vote_tx
-            .send(BlockMessage::PrevoteVote(message::PrevoteVoteMsg(vote)))
+            .send(BlockMessage::CommitVote(vote))
             .expect("send prevote");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
 
@@ -2759,14 +2773,13 @@ mod tests {
                 height: 1,
                 view: 0,
                 epoch: 0,
-                highest_qc: QcHeaderRef {
+                highest_cert: QcHeaderRef {
                     height: 0,
                     view: 0,
                     epoch: 0,
                     subject_block_hash: block_hash,
-                    phase: Phase::Prevote,
+                    phase: Phase::Prepare,
                 },
-                avail_qc_ref: None,
             },
             payload_hash: Hash::new(b"payload"),
         };
@@ -2844,17 +2857,17 @@ mod tests {
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
         for signer in 0..2u32 {
             let vote = Vote {
-                phase: Phase::Prevote,
+                phase: Phase::Prepare,
                 block_hash,
                 height: 1,
                 view: 0,
                 epoch: 0,
+                highest_cert: None,
                 signer,
                 bls_sig: Vec::new(),
-                signature: Vec::new(),
             };
             vote_tx
-                .send(BlockMessage::PrevoteVote(message::PrevoteVoteMsg(vote)))
+                .send(BlockMessage::CommitVote(vote))
                 .expect("send prevote");
             status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
         }
@@ -2930,27 +2943,33 @@ mod tests {
         let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
 
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
-        let qc = Qc {
-            phase: Phase::Prevote,
-            subject_block_hash: block_hash,
-            height: 0,
-            view: 0,
-            epoch: 0,
-            aggregate: QcAggregate {
-                signers_bitmap: vec![0],
-                bls_aggregate_signature: Vec::new(),
-            },
-        };
-        let new_view = NewView {
+        let v1 = Vote {
+            phase: Phase::Prepare,
+            block_hash,
             height: 1,
             view: 1,
-            highest_qc: qc,
-            sender: 0,
-            signature: Vec::new(),
+            epoch: 0,
+            highest_cert: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let v2 = Vote {
+            phase: Phase::Prepare,
+            block_hash,
+            height: 1,
+            view: 1,
+            epoch: 0,
+            highest_cert: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let evidence = crate::sumeragi::consensus::Evidence {
+            kind: crate::sumeragi::consensus::EvidenceKind::DoublePrepare,
+            payload: crate::sumeragi::consensus::EvidencePayload::DoubleVote { v1, v2 },
         };
         consensus_tx
-            .send(ControlFlow::NewView(new_view))
-            .expect("send new view");
+            .send(ControlFlow::Evidence(evidence))
+            .expect("send evidence");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::Consensus);
 
         let config = WorkerLoopConfig {
@@ -3075,17 +3094,17 @@ mod tests {
 
             let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
             let vote = Vote {
-                phase: Phase::Prevote,
+                phase: Phase::Prepare,
                 block_hash,
                 height: 1,
                 view: 0,
                 epoch: 0,
+                highest_cert: None,
                 signer: 0,
                 bls_sig: Vec::new(),
-                signature: Vec::new(),
             };
             vote_tx
-                .send(BlockMessage::PrevoteVote(message::PrevoteVoteMsg(vote)))
+                .send(BlockMessage::CommitVote(vote))
                 .expect("send prevote");
             status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
 
@@ -3111,14 +3130,13 @@ mod tests {
                     height: 1,
                     view: 0,
                     epoch: 0,
-                    highest_qc: QcHeaderRef {
+                    highest_cert: QcHeaderRef {
                         height: 0,
                         view: 0,
                         epoch: 0,
                         subject_block_hash: block_hash,
-                        phase: Phase::Prevote,
+                        phase: Phase::Prepare,
                     },
-                    avail_qc_ref: None,
                 },
                 payload_hash: Hash::new(b"payload"),
             };
@@ -3138,27 +3156,33 @@ mod tests {
                 .expect("send consensus params");
             status::record_worker_queue_enqueue(status::WorkerQueueKind::Blocks);
 
-            let qc = Qc {
-                phase: Phase::Prevote,
-                subject_block_hash: block_hash,
-                height: 0,
-                view: 0,
-                epoch: 0,
-                aggregate: QcAggregate {
-                    signers_bitmap: vec![0],
-                    bls_aggregate_signature: Vec::new(),
-                },
-            };
-            let new_view = NewView {
+            let v1 = Vote {
+                phase: Phase::Prepare,
+                block_hash,
                 height: 1,
                 view: 1,
-                highest_qc: qc,
-                sender: 0,
-                signature: Vec::new(),
+                epoch: 0,
+                highest_cert: None,
+                signer: 0,
+                bls_sig: Vec::new(),
+            };
+            let v2 = Vote {
+                phase: Phase::Prepare,
+                block_hash,
+                height: 1,
+                view: 1,
+                epoch: 0,
+                highest_cert: None,
+                signer: 0,
+                bls_sig: Vec::new(),
+            };
+            let evidence = crate::sumeragi::consensus::Evidence {
+                kind: crate::sumeragi::consensus::EvidenceKind::DoublePrepare,
+                payload: crate::sumeragi::consensus::EvidencePayload::DoubleVote { v1, v2 },
             };
             consensus_tx
-                .send(ControlFlow::NewView(new_view))
-                .expect("send new view");
+                .send(ControlFlow::Evidence(evidence))
+                .expect("send evidence");
             status::record_worker_queue_enqueue(status::WorkerQueueKind::Consensus);
 
             let merge_signature = MergeCommitteeSignature {
@@ -3269,16 +3293,16 @@ mod tests {
 
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
         let vote = Vote {
-            phase: Phase::Prevote,
+            phase: Phase::Prepare,
             block_hash,
             height: 1,
             view: 0,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
-        handle.incoming_block_message(BlockMessage::PrevoteVote(message::PrevoteVoteMsg(vote)));
+        handle.incoming_block_message(BlockMessage::CommitVote(vote));
 
         let rbc_chunk = RbcChunk {
             block_hash,
@@ -3299,14 +3323,13 @@ mod tests {
                 height: 1,
                 view: 0,
                 epoch: 0,
-                highest_qc: QcHeaderRef {
+                highest_cert: QcHeaderRef {
                     height: 0,
                     view: 0,
                     epoch: 0,
                     subject_block_hash: block_hash,
-                    phase: Phase::Prevote,
+                    phase: Phase::Prepare,
                 },
-                avail_qc_ref: None,
             },
             payload_hash: Hash::new(b"payload"),
         };
@@ -3506,7 +3529,6 @@ pub mod rbc_store;
 pub(crate) mod smt;
 pub(crate) mod stake_snapshot;
 pub mod status;
-pub mod view_change;
 pub(crate) mod witness;
 pub use evidence::EvidenceValidationContext;
 pub use evidence::evidence_subject_height_view;
@@ -3916,13 +3938,11 @@ pub struct SumeragiHandle {
 }
 
 impl SumeragiHandle {
-    const COMMIT_VOTE_PHASE_ID: u8 = 3;
-
     fn phase_id(phase: crate::sumeragi::consensus::Phase) -> u8 {
         match phase {
-            crate::sumeragi::consensus::Phase::Prevote => 0,
-            crate::sumeragi::consensus::Phase::Precommit => 1,
-            crate::sumeragi::consensus::Phase::Available => 2,
+            crate::sumeragi::consensus::Phase::Prepare => 0,
+            crate::sumeragi::consensus::Phase::Commit => 1,
+            crate::sumeragi::consensus::Phase::NewView => 2,
         }
     }
 
@@ -4112,8 +4132,8 @@ impl SumeragiHandle {
                 },
             };
         match msg {
-            BlockMessage::PrecommitVote(vote) => {
-                let vote_ref = &vote.0;
+            BlockMessage::CommitVote(vote) => {
+                let vote_ref = &vote;
                 let duplicate = !self.dedup_vote((
                     Self::phase_id(vote_ref.phase),
                     vote_ref.block_hash,
@@ -4145,104 +4165,14 @@ impl SumeragiHandle {
                 );
                 enqueue_blocking(
                     &self.votes,
-                    BlockMessage::PrecommitVote(vote),
-                    "PrecommitVote",
-                    status::WorkerQueueKind::Votes,
-                )
-            }
-            BlockMessage::CommitVote(vote) => {
-                let signer = match crate::sumeragi::consensus::ValidatorIndex::try_from(
-                    vote.signature.index(),
-                ) {
-                    Ok(idx) => idx,
-                    Err(err) => {
-                        iroha_logger::warn!(
-                            ?err,
-                            height = vote.height,
-                            view = vote.view,
-                            epoch = vote.epoch,
-                            signer = vote.signature.index(),
-                            block_hash = %vote.block_hash,
-                            "dropping commit vote with invalid signer index"
-                        );
-                        return false;
-                    }
-                };
-                let duplicate = !self.dedup_vote((
-                    Self::COMMIT_VOTE_PHASE_ID,
-                    vote.block_hash,
-                    vote.height,
-                    vote.view,
-                    vote.epoch,
-                    signer,
-                ));
-                if duplicate {
-                    iroha_logger::debug!(
-                        height = vote.height,
-                        view = vote.view,
-                        epoch = vote.epoch,
-                        signer,
-                        block_hash = %vote.block_hash,
-                        "dropping duplicate commit vote from network"
-                    );
-                    return false;
-                }
-                iroha_logger::debug!(
-                    height = vote.height,
-                    view = vote.view,
-                    epoch = vote.epoch,
-                    signer,
-                    block_hash = %vote.block_hash,
-                    "enqueueing commit vote from network"
-                );
-                enqueue_blocking(
-                    &self.votes,
                     BlockMessage::CommitVote(vote),
                     "CommitVote",
                     status::WorkerQueueKind::Votes,
                 )
             }
-            BlockMessage::PrevoteVote(vote) => {
-                let vote_ref = &vote.0;
+            BlockMessage::CommitVote(vote) => {
                 let duplicate = !self.dedup_vote((
-                    Self::phase_id(vote_ref.phase),
-                    vote_ref.block_hash,
-                    vote_ref.height,
-                    vote_ref.view,
-                    vote_ref.epoch,
-                    vote_ref.signer,
-                ));
-                if duplicate {
-                    iroha_logger::debug!(
-                        phase = ?vote_ref.phase,
-                        height = vote_ref.height,
-                        view = vote_ref.view,
-                        epoch = vote_ref.epoch,
-                        signer = vote_ref.signer,
-                        block_hash = %vote_ref.block_hash,
-                        "dropping duplicate prevote from network"
-                    );
-                    return false;
-                }
-                iroha_logger::debug!(
-                    phase = ?vote_ref.phase,
-                    height = vote_ref.height,
-                    view = vote_ref.view,
-                    epoch = vote_ref.epoch,
-                    signer = vote_ref.signer,
-                    block_hash = %vote_ref.block_hash,
-                    "enqueueing prevote from network"
-                );
-                enqueue_blocking(
-                    &self.votes,
-                    BlockMessage::PrevoteVote(vote),
-                    "PrevoteVote",
-                    status::WorkerQueueKind::Votes,
-                )
-            }
-            BlockMessage::AvailabilityVote(vote) => {
-                let duplicate = !self.dedup_vote((
-                    Self::phase_id(crate::sumeragi::consensus::Phase::Available),
+                    Self::phase_id(vote.phase),
                     vote.block_hash,
                     vote.height,
                     vote.view,
@@ -4251,27 +4181,29 @@ impl SumeragiHandle {
                 ));
                 if duplicate {
                     iroha_logger::debug!(
+                        phase = ?vote.phase,
                         height = vote.height,
                         view = vote.view,
                         epoch = vote.epoch,
                         signer = vote.signer,
-                        block = %vote.block_hash,
-                        "dropping duplicate availability vote from network"
+                        block_hash = %vote.block_hash,
+                        "dropping duplicate commit vote from network"
                     );
                     return false;
                 }
                 iroha_logger::debug!(
+                    phase = ?vote.phase,
                     height = vote.height,
                     view = vote.view,
                     epoch = vote.epoch,
                     signer = vote.signer,
-                    block = %vote.block_hash,
-                    "enqueueing availability vote from network"
+                    block_hash = %vote.block_hash,
+                    "enqueueing commit vote from network"
                 );
                 enqueue_blocking(
                     &self.votes,
-                    BlockMessage::AvailabilityVote(vote),
-                    "AvailabilityVote",
+                    BlockMessage::CommitVote(vote),
+                    "CommitVote",
                     status::WorkerQueueKind::Votes,
                 )
             }
@@ -4287,22 +4219,10 @@ impl SumeragiHandle {
                 "ExecutionQC",
                 status::WorkerQueueKind::Votes,
             ),
-            BlockMessage::PrecommitQC(qc) => enqueue_blocking(
+            BlockMessage::CommitCertificate(cert) => enqueue_blocking(
                 &self.votes,
-                BlockMessage::PrecommitQC(qc),
-                "VoteLike",
-                status::WorkerQueueKind::Votes,
-            ),
-            BlockMessage::PrevoteQC(qc) => enqueue_blocking(
-                &self.votes,
-                BlockMessage::PrevoteQC(qc),
-                "VoteLike",
-                status::WorkerQueueKind::Votes,
-            ),
-            BlockMessage::AvailabilityQC(qc) => enqueue_blocking(
-                &self.votes,
-                BlockMessage::AvailabilityQC(qc),
-                "VoteLike",
+                BlockMessage::CommitCertificate(cert),
+                "CommitCertificate",
                 status::WorkerQueueKind::Votes,
             ),
             BlockMessage::ProposalHint(hint) => enqueue_blocking(
@@ -5332,16 +5252,16 @@ fn drain_mailbox<A: WorkerActor>(
         status::set_worker_stage(tier.stage());
         match envelope.message {
             WorkerMessage::Block(msg) => {
-                if let BlockMessage::PrecommitVote(vote) = &msg {
+                if let BlockMessage::CommitVote(vote) = &msg {
                     stats.precommit_votes_handled = stats.precommit_votes_handled.saturating_add(1);
                     stats.last_precommit_vote =
-                        Some((vote.0.height, vote.0.view, vote.0.epoch, vote.0.block_hash));
+                        Some((vote.height, vote.view, vote.epoch, vote.block_hash));
                     iroha_logger::debug!(
-                        height = vote.0.height,
-                        view = vote.0.view,
-                        epoch = vote.0.epoch,
-                        signer = vote.0.signer,
-                        block_hash = %vote.0.block_hash,
+                        height = vote.height,
+                        view = vote.view,
+                        epoch = vote.epoch,
+                        signer = vote.signer,
+                        block_hash = %vote.block_hash,
                         tier = ?tier,
                         "received precommit vote"
                     );

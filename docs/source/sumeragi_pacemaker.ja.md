@@ -103,5 +103,5 @@ window_jittered_ms = clamp(window + jitter, 0, cap)
 - 設定の検証: `max(sumeragi_pacemaker_backoff_multiplier)`, `max(sumeragi_pacemaker_rtt_floor_multiplier)`, `max(sumeragi_pacemaker_max_backoff_ms)`
 
 ## 決定性と安全性
-- タイマー／バックオフ／ジッタは提案やビュー変更のトリガ時刻にのみ影響し、署名検証や QC ルールには影響しません。
+- タイマー／バックオフ／ジッタは提案やビュー変更のトリガ時刻にのみ影響し、署名検証や commit certificate ルールには影響しません。
 - 乱数を用いる際はノードおよび `(height, view)` ごとに決定的な方式を保ち、日付時刻や OS RNG をコンセンサスクリティカル経路で利用しないでください。

@@ -88,7 +88,7 @@
 # control_msg_channel_cap = 1024        # control/background/lane channel capacity
 # msg_channel_cap = 100                 # legacy fallback when per-queue caps are omitted
 # commit_inflight_timeout_ms = 30000
-# missing_block_signer_fallback_attempts = 1 # fetch from QC signers before falling back to full topology
+# missing_block_signer_fallback_attempts = 1 # fetch from commit certificate signers before falling back to full topology
 # membership_mismatch_alert_threshold = 1    # consecutive mismatches before alert/fail-closed
 # membership_mismatch_fail_closed = false    # drop consensus messages from mismatched peers
 # da_quorum_timeout_multiplier = 3          # DA quorum timeout scaling (block_time + 4 * commit_time)

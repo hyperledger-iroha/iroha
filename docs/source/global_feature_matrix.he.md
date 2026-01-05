@@ -18,11 +18,11 @@ translator: manual
 
 | יכולת | מצב | הערות | מקורות |
 |-------|------|--------|---------|
-| תמיכת Multi-collector K/r ו-First-QC-wins | ◉ | בחירת אספן דטרמיניסטית, פאן-אאוט עודף ופרמטרים on-chain. | status.md:255; status.md:314 |
+| תמיכת Multi-collector K/r ו-First-commit-certificate-wins | ◉ | בחירת אספן דטרמיניסטית, פאן-אאוט עודף ופרמטרים on-chain. | status.md:255; status.md:314 |
 | Bacמת זמן בפייסמייקר (backoff, RTT floor, jitter) | ◉ | טיימרים ניתנים לקונפיגורציה עם טווח jitter, טלמטריה ותיעוד. | status.md:251 |
-| NEW_VIEW gating ומעקב HighestQC | ◉ | זרימת השליטה מעבירה NEW_VIEW/Evidence והמעקב אחר HighestQC מונוטוני. | status.md:210 |
-| AvailabilityQC gating | ○ | קיומי וגם QC זמינות מגבילים קומיט כשה-DA נדרש. | status.md:190 |
-| שערי RBC (DA + Reliable Broadcast) | ◉ | הקומיט מחכה ל-`DELIVER` של RBC בצירוף AvailabilityQC. | status.md:283-284 |
+| NEW_VIEW gating ומעקב Highest commit certificate | ◉ | זרימת השליטה מעבירה NEW_VIEW/Evidence והמעקב אחר Highest commit certificate מונוטוני. | status.md:210 |
+| availability evidence gating | ○ | קיומי וגם availability evidence זמינות מגבילים קומיט כשה-DA נדרש. | status.md:190 |
+| שערי RBC (DA + Reliable Broadcast) | ◉ | הקומיט מחכה ל-`DELIVER` של RBC בצירוף availability evidence. | status.md:283-284 |
 | איסוף ExecutionQC ושערים | ○ | אספני Exec ו-witnessים פועלים; פריטי חתימה מצטברת עדיין בפיתוח. | status.md:177 |
 | הפצת Evidence ונקודות קצה לאודיט | ◉ | `ControlFlow::Evidence`, API ב-Torii ובדיקות שליליות. | status.md:176; status.md:760-761 |
 | טלמטריית RBC (מדדי מוכנות/מסירה) | ◉ | `/v1/sumeragi/rbc*` והיסטוגרמות למפעילים. | status.md:283-284; status.md:772 |

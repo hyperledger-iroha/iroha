@@ -14,12 +14,17 @@ use iroha::{
         prelude::TransactionBuilder,
     },
 };
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::{
-    BlockHeader,
-    consensus::{Evidence, EvidenceKind, EvidencePayload, Phase, Vote},
+use iroha_core::sumeragi::consensus::Phase;
+use iroha_core::sumeragi::consensus::{PERMISSIONED_TAG, vote_preimage};
+use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
+use iroha_data_model::{
+    ChainId,
+    block::{
+        BlockHeader,
+        consensus::{CommitVote as Vote, Evidence, EvidenceKind, EvidencePayload},
+    },
 };
-use iroha_test_network::{NetworkBuilder, init_instruction_registry};
+use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use norito::{codec::Encode as _, json::Value};
 use tokio::runtime::Runtime;
@@ -34,25 +39,56 @@ fn evidence_count(value: &norito::json::Value) -> u64 {
 fn make_vote(seed: u8) -> Vote {
     let hash = Hash::prehashed([seed; 32]);
     Vote {
-        phase: Phase::Prevote,
+        phase: Phase::Prepare,
         block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(hash),
         height: 10,
         view: 3,
         epoch: 0,
+        highest_cert: None,
         signer: 0,
-        bls_sig: Vec::new(),
-        signature: vec![seed; 64],
+        bls_sig: vec![seed; 96],
     }
 }
 
-fn valid_double_prevote_evidence() -> (Evidence, Vote, Vote) {
-    let v1 = make_vote(0x90);
-    let mut v2 = v1.clone();
-    v2.block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x91; 32]));
-    v2.signature = vec![0x91; 64];
+fn signed_vote(
+    seed: u8,
+    signer: u32,
+    chain_id: &ChainId,
+    keypair: &KeyPair,
+    height: u64,
+    view: u64,
+    epoch: u64,
+) -> Vote {
+    let hash = Hash::prehashed([seed; 32]);
+    let mut vote = Vote {
+        phase: Phase::Prepare,
+        block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(hash),
+        height,
+        view,
+        epoch,
+        highest_cert: None,
+        signer,
+        bls_sig: Vec::new(),
+    };
+    let preimage = vote_preimage(chain_id, PERMISSIONED_TAG, &vote);
+    let signature = Signature::new(keypair.private_key(), &preimage);
+    vote.bls_sig = signature.payload().to_vec();
+    vote
+}
+
+fn valid_double_prepare_evidence(network: &Network) -> (Evidence, Vote, Vote) {
+    let (signer_idx, signer_kp) = network
+        .peers()
+        .iter()
+        .enumerate()
+        .find_map(|(idx, peer)| peer.bls_key_pair().map(|kp| (idx as u32, kp)))
+        .expect("network should expose at least one BLS keypair");
+    let chain_id = network.chain_id();
+    let v1 = signed_vote(0x90, signer_idx, &chain_id, signer_kp, 10, 0, 0);
+    let v2 = signed_vote(0x91, signer_idx, &chain_id, signer_kp, 10, 0, 0);
     (
         Evidence {
-            kind: EvidenceKind::DoublePrevote,
+            kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote {
                 v1: v1.clone(),
                 v2: v2.clone(),
@@ -95,7 +131,7 @@ fn posting_structurally_invalid_evidence_is_rejected() -> Result<()> {
 
     let vote = make_vote(0x42);
     let forged = Evidence {
-        kind: EvidenceKind::DoublePrevote,
+        kind: EvidenceKind::DoublePrepare,
         payload: EvidencePayload::DoubleVote {
             v1: vote.clone(),
             v2: vote,
@@ -137,7 +173,7 @@ fn posting_evidence_with_mismatched_signer_is_rejected() -> Result<()> {
     v2.block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x12; 32]));
     v2.signer = v1.signer.saturating_add(1);
     let evidence = Evidence {
-        kind: EvidenceKind::DoublePrevote,
+        kind: EvidenceKind::DoublePrepare,
         payload: EvidencePayload::DoubleVote { v1, v2 },
     };
 
@@ -168,7 +204,7 @@ fn posting_evidence_with_kind_payload_mismatch_is_rejected() -> Result<()> {
     let mut v2 = v1.clone();
     v2.block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x52; 32]));
     let evidence = Evidence {
-        kind: EvidenceKind::InvalidQC,
+        kind: EvidenceKind::InvalidCommitCertificate,
         payload: EvidencePayload::DoubleVote { v1, v2 },
     };
 
@@ -200,7 +236,7 @@ fn posting_evidence_with_conflicting_height_is_rejected() -> Result<()> {
     v2.block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; 32]));
     v2.height = v2.height.saturating_add(1);
     let evidence = Evidence {
-        kind: EvidenceKind::DoublePrevote,
+        kind: EvidenceKind::DoublePrepare,
         payload: EvidencePayload::DoubleVote { v1, v2 },
     };
 
@@ -232,7 +268,7 @@ fn posting_evidence_with_conflicting_view_is_rejected() -> Result<()> {
     v2.block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x32; 32]));
     v2.view = v2.view.saturating_add(1);
     let evidence = Evidence {
-        kind: EvidenceKind::DoublePrevote,
+        kind: EvidenceKind::DoublePrepare,
         payload: EvidencePayload::DoubleVote { v1, v2 },
     };
 
@@ -265,7 +301,7 @@ fn posting_evidence_with_conflicting_epoch_is_rejected() -> Result<()> {
     v2.block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x36; 32]));
     v2.epoch = 2;
     let evidence = Evidence {
-        kind: EvidenceKind::DoublePrevote,
+        kind: EvidenceKind::DoublePrepare,
         payload: EvidencePayload::DoubleVote { v1, v2 },
     };
 
@@ -295,9 +331,9 @@ fn posting_evidence_with_missing_signature_is_rejected() -> Result<()> {
     let mut v1 = make_vote(0x41);
     let mut v2 = v1.clone();
     v2.block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; 32]));
-    v1.signature.clear();
+    v1.bls_sig.clear();
     let evidence = Evidence {
-        kind: EvidenceKind::DoublePrevote,
+        kind: EvidenceKind::DoublePrepare,
         payload: EvidencePayload::DoubleVote { v1, v2 },
     };
 
@@ -456,14 +492,18 @@ fn posting_stale_evidence_is_not_persisted() -> Result<()> {
 
     let before = evidence_count(&client.get_sumeragi_evidence_count_json()?);
 
-    let mut v1 = make_vote(0x61);
-    v1.height = 0;
-    let mut v2 = v1.clone();
-    v2.block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x62; 32]));
-    v2.signature = vec![0x62; 64];
+    let (signer_idx, signer_kp) = network
+        .peers()
+        .iter()
+        .enumerate()
+        .find_map(|(idx, peer)| peer.bls_key_pair().map(|kp| (idx as u32, kp)))
+        .expect("network should expose at least one BLS keypair");
+    let chain_id = network.chain_id();
+    let v1 = signed_vote(0x61, signer_idx, &chain_id, signer_kp, 0, 0, 0);
+    let v2 = signed_vote(0x62, signer_idx, &chain_id, signer_kp, 0, 0, 0);
 
     let evidence = Evidence {
-        kind: EvidenceKind::DoublePrevote,
+        kind: EvidenceKind::DoublePrepare,
         payload: EvidencePayload::DoubleVote { v1, v2 },
     };
 
@@ -501,7 +541,7 @@ fn posting_valid_double_vote_evidence_is_persisted_for_slashing() -> Result<()> 
         "expected empty evidence store on fresh network, got {before}"
     );
 
-    let (evidence, first_vote, second_vote) = valid_double_prevote_evidence();
+    let (evidence, first_vote, second_vote) = valid_double_prepare_evidence(&network);
     let hex_payload = hex::encode(evidence.encode());
     let response = client.post_sumeragi_evidence_hex(&hex_payload)?;
     ensure!(
@@ -509,8 +549,8 @@ fn posting_valid_double_vote_evidence_is_persisted_for_slashing() -> Result<()> 
         "expected POST response to report status=accepted, got {response:?}"
     );
     ensure!(
-        response.get("kind").and_then(Value::as_str) == Some("DoublePrevote"),
-        "expected response kind DoublePrevote, got {response:?}"
+        response.get("kind").and_then(Value::as_str) == Some("DoublePrepare"),
+        "expected response kind DoublePrepare, got {response:?}"
     );
 
     let after = evidence_count(&client.get_sumeragi_evidence_count_json()?);
@@ -540,11 +580,11 @@ fn posting_valid_double_vote_evidence_is_persisted_for_slashing() -> Result<()> 
     };
 
     ensure!(
-        record.get("kind").and_then(Value::as_str) == Some("DoublePrevote"),
+        record.get("kind").and_then(Value::as_str) == Some("DoublePrepare"),
         "record kind mismatch: {record:?}"
     );
     ensure!(
-        record.get("phase").and_then(Value::as_str) == Some("Prevote"),
+        record.get("phase").and_then(Value::as_str) == Some("Prepare"),
         "record phase mismatch: {record:?}"
     );
     let recorded_height = record

@@ -287,9 +287,9 @@ Unlock sweep (מפעיל/ביקורת)
 use iroha_data_model::block::consensus::EvidenceKind;
 
 let offences = [
-    EvidenceKind::DoublePrevote,
-    EvidenceKind::DoublePrecommit,
-    EvidenceKind::InvalidQC,
+    EvidenceKind::DoublePrepare,
+    EvidenceKind::DoubleCommit,
+    EvidenceKind::InvalidCommitCertificate,
     EvidenceKind::InvalidProposal,
     EvidenceKind::DoubleExecVote,
 ];
@@ -299,9 +299,9 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrevote/DoublePrecommit** - המאמת חתם על hashes מתנגשים עבור אותו tuple `(phase,height,view,epoch)`.
+- **DoublePrepare/DoubleCommit** - המאמת חתם על hashes מתנגשים עבור אותו tuple `(phase,height,view,epoch)`.
 - **DoubleExecVote** - הצבעות ביצוע מתנגשות מפרסמות roots מצב שונים.
-- **InvalidQC** - aggregate פרסם QC שהמבנה שלו נכשל בבדיקות דטרמיניסטיות (למשל bitmap חתימות ריק).
+- **InvalidCommitCertificate** - aggregate פרסם commit certificate שהמבנה שלו נכשל בבדיקות דטרמיניסטיות (למשל bitmap חתימות ריק).
 - **InvalidProposal** - מנהיג הציע בלוק שנכשל באימות מבני (למשל מפר את כלל locked-chain).
 
 מפעילים וכלים יכולים לבדוק ולשדר מחדש payloads דרך:

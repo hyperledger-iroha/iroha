@@ -5,7 +5,7 @@
 ## 提供エンドポイント
 
 - `/metrics`: Prometheus 書式のテキスト。テレメトリ無効化時やプロファイルで制限されている場合は非公開。
-- `/status`: JSON ステータス。`sumeragi`（リーダー、HighestQC/LockedQC、ビュー変更証明カウンタ（`view_change_proof_{accepted,stale,rejected}_total`）、ゴシップフォールバック、トランザクションキュー深さ、エポック情報 `epoch { length_blocks, commit_deadline_offset, reveal_deadline_offset }`、RBC ストア統計〔`sessions`, `bytes`, `pressure_level`, `evictions_total`, `recent_evictions`〕、PRF シード／高さ／ビュー など）や `governance` のスナップショットを含む。
+- `/status`: JSON ステータス。`sumeragi`（リーダー、Highest/Locked commit certificate（`highest_qc`/`locked_qc`）、ビュー変更証明カウンタ（`view_change_proof_{accepted,stale,rejected}_total`）、ゴシップフォールバック、トランザクションキュー深さ、エポック情報 `epoch { length_blocks, commit_deadline_offset, reveal_deadline_offset }`、RBC ストア統計〔`sessions`, `bytes`, `pressure_level`, `evictions_total`, `recent_evictions`〕、PRF シード／高さ／ビュー など）や `governance` のスナップショットを含む。
 - `/v1/sumeragi/new_view` / `/v1/sumeragi/new_view/sse`: NEW_VIEW 受信数を JSON / SSE で取得（固定サイズのメモリ内ウィンドウで保持し、古い `(height, view)` は破棄）。
 - `/v1/sumeragi/status` / `/v1/sumeragi/status/sse`: コンセンサス状態を JSON または Norito で取得。JSON 版には `epoch { length_blocks, commit_deadline_offset, reveal_deadline_offset }` に加え、`da_reschedule_total`、`lane_governance_sealed_total` / `lane_governance_sealed_aliases`、`worker_loop { stage, stage_started_ms, last_iteration_ms, queue_depths { vote_rx, block_payload_rx, rbc_chunk_rx, block_rx, consensus_rx, lane_relay_rx, background_rx } }` などの集約メトリクスが含まれる。
 - `/v1/sumeragi/rbc` / `/v1/sumeragi/rbc/sessions`: RBC セッションの統計と詳細（`lane_backlog` / `dataspace_backlog` を含む）。
@@ -94,7 +94,7 @@
   - `sumeragi_collectors_targeted_current`: 現在のブロックでターゲット済みのコレクタ数（ゲージ）。
   - `sumeragi_collectors_targeted_per_block_bucket`: ブロック単位のコレクタ数を記録するヒストグラム。
   - `sumeragi_redundant_sends_total`, `sumeragi_redundant_sends_by_peer`, `sumeragi_redundant_sends_by_collector`: 冗長送信の総量／peer 別／collector インデックス別カウンタ。
-- DA 可用性警告: `sumeragi_da_gate_block_total{reason="missing_availability_qc"}` で可用性証跡の不足を追跡します。`sumeragi_rbc_da_reschedule_total` と `/v1/sumeragi/status` の `da_reschedule_total` はレガシーで、通常 0 のままです。
+- DA 可用性警告: `sumeragi_da_gate_block_total{reason="missing_local_data"}` で可用性証跡の不足を追跡します。`sumeragi_rbc_da_reschedule_total` と `/v1/sumeragi/status` の `da_reschedule_total` はレガシーで、通常 0 のままです。
 - チャネル圧力: `sumeragi_dropped_block_messages_total`, `sumeragi_dropped_control_messages_total`, `dropped_messages`。
 - VRF 活動: `sumeragi_vrf_commits_emitted_total`, `sumeragi_vrf_reveals_emitted_total`, `sumeragi_vrf_non_reveal_*`。
 - NEW_VIEW 可視化: `sumeragi_new_view_receipts_by_hv{height,view}`, `sumeragi_new_view_dropped_by_lock_total`。
@@ -210,7 +210,7 @@ nexus_lane_configured_total != EXPECTED_LANE_COUNT
 
 - `increase(block_created_hint_mismatch_total[5m]) > 0`: 提案ヘッダの不整合
 - `increase(block_created_proposal_mismatch_total[5m]) > 0`: 提案ペイロードの不一致
-- `increase(block_created_dropped_by_lock_total[5m]) > 0`: Locked QC によるドロップ
+- `increase(block_created_dropped_by_lock_total[5m]) > 0`: Locked commit certificate によるドロップ
 - `increase(pacemaker_backpressure_deferrals_total[5m]) > 0`: キュー飽和による Pacemaker 停止
 - `increase(sumeragi_redundant_sends_total[5m])` と `rate(sumeragi_dropped_*[5m])` の同時増加は collector/チャネル設定の見直しを示唆
 - ログ相関の自動化: `python3 scripts/sumeragi_backpressure_log_scraper.py <logfile>` を実行すると、`pacemaker_backpressure_deferrals_total` のスパイクと RBC の `retry` / `abort` ログをまとめて確認できます。`journalctl -f ... | python3 scripts/sumeragi_backpressure_log_scraper.py -` のように標準入力からも扱え、`--status path/to/status.json` で `/v1/sumeragi/status` スナップショットを併せて把握できます。詳細はスクリプトの `--help` と英語版ランブックを参照してください。

@@ -62,7 +62,7 @@ impl Actor {
             let key = (*hash, pending.height, pending.view);
             let qc_precommit = cached_qc_for(
                 &self.qc_cache,
-                crate::sumeragi::consensus::Phase::Precommit,
+                crate::sumeragi::consensus::Phase::Commit,
                 *hash,
                 pending.height,
                 pending.view,
@@ -72,16 +72,7 @@ impl Actor {
                 .or_else(|| {
                     cached_qc_for(
                         &self.qc_cache,
-                        crate::sumeragi::consensus::Phase::Prevote,
-                        *hash,
-                        pending.height,
-                        pending.view,
-                    )
-                })
-                .or_else(|| {
-                    cached_qc_for(
-                        &self.qc_cache,
-                        crate::sumeragi::consensus::Phase::Available,
+                        crate::sumeragi::consensus::Phase::Prepare,
                         *hash,
                         pending.height,
                         pending.view,
@@ -163,7 +154,7 @@ impl Actor {
                     });
                 }
                 if let Some(qc) = qc {
-                    let msg = BlockMessage::PrevoteQC(super::message::PrevoteQCMsg(qc.clone()));
+                    let msg = BlockMessage::CommitCertificate(qc.clone());
                     for peer in commit_topology.as_ref() {
                         if peer == &local_peer_id {
                             continue;
@@ -283,7 +274,7 @@ impl Actor {
             .vote_log
             .values()
             .filter(|vote| {
-                vote.phase == crate::sumeragi::consensus::Phase::Precommit
+                vote.phase == crate::sumeragi::consensus::Phase::Commit
                     && vote.block_hash == block_hash
                     && vote.height == height
                     && vote.view == view
@@ -296,10 +287,7 @@ impl Actor {
         let last_reschedule_ms = pending
             .last_quorum_reschedule
             .map(|ts| now.saturating_duration_since(ts).as_millis());
-        let has_availability_qc = pending.availability_qc_view.is_some();
-        let drop_pending = has_availability_qc
-            && already_rescheduled
-            && reschedule_vote_count < min_votes_for_commit;
+        let drop_pending = already_rescheduled && reschedule_vote_count < min_votes_for_commit;
         let (requeued, failures, _duplicate_failures, _gossip_hashes) =
             if !has_reschedule_votes || drop_pending {
                 // Avoid conflicting proposals once votes exist (precommit or commit), unless we've
@@ -330,8 +318,8 @@ impl Actor {
                 .retain(|(_, qc_hash, _, _, _), _| qc_hash != &block_hash);
             self.execution_qc_cache.remove(&block_hash);
         } else {
-            // Keep the pending block and cached QCs so late commit certificates or
-            // availability evidence can still finalize it.
+            // Keep the pending block and cached certificates so late commit certificates
+            // can still finalize it.
             // We only requeue the transactions to allow a new view to assemble a fresh proposal.
             self.pending.pending_blocks.insert(block_hash, pending);
         }
@@ -371,7 +359,7 @@ impl Actor {
         local_peer_id: &PeerId,
     ) -> RescheduleRebroadcast {
         let votes = self.rebroadcast_block_votes(
-            crate::sumeragi::consensus::Phase::Precommit,
+            crate::sumeragi::consensus::Phase::Commit,
             block_hash,
             height,
             view,
@@ -424,10 +412,8 @@ impl Actor {
                 })
         };
         // Keep and rebroadcast the pending block so late payload requests can still succeed while
-        // allowing a fresh proposal to be assembled from the requeued transactions. If we already
-        // have availability evidence and still cannot reach precommit quorum after a retry, drop
-        // the pending block to unblock proposal assembly.
-        let block = if drop_pending || pending.availability_qc_view.is_some() {
+        // allowing a fresh proposal to be assembled from the requeued transactions.
+        let block = if drop_pending {
             false
         } else {
             let msg = BlockMessage::BlockCreated(super::message::BlockCreated {

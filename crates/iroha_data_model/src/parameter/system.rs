@@ -189,9 +189,9 @@ mod model {
         pub collectors_redundant_send_r: u8,
         /// Enable data availability for Sumeragi.
         ///
-        /// When enabled, block payload distribution uses Reliable Broadcast (RBC) and commit is
-        /// gated on observing an `AvailabilityQC`. When disabled, classic Sumeragi commits do not
-        /// wait for `AvailabilityQC` and RBC payload dissemination is off.
+        /// When enabled, block payload distribution uses Reliable Broadcast (RBC) and nodes
+        /// track payload/manifest availability, but consensus never gates on DA evidence.
+        /// When disabled, RBC payload dissemination is off and nodes rely on direct payloads.
         #[norito(default = "defaults::sumeragi::da_enabled")]
         pub da_enabled: bool,
         /// If set, indicates the next consensus mode to switch to at `mode_activation_height`.
@@ -482,7 +482,7 @@ mod model {
         CollectorsK(u16),
         /// Redundant send fanout (r). Must be >= 1.
         RedundantSendR(u8),
-        /// Enable/disable data availability (RBC + availability QC gating).
+        /// Enable/disable data availability (RBC payload dissemination and advisory tracking).
         DaEnabled(bool),
         /// Set the next consensus mode for future activation.
         NextMode(SumeragiConsensusMode),
@@ -827,7 +827,7 @@ impl SumeragiParameters {
         self.collectors_redundant_send_r
     }
 
-    /// Whether data availability (RBC + availability QC gating) is enabled.
+    /// Whether data availability (RBC payload dissemination and advisory tracking) is enabled.
     #[must_use]
     pub fn da_enabled(&self) -> bool {
         self.da_enabled

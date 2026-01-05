@@ -25,7 +25,7 @@ translator: manual
 
 - GET `/v1/sumeragi/evidence`
   - מציג רשומות ראיות אחרונות שנשמרו בסנאפשוט הביקורת של ה-WSV.
-  - פרמטרים: `limit` (ברירת מחדל 50, מקסימום 1000), ‏`offset` (ברירת מחדל 0), ‏`kind` (אופציונלי: `DoublePrevote|DoublePrecommit|InvalidQC|InvalidProposal`).
+  - פרמטרים: `limit` (ברירת מחדל 50, מקסימום 1000), ‏`offset` (ברירת מחדל 0), ‏`kind` (אופציונלי: `DoublePrepare|DoubleCommit|InvalidCommitCertificate|InvalidProposal`).
   - תגובה (Norito): `(total, Vec<EvidenceRecord>)`.
   - `Accept: application/json` יחזיר `{ "total": <u64>, "items": [ ... ] }`.
   - ראיות עם subject height ישן מ-`sumeragi.npos.reconfig.evidence_horizon_blocks` (ברירת מחדל ‎7200) נזרקות בעת קבלה; השחקן מדווח זאת בלוג לצורך חקירת הגשות ישנות.
@@ -34,13 +34,13 @@ translator: manual
   - מגיש ראיה מקודדת Norito (hex) אל שחקן Sumeragi (`ControlFlow::Evidence`).
   - גוף הבקשה (JSON): `{ "evidence_hex": "<hex string>" }`; רווחים מותרים.
   - תגובה (JSON): `{ "status": "accepted", "kind": "<variant>" }`.
-  - ולידציה בוחנת התאמת חותמים/גובה/תצוגה/אפוק עבור כפלי הצבעה, דורשת payload לא ריק לחתימה בודדת, דורשת קוורום קבלות חתומות (`TransactionSubmissionReceipt`) עבור `Censorship`, ודוחה `InvalidProposal` שאינן מקדמות height/view או שה-hash של ההורה אינו תואם את ה-QC.
+  - ולידציה בוחנת התאמת חותמים/גובה/תצוגה/אפוק עבור כפלי הצבעה, דורשת payload לא ריק לחתימה בודדת, דורשת קוורום קבלות חתומות (`TransactionSubmissionReceipt`) עבור `Censorship`, ודוחה `InvalidProposal` שאינן מקדמות height/view או שה-hash של ההורה אינו תואם את ה-commit certificate.
   - כלי CLI: `iroha sumeragi evidence submit --evidence-hex <hex>` או `--evidence-hex-file <path>`.
 
 עוד סטטוס קונצנזוס והוכחות ריצה
 
-- GET `/v1/sumeragi/status` — כברירת מחדל מחזיר `SumeragiStatusWire` בקידוד Norito. ‏`Accept: application/json` מספק אובייקט עם נתוני מנהיג, QC, `commit_certificate{height,view,epoch,block_hash,validator_set_hash,validator_set_len,signatures_total}` ו-`commit_quorum{height,view,block_hash,signatures_present,signatures_counted,signatures_set_b,signatures_required,last_updated_ms}`, תורי טרנזקציות, מקטע `view_change_causes { commit_failure_total, quorum_timeout_total, da_gate_total, censorship_evidence_total, missing_payload_total, missing_qc_total, validation_reject_total, last_cause, last_cause_timestamp_ms }`, מדדי gossip fallback, חתכי epoch (`epoch { length_blocks, commit_deadline_offset, reveal_deadline_offset }`), אובייקט `membership { height, view, epoch, view_hash }`, מדדי VRF/PRF, מוני validation_reject (total/reason) והמידע של block_sync_roster (commit/ checkpoint hints, history, sidecar, journal, topology, trusted, drops), בנוסף למונים של pacemaker_backpressure_deferrals_total ו-commit_pipeline_tick_total יחד עם pipeline_conflict_rate_bps ו-`access_set_sources { manifest_hints, entrypoint_hints, prepass_merge, conservative_fallback }`, ונתוני RBC/DA המשויכים, worker_loop { stage, stage_started_ms, last_iteration_ms, queue_depths { vote_rx, block_payload_rx, rbc_chunk_rx, block_rx, consensus_rx, lane_relay_rx, background_rx } }.
-- GET `/v1/sumeragi/qc` — ברירת מחדל Norito `SumeragiQcSnapshot`; JSON מספק `highest_qc` ו-`locked_qc`.
+- GET `/v1/sumeragi/status` — כברירת מחדל מחזיר `SumeragiStatusWire` בקידוד Norito. ‏`Accept: application/json` מספק אובייקט עם נתוני מנהיג, commit certificate, `commit_certificate{height,view,epoch,block_hash,validator_set_hash,validator_set_len,signatures_total}` ו-`commit_quorum{height,view,block_hash,signatures_present,signatures_counted,signatures_set_b,signatures_required,last_updated_ms}`, תורי טרנזקציות, מקטע `view_change_causes { commit_failure_total, quorum_timeout_total, da_gate_total, censorship_evidence_total, missing_payload_total, missing_qc_total, validation_reject_total, last_cause, last_cause_timestamp_ms }`, מדדי gossip fallback, חתכי epoch (`epoch { length_blocks, commit_deadline_offset, reveal_deadline_offset }`), אובייקט `membership { height, view, epoch, view_hash }`, מדדי VRF/PRF, מוני validation_reject (total/reason) והמידע של block_sync_roster (commit/ checkpoint hints, history, sidecar, journal, topology, trusted, drops), בנוסף למונים של pacemaker_backpressure_deferrals_total ו-commit_pipeline_tick_total יחד עם pipeline_conflict_rate_bps ו-`access_set_sources { manifest_hints, entrypoint_hints, prepass_merge, conservative_fallback }`, ונתוני RBC/DA המשויכים, worker_loop { stage, stage_started_ms, last_iteration_ms, queue_depths { vote_rx, block_payload_rx, rbc_chunk_rx, block_rx, consensus_rx, lane_relay_rx, background_rx } }.
+- GET `/v1/sumeragi/qc` — ברירת מחדל Norito `SumeragiQcSnapshot` עבור commit certificate; JSON מספק `highest_qc` ו-`locked_qc`.
 - GET `/v1/sumeragi/status/sse` — זרם SSE של אותו מטען (≈שנייה).
 - GET `/v1/sumeragi/exec_root/:hash` — Norito `(block_hash, Option<ExecRoot>)`; JSON מחזיר `{ block_hash, exec_root }` (hex) או `null`.
 - GET `/v1/sumeragi/exec_qc/:hash` — Norito `ExecutionQcRecord`; JSON כולל `post_state_root`, ‏`height`, ‏`view`, ‏`epoch`, ‏`signers_bitmap`, ‏`bls_aggregate_signature` (hex). אם אין נתון, מוחזר `{ subject_block_hash, exec_qc: null }`.

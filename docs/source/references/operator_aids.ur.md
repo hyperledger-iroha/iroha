@@ -27,11 +27,11 @@ translation_last_reviewed: 2026-01-01
     - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
 - میٹرکس: `sumeragi_new_view_receipts_by_hv{height,view}` گیجز کاؤنٹس کو ظاہر کرتے ہیں۔
 - GET `/v1/sumeragi/status`
-  - لیڈر انڈیکس، HighestQC/LockedQC (ہائٹس، ویوز، سبجیکٹ ہیشز)، کلیکٹر/VRF کاؤنٹرز، pacemaker ڈفرلز، ٹرانزیکشن کیو ڈیپتھ، اور RBC اسٹور ہیلتھ (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`) کا سنیپ شاٹ۔
+  - لیڈر انڈیکس، Highest/Locked commit certificates (`highest_qc`/`locked_qc`, ہائٹس/ویوز/سبجیکٹ ہیشز)، کلیکٹر/VRF کاؤنٹرز، pacemaker ڈفرلز، ٹرانزیکشن کیو ڈیپتھ، اور RBC اسٹور ہیلتھ (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`) کا سنیپ شاٹ۔
 - GET `/v1/sumeragi/status/sse`
   - `/v1/sumeragi/status` والے payload کا SSE اسٹریم (≈1 سیکنڈ) لائیو ڈیش بورڈز کے لیے۔
 - GET `/v1/sumeragi/qc`
-  - HighestQC اور LockedQC کا سنیپ شاٹ؛ معلوم ہونے پر HighestQC کے لیے `subject_block_hash` شامل ہوتا ہے۔
+  - highest/locked commit certificates کا سنیپ شاٹ؛ معلوم ہونے پر highest commit certificate کے لیے `subject_block_hash` شامل ہوتا ہے۔
 - GET `/v1/sumeragi/pacemaker`
   - pacemaker ٹائمر/کنفیگ: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`۔
 - GET `/v1/sumeragi/leader`
@@ -40,7 +40,7 @@ translation_last_reviewed: 2026-01-01
   - کمِٹڈ ٹوپولوجی اور آن‑چین پیرامیٹرز سے اخذ کردہ deterministic collector پلان: `mode`, پلان `(height, view)` (جہاں `height` موجودہ چین ہائٹ کے برابر ہے)، `collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, کلیکٹرز کی ترتیب شدہ فہرست، اور `epoch_seed` (hex) جب NPoS فعال ہو۔
 - GET `/v1/sumeragi/params`
   - آن‑چین Sumeragi پیرامیٹرز کا سنیپ شاٹ `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`۔
-  - جب `da_enabled` true ہو تو دستیابی کی گواہی (`AvailabilityQC` یا RBC `READY`) ٹریک ہوتی ہے مگر commit اس کا انتظار نہیں کرتا؛ لوکل RBC `DELIVER` بھی لازمی نہیں۔ آپریٹرز نیچے دیے گئے RBC endpoints سے payload ٹرانسپورٹ ہیلتھ کی تصدیق کر سکتے ہیں۔
+  - جب `da_enabled` true ہو تو دستیابی کی گواہی (`availability evidence` یا RBC `READY`) ٹریک ہوتی ہے مگر commit اس کا انتظار نہیں کرتا؛ لوکل RBC `DELIVER` بھی لازمی نہیں۔ آپریٹرز نیچے دیے گئے RBC endpoints سے payload ٹرانسپورٹ ہیلتھ کی تصدیق کر سکتے ہیں۔
 - GET `/v1/sumeragi/rbc`
   - Reliable Broadcast کے مجموعی کاؤنٹرز: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, deliver_broadcasts_total, payload_bytes_delivered_total }`۔
 - GET `/v1/sumeragi/rbc/sessions`
@@ -50,7 +50,7 @@ translation_last_reviewed: 2026-01-01
 ثبوت (آڈٹ؛ غیر‑کنسینسس)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
 - GET `/v1/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
-  - بنیادی فیلڈز (مثلاً DoublePrevote/Precommit، InvalidQC، InvalidProposal) معائنہ کے لیے شامل ہیں۔
+  - بنیادی فیلڈز (مثلاً DoublePrepare/Precommit، InvalidCommitCertificate، InvalidProposal) معائنہ کے لیے شامل ہیں۔
   - مثالیں:
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence/count | jq .`
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`

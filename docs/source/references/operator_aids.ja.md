@@ -25,11 +25,11 @@ translator: manual
   - 例: `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
 - メトリクス: `sumeragi_new_view_receipts_by_hv{height,view}` ゲージが同じカウントを公開。
 - `GET /v1/sumeragi/status`
-  - リーダーインデックス、HighestQC／LockedQC（高さ・ビュー・サブジェクトハッシュ）、コレクタ／VRF カウンター、ペースメーカーの猶予、トランザクションキュー深さ、RBC ストア状態（`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`）を取得。
+  - リーダーインデックス、Highest/Locked commit certificates（`highest_qc`/`locked_qc` の高さ・ビュー・サブジェクトハッシュ）、コレクタ／VRF カウンター、ペースメーカーの猶予、トランザクションキュー深さ、RBC ストア状態（`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`）を取得。
 - `GET /v1/sumeragi/status/sse`
   - `/v1/sumeragi/status` と同じペイロードの SSE（約 1 秒間隔）。
 - `GET /v1/sumeragi/qc`
-  - HighestQC／LockedQC のスナップショット。HighestQC のブロックハッシュが判明していれば `subject_block_hash` を含む。
+  - highest/locked commit certificates のスナップショット。highest commit certificate のブロックハッシュが判明していれば `subject_block_hash` を含む。
 - `GET /v1/sumeragi/pacemaker`
   - ペースメーカーのタイマー／設定値 `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`。
 - `GET /v1/sumeragi/leader`
@@ -38,7 +38,7 @@ translator: manual
   - コレクタプランを決定論的にエクスポート。`mode`、計画 `(height, view)`（`height` は現在のチェーン高）、`collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, 並び順を維持したコレクタ一覧、および NPoS 有効時の `epoch_seed` (hex)。
 - `GET /v1/sumeragi/params`
   - オンチェーンの Sumeragi パラメータ `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`。
-  - `da_enabled` が true の場合、コミットは `AvailabilityQC` を待機します（ローカルの RBC `DELIVER` は条件ではありません）。後述のエンドポイントで RBC の輸送状況を確認できます。
+  - `da_enabled` が true の場合、コミットは `availability evidence` を待機します（ローカルの RBC `DELIVER` は条件ではありません）。後述のエンドポイントで RBC の輸送状況を確認できます。
 - `GET /v1/sumeragi/rbc`
   - Reliable Broadcast の集計カウンター `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, deliver_broadcasts_total, payload_bytes_delivered_total }`。
 - `GET /v1/sumeragi/rbc/sessions`
@@ -49,7 +49,7 @@ translator: manual
 
 - `GET /v1/sumeragi/evidence/count` → `{ "count": <u64> }`
 - `GET /v1/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
-  - DoublePrevote/Precommit、InvalidQC、InvalidProposal などの基本フィールドを含む。
+  - DoublePrepare/Precommit、InvalidCommitCertificate、InvalidProposal などの基本フィールドを含む。
   - 例:
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence/count | jq .`
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`

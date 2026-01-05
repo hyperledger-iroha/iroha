@@ -15,28 +15,28 @@ translator: manual
 ### 概要
 - **役割とローテーション**: ソート済みトポロジはピアを `Leader`、`ValidatingPeer`、`ProxyTail`、`SetBValidator` の役割に分割します。各コミット後、集合 A（`min_votes_for_commit()` で決まる先頭ピア群）は `hash(prev_block_hash) mod min_votes_for_commit()` だけ左に回転します。ビュー変更ではリーダーを進めるためトポロジ全体を回転させます。`network_topology.rs` の `rotated_for_prev_block_hash(prev_hash)` が前ブロックハッシュに基づく監査しやすい決定論的ローテーションを定義しています。
 - **K コレクターモード**: 各高さに対し、トポロジは `proxy_tail_index()`（含む）から始まる連続領域として K 個のコレクターを決定論的に選びます（巻き戻りなし）。リーダーは決して含まれません。K=1 にすると従来の単一コレクター（プロキシテール）構成と一致します。
-- **First-QC-wins**: 指定コレクター（プロキシテールを含む）が正当な Precommit QC を組み立てた場合、それを公表できます。ピアは同じ `(height, hash)` に対して最初に受信した正当な QC を採用し、遅れて届いた重複は破棄します。ブロックコミットはこれらの QC だけで判断されます。
+- **First-commit-certificate-wins**: 指定コレクター（プロキシテールを含む）が正当な Precommit phase commit certificate を組み立てた場合、それを公表できます。ピアは同じ `(height, hash)` に対して最初に受信した正当な commit certificate を採用し、遅れて届いた重複は破棄します。ブロックコミットはこれらの commit certificate だけで判断されます。
 
 ### ノード役割（設定）
 - `validator`（既定）: 現在のトポロジ上の役割に従って合意に参加します。
-- `observer`: 合意トポロジから除外され（役割は `Undefined`）、本来その位置がコレクターであっても提案・投票・収集を行いません。ブロックゴシップで完全同期し、受信した QC を使ってコミットできます。
+- `observer`: 合意トポロジから除外され（役割は `Undefined`）、本来その位置がコレクターであっても提案・投票・収集を行いません。ブロックゴシップで完全同期し、受信した commit certificate を使ってコミットできます。
 
 ### バリデータ鍵要件
 - バリデータは BLS-Normal 公開鍵と証明（PoP）を必ず提示する必要があります。起動時（高さ 0）には、`trusted_peers` から BLS-Normal 鍵を持たないピア、または PoP が欠落・無効なピアを除外した集合が初期バリデータ集合になります。BLS でない、もしくは PoP 不備のピアは合意集合から外されます。
-- QC には同一メッセージ署名に対する BLS 集約署名、明示的な署名集合、コンパクトな署名者ビットマップが必須で添付されます。合意検証は明示署名に基づいたままです。集約署名とビットマップは監査目的のアーティファクトであり、セマンティクスを変えてはなりません。
+- commit certificate には同一メッセージ署名に対する BLS 集約署名、明示的な署名集合、コンパクトな署名者ビットマップが必須で添付されます。合意検証は明示署名に基づいたままです。集約署名とビットマップは監査目的のアーティファクトであり、セマンティクスを変えてはなりません。
 
 ### メッセージフロー（定常状態）
 - **リーダー**: ブロック作成が必要な状況（トランザクション待ちまたは前ブロックが非空）で期限が来ると `BlockCreated` をブロードキャストします。
 - **バリデータ**: ブロックを検証し、可用性投票を発行し、指定コレクターへ Prevote/Precommit 投票を送ります。ビュー 0 でローカルタイムアウトした場合、ノードは最大 `r` 個まで追加コレクターに投票をファンアウトできます。
-- **コレクター**: 投票を集約し、Availability/Prevote/Precommit の各 QC を公表します。`(height, hash)` ごとに最初の正当な Precommit QC が勝者となり、遅い QC は無視されます。
-- **観測ピア**: ビュー 0 では投票しません。後続ビューでは投票する場合があります。ブロック本体と一致する Precommit QC が揃った時点で決定論的にコミットします。
-- **受信側**: QC を検証し、Highest/Locked QC の追跡を更新し、対応する Precommit QC とブロック本体が揃ったらコミットを試みます。
+- **コレクター**: 投票を集約し、Availability/Prevote/Precommit の各 commit certificate を公表します。`(height, hash)` ごとに最初の正当な Precommit phase commit certificate が勝者となり、遅い commit certificate は無視されます。
+- **観測ピア**: ビュー 0 では投票しません。後続ビューでは投票する場合があります。ブロック本体と一致する Precommit phase commit certificate が揃った時点で決定論的にコミットします。
+- **受信側**: commit certificate を検証し、Highest/Locked commit certificate の追跡を更新し、対応する Precommit phase commit certificate とブロック本体が揃ったらコミットを試みます。
 
-### コミット規則（2 QC パイプライン）
-- 各バリデータは 2 種の QC を追跡します。最新の `highest_qc`（通常は子高さ）、安全性を守る `locked_qc` です。`highest_qc` が `locked_qc` を拡張しなければ提案は生成されず、NEW_VIEW のクォーラムがあっても破棄されます。
-- 高さ `h` のブロックは、高さ `h + 1` の QC の親ハッシュが高さ `h` でロックされた QC と一致した時点で最終化されます。この「2 段」条件によりパイプラインを維持しつつ、競合チェーンがコミットを得ることを防ぎます。`h` の実行を進めながら `h + 1` の投票を集められます。
-- この規則により、追加の最終化メッセージが不要になります。子 QC が届けば親ブロックは安全であり、ブロックと 2 つの QC を持つ全ノードが決定論的にコミットできます。最初の QC を見逃したノードはゴシップ／RBC 経由でブロックと QC を取得するだけで同じ決定に到達します。
-- 任意の時点で開いている高さは 2 連続までのため、コレクター・RBC・テレメトリはフォークの危険なくパイプライン処理できます。`sumeragi::main_loop` 内の不変条件でこれを保証しており、`ensure_locked_qc_allows` が提案生成をガードし、保留ブロックはインメモリで追跡され、コミット経路では互換子 QC を観測した後にのみ `locked_qc` を退役させます。
+### コミット規則（2 commit certificate パイプライン）
+- 各バリデータは 2 種の commit certificate を追跡します。最新の `highest_qc`（通常は子高さ）、安全性を守る `locked_qc` です。`highest_qc` が `locked_qc` を拡張しなければ提案は生成されず、NEW_VIEW のクォーラムがあっても破棄されます。
+- 高さ `h` のブロックは、高さ `h + 1` の commit certificate の親ハッシュが高さ `h` でロックされた commit certificate と一致した時点で最終化されます。この「2 段」条件によりパイプラインを維持しつつ、競合チェーンがコミットを得ることを防ぎます。`h` の実行を進めながら `h + 1` の投票を集められます。
+- この規則により、追加の最終化メッセージが不要になります。子 commit certificate が届けば親ブロックは安全であり、ブロックと 2 つの commit certificate を持つ全ノードが決定論的にコミットできます。最初の commit certificate を見逃したノードはゴシップ／RBC 経由でブロックと commit certificate を取得するだけで同じ決定に到達します。
+- 任意の時点で開いている高さは 2 連続までのため、コレクター・RBC・テレメトリはフォークの危険なくパイプライン処理できます。`sumeragi::main_loop` 内の不変条件でこれを保証しており、`ensure_locked_qc_allows` が提案生成をガードし、保留ブロックはインメモリで追跡され、コミット経路では互換子 commit certificate を観測した後にのみ `locked_qc` を退役させます。
 
 ### ペースメーカー（ビュー変更）
 - v1 ではビュー 0 における観測ピアの投票猶予が削除され、観測ピアはビュー 0 で投票しません。ビュー 0 でローカルタイムアウトした際は（ローテーション前の広げる処理なしで）ビュー変更を提案します。タイミングはオンチェーンの `SumeragiParameters`（`BlockTimeMs` と `CommitTimeMs`）で制御され、リーダー提案はパイプライン時間の約 1/3、期待コミットは約 2/3 です。
@@ -52,20 +52,20 @@ translator: manual
 - `Topology::role_at(index)` で任意ピアの役割を取得し、`is_validator(idx)` でその高さにおけるバリデータかどうかを判定します。
 
 ### API サーフェス
-- `iroha_cli sumeragi status --summary`（`GET /v1/sumeragi/status/summary`）がトポロジ情報・役割分布・QC 状態に加え、RBC の利用状況やエポック調整値（`epoch_len`/`epoch_commit`/`epoch_reveal`）を表示します。
+- `iroha_cli sumeragi status --summary`（`GET /v1/sumeragi/status/summary`）がトポロジ情報・役割分布・commit certificate 状態に加え、RBC の利用状況やエポック調整値（`epoch_len`/`epoch_commit`/`epoch_reveal`）を表示します。
 - `iroha_cli sumeragi params --summary`（`GET /v1/sumeragi/params`）で `collectors_k`、`collectors_redundant_send_r`、Sumeragi パラメータ（タイムアウト、モード等）を確認できます。
-- `iroha_cli sumeragi status`（`GET /v1/sumeragi/status`）はノードの役割履歴、ビュー、ロック中 QC、未コミットブロックなど完全な Norito レコードを返します。
+- `iroha_cli sumeragi status`（`GET /v1/sumeragi/status`）はノードの役割履歴、ビュー、ロック中 commit certificate、未コミットブロックなど完全な Norito レコードを返します。
 
 ### 実装ハイライト
-- `sumeragi::main_loop` がイベントループを担当し、QC 更新、提案処理、コミット処理を管理します。
-- QC ストレージは `HighestQc` と `LockedQc` を明示的な構造体で追跡し、ミスマッチ時に詳細ログとエビデンスを提供します。
-- RBC（Reliable Broadcast）は非同期で動作し、ブロック本体が揃うと QC に基づいて即座にコミットを試行します。
+- `sumeragi::main_loop` がイベントループを担当し、commit certificate 更新、提案処理、コミット処理を管理します。
+- commit certificate ストレージは `HighestQc` と `LockedQc` を明示的な構造体で追跡し、ミスマッチ時に詳細ログとエビデンスを提供します。
+- RBC（Reliable Broadcast）は非同期で動作し、ブロック本体が揃うと commit certificate に基づいて即座にコミットを試行します。
 - Pacemaker はハートビートとビュー変更を制御し、`SumeragiParameters` のタイムアウトに従ってローカルタイムアウトやビュー拡張を行います。
 - Telemetry は Prometheus メトリクスを公開し、`sumeragi_*` メトリクスで集約・キュー深さ・エビデンス件数などを可視化します。
 
 ### RBC／DA（データ可用性）
 - RBC はトポロジから導出された Collector 集合を使用してブロック本体を配布します。ブロックヘッダーには RBC セッション ID とパケットメタデータが含まれます。
-- `sumeragi.da_enabled` を有効にすると、可用性証跡（`AvailabilityQC`）を追跡しますがコミットは待機しません（ローカルの RBC `DELIVER` は条件になりません）。可用性証跡が不足している間は `sumeragi_da_gate_block_total{reason="missing_availability_qc"}` が増加し、`da_reschedule_total` はレガシーのため通常 0 のままです。
+- `sumeragi.da_enabled` を有効にすると、可用性証跡（`availability evidence`）を追跡しますがコミットは待機しません（ローカルの RBC `DELIVER` は条件になりません）。可用性証跡が不足している間は `sumeragi_da_gate_block_total{reason="missing_local_data"}` が増加し、`da_reschedule_total` はレガシーのため通常 0 のままです。
 - 大規模ペイロード（≥10 MiB）を扱うシナリオでは RBC デリバリー時間、コミット時間、スループット、キュー深さをテレメトリで監視し、SLO 違反をアラートします。
 
 ### トポロジ／役割取得の CLI 例
@@ -74,7 +74,7 @@ translator: manual
 - `iroha_cli sumeragi roles --peer <account>` で指定ピアの現在の役割を照会できます。
 
 ### エビデンス & スラッシング
-- ダブル投票や無効な QC/提案は `Evidence` レコードとして保存され、`/v1/sumeragi/evidence` エンドポイントから取得できます。
+- ダブル投票や無効な commit certificate/提案は `Evidence` レコードとして保存され、`/v1/sumeragi/evidence` エンドポイントから取得できます。
 - `iroha_cli sumeragi evidence submit --evidence-hex <0x…>` を使って Norito エンコードされたエビデンスを提出できます。Torii は構造検証を行い、`invalid consensus evidence` の場合は保存しません。
 - `sumeragi evidence count` で重複排除後の件数を確認し、監査やガバナンス判断に活用します。
 - `SumeragiParameters evidence_horizon_blocks` により保持期間を制御できます。短すぎる値は CI テストで拒否されます。
@@ -108,7 +108,7 @@ translator: manual
 - `sumeragi_collectors_k`, `sumeragi_collectors_r`
 
 ### テストカバレッジ
-- `crates/iroha_core/tests/sumeragi_negative_paths.rs`: 無効な提案・QC・重複投票を投稿し、`invalid proposal` / `invalid consensus evidence` を検証します。
+- `crates/iroha_core/tests/sumeragi_negative_paths.rs`: 無効な提案・commit certificate・重複投票を投稿し、`invalid proposal` / `invalid consensus evidence` を検証します。
 - `crates/iroha_core/tests/sumeragi_exec_qc.rs`: ExecQC の厳格モードと各フェイルパスをテストします。
 - `integration_tests/tests/sumeragi_da.rs`: RBC/DA の大規模ペイロードを検証し、SLO 違反で失敗させます。
 - `docs/source/sumeragi_da.md` に RBC の運用手順と測定基準がまとまっています。
@@ -130,26 +130,26 @@ translator: manual
 - ビュー変更は `Pacemaker` がトリガーし、`ViewChange` メッセージが全ピアに伝播します。
 - `Epoch` はガバナンスイベントやトポロジ変更を区切る単位であり、`FetchedTopology` が参照するスナップショットを更新します。
 
-### Highest / Locked QC
-- `HighestQc` と `LockedQc` はそれぞれ最新 QC と安全性を担保する QC を保持します。
-- `update_highest_qc` は高さ・ビューを比較し、より新しい QC のみ受け入れます。
+### Highest / Locked commit certificate
+- `HighestQc` と `LockedQc` はそれぞれ最新 commit certificate と安全性を担保する commit certificate を保持します。
+- `update_highest_qc` は高さ・ビューを比較し、より新しい commit certificate のみ受け入れます。
 - `ensure_locked_qc_allows` が提案時に安全条件を確認し、違反した場合は提案を破棄しエビデンスを生成します。
 
 ### RBC
 - RBC セッションは `RbcSessionId` で識別され、メタデータにはブロック高さ・ハッシュ・収集に必要な閾値が含まれます。
 - RBC は Gossip でブロック断片を流通させ、全ピアが復元できるようにすることで DA を実現します。
-- `sumeragi.da_enabled` を有効にすると、コミット前に `AvailabilityQC` が必要になります。RBC は同じ設定で有効になり、ペイロード配布と欠落回復に使われます（コミットはローカルの `RbcDeliver` を待ちません）。
+- `sumeragi.da_enabled` を有効にすると、コミット前に `availability evidence` が必要になります。RBC は同じ設定で有効になり、ペイロード配布と欠落回復に使われます（コミットはローカルの `RbcDeliver` を待ちません）。
 
 ### ExecQC と証跡
-- ExecQC は実行結果を証明する QC で、SBV-AM シグネチャを含みます。
-- `require_execution_qc` を true にすると、Precommit QC に加えて ExecQC がなければコミットできません。
+- ExecQC は実行結果を証明する ExecutionQC で、SBV-AM シグネチャを含みます。
+- `require_execution_qc` を true にすると、Precommit phase commit certificate に加えて ExecQC がなければコミットできません。
 - `require_wsv_exec_qc` を有効にすると、WSV に ExecQC が永続化されたことを確認してからコミットします。
 - ExecQC ゲートが必要な場合でも、古いビューの ExecutionQC は受理されます。ペイロードが欠けている場合は欠落ブロック取得を起動し、厳格モードの停滞を避けます。
 
 ### `proof_policy` の設定
-- `proof_policy = "precommit_qc"`（既定）: Precommit QC のみ要求。
+- `proof_policy = "precommit_qc"`（既定）: Precommit phase commit certificate のみ要求。
 - `proof_policy = "exec_qc"`: ExecQC を必須化。
-- `proof_policy = "off"`: QC を使用しない（検証・監査目的以外では推奨されません）。
+- `proof_policy = "off"`: commit certificate を使用しない（検証・監査目的以外では推奨されません）。
 
 ### Telemetry & Backpressure
 - `pacemaker_backpressure_deferrals_total` が増加した場合、`scripts/sumeragi_backpressure_log_scraper.py` を使ってログと照合できます。
@@ -168,22 +168,22 @@ translator: manual
 
 ### コレクター／ウィットネステレメトリ実務ガイド
 
-停滞したコレクターやウィットネス遅延は `AvailabilityQC` が生成されない、DA 集約が長引く、`collect_witness_ms` がスパイクする、といった形で表面化します。次の信号を監視してください。
+停滞したコレクターやウィットネス遅延は `availability evidence` が生成されない、DA 集約が長引く、`collect_witness_ms` がスパイクする、といった形で表面化します。次の信号を監視してください。
 
 **主要ダッシュボード**
 - `sum(rate(sumeragi_da_votes_ingested_total[1m])) by (collector_idx)` — 投票を取り込めていないコレクターを特定。
-- `sumeragi_qc_last_latency_ms{kind="availability"}` とヒストグラム `sumeragi_qc_assembly_latency_ms{kind="availability"}` — Availability QC 組み立ての最新／直近レイテンシ。
+- `sumeragi_qc_last_latency_ms{kind="availability"}` とヒストグラム `sumeragi_qc_assembly_latency_ms{kind="availability"}` — Availability evidence 組み立ての最新／直近レイテンシ。
 - `sumeragi_phase_latency_ms{phase="collect_da"}` と `{phase="collect_witness"}` の P95（5 分窓） — 可用性票とウィットネス ACK 収集に費やした時間。
 - `sumeragi_phase_latency_ms{phase="collect_aggregator"}` — 冗長送信の遅延。`sumeragi_gossip_fallback_total`、`block_created_dropped_by_lock_total`、`block_created_hint_mismatch_total`、`block_created_proposal_mismatch_total`、`pacemaker_backpressure_deferrals_total` と合わせてファンアウト不足やバックプレッシャを判別。
 - `sumeragi_phase_latency_ema_ms{phase="…"}`
   — 各フェーズの平滑化レイテンシ（EMA）。生値との乖離で異常を検出。
-- `/v1/sumeragi/telemetry`（または `iroha_cli sumeragi status --summary`） — コレクター別の投票数、QC レイテンシ、RBC backlog、最新 Highest/Locked QC ハッシュを含む軽量スナップショット。
+- `/v1/sumeragi/telemetry`（または `iroha_cli sumeragi status --summary`） — コレクター別の投票数、commit certificate レイテンシ、RBC backlog、最新 Highest/Locked commit certificate ハッシュを含む軽量スナップショット。
 - `/v1/sumeragi/status/sse` — 1 秒周期程度の SSE ストリームでライブ観測。
 - `/v1/sumeragi/phases` / `iroha_cli sumeragi phases --summary` — `{propose_ms, collect_da_ms, …, commit_ms, pipeline_total_ms}` と `ema_ms` を併記したフェーズ別タイムライン。
-- `docs/source/grafana_sumeragi_overview.json` — QC 高さの乖離、BlockCreated ドロップ、VRF 参加状況を可視化する Grafana ダッシュボード。
+- `docs/source/grafana_sumeragi_overview.json` — commit certificate 高さの乖離、BlockCreated ドロップ、VRF 参加状況を可視化する Grafana ダッシュボード。
 
 **アラート閾値**
-- Availability QC レイテンシ: `sumeragi_qc_last_latency_ms{kind="availability"}` が `0.6 * CommitTimeMs` を 2 連続で超過、またはヒストグラム P95 が `0.7 * CommitTimeMs` を超えたら要警告。
+- Availability evidence レイテンシ: `sumeragi_qc_last_latency_ms{kind="availability"}` が `0.6 * CommitTimeMs` を 2 連続で超過、またはヒストグラム P95 が `0.7 * CommitTimeMs` を超えたら要警告。
 - 投票取り込みの停滞: `sum(rate(sumeragi_da_votes_ingested_total[2m])) == 0` かつ `sumeragi_rbc_backlog_sessions_pending > 0`（RBC は動いているのに票が集まらない）。
 - ウィットネス遅延: `collect_witness_ms` または `sumeragi_phase_latency_ms{phase="collect_witness"}` の P95 が `0.75 * CommitTimeMs` を超過、あるいは新しいブロックが届いているのに 3 ラウンド以上 0 のまま。
 - コレクターファンアウト: `collect_aggregator_ms` が `0.5 * sumeragi.npos.timeouts.aggregator_ms` を 3 ラウンド連続で上回る、`sumeragi_redundant_sends_total` が一つの View で `redundant_send_r` を超える、`rate(sumeragi_gossip_fallback_total[5m]) > 0`、`increase(block_created_dropped_by_lock_total[5m]) > 0`、`increase(block_created_hint_mismatch_total[5m]) > 0`、`increase(block_created_proposal_mismatch_total[5m]) > 0`、または `increase(pacemaker_backpressure_deferrals_total[5m]) > 0` のいずれかが持続。
@@ -203,7 +203,7 @@ translator: manual
 
 ## RBC / DA ロードマップ
 
-1. **DA/RBC 有効化**: `sumeragi.da_enabled = true` を既定とし、コミット前に `AvailabilityQC` を要求。RBC は同じ設定で有効になり、ペイロード配布と欠落回復に使われます（コミットはローカルの `RbcDeliver` を待ちません）。
+1. **DA/RBC 有効化**: `sumeragi.da_enabled = true` を既定とし、コミット前に `availability evidence` を要求。RBC は同じ設定で有効になり、ペイロード配布と欠落回復に使われます（コミットはローカルの `RbcDeliver` を待ちません）。
 2. **前処理**: リーダーはブロック提案と同時に RBC セッションを起動し、Collectors が投票を集約するまでに全ピアへブロック断片を配布します。
 3. **Fallback**: RBC 完了前に View 変更が発生した場合、次リーダーが同一ブロックを提案する必要性を評価し、未完セッションを踏まえて処理します。
 4. **監視**: `sumeragi_da_summary::*` と `/v1/sumeragi/rbc/sessions` を定期取得し、遅延や失敗を早期検知します。
@@ -224,11 +224,11 @@ require_execution_qc = true         # proof_policy != "off" のとき有効
 # 厳格モード: WSV に完全な ExecutionQC レコードを必須化
 require_wsv_exec_qc = true
 
-# PrecommitQC ゲートは既定で有効。無効化する場合は以下をコメントアウト解除（非推奨）
+# commit certificate ゲート（precommit）は既定で有効。無効化する場合は以下をコメントアウト解除（非推奨）
 # require_precommit_qc = false
 ```
 
-`require_wsv_exec_qc = true` を設定すると、ノードはインメモリ QC が存在する場合に同じ更新処理で WSV に ExecutionQC レコードを永続化し、それが完了しない限りコミットを進めません。
+`require_wsv_exec_qc = true` を設定すると、ノードはインメモリ ExecutionQC が存在する場合に同じ更新処理で WSV に ExecutionQC レコードを永続化し、それが完了しない限りコミットを進めません。
 
 ### VRF ランダムネスパイプライン
 

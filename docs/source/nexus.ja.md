@@ -349,7 +349,7 @@ Testing Strategy
 
 ### NX-18 Telemetry & Runbook Assets
 
-- **Grafana board:** `dashboards/grafana/nexus_lanes.json` が NX-18 要求の "Nexus Lane Finality & Oracles" をエクスポート。`iroha_slot_duration_ms` の `histogram_quantile()`、`iroha_da_quorum_ratio`、DA availability warnings（`sumeragi_da_gate_block_total{reason="missing_availability_qc"}`）、オラクル価格/鮮度/TWAP/haircut gauges、`iroha_settlement_buffer_xor` バッファなどを包含。
+- **Grafana board:** `dashboards/grafana/nexus_lanes.json` が NX-18 要求の "Nexus Lane Finality & Oracles" をエクスポート。`iroha_slot_duration_ms` の `histogram_quantile()`、`iroha_da_quorum_ratio`、DA availability warnings（`sumeragi_da_gate_block_total{reason="missing_local_data"}`）、オラクル価格/鮮度/TWAP/haircut gauges、`iroha_settlement_buffer_xor` バッファなどを包含。
 - **CI gate:** `scripts/telemetry/check_slot_duration.py` が Prometheus snapshots を解析し、p50/p95/p99 を出力、NX-18 しきい値（p95 <= 1000 ms, p99 <= 1100 ms）を適用。`scripts/telemetry/nx18_acceptance.py` は DA quorum、オラクル指標、settlement buffers、slot quantiles を一括チェックし、`ci/check_nexus_lane_smoke.sh` 内で実行。
 - **Evidence bundler:** `scripts/telemetry/bundle_slot_artifacts.py` が metrics snapshot + JSON summary を `artifacts/nx18/` にコピーし、`slot_bundle_manifest.json` に SHA-256 digests を記録。
 - **Release automation:** `scripts/run_release_pipeline.py` が `ci/check_nexus_lane_smoke.sh` を呼び出し（`--skip-nexus-lane-smoke` で回避）、`artifacts/nx18/` を release 出力へコピー。

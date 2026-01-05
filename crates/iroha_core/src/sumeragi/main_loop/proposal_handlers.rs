@@ -34,7 +34,6 @@ pub(super) struct MissingProposalContext {
     pub(super) pending_match: bool,
     pub(super) pending_gate: Option<GateReason>,
     pub(super) pending_validation: Option<ValidationStatus>,
-    pub(super) pending_availability_qc_view: Option<u64>,
     pub(super) pending_age_ms: Option<u64>,
     pub(super) commit_inflight: Option<(u64, u64)>,
     pub(super) forced_view_after_timeout: Option<(u64, u64)>,
@@ -91,7 +90,7 @@ impl Actor {
         hint: super::message::ProposalHint,
     ) -> Result<()> {
         let mut hint = hint;
-        let highest_qc = hint.highest_qc;
+        let highest_qc = hint.highest_cert;
         let height = hint.height;
         let view = hint.view;
         let state_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
@@ -115,22 +114,22 @@ impl Actor {
             let conflict = existing.block_hash != hint.block_hash
                 || existing.height != hint.height
                 || existing.view != hint.view
-                || existing.highest_qc != highest_qc;
+                || existing.highest_cert != highest_qc;
             if conflict {
-                let committed_conflict = usize::try_from(existing.highest_qc.height)
+                let committed_conflict = usize::try_from(existing.highest_cert.height)
                     .ok()
                     .and_then(NonZeroUsize::new)
                     .and_then(|nz| self.kura.get_block(nz))
                     .map(|block| block.hash())
-                    .is_some_and(|hash| hash != existing.highest_qc.subject_block_hash)
-                    && existing.highest_qc.height <= committed_height;
+                    .is_some_and(|hash| hash != existing.highest_cert.subject_block_hash)
+                    && existing.highest_cert.height <= committed_height;
                 if committed_conflict {
                     info!(
                         height,
                         view,
                         existing_block = %existing.block_hash,
                         incoming_block = %hint.block_hash,
-                        existing_highest = %existing.highest_qc.subject_block_hash,
+                        existing_highest = %existing.highest_cert.subject_block_hash,
                         incoming_highest = %highest_qc.subject_block_hash,
                         "replacing cached proposal hint that conflicts with committed tip"
                     );
@@ -140,7 +139,7 @@ impl Actor {
                         view,
                         existing_block = %existing.block_hash,
                         incoming_block = %hint.block_hash,
-                        existing_highest = %existing.highest_qc.subject_block_hash,
+                        existing_highest = %existing.highest_cert.subject_block_hash,
                         incoming_highest = %highest_qc.subject_block_hash,
                         "ignoring conflicting proposal hint for cached slot"
                     );
@@ -148,9 +147,6 @@ impl Actor {
                 }
             }
 
-            if existing.avail_qc_ref.is_some() && hint.avail_qc_ref.is_none() {
-                hint.avail_qc_ref = existing.avail_qc_ref;
-            }
         }
 
         if let Some(stored_height) = self
@@ -345,7 +341,6 @@ impl Actor {
         let pending_match = pending.is_some();
         let pending_gate = pending.and_then(|pending| pending.last_gate);
         let pending_validation = pending.map(|pending| pending.validation_status);
-        let pending_availability_qc_view = pending.and_then(|pending| pending.availability_qc_view);
         let pending_age_ms = pending.map(|pending| {
             u64::try_from(pending.inserted_at.elapsed().as_millis()).unwrap_or(u64::MAX)
         });
@@ -363,7 +358,6 @@ impl Actor {
             pending_match,
             pending_gate,
             pending_validation,
-            pending_availability_qc_view,
             pending_age_ms,
             commit_inflight,
             forced_view_after_timeout: self.subsystems.propose.forced_view_after_timeout,
@@ -387,7 +381,6 @@ impl Actor {
                 pending_match = context.pending_match,
                 pending_gate = ?context.pending_gate,
                 pending_validation = ?context.pending_validation,
-                pending_availability_qc_view = ?context.pending_availability_qc_view,
                 pending_age_ms = ?context.pending_age_ms,
                 commit_inflight = ?context.commit_inflight,
                 forced_view_after_timeout = ?context.forced_view_after_timeout,
@@ -562,8 +555,8 @@ impl Actor {
                 }
             }
         }
-        let hinted_avail = if let Some(hint) = cached_hint {
-            if let Err(reason) = ensure_locked_qc_allows(self.locked_qc, hint.highest_qc) {
+        if let Some(hint) = cached_hint {
+            if let Err(reason) = ensure_locked_qc_allows(self.locked_qc, hint.highest_cert) {
                 let locked_hash = self.locked_qc.map(|qc| qc.subject_block_hash);
                 let locked_missing =
                     locked_hash.is_some_and(|hash| !self.block_known_locally(hash));
@@ -573,14 +566,14 @@ impl Actor {
                         locked_qc_height = self.locked_qc.map(|qc| qc.height),
                         locked_qc_view = self.locked_qc.map(|qc| qc.view),
                         locked_qc_hash = ?locked_hash,
-                        hint_highest_qc_height = hint.highest_qc.height,
-                        hint_highest_qc_view = hint.highest_qc.view,
-                        hint_highest_qc_hash = ?hint.highest_qc.subject_block_hash,
+                        hint_highest_qc_height = hint.highest_cert.height,
+                        hint_highest_qc_view = hint.highest_cert.view,
+                        hint_highest_qc_hash = ?hint.highest_cert.subject_block_hash,
                         height,
                         view,
                         "locked QC missing from kura; accepting BlockCreated and replacing lock"
                     );
-                    self.locked_qc = Some(hint.highest_qc);
+                    self.locked_qc = Some(hint.highest_cert);
                 } else {
                     super::status::inc_block_created_dropped_by_lock();
                     #[cfg(feature = "telemetry")]
@@ -590,9 +583,9 @@ impl Actor {
                         locked_qc_height = self.locked_qc.map(|qc| qc.height),
                         locked_qc_view = self.locked_qc.map(|qc| qc.view),
                         locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
-                        hint_highest_qc_height = hint.highest_qc.height,
-                        hint_highest_qc_view = hint.highest_qc.view,
-                        hint_highest_qc_hash = ?hint.highest_qc.subject_block_hash,
+                        hint_highest_qc_height = hint.highest_cert.height,
+                        hint_highest_qc_view = hint.highest_cert.view,
+                        hint_highest_qc_hash = ?hint.highest_cert.subject_block_hash,
                         height,
                         view,
                         "BlockCreated rejected by locked QC gate"
@@ -600,19 +593,19 @@ impl Actor {
                     return Ok(());
                 }
             }
-            if !self.highest_qc_extends_locked(hint.highest_qc) {
+            if !self.highest_qc_extends_locked(hint.highest_cert) {
                 if let Some(new_lock) = realign_locked_to_committed_if_extends(
                     self.locked_qc,
                     self.latest_committed_qc(),
-                    hint.highest_qc,
+                    hint.highest_cert,
                     |hash, height| self.parent_hash_for(hash, height),
                 ) {
                     if self.locked_qc != Some(new_lock) {
                         info!(
                             locked_qc_height = self.locked_qc.map(|qc| qc.height),
                             locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
-                            highest_qc_height = hint.highest_qc.height,
-                            highest_qc_hash = ?hint.highest_qc.subject_block_hash,
+                            highest_qc_height = hint.highest_cert.height,
+                            highest_qc_hash = ?hint.highest_cert.subject_block_hash,
                             height,
                             view,
                             "resetting locked QC to committed chain before accepting BlockCreated"
@@ -626,29 +619,27 @@ impl Actor {
                     }
                 }
             }
-            if !self.highest_qc_extends_locked(hint.highest_qc) {
+            if !self.highest_qc_extends_locked(hint.highest_cert) {
                 super::status::inc_block_created_dropped_by_lock();
                 #[cfg(feature = "telemetry")]
                 self.telemetry.inc_block_created_dropped_by_lock();
                 warn!(
                     locked_qc_height = self.locked_qc.map(|qc| qc.height),
                     locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
-                    highest_qc_height = hint.highest_qc.height,
-                    highest_qc_hash = ?hint.highest_qc.subject_block_hash,
+                    highest_qc_height = hint.highest_cert.height,
+                    highest_qc_hash = ?hint.highest_cert.subject_block_hash,
                     height,
                     view,
                     "BlockCreated rejected: highest QC does not extend locked chain"
                 );
                 return Ok(());
             }
-            hint.avail_qc_ref
         } else {
             trace!(
                 height,
                 view, "BlockCreated arrived without cached ProposalHint"
             );
-            None
-        };
+        }
         let payload_bytes = block_payload_bytes(&block);
         let payload_hash = Hash::new(&payload_bytes);
         let tx_count = block.transactions_vec().len();
@@ -729,43 +720,6 @@ impl Actor {
                     vac.insert(PendingBlock::new(block, payload_hash, height, view))
                 }
             };
-
-            if let Some(avail_ref) = hinted_avail {
-                pending.mark_availability_qc(avail_ref.view);
-            } else if pending.availability_qc_view.is_none() {
-                let cached_exact = super::cached_qc_for(
-                    &self.qc_cache,
-                    crate::sumeragi::consensus::Phase::Available,
-                    block_hash,
-                    height,
-                    view,
-                );
-                let cached_any = cached_exact.or_else(|| {
-                    super::qc_cache_for_subject(&self.qc_cache, block_hash)
-                        .find(|qc| {
-                            matches!(qc.phase, crate::sumeragi::consensus::Phase::Available)
-                                && qc.height == height
-                        })
-                        .cloned()
-                });
-                let cached_precommit = cached_any
-                    .is_none()
-                    .then(|| {
-                        super::cached_qc_for(
-                            &self.qc_cache,
-                            crate::sumeragi::consensus::Phase::Precommit,
-                            block_hash,
-                            height,
-                            view,
-                        )
-                    })
-                    .flatten();
-                if let Some(avail_qc) = cached_any.as_ref() {
-                    Self::mark_pending_availability_from_qcs(pending, Some(avail_qc), None);
-                } else if let Some(precommit_qc) = cached_precommit.as_ref() {
-                    Self::mark_pending_availability_from_qcs(pending, None, Some(precommit_qc));
-                }
-            }
         }
 
         let mut status_update = None;
@@ -858,14 +812,14 @@ impl Actor {
             let topology = super::network_topology::Topology::new(commit_topology.clone());
             let epochs = distinct_epochs_for_block_votes(
                 &self.vote_log,
-                crate::sumeragi::consensus::Phase::Precommit,
+                crate::sumeragi::consensus::Phase::Commit,
                 block_hash,
                 height,
                 view,
             );
             for epoch in epochs {
                 self.try_form_qc_from_votes(
-                    crate::sumeragi::consensus::Phase::Precommit,
+                    crate::sumeragi::consensus::Phase::Commit,
                     block_hash,
                     height,
                     view,
@@ -875,7 +829,7 @@ impl Actor {
             }
             let cached_qc = qc_cache_for_subject(&self.qc_cache, block_hash)
                 .find(|cached| {
-                    cached.phase == crate::sumeragi::consensus::Phase::Precommit
+                    cached.phase == crate::sumeragi::consensus::Phase::Commit
                         && cached.height == height
                         && cached.view == view
                 })
@@ -884,8 +838,6 @@ impl Actor {
                 let _ = self.handle_qc(qc);
             }
         }
-        let _ = self.replay_commit_votes_for_block(block_hash, height, view);
-
         self.process_commit_candidates();
         Ok(())
     }
@@ -929,9 +881,6 @@ impl Actor {
     ) {
         self.pending.pending_blocks.remove(&block_hash);
         self.pending.pending_replay_last_sent.remove(&block_hash);
-        self.pending
-            .availability_rebroadcast_last_sent
-            .remove(&block_hash);
         self.purge_rbc_state(session_key, block_hash, height, view);
     }
 }
