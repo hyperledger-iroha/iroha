@@ -8237,6 +8237,26 @@ pub mod isi {
                 .accounts_in_domain_iter(&domain_id)
                 .map(|account| account.id().clone())
                 .collect();
+            let account_set: BTreeSet<AccountId> =
+                remove_accounts.iter().cloned().collect();
+
+            let mut remove_nfts: BTreeSet<NftId> = state_transaction
+                .world
+                .nfts
+                .iter()
+                .filter(|(_, nft)| account_set.contains(&nft.owned_by))
+                .map(|(id, _)| id.clone())
+                .collect();
+            for nft in state_transaction.world.nfts_in_domain_iter(&domain_id) {
+                remove_nfts.insert(nft.id().clone());
+            }
+
+            for nft_id in remove_nfts {
+                state_transaction.world.nfts.remove(nft_id.clone());
+                state_transaction
+                    .world
+                    .emit_events(Some(DomainEvent::Nft(NftEvent::Deleted(nft_id))));
+            }
             for account in remove_accounts {
                 state_transaction
                     .world
@@ -8251,10 +8271,30 @@ pub mod isi {
                     .map(|ad| ad.id().clone())
                     .collect();
                 for asset_id in remove_assets {
-                    state_transaction.world.assets.remove(asset_id);
+                    state_transaction.world.remove_asset_and_metadata(&asset_id);
                 }
 
-                state_transaction.world.accounts.remove(account);
+                state_transaction
+                    .world
+                    .tx_sequences
+                    .remove(account.clone());
+                let removed = state_transaction.world.accounts.remove(account.clone());
+                let Some(account_value) = removed else {
+                    iroha_logger::error!(
+                        %account,
+                        "account not found while unregistering domain"
+                    );
+                    continue;
+                };
+                if let Some(label) = account_value.label().cloned() {
+                    state_transaction
+                        .world
+                        .account_rekey_records
+                        .remove(label);
+                }
+                if let Some(uaid) = account_value.uaid().copied() {
+                    state_transaction.rebuild_space_directory_bindings(uaid);
+                }
             }
 
             let remove_asset_definitions: Vec<AssetDefinitionId> = state_transaction
@@ -8267,15 +8307,6 @@ pub mod isi {
                     .world
                     .asset_definitions
                     .remove(asset_definition_id.clone());
-            }
-
-            let remove_nfts: Vec<NftId> = state_transaction
-                .world
-                .nfts_in_domain_iter(&domain_id)
-                .map(|nft| nft.id().clone())
-                .collect();
-            for nft_id in remove_nfts {
-                state_transaction.world.nfts.remove(nft_id.clone());
             }
 
             if state_transaction
@@ -8723,6 +8754,13 @@ pub mod isi {
             },
             query::error::FindError,
             zk::BackendTag,
+            IntoKeyValue,
+        };
+        use iroha_data_model::{
+            account::{NewAccount, rekey::AccountLabel},
+            asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
+            nexus::{AssetPermissionManifest, ManifestVersion, UniversalAccountId},
+            nft::{Nft, NftId},
         };
         use iroha_data_model::{
             isi::{SetParameter, bridge::RecordBridgeReceipt},
@@ -8730,7 +8768,7 @@ pub mod isi {
             prelude::Parameter,
             zk::OpenVerifyEnvelope,
         };
-        use iroha_primitives::json::Json;
+        use iroha_primitives::{json::Json, numeric::Numeric};
         #[allow(unused_imports)]
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, gen_account_in};
@@ -8740,6 +8778,7 @@ pub mod isi {
             block::ValidBlock,
             executor::Executor,
             kura::Kura,
+            nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
             query::store::LiveQueryStore,
             state::{
                 State, StateTransaction, SumeragiPolicyConfig, SumeragiPolicyFlags, World,
@@ -8781,6 +8820,27 @@ pub mod isi {
             .expect("dataspace catalog");
         }
 
+        fn seed_manifest_record(
+            stx: &mut StateTransaction<'_, '_>,
+            uaid: UniversalAccountId,
+            dataspace: DataSpaceId,
+        ) {
+            let manifest = AssetPermissionManifest {
+                version: ManifestVersion::V1,
+                uaid,
+                dataspace,
+                issued_ms: 0,
+                activation_epoch: 0,
+                expiry_epoch: None,
+                entries: Vec::new(),
+            };
+            let mut record = SpaceDirectoryManifestRecord::new(manifest);
+            record.lifecycle.mark_activated(1);
+            let mut set = SpaceDirectoryManifestSet::default();
+            set.upsert(record);
+            stx.world.space_directory_manifests.insert(uaid, set);
+        }
+
         fn grant_manage_peers_permission(stx: &mut StateTransaction<'_, '_>, account: &AccountId) {
             let permission = Permission::new("CanManagePeers".into(), Json::new(()));
             stx.world
@@ -8806,6 +8866,103 @@ pub mod isi {
                 .execute(&ALICE_ID, stx)
                 .expect("register multisig authority");
             multisig_id
+        }
+
+        #[test]
+        fn unregister_domain_cleans_account_records_and_owned_nfts() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let other_domain_id: DomainId = "other.world".parse().expect("domain id parses");
+            let account_label = AccountLabel::new(domain_id.clone(), "primary".parse().unwrap());
+            let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::domain_unregister"));
+            let dataspace = DataSpaceId::new(17);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+            Register::domain(Domain::new(other_domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register other domain");
+
+            seed_manifest_record(&mut stx, uaid, dataspace);
+
+            let keypair = KeyPair::random();
+            let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
+            Register::account(
+                NewAccount::new(account_id.clone())
+                    .with_label(Some(account_label.clone()))
+                    .with_uaid(Some(uaid)),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register account");
+
+            assert!(
+                stx.world.uaid_dataspaces.get(&uaid).is_some(),
+                "bindings should exist before unregister"
+            );
+
+            stx.world.tx_sequences.insert(account_id.clone(), 7);
+
+            let asset_def_id: AssetDefinitionId =
+                AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
+            Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register asset definition");
+            let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
+            let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
+            let (asset_id, asset_value) = asset.into_key_value();
+            stx.world.assets.insert(asset_id.clone(), asset_value);
+
+            let mut metadata = Metadata::default();
+            let key: iroha_data_model::name::Name = "tag".parse().unwrap();
+            let value = Json::from(norito::json!("cleanup"));
+            metadata.insert(key, value);
+            stx.world.asset_metadata.insert(asset_id.clone(), metadata);
+
+            let nft_id = NftId::new(other_domain_id.clone(), "phoenix".parse().unwrap());
+            let nft = Nft {
+                id: nft_id.clone(),
+                content: Metadata::default(),
+                owned_by: account_id.clone(),
+            };
+            let (nft_id, nft_value) = nft.into_key_value();
+            stx.world.nfts.insert(nft_id.clone(), nft_value);
+
+            Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("unregister domain");
+
+            assert!(
+                stx.world.accounts.get(&account_id).is_none(),
+                "account should be removed"
+            );
+            assert!(
+                stx.world.tx_sequences.get(&account_id).is_none(),
+                "tx sequence should be removed"
+            );
+            assert!(
+                stx.world.account_rekey_records.get(&account_label).is_none(),
+                "account label record should be removed"
+            );
+            assert!(
+                stx.world.uaid_dataspaces.get(&uaid).is_none(),
+                "UAID bindings should be cleared"
+            );
+            assert!(
+                stx.world.nfts.get(&nft_id).is_none(),
+                "owned NFT should be removed"
+            );
+            assert!(
+                stx.world.asset_metadata.get(&asset_id).is_none(),
+                "asset metadata should be removed with assets"
+            );
         }
 
         #[test]

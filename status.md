@@ -7,6 +7,27 @@
 - Tests: `cargo test --workspace` (timed out after 120s waiting for build directory lock).
 - Sumeragi: reject RBC INIT messages with zero chunks and treat empty payload hydration as a layout mismatch; add regression tests.
 - Tests: not run (not requested).
+- Docs: resolve merge conflicts in status.md and roadmap.md.
+- Tests: not run (not requested).
+- WSV (IVM mock): clear direct permissions and role assignments on account unregister to avoid stale grants; add regression coverage.
+- Tests: not run (not requested).
+- Swift SDK: unwrap Norito-framed native signed transactions before packaging, fix SM2 private-key payload encoding, and refresh DA/proof fixtures; add Norito frame decoding coverage.
+- Tests: `swift test` (from `IrohaSwift`).
+- Norito Java: enforce canonical varint decoding, encode maps deterministically (sorted keys), implement packed-map layout per the Norito spec, and add regression tests.
+- Java/Android SDK: sort JSON object keys during encoding to produce canonical payloads and add regression coverage.
+- P2P: fix IPv6 CIDR masking on byte boundaries to avoid shift panics and ensure correct allow/deny matching; add regression coverage.
+- Tests: `cargo test --workspace` (timed out after 120s; warnings about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450` and dead_code in `crates/norito/src/core.rs:6792`).
+- Crypto: make Merkle byte-chunk builders validate chunk sizes (return `Result`), validate deserialized layouts, and guard proof audit-path shifts; add regression tests.
+- Tests: not run (not requested).
+- Kura: skip temp sidecar index promotion when the main index is valid to avoid losing correct sidecar pointers; add regression coverage for conflicting temp index entries.
+- Tests: not run (not requested).
+- WSV: clean up account/domain unregister to drop owned NFTs, per-asset metadata, tx sequences, account labels, and UAID bindings; wire asset cleanup into detached merges and add regression coverage.
+- Tests: `cargo test -p iroha_core unregister_ -- --nocapture` (failed: ivm compile errors in `crates/ivm/src/byte_merkle_tree.rs`; warnings about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450` and dead_code in `crates/iroha_crypto/src/merkle.rs`).
+- P2P: flush handshake and message writes so WS fallback sends frames; add unit tests covering flush behavior in handshake and message sender.
+- Tests: not run (not requested).
+- Java/Android SDK: respect `retryOnNetworkError` in `HttpClientTransport` retries and add regression coverage for network failures without retries.
+- Kura: enforce storage budget checks when replacing the top block (soft-fork rewrites) and add regression coverage for oversized replacements.
+- Tests: `cargo test -p iroha_core replace_top_block_rejects_when_budget_exceeded -- --nocapture` (timed out after 300s; new test passed before timeout; warning about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450`).
 - Sumeragi: realign NPoS epoch state and seed when on-chain epoch length changes (reset stale VRF inputs), and add regression coverage for epoch-length refresh behavior.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
 - Tests: `cargo test -p iroha_core refresh_npos_seed_realigns_epoch_after_epoch_length_change -- --nocapture` (timed out after 120s during compile; warnings about unused methods in `crates/iroha_core/src/sumeragi/main_loop/pending_rbc.rs` and `crates/iroha_core/src/sumeragi/main_loop/votes.rs`).

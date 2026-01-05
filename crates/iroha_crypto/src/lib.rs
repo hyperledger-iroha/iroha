@@ -95,7 +95,7 @@ pub use hybrid::{
 use iroha_macro::ffi_impl_opaque;
 use iroha_primitives::const_vec::{ConstVec, ToConstVec};
 use iroha_schema::{Declaration, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, TypeId};
-pub use merkle::{CompactMerkleProof, MerkleProof, MerkleTree};
+pub use merkle::{CompactMerkleProof, MerkleError, MerkleProof, MerkleTree};
 #[cfg(not(feature = "ffi_import"))]
 pub use privacy::{
     CommitmentScheme, CommitmentSchemeKind, LaneCommitmentId, LanePrivacyCommitment,

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use iroha_data_model::prelude::PublicKey;
 use ivm::mock_wsv::{
     AccountId, AssetDefinitionId, DomainId, Mintable, MockWorldStateView, PermissionToken,
@@ -161,4 +163,45 @@ fn unregister_account_after_transferring_everything_out() {
 
     assert!(wsv.transfer(&acc1, acc1.clone(), acc2.clone(), asset.clone(), 25));
     assert!(wsv.unregister_account(&acc1));
+}
+
+#[test]
+fn unregister_account_clears_permissions_and_roles() {
+    let d: DomainId = "domain".parse().unwrap();
+    let pk: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
+        .parse()
+        .unwrap();
+    let acc: AccountId = format!("{pk}@{d}").parse().unwrap();
+    let asset: AssetDefinitionId = "rose#domain".parse().unwrap();
+
+    let mut wsv = MockWorldStateView::new();
+    wsv.grant_permission(&acc, PermissionToken::RegisterDomain);
+    wsv.grant_permission(&acc, PermissionToken::RegisterAccount);
+    wsv.grant_permission(&acc, PermissionToken::RegisterAssetDefinition);
+
+    assert!(wsv.register_domain(&acc, d.clone()));
+    assert!(wsv.register_account(&acc, acc.clone()));
+    assert!(wsv.register_asset_definition(&acc, asset.clone(), Mintable::Infinitely));
+
+    let mut perms = HashSet::new();
+    perms.insert(PermissionToken::MintAsset(asset.clone()));
+    assert!(wsv.create_role("minter", perms));
+    assert!(wsv.grant_role(&acc, "minter"));
+    wsv.grant_permission(&acc, PermissionToken::ReadAccountAssets(acc.clone()));
+
+    assert!(wsv.has_permission(&acc, &PermissionToken::MintAsset(asset.clone())));
+    assert!(wsv.has_permission(
+        &acc,
+        &PermissionToken::ReadAccountAssets(acc.clone())
+    ));
+
+    assert!(wsv.unregister_account(&acc));
+    assert!(!wsv.has_permission(
+        &acc,
+        &PermissionToken::MintAsset(asset.clone())
+    ));
+    assert!(!wsv.has_permission(
+        &acc,
+        &PermissionToken::ReadAccountAssets(acc.clone())
+    ));
 }

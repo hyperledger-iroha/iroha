@@ -249,6 +249,18 @@ final class TxBuilderTests: XCTestCase {
                       "Native transaction encoder unavailable")
     }
 
+    private func normalizeNativeSignedTransaction(
+        _ native: NativeSignedTransaction
+    ) -> (signed: Data, norito: Data) {
+        if let framed = noritoDecodeFrame(native.signedBytes) {
+            return (signed: framed.payload, norito: native.signedBytes)
+        }
+        let norito = noritoEncode(typeName: "iroha_data_model::transaction::signed::SignedTransaction",
+                                  payload: native.signedBytes,
+                                  flags: 0x04)
+        return (signed: native.signedBytes, norito: norito)
+    }
+
     private func makeRegisterZkAssetRequest(authority: String,
                                             ttlMs: UInt64? = 30) throws -> RegisterZkAssetRequest {
         let transferVk = try VerifyingKeyIdReference(backend: "halo2/ipa", name: "vk_transfer")
@@ -529,12 +541,10 @@ final class TxBuilderTests: XCTestCase {
             return
         }
 
-        let nativeNorito = noritoEncode(typeName: "iroha_data_model::transaction::SignedTransaction",
-                                        payload: native.signedBytes,
-                                        flags: 0x04)
-        XCTAssertEqual(native.signedBytes, fallback.signedTransaction)
+        let normalized = normalizeNativeSignedTransaction(native)
+        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
         XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(nativeNorito, fallback.norito)
+        XCTAssertEqual(normalized.norito, fallback.norito)
     }
 
     func testSigningKeyTransferMatchesKeypairEncoding() throws {
@@ -591,12 +601,10 @@ final class TxBuilderTests: XCTestCase {
             return
         }
 
-        let nativeNorito = noritoEncode(typeName: "iroha_data_model::transaction::SignedTransaction",
-                                        payload: native.signedBytes,
-                                        flags: 0x04)
-        XCTAssertEqual(native.signedBytes, fallback.signedTransaction)
+        let normalized = normalizeNativeSignedTransaction(native)
+        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
         XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(nativeNorito, fallback.norito)
+        XCTAssertEqual(normalized.norito, fallback.norito)
     }
 
     func testFallbackBurnMatchesNativeBridge() throws {
@@ -629,12 +637,10 @@ final class TxBuilderTests: XCTestCase {
             return
         }
 
-        let nativeNorito = noritoEncode(typeName: "iroha_data_model::transaction::SignedTransaction",
-                                        payload: native.signedBytes,
-                                        flags: 0x04)
-        XCTAssertEqual(native.signedBytes, fallback.signedTransaction)
+        let normalized = normalizeNativeSignedTransaction(native)
+        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
         XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(nativeNorito, fallback.norito)
+        XCTAssertEqual(normalized.norito, fallback.norito)
     }
 
     func testSetMetadataMatchesNativeBridge() throws {
@@ -673,12 +679,10 @@ final class TxBuilderTests: XCTestCase {
             return
         }
 
-        let nativeNorito = noritoEncode(typeName: "iroha_data_model::transaction::SignedTransaction",
-                                        payload: native.signedBytes,
-                                        flags: 0x04)
-        XCTAssertEqual(native.signedBytes, fallback.signedTransaction)
+        let normalized = normalizeNativeSignedTransaction(native)
+        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
         XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(nativeNorito, fallback.norito)
+        XCTAssertEqual(normalized.norito, fallback.norito)
     }
 
     func testGovernanceProposeDeployMatchesNativeBridge() throws {
@@ -726,12 +730,10 @@ final class TxBuilderTests: XCTestCase {
             return
         }
 
-        let nativeNorito = noritoEncode(typeName: "iroha_data_model::transaction::SignedTransaction",
-                                        payload: native.signedBytes,
-                                        flags: 0x04)
-        XCTAssertEqual(native.signedBytes, fallback.signedTransaction)
+        let normalized = normalizeNativeSignedTransaction(native)
+        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
         XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(nativeNorito, fallback.norito)
+        XCTAssertEqual(normalized.norito, fallback.norito)
     }
 
     func testPersistCouncilMatchesNativeBridge() throws {
@@ -771,12 +773,10 @@ final class TxBuilderTests: XCTestCase {
             return
         }
 
-        let nativeNorito = noritoEncode(typeName: "iroha_data_model::transaction::SignedTransaction",
-                                        payload: native.signedBytes,
-                                        flags: 0x04)
-        XCTAssertEqual(native.signedBytes, fallback.signedTransaction)
+        let normalized = normalizeNativeSignedTransaction(native)
+        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
         XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(nativeNorito, fallback.norito)
+        XCTAssertEqual(normalized.norito, fallback.norito)
     }
 
     func testNativeBridgeTransferWhenAvailable() throws {
@@ -1024,12 +1024,10 @@ final class TxBuilderTests: XCTestCase {
             return
         }
 
-        let nativeNorito = noritoEncode(typeName: "iroha_data_model::transaction::SignedTransaction",
-                                        payload: native.signedBytes,
-                                        flags: 0x04)
-        XCTAssertEqual(native.signedBytes, fallback.signedTransaction)
+        let normalized = normalizeNativeSignedTransaction(native)
+        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
         XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(nativeNorito, fallback.norito)
+        XCTAssertEqual(normalized.norito, fallback.norito)
     }
 
     func testUnshieldRequestRequiresInputs() throws {
@@ -1117,12 +1115,10 @@ final class TxBuilderTests: XCTestCase {
             XCTFail("Expected native unshield encoding")
             return
         }
-        let nativeNorito = noritoEncode(typeName: "iroha_data_model::transaction::SignedTransaction",
-                                        payload: native.signedBytes,
-                                        flags: 0x04)
-        XCTAssertEqual(native.signedBytes, fallback.signedTransaction)
+        let normalized = normalizeNativeSignedTransaction(native)
+        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
         XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(nativeNorito, fallback.norito)
+        XCTAssertEqual(normalized.norito, fallback.norito)
     }
 
     @available(iOS 15.0, macOS 12.0, *)

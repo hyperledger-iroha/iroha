@@ -54,6 +54,7 @@ public final class HttpClientTransportTests {
   public static void main(final String[] args) throws Exception {
     submitBuildsToriiRequest();
     submitPropagatesExecutorFailure();
+    submitSkipsRetryWhenNetworkRetriesDisabled();
     submitRetriesOnServerError();
     retryPolicyRecognizesRetryableStatus();
     submitQueuesTransactionsWhenOffline();
@@ -161,6 +162,34 @@ public final class HttpClientTransportTests {
     assert observer.requestCount.get() == 1 : "Observer must see request";
     assert observer.responseCount.get() == 0 : "No response should be recorded";
     assert observer.failureCount.get() == 1 : "Observer must see failure";
+  }
+
+  private static void submitSkipsRetryWhenNetworkRetriesDisabled() {
+    final CountingFailingExecutor executor =
+        new CountingFailingExecutor(new RuntimeException("network down"));
+    final ClientConfig config =
+        ClientConfig.builder()
+            .setBaseUri(URI.create("http://localhost:8080"))
+            .setRetryPolicy(
+                RetryPolicy.builder()
+                    .setMaxAttempts(3)
+                    .setBaseDelay(Duration.ZERO)
+                    .setRetryOnNetworkError(false)
+                    .build())
+            .build();
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
+
+    final SignedTransaction transaction =
+        new SignedTransaction(new byte[] {0x00}, new byte[] {0x01}, new byte[] {0x02}, "schema");
+
+    boolean threw = false;
+    try {
+      transport.submitTransaction(transaction).join();
+    } catch (final RuntimeException ex) {
+      threw = true;
+    }
+    assert threw : "Submission should fail when network retries are disabled";
+    assert executor.callCount == 1 : "Transport must not retry on network failures when disabled";
   }
 
   private static void submitRetriesOnServerError() {
@@ -842,6 +871,23 @@ public final class HttpClientTransportTests {
 
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
+      final CompletableFuture<TransportResponse> future = new CompletableFuture<>();
+      future.completeExceptionally(error);
+      return future;
+    }
+  }
+
+  private static final class CountingFailingExecutor implements HttpTransportExecutor {
+    private final RuntimeException error;
+    private int callCount = 0;
+
+    private CountingFailingExecutor(final RuntimeException error) {
+      this.error = error;
+    }
+
+    @Override
+    public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
+      callCount++;
       final CompletableFuture<TransportResponse> future = new CompletableFuture<>();
       future.completeExceptionally(error);
       return future;

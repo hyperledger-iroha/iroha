@@ -268,7 +268,7 @@ In short, VM‑level commitments provide verifiable execution evidence, while le
 
 Canonical helpers and re-exports:
 
-- Use `iroha_crypto::MerkleTree<[u8;32]>::from_byte_chunks(bytes, 32)` (or `from_chunked_bytes_parallel` with the `rayon` feature) to build byte‑chunk trees.
+- Use `iroha_crypto::MerkleTree<[u8;32]>::from_byte_chunks(bytes, 32)?` (or `from_chunked_bytes_parallel` with the `rayon` feature) to build byte‑chunk trees. These helpers return `Result` and validate chunk sizes (`1..=32`).
 - Use `iroha_crypto::MerkleTree::get_proof(idx)` to obtain Merkle proofs; verify with `MerkleProof::<[u8;32]>::verify_sha256`.
 - The `ivm` crate re‑exports the canonical type as `ivm::MerkleTree` for convenience; VM adapters like `ivm::ByteMerkleTree` are thin wrappers that build on it.
 

@@ -97,9 +97,9 @@ translator: manual
   - שגיאות: ‏`Repetition(Register, TriggerId)`, ובכשל המרה/ולידציה ‏`InvalidParameterError::SmartContract(..)`. קוד: `core/.../isi/triggers/mod.rs`.
 
 - ביטול רישום (פיֵר/דומיין/חשבון/הגדרת נכס/NFT/תפקיד/טריגר): מסיר את היישות ופולט אירועים. הסרות מדורגות נוספות:
-  - דומיין: מסיר את כל החשבונות, תפקידים, הרשאות, נכסים, הגדרות נכס ו-NFT בדומיין, ומוחק טריגרים שהסמכות שלהם בדומיין. אירועים: `DomainEvent::Deleted` ועוד אירוע לכל פריט. שגיאות: `FindError::Domain`. קוד: `core/.../isi/world.rs`.
-  - חשבון: מסיר הרשאות ותפקידים של החשבון, נכסים בבעלותו וטריגרים שהסמכות שלהם היא אותו חשבון. אירועים: `AccountEvent::Deleted`. שגיאות: `FindError::Account`. קוד: `core/.../isi/domain.rs`.
-  - הגדרת נכס: מוחק את כלל הנכסים מהסוג. אירועים: `AssetDefinitionEvent::Deleted` ו-`AssetEvent::Deleted`. שגיאות: `FindError::AssetDefinition`. קוד: `core/.../isi/domain.rs`.
+  - דומיין: מסיר את כל החשבונות בדומיין, את התפקידים/הרשאות שלהם, את מוני רצף העסקאות, את תוויות החשבון ואת קשירות ה‑UAID; מוחק את נכסי החשבונות (כולל מטא־דאטה של נכסים). מסיר את כל הגדרות הנכסים בדומיין; מוחק NFT בדומיין וכן NFT שבבעלות החשבונות שהוסרו; ומוחק טריגרים שסמכות הדומיין שלהם תואמת. אירועים: `DomainEvent::Deleted` ועוד אירוע לכל פריט. שגיאות: `FindError::Domain`. קוד: `core/.../isi/world.rs`.
+  - חשבון: מסיר הרשאות ותפקידים של החשבון, מוני רצף עסקאות, תוויות חשבון וקשירות UAID; מוחק נכסים בבעלות החשבון (כולל מטא־דאטה של נכסים) ו‑NFT בבעלותו; מוחק טריגרים שהסמכות שלהם היא אותו חשבון. אירועים: `AccountEvent::Deleted` וכן `NftEvent::Deleted` לכל NFT שנמחק. שגיאות: `FindError::Account`. קוד: `core/.../isi/domain.rs`.
+  - הגדרת נכס: מוחק את כלל הנכסים מהסוג ואת מטא־דאטה של אותם נכסים. אירועים: `AssetDefinitionEvent::Deleted` ו-`AssetEvent::Deleted`. שגיאות: `FindError::AssetDefinition`. קוד: `core/.../isi/domain.rs`.
   - NFT: מוחק את ה-NFT. אירועים: `NftEvent::Deleted`. שגיאות: `FindError::Nft`. קוד: `core/.../isi/nft.rs`.
   - תפקיד: מסיר את התפקיד מכל החשבונות ואז מוחק את התפקיד עצמו. אירועים: `RoleEvent::Deleted`. שגיאות: `FindError::Role`. קוד: `core/.../isi/world.rs`.
   - טריגר: מסיר אם קיים; ניסיון כפול מחזיר `Repetition(Unregister, TriggerId)`. אירועים: `TriggerEvent::Deleted`. קוד: `core/.../isi/triggers/mod.rs`.

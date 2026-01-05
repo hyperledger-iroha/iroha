@@ -2106,6 +2106,15 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) internal_event_buf: Vec<Arc<DataEvent>>,
 }
 
+impl WorldTransaction<'_, '_> {
+    /// Remove an asset entry and any attached asset metadata.
+    pub(crate) fn remove_asset_and_metadata(&mut self, asset_id: &AssetId) -> Option<AssetValue> {
+        let removed = self.assets.remove(asset_id.clone());
+        self.asset_metadata.remove(asset_id.clone());
+        removed
+    }
+}
+
 /// Consistent point in time view of the [`World`]
 pub struct WorldView<'world> {
     /// Iroha on-chain parameters.
@@ -6435,7 +6444,7 @@ impl DetachedStateTransactionDelta {
                     is_zero
                 };
                 if remove_it {
-                    let _ = stx.world.assets.remove(id.clone());
+                    let _ = stx.world.remove_asset_and_metadata(id);
                 }
             }
             // Apply asset additions (aggregated per id) and defer event emission until totals update.
@@ -27779,6 +27788,39 @@ mod tests {
         );
 
         assert!(stx.world.asset_metadata.get(&asset_id).is_none());
+    }
+
+    #[test]
+    fn detached_merge_removes_asset_metadata_on_zero_balance() {
+        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+        let domain = Domain::new(domain_id).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let asset_def = AssetDefinition::numeric(asset_def_id).build(&ALICE_ID);
+        let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
+
+        let mut world = World::with_assets([domain], [account], [asset_def], [asset], []);
+        let mut metadata = Metadata::default();
+        let key: Name = "tag".parse().unwrap();
+        let value = Json::from(norito::json!("detached"));
+        metadata.insert(key, value);
+        world.asset_metadata.insert(asset_id.clone(), metadata);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(world, kura, query);
+
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut delta = DetachedStateTransactionDelta::default();
+        delta.add_asset_sub(asset_id.clone(), Numeric::new(1, 0));
+        delta
+            .merge_into(&mut state_block, &ALICE_ID)
+            .expect("detached merge succeeds");
+
+        assert!(state_block.world.assets.get(&asset_id).is_none());
+        assert!(state_block.world.asset_metadata.get(&asset_id).is_none());
     }
 
     #[tokio::test]

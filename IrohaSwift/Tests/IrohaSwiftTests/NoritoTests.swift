@@ -14,6 +14,24 @@ final class NoritoTests: XCTestCase {
         XCTAssertEqual(crc, 0x995DC9BBDF1939FA)
     }
 
+    func testNoritoDecodeFrameExtractsPayloadWithPadding() {
+        let typeName = "iroha_data_model::transaction::signed::SignedTransaction"
+        let payload = Data([0x01, 0x02, 0x03, 0x04])
+        let framed = noritoEncode(typeName: typeName, payload: payload, flags: 0x04)
+        var padded = framed
+        let padding = [UInt8](repeating: 0, count: 8)
+        padded.insert(contentsOf: padding, at: NoritoHeader.encodedLength)
+
+        guard let frame = noritoDecodeFrame(padded) else {
+            return XCTFail("expected Norito frame to decode")
+        }
+
+        XCTAssertEqual(frame.payload, payload)
+        XCTAssertEqual(frame.paddingLength, padding.count)
+        XCTAssertEqual(frame.header.flags, 0x04)
+        XCTAssertEqual(frame.header.schema, noritoSchemaHash(forTypeName: typeName))
+    }
+
     func testUInt128FromDecimalStringMaxValue() {
         let maxDecimal = "340282366920938463463374607431768211455" // 2^128 - 1
         let value = UInt128.fromDecimalString(maxDecimal)
