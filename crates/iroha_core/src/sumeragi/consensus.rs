@@ -199,39 +199,64 @@ pub fn compute_consensus_handshake_caps_from_view(
             "bls-iroha2:npos-sumeragi:v1".to_string(),
         ),
     };
-    let epoch_length_blocks = if matches!(effective_mode, ConsensusMode::Npos) {
-        sumeragi_config.epoch_length_blocks.max(1)
+    let (npos_params, epoch_length_blocks) = if matches!(effective_mode, ConsensusMode::Npos) {
+        if let Some(npos) = view.world().sumeragi_npos_parameters() {
+            (
+                Some(NposGenesisParams {
+                    block_time_ms: npos.block_time_ms(),
+                    timeout_propose_ms: npos.timeout_propose_ms(),
+                    timeout_prevote_ms: npos.timeout_prevote_ms(),
+                    timeout_precommit_ms: npos.timeout_precommit_ms(),
+                    timeout_commit_ms: npos.timeout_commit_ms(),
+                    timeout_da_ms: npos.timeout_da_ms(),
+                    timeout_aggregator_ms: npos.timeout_aggregator_ms(),
+                    k_aggregators: npos.k_aggregators(),
+                    redundant_send_r: npos.redundant_send_r(),
+                    vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
+                    vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
+                    min_self_bond: npos.min_self_bond(),
+                    max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
+                    seat_band_pct: npos.seat_band_pct(),
+                    max_entity_correlation_pct: npos.max_entity_correlation_pct(),
+                    evidence_horizon_blocks: npos.evidence_horizon_blocks(),
+                    activation_lag_blocks: npos.activation_lag_blocks(),
+                }),
+                npos.epoch_length_blocks().max(1),
+            )
+        } else {
+            let npos_cfg = &sumeragi_config.npos;
+            let duration_ms = |d: Duration| -> u64 {
+                let ms = d.as_millis();
+                u64::try_from(ms).expect("NPoS timeout exceeds supported millisecond range")
+            };
+            (
+                Some(NposGenesisParams {
+                    block_time_ms: duration_ms(npos_cfg.block_time),
+                    timeout_propose_ms: duration_ms(npos_cfg.timeouts.propose),
+                    timeout_prevote_ms: duration_ms(npos_cfg.timeouts.prevote),
+                    timeout_precommit_ms: duration_ms(npos_cfg.timeouts.precommit),
+                    timeout_commit_ms: duration_ms(npos_cfg.timeouts.commit),
+                    timeout_da_ms: duration_ms(npos_cfg.timeouts.da),
+                    timeout_aggregator_ms: duration_ms(npos_cfg.timeouts.aggregator),
+                    k_aggregators: u16::try_from(npos_cfg.k_aggregators)
+                        .expect("npos.k_aggregators must fit into u16"),
+                    redundant_send_r: npos_cfg.redundant_send_r,
+                    vrf_commit_window_blocks: npos_cfg.vrf.commit_window_blocks,
+                    vrf_reveal_window_blocks: npos_cfg.vrf.reveal_window_blocks,
+                    min_self_bond: npos_cfg.election.min_self_bond,
+                    max_nominator_concentration_pct: npos_cfg
+                        .election
+                        .max_nominator_concentration_pct,
+                    seat_band_pct: npos_cfg.election.seat_band_pct,
+                    max_entity_correlation_pct: npos_cfg.election.max_entity_correlation_pct,
+                    evidence_horizon_blocks: npos_cfg.reconfig.evidence_horizon_blocks,
+                    activation_lag_blocks: npos_cfg.reconfig.activation_lag_blocks,
+                }),
+                sumeragi_config.epoch_length_blocks.max(1),
+            )
+        }
     } else {
-        0
-    };
-    let npos_params = if matches!(effective_mode, ConsensusMode::Npos) {
-        let npos_cfg = &sumeragi_config.npos;
-        let duration_ms = |d: Duration| -> u64 {
-            let ms = d.as_millis();
-            u64::try_from(ms).expect("NPoS timeout exceeds supported millisecond range")
-        };
-        Some(NposGenesisParams {
-            block_time_ms: duration_ms(npos_cfg.block_time),
-            timeout_propose_ms: duration_ms(npos_cfg.timeouts.propose),
-            timeout_prevote_ms: duration_ms(npos_cfg.timeouts.prevote),
-            timeout_precommit_ms: duration_ms(npos_cfg.timeouts.precommit),
-            timeout_commit_ms: duration_ms(npos_cfg.timeouts.commit),
-            timeout_da_ms: duration_ms(npos_cfg.timeouts.da),
-            timeout_aggregator_ms: duration_ms(npos_cfg.timeouts.aggregator),
-            k_aggregators: u16::try_from(npos_cfg.k_aggregators)
-                .expect("npos.k_aggregators must fit into u16"),
-            redundant_send_r: npos_cfg.redundant_send_r,
-            vrf_commit_window_blocks: npos_cfg.vrf.commit_window_blocks,
-            vrf_reveal_window_blocks: npos_cfg.vrf.reveal_window_blocks,
-            min_self_bond: npos_cfg.election.min_self_bond,
-            max_nominator_concentration_pct: npos_cfg.election.max_nominator_concentration_pct,
-            seat_band_pct: npos_cfg.election.seat_band_pct,
-            max_entity_correlation_pct: npos_cfg.election.max_entity_correlation_pct,
-            evidence_horizon_blocks: npos_cfg.reconfig.evidence_horizon_blocks,
-            activation_lag_blocks: npos_cfg.reconfig.activation_lag_blocks,
-        })
-    } else {
-        None
+        (None, 0)
     };
 
     let canon = ConsensusGenesisParams {
@@ -241,7 +266,7 @@ pub fn compute_consensus_handshake_caps_from_view(
         collectors_k: sumeragi.collectors_k,
         redundant_send_r: sumeragi.collectors_redundant_send_r,
         block_max_transactions: block.max_transactions().get(),
-        da_enabled: sumeragi_config.da_enabled,
+        da_enabled: sumeragi.da_enabled,
         epoch_length_blocks,
         bls_domain: bls_domain.clone(),
         npos: npos_params,

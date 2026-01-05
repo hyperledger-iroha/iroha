@@ -5591,7 +5591,6 @@ impl SumeragiWorker {
         let msg_channel_cap_blocks = config.msg_channel_cap_blocks;
         let msg_channel_cap_rbc_chunks = config.msg_channel_cap_rbc_chunks;
         let control_msg_channel_cap = config.control_msg_channel_cap;
-        let chain_id = state.chain_id.clone();
         let (block_time, commit_time, da_enabled) = {
             let view = state.view();
             let params = view.world.parameters().sumeragi();
@@ -5601,10 +5600,7 @@ impl SumeragiWorker {
                 fallback_block_time,
                 fallback_commit_time,
             );
-            let da_enabled = crate::sumeragi::main_loop::apply_devnet_da_override(
-                params.da_enabled(),
-                &chain_id,
-            );
+            let da_enabled = params.da_enabled();
             (block_time, commit_time, da_enabled)
         };
         let da_quorum_timeout_multiplier = config.da_quorum_timeout_multiplier;

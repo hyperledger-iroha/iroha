@@ -149,6 +149,11 @@ path = "src/bin/bls_variant_detect.rs"
 required-features = ["bls", "bls-backend-blstrs"]
 
 [[bin]]
+name = "bls_check"
+path = "src/bin/bls_check.rs"
+required-features = ["bls"]
+
+[[bin]]
 name = "gost_perf_check"
 path = "src/bin/gost_perf_check.rs"
 required-features = ["gost"]

@@ -236,7 +236,7 @@
     "consensus_mode": "Permissioned",
     "bls_domain": "bls-iroha2:permissioned-sumeragi:v1",
     "wire_proto_versions": [
-        3
+        1
     ],
-    "consensus_fingerprint": "0x6df12f2a8d8a3d78aa63bd0b81b522a6ccad0ad14f75daf669fdd7d2d5f707b9"
+    "consensus_fingerprint": "0xe09a96935f2170ca180e335462d5d8e8dd9364e6a299b5e8b5fc4abdb9fc4eeb"
 }

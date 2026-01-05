@@ -46,6 +46,9 @@ pub const SM2: &str = "sm2";
 
 crate::ffi::ffi_item! {
     /// Algorithm for hashing & signing
+    ///
+    /// Discriminants are part of the on-wire format; keep them stable and aligned
+    /// with `Algorithm::try_from` and `PublicKeyCompact` tag mappings.
     #[derive(
         Debug,
         Clone,
@@ -64,36 +67,36 @@ crate::ffi::ffi_item! {
     pub enum Algorithm {
         /// Ed25519 digital signature scheme
         #[default]
-        Ed25519,
+        Ed25519 = 0,
         /// ECDSA over secp256k1
-        Secp256k1,
-        #[cfg(feature = "ml-dsa")]
-        /// ML‑DSA (Dilithium) post-quantum signature scheme
-        MlDsa,
-        #[cfg(feature = "gost")]
-        /// GOST R 34.10-2012 256-bit curve, TC26 param set A
-        Gost3410_2012_256ParamSetA,
-        #[cfg(feature = "gost")]
-        /// GOST R 34.10-2012 256-bit curve, TC26 param set B
-        Gost3410_2012_256ParamSetB,
-        #[cfg(feature = "gost")]
-        /// GOST R 34.10-2012 256-bit curve, TC26 param set C
-        Gost3410_2012_256ParamSetC,
-        #[cfg(feature = "gost")]
-        /// GOST R 34.10-2012 512-bit curve, TC26 param set A
-        Gost3410_2012_512ParamSetA,
-        #[cfg(feature = "gost")]
-        /// GOST R 34.10-2012 512-bit curve, TC26 param set B
-        Gost3410_2012_512ParamSetB,
+        Secp256k1 = 1,
         #[cfg(feature = "bls")]
         /// BLS12-381 (normal) scheme
-        BlsNormal,
+        BlsNormal = 2,
         #[cfg(feature = "bls")]
         /// BLS12-381 (small) scheme
-        BlsSmall,
+        BlsSmall = 3,
+        #[cfg(feature = "ml-dsa")]
+        /// ML‑DSA (Dilithium) post-quantum signature scheme
+        MlDsa = 4,
+        #[cfg(feature = "gost")]
+        /// GOST R 34.10-2012 256-bit curve, TC26 param set A
+        Gost3410_2012_256ParamSetA = 5,
+        #[cfg(feature = "gost")]
+        /// GOST R 34.10-2012 256-bit curve, TC26 param set B
+        Gost3410_2012_256ParamSetB = 6,
+        #[cfg(feature = "gost")]
+        /// GOST R 34.10-2012 256-bit curve, TC26 param set C
+        Gost3410_2012_256ParamSetC = 7,
+        #[cfg(feature = "gost")]
+        /// GOST R 34.10-2012 512-bit curve, TC26 param set A
+        Gost3410_2012_512ParamSetA = 8,
+        #[cfg(feature = "gost")]
+        /// GOST R 34.10-2012 512-bit curve, TC26 param set B
+        Gost3410_2012_512ParamSetB = 9,
         #[cfg(feature = "sm")]
         /// SM2 signature scheme (GM/T 0003-2012)
-        Sm2,
+        Sm2 = 10,
     }
 }
 
@@ -330,6 +333,7 @@ mod tests {
             assert_eq!(alg.as_static_str(), name);
             assert_eq!(Algorithm::from_str(name).unwrap(), alg);
             assert_eq!(Algorithm::try_from(value).unwrap(), alg);
+            assert_eq!(alg as u8, value);
         }
     }
 }

@@ -1678,6 +1678,31 @@ impl Actor {
                 defer_reason,
             );
         }
+        if session.delivered {
+            ignored = true;
+            if session.deliver_sender == Some(deliver.sender)
+                && session
+                    .deliver_signature
+                    .as_deref()
+                    .is_some_and(|sig| sig != deliver.signature.as_slice())
+            {
+                session.invalid = true;
+                invalidate = true;
+                warn!(
+                    height = key.1,
+                    view = key.2,
+                    sender = deliver.sender,
+                    "conflicting RBC DELIVER signature detected; marking session invalid"
+                );
+            }
+            return (
+                ignored,
+                first_deliver,
+                delivered_bytes,
+                invalidate,
+                defer_reason,
+            );
+        }
         if let Some(expected) = session.expected_chunk_root {
             if expected != deliver.chunk_root {
                 session.invalid = true;

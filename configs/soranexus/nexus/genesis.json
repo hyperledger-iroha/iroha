@@ -223,7 +223,7 @@
     "consensus_mode": "Npos",
     "bls_domain": "bls-iroha2:npos-sumeragi:v1",
     "wire_proto_versions": [
-        3
+        1
     ],
-    "consensus_fingerprint": "0x7085a94e3d9b0be28bbbd18706806cd5a70e584bb28292e65ba806df2d6f1a4f"
+    "consensus_fingerprint": "0xd7d5873eb950baf364fc3d9658bac46a278a284201a4df5a7a0a120c3885773f"
 }

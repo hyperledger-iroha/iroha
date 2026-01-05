@@ -1789,6 +1789,7 @@ impl Actor {
             } else {
                 false
             };
+            let missing_local_data = da_enabled && !delivered;
 
             let mut emit_precommit = false;
             let mut abort_due_to_kura = false;
@@ -1806,7 +1807,7 @@ impl Actor {
 
             let pending_age = pending.age();
             let pending_age_ms = pending_age.as_millis();
-            let gate = recompute_da_gate_status(&mut pending, da_enabled);
+            let gate = recompute_da_gate_status(&mut pending, da_enabled, missing_local_data);
             let kura_ready = pending.kura_retry_due(now);
             let commit_epoch = pending.commit_certificate_epoch.unwrap_or(current_epoch);
             let ready_to_finalize = pending.commit_certificate_seen && kura_ready;
@@ -2734,6 +2735,7 @@ impl Actor {
     pub(super) fn compute_da_gate_status(
         pending: &mut PendingBlock,
         da_enabled: bool,
+        missing_local_data: bool,
         manifest_cache: &mut ManifestSpoolCache,
         spool_dir: &Path,
         lane_config: &LaneConfigSnapshot,
@@ -2821,11 +2823,19 @@ impl Actor {
             }
         }
 
-        recompute_da_gate_status(pending, da_enabled)
+        recompute_da_gate_status(pending, da_enabled, missing_local_data)
     }
 
     fn refresh_da_gate_status(&mut self, pending: &mut PendingBlock) -> DaGateStatus {
         let da_enabled = self.runtime_da_enabled();
+        let missing_local_data = da_enabled
+            && !Self::ensure_block_matches_rbc_payload(
+                &self.subsystems.da_rbc.rbc.sessions,
+                &self.subsystems.da_rbc.rbc.status_handle,
+                &pending.block.hash(),
+                pending.height,
+                &pending.payload_hash,
+            );
         let lane_config = self.state.nexus_snapshot().lane_config.clone();
         let telemetry = {
             #[cfg(feature = "telemetry")]
@@ -2843,6 +2853,7 @@ impl Actor {
             Self::compute_da_gate_status(
                 pending,
                 da_enabled,
+                missing_local_data,
                 &mut da_rbc.manifest_cache,
                 &da_rbc.spool_dir,
                 &lane_config,
