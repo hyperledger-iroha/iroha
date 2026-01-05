@@ -230,7 +230,8 @@ impl ProofToken {
     /// # Errors
     ///
     /// Returns [`DecodeError`] when the payload is truncated, malformed, or
-    /// uses an unsupported version.
+    /// uses an unsupported version. Also enforces mint invariants such as
+    /// non-empty entry lists and `expires_at` strictly after `issued_at`.
     pub fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         if bytes.len() < FRAME_MAGIC.len() + 2 {
             return Err(DecodeError::Truncated);
@@ -253,11 +254,22 @@ impl ProofToken {
         } else {
             None
         };
+        if let Some(expires_at) = expires_at {
+            if expires_at <= issued_at {
+                return Err(DecodeError::InvalidExpiry {
+                    issued_at,
+                    expires_at,
+                });
+            }
+        }
 
         let mut token_id = [0u8; 16];
         token_id.copy_from_slice(reader.take(16)?);
 
         let entry_count = u16::from_be_bytes(reader.take(2)?.try_into().unwrap()) as usize;
+        if entry_count == 0 {
+            return Err(DecodeError::MissingEntries);
+        }
         if entry_count > MAX_ENTRY_IDS {
             return Err(DecodeError::TooManyEntries(entry_count));
         }
@@ -467,6 +479,9 @@ pub enum DecodeError {
     /// Frame did not begin with the expected `SFGT` magic.
     #[error("invalid frame magic")]
     BadMagic,
+    /// Entry list is empty.
+    #[error("entry list must not be empty")]
+    MissingEntries,
     /// More entry ids were present than the helper supports.
     #[error("too many entry ids ({0})")]
     TooManyEntries(usize),
@@ -476,6 +491,14 @@ pub enum DecodeError {
     /// Entry identifier bytes were not valid UTF-8.
     #[error("entry id contains invalid utf-8")]
     InvalidUtf8,
+    /// `expires_at` timestamp was not after `issued_at`.
+    #[error("expires_at {expires_at} must be greater than issued_at {issued_at}")]
+    InvalidExpiry {
+        /// Issued-at timestamp (UNIX seconds).
+        issued_at: u64,
+        /// Expiry timestamp (UNIX seconds).
+        expires_at: u64,
+    },
     /// Signature length prefix did not match the trailing bytes.
     #[error("signature length mismatch (expected {expected}, actual {actual})")]
     InvalidSignatureLength {
@@ -613,6 +636,42 @@ mod tests {
         let header = token.encode_base64();
         let decoded = ProofToken::decode_base64(&header).unwrap();
         assert_eq!(token, decoded);
+    }
+
+    #[test]
+    fn decode_rejects_empty_entries() {
+        let token = ProofToken {
+            token_id: [0u8; 16],
+            moderation: ModerationAction::Block,
+            issued_at: 10,
+            expires_at: None,
+            entry_ids: Vec::new(),
+            blinded_digest: [0u8; 32],
+            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+        };
+        let err = ProofToken::decode(&token.encode()).expect_err("empty entries should fail");
+        assert!(matches!(err, DecodeError::MissingEntries));
+    }
+
+    #[test]
+    fn decode_rejects_expiry_before_issue() {
+        let token = ProofToken {
+            token_id: [0u8; 16],
+            moderation: ModerationAction::Block,
+            issued_at: 20,
+            expires_at: Some(19),
+            entry_ids: vec!["denylist/entry".to_string()],
+            blinded_digest: [0u8; 32],
+            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+        };
+        let err = ProofToken::decode(&token.encode()).expect_err("invalid expiry should fail");
+        assert!(matches!(
+            err,
+            DecodeError::InvalidExpiry {
+                issued_at: 20,
+                expires_at: 19
+            }
+        ));
     }
 
     #[test]

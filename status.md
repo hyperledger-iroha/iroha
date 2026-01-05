@@ -6,6 +6,7 @@
 - Tests: `cargo test -p iroha_core block_sync_update_drops_qc_epoch_mismatch -- --nocapture` (timed out after 120s during compile).
 - Tests: `cargo test --workspace` (timed out after 120s waiting for build directory lock).
 - Sumeragi: reject RBC INIT messages with zero chunks and treat empty payload hydration as a layout mismatch; add regression tests.
+- Crypto/SoraFS: reject proof tokens with empty entry lists or expiries at/before issuance during decode; add regression coverage.
 - Tests: not run (not requested).
 - Docs: resolve merge conflicts in status.md and roadmap.md.
 - Tests: not run (not requested).
