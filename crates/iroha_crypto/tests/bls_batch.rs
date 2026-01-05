@@ -128,9 +128,7 @@ fn bls_normal_same_message_rejects_duplicate_public_keys() {
     assert!(bls_normal_verify_aggregate_same_message(&msg, &sig_refs, &pk_refs).is_err());
 
     let aggregate = bls_normal_aggregate_signatures(&sig_refs).expect("aggregate ok");
-    assert!(
-        bls_normal_verify_preaggregated_same_message(&msg, &aggregate, &pk_refs).is_err()
-    );
+    assert!(bls_normal_verify_preaggregated_same_message(&msg, &aggregate, &pk_refs).is_err());
 }
 
 #[test]

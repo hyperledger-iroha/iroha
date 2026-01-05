@@ -208,10 +208,8 @@ fn compute_program_hashes(
     bytecode: &[u8],
 ) -> (Hash, Hash) {
     let code_hash = Hash::new(&bytecode[header_len..]);
-    let policy = match meta.abi_version {
-        1 => ivm::SyscallPolicy::AbiV1,
-        v => ivm::SyscallPolicy::Experimental(v),
-    };
+    debug_assert_eq!(meta.abi_version, 1, "only ABI v1 is supported");
+    let policy = ivm::SyscallPolicy::AbiV1;
     let computed = Hash::prehashed(ivm::syscalls::compute_abi_hash(policy));
     let abi_hash = PROGRAM_HASH_CACHE
         .lock()
@@ -552,38 +550,7 @@ pub fn build_overlay_for_transaction_with_cache<R: StateReadOnly>(
                 .map_err(OverlayBuildError::IvmLoad)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
-            // Dynamic ABI gating: allow v1 unconditionally; require activation for >1
-            if meta.abi_version > 1 {
-                let mut active: std::collections::BTreeSet<u16> = [1u16].into_iter().collect();
-                let mut matching: Option<iroha_data_model::runtime::RuntimeUpgradeRecord> = None;
-                for (_id, rec) in state_ro.world().runtime_upgrades().iter() {
-                    if let iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(_) =
-                        rec.status
-                    {
-                        active.insert(rec.manifest.abi_version);
-                        if rec.manifest.abi_version == u16::from(meta.abi_version) {
-                            matching = Some(rec.clone());
-                        }
-                    }
-                }
-                if !active.contains(&u16::from(meta.abi_version)) {
-                    return Err(OverlayBuildError::HeaderPolicy(
-                        IvmAdmissionError::AbiVersionNotActive(meta.abi_version),
-                    ));
-                }
-                let rec = matching.ok_or(OverlayBuildError::HeaderPolicy(
-                    IvmAdmissionError::AbiVersionNotActive(meta.abi_version),
-                ))?;
-                let expected = iroha_crypto::Hash::prehashed(rec.manifest.abi_hash);
-                if expected != summary.abi_hash {
-                    return Err(OverlayBuildError::HeaderPolicy(
-                        IvmAdmissionError::ManifestAbiHashMismatch(ManifestAbiHashMismatchInfo {
-                            expected,
-                            actual: summary.abi_hash,
-                        }),
-                    ));
-                }
-            }
+            // ABI gating is handled in validate_header_policy (v1-only release).
 
             let code_offset = summary.code_offset;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
@@ -728,11 +695,6 @@ pub fn build_overlay_for_transaction_with_accounts(
             let meta = parsed.metadata;
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
             let code_offset = parsed.code_offset;
-            if meta.abi_version > 1 {
-                return Err(OverlayBuildError::HeaderPolicy(
-                    IvmAdmissionError::AbiVersionNotActive(meta.abi_version),
-                ));
-            }
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk {
                 return Err(OverlayBuildError::HeaderPolicy(
@@ -807,11 +769,6 @@ pub(crate) fn build_overlay_for_transaction_with_accounts_zk<R: StateReadOnly>(
             let meta = parsed.metadata;
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
             let code_offset = parsed.code_offset;
-            if meta.abi_version > 1 {
-                return Err(OverlayBuildError::HeaderPolicy(
-                    IvmAdmissionError::AbiVersionNotActive(meta.abi_version),
-                ));
-            }
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !zk_enabled {
                 return Err(OverlayBuildError::HeaderPolicy(
@@ -941,11 +898,6 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
             let meta = parsed.metadata;
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
-            if meta.abi_version > 1 {
-                return Err(OverlayBuildError::HeaderPolicy(
-                    IvmAdmissionError::AbiVersionNotActive(meta.abi_version),
-                ));
-            }
             if meta.mode & ivm::ivm_mode::ZK != 0 {
                 return Err(OverlayBuildError::HeaderPolicy(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
@@ -1135,9 +1087,9 @@ fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), IvmAdmissio
             meta.mode & !known,
         ));
     }
-    // ABI version: reject reserved value 0 at header level; other versions are gated dynamically
-    if meta.abi_version == 0 {
-        return Err(IvmAdmissionError::UnsupportedAbiVersion(0));
+    // ABI version: first release supports only v1.
+    if meta.abi_version != 1 {
+        return Err(IvmAdmissionError::UnsupportedAbiVersion(meta.abi_version));
     }
     // Vector length sanity
     if meta.vector_length != 0 && meta.vector_length > ivm::VECTOR_LENGTH_MAX {

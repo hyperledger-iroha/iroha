@@ -255,8 +255,7 @@ curl -s -X POST \
 ### חישוב `abi_hash`
 
 ```bash
-iroha ivm abi-hash
-iroha ivm abi-hash --policy exp:2 --uppercase
+iroha ivm abi-hash --policy v1 --uppercase
 ```
 
 ## אבטחה וממשל

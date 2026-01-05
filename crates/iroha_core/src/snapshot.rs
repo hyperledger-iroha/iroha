@@ -539,14 +539,6 @@ fn verify_signature_with_fallback(
     Err(main_error.unwrap_or_else(|| TryReadError::SignatureMissing(sig_path.to_path_buf())))
 }
 
-fn read_merkle_metadata(path: &Path) -> Result<Option<SnapshotMerkleMetadata>, TryReadError> {
-    match SnapshotMerkleMetadata::from_path(path) {
-        Ok(metadata) => Ok(Some(metadata)),
-        Err(SnapshotMerkleError::Missing) => Ok(None),
-        Err(err) => Err(merkle_err_to_try_read(err, path.to_path_buf())),
-    }
-}
-
 fn verify_merkle_with_fallback(
     merkle_path: &Path,
     merkle_tmp_path: &Path,
@@ -554,24 +546,33 @@ fn verify_merkle_with_fallback(
     merkle_chunk_size: NonZeroUsize,
 ) -> Result<bool, TryReadError> {
     let mut main_error = None;
-    if let Some(metadata) = read_merkle_metadata(merkle_path)? {
-        match metadata
+    match SnapshotMerkleMetadata::from_path(merkle_path) {
+        Ok(metadata) => match metadata
             .verify_against_bytes(bytes, merkle_chunk_size)
             .map_err(|err| merkle_err_to_try_read(err, merkle_path.to_path_buf()))
         {
             Ok(()) => return Ok(false),
             Err(err) => main_error = Some(err),
-        }
+        },
+        Err(SnapshotMerkleError::Missing) => {}
+        Err(err) => main_error = Some(merkle_err_to_try_read(err, merkle_path.to_path_buf())),
     }
-    if let Some(metadata) = read_merkle_metadata(merkle_tmp_path)? {
-        match metadata
+
+    match SnapshotMerkleMetadata::from_path(merkle_tmp_path) {
+        Ok(metadata) => match metadata
             .verify_against_bytes(bytes, merkle_chunk_size)
             .map_err(|err| merkle_err_to_try_read(err, merkle_tmp_path.to_path_buf()))
         {
             Ok(()) => return Ok(true),
             Err(err) => return Err(main_error.unwrap_or(err)),
+        },
+        Err(SnapshotMerkleError::Missing) => {}
+        Err(err) => {
+            let temp_err = merkle_err_to_try_read(err, merkle_tmp_path.to_path_buf());
+            return Err(main_error.unwrap_or(temp_err));
         }
     }
+
     Err(main_error.unwrap_or_else(|| TryReadError::MerkleMissing(merkle_path.to_path_buf())))
 }
 
@@ -1307,6 +1308,69 @@ mod tests {
             StateTelemetry::new(<_>::default(), true),
         )
         .expect("fallback to temp snapshot");
+
+        assert_eq!(state.chain_id, expected_chain_id);
+        for path in main_paths {
+            assert!(
+                path.is_file(),
+                "expected promoted snapshot artifact: {}",
+                path.display()
+            );
+        }
+        for path in tmp_paths {
+            assert!(
+                !path.exists(),
+                "temp snapshot artifact should be removed: {}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    async fn snapshot_read_falls_back_to_tmp_on_corrupt_merkle_metadata() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair = KeyPair::random();
+        let expected_chain_id = state.chain_id.clone();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+
+        let main_paths = vec![
+            store_dir.join(SNAPSHOT_FILE_NAME),
+            store_dir.join(SNAPSHOT_DIGEST_FILE_NAME),
+            store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME),
+            store_dir.join(SNAPSHOT_MERKLE_FILE_NAME),
+        ];
+        let tmp_paths = vec![
+            store_dir.join(SNAPSHOT_TMP_FILE_NAME),
+            store_dir.join(SNAPSHOT_DIGEST_TMP_FILE_NAME),
+            store_dir.join(SNAPSHOT_SIGNATURE_TMP_FILE_NAME),
+            store_dir.join(SNAPSHOT_MERKLE_TMP_FILE_NAME),
+        ];
+
+        for (main, tmp) in main_paths.iter().zip(tmp_paths.iter()) {
+            std::fs::copy(main, tmp).expect("copy snapshot files to temp");
+        }
+
+        std::fs::write(
+            store_dir.join(SNAPSHOT_MERKLE_FILE_NAME),
+            b"{\"corrupt\":",
+        )
+        .expect("write corrupt merkle metadata");
+
+        let state = try_read_snapshot(
+            &store_dir,
+            &Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &expected_chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        )
+        .expect("fallback to temp merkle metadata");
 
         assert_eq!(state.chain_id, expected_chain_id);
         for path in main_paths {

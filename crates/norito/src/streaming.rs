@@ -6439,10 +6439,13 @@ pub mod codec {
             return (stream, BundleAcceleration::None);
         }
         if requested == BundleAcceleration::CpuSimd && cpu_simd_supported() {
-            (
-                encode_bundle_stream_simd(tables, bundles, prefetch_distance),
-                BundleAcceleration::CpuSimd,
-            )
+            let stream = encode_bundle_stream_simd(tables, bundles, prefetch_distance);
+            let acceleration = if stream.starts_with(&SIMD_BUNDLE_MAGIC) {
+                BundleAcceleration::CpuSimd
+            } else {
+                BundleAcceleration::None
+            };
+            (stream, acceleration)
         } else {
             (
                 encode_bundle_stream_scalar(tables, bundles, prefetch_distance),
@@ -6517,15 +6520,23 @@ pub mod codec {
 
         let mut payload_len = SIMD_BUNDLE_MAGIC.len();
         let mut lane_lengths = [0usize; 4];
+        let mut overflowed = false;
         for (idx, buf) in buffers.iter().enumerate() {
             lane_lengths[idx] = buf.len();
+            if lane_lengths[idx] > u32::MAX as usize {
+                overflowed = true;
+            }
             payload_len = payload_len.saturating_add(4).saturating_add(buf.len());
+        }
+        if overflowed {
+            // SIMD header stores lane lengths as u32, so fall back to scalar on overflow.
+            return encode_bundle_stream_scalar(tables, bundles, prefetch_distance);
         }
 
         let mut out = Vec::with_capacity(payload_len);
         out.extend_from_slice(&SIMD_BUNDLE_MAGIC);
         for len in lane_lengths {
-            let len_u32 = u32::try_from(len).expect("lane stream length fits in u32");
+            let len_u32 = len as u32;
             out.extend_from_slice(&len_u32.to_le_bytes());
         }
         for buf in buffers {
@@ -7756,6 +7767,30 @@ pub mod codec {
         }
 
         #[test]
+        fn baseline_encoder_rejects_zero_frame_samples() {
+            let dims = FrameDimensions::new(4, 4);
+            let audio_cfg = AudioEncoderConfig {
+                frame_samples: 0,
+                ..AudioEncoderConfig::default()
+            };
+            let config = BaselineEncoderConfig {
+                frame_dimensions: dims,
+                audio: Some(audio_cfg),
+                ..BaselineEncoderConfig::default()
+            };
+            let mut encoder = BaselineEncoder::new(config);
+            let frame =
+                RawFrame::new(dims, vec![0u8; dims.pixel_count()]).expect("frame");
+            let err = encoder
+                .encode_segment(1, 0, 0, &[frame], Some(&[]))
+                .expect_err("zero frame_samples should error");
+            assert!(matches!(
+                err,
+                CodecError::Audio(AudioCodecError::InvalidSampleCount(_))
+            ));
+        }
+
+        #[test]
         fn baseline_encoder_produces_audio_summary() {
             let dims = FrameDimensions::new(4, 4);
             let audio_cfg = AudioEncoderConfig {
@@ -8072,6 +8107,65 @@ pub mod codec {
             assert_eq!(decoded_prefetch_stream, decoded_baseline);
             assert_eq!(telemetry.prefetch_distance, 3);
             assert_eq!(telemetry.acceleration, BundleAcceleration::None);
+        }
+
+        fn sample_bundles() -> Vec<BundleRecord> {
+            vec![
+                BundleRecord {
+                    bundle_type: BundleType::SignificanceOnly,
+                    context: BundleContextId::new(1),
+                    bits: 0b1,
+                    bit_len: 1,
+                    flush: BundleFlushReason::TypeComplete,
+                },
+                BundleRecord {
+                    bundle_type: BundleType::SignAndMagnitude,
+                    context: BundleContextId::new(2),
+                    bits: 0b10,
+                    bit_len: 2,
+                    flush: BundleFlushReason::TypeComplete,
+                },
+                BundleRecord {
+                    bundle_type: BundleType::SignParity,
+                    context: BundleContextId::new(3),
+                    bits: 0b101,
+                    bit_len: 3,
+                    flush: BundleFlushReason::TypeComplete,
+                },
+            ]
+        }
+
+        #[test]
+        fn bundle_stream_simd_roundtrips() {
+            let tables = default_bundle_tables();
+            let bundles = sample_bundles();
+            let stream = encode_bundle_stream_simd(tables.as_ref(), &bundles, 0);
+            assert!(stream.starts_with(&SIMD_BUNDLE_MAGIC));
+            let decoded =
+                decode_bundle_stream(&stream, &bundles, tables.as_ref()).expect("decode");
+            let expected: Vec<u8> = bundles
+                .iter()
+                .map(|record| record.bits & ((1u8 << record.bit_len) - 1))
+                .collect();
+            assert_eq!(decoded, expected);
+        }
+
+        #[test]
+        fn bundle_stream_acceleration_matches_header() {
+            let tables = default_bundle_tables();
+            let bundles = sample_bundles();
+            let (stream, accel) = encode_bundle_stream_with_opts(
+                tables.as_ref(),
+                &bundles,
+                BundleAcceleration::CpuSimd,
+                0,
+            );
+            let expected = if stream.starts_with(&SIMD_BUNDLE_MAGIC) {
+                BundleAcceleration::CpuSimd
+            } else {
+                BundleAcceleration::None
+            };
+            assert_eq!(accel, expected);
         }
 
         #[test]

@@ -3579,6 +3579,74 @@ impl BlockStore {
         Ok(())
     }
 
+    fn align_hashes_len(&mut self) -> Result<u64> {
+        if self.path_to_blockchain.as_os_str().is_empty() {
+            return Ok(0);
+        }
+        let hashes_file = self.ensure_hashes_file()?;
+        let len = hashes_file.try_io(|file| file.metadata().map(|meta| meta.len()))?;
+        let aligned = len - (len % SIZE_OF_BLOCK_HASH);
+        if aligned != len {
+            warn!(
+                len,
+                aligned,
+                "block hashes length misaligned; truncating trailing bytes"
+            );
+            hashes_file.try_io(|file| file.set_len(aligned))?;
+        }
+        Ok(aligned / SIZE_OF_BLOCK_HASH)
+    }
+
+    fn data_backed_count(&mut self, mut candidate: u64) -> Result<u64> {
+        if candidate == 0 {
+            return Ok(0);
+        }
+        let data_len = self.data_file_len()?;
+        if data_len == 0 {
+            return Ok(0);
+        }
+        let initial = candidate;
+        while candidate > 0 {
+            match self.read_block_index(candidate - 1) {
+                Ok(index) => {
+                    let end = match index.start.checked_add(index.length) {
+                        Some(end) => end,
+                        None => {
+                            candidate = candidate.saturating_sub(1);
+                            continue;
+                        }
+                    };
+                    if index.length == 0
+                        || index.length > STRICT_INIT_MAX_BLOCK_BYTES
+                        || end > data_len
+                    {
+                        candidate = candidate.saturating_sub(1);
+                        continue;
+                    }
+                    break;
+                }
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        candidate,
+                        "failed to read block index while reconciling data length; truncating"
+                    );
+                    candidate = 0;
+                    break;
+                }
+            }
+        }
+        if candidate != initial {
+            warn!(
+                initial,
+                candidate,
+                data_len,
+                "block store data shorter than index; truncating durable count"
+            );
+        }
+        Ok(candidate)
+    }
+
     fn init_commit_marker(&mut self) -> Result<()> {
         if self.path_to_blockchain.as_os_str().is_empty() {
             return Ok(());
@@ -3597,11 +3665,13 @@ impl BlockStore {
             }
             aligned / BlockIndex::SIZE
         };
+        self.align_hashes_len()?;
+        let data_backed_count = self.data_backed_count(logical_count)?;
         if matches!(self.fsync.mode, FsyncMode::Off) {
-            self.write_commit_marker(logical_count)?;
-            self.truncate_hashes_to_count(logical_count)?;
-            self.truncate_data_to_index(logical_count)?;
-            self.commit_marker_count = logical_count;
+            self.write_commit_marker(data_backed_count)?;
+            self.truncate_hashes_to_count(data_backed_count)?;
+            self.truncate_data_to_index(data_backed_count)?;
+            self.commit_marker_count = data_backed_count;
             self.commit_marker_pending = None;
             return Ok(());
         }
@@ -3609,11 +3679,20 @@ impl BlockStore {
         let mut durable_count = match self.read_commit_marker()? {
             Some(marker) => marker.count,
             None => {
-                self.write_commit_marker(logical_count)?;
-                logical_count
+                self.write_commit_marker(data_backed_count)?;
+                data_backed_count
             }
         };
 
+        if durable_count > data_backed_count {
+            warn!(
+                durable_count,
+                data_backed_count,
+                "block store marker exceeds data-backed count; truncating marker"
+            );
+            durable_count = data_backed_count;
+            self.write_commit_marker(durable_count)?;
+        }
         if logical_count < durable_count {
             warn!(
                 logical_count,
@@ -3624,6 +3703,8 @@ impl BlockStore {
         }
 
         if logical_count > durable_count {
+            self.commit_marker_count = durable_count;
+            self.commit_marker_pending = None;
             self.prune(durable_count)?;
         }
 
@@ -7881,6 +7962,8 @@ mod tests {
         assert_eq!(reopened.read_index_count().unwrap(), 1);
         assert_eq!(reopened.read_hashes_count().unwrap(), 1);
         assert_eq!(reopened.read_durable_index_count().unwrap(), 1);
+        let marker = reopened.read_commit_marker().unwrap().expect("marker");
+        assert_eq!(marker.count, 1);
 
         let last = reopened.read_block_index(0).unwrap();
         let data_len = reopened.data_file_len().unwrap();
@@ -7952,6 +8035,43 @@ mod tests {
     }
 
     #[test]
+    fn commit_marker_corruption_falls_back_to_data_backed_count() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let mut blocks = DummyBlocks::new();
+        for _ in 0..2 {
+            store.append_block_to_chain(&blocks.next()).unwrap();
+        }
+
+        let first = store.read_block_index(0).unwrap();
+        let first_end = first.start + first.length;
+        drop(store);
+
+        let data_path = blocks_dir.join(DATA_FILE_NAME);
+        let data_file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&data_path)
+            .unwrap();
+        data_file.set_len(first_end).unwrap();
+
+        let marker_path = blocks_dir.join(COUNT_FILE_NAME);
+        std::fs::write(&marker_path, b"corrupt").unwrap();
+
+        let mut reopened = BlockStore::new(&blocks_dir);
+        reopened.create_files_if_they_do_not_exist().unwrap();
+        assert_eq!(reopened.read_durable_index_count().unwrap(), 1);
+        assert_eq!(reopened.read_index_count().unwrap(), 1);
+        assert_eq!(reopened.read_hashes_count().unwrap(), 1);
+
+        let last = reopened.read_block_index(0).unwrap();
+        let data_len = reopened.data_file_len().unwrap();
+        assert_eq!(data_len, last.start + last.length);
+    }
+
+    #[test]
     fn index_misalignment_truncates_on_init() {
         let temp_dir = TempDir::new().unwrap();
         let blocks_dir = primary_blocks_dir(&temp_dir);
@@ -7976,6 +8096,33 @@ mod tests {
         let len = reopened.index_file_len().unwrap();
         assert_eq!(len % BlockIndex::SIZE, 0);
         assert_eq!(reopened.read_index_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn hashes_misalignment_truncates_on_init() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let mut blocks = DummyBlocks::new();
+        for _ in 0..2 {
+            store.append_block_to_chain(&blocks.next()).unwrap();
+        }
+
+        let hashes_path = blocks_dir.join(HASHES_FILE_NAME);
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&hashes_path)
+            .unwrap();
+        file.write_all(&[0u8; 3]).unwrap();
+        drop(store);
+
+        let mut reopened = BlockStore::new(&blocks_dir);
+        reopened.create_files_if_they_do_not_exist().unwrap();
+        let len = reopened.hashes_file_len().unwrap();
+        assert_eq!(len % SIZE_OF_BLOCK_HASH, 0);
+        assert_eq!(reopened.read_hashes_count().unwrap(), 2);
     }
 
     #[test]

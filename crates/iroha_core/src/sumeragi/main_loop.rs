@@ -2347,6 +2347,20 @@ impl NewViewTracker {
         entry.senders.len()
     }
 
+    #[cfg(test)]
+    fn count(&self, height: u64, view: u64) -> usize {
+        self.entries
+            .get(&(height, view))
+            .map_or(0, |entry| entry.senders.len())
+    }
+
+    #[cfg(test)]
+    fn count_with_local(&self, height: u64, view: u64, local: Option<ValidatorIndex>) -> usize {
+        self.entries
+            .get(&(height, view))
+            .map_or(0, |entry| entry.count_with_local(local))
+    }
+
     fn prune(&mut self, committed_height: u64) {
         self.entries
             .retain(|(entry_height, _), _| *entry_height > committed_height);
@@ -2390,21 +2404,6 @@ impl NewViewTracker {
                     quorum: entry.senders.len(),
                 }
             })
-    }
-}
-
-#[cfg(test)]
-impl NewViewTracker {
-    fn count(&self, height: u64, view: u64) -> usize {
-        self.entries
-            .get(&(height, view))
-            .map_or(0, |entry| entry.senders.len())
-    }
-
-    fn count_with_local(&self, height: u64, view: u64, local: Option<ValidatorIndex>) -> usize {
-        self.entries
-            .get(&(height, view))
-            .map_or(0, |entry| entry.count_with_local(local))
     }
 }
 
@@ -4330,6 +4329,7 @@ impl Actor {
         block: &SignedBlock,
         roster: &[PeerId],
         mode_tag: &str,
+        _epoch: u64,
         consensus_mode: ConsensusMode,
     ) -> Option<(CommitCertificate, Option<CommitStakeSnapshot>)> {
         if roster.is_empty() {
@@ -4370,12 +4370,13 @@ impl Actor {
 
     fn persist_roster_sidecar_for_commit(&self, block: &SignedBlock, roster: &[PeerId]) {
         let height = block.header().height().get();
-        let (consensus_mode, mode_tag, _prf_seed) = self.consensus_context_for_height(height);
+        let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(height);
         if let Some((cert, stake_snapshot)) = Self::synthesize_commit_certificate(
             self.state.as_ref(),
             block,
             roster,
             mode_tag,
+            self.epoch_for_height(height),
             consensus_mode,
         ) {
             super::status::record_commit_certificate(cert.clone());
@@ -7793,6 +7794,7 @@ fn distinct_epochs_for_block_votes(
         .collect()
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PipelinePhase {
     Propose,

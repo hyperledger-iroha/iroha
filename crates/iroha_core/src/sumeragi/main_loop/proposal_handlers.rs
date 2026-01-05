@@ -484,12 +484,12 @@ impl Actor {
         if self.pending.pending_blocks.contains_key(&block_hash) {
             if da_enabled {
                 let session_key = Self::session_key(&block_hash, height, view);
+                let payload_bytes = super::proposals::block_payload_bytes(&block);
+                let payload_hash = Hash::new(&payload_bytes);
                 if !self.subsystems.da_rbc.rbc.sessions.contains_key(&session_key) {
-                    let payload_bytes = super::proposals::block_payload_bytes(&block);
-                    let payload_hash = Hash::new(&payload_bytes);
                     self.seed_rbc_session_from_block(session_key, &block, payload_hash)?;
-                    self.hydrate_rbc_session_from_block(session_key, &payload_bytes, payload_hash)?;
                 }
+                self.hydrate_rbc_session_from_block(session_key, &payload_bytes, payload_hash)?;
             }
             debug!(
                 height,

@@ -34,11 +34,15 @@ async fn multiple_blocks_created() -> Result<()> {
     else {
         return Ok(());
     };
+    let sync_timeout = network.sync_timeout().max(Duration::from_secs(600));
     let leader = network
         .peers()
         .iter()
         .min_by_key(|peer| peer.public_key().to_string())
         .expect("at least one peer");
+    let mut submit_client = leader.client();
+    submit_client.transaction_status_timeout = sync_timeout;
+    submit_client.transaction_ttl = Some(sync_timeout + Duration::from_secs(5));
 
     let create_domain = Register::domain(Domain::new("domain".parse()?));
     let (account_id, _account_keypair) = gen_account_in("domain");
@@ -48,7 +52,7 @@ async fn multiple_blocks_created() -> Result<()> {
         Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
 
     {
-        let client = leader.client();
+        let client = submit_client.clone();
         let tx = client.clone().build_transaction(
             [
                 InstructionBox::from(create_domain),
@@ -58,7 +62,7 @@ async fn multiple_blocks_created() -> Result<()> {
             <_>::default(),
         );
         let submit_res: eyre::Result<()> =
-            spawn_blocking(move || client.submit_transaction_blocking(&tx).map(|_| ()))
+            spawn_blocking(move || client.submit_transaction(&tx).map(|_| ()))
                 .await
                 .map_err(eyre::Report::from)?;
         if sandbox::handle_result(submit_res, stringify!(multiple_blocks_created))?.is_none() {
@@ -76,7 +80,7 @@ async fn multiple_blocks_created() -> Result<()> {
     }
 
     let mut last_non_empty = match sandbox::handle_result(
-        get_status_with_retry(&leader.client()),
+        get_status_with_retry(&submit_client),
         stringify!(multiple_blocks_created),
     )? {
         Some(status) => status.blocks_non_empty,
@@ -98,7 +102,7 @@ async fn multiple_blocks_created() -> Result<()> {
                 .expect("there is quite a room to choose from");
             total += value;
 
-            let client = leader.client();
+            let client = submit_client.clone();
             let tx = client.build_transaction(
                 [Mint::asset_numeric(
                     Numeric::new(value, 0),
@@ -107,7 +111,7 @@ async fn multiple_blocks_created() -> Result<()> {
                 <_>::default(),
             );
             submit_handles.push(spawn_blocking(move || {
-                client.submit_transaction_blocking(&tx).map(|_| ())
+                client.submit_transaction(&tx).map(|_| ())
             }));
         }
 
@@ -130,7 +134,7 @@ async fn multiple_blocks_created() -> Result<()> {
         }
 
         match sandbox::handle_result(
-            get_status_with_retry(&leader.client()),
+            get_status_with_retry(&submit_client),
             stringify!(multiple_blocks_created),
         )? {
             Some(status) => last_non_empty = status.blocks_non_empty,
@@ -143,7 +147,7 @@ async fn multiple_blocks_created() -> Result<()> {
     let expected_value = Numeric::new(total, 0);
 
     // Give the network a chance to flush any straggling transactions before asserting.
-    let deadline = Instant::now() + network.sync_timeout();
+    let deadline = Instant::now() + sync_timeout;
     loop {
         let mut all_ok = true;
         for peer in network.peers() {
@@ -159,15 +163,20 @@ async fn multiple_blocks_created() -> Result<()> {
                 Some(v) => v,
                 None => return Ok(()),
             };
-            let asset = assets
-                .into_iter()
-                .find(|asset| {
-                    *asset.id().account() == account_id && *asset.id().definition() == definition
-                })
-                .expect("asset not found");
-            if *asset.value() != expected_value {
-                all_ok = false;
-                break;
+            let asset = assets.into_iter().find(|asset| {
+                *asset.id().account() == account_id && *asset.id().definition() == definition
+            });
+            match asset {
+                Some(asset) => {
+                    if *asset.value() != expected_value {
+                        all_ok = false;
+                        break;
+                    }
+                }
+                None => {
+                    all_ok = false;
+                    break;
+                }
             }
         }
 

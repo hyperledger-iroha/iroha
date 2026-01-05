@@ -129,6 +129,22 @@ pub enum Pattern {
     Tuple(Vec<String>),
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum AssignOp {
+    /// Simple assignment: `=`.
+    Set,
+    /// Compound assignment: `+=`.
+    Add,
+    /// Compound assignment: `-=`.
+    Sub,
+    /// Compound assignment: `*=`.
+    Mul,
+    /// Compound assignment: `/=`.
+    Div,
+    /// Compound assignment: `%=`.
+    Mod,
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
     /// Variable declaration with optional type annotation.
@@ -145,6 +161,7 @@ pub enum Statement {
     /// Assignment to a general lvalue (field/indexed), e.g. `a[i].f = v` or `obj.x += 1`.
     AssignExpr {
         target: Expr,
+        op: AssignOp,
         value: Expr,
     },
     Expr(Expr),

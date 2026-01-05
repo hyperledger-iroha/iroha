@@ -914,55 +914,24 @@ impl<'a> Parser<'a> {
                     let op_tok = self.bump().kind.clone();
                     let rhs = self.parse_expr()?;
                     self.expect(TokenKind::Semicolon)?;
-                    return Ok(match (target, op_tok) {
-                        (Expr::Ident(name), TokenKind::Equal) => {
+                    let op = match op_tok {
+                        TokenKind::Equal => AssignOp::Set,
+                        TokenKind::PlusEqual => AssignOp::Add,
+                        TokenKind::MinusEqual => AssignOp::Sub,
+                        TokenKind::StarEqual => AssignOp::Mul,
+                        TokenKind::SlashEqual => AssignOp::Div,
+                        TokenKind::PercentEqual => AssignOp::Mod,
+                        _ => unreachable!(),
+                    };
+                    return Ok(match (target, op) {
+                        (Expr::Ident(name), AssignOp::Set) => {
                             Statement::Assign { name, value: rhs }
                         }
-                        (t, TokenKind::Equal) => Statement::AssignExpr {
+                        (t, op) => Statement::AssignExpr {
                             target: t,
+                            op,
                             value: rhs,
                         },
-                        (t, TokenKind::PlusEqual) => Statement::AssignExpr {
-                            target: t.clone(),
-                            value: Expr::Binary {
-                                op: BinaryOp::Add,
-                                left: Box::new(t),
-                                right: Box::new(rhs),
-                            },
-                        },
-                        (t, TokenKind::MinusEqual) => Statement::AssignExpr {
-                            target: t.clone(),
-                            value: Expr::Binary {
-                                op: BinaryOp::Sub,
-                                left: Box::new(t),
-                                right: Box::new(rhs),
-                            },
-                        },
-                        (t, TokenKind::StarEqual) => Statement::AssignExpr {
-                            target: t.clone(),
-                            value: Expr::Binary {
-                                op: BinaryOp::Mul,
-                                left: Box::new(t),
-                                right: Box::new(rhs),
-                            },
-                        },
-                        (t, TokenKind::SlashEqual) => Statement::AssignExpr {
-                            target: t.clone(),
-                            value: Expr::Binary {
-                                op: BinaryOp::Div,
-                                left: Box::new(t),
-                                right: Box::new(rhs),
-                            },
-                        },
-                        (t, TokenKind::PercentEqual) => Statement::AssignExpr {
-                            target: t.clone(),
-                            value: Expr::Binary {
-                                op: BinaryOp::Mod,
-                                left: Box::new(t),
-                                right: Box::new(rhs),
-                            },
-                        },
-                        _ => unreachable!(),
                     });
                 } else {
                     // Not an assignment; rewind and continue parsing as expression
@@ -1892,5 +1861,27 @@ mod tests {
     fn parse_bounded_attribute_literal() {
         let src = "fn f(m: Map<int, int>) { for (k, v) in m #[bounded(1)] { let z = k; } }";
         parse(src).expect("parse bounded attribute");
+    }
+
+    #[test]
+    fn parse_compound_assignment_keeps_rhs() {
+        let src = "fn f() { m[0] += 1; }";
+        let prog = parse(src).expect("parse compound assignment");
+        let func = prog
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(f) => Some(f),
+                _ => None,
+            })
+            .expect("function present");
+        let stmt = func.body.statements.first().expect("statement present");
+        match stmt {
+            Statement::AssignExpr { op, value, .. } => {
+                assert_eq!(*op, AssignOp::Add);
+                assert!(matches!(value, Expr::Number(1)));
+            }
+            other => panic!("expected compound assignment, got {other:?}"),
+        }
     }
 }

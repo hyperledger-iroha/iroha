@@ -3962,10 +3962,10 @@ pub mod tests {
 
     fn sample_runtime_upgrade_manifest_bytes() -> Vec<u8> {
         RuntimeUpgradeManifest {
-            name: "upgrade.test".to_string(),
-            description: "test upgrade for runtime hook enforcement".to_string(),
-            abi_version: 2,
-            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::Experimental(2)),
+            name: "upgrade.v1.test".to_string(),
+            description: "test upgrade for runtime hook enforcement (v1)".to_string(),
+            abi_version: 1,
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
             added_syscalls: vec![],
             added_pointer_types: vec![],
             start_height: 42,

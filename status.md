@@ -41,6 +41,17 @@
 - SM2/Bridge: rebuild `NoritoBridge.xcframework` to align SM2 public-key multihash payloads (distid + SEC1) with the canonical fixture so Swift parity tests match.
 - Tests: `swift test --filter Sm2Tests`; `cargo test -p iroha_torii --lib`.
 - Crypto: fix Algorithm discriminant stability (explicit repr u8 values aligned with TryFrom/PublicKeyCompact/SDK docs) and gate `bls_check` behind the `bls` feature; add regression assertion for discriminant values.
+- Sumeragi: hydrate existing RBC sessions on duplicate `BlockCreated` and emit precommit/exec votes with per-height epochs to avoid cross-epoch drops; add regression tests.
+- Irohad: remove the DA/RBC override for Iroha 3 so `sumeragi.da_enabled` is enforced by config validation; update docs and tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/assignments in unrelated modules).
+- Core: silence unused warnings in Norito AoS helpers and Sumeragi commit/pacemaker paths, derive `Debug` for RBC sampling payloads, and add missing unit tests for Kura sidecar height mismatch cases.
+- Tests: `cargo test -p iroha_core` (timed out after 240s; multiple test failures still pending).
+- ABI/runtime upgrades: keep ABI v1 fixed (no version bumps), allow v1 runtime upgrades without ABI increments, re-enable runtime-upgrade admission tests, and update runtime-upgrade docs/translations.
+- Integration tests: ensure genesis peers always receive a genesis file to prevent empty-storage startup failures.
+- Sumeragi: drop votes/QCs with mismatched epochs (commit + exec paths) to avoid cross-epoch pollution; add regression tests.
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/vars in unrelated modules).
+- Sumeragi: ignore conflicting same-signer votes (record evidence without overwriting the first vote) to avoid QC regression; add regression coverage.
 - Tests: not run (not requested).
 - Sumeragi: drop the DA/RBC devnet override so `sumeragi.da_enabled` is honored at runtime; update docs and runtime DA tests accordingly.
 - Tests: not run (not requested).
@@ -1101,3 +1112,5 @@
 - Switched Ed25519 verification to strict checks (reject low-order keys/signatures), hardened batch verification for low-order points, and added a regression that demonstrates low-order key forgery is now rejected.
 - Enforced low-S canonical secp256k1 signatures (signer normalizes, verifier rejects high-S) and added a regression to prove high-S malleability no longer verifies.
 - Rejected duplicate public keys in BLS same-message aggregate verification (including pre-aggregated checks) with new regressions for both normal and small variants.
+- Hardened Kura block store init by clamping commit markers to data-backed counts, preserving markers during prune, and aligning hash lengths; added tests for data-backed fallback and hash misalignment.
+- Snapshot reader now falls back to temp Merkle metadata when the main metadata is corrupt, with coverage for the new behavior.
