@@ -1,6 +1,9 @@
 # Status
 
 ## Latest Updates
+- Sumeragi: persist roster sidecars after recording commit certificates (with precommit signer fallback) to avoid block-sync roster gaps; add regression tests for commit-sidecar persistence and signer-based synthesis; fix roster-index test to use an Arc-backed provider.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (failed: could not write dep-info/fingerprint files under `target/debug/.fingerprint`/`target/debug/deps` with `No such file or directory`).
 - Genesis: enable DA in `defaults/genesis.json` across parameter blocks and refresh the consensus fingerprint to match the DA-enabled parameters (fixes genesis startup failures when defaults are used).
 - Tests: not run (not requested).
 - Sumeragi: validate RBC READY signatures before chunk-root rejection and keep sessions valid when mismatched roots arrive; extend regression test.
