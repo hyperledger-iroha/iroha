@@ -9117,7 +9117,8 @@ pub mod events_api {
                     filters,
                 } = self;
 
-                let msg = EventSubscriptionRequest::new(filters).encode();
+                let msg = norito::to_bytes(&EventSubscriptionRequest::new(filters))
+                    .expect("encode event subscription request");
                 InitData::new(R::new(HttpMethod::GET, url).headers(headers), msg, Events)
             }
         }
@@ -9130,7 +9131,7 @@ pub mod events_api {
             type Event = crate::data_model::prelude::EventBox;
 
             fn message(&self, message: Vec<u8>) -> Result<Self::Event> {
-                let event_socket_message = EventMessage::decode_all(&mut message.as_slice())?;
+                let event_socket_message: EventMessage = decode_from_bytes(&message)?;
                 Ok(event_socket_message.into())
             }
         }
@@ -9196,7 +9197,8 @@ mod blocks_api {
                     url,
                 } = self;
 
-                let msg = BlockSubscriptionRequest::new(height).encode();
+                let msg = norito::to_bytes(&BlockSubscriptionRequest::new(height))
+                    .expect("encode block subscription request");
                 InitData::new(R::new(HttpMethod::GET, url).headers(headers), msg, Events)
             }
         }
@@ -9209,7 +9211,8 @@ mod blocks_api {
             type Event = SignedBlock;
 
             fn message(&self, message: Vec<u8>) -> Result<Self::Event> {
-                Ok(BlockMessage::decode_all(&mut message.as_slice()).map(Into::into)?)
+                let block_message: BlockMessage = decode_from_bytes(&message)?;
+                Ok(block_message.into())
             }
         }
     }
@@ -9269,6 +9272,7 @@ mod tests {
         },
         *,
     };
+    use crate::http::ws::conn_flow::Events as _;
     use crate::{
         config::{BasicAuth, Config},
         da::{DaSampledChunk, DaSamplingPlan, PDP_COMMITMENT_HEADER},
@@ -9506,6 +9510,100 @@ mod tests {
             sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
             sorafs_rollout_phase: SorafsRolloutPhase::Canary,
         }
+    }
+
+    #[test]
+    fn events_ws_flow_uses_framed_norito() {
+        use std::num::NonZeroU64;
+
+        use crate::data_model::events::{
+            EventBox, EventFilterBox,
+            pipeline::{
+                PipelineEventBox, PipelineEventFilterBox, PipelineWarning, TransactionEventFilter,
+            },
+            stream::{EventMessage, EventSubscriptionRequest},
+        };
+
+        let filters = vec![EventFilterBox::Pipeline(
+            PipelineEventFilterBox::Transaction(TransactionEventFilter::default()),
+        )];
+        let init = events_api::flow::Init::new(
+            filters.clone(),
+            HashMap::new(),
+            "http://127.0.0.1:8080".parse().expect("valid url"),
+        )
+        .expect("init events handler");
+        let init_data = <events_api::flow::Init as crate::http::ws::conn_flow::Init<
+            crate::http_default::DefaultWebSocketRequestBuilder,
+        >>::init(init);
+        let decoded: EventSubscriptionRequest = norito::decode_from_bytes(&init_data.first_message)
+            .expect("decode event subscription request");
+        assert_eq!(decoded.filters, filters);
+        assert!(decoded.proof_backend.is_none());
+        assert!(decoded.proof_call_hash.is_none());
+        assert!(decoded.proof_envelope_hash.is_none());
+
+        let header = BlockHeader::new(NonZeroU64::new(1).expect("height"), None, None, None, 0, 0);
+        let warning = PipelineWarning {
+            header,
+            kind: "test".to_string(),
+            details: "details".to_string(),
+        };
+        let event = EventBox::Pipeline(PipelineEventBox::Warning(warning));
+        let bytes = norito::to_bytes(&EventMessage(event.clone())).expect("encode event message");
+        let decoded_event = events_api::flow::Events
+            .message(bytes)
+            .expect("decode event message");
+        assert_eq!(decoded_event, event);
+    }
+
+    #[test]
+    fn blocks_ws_flow_uses_framed_norito() {
+        use std::num::NonZeroU64;
+
+        use crate::{
+            crypto::{PrivateKey, PublicKey},
+            data_model::{
+                block::{SignedBlock, stream::BlockMessage, stream::BlockSubscriptionRequest},
+                prelude::{AccountId, ChainId, DomainId, TransactionBuilder},
+            },
+        };
+
+        let height = NonZeroU64::new(1).expect("height");
+        let init = blocks_api::flow::Init::new(
+            height,
+            HashMap::new(),
+            "http://127.0.0.1:8080".parse().expect("valid url"),
+        )
+        .expect("init blocks handler");
+        let init_data = <blocks_api::flow::Init as crate::http::ws::conn_flow::Init<
+            crate::http_default::DefaultWebSocketRequestBuilder,
+        >>::init(init);
+        let decoded: BlockSubscriptionRequest = norito::decode_from_bytes(&init_data.first_message)
+            .expect("decode block subscription request");
+        assert_eq!(decoded.0, height);
+
+        let chain: ChainId = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("chain id");
+        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let public_key: PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .expect("public key");
+        let private_key: PrivateKey =
+            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                .parse()
+                .expect("private key");
+        let authority = AccountId::new(domain, public_key);
+        let tx = TransactionBuilder::new(chain, authority).sign(&private_key);
+        let block = SignedBlock::genesis(vec![tx], &private_key, None, None);
+
+        let bytes = norito::to_bytes(&BlockMessage(block.clone())).expect("encode block message");
+        let decoded_block = blocks_api::flow::Events
+            .message(bytes)
+            .expect("decode block message");
+        assert_eq!(decoded_block, block);
     }
 
     #[test]

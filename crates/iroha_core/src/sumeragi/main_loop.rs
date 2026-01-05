@@ -485,6 +485,8 @@ pub(crate) enum QcValidationError {
     MissingVotes { missing: usize },
     #[error("QC contains duplicate signer bits")]
     DuplicateSigners,
+    #[error("QC validator set does not match active roster")]
+    ValidatorSetMismatch,
     #[error("QC aggregate does not match subject/bitmap")]
     AggregateMismatch,
     #[error("QC subject mismatch for signer {signer}")]
@@ -503,6 +505,7 @@ impl QcValidationError {
             Self::InsufficientSigners { .. } => "insufficient_signers",
             Self::MissingVotes { .. } => "missing_votes",
             Self::DuplicateSigners => "duplicate_signers",
+            Self::ValidatorSetMismatch => "validator_set_mismatch",
             Self::AggregateMismatch => "aggregate_mismatch",
             Self::SubjectMismatch { .. } => "subject_mismatch",
             Self::InvalidSignature { .. } => "invalid_signature",
@@ -646,6 +649,7 @@ fn qc_validation_error_to_evidence(
         | QcValidationError::SignerOutOfBounds { .. }
         | QcValidationError::InvalidSignature { .. }
         | QcValidationError::SignerMissingFromBlock { .. }
+        | QcValidationError::ValidatorSetMismatch
         | QcValidationError::AggregateMismatch
         | QcValidationError::DuplicateSigners
         | QcValidationError::SubjectMismatch { .. } => Some(Evidence {
@@ -846,12 +850,28 @@ fn exec_qc_bls_preimage(
     crate::sumeragi::consensus::bls_preimage::exec_vote(chain_id, mode_tag, &vote)
 }
 
+fn qc_validator_set_matches_topology(
+    qc: &crate::sumeragi::consensus::Qc,
+    canonical_topology: &super::network_topology::Topology,
+) -> bool {
+    if qc.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1 {
+        return false;
+    }
+    if HashOf::new(&qc.validator_set) != qc.validator_set_hash {
+        return false;
+    }
+    qc.validator_set.as_slice() == canonical_topology.as_ref()
+}
+
 fn qc_aggregate_consistent(
     qc: &crate::sumeragi::consensus::Qc,
     canonical_topology: &super::network_topology::Topology,
     chain_id: &ChainId,
     mode_tag: &str,
 ) -> bool {
+    if !qc_validator_set_matches_topology(qc, canonical_topology) {
+        return false;
+    }
     if qc.aggregate.bls_aggregate_signature.is_empty() {
         return false;
     }
@@ -1051,6 +1071,9 @@ pub(crate) fn validate_block_sync_qc(
     let roster_len = topology.as_ref().len();
     let required = signature_topology.min_votes_for_commit().max(1);
     let voting_len = roster_len;
+    if !qc_validator_set_matches_topology(qc, topology) {
+        return Err(QcValidationError::ValidatorSetMismatch);
+    }
     let parsed_signers = qc_signer_indices(qc, roster_len, voting_len)?;
     if parsed_signers.voting.len() < required {
         return Err(QcValidationError::InsufficientSigners {
@@ -1237,6 +1260,9 @@ fn validate_qc_against_votes(
     let roster_len = topology.as_ref().len();
     let required = signature_topology.min_votes_for_commit();
     let voting_len = roster_len;
+    if !qc_validator_set_matches_topology(qc, topology) {
+        return Err(QcValidationError::ValidatorSetMismatch);
+    }
     let parsed_signers = qc_signer_indices(qc, roster_len, voting_len)?;
     if parsed_signers.voting.len() < required {
         return Err(QcValidationError::InsufficientSigners {

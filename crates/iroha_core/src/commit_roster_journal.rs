@@ -592,7 +592,7 @@ mod tests {
             version: 1,
             entries: vec![CommitRosterRecord {
                 height: cert.height,
-                block_hash: cert.block_hash,
+                block_hash: cert.subject_block_hash,
                 commit_certificate: cert.clone(),
                 validator_checkpoint: checkpoint.clone(),
                 stake_snapshot: None,

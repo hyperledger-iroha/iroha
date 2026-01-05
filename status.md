@@ -1,6 +1,14 @@
 # Status
 
 ## Latest Updates
+- Torii: negotiate Kaigi relay endpoint responses so JSON `Accept` headers receive JSON bodies.
+- Tests: not run (not requested).
+- Torii: update evidence decode tests to assert `DoublePrepare` now that `EvidenceKind::DoublePrevote` is removed.
+- Tests: not run (not requested).
+- Crypto: fix Merkle compact-proof depth truncation test by typing the sibling hash to satisfy `HashOf` inference (E0282).
+- Tests: not run (not requested).
+- Crypto: derive `Debug` for `PublicKeyCompact` to unblock compact payload error assertions.
+- Tests: not run (not requested).
 - Resolved merge conflicts across Sumeragi docs, telemetry, and roadmap/status to align commit-certificate terminology and DA availability wording.
 - Refactored commit-certificate-only test fixtures across core (QC alias), block-sync checkpoints, evidence, and bridge finality proofs to use BLS aggregate signatures + signer bitmaps; removed legacy view-change proof tests.
 - Tests: `cargo test -p iroha_core --tests --no-run` (passed; warnings about unused imports/assignments in unrelated modules).

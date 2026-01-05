@@ -34,7 +34,7 @@ impl Actor {
             validator_checkpoint,
             stake_snapshot,
         } = update;
-        let mut incoming_qc = incoming_qc;
+        let incoming_qc = incoming_qc;
         let block_hash = block.hash();
         let block_height = block.header().height().get();
         let block_view = u64::from(block.header().view_change_index());
@@ -166,13 +166,6 @@ impl Actor {
             "block sync roster selected"
         );
         let topology = super::network_topology::Topology::new(selection.roster.clone());
-        if let Some(cert) = selection.commit_certificate.as_ref() {
-            super::status::record_commit_certificate(cert.clone());
-            #[cfg(feature = "telemetry")]
-            if let Some(telemetry) = self.telemetry_handle() {
-                telemetry.set_commit_certificate_summary(cert);
-            }
-        }
         if let Some(checkpoint) = selection.checkpoint.clone() {
             super::status::record_validator_checkpoint(checkpoint);
         }
@@ -273,8 +266,9 @@ impl Actor {
             }
         };
         let commit_quorum = topology.min_votes_for_commit().max(1);
-        let mut candidate_qc =
-            incoming_qc.or_else(|| crate::block_sync::BlockSynchronizer::block_sync_qc_for(&block));
+        let mut candidate_qc = incoming_qc
+            .or_else(|| selection.commit_certificate.clone())
+            .or_else(|| crate::block_sync::BlockSynchronizer::block_sync_qc_for(&block));
         candidate_qc = candidate_qc.and_then(|qc| {
             if qc.height != block_height {
                 warn!(
@@ -571,18 +565,6 @@ impl Actor {
                 );
             }
         }
-        if creation_ok && block_known_after_creation {
-            if let Some(cert) = selection.commit_certificate.as_ref() {
-                self.apply_commit_certificate(
-                    cert,
-                    &selection.roster,
-                    block_hash,
-                    block_height,
-                    block_view,
-                );
-            }
-        }
-
         for vote in commit_votes {
             self.handle_vote(vote);
         }
@@ -692,6 +674,13 @@ impl Actor {
                             signers = tally.voting_signers.len(),
                             qc_signers,
                             "applied block sync QC after validation"
+                        );
+                        self.apply_commit_certificate(
+                            &qc,
+                            topology.as_ref(),
+                            block_hash,
+                            block_height,
+                            block_view,
                         );
                         self.process_commit_candidates();
                     }

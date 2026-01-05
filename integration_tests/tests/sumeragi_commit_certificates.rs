@@ -18,10 +18,7 @@ use iroha::data_model::{
     peer::PeerId,
     prelude::*,
 };
-use iroha_core::sumeragi::{
-    consensus::qc_signer_count,
-    network_topology::commit_quorum_from_len,
-};
+use iroha_core::sumeragi::{consensus::qc_signer_count, network_topology::commit_quorum_from_len};
 use iroha_primitives::numeric::Numeric;
 use iroha_test_network::{NetworkBuilder, genesis_factory, init_instruction_registry};
 use norito::json;
@@ -328,10 +325,7 @@ async fn wait_for_commit_certificate_quorum(
                     }
                     let signer_count = commit_certificate_signer_count(cert);
                     if signer_count < required {
-                        missing.push(format!(
-                            "{torii} signatures {} < {required}",
-                            signer_count
-                        ));
+                        missing.push(format!("{torii} signatures {} < {required}", signer_count));
                     }
                 }
                 Err(err) => {

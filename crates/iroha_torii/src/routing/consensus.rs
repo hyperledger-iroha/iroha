@@ -1225,7 +1225,7 @@ mod evidence_submit_tests {
         }
 
         let decoded = decode_evidence_hex(&spaced).expect("decode spaced hex");
-        assert_eq!(decoded.kind, EvidenceKind::DoublePrevote);
+        assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
     }
 
     #[test]

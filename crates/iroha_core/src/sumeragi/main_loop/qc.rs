@@ -1355,6 +1355,15 @@ impl Actor {
             cache_len = self.qc_cache.len(),
             "cached validated QC"
         );
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) && block_known {
+            self.apply_commit_certificate(
+                &qc,
+                &commit_topology,
+                qc.subject_block_hash,
+                qc.height,
+                qc.view,
+            );
+        }
         if !block_known {
             if let Some(lock) = self.locked_qc {
             // Keep status in sync if we cleared an unknown lock earlier.
