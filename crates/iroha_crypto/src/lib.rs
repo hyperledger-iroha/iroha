@@ -569,7 +569,7 @@ impl From<&PublicKeyCompact> for PublicKeyFull {
 /// In case signature verification is needed, it will be decoded.
 ///
 /// Invariant: `payload` is valid, that is conversion to full form must not give error.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct PublicKeyCompact {
     // First byte corresponds to algorithm

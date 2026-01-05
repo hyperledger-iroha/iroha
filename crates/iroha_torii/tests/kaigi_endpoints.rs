@@ -5,7 +5,7 @@ use std::{str::FromStr, sync::Arc};
 
 use axum::{
     body::Body,
-    http::{Request, StatusCode},
+    http::{HeaderValue, Request, StatusCode, header::CONTENT_TYPE},
 };
 use http_body_util::BodyExt;
 use iroha_core::{kiso::KisoHandle, kura::Kura, query::store::LiveQueryStore, state::State};
@@ -261,6 +261,59 @@ async fn kaigi_endpoints_support_compressed_address_format() {
     assert_eq!(
         detail["reported_by"].as_str(),
         Some(owner_compressed.as_str())
+    );
+}
+
+#[tokio::test]
+async fn kaigi_endpoints_honor_json_accept_header() {
+    let (app, relay_account, _owner_account) = build_app();
+    let relay_literal = relay_account.to_string();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/kaigi/relays")
+                .header("Accept", "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get(CONTENT_TYPE),
+        Some(&HeaderValue::from_static("application/json"))
+    );
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let summary: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        summary["items"][0]["relay_id"].as_str(),
+        Some(relay_literal.as_str())
+    );
+
+    let detail_path = format!("/v1/kaigi/relays/{relay_literal}");
+    let detail_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(detail_path)
+                .header("Accept", "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail_resp.status(), StatusCode::OK);
+    assert_eq!(
+        detail_resp.headers().get(CONTENT_TYPE),
+        Some(&HeaderValue::from_static("application/json"))
+    );
+    let detail_bytes = detail_resp.into_body().collect().await.unwrap().to_bytes();
+    let detail: norito::json::Value = norito::json::from_slice(&detail_bytes).unwrap();
+    assert_eq!(
+        detail["relay"]["relay_id"].as_str(),
+        Some(relay_literal.as_str())
     );
 }
 

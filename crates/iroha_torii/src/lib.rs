@@ -5348,6 +5348,7 @@ async fn handler_new_view_json(
 async fn handler_kaigi_relays(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
     AxQuery(params): AxQuery<routing::KaigiRelayFormatParams>,
 ) -> Result<Response, Error> {
     let key = rate_limit_key(&headers, None, "v1/kaigi/relays", app.api_token_enforced());
@@ -5356,15 +5357,25 @@ async fn handler_kaigi_relays(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    routing::handle_v1_kaigi_relays(app.state.clone(), app.telemetry.clone(), AxQuery(params))
-        .await
-        .map(axum::response::IntoResponse::into_response)
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    routing::handle_v1_kaigi_relays(
+        app.state.clone(),
+        app.telemetry.clone(),
+        AxQuery(params),
+        format,
+    )
+    .await
+    .map(axum::response::IntoResponse::into_response)
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 async fn handler_kaigi_relay_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
     AxPath(relay_id): AxPath<String>,
     AxQuery(params): AxQuery<routing::KaigiRelayFormatParams>,
 ) -> Result<Response, Error> {
@@ -5379,11 +5390,16 @@ async fn handler_kaigi_relay_detail(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
     routing::handle_v1_kaigi_relay_detail_with_policy(
         app.state.clone(),
         app.telemetry.clone(),
         AxPath(relay_id),
         AxQuery(params),
+        format,
         app.strict_addresses,
     )
     .await
@@ -5394,6 +5410,7 @@ async fn handler_kaigi_relay_detail(
 async fn handler_kaigi_relays_health(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
     let key = rate_limit_key(
         &headers,
@@ -5406,7 +5423,11 @@ async fn handler_kaigi_relays_health(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    routing::handle_v1_kaigi_relays_health(app.state.clone(), app.telemetry.clone())
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    routing::handle_v1_kaigi_relays_health(app.state.clone(), app.telemetry.clone(), format)
         .await
         .map(axum::response::IntoResponse::into_response)
 }
@@ -14241,7 +14262,7 @@ pub(crate) mod tests_runtime_handlers {
         kiso::KisoHandle,
         query::store::LiveQueryStore,
         sumeragi::{
-            consensus::{Phase, Vote, vote_preimage, PERMISSIONED_TAG},
+            consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage},
             status::record_commit_certificate,
         },
     };

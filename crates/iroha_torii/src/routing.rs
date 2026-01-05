@@ -4746,7 +4746,7 @@ mod evidence_submit_tests {
         }
 
         let decoded = decode_evidence_hex(&spaced).expect("decode spaced hex");
-        assert_eq!(decoded.kind, EvidenceKind::DoublePrevote);
+        assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
     }
 
     #[test]
@@ -18583,6 +18583,7 @@ pub async fn handle_v1_kaigi_relays(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
     crate::NoritoQuery(params): crate::NoritoQuery<KaigiRelayFormatParams>,
+    format: crate::utils::ResponseFormat,
 ) -> Result<impl IntoResponse> {
     if !telemetry.allows_metrics() {
         return Err(Error::telemetry_profile_forbidden(
@@ -18628,7 +18629,7 @@ pub async fn handle_v1_kaigi_relays(
             context: "kaigi_relays_summary",
             source,
         })?;
-    Ok(NoritoJsonBody(payload_value))
+    Ok(crate::utils::respond_value_with_format(payload_value, format))
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -18645,6 +18646,7 @@ pub async fn handle_v1_kaigi_relay_detail(
         telemetry,
         axum::extract::Path(relay_id_str),
         crate::NoritoQuery(params),
+        crate::utils::ResponseFormat::Json,
         false,
     )
     .await
@@ -18658,6 +18660,7 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
     telemetry: MaybeTelemetry,
     axum::extract::Path(relay_id_str): axum::extract::Path<String>,
     crate::NoritoQuery(params): crate::NoritoQuery<KaigiRelayFormatParams>,
+    format: crate::utils::ResponseFormat,
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     if !telemetry.allows_metrics() {
@@ -18748,7 +18751,7 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
             context: "kaigi_relay_detail",
             source,
         })?;
-    Ok(NoritoJsonBody(detail_value))
+    Ok(crate::utils::respond_value_with_format(detail_value, format))
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -18757,6 +18760,7 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
 pub async fn handle_v1_kaigi_relays_health(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
+    format: crate::utils::ResponseFormat,
 ) -> Result<impl IntoResponse> {
     if !telemetry.allows_metrics() {
         return Err(Error::telemetry_profile_forbidden(
@@ -18820,7 +18824,7 @@ pub async fn handle_v1_kaigi_relays_health(
             context: "kaigi_relays_health",
             source,
         })?;
-    Ok(NoritoJsonBody(snapshot_value))
+    Ok(crate::utils::respond_value_with_format(snapshot_value, format))
 }
 
 #[cfg(feature = "app_api")]

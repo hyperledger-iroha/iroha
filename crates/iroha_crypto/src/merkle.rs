@@ -1486,7 +1486,8 @@ mod tests {
 
     #[test]
     fn compact_proof_truncates_audit_path_to_depth_limit() {
-        let sibling = HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
+        let sibling: HashOf<()> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
         let full = MerkleProof::from_audit_path(0, vec![Some(sibling); 40]);
         let compact = CompactMerkleProof::from_full(full);
         assert_eq!(compact.depth() as usize, 32);

@@ -15,7 +15,7 @@ use iroha_core::{
     queue::Queue,
     state::{State, World},
     sumeragi::{
-        consensus::{Phase, Vote, vote_preimage, PERMISSIONED_TAG},
+        consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage},
         status::{record_commit_certificate, reset_commit_certs_for_tests},
     },
 };
