@@ -25,12 +25,12 @@ translation_last_reviewed: 2025-12-28
 
 - **Grafana (`dashboards/grafana/nexus_lanes.json`)** — מפרסם את לוח “Nexus Lane Finality & Oracles”. הפאנלים עוקבים אחר:
   - `histogram_quantile()` על `iroha_slot_duration_ms` (p50/p95/p99) + מדד הדגימה האחרונה.
-  - `iroha_da_quorum_ratio` ו־`increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m])` להבלטת churn של DA.
+  - `iroha_da_quorum_ratio` ו־`increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])` להבלטת churn של DA.
   - פני האורקל: `iroha_oracle_price_local_per_xor`, `iroha_oracle_staleness_seconds`, `iroha_oracle_twap_window_seconds`, `iroha_oracle_haircut_basis_points`.
   - פאנל באפר הסדרים (`iroha_settlement_buffer_xor`) המציג דביטים פר‑ליין מה‑`LaneBlockCommitment`.
 - **כללי התראה** — משתמשים מחדש בסעיפי Slot/DA SLO מתוך `ans3.md`. Page כאשר:
   - p95 של משך סלוט > 1000 ms בשני חלונות 5 דקות רצופים,
-  - יחס קוורום DA < 0.95 או `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m]) > 0`,
+  - יחס קוורום DA < 0.95 או `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m]) > 0`,
   - staleness של האורקל > 90 שניות או חלון TWAP ≠ 60 שניות,
   - באפר הסדרים < 25 % (soft) / 10 % (hard) לאחר שהמדד מופעל.
 
@@ -41,7 +41,7 @@ translation_last_reviewed: 2025-12-28
 | `histogram_quantile(0.95, iroha_slot_duration_ms)` | ≤ 1000 ms (hard), 950 ms warning | להשתמש בפאנל הדשבורד או להריץ `scripts/telemetry/check_slot_duration.py` (`--json-out artifacts/nx18/slot_summary.json`) מול יצוא Prometheus שנאסף בזמן chaos. |
 | `iroha_slot_duration_ms_latest` | משקף את הסלוט האחרון; לבדוק אם > 1100 ms גם כשהקוואנטילים נראים תקינים. | לייצא את הערך בעת פתיחת אירוע. |
 | `iroha_da_quorum_ratio` | ≥ 0.95 בחלון מתגלגל של 30 דקות. | נגזר מ‑DA reschedules במהלך commit בלוקים. |
-| `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m])` | צריך להישאר 0 מחוץ לרהרסלים. | כל עלייה מתמשכת נספרת כ‑`missing-availability warning`. |
+| `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])` | צריך להישאר 0 מחוץ לרהרסלים. | כל עלייה מתמשכת נספרת כ‑`missing-availability warning`. |
 
 כל reschedule מפעיל גם אזהרת pipeline ב‑Torii עם `kind = "missing-availability warning"`. ללכוד אירועים אלו יחד עם קפיצת המטריקה כדי לזהות את כותרת הבלוק, ניסיון ה‑retry ומוני requeue בלי לנבור בלוגים של הוולידטורים.【crates/iroha_core/src/sumeragi/main_loop.rs:5164】
 | `iroha_oracle_staleness_seconds` | ≤ 60 שניות. התראה ב‑75 שניות. | מציין הזנות TWAP של 60 שניות שהתיישנו. |

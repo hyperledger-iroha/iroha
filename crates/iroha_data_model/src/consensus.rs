@@ -8,6 +8,7 @@ use mv::json::JsonKeyCodec;
 use norito::codec::{Decode, Encode};
 
 pub use crate::block::consensus::{
+    CertPhase, CommitAggregate, CommitCertificate, CommitCertificateRef, CommitVote,
     SumeragiBlockSyncRosterStatus, SumeragiCommitCertificateStatus, SumeragiCommitQuorumStatus,
     SumeragiConsensusCapsStatus, SumeragiMembershipMismatchStatus, SumeragiPeerKeyPolicyStatus,
     SumeragiQcEntry, SumeragiQcSnapshot, SumeragiStatusWire, SumeragiViewChangeCauseStatus,
@@ -43,30 +44,7 @@ pub struct ExecutionQcRecord {
 /// Hash-version constant for validator set checkpoints.
 pub const VALIDATOR_SET_HASH_VERSION_V1: u16 = 1;
 
-/// Deterministic commit certificate covering a block header and validator set.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct CommitCertificate {
-    /// Block height certified by this commit certificate.
-    pub height: u64,
-    /// Block hash certified by this commit certificate.
-    pub block_hash: HashOf<crate::block::BlockHeader>,
-    /// Consensus view index associated with the commit.
-    pub view: u64,
-    /// Consensus epoch (zero for permissioned mode).
-    pub epoch: u64,
-    /// Stable hash of the validator set that produced the certificate.
-    pub validator_set_hash: HashOf<Vec<crate::peer::PeerId>>,
-    /// Version of the validator-set hashing scheme.
-    pub validator_set_hash_version: u16,
-    /// Ordered validator set used when assembling the certificate.
-    pub validator_set: Vec<crate::peer::PeerId>,
-    /// Collected signatures (validator index + signature) covering the block header.
-    pub signatures: Vec<crate::block::BlockSignature>,
-}
+// CommitCertificate is now defined in `block::consensus` and re-exported above.
 
 /// Signed validator set checkpoint used for bootstrap and audit.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -85,8 +63,10 @@ pub struct ValidatorSetCheckpoint {
     pub validator_set_hash_version: u16,
     /// Ordered validator set used to assemble the commit certificate.
     pub validator_set: Vec<crate::peer::PeerId>,
-    /// Signatures collected for the block (validator indices + signatures).
-    pub signatures: Vec<crate::block::BlockSignature>,
+    /// Compact signer bitmap (LSB-first).
+    pub signers_bitmap: Vec<u8>,
+    /// BLS12-381 aggregate signature bytes (compressed).
+    pub bls_aggregate_signature: Vec<u8>,
     /// Optional expiry height for the checkpoint (exclusive).
     #[norito(skip_serializing_if = "Option::is_none")]
     pub expires_at_height: Option<u64>,
@@ -99,7 +79,8 @@ impl ValidatorSetCheckpoint {
         height: u64,
         block_hash: HashOf<crate::block::BlockHeader>,
         validator_set: Vec<crate::peer::PeerId>,
-        signatures: Vec<crate::block::BlockSignature>,
+        signers_bitmap: Vec<u8>,
+        bls_aggregate_signature: Vec<u8>,
         validator_set_hash_version: u16,
         expires_at_height: Option<u64>,
     ) -> Self {
@@ -110,7 +91,8 @@ impl ValidatorSetCheckpoint {
             validator_set_hash,
             validator_set_hash_version,
             validator_set,
-            signatures,
+            signers_bitmap,
+            bls_aggregate_signature,
             expires_at_height,
         }
     }
@@ -482,8 +464,8 @@ mod tests {
 
     #[test]
     fn validator_set_checkpoint_roundtrip_and_hash() {
-        let kp_a = iroha_crypto::KeyPair::random();
-        let kp_b = iroha_crypto::KeyPair::random();
+        let kp_a = iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let kp_b = iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let validator_set = vec![
             crate::peer::PeerId::new(kp_a.public_key().clone()),
             crate::peer::PeerId::new(kp_b.public_key().clone()),
@@ -495,7 +477,8 @@ mod tests {
             42,
             block_hash,
             validator_set.clone(),
-            Vec::new(),
+            vec![0x01],
+            vec![0xAA, 0xBB],
             VALIDATOR_SET_HASH_VERSION_V1,
             None,
         );
@@ -513,8 +496,8 @@ mod tests {
 
     #[test]
     fn commit_certificate_roundtrip() {
-        let kp_a = iroha_crypto::KeyPair::random();
-        let kp_b = iroha_crypto::KeyPair::random();
+        let kp_a = iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let kp_b = iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let validator_set = vec![
             crate::peer::PeerId::new(kp_a.public_key().clone()),
             crate::peer::PeerId::new(kp_b.public_key().clone()),
@@ -523,23 +506,21 @@ mod tests {
         let block_hash = HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
             iroha_crypto::Hash::prehashed([0xCC; 32]),
         );
-        // Use real signatures to exercise encoding.
-        let signature_a = iroha_crypto::SignatureOf::from_hash(kp_a.private_key(), block_hash);
-        let signature_b = iroha_crypto::SignatureOf::from_hash(kp_b.private_key(), block_hash);
-        let signatures = vec![
-            crate::block::BlockSignature::new(0, signature_a),
-            crate::block::BlockSignature::new(1, signature_b),
-        ];
-
         let cert = CommitCertificate {
+            phase: CertPhase::Commit,
+            subject_block_hash: block_hash,
             height: 7,
-            block_hash,
             view: 3,
             epoch: 0,
+            mode_tag: crate::block::consensus::PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
             validator_set_hash,
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: validator_set.clone(),
-            signatures: signatures.clone(),
+            aggregate: CommitAggregate {
+                signers_bitmap: vec![0x03],
+                bls_aggregate_signature: vec![0x01, 0x02],
+            },
         };
         let buf = cert.encode();
         let decoded = CommitCertificate::decode(&mut &buf[..]).expect("decode commit cert");
@@ -547,7 +528,10 @@ mod tests {
         assert_eq!(decoded.view, cert.view);
         assert_eq!(decoded.validator_set_hash, validator_set_hash);
         assert_eq!(decoded.validator_set, validator_set);
-        assert_eq!(decoded.signatures.len(), signatures.len());
+        assert_eq!(
+            decoded.aggregate.bls_aggregate_signature,
+            cert.aggregate.bls_aggregate_signature
+        );
     }
 
     #[test]

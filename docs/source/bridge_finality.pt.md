@@ -64,7 +64,7 @@ protocolos de bridge que preferem a separacao.
 
 1. Recompute `block_hash` a partir de `block_header`; rejeite se nao coincidir.
 2. Verifique que `commit_certificate.block_hash` corresponde ao `block_hash` recomputado;
-   rejeite pares header/QC em mismatch.
+   rejeite pares header/commit certificate em mismatch.
 3. Verifique que `chain_id` corresponde a cadeia Iroha esperada.
 4. Recompute `validator_set_hash` de `commit_certificate.validator_set` e verifique que
    corresponde ao hash/versao registrados.

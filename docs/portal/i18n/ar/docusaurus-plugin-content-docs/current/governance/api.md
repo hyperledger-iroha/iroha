@@ -287,9 +287,9 @@ Endpoint للراحة
 use iroha_data_model::block::consensus::EvidenceKind;
 
 let offences = [
-    EvidenceKind::DoublePrevote,
-    EvidenceKind::DoublePrecommit,
-    EvidenceKind::InvalidQC,
+    EvidenceKind::DoublePrepare,
+    EvidenceKind::DoubleCommit,
+    EvidenceKind::InvalidCommitCertificate,
     EvidenceKind::InvalidProposal,
     EvidenceKind::DoubleExecVote,
 ];
@@ -299,9 +299,9 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrevote/DoublePrecommit** - المدقق وقع hashes متعارضة لنفس tuple `(phase,height,view,epoch)`.
+- **DoublePrepare/DoubleCommit** - المدقق وقع hashes متعارضة لنفس tuple `(phase,height,view,epoch)`.
 - **DoubleExecVote** - تصويتات تنفيذ متعارضة تعلن جذور حالة لاحقة مختلفة.
-- **InvalidQC** - قام مجمع ببث QC شكله يفشل الفحوص الحتمية (مثلا bitmap موقعين فارغ).
+- **InvalidCommitCertificate** - قام مجمع ببث commit certificate شكله يفشل الفحوص الحتمية (مثلا bitmap موقعين فارغ).
 - **InvalidProposal** - قدم قائد بلوكا يفشل التحقق البنيوي (مثلا يكسر قاعدة locked-chain).
 
 يمكن للمشغلين والادوات فحص واعادة بث الحمولات عبر:

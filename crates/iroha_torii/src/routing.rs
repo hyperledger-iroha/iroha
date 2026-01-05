@@ -3761,7 +3761,7 @@ fn collect_validator_snapshots() -> Vec<ValidatorSetSnapshot> {
         .into_iter()
         .map(|cert| ValidatorSetSnapshot {
             height: cert.height,
-            block_hash: cert.block_hash,
+            block_hash: cert.subject_block_hash,
             validator_set_hash: cert.validator_set_hash,
             validator_set_hash_version: cert.validator_set_hash_version,
             validator_set: cert.validator_set,
@@ -4250,7 +4250,7 @@ pub struct EvidenceListQuery {
     pub limit: Option<usize>,
     /// Offset into the snapshot list. Default 0.
     pub offset: Option<usize>,
-    /// Optional filter by kind: one of DoublePrevote, DoublePrecommit, DoubleExecVote, InvalidQC, InvalidProposal, Censorship
+    /// Optional filter by kind: one of DoublePrepare, DoubleCommit, DoubleExecVote, InvalidCommitCertificate, InvalidProposal, Censorship
     pub kind: Option<String>,
 }
 
@@ -4267,10 +4267,12 @@ pub async fn handle_v1_sumeragi_evidence_list(
     if let Some(kind_s) = q.kind.as_deref() {
         use iroha_core::sumeragi::consensus::EvidenceKind;
         let kind_opt = match kind_s {
-            "DoublePrevote" => Some(EvidenceKind::DoublePrevote),
-            "DoublePrecommit" => Some(EvidenceKind::DoublePrecommit),
+            "DoublePrepare" | "DoublePrevote" => Some(EvidenceKind::DoublePrepare),
+            "DoubleCommit" | "DoublePrecommit" => Some(EvidenceKind::DoubleCommit),
             "DoubleExecVote" => Some(EvidenceKind::DoubleExecVote),
-            "InvalidQC" => Some(EvidenceKind::InvalidQC),
+            "InvalidCommitCertificate" | "InvalidQC" => {
+                Some(EvidenceKind::InvalidCommitCertificate)
+            }
             "InvalidProposal" => Some(EvidenceKind::InvalidProposal),
             "Censorship" => Some(EvidenceKind::Censorship),
             _ => None,
@@ -4338,13 +4340,13 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Value {
     let ev = &rec.evidence;
     let mut map = match (&ev.kind, &ev.payload) {
         (
-            EvidenceKind::DoublePrevote | EvidenceKind::DoublePrecommit,
+            EvidenceKind::DoublePrepare | EvidenceKind::DoubleCommit,
             EvidencePayload::DoubleVote { v1, v2 },
         ) => {
             let phase = match v1.phase {
-                Phase::Prevote => "Prevote",
-                Phase::Precommit => "Precommit",
-                Phase::Available => "Available",
+                Phase::Prepare => "Prepare",
+                Phase::Commit => "Commit",
+                Phase::NewView => "NewView",
             };
             let mut map = json::Map::new();
             map.insert("kind".into(), Value::from(format!("{:?}", ev.kind)));
@@ -4385,17 +4387,26 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Value {
             );
             map
         }
-        (EvidenceKind::InvalidQC, EvidencePayload::InvalidQc { qc, reason }) => {
+        (
+            EvidenceKind::InvalidCommitCertificate,
+            EvidencePayload::InvalidCommitCertificate {
+                certificate,
+                reason,
+            },
+        ) => {
             let mut map = json::Map::new();
-            map.insert("kind".into(), Value::from("InvalidQC"));
-            map.insert("height".into(), Value::from(qc.height));
-            map.insert("view".into(), Value::from(qc.view));
-            map.insert("epoch".into(), Value::from(qc.epoch));
+            map.insert("kind".into(), Value::from("InvalidCommitCertificate"));
+            map.insert("height".into(), Value::from(certificate.height));
+            map.insert("view".into(), Value::from(certificate.view));
+            map.insert("epoch".into(), Value::from(certificate.epoch));
             map.insert(
                 "subject_block_hash".into(),
-                Value::from(hash_to_hex(qc.subject_block_hash)),
+                Value::from(hash_to_hex(certificate.subject_block_hash)),
             );
-            map.insert("phase".into(), Value::from(format!("{:?}", qc.phase)));
+            map.insert(
+                "phase".into(),
+                Value::from(format!("{:?}", certificate.phase)),
+            );
             map.insert("reason".into(), Value::from(reason.clone()));
             map
         }
@@ -4407,7 +4418,7 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Value {
             map.insert("epoch".into(), Value::from(proposal.header.epoch));
             map.insert(
                 "subject_block_hash".into(),
-                Value::from(hash_to_hex(proposal.header.highest_qc.subject_block_hash)),
+                Value::from(hash_to_hex(proposal.header.highest_cert.subject_block_hash)),
             );
             map.insert(
                 "payload_hash".into(),
@@ -4645,19 +4656,18 @@ mod evidence_submit_tests {
     ) -> Vote {
         let hash = Hash::prehashed([seed; 32]);
         let mut vote = Vote {
-            phase: Phase::Prevote,
+            phase: Phase::Prepare,
             block_hash: HashOf::from_untyped_unchecked(hash),
             height,
             view,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
         let preimage = iroha_core::sumeragi::consensus::vote_preimage(chain_id, mode_tag, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         let payload = signature.payload().to_vec();
-        vote.signature = payload.clone();
         vote.bls_sig = payload;
         vote
     }
@@ -4667,7 +4677,7 @@ mod evidence_submit_tests {
         let v1 = make_vote(chain_id, mode_tag, keypair, 10, 3, 0x11);
         let v2 = make_vote(chain_id, mode_tag, keypair, 10, 3, 0x22);
         Evidence {
-            kind: EvidenceKind::DoublePrevote,
+            kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         }
     }
@@ -4684,8 +4694,8 @@ mod evidence_submit_tests {
         let decoded_plain = decode_evidence_hex(&plain).expect("decode plain hex");
         let decoded_prefixed = decode_evidence_hex(&prefixed).expect("decode 0x hex");
 
-        assert_eq!(decoded_plain.kind, EvidenceKind::DoublePrevote);
-        assert_eq!(decoded_prefixed.kind, EvidenceKind::DoublePrevote);
+        assert_eq!(decoded_plain.kind, EvidenceKind::DoublePrepare);
+        assert_eq!(decoded_prefixed.kind, EvidenceKind::DoublePrepare);
     }
 
     #[test]
@@ -4736,7 +4746,7 @@ mod evidence_submit_tests {
         }
 
         let decoded = decode_evidence_hex(&spaced).expect("decode spaced hex");
-        assert_eq!(decoded.kind, EvidenceKind::DoublePrevote);
+        assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
     }
 
     #[test]
@@ -4747,7 +4757,7 @@ mod evidence_submit_tests {
         let mode_tag = iroha_core::sumeragi::consensus::PERMISSIONED_TAG;
         let vote = make_vote(&chain_id, mode_tag, &keypair, 42, 7, 0xAB);
         let forged = Evidence {
-            kind: EvidenceKind::DoublePrevote,
+            kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote {
                 v1: vote.clone(),
                 v2: vote,
@@ -4773,7 +4783,7 @@ mod evidence_submit_tests {
         let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
         let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
             .expect("valid evidence should be accepted");
-        assert_eq!(decoded.kind, EvidenceKind::DoublePrevote);
+        assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
     }
 
     #[test]
@@ -4793,7 +4803,7 @@ mod evidence_submit_tests {
         let v1 = make_vote(&chain_id, mode_tag, &keypair, 10, 3, 0x11);
         let v2 = make_vote(&chain_id, mode_tag, &keypair, 10, 3, 0x22);
         let ev = Evidence {
-            kind: EvidenceKind::DoublePrevote,
+            kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
         let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
@@ -4927,13 +4937,13 @@ mod evidence_submit_tests {
         let mut v2 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x22);
         v2.signer = signer_index;
         let ev = Evidence {
-            kind: EvidenceKind::DoublePrevote,
+            kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
         let encoded = hex::encode(norito::to_bytes(&ev).expect("encode evidence"));
         let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
             .expect("evidence should validate with subject-height seed");
-        assert_eq!(decoded.kind, EvidenceKind::DoublePrevote);
+        assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
     }
 }
 
@@ -18581,6 +18591,7 @@ pub async fn handle_v1_kaigi_relays(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
     crate::NoritoQuery(params): crate::NoritoQuery<KaigiRelayFormatParams>,
+    format: crate::utils::ResponseFormat,
 ) -> Result<impl IntoResponse> {
     if !telemetry.allows_metrics() {
         return Err(Error::telemetry_profile_forbidden(
@@ -18626,7 +18637,7 @@ pub async fn handle_v1_kaigi_relays(
             context: "kaigi_relays_summary",
             source,
         })?;
-    Ok(NoritoJsonBody(payload_value))
+    Ok(crate::utils::respond_value_with_format(payload_value, format))
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -18643,6 +18654,7 @@ pub async fn handle_v1_kaigi_relay_detail(
         telemetry,
         axum::extract::Path(relay_id_str),
         crate::NoritoQuery(params),
+        crate::utils::ResponseFormat::Json,
         false,
     )
     .await
@@ -18656,6 +18668,7 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
     telemetry: MaybeTelemetry,
     axum::extract::Path(relay_id_str): axum::extract::Path<String>,
     crate::NoritoQuery(params): crate::NoritoQuery<KaigiRelayFormatParams>,
+    format: crate::utils::ResponseFormat,
     strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     if !telemetry.allows_metrics() {
@@ -18746,7 +18759,7 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
             context: "kaigi_relay_detail",
             source,
         })?;
-    Ok(NoritoJsonBody(detail_value))
+    Ok(crate::utils::respond_value_with_format(detail_value, format))
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -18755,6 +18768,7 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
 pub async fn handle_v1_kaigi_relays_health(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
+    format: crate::utils::ResponseFormat,
 ) -> Result<impl IntoResponse> {
     if !telemetry.allows_metrics() {
         return Err(Error::telemetry_profile_forbidden(
@@ -18818,7 +18832,7 @@ pub async fn handle_v1_kaigi_relays_health(
             context: "kaigi_relays_health",
             source,
         })?;
-    Ok(NoritoJsonBody(snapshot_value))
+    Ok(crate::utils::respond_value_with_format(snapshot_value, format))
 }
 
 #[cfg(feature = "app_api")]
@@ -19782,8 +19796,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("reason", snap.da_gate.reason.as_str()),
         json_entry("last_satisfied", snap.da_gate.last_satisfied.as_str()),
         json_entry(
-            "missing_availability_total",
-            snap.da_gate.missing_availability_total,
+            "missing_local_data_total",
+            snap.da_gate.missing_local_data_total,
         ),
         json_entry("manifest_guard_total", snap.da_gate.manifest_guard_total),
     ]);
@@ -21427,9 +21441,9 @@ mod status_tests {
         let last_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xEE; 32]));
         let snap = sumeragi::StatusSnapshot {
             da_gate: status::DaGateSnapshot {
-                reason: status::DaGateReasonSnapshot::MissingAvailabilityQc,
-                last_satisfied: status::DaGateSatisfactionSnapshot::AvailabilityQc,
-                missing_availability_total: 4,
+                reason: status::DaGateReasonSnapshot::MissingLocalData,
+                last_satisfied: status::DaGateSatisfactionSnapshot::MissingDataRecovered,
+                missing_local_data_total: 4,
                 manifest_guard_total: 2,
             },
             missing_block_fetch_total: 9,
@@ -21455,15 +21469,14 @@ mod status_tests {
             .expect("da_gate object");
         assert_eq!(
             gate.get("reason").and_then(Value::as_str),
-            Some("missing_availability_qc")
+            Some("missing_local_data")
         );
         assert_eq!(
             gate.get("last_satisfied").and_then(Value::as_str),
-            Some("availability_qc")
+            Some("missing_data_recovered")
         );
         assert_eq!(
-            gate.get("missing_availability_total")
-                .and_then(Value::as_u64),
+            gate.get("missing_local_data_total").and_then(Value::as_u64),
             Some(4)
         );
         assert_eq!(
@@ -21740,8 +21753,8 @@ pub async fn handle_v1_sumeragi_status(
             },
             da_gate: SumeragiDaGateStatus {
                 reason: match snap.da_gate.reason {
-                    sumeragi::status::DaGateReasonSnapshot::MissingAvailabilityQc => {
-                        SumeragiDaGateReason::MissingAvailabilityQc
+                    sumeragi::status::DaGateReasonSnapshot::MissingLocalData => {
+                        SumeragiDaGateReason::MissingLocalData
                     }
                     sumeragi::status::DaGateReasonSnapshot::ManifestMissing => {
                         SumeragiDaGateReason::ManifestMissing
@@ -21761,11 +21774,11 @@ pub async fn handle_v1_sumeragi_status(
                     sumeragi::status::DaGateSatisfactionSnapshot::None => {
                         SumeragiDaGateSatisfaction::None
                     }
-                    sumeragi::status::DaGateSatisfactionSnapshot::AvailabilityQc => {
-                        SumeragiDaGateSatisfaction::AvailabilityQc
+                    sumeragi::status::DaGateSatisfactionSnapshot::MissingDataRecovered => {
+                        SumeragiDaGateSatisfaction::MissingDataRecovered
                     }
                 },
-                missing_availability_total: snap.da_gate.missing_availability_total,
+                missing_local_data_total: snap.da_gate.missing_local_data_total,
                 manifest_guard_total: snap.da_gate.manifest_guard_total,
             },
             kura_store: SumeragiKuraStoreStatus {

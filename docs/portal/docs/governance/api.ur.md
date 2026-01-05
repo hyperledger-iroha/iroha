@@ -289,9 +289,9 @@ Recognized offences `EvidenceKind` سے one-to-one map ہوتے ہیں؛ discrim
 use iroha_data_model::block::consensus::EvidenceKind;
 
 let offences = [
-    EvidenceKind::DoublePrevote,
-    EvidenceKind::DoublePrecommit,
-    EvidenceKind::InvalidQC,
+    EvidenceKind::DoublePrepare,
+    EvidenceKind::DoubleCommit,
+    EvidenceKind::InvalidCommitCertificate,
     EvidenceKind::InvalidProposal,
     EvidenceKind::DoubleExecVote,
 ];
@@ -301,9 +301,9 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrevote/DoublePrecommit** - validator نے اسی `(phase,height,view,epoch)` کے لئے متضاد hashes پر دستخط کئے۔
+- **DoublePrepare/DoubleCommit** - validator نے اسی `(phase,height,view,epoch)` کے لئے متضاد hashes پر دستخط کئے۔
 - **DoubleExecVote** - متضاد execution votes مختلف post-state roots ظاہر کرتے ہیں۔
-- **InvalidQC** - aggregator نے ایسا QC gossip کیا جس کی شکل deterministic checks میں fail ہو (مثلا خالی signer bitmap)۔
+- **InvalidCommitCertificate** - aggregator نے ایسا commit certificate gossip کیا جس کی شکل deterministic checks میں fail ہو (مثلا خالی signer bitmap)۔
 - **InvalidProposal** - leader نے ایسا بلاک propose کیا جو structural validation میں fail ہو (مثلا locked-chain rule توڑے)۔
 
 Operators اور tooling payloads کو inspect اور re-broadcast کر سکتے ہیں:

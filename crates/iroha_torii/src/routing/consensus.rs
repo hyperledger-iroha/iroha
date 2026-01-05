@@ -913,7 +913,7 @@ pub struct EvidenceListQuery {
     pub limit: Option<usize>,
     /// Offset into the snapshot list. Default 0.
     pub offset: Option<usize>,
-    /// Optional filter by kind: one of DoublePrevote, DoublePrecommit, DoubleExecVote, InvalidQC, InvalidProposal
+    /// Optional filter by kind: one of DoublePrepare, DoubleCommit, DoubleExecVote, InvalidCommitCertificate, InvalidProposal
     pub kind: Option<String>,
 }
 
@@ -930,10 +930,12 @@ pub async fn handle_v1_sumeragi_evidence_list(
     if let Some(kind_s) = q.kind.as_deref() {
         use iroha_core::sumeragi::consensus::EvidenceKind;
         let kind_opt = match kind_s {
-            "DoublePrevote" => Some(EvidenceKind::DoublePrevote),
-            "DoublePrecommit" => Some(EvidenceKind::DoublePrecommit),
+            "DoublePrepare" | "DoublePrevote" => Some(EvidenceKind::DoublePrepare),
+            "DoubleCommit" | "DoublePrecommit" => Some(EvidenceKind::DoubleCommit),
             "DoubleExecVote" => Some(EvidenceKind::DoubleExecVote),
-            "InvalidQC" => Some(EvidenceKind::InvalidQC),
+            "InvalidCommitCertificate" | "InvalidQC" => {
+                Some(EvidenceKind::InvalidCommitCertificate)
+            }
             "InvalidProposal" => Some(EvidenceKind::InvalidProposal),
             _ => None,
         };
@@ -1132,7 +1134,7 @@ mod evidence_submit_tests {
     ) -> Vote {
         let hash = Hash::prehashed([seed; 32]);
         let mut vote = Vote {
-            phase: Phase::Prevote,
+            phase: Phase::Prepare,
             block_hash: HashOf::from_untyped_unchecked(hash),
             height,
             view,
@@ -1154,7 +1156,7 @@ mod evidence_submit_tests {
         let v1 = make_vote(chain_id, mode_tag, keypair, 10, 3, 0x11);
         let v2 = make_vote(chain_id, mode_tag, keypair, 10, 3, 0x22);
         Evidence {
-            kind: EvidenceKind::DoublePrevote,
+            kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         }
     }
@@ -1171,8 +1173,8 @@ mod evidence_submit_tests {
         let decoded_plain = decode_evidence_hex(&plain).expect("decode plain hex");
         let decoded_prefixed = decode_evidence_hex(&prefixed).expect("decode 0x hex");
 
-        assert_eq!(decoded_plain.kind, EvidenceKind::DoublePrevote);
-        assert_eq!(decoded_prefixed.kind, EvidenceKind::DoublePrevote);
+        assert_eq!(decoded_plain.kind, EvidenceKind::DoublePrepare);
+        assert_eq!(decoded_prefixed.kind, EvidenceKind::DoublePrepare);
     }
 
     #[test]
@@ -1223,7 +1225,7 @@ mod evidence_submit_tests {
         }
 
         let decoded = decode_evidence_hex(&spaced).expect("decode spaced hex");
-        assert_eq!(decoded.kind, EvidenceKind::DoublePrevote);
+        assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
     }
 
     #[test]
@@ -1234,7 +1236,7 @@ mod evidence_submit_tests {
         let mode_tag = iroha_core::sumeragi::consensus::PERMISSIONED_TAG;
         let vote = make_vote(&chain_id, mode_tag, &keypair, 42, 7, 0xAB);
         let forged = Evidence {
-            kind: EvidenceKind::DoublePrevote,
+            kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote {
                 v1: vote.clone(),
                 v2: vote,
@@ -1359,13 +1361,13 @@ mod evidence_submit_tests {
         let v1 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x11);
         let v2 = make_vote(&chain_id, mode_tag, signer_keypair, height, view, 0x22);
         let ev = Evidence {
-            kind: EvidenceKind::DoublePrevote,
+            kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
         let encoded = hex::encode(ev.encode());
         let decoded = decode_and_validate_evidence(&encoded, &state, &chain_id)
             .expect("evidence should validate with subject-height seed");
-        assert_eq!(decoded.kind, EvidenceKind::DoublePrevote);
+        assert_eq!(decoded.kind, EvidenceKind::DoublePrepare);
     }
 }
 
@@ -1992,8 +1994,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("reason", snap.da_gate.reason.as_str()),
         json_entry("last_satisfied", snap.da_gate.last_satisfied.as_str()),
         json_entry(
-            "missing_availability_total",
-            snap.da_gate.missing_availability_total,
+            "missing_local_data_total",
+            snap.da_gate.missing_local_data_total,
         ),
         json_entry("manifest_guard_total", snap.da_gate.manifest_guard_total),
     ]);
@@ -2947,9 +2949,9 @@ mod status_tests {
         let last_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCD; 32]));
         let snap = sumeragi::StatusSnapshot {
             da_gate: status::DaGateSnapshot {
-                reason: status::DaGateReasonSnapshot::MissingAvailabilityQc,
-                last_satisfied: status::DaGateSatisfactionSnapshot::AvailabilityQc,
-                missing_availability_total: 2,
+                reason: status::DaGateReasonSnapshot::MissingLocalData,
+                last_satisfied: status::DaGateSatisfactionSnapshot::MissingDataRecovered,
+                missing_local_data_total: 2,
                 manifest_guard_total: 4,
             },
             missing_block_fetch_total: 5,
@@ -2975,14 +2977,14 @@ mod status_tests {
             .expect("da_gate object");
         assert_eq!(
             gate.get("reason").and_then(Value::as_str),
-            Some("missing_availability_qc")
+            Some("missing_local_data")
         );
         assert_eq!(
             gate.get("last_satisfied").and_then(Value::as_str),
-            Some("availability_qc")
+            Some("missing_data_recovered")
         );
         assert_eq!(
-            gate.get("missing_availability_total")
+            gate.get("missing_local_data_total")
                 .and_then(Value::as_u64),
             Some(2)
         );
@@ -3236,8 +3238,8 @@ pub async fn handle_v1_sumeragi_status(
             },
             da_gate: SumeragiDaGateStatus {
                 reason: match snap.da_gate.reason {
-                    sumeragi::status::DaGateReasonSnapshot::MissingAvailabilityQc => {
-                        SumeragiDaGateReason::MissingAvailabilityQc
+                    sumeragi::status::DaGateReasonSnapshot::MissingLocalData => {
+                        SumeragiDaGateReason::MissingLocalData
                     }
                     sumeragi::status::DaGateReasonSnapshot::ManifestMissing => {
                         SumeragiDaGateReason::ManifestMissing
@@ -3257,11 +3259,11 @@ pub async fn handle_v1_sumeragi_status(
                     sumeragi::status::DaGateSatisfactionSnapshot::None => {
                         SumeragiDaGateSatisfaction::None
                     }
-                    sumeragi::status::DaGateSatisfactionSnapshot::AvailabilityQc => {
-                        SumeragiDaGateSatisfaction::AvailabilityQc
+                    sumeragi::status::DaGateSatisfactionSnapshot::MissingDataRecovered => {
+                        SumeragiDaGateSatisfaction::MissingDataRecovered
                     }
                 },
-                missing_availability_total: snap.da_gate.missing_availability_total,
+                missing_local_data_total: snap.da_gate.missing_local_data_total,
                 manifest_guard_total: snap.da_gate.manifest_guard_total,
             },
             kura_store: SumeragiKuraStoreStatus {

@@ -50,7 +50,7 @@ pub(super) fn reset_qcs_after_kura_abort(
                 view: u64::from(block.header().view_change_index()),
                 epoch: 0,
                 subject_block_hash: block.hash(),
-                phase: crate::sumeragi::consensus::Phase::Precommit,
+                phase: crate::sumeragi::consensus::Phase::Commit,
             })
     });
     let (record_height, record_view, record_hash) = if let Some(qc) = fallback_qc {

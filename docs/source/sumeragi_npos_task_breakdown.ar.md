@@ -20,24 +20,24 @@ translation_last_reviewed: 2026-01-01
 ### A2 - اعتماد الرسائل على مستوى wire
 - ✅ اظهار انواع Norito `Proposal`/`Vote`/`Qc` في `BlockMessage` وتشغيل round-trip encode/decode (`crates/iroha_data_model/tests/consensus_roundtrip.rs`).
 - ✅ تقييد الاطارات السابقة `BlockSigned/BlockCommitted`؛ تم ضبط مفتاح الهجرة على `false` قبل الايقاف.
-- ✅ ازالة مفتاح الهجرة الذي كان يبدل رسائل البلوك القديمة؛ مسار Vote/QC الان هو المسار الوحيد على wire.
+- ✅ ازالة مفتاح الهجرة الذي كان يبدل رسائل البلوك القديمة؛ مسار Vote/commit certificate الان هو المسار الوحيد على wire.
 - ✅ تحديث مسارات Torii واوامر CLI ومستلمي telemetria لتفضيل لقطات JSON `/v1/sumeragi/*` على الاطارات القديمة.
-- ✅ تغطية التكامل تختبر endpoints `/v1/sumeragi/*` حصرا عبر مسار Vote/QC (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
+- ✅ تغطية التكامل تختبر endpoints `/v1/sumeragi/*` حصرا عبر مسار Vote/commit certificate (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
 - ✅ ازالة الاطارات القديمة بعد تحقق التكافؤ الوظيفي واختبارات التشغيل البيني.
 
 ### خطة ازالة الاطارات
-1. ✅ اجريت اختبارات soak متعددة العقد لمدة 72 h على حزم telemetria وCI؛ اظهرت لقطات Torii انتاجية proposer مستقرة وتشكيل QC دون تراجعات.
-2. ✅ تغطية اختبارات التكامل تعمل الان حصرا عبر مسار Vote/QC (`sumeragi_vote_qc_commit.rs`) وتضمن وصول النظراء المختلطين الى اجماع دون الاطارات القديمة.
-3. ✅ لم تعد وثائق المشغلين ومساعدة CLI تذكر مسار wire السابق؛ توجيه استكشاف الاعطال يشير الان الى telemetria الخاصة بـ Vote/QC.
-4. ✅ تم حذف متغيرات الرسائل ومقاييس telemetria ومخازن commit المعلقة؛ مصفوفة التوافق تعكس الان سطح Vote/QC فقط.
+1. ✅ اجريت اختبارات soak متعددة العقد لمدة 72 h على حزم telemetria وCI؛ اظهرت لقطات Torii انتاجية proposer مستقرة وتشكيل commit certificate دون تراجعات.
+2. ✅ تغطية اختبارات التكامل تعمل الان حصرا عبر مسار Vote/commit certificate (`sumeragi_vote_qc_commit.rs`) وتضمن وصول النظراء المختلطين الى اجماع دون الاطارات القديمة.
+3. ✅ لم تعد وثائق المشغلين ومساعدة CLI تذكر مسار wire السابق؛ توجيه استكشاف الاعطال يشير الان الى telemetria الخاصة بـ Vote/commit certificate.
+4. ✅ تم حذف متغيرات الرسائل ومقاييس telemetria ومخازن commit المعلقة؛ مصفوفة التوافق تعكس الان سطح Vote/commit certificate فقط.
 
 ### A3 - فرض المحرك و pacemaker
-- ✅ تم فرض ثوابت Lock/HighestQC داخل `handle_message` (انظر `block_created_header_sanity`).
+- ✅ تم فرض ثوابت Lock/Highestcommit certificate داخل `handle_message` (انظر `block_created_header_sanity`).
 - ✅ تتبع توافر البيانات يتحقق من hash حمولة RBC عند تسجيل التسليم (`Actor::ensure_block_matches_rbc_payload`) بحيث لا تعامل الجلسات غير المتطابقة كتسليم صحيح.
-- ✅ تم توصيل شرط PrecommitQC (`require_precommit_qc`) في الاعدادات الافتراضية واضافة اختبارات سلبية (الافتراضي الان `true`؛ الاختبارات تغطي مسارات gated و opt-out).
+- ✅ تم توصيل شرط Precommitcommit certificate (`require_precommit_qc`) في الاعدادات الافتراضية واضافة اختبارات سلبية (الافتراضي الان `true`؛ الاختبارات تغطي مسارات gated و opt-out).
 - ✅ استبدال heuristics الخاصة بـ redundant-send على مستوى view بوحدات تحكم pacemaker مدعومة بـ EMA (اصبح `aggregator_retry_deadline` مشتقا من EMA الحي ويقود مواعيد redundant send).
 - ✅ بوابة تجميع المقترحات على backpressure للطابور (`BackpressureGate` توقف pacemaker عند تشبع الطابور وتسجل deferrals في status/telemetry).
-- ✅ تصدر اصوات availability بعد التحقق من المقترح عندما تكون DA مطلوبة (من دون انتظار `DELIVER` المحلي لـ RBC)، ويتم تتبع دليل availability عبر `AvailabilityQC` كاثبات امان بينما يستمر commit دون انتظار. هذا يتجنب الانتظار الدائري بين نقل payload والتصويت.
+- ✅ تصدر اصوات availability بعد التحقق من المقترح عندما تكون DA مطلوبة (من دون انتظار `DELIVER` المحلي لـ RBC)، ويتم تتبع دليل availability عبر `availability evidence` كاثبات امان بينما يستمر commit دون انتظار. هذا يتجنب الانتظار الدائري بين نقل payload والتصويت.
 - ✅ تغطية restart/liveness تختبر الان تعافي RBC بعد cold-start (`integration_tests/tests/sumeragi_da.rs::sumeragi_rbc_session_recovers_after_cold_restart`) واستئناف pacemaker بعد downtime (`integration_tests/tests/sumeragi_npos_liveness.rs::npos_pacemaker_resumes_after_downtime`).
 - ✅ اضفنا اختبارات رجعية حتمية لـ restart/view-change تغطي تقارب lock (`integration_tests/tests/sumeragi_lock_convergence.rs`).
 
@@ -48,7 +48,7 @@ translation_last_reviewed: 2026-01-01
 - ✅ GA-A4.3 - تقنين تعافي late-reveal واختبارات epochs بدون مشاركة ضمن `integration_tests/tests/sumeragi_randomness.rs` (`npos_late_vrf_reveal_clears_penalty_and_preserves_seed`, `npos_zero_participation_epoch_reports_full_no_participation`)، مع اختبار telemetria لتنظيف العقوبات. المالكون: `@sumeragi-core`. المتتبع: `project_tracker/npos_sumeragi_phase_a.md:7`.
 
 ### A5 - اعادة تهيئة مشتركة و evidence
-- ✅ بنية evidence وحفظ WSV وعمليات Norito roundtrip تغطي الان double-vote و invalid proposal و invalid QC ومتغيرات double exec مع ازالة تكرار حتمية وتقليص افق (`sumeragi::evidence`).
+- ✅ بنية evidence وحفظ WSV وعمليات Norito roundtrip تغطي الان double-vote و invalid proposal و invalid commit certificate ومتغيرات double exec مع ازالة تكرار حتمية وتقليص افق (`sumeragi::evidence`).
 - ✅ GA-A5.1 - تفعيل joint-consensus (المجموعة القديمة توقع، والجديدة تتفعل في البلوك التالي) مع تغطية تكامل مستهدفة.
 - ✅ GA-A5.2 - تحديث وثائق governance وتدفقات CLI الخاصة بـ slashing/jailing مع اختبارات مزامنة mdBook لتثبيت defaults وصياغة evidence horizon.
 - ✅ GA-A5.3 - اختبارات evidence للمسارات السلبية (duplicate signer, forged signature, stale epoch replay, mixed manifest payloads) مع fixtures fuzz تضاف وتعمل ليلا لحماية تحقق Norito roundtrip.

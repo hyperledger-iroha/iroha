@@ -5,30 +5,31 @@ remaining Sumeragi/NPoS work incrementally. Status annotations follow the conven
 `✅` done, `⚙️` in progress, `⬜` not started, and `🧪` needs tests.
 
 ### A2 — Wire-Level Message Adoption
-- ✅ Surface Norito `Proposal`/`Vote`/`Qc` types in `BlockMessage` and exercise encode/decode
+- ✅ Surface Norito `Proposal`/`Vote`/`CommitCertificate` types in `BlockMessage` and exercise encode/decode
   round-trips (`crates/iroha_data_model/tests/consensus_roundtrip.rs`).
 - ✅ Gate the former `BlockSigned/BlockCommitted` frames; migration toggle defaulted to `false`
   before retirement.
-- ✅ Retire the migration knob that toggled the old block messages; Vote/QC mode is now the only
+- ✅ Retire the migration knob that toggled the old block messages; Vote/commit-certificate mode is now the only
   wire path.
 - ✅ Update Torii routers, CLI commands, and telemetry consumers to prefer
   `/v1/sumeragi/*` JSON snapshots over the older block frames.
-- ✅ Integration coverage exercises `/v1/sumeragi/*` endpoints purely over the Vote/QC pipeline
+- ✅ Integration coverage exercises `/v1/sumeragi/*` endpoints purely over the Vote/commit-certificate pipeline
   (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
 - ✅ Remove the old frames once feature parity & interop tests are in place.
 
 ### Frame Removal Plan
-1. ✅ Multi-node soak tests ran for 72 h on both telemetry and CI harnesses; captured Torii snapshots showed stable proposer throughput and QC formation with no regressions.
-2. ✅ Integration test coverage now runs purely on the Vote/QC path (`sumeragi_vote_qc_commit.rs`), ensuring mixed peers reach consensus without the old frames.
-3. ✅ Operator documentation and CLI help no longer mention the previous wire path; troubleshooting guidance now points at the Vote/QC telemetry.
+1. ✅ Multi-node soak tests ran for 72 h on both telemetry and CI harnesses; captured Torii snapshots showed stable proposer throughput and commit certificate formation with no regressions.
+2. ✅ Integration test coverage now runs purely on the Vote/commit-certificate path (`sumeragi_vote_qc_commit.rs`), ensuring mixed peers reach consensus without the old frames.
+3. ✅ Operator documentation and CLI help no longer mention the previous wire path; troubleshooting guidance now points at the Vote/commit-certificate telemetry.
+4. ✅ Former message variants, telemetry counters, and pending commit caches were deleted; the compatibility matrix now reflects the Vote/commit-certificate-only surface.
 
 ### A3 — Engine & Pacemaker Enforcement
-- ✅ Lock/HighestQC invariants enforced in `handle_message` (see `block_created_header_sanity`).
+- ✅ Lock/Highest commit-certificate invariants enforced in `handle_message` (see `block_created_header_sanity`).
 - ✅ Data-availability tracking validates the RBC payload hash when recording delivery (`Actor::ensure_block_matches_rbc_payload`) so mismatched sessions cannot be treated as delivered.
-- ✅ Wire PrecommitQC requirement (`require_precommit_qc`) into default configs and add negative tests (default now `true`; tests cover both gated and opt-out paths).
+- ✅ Wire precommit commit-certificate requirement (`require_precommit_qc`) into default configs and add negative tests (default now `true`; tests cover both gated and opt-out paths).
 - ✅ Replace view-wide redundant-send heuristics with EMA-backed pacemaker controllers (`aggregator_retry_deadline` now derives from the live EMA and drives redundant send deadlines).
 - ✅ Gate proposal assembly on queue backpressure (`BackpressureGate` now halts the pacemaker when the queue is saturated and records deferrals for status/telemetry).
-- ✅ Availability votes are emitted after proposal validation whenever DA is required (without waiting for local RBC `DELIVER`), and availability evidence is tracked via `AvailabilityQC` as the safety proof while commit proceeds without waiting. This avoids circular waits between payload transport and voting.
+- ✅ Availability votes are emitted after proposal validation whenever DA is required (without waiting for local RBC `DELIVER`), and availability evidence is tracked via `availability evidence` as the safety proof while commit proceeds without waiting. This avoids circular waits between payload transport and voting.
 - ✅ Restart/liveness coverage now exercises cold-start RBC recovery (`integration_tests/tests/sumeragi_da.rs::sumeragi_rbc_session_recovers_after_cold_restart`) and pacemaker resume after downtime (`integration_tests/tests/sumeragi_npos_liveness.rs::npos_pacemaker_resumes_after_downtime`).
 - ✅ Add deterministic restart/view-change regression tests covering lock convergence (`integration_tests/tests/sumeragi_lock_convergence.rs`).
 
@@ -39,7 +40,7 @@ remaining Sumeragi/NPoS work incrementally. Status annotations follow the conven
 - ✅ GA-A4.3 — Codify late-reveal recovery and zero-participation epoch tests under `integration_tests/tests/sumeragi_randomness.rs` (`npos_late_vrf_reveal_clears_penalty_and_preserves_seed`, `npos_zero_participation_epoch_reports_full_no_participation`), exercising penalty-clearing telemetry. Owners: `@sumeragi-core`. Tracker: `project_tracker/npos_sumeragi_phase_a.md:7`.
 
 ### A5 — Joint Reconfiguration & Evidence
-- ✅ Evidence scaffolding, WSV persistence, and Norito roundtrips now cover double-vote, invalid proposal, invalid QC, and double exec variants with deterministic deduplication and horizon pruning (`sumeragi::evidence`).
+- ✅ Evidence scaffolding, WSV persistence, and Norito roundtrips now cover double-vote, invalid proposal, invalid commit certificate, and double exec variants with deterministic deduplication and horizon pruning (`sumeragi::evidence`).
 - ✅ GA-A5.1 — Joint-consensus activation (old set commits, new set activates on the next block) enforced with targeted integration coverage.
 - ✅ GA-A5.2 — Governance docs and CLI flows for slashing/jailing updated, complete with mdBook synchronization tests to lock defaults and evidence horizon wording.
 - ✅ GA-A5.3 — Negative-path evidence tests (duplicate signer, forged signature, stale epoch replay, mixed manifest payloads) plus fuzz fixtures landed and run nightly to guard Norito roundtrip validation.

@@ -145,20 +145,27 @@ fn decode_query_response_body(
     body: &[u8],
     json_err: Option<&json::Error>,
 ) -> QueryResult<QueryResponse> {
-    let mut cursor = body;
-    match QueryResponse::decode_all(&mut cursor) {
+    match norito::decode_from_bytes::<QueryResponse>(body) {
         Ok(res) => Ok(res),
-        Err(primary_err) => {
-            let mut msg = String::from(
-                "Failed to decode response from Iroha. \
-                 You are likely using a version of the client library \
-                 that is incompatible with the version of the peer software",
-            );
-            if let Some(json_err) = json_err {
-                let _ = write!(msg, " (JSON decode error: {json_err})");
+        Err(frame_err) => {
+            let mut cursor = body;
+            match QueryResponse::decode_all(&mut cursor) {
+                Ok(res) => Ok(res),
+                Err(primary_err) => {
+                    let mut msg = String::from(
+                        "Failed to decode response from Iroha. \
+                         You are likely using a version of the client library \
+                         that is incompatible with the version of the peer software",
+                    );
+                    if let Some(json_err) = json_err {
+                        let _ = write!(msg, " (JSON decode error: {json_err})");
+                    }
+                    let report = Report::new(primary_err)
+                        .wrap_err(msg)
+                        .wrap_err(format!("framed Norito decode failed: {frame_err}"));
+                    Err(report.into())
+                }
             }
-            let report = Report::new(primary_err).wrap_err(msg);
-            Err(report.into())
         }
     }
 }
@@ -623,7 +630,7 @@ mod query_errors_handling {
         let response = Response::builder()
             .status(HttpStatusCode::OK)
             .header("content-type", "application/json")
-            .body(expected.encode())?;
+            .body(norito::to_bytes(&expected)?)?;
 
         let decoded = decode_query_response(&response)?;
         assert_eq!(decoded, expected);
@@ -679,7 +686,7 @@ mod query_errors_handling {
         });
         let response = Response::builder()
             .status(HttpStatusCode::OK)
-            .body(expected.encode())?;
+            .body(norito::to_bytes(&expected)?)?;
 
         let decoded = decode_query_response(&response)?;
         assert_eq!(decoded, expected);
@@ -804,12 +811,12 @@ mod query_errors_handling {
             rollout_phase: SorafsRolloutPhase::Default,
         };
 
-        let encoded_response = QueryResponse::Iterable(QueryOutput {
+        let encoded_response = norito::to_bytes(&QueryResponse::Iterable(QueryOutput {
             batch: QueryOutputBatchBoxTuple { tuple: Vec::new() },
             remaining_items: 0,
             continue_cursor: None,
-        })
-        .encode();
+        }))
+        .expect("encode query response");
 
         let observed = Arc::new(AtomicBool::new(false));
         let observed_clone = Arc::clone(&observed);

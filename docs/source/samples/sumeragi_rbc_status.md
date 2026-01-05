@@ -58,4 +58,4 @@ Sample session detail (`GET /v1/sumeragi/rbc/sessions`, truncated):
 Notes
 - Available only when telemetry is enabled.
 - Provides aggregate counters for RBC (Reliable Broadcast) activity.
-- When `sumeragi.da_enabled = true`, availability evidence (an `AvailabilityQC` or an RBC `READY` quorum) is tracked, but commit does not wait on it or on local RBC `DELIVER`. RBC remains transport/recovery and its delivery latency is still useful for debugging.
+- When `sumeragi.da_enabled = true`, availability evidence (an `availability evidence` or an RBC `READY` quorum) is tracked, but commit does not wait on it or on local RBC `DELIVER`. RBC remains transport/recovery and its delivery latency is still useful for debugging.

@@ -1,8 +1,8 @@
 //! Norito-encoded consensus message types shared across Sumeragi implementations.
 //!
-//! These types cover the single-chain prevote/precommit flow, data-availability
-//! acknowledgements, execution attestations, control-flow primitives (`NEW_VIEW`,
-//! Evidence), VRF commit/reveal envelopes, and optional reliable broadcast
+//! These types cover commit-certificate voting (prepare/commit/new-view),
+//! execution attestations, evidence, VRF commit/reveal envelopes, and optional
+//! reliable broadcast
 //! helpers. They are split out of `iroha_core` so that other crates (e.g.,
 //! Torii, genesis tooling, or test harnesses) can construct and inspect
 //! consensus payloads without depending on the core runtime crate.
@@ -11,7 +11,7 @@ use core::fmt;
 use std::{string::String, vec::Vec};
 
 use iroha_crypto::{Hash, HashOf};
-use iroha_schema::IntoSchema;
+use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, DecodeAll, Encode};
 
 use super::Header as BlockHeader;
@@ -55,11 +55,11 @@ pub struct ConsensusGenesisParams {
     pub redundant_send_r: u8,
     /// Block sizing: max transactions per block.
     pub block_max_transactions: u64,
-    /// Data availability enabled (RBC + availability QC gating).
+    /// Data availability enabled (RBC transport; consensus does not gate on DA).
     pub da_enabled: bool,
     /// Epoch length in blocks (`NPoS` mode; 0 in permissioned).
     pub epoch_length_blocks: u64,
-    /// BLS domain separation string used for vote/QC signatures.
+    /// BLS domain separation string used for commit-vote signatures.
     pub bls_domain: String,
     /// Optional NPoS-specific configuration captured at genesis.
     #[norito(default)]
@@ -105,31 +105,73 @@ pub struct NposGenesisParams {
     pub activation_lag_blocks: u64,
 }
 
-/// Consensus phases that are certified via QCs.
+/// Consensus certificate phases (BLS-only).
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
-pub enum Phase {
-    /// Prevote phase
-    Prevote = 1,
-    /// Precommit phase
-    Precommit = 2,
-    /// Data-availability acknowledgement phase
-    Available = 3,
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(tag = "phase", content = "detail", rename_all = "snake_case")]
+pub enum CertPhase {
+    /// Prepare/lock certificate for a proposal.
+    Prepare = 1,
+    /// Commit certificate for finalization.
+    Commit = 2,
+    /// New-view certificate for view change.
+    NewView = 3,
 }
 
-/// Reference to an existing QC header for embedding in proposals.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct QcHeaderRef {
+impl TypeId for CertPhase {
+    fn id() -> Ident {
+        "CertPhase".to_owned()
+    }
+}
+
+impl IntoSchema for CertPhase {
+    fn type_name() -> Ident {
+        "CertPhase".to_owned()
+    }
+
+    fn update_schema_map(metamap: &mut MetaMap) {
+        let variants = vec![
+            EnumVariant {
+                tag: "Prepare".to_owned(),
+                discriminant: CertPhase::Prepare as u8,
+                ty: None,
+            },
+            EnumVariant {
+                tag: "Commit".to_owned(),
+                discriminant: CertPhase::Commit as u8,
+                ty: None,
+            },
+            EnumVariant {
+                tag: "NewView".to_owned(),
+                discriminant: CertPhase::NewView as u8,
+                ty: None,
+            },
+        ];
+        metamap.insert::<Self>(Metadata::Enum(EnumMeta { variants }));
+    }
+}
+
+/// Reference to an existing commit certificate header for embedding in proposals.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CommitCertificateRef {
     /// Height of the certified block.
     pub height: Height,
-    /// View in which the QC was formed.
+    /// View in which the certificate was formed.
     pub view: View,
     /// Epoch index (0 in permissioned mode).
     pub epoch: u64,
-    /// Block hash certified by the QC.
+    /// Block hash certified by the certificate.
     pub subject_block_hash: HashOf<BlockHeader>,
-    /// Phase certified by the QC.
-    pub phase: Phase,
+    /// Phase certified by the certificate.
+    pub phase: CertPhase,
 }
 
 /// Block header fields essential for consensus (proposal header subset).
@@ -149,14 +191,12 @@ pub struct ConsensusBlockHeader {
     pub view: View,
     /// Epoch index for `NPoS`. Zero in permissioned builds.
     pub epoch: u64,
-    /// Embedded reference to the highest QC known to the proposer.
-    pub highest_qc: QcHeaderRef,
-    /// Optional `AvailabilityQC` for this block (when available).
-    pub avail_qc_ref: Option<QcHeaderRef>,
+    /// Embedded reference to the highest certificate known to the proposer.
+    pub highest_cert: CommitCertificateRef,
 }
 
 /// Proposal message with payload commitment.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct Proposal {
     /// Proposal header (consensus-relevant subset).
     pub header: ConsensusBlockHeader,
@@ -164,11 +204,15 @@ pub struct Proposal {
     pub payload_hash: Hash,
 }
 
-/// Vote over a specific block and phase.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct Vote {
-    /// Target phase (Prevote or Precommit).
-    pub phase: Phase,
+/// Commit vote over a specific block and phase (BLS-only).
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CommitVote {
+    /// Target phase (Prepare, Commit, NewView).
+    pub phase: CertPhase,
     /// Hash of the block being voted on.
     pub block_hash: HashOf<BlockHeader>,
     /// Block height of the subject.
@@ -177,72 +221,60 @@ pub struct Vote {
     pub view: View,
     /// Epoch index for `NPoS`; 0 in permissioned.
     pub epoch: u64,
+    /// Highest known certificate for `NewView` votes (advisory; not signed).
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub highest_cert: Option<CommitCertificateRef>,
     /// Signer index within the active validator set.
     pub signer: ValidatorIndex,
-    /// BLS-normal signature over the canonical exec-vote preimage; required for QC aggregation.
+    /// BLS signature over the canonical commit-vote preimage.
     pub bls_sig: Vec<u8>,
-    /// Identity signature payload (unused in BLS-only consensus).
-    pub signature: Vec<u8>,
 }
 
-/// Commit vote carrying a block signature for B-Chain-style finalization.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct CommitVote {
-    /// Hash of the block being committed.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Block height of the subject.
-    pub height: Height,
-    /// View number of the vote.
-    pub view: View,
-    /// Epoch index for `NPoS`; 0 in permissioned.
-    pub epoch: u64,
-    /// Block header signature by the voting validator (includes the validator index).
-    pub signature: crate::block::BlockSignature,
-}
-
-/// Data availability acknowledgement vote.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct AvailableVote {
-    /// Hash of the block for which DA is acknowledged.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Height of the block.
-    pub height: Height,
-    /// View number.
-    pub view: View,
-    /// Epoch index for `NPoS`; 0 in permissioned.
-    pub epoch: u64,
-    /// Signer index within the active set.
-    pub signer: ValidatorIndex,
-    /// BLS signature over the canonical vote preimage.
-    pub bls_sig: Vec<u8>,
-    /// Identity signature payload (unused in BLS-only consensus).
-    pub signature: Vec<u8>,
-}
-
-/// BLS aggregate signature envelope with signer bitmap for constant-size QCs.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct QcAggregate {
+/// BLS aggregate signature envelope with signer bitmap for constant-size certificates.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CommitAggregate {
     /// Compact signer bitmap (LSB-first).
     pub signers_bitmap: Vec<u8>,
     /// BLS12-381 aggregate signature bytes (compressed).
     pub bls_aggregate_signature: Vec<u8>,
 }
 
-/// Quorum Certificate certifying a phase for a block.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct Qc {
-    /// Phase certified by this QC.
-    pub phase: Phase,
-    /// Block hash certified by the QC.
+/// Commit certificate certifying a phase for a block.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CommitCertificate {
+    /// Phase certified by this certificate.
+    pub phase: CertPhase,
+    /// Block hash certified by the certificate.
     pub subject_block_hash: HashOf<BlockHeader>,
     /// Height of the subject block.
     pub height: Height,
-    /// View in which the QC was formed.
+    /// View in which the certificate was formed.
     pub view: View,
     /// Epoch index.
     pub epoch: u64,
+    /// Consensus mode tag used to domain-separate signatures.
+    pub mode_tag: String,
+    /// Highest known certificate that justifies a `NewView` certificate (advisory; not signed).
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub highest_cert: Option<CommitCertificateRef>,
+    /// Stable hash of the validator set that produced the certificate.
+    pub validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Version of the validator-set hashing scheme.
+    pub validator_set_hash_version: u16,
+    /// Ordered validator set used when assembling the certificate.
+    pub validator_set: Vec<PeerId>,
     /// Aggregate signature and signer bitmap.
-    pub aggregate: QcAggregate,
+    pub aggregate: CommitAggregate,
 }
 
 /// Stateless execution vote over a block's post-state root.
@@ -282,33 +314,18 @@ pub struct ExecutionQC {
     /// Epoch index.
     pub epoch: u64,
     /// Aggregate signature and signer bitmap.
-    pub aggregate: QcAggregate,
-}
-
-/// `NEW_VIEW` message carrying sender’s highest known QC.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct NewView {
-    /// Height for which the new view is requested.
-    pub height: Height,
-    /// Next view number proposed by the sender.
-    pub view: View,
-    /// Sender’s highest known QC.
-    pub highest_qc: Qc,
-    /// Sender index within the validator set.
-    pub sender: ValidatorIndex,
-    /// Authentication tag binding the sender to this payload.
-    pub signature: Vec<u8>,
+    pub aggregate: CommitAggregate,
 }
 
 /// Evidence kinds for slashing or governance penalties.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub enum EvidenceKind {
-    /// Same (height, view) prevote on different blocks
-    DoublePrevote = 0,
-    /// Same (height, view) precommit on different blocks
-    DoublePrecommit = 1,
-    /// Invalid QC
-    InvalidQC = 2,
+    /// Same (height, view) prepare vote on different blocks
+    DoublePrepare = 0,
+    /// Same (height, view) commit vote on different blocks
+    DoubleCommit = 1,
+    /// Invalid commit certificate
+    InvalidCommitCertificate = 2,
     /// Invalid proposal
     InvalidProposal = 3,
     /// Same (height, view) execution vote on different post-state roots
@@ -324,14 +341,14 @@ pub enum EvidencePayload {
     /// on different block hashes.
     DoubleVote {
         /// First observed vote.
-        v1: Vote,
+        v1: CommitVote,
         /// Second observed vote.
-        v2: Vote,
+        v2: CommitVote,
     },
-    /// A Quorum Certificate considered invalid by local shape checks.
-    InvalidQc {
-        /// The QC flagged as invalid.
-        qc: Qc,
+    /// A commit certificate considered invalid by local checks.
+    InvalidCommitCertificate {
+        /// The certificate flagged as invalid.
+        certificate: CommitCertificate,
         /// Human-readable reason describing the invalidity.
         reason: String,
     },
@@ -672,8 +689,8 @@ pub enum SumeragiDaGateReason {
     /// No gate currently blocking commit/finalize.
     #[default]
     None,
-    /// Missing an `AvailabilityQC` for the pending block.
-    MissingAvailabilityQc,
+    /// Missing local data required to validate the pending block.
+    MissingLocalData,
     /// Manifest is missing for the pending commitment.
     ManifestMissing,
     /// Manifest hash mismatched the commitment.
@@ -696,8 +713,8 @@ pub enum SumeragiDaGateSatisfaction {
     /// No condition has been satisfied yet.
     #[default]
     None,
-    /// Availability QC was observed after availability tracking flagged it.
-    AvailabilityQc,
+    /// Missing local data was recovered.
+    MissingDataRecovered,
 }
 
 /// Snapshot of DA availability tracking counters for `/v1/sumeragi/status`.
@@ -711,8 +728,8 @@ pub struct SumeragiDaGateStatus {
     pub reason: SumeragiDaGateReason,
     /// Most recent condition that satisfied availability tracking.
     pub last_satisfied: SumeragiDaGateSatisfaction,
-    /// Count of times availability QC was missing.
-    pub missing_availability_total: u64,
+    /// Count of times local data was missing.
+    pub missing_local_data_total: u64,
     /// Count of times the manifest guard reported missing/invalid manifests.
     #[norito(default)]
     pub manifest_guard_total: u64,
@@ -1784,38 +1801,6 @@ pub struct RbcDeliver {
     pub signature: Vec<u8>,
 }
 
-/// Witness-availability acknowledgement (validator fetched witness/multiproof for this block).
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct WitnessAvailAck {
-    /// Subject block hash.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Height of the block.
-    pub height: Height,
-    /// View/round in which the ack applies.
-    pub view: View,
-    /// Epoch index (0 in permissioned mode).
-    pub epoch: u64,
-    /// Signer index within the active validator set.
-    pub signer: ValidatorIndex,
-    /// Optional BLS signature over the canonical ack preimage (when enabled).
-    pub bls_sig: Vec<u8>,
-}
-
-/// Witness-availability QC (>=2f+1 acks for the block's witness).
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct WitnessAvailQC {
-    /// Subject block hash.
-    pub subject_block_hash: HashOf<BlockHeader>,
-    /// Height of the subject block.
-    pub height: Height,
-    /// View/round in which the QC was formed.
-    pub view: View,
-    /// Epoch index.
-    pub epoch: u64,
-    /// Aggregate signature and signer bitmap.
-    pub aggregate: QcAggregate,
-}
-
 #[cfg(feature = "sumeragi-multiproof")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct BlockMultiproof {
@@ -1879,16 +1864,14 @@ macro_rules! impl_decode_from_slice_via_codec {
     };
 }
 
-impl_decode_from_slice_via_codec!(QcHeaderRef);
+impl_decode_from_slice_via_codec!(CommitCertificateRef);
 impl_decode_from_slice_via_codec!(ConsensusBlockHeader);
 impl_decode_from_slice_via_codec!(Proposal);
-impl_decode_from_slice_via_codec!(Vote);
-impl_decode_from_slice_via_codec!(AvailableVote);
-impl_decode_from_slice_via_codec!(QcAggregate);
-impl_decode_from_slice_via_codec!(Qc);
+impl_decode_from_slice_via_codec!(CommitVote);
+impl_decode_from_slice_via_codec!(CommitAggregate);
+impl_decode_from_slice_via_codec!(CommitCertificate);
 impl_decode_from_slice_via_codec!(ExecVote);
 impl_decode_from_slice_via_codec!(ExecutionQC);
-impl_decode_from_slice_via_codec!(NewView);
 impl_decode_from_slice_via_codec!(ExecKv);
 impl_decode_from_slice_via_codec!(ExecWitness);
 impl_decode_from_slice_via_codec!(Evidence);
@@ -1902,8 +1885,6 @@ impl_decode_from_slice_via_codec!(RbcInit);
 impl_decode_from_slice_via_codec!(RbcChunk);
 impl_decode_from_slice_via_codec!(RbcReady);
 impl_decode_from_slice_via_codec!(RbcDeliver);
-impl_decode_from_slice_via_codec!(WitnessAvailAck);
-impl_decode_from_slice_via_codec!(WitnessAvailQC);
 #[cfg(feature = "sumeragi-multiproof")]
 impl_decode_from_slice_via_codec!(BlockMultiproof);
 #[cfg(feature = "sumeragi-multiproof")]
@@ -1922,12 +1903,12 @@ impl_decode_from_slice_via_codec!(SumeragiLaneGovernance);
 impl_decode_from_slice_via_codec!(SumeragiStatusWire);
 
 // Provide nicer `Debug` rendering for validator indices in test snapshots.
-impl fmt::Display for Phase {
+impl fmt::Display for CertPhase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            Phase::Prevote => "Prevote",
-            Phase::Precommit => "Precommit",
-            Phase::Available => "Available",
+            CertPhase::Prepare => "Prepare",
+            CertPhase::Commit => "Commit",
+            CertPhase::NewView => "NewView",
         };
         f.write_str(s)
     }
@@ -1944,7 +1925,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for LaneSettlementReceipt {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Algorithm, KeyPair};
     use norito::core::DecodeFromSlice;
 
     use super::*;
@@ -1953,27 +1934,45 @@ mod tests {
         HashOf::from_untyped_unchecked(Hash::prehashed([0u8; 32]))
     }
 
-    fn sample_qc() -> Qc {
-        Qc {
-            phase: Phase::Prevote,
+    fn sample_roster() -> Vec<PeerId> {
+        (0..3)
+            .map(|_| {
+                PeerId::new(
+                    KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect()
+    }
+
+    fn sample_commit_certificate() -> CommitCertificate {
+        let roster = sample_roster();
+        CommitCertificate {
+            phase: CertPhase::Prepare,
             subject_block_hash: dummy_hash(),
             height: 5,
             view: 2,
             epoch: 1,
-            aggregate: QcAggregate {
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: 1,
+            validator_set: roster,
+            aggregate: CommitAggregate {
                 signers_bitmap: vec![0x0F],
                 bls_aggregate_signature: vec![0xAA, 0xBB, 0xCC],
             },
         }
     }
 
-    fn sample_qc_header_ref() -> QcHeaderRef {
-        QcHeaderRef {
+    fn sample_commit_certificate_ref() -> CommitCertificateRef {
+        CommitCertificateRef {
             height: 4,
             view: 1,
             epoch: 1,
             subject_block_hash: dummy_hash(),
-            phase: Phase::Prevote,
+            phase: CertPhase::Prepare,
         }
     }
 
@@ -1986,8 +1985,7 @@ mod tests {
             height: 6,
             view: 3,
             epoch: 1,
-            highest_qc: sample_qc_header_ref(),
-            avail_qc_ref: Some(sample_qc_header_ref()),
+            highest_cert: sample_commit_certificate_ref(),
         }
     }
 
@@ -1998,28 +1996,16 @@ mod tests {
         }
     }
 
-    fn sample_vote() -> Vote {
-        Vote {
-            phase: Phase::Prevote,
+    fn sample_commit_vote() -> CommitVote {
+        CommitVote {
+            phase: CertPhase::Prepare,
             block_hash: dummy_hash(),
             height: 6,
             view: 3,
             epoch: 1,
+            highest_cert: None,
             signer: 4,
             bls_sig: vec![0x01, 0x02],
-            signature: vec![0xAA, 0xBB],
-        }
-    }
-
-    fn sample_available_vote() -> AvailableVote {
-        AvailableVote {
-            block_hash: dummy_hash(),
-            height: 6,
-            view: 3,
-            epoch: 1,
-            signer: 5,
-            bls_sig: vec![0x03, 0x04],
-            signature: vec![0xCC, 0xDD],
         }
     }
 
@@ -2044,20 +2030,10 @@ mod tests {
             height: 6,
             view: 3,
             epoch: 1,
-            aggregate: QcAggregate {
+            aggregate: CommitAggregate {
                 signers_bitmap: vec![0x07],
                 bls_aggregate_signature: vec![0xEE, 0xFF],
             },
-        }
-    }
-
-    fn sample_new_view() -> NewView {
-        NewView {
-            height: 6,
-            view: 4,
-            highest_qc: sample_qc(),
-            sender: 3,
-            signature: vec![0xAB, 0xCD],
         }
     }
 
@@ -2118,30 +2094,6 @@ mod tests {
         }
     }
 
-    fn sample_witness_avail_ack() -> WitnessAvailAck {
-        WitnessAvailAck {
-            block_hash: dummy_hash(),
-            height: 6,
-            view: 3,
-            epoch: 1,
-            signer: 4,
-            bls_sig: vec![0x12, 0x13],
-        }
-    }
-
-    fn sample_witness_avail_qc() -> WitnessAvailQC {
-        WitnessAvailQC {
-            subject_block_hash: dummy_hash(),
-            height: 6,
-            view: 3,
-            epoch: 1,
-            aggregate: QcAggregate {
-                signers_bitmap: vec![0x0A],
-                bls_aggregate_signature: vec![0x77, 0x88],
-            },
-        }
-    }
-
     fn sample_vrf_commit() -> VrfCommit {
         VrfCommit {
             epoch: 7,
@@ -2159,21 +2111,28 @@ mod tests {
     }
 
     #[test]
-    fn qc_roundtrip_encode_decode() {
-        let qc = Qc {
-            phase: Phase::Prevote,
-            subject_block_hash: dummy_hash(),
-            height: 10,
+    fn commit_certificate_roundtrip_encode_decode() {
+        let roster = sample_roster();
+        let highest = sample_commit_certificate_ref();
+        let cert = CommitCertificate {
+            phase: CertPhase::NewView,
+            subject_block_hash: highest.subject_block_hash,
+            height: highest.height,
             view: 7,
             epoch: 0,
-            aggregate: QcAggregate {
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_cert: Some(highest),
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: 1,
+            validator_set: roster,
+            aggregate: CommitAggregate {
                 signers_bitmap: vec![0xAA, 0x01],
                 bls_aggregate_signature: vec![1, 2, 3],
             },
         };
-        let bytes = qc.encode();
-        let dec = Qc::decode(&mut &bytes[..]).expect("decode qc");
-        assert_eq!(qc, dec);
+        let bytes = cert.encode();
+        let dec = CommitCertificate::decode(&mut &bytes[..]).expect("decode certificate");
+        assert_eq!(cert, dec);
     }
 
     #[test]
@@ -2197,16 +2156,22 @@ mod tests {
 
     #[test]
     fn evidence_roundtrip_codec() {
+        let roster = sample_roster();
         let ev = Evidence {
-            kind: EvidenceKind::InvalidQC,
-            payload: EvidencePayload::InvalidQc {
-                qc: Qc {
-                    phase: Phase::Precommit,
+            kind: EvidenceKind::InvalidCommitCertificate,
+            payload: EvidencePayload::InvalidCommitCertificate {
+                certificate: CommitCertificate {
+                    phase: CertPhase::Commit,
                     subject_block_hash: dummy_hash(),
                     height: 12,
                     view: 3,
                     epoch: 0,
-                    aggregate: QcAggregate {
+                    mode_tag: PERMISSIONED_TAG.to_string(),
+                    highest_cert: None,
+                    validator_set_hash: HashOf::new(&roster),
+                    validator_set_hash_version: 1,
+                    validator_set: roster,
+                    aggregate: CommitAggregate {
                         signers_bitmap: vec![0xFF],
                         bls_aggregate_signature: vec![4, 5, 6],
                     },
@@ -2272,27 +2237,27 @@ mod tests {
     #[test]
     fn evidence_record_roundtrip() {
         let ev = Evidence {
-            kind: EvidenceKind::DoublePrevote,
+            kind: EvidenceKind::DoublePrepare,
             payload: EvidencePayload::DoubleVote {
-                v1: Vote {
-                    phase: Phase::Prevote,
+                v1: CommitVote {
+                    phase: CertPhase::Prepare,
                     block_hash: dummy_hash(),
                     height: 10,
                     view: 1,
                     epoch: 0,
+                    highest_cert: None,
                     signer: 2,
                     bls_sig: vec![],
-                    signature: vec![7, 7],
                 },
-                v2: Vote {
-                    phase: Phase::Prevote,
+                v2: CommitVote {
+                    phase: CertPhase::Prepare,
                     block_hash: dummy_hash(),
                     height: 10,
                     view: 1,
                     epoch: 0,
+                    highest_cert: None,
                     signer: 2,
                     bls_sig: vec![],
-                    signature: vec![8, 8],
                 },
             },
         };
@@ -2336,22 +2301,15 @@ mod tests {
     }
 
     #[test]
-    fn vote_roundtrip_codec_and_decode_from_slice() {
-        let vote = sample_vote();
+    fn commit_vote_roundtrip_codec_and_decode_from_slice() {
+        let vote = sample_commit_vote();
         let bytes = vote.encode();
-        let dec = Vote::decode(&mut &bytes[..]).expect("decode vote");
+        let dec = CommitVote::decode(&mut &bytes[..]).expect("decode commit vote");
         assert_eq!(vote, dec);
-        let (slice_dec, used) = Vote::decode_from_slice(&bytes).expect("decode_from_slice vote");
+        let (slice_dec, used) =
+            CommitVote::decode_from_slice(&bytes).expect("decode_from_slice commit vote");
         assert_eq!(vote, slice_dec);
         assert_eq!(used, bytes.len());
-    }
-
-    #[test]
-    fn available_vote_roundtrip_codec() {
-        let vote = sample_available_vote();
-        let bytes = vote.encode();
-        let dec = AvailableVote::decode(&mut &bytes[..]).expect("decode available vote");
-        assert_eq!(vote, dec);
     }
 
     #[test]
@@ -2368,23 +2326,6 @@ mod tests {
         let bytes = qc.encode();
         let dec = ExecutionQC::decode(&mut &bytes[..]).expect("decode execution qc");
         assert_eq!(qc, dec);
-    }
-
-    #[test]
-    fn new_view_roundtrip_codec() {
-        let nv = sample_new_view();
-        let bytes = nv.encode();
-        let dec = NewView::decode(&mut &bytes[..]).expect("decode new view");
-        assert_eq!(nv, dec);
-    }
-
-    #[test]
-    fn new_view_rejects_truncated_signature() {
-        let nv = sample_new_view();
-        let mut bytes = nv.encode();
-        bytes.truncate(bytes.len().saturating_sub(1));
-        let err = NewView::decode(&mut &bytes[..]).expect_err("missing signature should fail");
-        assert!(matches!(err, norito::Error::LengthMismatch));
     }
 
     #[test]
@@ -2441,21 +2382,5 @@ mod tests {
         let bytes = deliver.encode();
         let dec = RbcDeliver::decode(&mut &bytes[..]).expect("decode rbc deliver");
         assert_eq!(deliver, dec);
-    }
-
-    #[test]
-    fn witness_avail_ack_roundtrip_codec() {
-        let ack = sample_witness_avail_ack();
-        let bytes = ack.encode();
-        let dec = WitnessAvailAck::decode(&mut &bytes[..]).expect("decode witness ack");
-        assert_eq!(ack, dec);
-    }
-
-    #[test]
-    fn witness_avail_qc_roundtrip_codec() {
-        let qc = sample_witness_avail_qc();
-        let bytes = qc.encode();
-        let dec = WitnessAvailQC::decode(&mut &bytes[..]).expect("decode witness qc");
-        assert_eq!(qc, dec);
     }
 }

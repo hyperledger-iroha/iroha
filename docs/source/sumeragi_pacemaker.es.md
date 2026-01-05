@@ -107,5 +107,5 @@ Redes de alta variancia o moviles
 - Verificar config: `max(sumeragi_pacemaker_backoff_multiplier)`, `max(sumeragi_pacemaker_rtt_floor_multiplier)`, `max(sumeragi_pacemaker_max_backoff_ms)`
 
 ## Determinismo y seguridad
-- Temporizadores/backoff/jitter solo influyen en cuando los nodos disparan propuestas/cambios de vista; no afectan la validez de firmas ni las reglas de QC.
+- Temporizadores/backoff/jitter solo influyen en cuando los nodos disparan propuestas/cambios de vista; no afectan la validez de firmas ni las reglas de commit certificate.
 - Mantenga cualquier aleatoriedad determinista por nodo y por (height, view). Evite hora del dia o RNG del SO en rutas criticas de consenso.

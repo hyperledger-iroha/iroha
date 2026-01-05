@@ -39,7 +39,7 @@ fn precommit_qc_for_view_change(
     committed_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
 ) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
     let highest_precommit =
-        highest_qc.filter(|qc| qc.phase == crate::sumeragi::consensus::Phase::Precommit);
+        highest_qc.filter(|qc| qc.phase == crate::sumeragi::consensus::Phase::Commit);
     match (highest_precommit, committed_qc) {
         (Some(highest), Some(committed)) => {
             if (highest.height, highest.view) >= (committed.height, committed.view) {
@@ -730,8 +730,7 @@ impl Actor {
                     block_hash,
                     height: proposal_height,
                     view,
-                    highest_qc,
-                    avail_qc_ref: None,
+                    highest_cert: highest_qc,
                 };
                 self.subsystems.propose.proposal_cache.insert_hint(proposal_hint);
 
@@ -1001,8 +1000,7 @@ impl Actor {
                 height: block_height,
                 view,
                 epoch: highest_qc.epoch,
-                highest_qc,
-                avail_qc_ref: None,
+                highest_cert: highest_qc,
             },
             payload_hash,
         }
@@ -1068,7 +1066,7 @@ impl Actor {
         }
 
         let mut topology = super::network_topology::Topology::new(topology_peers);
-        let required = topology.min_votes_for_view_change();
+        let mut required = topology.min_votes_for_view_change();
         let local_idx = local_index;
 
         if da_enabled && pending_queue_len == 0 && empty_child_ctx.is_none() {
@@ -1158,7 +1156,7 @@ impl Actor {
                         let existing = (current.height, current.view);
                         incoming > existing
                             || (incoming == existing
-                                && current.phase != crate::sumeragi::consensus::Phase::Precommit)
+                                && current.phase != crate::sumeragi::consensus::Phase::Commit)
                     }) {
                         self.highest_qc = Some(qc);
                     }
@@ -1272,7 +1270,6 @@ impl Actor {
                 highest_qc: qc,
             })
         }) else {
-            self.maybe_regossip_new_view(required, local_idx);
             if pending_queue_len > 0 {
                 iroha_logger::info!(
                     queue_len = pending_queue_len,
@@ -1327,7 +1324,7 @@ impl Actor {
             .vote_log
             .values()
             .filter(|vote| {
-                vote.phase == crate::sumeragi::consensus::Phase::Precommit
+                vote.phase == crate::sumeragi::consensus::Phase::Commit
                     && vote.height == height
                     && vote.view == view_idx
                     && vote.epoch == epoch
@@ -1612,6 +1609,23 @@ impl Actor {
             }
         }
 
+        let proposal_roster = self
+            .roster_from_commit_certificate_history_roll_forward(
+                height,
+                Some(highest_qc.subject_block_hash),
+            )
+            .unwrap_or_else(|| self.effective_commit_topology());
+        if proposal_roster.is_empty() {
+            warn!(
+                height,
+                view = view_idx,
+                "deferring proposal: empty commit topology for selected height"
+            );
+            return false;
+        }
+        topology = super::network_topology::Topology::new(proposal_roster);
+        required = topology.min_votes_for_view_change();
+
         let leader_index = match self.leader_index_for(&mut topology, height, view_idx) {
             Ok(idx) => idx,
             Err(err) => {
@@ -1671,15 +1685,6 @@ impl Actor {
             warn!(local_pos, "local validator index exceeds u32 limits");
             return false;
         };
-
-        if let Err(err) = self.record_and_broadcast_view_change_proof(height, view_idx) {
-            warn!(
-                ?err,
-                height,
-                view = view_idx,
-                "failed to broadcast view-change proof for NEW_VIEW quorum"
-            );
-        }
 
         debug!(
             height,

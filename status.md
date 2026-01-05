@@ -43,6 +43,17 @@
 - Torii: enforce app pagination on repo-agreements and asset-definitions list/query endpoints (reject `limit=0`, clamp fetch_size); add regression tests.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
 - Tests: `cargo test --workspace` (timed out after 120s during compile; no errors reported at timeout).
+- Torii: negotiate Kaigi relay endpoint responses so JSON `Accept` headers receive JSON bodies.
+- Tests: not run (not requested).
+- Torii: update evidence decode tests to assert `DoublePrepare` now that `EvidenceKind::DoublePrevote` is removed.
+- Tests: not run (not requested).
+- Crypto: fix Merkle compact-proof depth truncation test by typing the sibling hash to satisfy `HashOf` inference (E0282).
+- Tests: not run (not requested).
+- Crypto: derive `Debug` for `PublicKeyCompact` to unblock compact payload error assertions.
+- Tests: not run (not requested).
+- Resolved merge conflicts across Sumeragi docs, telemetry, and roadmap/status to align commit-certificate terminology and DA availability wording.
+- Refactored commit-certificate-only test fixtures across core (QC alias), block-sync checkpoints, evidence, and bridge finality proofs to use BLS aggregate signatures + signer bitmaps; removed legacy view-change proof tests.
+- Tests: `cargo test -p iroha_core --tests --no-run` (passed; warnings about unused imports/assignments in unrelated modules).
 - Torii: enforce app pagination on accounts list/query endpoints so `limit=0` is rejected; add regression tests.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
 - Tests: `cargo test --workspace` (failed in `iroha_crypto` tests: E0282 type annotations needed in `crates/iroha_crypto/src/merkle.rs:1489`; E0277 missing `Debug` for `PublicKeyCompact` in `crates/iroha_crypto/src/lib.rs:2659`/`2671`).

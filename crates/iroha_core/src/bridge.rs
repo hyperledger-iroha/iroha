@@ -136,13 +136,13 @@ pub fn build_finality_proof(
         .collect();
     let cert = if let Some(cert) = cert_candidates
         .iter()
-        .find(|candidate| candidate.block_hash == block_hash)
+        .find(|candidate| candidate.subject_block_hash == block_hash)
     {
         cert.clone()
     } else if let Some(cert) = cert_candidates.pop() {
         return Err(BridgeFinalityError::CommitCertificateHashMismatch {
             height,
-            cert_hash: cert.block_hash,
+            cert_hash: cert.subject_block_hash,
             block_hash,
         });
     } else {
@@ -160,9 +160,8 @@ pub fn build_finality_proof(
 
 /// Build a commitment + justification bundle for the block at `height`.
 ///
-/// The bundle reuses the commit certificate signatures as a justification for
-/// the commitment; verifiers can check that the commitment fields mirror the
-/// commit certificate and block header before validating signatures.
+/// The bundle relies on the commit certificate aggregate signature for
+/// justification; the legacy signature list is left empty.
 ///
 /// # Errors
 ///
@@ -192,7 +191,7 @@ pub fn build_finality_bundle(
         next_authority_set: None,
     };
     let justification = BridgeCommitmentJustification {
-        signatures: proof.commit_certificate.signatures.clone(),
+        signatures: Vec::new(),
     };
     Ok(BridgeFinalityBundle {
         commitment,
@@ -237,6 +236,12 @@ pub enum BridgeFinalityVerificationError {
         /// Height carried in the commit certificate.
         cert_height: u64,
     },
+    /// Commit certificate phase is not `Commit`.
+    #[error("unexpected commit certificate phase {actual:?}")]
+    UnexpectedCertificatePhase {
+        /// Phase carried in the commit certificate.
+        actual: sumeragi::consensus::Phase,
+    },
     /// Recomputed block hash does not match the proof/certificate payloads.
     #[error(
         "block hash mismatch: header {header_hash:?}, proof {proof_hash:?}, certificate {certificate_hash:?}"
@@ -274,6 +279,14 @@ pub enum BridgeFinalityVerificationError {
     /// Validator set is empty, so no quorum can be reached.
     #[error("validator set is empty")]
     EmptyValidatorSet,
+    /// Signer bitmap length does not match the validator set size.
+    #[error("signer bitmap length mismatch: expected {expected}, got {actual}")]
+    SignerBitmapLengthMismatch {
+        /// Expected bitmap length in bytes.
+        expected: usize,
+        /// Actual bitmap length in bytes.
+        actual: usize,
+    },
     /// A signer index falls outside the validator set bounds.
     #[error("signer index {signer} is out of bounds for roster length {roster_len}")]
     SignerOutOfBounds {
@@ -296,12 +309,12 @@ pub enum BridgeFinalityVerificationError {
         /// Required quorum.
         required: usize,
     },
-    /// A signature failed cryptographic verification.
-    #[error("invalid signature for signer index {signer}")]
-    InvalidSignature {
-        /// Signer whose signature failed verification.
-        signer: u64,
-    },
+    /// Commit certificate carries no aggregate signature.
+    #[error("commit certificate aggregate signature is missing")]
+    AggregateSignatureMissing,
+    /// Commit certificate aggregate signature failed verification.
+    #[error("commit certificate aggregate signature is invalid")]
+    AggregateSignatureInvalid,
 }
 
 /// Verification knobs for [`verify_finality_proof`].
@@ -370,12 +383,20 @@ pub fn verify_finality_proof(
         );
     }
 
+    if certificate.phase != sumeragi::consensus::Phase::Commit {
+        return Err(
+            BridgeFinalityVerificationError::UnexpectedCertificatePhase {
+                actual: certificate.phase,
+            },
+        );
+    }
+
     let header_hash = proof.block_header.hash();
-    if header_hash != proof.block_hash || header_hash != certificate.block_hash {
+    if header_hash != proof.block_hash || header_hash != certificate.subject_block_hash {
         return Err(BridgeFinalityVerificationError::BlockHashMismatch {
             header_hash,
             proof_hash: proof.block_hash,
-            certificate_hash: certificate.block_hash,
+            certificate_hash: certificate.subject_block_hash,
         });
     }
 
@@ -410,33 +431,41 @@ pub fn verify_finality_proof(
     if roster_len == 0 {
         return Err(BridgeFinalityVerificationError::EmptyValidatorSet);
     }
+    let expected_bitmap_len = roster_len.div_ceil(8);
+    if certificate.aggregate.signers_bitmap.len() != expected_bitmap_len {
+        return Err(
+            BridgeFinalityVerificationError::SignerBitmapLengthMismatch {
+                expected: expected_bitmap_len,
+                actual: certificate.aggregate.signers_bitmap.len(),
+            },
+        );
+    }
     let required = min_votes_for_len(roster_len);
     let mut seen = BTreeSet::new();
-
-    for block_sig in &certificate.signatures {
-        let signer = block_sig.index();
-        let signer_index: usize =
-            signer
-                .try_into()
-                .map_err(|_| BridgeFinalityVerificationError::SignerOutOfBounds {
+    for (byte_idx, byte) in certificate.aggregate.signers_bitmap.iter().enumerate() {
+        if *byte == 0 {
+            continue;
+        }
+        for bit in 0..8 {
+            if (byte >> bit) & 1 == 0 {
+                continue;
+            }
+            let idx = byte_idx * 8 + bit;
+            let signer = u64::try_from(idx).unwrap_or(u64::MAX);
+            if idx >= roster_len {
+                return Err(BridgeFinalityVerificationError::SignerOutOfBounds {
                     signer,
                     roster_len,
-                })?;
-        if signer_index >= roster_len {
-            return Err(BridgeFinalityVerificationError::SignerOutOfBounds { signer, roster_len });
+                });
+            }
+            if !seen.insert(signer) {
+                return Err(BridgeFinalityVerificationError::DuplicateSigner { signer });
+            }
         }
-        if !seen.insert(signer) {
-            return Err(BridgeFinalityVerificationError::DuplicateSigner { signer });
-        }
+    }
 
-        let signer_key = certificate.validator_set[signer_index].public_key();
-        if block_sig
-            .signature()
-            .verify_hash(signer_key, proof.block_hash)
-            .is_err()
-        {
-            return Err(BridgeFinalityVerificationError::InvalidSignature { signer });
-        }
+    if certificate.aggregate.bls_aggregate_signature.is_empty() {
+        return Err(BridgeFinalityVerificationError::AggregateSignatureMissing);
     }
 
     let collected = seen.len();
@@ -445,6 +474,45 @@ pub fn verify_finality_proof(
             collected,
             required,
         });
+    }
+
+    let vote = sumeragi::consensus::Vote {
+        phase: certificate.phase,
+        block_hash: certificate.subject_block_hash,
+        height: certificate.height,
+        view: certificate.view,
+        epoch: certificate.epoch,
+        highest_cert: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let preimage =
+        sumeragi::consensus::vote_preimage(config.expected_chain_id, &certificate.mode_tag, &vote);
+    let mut public_keys: Vec<&[u8]> = Vec::with_capacity(seen.len());
+    for signer in &seen {
+        let idx = usize::try_from(*signer).map_err(|_| {
+            BridgeFinalityVerificationError::SignerOutOfBounds {
+                signer: *signer,
+                roster_len,
+            }
+        })?;
+        let Some(peer) = certificate.validator_set.get(idx) else {
+            return Err(BridgeFinalityVerificationError::SignerOutOfBounds {
+                signer: *signer,
+                roster_len,
+            });
+        };
+        let (_, payload) = peer.public_key().to_bytes();
+        public_keys.push(payload);
+    }
+    if iroha_crypto::bls_normal_verify_preaggregated_same_message(
+        &preimage,
+        &certificate.aggregate.bls_aggregate_signature,
+        &public_keys,
+    )
+    .is_err()
+    {
+        return Err(BridgeFinalityVerificationError::AggregateSignatureInvalid);
     }
 
     Ok(())

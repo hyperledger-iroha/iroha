@@ -267,7 +267,7 @@ API
 ## בדיקה דו-שלבית לעסקה
 
 1. **סטטֵטלס (פרללי):** דקוד Norito, בדיקות סכימה, חתימות (batch), chain id/TTL/Rate, זיהוי הוראות, קאש bytecode IVM (`IvmCache`).
-   - בדיקות חתימה בקבוצות לפי scheme (Ed25519/ECDSA/PQC) עם batch micro (≥64 חתימות או 2–5ms). התוצאה שקולה לבדיקה בודדת לכל חתימה.
+   - בדיקות חתימה בקבוצות לפי scheme (Ed25519/ECDSA/Pcommit certificate) עם batch micro (≥64 חתימות או 2–5ms). התוצאה שקולה לבדיקה בודדת לכל חתימה.
 2. **סטייטפול:** יצירת `StateBlock` מבודד, הרצת הוראות IVM/Host, בדיקות הרשאה ושימור נכסים. כישלון → rollback קנוני.
    - עדכונים נשמרים כ-`StateUpdate`.
 
@@ -460,7 +460,7 @@ Registry
 - כותרת כוללת `height`, `prev_hash`, `state_root`, `commit_qc`, `validator_set_hash`, `timestamp_net`, `warnings_merkle_root`.
 - קליינטים קלים מאמתים `commit_qc` וה-`validator_set_hash`.
 - `warnings_merkle_root` מאפשר אימות של אירועי אזהרה.
-- פיינליות מושגת עם QC; קטגוריית אישור ניתנת להגדרה.
+- פיינליות מושגת עם commit certificate; קטגוריית אישור ניתנת להגדרה.
 
 ---
 
@@ -609,7 +609,7 @@ Registry
 - **יצירת הוכחות:** `zk_prove`, `max_concurrency`, quotas CPU/MEM/GPU, `queue_limits`, `allowed_circuits`, `artifact_store`.
 - **שאילתות:** `workers`, מגבלות זמן/שורות, quotas, snapshots היסטוריים.
 - **Mempool/MST:** סגנון בחירה, TTL, משקלי fee, מגבלות MST.
-- **Batch סטטֵטלס:** ספים ל-ECC/PQC, זמני המתנה, מקס' באצ׳ים מקבילים.
+- **Batch סטטֵטלס:** ספים ל-ECC/Pcommit certificate, זמני המתנה, מקס' באצ׳ים מקבילים.
 - **Prefetch:** מגבלות טווח/מפתחות, תקציב פר wave.
 - **Backpressure:** `max_parallel_waves`, `overlay_pool_limit`, `ivm_cache_size`.
 - **טלמטריה:** רמות יומן ויעדי יצוא.

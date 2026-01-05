@@ -69,7 +69,7 @@ All of the above share the same validation and consensus pipeline once they beco
 8) Commit (Quorum Reached)
 - Once the leader (or the network) observes a quorum of approvals, `sumeragi` finalizes the block after verifying the required conditions:
   - Commit certificate: validators send `CommitVote` signatures to the deterministic collector set (proxy tail + Set B slice), with fallback to the full commit topology when collector fan-out is below quorum. Any collector that reaches quorum aggregates `2f+1` signatures (permissioned) or ≥2/3 total stake (NPoS) into a `CommitCertificate`. Peers commit when the certificate and payload are both available.
-  - Data availability: when `SumeragiParameter::DaEnabled = true` (`sumeragi.da_enabled=true`), availability evidence is tracked via `AvailabilityQC` or an RBC `READY` quorum (>= `Topology::min_votes_for_commit()`), but commit does not wait on it.
+  - Data availability: when `SumeragiParameter::DaEnabled = true` (`sumeragi.da_enabled=true`), availability evidence is tracked via availability votes or an RBC `READY` quorum (>= `Topology::min_votes_for_commit()`), but commit does not wait on it.
   - Reliable broadcast (RBC): enabled automatically when `sumeragi.da_enabled=true` as a transport/recovery path for block payload distribution; commit does not wait on local `RbcDeliver`.
   - Execution QC: when the proof policy requires execution QCs (`require_execution_qc=true` or hybrid modes), the parent’s `ExecutionQcRecord` must be available. Nodes persist `exec_root` + `ExecutionQcRecord` on commit (derived from the execution witness); in strict WSV mode (`require_wsv_exec_qc=true`) missing parent records block commit until the real record is present.
 - After the required checks succeed, all committee peers persist the block to `kura` (append‑only block store) and advance their canonical state by applying the block contents in a single atomic commit.
@@ -249,7 +249,7 @@ Iroha can group signatures by scheme during block validation and verify them in 
   - Micro‑batching groups signatures deterministically: same‑message groups run fast‑aggregate verification, distinct messages use a multi‑message aggregate with deterministic bisection on failure, and per‑lane telemetry records both the latest block counters (`pipeline_sig_bls_agg_*`) and cumulative results (`pipeline_sig_bls_agg_{same,multi}_total`).
   - PoP requirement: batching expects a proof of possession in transaction metadata (`bls_pop` for BLS-normal, `bls_pop_small` for BLS-small). Missing or invalid PoPs fall back to individual verification while still enforcing the signature.
   - Validators register with BLS-Normal keys only; `trusted_peers_bls` no longer exists and peer admission filters drop non-BLS entries unless they carry a valid PoP in `trusted_peers_pop` or the genesis topology entries (`pop_hex` bundled with each peer).
-  - Validator peers MUST set `signature_batch_max_bls > 0`; peer registration is rejected otherwise to ensure validators can batch BLS signatures (votes/QCs) by configuration.
+  - Validator peers MUST set `signature_batch_max_bls > 0`; peer registration is rejected otherwise to ensure validators can batch BLS signatures (votes/commit certificates) by configuration.
 - Key scope reminder: `allowed_signing`/`allowed_curve_ids` apply to transaction admission (account/controller signatures). Consensus votes always use the validator BLS key + PoP from `trusted_peers` and do not depend on `allowed_signing`. Transport identity (P2P/Torii) continues to use `common.public_key`/`private_key`, typically Ed25519 or secp256k1.
 
 - Scheme specifics:
@@ -274,6 +274,6 @@ Iroha can group signatures by scheme during block validation and verify them in 
 
 - Evidence audit (non‑consensus):
   - `GET /v1/sumeragi/evidence/count` — `{ "count": <u64> }` for in‑memory evidence store.
-- `GET /v1/sumeragi/evidence` — `{ "total": <u64>, "items": [...] }` with basic fields per evidence (DoublePrevote/Precommit, InvalidQC, InvalidProposal).
+- `GET /v1/sumeragi/evidence` — `{ "total": <u64>, "items": [...] }` with basic fields per evidence (DoublePrepare/Precommit, InvalidCommitCertificate, InvalidProposal).
 - Python SDK shortcuts: `iroha_python.ToriiClient.get_pipeline_recovery(height)` fetches the JSON sidecar, and `stream_pipeline_transactions`/`stream_pipeline_blocks`/`stream_pipeline_witnesses`/`stream_pipeline_merges` expose the SSE feeds with Norito-backed filters.
   - Purpose: quick inspection during development and ops. Data is node‑local and not persisted.

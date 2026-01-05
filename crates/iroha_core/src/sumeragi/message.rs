@@ -22,18 +22,6 @@ pub enum BlockMessage {
     /// Nodes verify that their local on-chain collector parameters match advertised values.
     /// A mismatch is logged and flagged locally; consensus rules remain unchanged.
     ConsensusParams(#[skip_try_from] ConsensusParamsAdvert),
-    /// Data Availability acknowledgement vote (scaffold path).
-    AvailabilityVote(#[skip_try_from] super::consensus::AvailableVote),
-    /// Availability QC for a block (scaffold path).
-    AvailabilityQC(#[skip_try_from] super::consensus::Qc),
-    /// Prevote vote (single-chain path; scaffold). Wrapped to avoid `From` collisions.
-    PrevoteVote(#[skip_try_from] PrevoteVoteMsg),
-    /// Prevote QC (single-chain path; scaffold). Wrapped to avoid `From` collisions.
-    PrevoteQC(#[skip_try_from] PrevoteQCMsg),
-    /// Precommit vote (single-chain path; scaffold). Wrapped to avoid `From` collisions.
-    PrecommitVote(#[skip_try_from] PrecommitVoteMsg),
-    /// Precommit QC (single-chain path; scaffold). Wrapped to avoid `From` collisions.
-    PrecommitQC(#[skip_try_from] PrecommitQCMsg),
     /// VRF commit (`NPoS` randomness).
     VrfCommit(#[skip_try_from] super::consensus::VrfCommit),
     /// VRF reveal (`NPoS` randomness).
@@ -42,10 +30,6 @@ pub enum BlockMessage {
     ExecVote(#[skip_try_from] super::consensus::ExecVote),
     /// `ExecutionQC` certifying post-state root.
     ExecutionQC(#[skip_try_from] super::consensus::ExecutionQC),
-    /// Witness-availability acknowledgement.
-    WitnessAvailAck(#[skip_try_from] super::consensus::WitnessAvailAck),
-    /// Witness-availability QC.
-    WitnessAvailQC(#[skip_try_from] super::consensus::WitnessAvailQC),
     /// Execution witness with metadata for SMT recomputation.
     ExecWitness(#[skip_try_from] super::consensus::ExecWitnessMsg),
     /// RBC init (payload distribution scaffold).
@@ -62,19 +46,17 @@ pub enum BlockMessage {
     ProposalHint(#[skip_try_from] ProposalHint),
     /// Full proposal header + payload hash. Used for on-wire parent/HighestQC checks.
     Proposal(#[skip_try_from] super::consensus::Proposal),
-    /// Commit vote carrying a block header signature.
+    /// Commit vote (Prepare/Commit/NewView) carrying a BLS signature.
     CommitVote(#[skip_try_from] super::consensus::CommitVote),
+    /// Commit certificate (Prepare/Commit/NewView) aggregating BLS signatures.
+    CommitCertificate(#[skip_try_from] super::consensus::CommitCertificate),
 }
 
 /// Control-flow signals exchanged between peers (pacemaker frames).
 #[derive(Debug, Clone, Decode, Encode, FromVariant)]
 pub enum ControlFlow {
-    /// `NEW_VIEW` message carrying sender’s highest known QC.
-    NewView(super::consensus::NewView),
     /// Evidence propagation for slashing/governance actions.
     Evidence(super::consensus::Evidence),
-    /// View-change proof propagation for leader rotation.
-    ViewChangeProof(#[skip_try_from] super::view_change::SignedViewChangeProof),
 }
 
 /// Minimal proposal header hint broadcast alongside `BlockCreated` by the leader.
@@ -87,27 +69,9 @@ pub struct ProposalHint {
     pub height: u64,
     /// View for which the proposal applies.
     pub view: u64,
-    /// `HighestQC` reference known to the proposer.
-    pub highest_qc: super::consensus::QcHeaderRef,
-    /// Optional availability QC reference for the subject block (scaffold; usually None at propose).
-    pub avail_qc_ref: Option<super::consensus::QcHeaderRef>,
+    /// Highest certificate reference known to the proposer.
+    pub highest_cert: super::consensus::CommitCertificateRef,
 }
-
-/// Wrapper around `Vote` to avoid `From<Vote>` collisions for multiple variants.
-#[derive(Debug, Clone, Decode, Encode)]
-pub struct PrevoteVoteMsg(pub super::consensus::Vote);
-
-/// Wrapper around `Vote` to avoid `From<Vote>` collisions for multiple variants.
-#[derive(Debug, Clone, Decode, Encode)]
-pub struct PrecommitVoteMsg(pub super::consensus::Vote);
-
-/// Wrapper around `Qc` to avoid `From<Qc>` collisions for multiple variants.
-#[derive(Debug, Clone, Decode, Encode)]
-pub struct PrevoteQCMsg(pub super::consensus::Qc);
-
-/// Wrapper around `Qc` to avoid `From<Qc>` collisions for multiple variants.
-#[derive(Debug, Clone, Decode, Encode)]
-pub struct PrecommitQCMsg(pub super::consensus::Qc);
 
 // Bridge Norito codec (Encode/Decode) to core slice-based decoding for strict-safe paths.
 impl<'a> norito::core::DecodeFromSlice<'a> for ControlFlow {
@@ -183,12 +147,8 @@ impl From<&SignedBlock> for BlockCreated {
 pub struct BlockSyncUpdate {
     /// The corresponding block.
     pub block: SignedBlock,
-    /// Optional commit QC for the block (precommit phase).
-    pub qc: Option<super::consensus::Qc>,
-    /// Optional availability QC for the block to record DA availability evidence.
-    pub availability_qc: Option<super::consensus::Qc>,
-    /// Cached precommit votes for the block (used to backfill missing votes on peers).
-    pub precommit_votes: Vec<super::consensus::Vote>,
+    /// Cached commit votes for the block (used to backfill missing votes on peers).
+    pub commit_votes: Vec<super::consensus::CommitVote>,
     /// Optional commit certificate associated with the block height.
     pub commit_certificate: Option<iroha_data_model::consensus::CommitCertificate>,
     /// Optional validator checkpoint associated with the block height.
@@ -203,9 +163,7 @@ impl From<&SignedBlock> for BlockSyncUpdate {
     fn from(block: &SignedBlock) -> Self {
         Self {
             block: block.clone(),
-            qc: None,
-            availability_qc: None,
-            precommit_votes: Vec::new(),
+            commit_votes: Vec::new(),
             commit_certificate: None,
             validator_checkpoint: None,
             stake_snapshot: None,
@@ -278,27 +236,27 @@ mod tests {
         // Construct minimal double-vote evidence
         let dummy_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([1u8; 32]));
         let v1 = consensus::Vote {
-            phase: consensus::Phase::Prevote,
+            phase: consensus::Phase::Prepare,
             block_hash: dummy_hash,
             height: 1,
             view: 1,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
         let v2 = consensus::Vote {
-            phase: consensus::Phase::Prevote,
+            phase: consensus::Phase::Prepare,
             block_hash: dummy_hash,
             height: 1,
             view: 1,
             epoch: 0,
+            highest_cert: None,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
         let ev = consensus::Evidence {
-            kind: consensus::EvidenceKind::DoublePrevote,
+            kind: consensus::EvidenceKind::DoublePrepare,
             payload: consensus::EvidencePayload::DoubleVote { v1, v2 },
         };
         let cf = ControlFlow::Evidence(ev);

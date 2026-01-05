@@ -287,9 +287,9 @@ CastZkBallot Verification Path
 use iroha_data_model::block::consensus::EvidenceKind;
 
 let offences = [
-    EvidenceKind::DoublePrevote,
-    EvidenceKind::DoublePrecommit,
-    EvidenceKind::InvalidQC,
+    EvidenceKind::DoublePrepare,
+    EvidenceKind::DoubleCommit,
+    EvidenceKind::InvalidCommitCertificate,
     EvidenceKind::InvalidProposal,
     EvidenceKind::DoubleExecVote,
 ];
@@ -299,9 +299,9 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrevote/DoublePrecommit** - валидатор подписал конфликтующие хэши для одного `(phase,height,view,epoch)`.
+- **DoublePrepare/DoubleCommit** - валидатор подписал конфликтующие хэши для одного `(phase,height,view,epoch)`.
 - **DoubleExecVote** - конфликтные execution votes объявляют разные post-state roots.
-- **InvalidQC** - агрегатор разослал QC, чья форма не проходит детерминированные проверки (например, пустой signer bitmap).
+- **InvalidCommitCertificate** - агрегатор разослал commit certificate, чья форма не проходит детерминированные проверки (например, пустой signer bitmap).
 - **InvalidProposal** - лидер предложил блок, который проваливает структурную валидацию (например, нарушает locked-chain rule).
 
 Операторы и инструменты могут просматривать и повторно рассылать payloads через:

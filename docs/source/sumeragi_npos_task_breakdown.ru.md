@@ -16,24 +16,24 @@ translation_last_reviewed: 2026-01-01
 ### A2 - Принятие сообщений на уровне wire
 - ✅ Вынести типы Norito `Proposal`/`Vote`/`Qc` в `BlockMessage` и прогнать round-trip encode/decode (`crates/iroha_data_model/tests/consensus_roundtrip.rs`).
 - ✅ Закрыть старые фреймы `BlockSigned/BlockCommitted`; переключатель миграции был выставлен в `false` до вывода из эксплуатации.
-- ✅ Удалить миграционный knob, переключавший старые сообщения блоков; режим Vote/QC теперь единственный wire-путь.
+- ✅ Удалить миграционный knob, переключавший старые сообщения блоков; режим Vote/commit certificate теперь единственный wire-путь.
 - ✅ Обновить роутеры Torii, команды CLI и потребителей телеметрии, чтобы предпочитать JSON-снимки `/v1/sumeragi/*` старым фреймам блоков.
-- ✅ Интеграционное покрытие упражняет эндпоинты `/v1/sumeragi/*` исключительно через пайплайн Vote/QC (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
+- ✅ Интеграционное покрытие упражняет эндпоинты `/v1/sumeragi/*` исключительно через пайплайн Vote/commit certificate (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
 - ✅ Удалить старые фреймы после достижения функционального паритета и тестов совместимости.
 
 ### План удаления фреймов
-1. ✅ Мультиузловые soak-тесты шли 72 h на телеметрийном и CI harness; снимки Torii показали стабильную пропускную способность proposer и формирование QC без регрессий.
-2. ✅ Интеграционные тесты теперь работают только через путь Vote/QC (`sumeragi_vote_qc_commit.rs`), гарантируя достижение консенсуса смешанными пирами без старых фреймов.
-3. ✅ Операторская документация и CLI help больше не упоминают прежний wire-путь; руководство по troubleshooting теперь указывает на телеметрию Vote/QC.
-4. ✅ Удалены прежние варианты сообщений, счетчики телеметрии и кеши ожидающих commit; матрица совместимости теперь отражает только поверхность Vote/QC.
+1. ✅ Мультиузловые soak-тесты шли 72 h на телеметрийном и CI harness; снимки Torii показали стабильную пропускную способность proposer и формирование commit certificate без регрессий.
+2. ✅ Интеграционные тесты теперь работают только через путь Vote/commit certificate (`sumeragi_vote_qc_commit.rs`), гарантируя достижение консенсуса смешанными пирами без старых фреймов.
+3. ✅ Операторская документация и CLI help больше не упоминают прежний wire-путь; руководство по troubleshooting теперь указывает на телеметрию Vote/commit certificate.
+4. ✅ Удалены прежние варианты сообщений, счетчики телеметрии и кеши ожидающих commit; матрица совместимости теперь отражает только поверхность Vote/commit certificate.
 
 ### A3 - Усиление движка и pacemaker
-- ✅ Инварианты Lock/HighestQC закреплены в `handle_message` (см. `block_created_header_sanity`).
+- ✅ Инварианты Lock/Highestcommit certificate закреплены в `handle_message` (см. `block_created_header_sanity`).
 - ✅ Отслеживание доступности данных валидирует хеш payload RBC при записи доставки (`Actor::ensure_block_matches_rbc_payload`), чтобы несовпадающие сессии не считались доставленными.
-- ✅ Требование PrecommitQC (`require_precommit_qc`) включено в конфиги по умолчанию и добавлены негативные тесты (по умолчанию теперь `true`; тесты покрывают пути с gate и opt-out).
+- ✅ Требование Precommitcommit certificate (`require_precommit_qc`) включено в конфиги по умолчанию и добавлены негативные тесты (по умолчанию теперь `true`; тесты покрывают пути с gate и opt-out).
 - ✅ Вместо эвристик redundant-send на уровне view внедрены контроллеры pacemaker на базе EMA (`aggregator_retry_deadline` теперь зависит от live EMA и задает дедлайны redundant send).
 - ✅ Сборка предложений блокируется по backpressure очереди (`BackpressureGate` теперь останавливает pacemaker при насыщении очереди и пишет deferrals в status/telemetry).
-- ✅ Голоса availability отправляются после валидации предложения, когда требуется DA (без ожидания локального RBC `DELIVER`), а evidence availability отслеживается через `AvailabilityQC` как доказательство безопасности, пока commit продолжается без ожидания. Это избегает циклических ожиданий между доставкой payload и голосованием.
+- ✅ Голоса availability отправляются после валидации предложения, когда требуется DA (без ожидания локального RBC `DELIVER`), а evidence availability отслеживается через `availability evidence` как доказательство безопасности, пока commit продолжается без ожидания. Это избегает циклических ожиданий между доставкой payload и голосованием.
 - ✅ Покрытие restart/liveness теперь включает восстановление RBC после cold-start (`integration_tests/tests/sumeragi_da.rs::sumeragi_rbc_session_recovers_after_cold_restart`) и возобновление pacemaker после downtime (`integration_tests/tests/sumeragi_npos_liveness.rs::npos_pacemaker_resumes_after_downtime`).
 - ✅ Добавлены детерминированные regression-тесты restart/view-change, покрывающие сходимость lock (`integration_tests/tests/sumeragi_lock_convergence.rs`).
 
@@ -44,7 +44,7 @@ translation_last_reviewed: 2026-01-01
 - ✅ GA-A4.3 - Зафиксировать восстановление после late-reveal и тесты эпох без участия в `integration_tests/tests/sumeragi_randomness.rs` (`npos_late_vrf_reveal_clears_penalty_and_preserves_seed`, `npos_zero_participation_epoch_reports_full_no_participation`), проверяя телеметрию очистки штрафов. Owners: `@sumeragi-core`. Tracker: `project_tracker/npos_sumeragi_phase_a.md:7`.
 
 ### A5 - Совместная переконфигурация и evidence
-- ✅ Скаффолдинг evidence, сохранение в WSV и Norito roundtrip теперь покрывают double-vote, invalid proposal, invalid QC и варианты double exec с детерминированным дедупом и pruning горизонта (`sumeragi::evidence`).
+- ✅ Скаффолдинг evidence, сохранение в WSV и Norito roundtrip теперь покрывают double-vote, invalid proposal, invalid commit certificate и варианты double exec с детерминированным дедупом и pruning горизонта (`sumeragi::evidence`).
 - ✅ GA-A5.1 - Активирована joint-consensus конфигурация (старый набор коммитит, новый активируется на следующем блоке) с целевым интеграционным покрытием.
 - ✅ GA-A5.2 - Обновлены governance docs и CLI потоки для slashing/jailing, вместе с mdBook синхронизацией для фиксации defaults и формулировок evidence horizon.
 - ✅ GA-A5.3 - Негативные evidence-тесты (duplicate signer, forged signature, stale epoch replay, mixed manifest payloads) плюс fuzz fixtures добавлены и запускаются nightly, чтобы защищать валидацию Norito roundtrip.

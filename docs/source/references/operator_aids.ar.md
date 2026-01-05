@@ -27,11 +27,11 @@ translation_last_reviewed: 2026-01-01
     - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
 - المقاييس: عدادات `sumeragi_new_view_receipts_by_hv{height,view}` تعكس الأعداد.
 - GET `/v1/sumeragi/status`
-  - لقطة لمؤشر القائد، HighestQC/LockedQC (الارتفاعات، المشاهدات، تجزئات الموضوع)، عدادات المجمّعين/VRF، تأجيلات pacemaker، عمق طابور المعاملات، وصحة مخزن RBC (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`).
+  - لقطة لمؤشر القائد، Highest/Locked commit certificates (`highest_qc`/`locked_qc` مع الارتفاعات والمشاهدات وتجزئات الموضوع)، عدادات المجمّعين/VRF، تأجيلات pacemaker، عمق طابور المعاملات، وصحة مخزن RBC (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`).
 - GET `/v1/sumeragi/status/sse`
   - تدفق SSE (≈1 ث) لنفس الحمولة مثل `/v1/sumeragi/status` للمتابعة الحية.
 - GET `/v1/sumeragi/qc`
-  - لقطة لـ HighestQC وLockedQC؛ تتضمن `subject_block_hash` لـ HighestQC عند توفره.
+  - لقطة لـ highest/locked commit certificates؛ تتضمن `subject_block_hash` لـ highest commit certificate عند توفره.
 - GET `/v1/sumeragi/pacemaker`
   - مؤقتات/إعدادات pacemaker: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
 - GET `/v1/sumeragi/leader`
@@ -40,7 +40,7 @@ translation_last_reviewed: 2026-01-01
   - خطة مجمّعين حتمية مشتقة من الطوبولوجيا المُلتزم بها والمعلمات على السلسلة: تصدر `mode` وخطة `(height, view)` (مع `height` مساويًا لارتفاع السلسلة الحالي)، و`collectors_k` و`redundant_send_r` و`proxy_tail_index` و`min_votes_for_commit` والقائمة المرتبة للمجمّعين، و`epoch_seed` (hex) عند تفعيل NPoS.
 - GET `/v1/sumeragi/params`
   - لقطة لمعلمات Sumeragi على السلسلة `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
-  - عندما تكون `da_enabled` true، يتم تتبع دليل التوفر (`AvailabilityQC` أو RBC `READY`) لكن الالتزام لا ينتظرها؛ كما أن `DELIVER` المحلي لـ RBC ليس شرطًا. يمكن للمشغّلين تأكيد سلامة نقل الحمولة عبر نقاط نهاية RBC أدناه.
+  - عندما تكون `da_enabled` true، يتم تتبع دليل التوفر (`availability evidence` أو RBC `READY`) لكن الالتزام لا ينتظرها؛ كما أن `DELIVER` المحلي لـ RBC ليس شرطًا. يمكن للمشغّلين تأكيد سلامة نقل الحمولة عبر نقاط نهاية RBC أدناه.
 - GET `/v1/sumeragi/rbc`
   - عدادات Reliable Broadcast الإجمالية: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, deliver_broadcasts_total, payload_bytes_delivered_total }`.
 - GET `/v1/sumeragi/rbc/sessions`
@@ -50,7 +50,7 @@ translation_last_reviewed: 2026-01-01
 الأدلة (تدقيق؛ خارج التوافق)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
 - GET `/v1/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
-  - تتضمن حقولًا أساسية (مثل DoublePrevote/Precommit، InvalidQC، InvalidProposal) للفحص.
+  - تتضمن حقولًا أساسية (مثل DoublePrepare/Precommit، InvalidCommitCertificate، InvalidProposal) للفحص.
   - أمثلة:
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence/count | jq .`
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`

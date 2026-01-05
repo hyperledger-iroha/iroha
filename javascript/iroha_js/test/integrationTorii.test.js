@@ -6828,8 +6828,8 @@ function assertEvidenceRecord(entry) {
   );
   assertNonNegativeInteger(entry.recorded_ms, "evidence entry recorded_ms must be non-negative");
   switch (entry.kind) {
-    case "DoublePrevote":
-    case "DoublePrecommit":
+    case "DoublePrepare":
+    case "DoubleCommit":
       assert.equal(typeof entry.phase, "string", "double vote evidence must include a phase");
       assertNonNegativeInteger(entry.height, "double vote evidence height must be non-negative");
       assertNonNegativeInteger(entry.view, "double vote evidence view must be non-negative");
@@ -6848,7 +6848,7 @@ function assertEvidenceRecord(entry) {
       assertHexString(entry.post_state_root_1, "double exec vote post_state_root_1");
       assertHexString(entry.post_state_root_2, "double exec vote post_state_root_2");
       break;
-    case "InvalidQC":
+    case "InvalidCommitCertificate":
       assertNonNegativeInteger(entry.height, "invalid QC height must be non-negative");
       assertNonNegativeInteger(entry.view, "invalid QC view must be non-negative");
       assertNonNegativeInteger(entry.epoch, "invalid QC epoch must be non-negative");

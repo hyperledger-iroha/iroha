@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn format_evidence_summary_includes_core_fields() {
         let mut map = norito::json::Map::new();
-        map.insert("kind".to_owned(), Value::from("InvalidQC"));
+        map.insert("kind".to_owned(), Value::from("InvalidCommitCertificate"));
         map.insert("height".to_owned(), Value::from(42u64));
         map.insert("view".to_owned(), Value::from(7u64));
         map.insert("epoch".to_owned(), Value::from(1u64));
@@ -196,7 +196,7 @@ mod tests {
         map.insert("recorded_ms".to_owned(), Value::from(1234u64));
         map.insert("signer".to_owned(), Value::from(3u64));
         let summary = format_evidence_summary(0, &Value::from(map));
-        assert!(summary.contains("1: kind=InvalidQC"));
+        assert!(summary.contains("1: kind=InvalidCommitCertificate"));
         assert!(summary.contains("height=42"));
         assert!(summary.contains("view=7"));
         assert!(summary.contains("epoch=1"));
@@ -208,10 +208,10 @@ mod tests {
     #[test]
     fn format_evidence_summary_uses_index_offset() {
         let mut map = norito::json::Map::new();
-        map.insert("kind".to_owned(), Value::from("DoublePrevote"));
+        map.insert("kind".to_owned(), Value::from("DoublePrepare"));
         let summary = format_evidence_summary(5, &Value::from(map));
         assert!(
-            summary.starts_with("6: kind=DoublePrevote"),
+            summary.starts_with("6: kind=DoublePrepare"),
             "unexpected summary: {summary}"
         );
     }

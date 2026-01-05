@@ -115,14 +115,14 @@ merge ring کو lane commitment قبول کرنے سے پہلے یہ شرائط 
 
 - **Metrics:**  
   `nexus_scheduler_lane_teu_*`, `nexus_scheduler_dataspace_*`, `sumeragi_rbc_da_reschedule_total`,
-  `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_availability_qc"}`,
+  `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_local_data"}`,
   `lane_relay_invalid_total{error}`, `lane_relay_emergency_override_total{outcome}`, اور
 - **Torii surfaces:**  
   `/v1/sumeragi/status` میں `lane_commitments`, `lane_settlement_commitments` اور dataspace snapshots شامل ہیں۔ `/v1/nexus/lane-config` (planned) `LaneConfig` geometry publish کرے گا تاکہ clients `lane_id` کو dataspace labels کے ساتھ map کر سکیں۔
 - **Dashboards:**  
   `dashboards/grafana/nexus_lanes.json` lane backlog، DA availability signals، اور اوپر بیان کردہ settlement totals دکھاتا ہے۔ Alert definitions کو page کرنا چاہئے جب:
   - `nexus_scheduler_dataspace_age_slots` policy کو breach کرے۔
-  - `sumeragi_da_gate_block_total{reason="missing_availability_qc"}` مسلسل بڑھے۔
+  - `sumeragi_da_gate_block_total{reason="missing_local_data"}` مسلسل بڑھے۔
   - `total_xor_variance_micro` historical norms سے deviate کرے۔
 - **Evidence bundles:**  
   ہر release کو `LaneBlockCommitment` exports، Grafana/Alertmanager snapshots، اور relay DA manifests کو `artifacts/nexus/cross-lane/<date>/` میں attach کرنا چاہئے۔ یہ bundle NX-4 readiness reports جمع کراتے وقت canonical proof set بنتا ہے۔

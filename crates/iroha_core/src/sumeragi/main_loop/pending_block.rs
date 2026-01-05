@@ -49,12 +49,10 @@ pub(super) struct PendingBlock {
     pub(super) height: u64,
     pub(super) view: u64,
     pub(super) tx_batch: Option<Vec<AcceptedTransaction<'static>>>,
-    pub(super) availability_qc_view: Option<u64>,
     pub(super) last_gate: Option<da::GateReason>,
     pub(super) last_gate_satisfied: Option<da::GateSatisfaction>,
     pub(super) inserted_at: Instant,
     pub(super) precommit_vote_sent: bool,
-    pub(super) commit_vote_sent: bool,
     pub(super) commit_certificate_seen: bool,
     pub(super) commit_certificate_epoch: Option<u64>,
     pub(super) validation_status: ValidationStatus,
@@ -63,7 +61,6 @@ pub(super) struct PendingBlock {
     pub(super) kura_aborted: bool,
     pub(super) kura_persisted: bool,
     pub(super) aborted: bool,
-    pub(super) availability_vote_sent: bool,
     pub(super) last_quorum_reschedule: Option<Instant>,
     pub(super) last_precommit_rebroadcast: Option<Instant>,
 }
@@ -76,12 +73,10 @@ impl PendingBlock {
             height,
             view,
             tx_batch: None,
-            availability_qc_view: None,
             last_gate: None,
             last_gate_satisfied: None,
             inserted_at: Instant::now(),
             precommit_vote_sent: false,
-            commit_vote_sent: false,
             commit_certificate_seen: false,
             commit_certificate_epoch: None,
             validation_status: ValidationStatus::Pending,
@@ -90,7 +85,6 @@ impl PendingBlock {
             kura_aborted: false,
             kura_persisted: false,
             aborted: false,
-            availability_vote_sent: false,
             last_quorum_reschedule: None,
             last_precommit_rebroadcast: None,
         }
@@ -128,17 +122,14 @@ impl PendingBlock {
         if !replacing_same_subject {
             self.inserted_at = Instant::now();
             self.precommit_vote_sent = false;
-            self.commit_vote_sent = false;
             self.commit_certificate_seen = false;
             self.commit_certificate_epoch = None;
             self.last_gate = None;
             self.last_gate_satisfied = None;
-            self.availability_qc_view = None;
             self.reset_kura_retry();
             self.kura_persisted = false;
             self.validation_status = ValidationStatus::Pending;
             self.last_precommit_rebroadcast = None;
-            self.availability_vote_sent = false;
             self.last_quorum_reschedule = None;
             self.aborted = false;
         }
@@ -154,7 +145,7 @@ impl PendingBlock {
     }
 
     pub(super) fn recompute_gate(&mut self, _da_enabled: bool) -> GateComputation {
-        // Availability evidence is advisory; do not surface missing AvailabilityQC as a gate.
+        // Availability evidence is advisory; consensus only records missing local data.
         let gate = None;
         let previous_gate = self.last_gate;
         let satisfaction = da::gate_satisfaction(previous_gate, gate);
@@ -173,10 +164,6 @@ impl PendingBlock {
         }
     }
 
-    pub(super) fn mark_availability_qc(&mut self, view: u64) {
-        self.availability_qc_view = Some(view);
-    }
-
     pub(super) fn reset_kura_retry(&mut self) {
         self.kura_retry_attempts = 0;
         self.next_kura_retry = None;
@@ -193,12 +180,9 @@ impl PendingBlock {
         self.reset_kura_retry();
         self.last_gate = None;
         self.last_gate_satisfied = None;
-        self.availability_qc_view = None;
         self.precommit_vote_sent = false;
-        self.commit_vote_sent = false;
         self.commit_certificate_seen = false;
         self.commit_certificate_epoch = None;
-        self.availability_vote_sent = false;
         self.last_precommit_rebroadcast = None;
     }
 

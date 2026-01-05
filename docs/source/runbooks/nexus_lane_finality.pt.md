@@ -24,12 +24,12 @@ liquidação que governam a promessa de finalização em 1 s. Use junto com
 
 - **Grafana (`dashboards/grafana/nexus_lanes.json`)** — publica o board “Nexus Lane Finality & Oracles”. Os painéis acompanham:
   - `histogram_quantile()` sobre `iroha_slot_duration_ms` (p50/p95/p99) e o gauge da amostra mais recente.
-  - `iroha_da_quorum_ratio` e `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m])` para destacar churn de DA.
+  - `iroha_da_quorum_ratio` e `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])` para destacar churn de DA.
   - Superfícies do oráculo: `iroha_oracle_price_local_per_xor`, `iroha_oracle_staleness_seconds`, `iroha_oracle_twap_window_seconds` e `iroha_oracle_haircut_basis_points`.
   - Painel de buffer de liquidação (`iroha_settlement_buffer_xor`) mostrando débitos por lane em tempo real a partir de recibos `LaneBlockCommitment`.
 - **Regras de alerta** — reutilizam as cláusulas Slot/DA SLO de `ans3.md`. Pager quando:
   - p95 de duração de slot > 1000 ms por duas janelas consecutivas de 5 m,
-  - quórum DA < 0,95 ou `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m]) > 0`,
+  - quórum DA < 0,95 ou `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m]) > 0`,
   - staleness do oráculo > 90 s ou janela TWAP ≠ 60 s configurados,
   - buffer de liquidação < 25 % (soft) / 10 % (hard) quando a métrica estiver ativa.
 
@@ -40,7 +40,7 @@ liquidação que governam a promessa de finalização em 1 s. Use junto com
 | `histogram_quantile(0.95, iroha_slot_duration_ms)` | ≤ 1000 ms (hard), 950 ms warning | Use o painel do dashboard ou rode `scripts/telemetry/check_slot_duration.py` (`--json-out artifacts/nx18/slot_summary.json`) contra o export do Prometheus coletado durante caos. |
 | `iroha_slot_duration_ms_latest` | Espelha o slot mais recente; investigue se > 1100 ms mesmo quando os quantis parecem OK. | Exporte o valor ao abrir incidentes. |
 | `iroha_da_quorum_ratio` | ≥ 0,95 em janela móvel de 30 m. | Derivado de reschedules DA durante commits de bloco. |
-| `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m])` | Deve permanecer 0 fora de rehearsals de caos. | Trate qualquer aumento sustentado como `missing-availability warning`. |
+| `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])` | Deve permanecer 0 fora de rehearsals de caos. | Trate qualquer aumento sustentado como `missing-availability warning`. |
 
 Cada reschedule também dispara um warning no pipeline Torii com `kind = "missing-availability warning"`. Capture esses eventos junto com o pico de métricas para identificar o cabeçalho de bloco afetado, a tentativa de retry e os contadores de requeue sem vasculhar logs de validadores.【crates/iroha_core/src/sumeragi/main_loop.rs:5164】
 | `iroha_oracle_staleness_seconds` | ≤ 60 s. Alertar a 75 s. | Indica feeds TWAP de 60 s stale. |

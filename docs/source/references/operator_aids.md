@@ -16,11 +16,11 @@ Consensus (Sumeragi)
     - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
 - Metrics: `sumeragi_new_view_receipts_by_hv{height,view}` gauges mirror the counts.
 - GET `/v1/sumeragi/status`
-  - Snapshot of leader index, HighestQC/LockedQC (heights, views, subject hashes), collector/VRF counters, pacemaker deferrals, tx queue depth, and RBC store health (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`).
+- Snapshot of leader index, highest/locked commit certificates (`highest_qc`/`locked_qc`, heights, views, subject hashes), collector/VRF counters, pacemaker deferrals, tx queue depth, and RBC store health (`rbc_store.{sessions,bytes,pressure_level,evictions_total,recent_evictions[...]}`).
 - GET `/v1/sumeragi/status/sse`
   - SSE stream (≈1s) of the same payload as `/v1/sumeragi/status` for live dashboards.
 - GET `/v1/sumeragi/qc`
-  - Snapshot of HighestQC and LockedQC; includes `subject_block_hash` for HighestQC when known.
+- Snapshot of highest/locked commit certificates; includes `subject_block_hash` for the highest commit certificate when known.
 - GET `/v1/sumeragi/pacemaker`
   - Pacemaker timers/config: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
 - GET `/v1/sumeragi/leader`
@@ -29,7 +29,7 @@ Consensus (Sumeragi)
   - Deterministic collector plan derived from the committed topology and on-chain parameters: exports `mode`, plan `(height, view)` (with `height` equal to the current chain height), `collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, the ordered collector list, and `epoch_seed` (hex) when NPoS is active.
 - GET `/v1/sumeragi/params`
   - Snapshot of on-chain Sumeragi parameters `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
-  - When `da_enabled` is true, availability evidence (`AvailabilityQC` or RBC `READY`) is tracked but commit does not wait on it; local RBC `DELIVER` is also not a requirement. Operators can confirm payload transport health via the RBC endpoints below.
+  - When `da_enabled` is true, availability evidence (availability votes or RBC `READY`) is tracked but commit does not wait on it; local RBC `DELIVER` is also not a requirement. Operators can confirm payload transport health via the RBC endpoints below.
 - GET `/v1/sumeragi/rbc`
   - Aggregate Reliable Broadcast counters: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, deliver_broadcasts_total, payload_bytes_delivered_total }`.
 - GET `/v1/sumeragi/rbc/sessions`
@@ -39,7 +39,7 @@ Consensus (Sumeragi)
 Evidence (audit; non-consensus)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
 - GET `/v1/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
-  - Includes basic fields (e.g., DoublePrevote/Precommit, InvalidQC, InvalidProposal) for inspection.
+  - Includes basic fields (e.g., DoublePrepare/Precommit, InvalidCommitCertificate, InvalidProposal) for inspection.
   - Examples:
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence/count | jq .`
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`

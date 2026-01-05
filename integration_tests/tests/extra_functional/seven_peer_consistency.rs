@@ -35,7 +35,10 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
         .with_peers(7)
         .with_default_pipeline_time()
         .with_config_layer(|layer| {
-            layer.write(["sumeragi", "da_enabled"], true);
+            layer
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full")
+                .write(["sumeragi", "da_enabled"], true);
         })
         // Keep blocks small to make block progression deterministic in tests
         .with_genesis_instruction(SetParameter::new(Parameter::Block(

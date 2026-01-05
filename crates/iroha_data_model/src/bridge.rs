@@ -1,7 +1,7 @@
 //! Bridge-related data types for wrapped assets and receipts.
 //! Feature-gated behind `bridge`.
 
-use std::{collections::BTreeSet, string::String, vec::Vec};
+use std::{string::String, vec::Vec};
 
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -203,10 +203,10 @@ pub struct BridgeProofRecord {
 /// Finality proof for an Iroha block built from the consensus commit certificate.
 ///
 /// This proof is self-contained: it carries the block header, its hash, and the
-/// commit certificate (validator set + signatures) produced by the active
-/// validator set for that height. Verifiers recompute the block hash from the
-/// header and validate the commit certificate signatures against the provided
-/// validator set.
+/// commit certificate (validator set + BLS aggregate signature) produced by the
+/// active validator set for that height. Verifiers recompute the block hash from
+/// the header and validate the commit certificate aggregate signature against the
+/// provided validator set and the certificate's mode tag.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -327,6 +327,14 @@ pub enum BridgeFinalityVerifyError {
         /// Height recorded in the commit certificate.
         certificate_height: u64,
     },
+    /// Commit certificate phase is not `Commit`.
+    #[error("commit certificate phase {got:?} does not match expected {expected:?}")]
+    CertificatePhaseMismatch {
+        /// Expected commit-certificate phase.
+        expected: crate::block::consensus::CertPhase,
+        /// Phase carried in the commit certificate.
+        got: crate::block::consensus::CertPhase,
+    },
     /// Block hash is inconsistent across the header/proof/certificate tuple.
     #[error(
         "block hash mismatch (header {header_hash:?}, proof field {proof_hash:?}, certificate {certificate_hash:?})"
@@ -376,32 +384,42 @@ pub enum BridgeFinalityVerifyError {
     /// Proof carries an empty validator set.
     #[error("validator set is empty")]
     EmptyValidatorSet,
-    /// Signature index references a validator outside the roster bounds.
-    #[error("signature index {index} is out of range for validator set length {len}")]
+    /// Signer bitmap length does not match the validator-set length.
+    #[error("signer bitmap length {got} does not match expected {expected}")]
+    SignerBitmapLengthMismatch {
+        /// Expected bitmap length.
+        expected: usize,
+        /// Actual bitmap length.
+        got: usize,
+    },
+    /// Signer bitmap references a validator outside the roster bounds.
+    #[error("signer index {index} is out of range for validator set length {len}")]
     SignatureIndexOutOfRange {
-        /// Index recorded in the signature.
+        /// Index inferred from the signer bitmap.
         index: u64,
         /// Validator-set length.
         len: usize,
     },
-    /// Proof carries duplicate signatures from the same validator index.
-    #[error("duplicate signature index {index}")]
-    DuplicateSignatureIndex {
-        /// Duplicate index encountered.
+    /// Validator key is not a BLS key, so aggregate verification cannot proceed.
+    #[error("validator key at index {index} is not BLS: {algorithm:?}")]
+    InvalidValidatorKeyAlgorithm {
+        /// Signer index that failed validation.
         index: u64,
+        /// Algorithm advertised by the public key.
+        algorithm: iroha_crypto::Algorithm,
     },
-    /// Signature failed to verify against the advertised block header.
-    #[error("invalid signature for validator index {index}")]
-    InvalidSignature {
-        /// Signer index that failed verification.
-        index: u64,
-    },
-    /// Proof does not contain enough unique signatures to satisfy quorum.
-    #[error("insufficient signatures: required {required}, collected {collected}")]
-    InsufficientSignatures {
+    /// Aggregate signature is missing from the commit certificate.
+    #[error("aggregate signature is missing")]
+    AggregateSignatureMissing,
+    /// Aggregate signature failed to verify against the advertised validator set.
+    #[error("aggregate signature failed to verify")]
+    InvalidAggregateSignature,
+    /// Proof does not contain enough signers to satisfy quorum.
+    #[error("insufficient signers: required {required}, collected {collected}")]
+    InsufficientSigners {
         /// Quorum required for the advertised validator set.
         required: usize,
-        /// Unique signatures collected in the proof.
+        /// Unique signer count from the bitmap.
         collected: usize,
     },
     /// Proof height is older than the latest verified height.
@@ -425,10 +443,10 @@ pub enum BridgeFinalityVerifyError {
 /// Stateful verifier for bridge finality proofs.
 ///
 /// The verifier enforces the canonical `(block_header, block_hash, commit_certificate)` tuple,
-/// binds proofs to a chain id, and checks commit-certificate signatures against the advertised
-/// validator set with the production quorum rule. It tracks the latest verified height to reject
-/// stale or skipped proofs, can anchor to a trusted validator-set hash, and optionally fixes the
-/// expected epoch to reject replays across topology changes.
+/// binds proofs to a chain id, and checks the commit-certificate aggregate signature against the
+/// advertised validator set with the production quorum rule. It tracks the latest verified height
+/// to reject stale or skipped proofs, can anchor to a trusted validator-set hash, and optionally
+/// fixes the expected epoch to reject replays across topology changes.
 #[derive(Debug, Clone)]
 pub struct BridgeFinalityVerifier {
     expected_chain_id: ChainId,
@@ -547,10 +565,16 @@ impl BridgeFinalityVerifier {
                 certificate_height: proof.commit_certificate.height,
             });
         }
+        if proof.commit_certificate.phase != crate::block::consensus::CertPhase::Commit {
+            return Err(BridgeFinalityVerifyError::CertificatePhaseMismatch {
+                expected: crate::block::consensus::CertPhase::Commit,
+                got: proof.commit_certificate.phase,
+            });
+        }
 
         let header_hash = iroha_crypto::HashOf::new(&proof.block_header);
         let proof_hash = proof.block_hash;
-        let certificate_hash = proof.commit_certificate.block_hash;
+        let certificate_hash = proof.commit_certificate.subject_block_hash;
         if header_hash != proof_hash || header_hash != certificate_hash {
             return Err(BridgeFinalityVerifyError::BlockHashMismatch {
                 header_hash,
@@ -606,11 +630,7 @@ impl BridgeFinalityVerifier {
             return Err(BridgeFinalityVerifyError::EmptyValidatorSet);
         }
 
-        Self::validate_signatures(
-            validator_set,
-            &proof.commit_certificate.signatures,
-            &proof.block_header,
-        )?;
+        Self::validate_commit_certificate(&proof.chain_id, &proof.commit_certificate)?;
 
         self.latest_height = Some(proof.height);
         if self.expected_epoch.is_none() {
@@ -619,48 +639,46 @@ impl BridgeFinalityVerifier {
         Ok(())
     }
 
-    fn validate_signatures(
-        validator_set: &[PeerId],
-        signatures: &[crate::block::BlockSignature],
-        header: &crate::block::BlockHeader,
+    fn validate_commit_certificate(
+        chain_id: &ChainId,
+        certificate: &crate::consensus::CommitCertificate,
     ) -> Result<(), BridgeFinalityVerifyError> {
-        let mut seen = BTreeSet::new();
-        let mut collected = 0usize;
+        let validator_set = &certificate.validator_set;
         let required = Self::min_signatures(validator_set.len());
-        for signature in signatures {
-            let index = signature.index();
-            let idx_usize: usize = index.try_into().map_err(|_| {
-                BridgeFinalityVerifyError::SignatureIndexOutOfRange {
-                    index,
-                    len: validator_set.len(),
-                }
-            })?;
-
-            if idx_usize >= validator_set.len() {
-                return Err(BridgeFinalityVerifyError::SignatureIndexOutOfRange {
-                    index,
-                    len: validator_set.len(),
-                });
-            }
-
-            if !seen.insert(index) {
-                return Err(BridgeFinalityVerifyError::DuplicateSignatureIndex { index });
-            }
-
-            let public_key = &validator_set[idx_usize].public_key;
-            if signature.signature().verify(public_key, header).is_err() {
-                return Err(BridgeFinalityVerifyError::InvalidSignature { index });
-            }
-
-            collected += 1;
-        }
-
+        let indices =
+            signer_indices_from_bitmap(&certificate.aggregate.signers_bitmap, validator_set.len())?;
+        let collected = indices.len();
         if collected < required {
-            return Err(BridgeFinalityVerifyError::InsufficientSignatures {
+            return Err(BridgeFinalityVerifyError::InsufficientSigners {
                 required,
                 collected,
             });
         }
+
+        if certificate.aggregate.bls_aggregate_signature.is_empty() {
+            return Err(BridgeFinalityVerifyError::AggregateSignatureMissing);
+        }
+
+        let mut public_keys: Vec<&[u8]> = Vec::with_capacity(indices.len());
+        for idx in indices {
+            let peer = &validator_set[idx];
+            let (algorithm, payload) = peer.public_key.to_bytes();
+            if algorithm != iroha_crypto::Algorithm::BlsNormal {
+                return Err(BridgeFinalityVerifyError::InvalidValidatorKeyAlgorithm {
+                    index: idx as u64,
+                    algorithm,
+                });
+            }
+            public_keys.push(payload);
+        }
+
+        let preimage = commit_vote_preimage(chain_id, certificate)?;
+        iroha_crypto::bls_normal_verify_preaggregated_same_message(
+            &preimage,
+            &certificate.aggregate.bls_aggregate_signature,
+            &public_keys,
+        )
+        .map_err(|_| BridgeFinalityVerifyError::InvalidAggregateSignature)?;
 
         Ok(())
     }
@@ -674,11 +692,88 @@ impl BridgeFinalityVerifier {
     }
 }
 
+fn consensus_domain(
+    chain_id: &ChainId,
+    message_type_tag: &str,
+    extra: &[u8],
+    mode_tag: &str,
+) -> [u8; 32] {
+    use iroha_crypto::blake2::{Blake2b512, Digest as _};
+    let mut hasher = Blake2b512::new();
+    iroha_crypto::blake2::digest::Update::update(&mut hasher, b"iroha2-consensus/v1");
+    iroha_crypto::blake2::digest::Update::update(
+        &mut hasher,
+        chain_id.clone().into_inner().as_bytes(),
+    );
+    iroha_crypto::blake2::digest::Update::update(&mut hasher, mode_tag.as_bytes());
+    iroha_crypto::blake2::digest::Update::update(
+        &mut hasher,
+        &crate::block::consensus::PROTO_VERSION.to_be_bytes(),
+    );
+    iroha_crypto::blake2::digest::Update::update(&mut hasher, message_type_tag.as_bytes());
+    iroha_crypto::blake2::digest::Update::update(&mut hasher, extra);
+    let digest = iroha_crypto::blake2::Digest::finalize(hasher);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest[..32]);
+    out
+}
+
+fn commit_vote_preimage(
+    chain_id: &ChainId,
+    certificate: &crate::consensus::CommitCertificate,
+) -> Result<Vec<u8>, BridgeFinalityVerifyError> {
+    let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 1);
+    let domain = consensus_domain(chain_id, "Vote", b"v1", &certificate.mode_tag);
+    out.extend_from_slice(&domain);
+    out.extend_from_slice(certificate.subject_block_hash.as_ref().as_ref());
+    out.extend_from_slice(&certificate.height.to_be_bytes());
+    out.extend_from_slice(&certificate.view.to_be_bytes());
+    out.extend_from_slice(&certificate.epoch.to_be_bytes());
+    out.push(certificate.phase as u8);
+
+    Ok(out)
+}
+
+fn signer_indices_from_bitmap(
+    bitmap: &[u8],
+    roster_len: usize,
+) -> Result<Vec<usize>, BridgeFinalityVerifyError> {
+    let expected_len = (roster_len + 7) / 8;
+    if bitmap.len() != expected_len {
+        return Err(BridgeFinalityVerifyError::SignerBitmapLengthMismatch {
+            expected: expected_len,
+            got: bitmap.len(),
+        });
+    }
+
+    let mut indices = Vec::new();
+    for (byte_idx, byte) in bitmap.iter().enumerate() {
+        if *byte == 0 {
+            continue;
+        }
+        for bit in 0..8 {
+            if (byte >> bit) & 1 == 0 {
+                continue;
+            }
+            let idx = byte_idx * 8 + bit;
+            if idx >= roster_len {
+                return Err(BridgeFinalityVerifyError::SignatureIndexOutOfRange {
+                    index: idx as u64,
+                    len: roster_len,
+                });
+            }
+            indices.push(idx);
+        }
+    }
+
+    Ok(indices)
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
 
-    use iroha_crypto::{HashOf, KeyPair, SignatureOf};
+    use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature};
     use iroha_version::DecodeAll;
 
     use super::*;
@@ -687,6 +782,17 @@ mod tests {
         keys.iter()
             .map(|kp| PeerId::from(kp.public_key().clone()))
             .collect()
+    }
+
+    fn full_signer_bitmap(len: usize) -> Vec<u8> {
+        let bytes = (len + 7) / 8;
+        let mut bitmap = vec![0u8; bytes];
+        for idx in 0..len {
+            let byte_idx = idx / 8;
+            let bit = idx % 8;
+            bitmap[byte_idx] |= 1u8 << bit;
+        }
+        bitmap
     }
 
     fn make_finality_proof(
@@ -706,23 +812,39 @@ mod tests {
         let block_hash = HashOf::new(&header);
         let validator_set = validator_set_from_keys(keys);
         let validator_set_hash = HashOf::new(&validator_set);
-        let signatures = keys
-            .iter()
-            .enumerate()
-            .map(|(idx, kp)| {
-                let signature = SignatureOf::new(kp.private_key(), &header);
-                crate::block::BlockSignature::new(idx as u64, signature)
-            })
-            .collect();
-        let commit_certificate = crate::consensus::CommitCertificate {
+        let cert_template = crate::consensus::CommitCertificate {
+            phase: crate::block::consensus::CertPhase::Commit,
+            subject_block_hash: block_hash,
             height,
-            block_hash,
             view: 0,
             epoch,
+            mode_tag: crate::block::consensus::PERMISSIONED_TAG.to_string(),
+            highest_cert: None,
             validator_set_hash,
             validator_set_hash_version: crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            signatures,
+            validator_set: validator_set.clone(),
+            aggregate: crate::consensus::CommitAggregate {
+                signers_bitmap: Vec::new(),
+                bls_aggregate_signature: Vec::new(),
+            },
+        };
+        let preimage = commit_vote_preimage(&chain_id.parse().expect("chain id"), &cert_template)
+            .expect("preimage");
+        let mut sig_payloads = Vec::with_capacity(keys.len());
+        for kp in keys {
+            let signature = Signature::new(kp.private_key(), &preimage);
+            sig_payloads.push(signature.payload().to_vec());
+        }
+        let sig_refs: Vec<&[u8]> = sig_payloads.iter().map(|sig| sig.as_slice()).collect();
+        let aggregate =
+            iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate signatures");
+        let signers_bitmap = full_signer_bitmap(validator_set.len());
+        let commit_certificate = crate::consensus::CommitCertificate {
+            aggregate: crate::consensus::CommitAggregate {
+                signers_bitmap,
+                bls_aggregate_signature: aggregate,
+            },
+            ..cert_template
         };
 
         BridgeFinalityProof {
@@ -791,39 +913,8 @@ mod tests {
 
     #[test]
     fn bridge_finality_proof_roundtrip() {
-        use std::num::NonZeroU64;
-
-        use iroha_crypto::{HashOf, KeyPair};
-
-        use crate::block::BlockHeader;
-
-        let _kp = KeyPair::random();
-        let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("non-zero"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let block_hash = HashOf::new(&header);
-        let commit_certificate = crate::consensus::CommitCertificate {
-            height: 1,
-            block_hash,
-            view: 0,
-            epoch: 0,
-            validator_set_hash: HashOf::new(&Vec::<crate::peer::PeerId>::new()),
-            validator_set_hash_version: crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: Vec::new(),
-            signatures: Vec::new(),
-        };
-        let proof = BridgeFinalityProof {
-            height: 1,
-            chain_id: "proof-chain".parse().expect("chain id"),
-            block_header: header,
-            block_hash,
-            commit_certificate,
-        };
+        let keys = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+        let proof = make_finality_proof("proof-chain", 1, 0, &keys);
         let buf = proof.encode();
         let dec = BridgeFinalityProof::decode_all(&mut &buf[..]).expect("decode");
         assert_eq!(proof, dec);
@@ -831,7 +922,9 @@ mod tests {
 
     #[test]
     fn verifier_rejects_wrong_chain_id() {
-        let keys: Vec<_> = (0..4).map(|_| KeyPair::random()).collect();
+        let keys: Vec<_> = (0..4)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
         let proof = make_finality_proof("chain-a", 1, 0, &keys);
         let mut verifier = BridgeFinalityVerifier::new("chain-b".parse().expect("chain id parses"));
 
@@ -844,7 +937,9 @@ mod tests {
 
     #[test]
     fn verifier_rejects_stale_and_advanced_heights() {
-        let keys: Vec<_> = (0..4).map(|_| KeyPair::random()).collect();
+        let keys: Vec<_> = (0..4)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
         let mut verifier = BridgeFinalityVerifier::new("chain-a".parse().expect("chain id parses"));
 
         let first = make_finality_proof("chain-a", 1, 0, &keys);
@@ -872,8 +967,12 @@ mod tests {
 
     #[test]
     fn verifier_rejects_replayed_validator_set_after_anchor() {
-        let old_keys: Vec<_> = (0..4).map(|_| KeyPair::random()).collect();
-        let new_keys: Vec<_> = (0..4).map(|_| KeyPair::random()).collect();
+        let old_keys: Vec<_> = (0..4)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let new_keys: Vec<_> = (0..4)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
         let expected_hash = HashOf::new(&validator_set_from_keys(&new_keys));
         let mut verifier = BridgeFinalityVerifier::with_validator_set(
             "chain-a".parse().expect("chain id parses"),
@@ -891,7 +990,9 @@ mod tests {
 
     #[test]
     fn verifier_rejects_unexpected_epoch_anchor() {
-        let keys: Vec<_> = (0..3).map(|_| KeyPair::random()).collect();
+        let keys: Vec<_> = (0..3)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
         let expected_hash = HashOf::new(&validator_set_from_keys(&keys));
         let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
             "chain-a".parse().expect("chain id parses"),
@@ -913,7 +1014,9 @@ mod tests {
 
     #[test]
     fn verifier_rejects_tampered_validator_set_hash() {
-        let keys: Vec<_> = (0..4).map(|_| KeyPair::random()).collect();
+        let keys: Vec<_> = (0..4)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
         let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
         proof.commit_certificate.validator_set_hash = HashOf::new(&Vec::<PeerId>::new());
 
@@ -927,8 +1030,12 @@ mod tests {
 
     #[test]
     fn verifier_rejects_prior_epoch_after_anchor_rotation() {
-        let epoch0_keys: Vec<_> = (0..3).map(|_| KeyPair::random()).collect();
-        let epoch1_keys: Vec<_> = (0..3).map(|_| KeyPair::random()).collect();
+        let epoch0_keys: Vec<_> = (0..3)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let epoch1_keys: Vec<_> = (0..3)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
         let mut verifier = BridgeFinalityVerifier::new("chain-a".parse().expect("chain id parses"));
 
         let proof_epoch0 = make_finality_proof("chain-a", 1, 0, &epoch0_keys);
@@ -955,8 +1062,12 @@ mod tests {
 
     #[test]
     fn verifier_accepts_roster_change_after_anchor_update() {
-        let roster_a: Vec<_> = (0..4).map(|_| KeyPair::random()).collect();
-        let roster_b: Vec<_> = (0..4).map(|_| KeyPair::random()).collect();
+        let roster_a: Vec<_> = (0..4)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let roster_b: Vec<_> = (0..4)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
         let mut verifier = BridgeFinalityVerifier::new("chain-a".parse().expect("chain id parses"));
 
         let proof_a = make_finality_proof("chain-a", 1, 0, &roster_a);

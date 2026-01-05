@@ -20,24 +20,24 @@ translation_last_reviewed: 2026-01-01
 ### A2 - אימוץ מסרים ברמת wire
 - ✅ חשיפת טיפוסי Norito `Proposal`/`Vote`/`Qc` ב-`BlockMessage` והרצת round-trip encode/decode (`crates/iroha_data_model/tests/consensus_roundtrip.rs`).
 - ✅ חסימת המסגרות הישנות `BlockSigned/BlockCommitted`; מתג ההגירה נשאר `false` לפני ההוצאה משימוש.
-- ✅ הסרת מתג ההגירה שהחליף בין מסרי הבלוקים הישנים; מסלול Vote/QC הוא כעת המסלול היחיד על wire.
+- ✅ הסרת מתג ההגירה שהחליף בין מסרי הבלוקים הישנים; מסלול Vote/commit certificate הוא כעת המסלול היחיד על wire.
 - ✅ עדכון נתבי Torii, פקודות CLI וצרכני הטלמטריה להעדיף snapshots JSON של `/v1/sumeragi/*` על פני מסגרות הבלוק הישנות.
-- ✅ כיסוי אינטגרציה מפעיל את נקודות הקצה `/v1/sumeragi/*` אך ורק דרך צינור Vote/QC (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
+- ✅ כיסוי אינטגרציה מפעיל את נקודות הקצה `/v1/sumeragi/*` אך ורק דרך צינור Vote/commit certificate (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
 - ✅ הסרת המסגרות הישנות לאחר השגת שוויון יכולות ובדיקות תאימות.
 
 ### תוכנית הסרת מסגרות
-1. ✅ בדיקות soak מרובות צמתים רצו 72 h על חבילות telemetria ו-CI; snapshots של Torii הראו תפוקת proposer יציבה והיווצרות QC ללא רגרסיות.
-2. ✅ כיסוי בדיקות אינטגרציה רץ כעת רק על נתיב Vote/QC (`sumeragi_vote_qc_commit.rs`), ומבטיח שעמיתים מעורבים מגיעים לקונצנזוס ללא המסגרות הישנות.
-3. ✅ תיעוד למפעילים ועזרת CLI כבר לא מזכירים את נתיב ה-wire הקודם; ההנחיות לאיתור תקלות מצביעות כעת על telemetria של Vote/QC.
-4. ✅ וריאנטים ישנים של מסרים, מוני telemetria ומטמוני commit ממתינים הוסרו; מטריצת התאימות משקפת כעת רק את פני השטח Vote/QC.
+1. ✅ בדיקות soak מרובות צמתים רצו 72 h על חבילות telemetria ו-CI; snapshots של Torii הראו תפוקת proposer יציבה והיווצרות commit certificate ללא רגרסיות.
+2. ✅ כיסוי בדיקות אינטגרציה רץ כעת רק על נתיב Vote/commit certificate (`sumeragi_vote_qc_commit.rs`), ומבטיח שעמיתים מעורבים מגיעים לקונצנזוס ללא המסגרות הישנות.
+3. ✅ תיעוד למפעילים ועזרת CLI כבר לא מזכירים את נתיב ה-wire הקודם; ההנחיות לאיתור תקלות מצביעות כעת על telemetria של Vote/commit certificate.
+4. ✅ וריאנטים ישנים של מסרים, מוני telemetria ומטמוני commit ממתינים הוסרו; מטריצת התאימות משקפת כעת רק את פני השטח Vote/commit certificate.
 
 ### A3 - אכיפת מנוע ו-pacemaker
-- ✅ אכיפת אינווריאנטים של Lock/HighestQC ב-`handle_message` (ראו `block_created_header_sanity`).
+- ✅ אכיפת אינווריאנטים של Lock/Highestcommit certificate ב-`handle_message` (ראו `block_created_header_sanity`).
 - ✅ מעקב זמינות נתונים מאמת את hash המטען של RBC בעת רישום המסירה (`Actor::ensure_block_matches_rbc_payload`) כך שסשנים לא תואמים לא ייחשבו כמסורים.
-- ✅ שילוב דרישת PrecommitQC (`require_precommit_qc`) בקונפיגורציות ברירת המחדל והוספת בדיקות שליליות (ברירת המחדל כעת `true`; הבדיקות מכסות מסלולי gated ו-opt-out).
+- ✅ שילוב דרישת Precommitcommit certificate (`require_precommit_qc`) בקונפיגורציות ברירת המחדל והוספת בדיקות שליליות (ברירת המחדל כעת `true`; הבדיקות מכסות מסלולי gated ו-opt-out).
 - ✅ החלפת heuristics של redundant-send ברמת view בבקרי pacemaker מבוססי EMA (`aggregator_retry_deadline` נגזר כעת מ-EMA חי ומניע את דד-ליינים של redundant send).
 - ✅ עצירת הרכבת הצעות תחת backpressure של התור (`BackpressureGate` עוצר כעת את ה-pacemaker כשהתור רווי ורושם deferrals ל-status/telemetry).
-- ✅ הצבעות availability נשלחות לאחר אימות ההצעה כאשר DA נדרש (ללא המתנה ל-`DELIVER` מקומי של RBC), ו-evidence של availability נעקב דרך `AvailabilityQC` כהוכחת בטיחות בזמן שה-commit מתקדם ללא המתנה. זה מונע המתנות מעגליות בין הובלת payload להצבעה.
+- ✅ הצבעות availability נשלחות לאחר אימות ההצעה כאשר DA נדרש (ללא המתנה ל-`DELIVER` מקומי של RBC), ו-evidence של availability נעקב דרך `availability evidence` כהוכחת בטיחות בזמן שה-commit מתקדם ללא המתנה. זה מונע המתנות מעגליות בין הובלת payload להצבעה.
 - ✅ כיסוי restart/liveness כולל כעת התאוששות RBC ב-cold-start (`integration_tests/tests/sumeragi_da.rs::sumeragi_rbc_session_recovers_after_cold_restart`) וחידוש pacemaker לאחר downtime (`integration_tests/tests/sumeragi_npos_liveness.rs::npos_pacemaker_resumes_after_downtime`).
 - ✅ הוספת בדיקות רגרסיה דטרמיניסטיות ל-restart/view-change המכסות התכנסות lock (`integration_tests/tests/sumeragi_lock_convergence.rs`).
 
@@ -48,7 +48,7 @@ translation_last_reviewed: 2026-01-01
 - ✅ GA-A4.3 - קידוד התאוששות late-reveal ובדיקות epoch ללא השתתפות ב-`integration_tests/tests/sumeragi_randomness.rs` (`npos_late_vrf_reveal_clears_penalty_and_preserves_seed`, `npos_zero_participation_epoch_reports_full_no_participation`), תוך בדיקת telemetria לניקוי עונשים. בעלי משימה: `@sumeragi-core`. מעקב: `project_tracker/npos_sumeragi_phase_a.md:7`.
 
 ### A5 - קונפיגורציה משותפת ו-evidence
-- ✅ תשתית evidence, התמדה ב-WSV ו-roundtrip של Norito מכסים כעת double-vote, invalid proposal, invalid QC ו-double exec עם דה-דופ דטרמיניסטי וקיטוע אופק (`sumeragi::evidence`).
+- ✅ תשתית evidence, התמדה ב-WSV ו-roundtrip של Norito מכסים כעת double-vote, invalid proposal, invalid commit certificate ו-double exec עם דה-דופ דטרמיניסטי וקיטוע אופק (`sumeragi::evidence`).
 - ✅ GA-A5.1 - הפעלת joint-consensus (הסט הישן מבצע commit, הסט החדש מופעל בבלוק הבא) עם כיסוי אינטגרציה ממוקד.
 - ✅ GA-A5.2 - עדכון מסמכי governance וזרימות CLI עבור slashing/jailing, יחד עם בדיקות סנכרון mdBook לנעילת ברירות מחדל וניסוח evidence horizon.
 - ✅ GA-A5.3 - בדיקות evidence למסלול שלילי (duplicate signer, forged signature, stale epoch replay, mixed manifest payloads) יחד עם fixtures fuzz נכנסו ורצות nightly כדי להגן על אימות Norito roundtrip.

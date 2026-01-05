@@ -70,4 +70,4 @@ translator: manual
 備考
 - テレメトリを有効にしたビルドでのみ利用可能です。
 - RBC（Reliable Broadcast）活動の集計カウンターを提供します。
-- `sumeragi.da_enabled = true` の場合、コミットは `AvailabilityQC` の観測を待ってからブロックを確定します（ローカルの RBC `DELIVER` は待ちません）。RBC はペイロード配布と欠落回復のための輸送・補助として使われます。
+- `sumeragi.da_enabled = true` の場合、コミットは `availability evidence` の観測を待ってからブロックを確定します（ローカルの RBC `DELIVER` は待ちません）。RBC はペイロード配布と欠落回復のための輸送・補助として使われます。

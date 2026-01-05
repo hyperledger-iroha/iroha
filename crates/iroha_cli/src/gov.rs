@@ -11,7 +11,6 @@ use crate::{Run, RunContext};
 use eyre::Result;
 
 pub use audit::AuditDeployArgs;
-pub use council::{DeriveAndPersistArgs, DeriveVrfArgs, GenVrfArgs, PersistCouncilArgs};
 pub use deploy::{
     ActivateInstanceArgs, DeployMetaArgs, EnactArgs, FinalizeArgs, InstancesArgs,
     ProposeDeployArgs, ProtectedApplyArgs, ProtectedGetArgs, ProtectedSetArgs,

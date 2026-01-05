@@ -23,12 +23,12 @@ translation_last_reviewed: 2025-12-28
 
 - **Grafana (`dashboards/grafana/nexus_lanes.json`)** — публикует панель “Nexus Lane Finality & Oracles”. Панели отслеживают:
   - `histogram_quantile()` по `iroha_slot_duration_ms` (p50/p95/p99) и gauge последней выборки.
-  - `iroha_da_quorum_ratio` и `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m])` для подсветки churn DA.
+  - `iroha_da_quorum_ratio` и `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])` для подсветки churn DA.
   - Метрики оракулов: `iroha_oracle_price_local_per_xor`, `iroha_oracle_staleness_seconds`, `iroha_oracle_twap_window_seconds`, `iroha_oracle_haircut_basis_points`.
   - Панель буфера расчётов (`iroha_settlement_buffer_xor`) с дебетами по линиям из receipt `LaneBlockCommitment`.
 - **Правила алертов** — используют Slot/DA SLO из `ans3.md`. Тревожить, если:
   - p95 длительности слота > 1000 мс два окна подряд по 5 м,
-  - DA‑кворум < 0,95 или `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m]) > 0`,
+  - DA‑кворум < 0,95 или `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m]) > 0`,
   - staleness оракула > 90 с или окно TWAP ≠ 60 с,
   - буфер расчётов < 25 % (soft) / 10 % (hard) после включения метрики.
 
@@ -39,7 +39,7 @@ translation_last_reviewed: 2025-12-28
 | `histogram_quantile(0.95, iroha_slot_duration_ms)` | ≤ 1000 мс (hard), 950 мс warning | Используйте панель в дашборде или `scripts/telemetry/check_slot_duration.py` (`--json-out artifacts/nx18/slot_summary.json`) на экспорт Prometheus из chaos‑прогонов. |
 | `iroha_slot_duration_ms_latest` | Последний слот; расследовать, если > 1100 мс даже при нормальных квантилях. | Экспортируйте значение в инцидент. |
 | `iroha_da_quorum_ratio` | ≥ 0,95 в окне 30 м. | Производная от reschedule DA при коммитах блоков. |
-| `increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m])` | Должно быть 0 вне chaos‑репетиций. | Любой устойчивый рост трактуйте как `missing-availability warning`. |
+| `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])` | Должно быть 0 вне chaos‑репетиций. | Любой устойчивый рост трактуйте как `missing-availability warning`. |
 
 Каждый reschedule также пишет предупреждение в pipeline Torii с `kind = "missing-availability warning"`. Фиксируйте эти события вместе со всплеском метрики, чтобы определить затронутый заголовок блока, попытку ретрая и счётчики requeue без просмотра логов валидаторов.【crates/iroha_core/src/sumeragi/main_loop.rs:5164】
 | `iroha_oracle_staleness_seconds` | ≤ 60 с. Алерт при 75 с. | Указывает на устаревшие TWAP‑фиды 60 с. |

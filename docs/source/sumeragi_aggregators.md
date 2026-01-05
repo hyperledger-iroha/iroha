@@ -56,13 +56,13 @@ rebroadcasts reuse collector targets with a commit-topology fallback.
   collector plan, falling back to the commit topology when collectors are
   empty, local-only, or below quorum. This provides a bounded "gossip" fallback
   without paying full broadcast cost on the steady-state fast path.
-* Each drop of a proposal due to the locked QC gate increments
+* Each drop of a proposal due to the locked commit-certificate gate increments
   `block_created_dropped_by_lock_total`; failed header validation paths raise
   `block_created_hint_mismatch_total` and
   `block_created_proposal_mismatch_total`, helping operators correlate repeated
   fallbacks with leader correctness issues. The `/v1/sumeragi/status` snapshot
-  also exports the latest Highest/Locked QC hashes so dashboards can correlate
-  drop spikes with specific block hashes.
+  also exports the latest Highest/Locked commit certificate hashes so dashboards
+  can correlate drop spikes with specific block hashes.
 
 ## Implementation Summary
 

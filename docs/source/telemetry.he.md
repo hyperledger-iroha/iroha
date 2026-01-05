@@ -27,7 +27,7 @@ Iroha חושפת מדדים תואמי Prometheus ותמצית סטטוס בפו
 - `/v1/sumeragi/rbc` (JSON): מדדי RBC: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, deliver_broadcasts_total, payload_bytes_delivered_total }`.
 - `/v1/sumeragi/rbc/sessions` (JSON): מצב סשני RBC: `{ sessions_active, items: [{ block_hash, height, view, total_chunks, received_chunks, ready_count, delivered, invalid, payload_hash, recovered, lane_backlog: [{ lane_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }], dataspace_backlog: [{ lane_id, dataspace_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }] }] }`.
 - `/v1/sumeragi/pacemaker` (JSON): טיימרים ותצורת pacemaker: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
-- `/v1/sumeragi/qc` (ברירת מחדל Norito): צילום HighestQC ו-LockedQC; כולל `subject_block_hash` עבור HighestQC אם ידוע. ניתן לבקש JSON דרך הכותרת `Accept`.
+- `/v1/sumeragi/qc` (ברירת מחדל Norito): צילום Highest/Locked commit certificate (`highest_qc`/`locked_qc`); כולל `subject_block_hash` עבור Highest commit certificate אם ידוע. ניתן לבקש JSON דרך הכותרת `Accept`.
 - `/v1/sumeragi/leader` (JSON): צילום מדד מנהיג; במצב NPoS כולל הקשר PRF `{ height, view, epoch_seed }`.
 - `/v1/sumeragi/phases` (JSON): זמני שלבים קומפקטיים (ms) ללוחות מחוונים של מפעילים; מחזיר את משכי השלבים האחרונים.
 - `/v1/sumeragi/collectors` (JSON): צילום של תוכנית ה-Collectors הדטרמיניסטית שמופקת מהטופולוגיה הקומיטד ומהפרמטרים on-chain; חושף `mode`, ‎`plan (height, view)`‎, ‎`collectors_k`, ‎`redundant_send_r`, ‎`proxy_tail_index`, ‎`min_votes_for_commit`, רשימת האוספים המסודרת ו-`epoch_seed` (ב-הקס) במצב NPoS.
@@ -106,7 +106,7 @@ Iroha חושפת מדדים תואמי Prometheus ותמצית סטטוס בפו
 - `sumeragi_new_view_height`: גובה הבלוק של קבלת NEW_VIEW אחרונה.
 - `pacemaker_backpressure_deferrals_total`: מספר דחיות pacemaker בגלל עומס.
 - `sumeragi_block_created_dropped_by_lock_total`, ‏`hint_mismatch_total`, ‏`proposal_mismatch_total`: מדדי נשירה של הצעות.
-- `sumeragi_da_gate_block_total{reason="missing_availability_qc"}`: מונה של הפעלות מחדש של עיבוד DA כאשר לא ניתן היה להרכיב AvailabilityQC בזמן.
+- `sumeragi_da_gate_block_total{reason="missing_local_data"}`: מונה של הפעלות מחדש של עיבוד DA כאשר לא ניתן היה להרכיב availability evidence בזמן.
 - `sumeragi_rbc_sessions_active`: סשני RBC פעילים כרגע.
 - `sumeragi_collectors_targeted_current`, ‏`sumeragi_collectors_targeted_last_per_block`: אינדיקציה לחלוקת אספנים.
 - `sumeragi_vrf_*`: מדדי השתתפות VRF (ללא השלמה, ללא השתתפות, איחורים).
@@ -159,7 +159,7 @@ increase(sumeragi_vrf_committed_no_reveal_total[15m])
 ### ניתור מסלולי RBC
 
 ```promql
-increase(sumeragi_da_gate_block_total{reason="missing_availability_qc"}[5m])
+increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])
 ```
 
 מקבץ ניסיונות חוזרים לפי סיבה (לדוגמה `payload_hash_mismatch`, ‏`expired`).

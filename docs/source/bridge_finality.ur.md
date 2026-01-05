@@ -68,7 +68,7 @@ protocols کیلئے جو separation کو ترجیح دیتے ہیں۔
 
 1. `block_header` سے `block_hash` دوبارہ compute کریں؛ mismatch پر reject کریں۔
 2. چیک کریں کہ `commit_certificate.block_hash` دوبارہ compute شدہ `block_hash` سے match کرتا ہے؛
-   mismatched header/QC جوڑوں کو reject کریں۔
+   mismatched header/commit certificate جوڑوں کو reject کریں۔
 3. `chain_id` کو متوقع Iroha chain سے match کریں۔
 4. `commit_certificate.validator_set` سے `validator_set_hash` دوبارہ compute کریں اور
    اسے ریکارڈ شدہ hash/version سے match کریں۔

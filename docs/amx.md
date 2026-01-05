@@ -67,7 +67,7 @@ Each DS fragment must finish its 30 ms prepare window before the lane assemble
 | `iroha_axt_policy_snapshot_cache_events_total{event}` | IVM host | Expect cache_miss only on startup/manifest change | Sustained misses indicate stale policy hydration. |
 | `iroha_axt_proof_cache_events_total{event}` | IVM host | Expect mostly `hit`/`miss` | `reject`/`expired` spikes usually indicate manifest drift or stale proofs. |
 | `iroha_axt_proof_cache_state{dsid,status,manifest_root_hex,verified_slot}` | IVM host | Inspect cached proofs | Gauge value is expiry_slot (with skew applied) for the cached proof. |
-| Missing availability evidence (`sumeragi_da_gate_block_total{reason="missing_availability_qc"}`) | Lane telemetry | Alert if >5% of tx per DS | Means attesters or proofs are lagging. |
+| Missing availability evidence (`sumeragi_da_gate_block_total{reason="missing_local_data"}`) | Lane telemetry | Alert if >5% of tx per DS | Means attesters or proofs are lagging. |
 
 `/v1/debug/axt/cache` mirrors the `iroha_axt_proof_cache_state` gauge with a per-dataspace snapshot (status, manifest root, verified/expiry slots) for operators.
 
@@ -128,6 +128,7 @@ Norito fixtures for the descriptor/handle/policy snapshot live at `crates/iroha_
 | Source | What to capture | Command / Path | Evidence expectations |
 |--------|-----------------|----------------|-----------------------|
 | Prometheus (`iroha_telemetry`) | Slot and AMX SLOs: `iroha_slot_duration_ms`, `iroha_amx_prepare_ms`, `iroha_amx_commit_ms`, `iroha_da_quorum_ratio`, `iroha_amx_abort_total{stage}` | Scrape `https://$TORII/telemetry/metrics` or export from the dashboards described in `docs/source/telemetry.md`. | Attach histogram snapshots (and alert history if triggered) to the nightly `status.md` note so auditors can see p95/p99 values and alert states. |
+| Torii RBC snapshots | DA/RBC backlog: per-session chunk backlog, view/height metadata, and DA availability counters (`sumeragi_da_gate_block_total{reason="missing_local_data"}`; `sumeragi_rbc_da_reschedule_total` is legacy). | `GET /v1/sumeragi/rbc` and `GET /v1/sumeragi/rbc/sessions` (see `docs/source/samples/sumeragi_rbc_status.md` for examples). | Store the JSON responses (with timestamps) whenever AMX DA alerts fire; include them in the incident bundle so reviewers can confirm that backpressure matched telemetry. |
 | Proof service metrics | PVO cache health: `iroha_pvo_cache_hit_ratio`, cache fill/evict counters, proof queue depth | `GET /metrics` on the proof service (`IROHA_PVO_METRICS_URL`) or via the shared OTLP collector. | Export the cache hit ratio and queue depth alongside the AMX slot metrics so the roadmap OA/PVO gate has deterministic artefacts. |
 | Acceptance harness | End-to-end mixed load (slot/DA/RBC/PVO) under controlled jitter | Re-run `ci/acceptance/slot_1s.yml` (or the same job in CI) and archive the log bundle + generated artefacts in `artifacts/acceptance/slot_1s/<timestamp>/`. | Required before GA and whenever pacemaker/DA settings change; include the YAML run summary plus the Prometheus snapshots in the operator hand-off packet. |
 

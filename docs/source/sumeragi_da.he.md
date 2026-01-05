@@ -18,6 +18,7 @@ translator: manual
 
 ### טיימאאוט DA והתראות
 
+כאשר `da_enabled=true`, צינור הקומיט רושם עדות זמינות (`availability evidence` או קוורום RBC `READY`; לא `DELIVER` מקומי). הקונצנזוס לא ממתין לעדות הזמינות: הקומיט מתקדם לפי ה-commit certificate הרגיל, וחוסר זמינות נרשם לצרכים תפעוליים. `sumeragi_da_gate_block_total{reason="missing_local_data"}` גדל, ו-`status_snapshot().da_reschedule_total` הוא legacy ולכן בדרך כלל נשאר 0.
 
 טיימאאוט הזמינות נגזר מזמני block/commit ומכווני ה-DA, ומשמש רק ללוגים ולהחלטות rebroadcast:
 - `sumeragi.da_quorum_timeout_multiplier` מקדם את `block_time + 4 * commit_time` כאשר DA פעיל (ברירת מחדל `3`).
@@ -25,7 +26,7 @@ translator: manual
 - `sumeragi.da_availability_timeout_floor_ms` כופה מינימום לחלון הטיימאאוט (ברירת מחדל `2000`, ערך `0` מבטל את הרצפה).
 שמרו על ערכים זהים בין הוולידטורים כדי למנוע קצב view-change שונה.
 
-מנגנון resend/abort אוטומטי של RBC שמבוסס על מעקב זמינות הוסר כדי למנוע המתנה מעגלית בין מסירה להצבעה. צומת שרואה `AvailabilityQC` או קוורום RBC `READY` בלי המטען מבצע fetch דטרמיניסטי מהחותמים, ואז נופל לטופולוגיית הקומיט המלאה אם אין הצלחה.
+מנגנון resend/abort אוטומטי של RBC שמבוסס על מעקב זמינות הוסר כדי למנוע המתנה מעגלית בין מסירה להצבעה. צומת שרואה `availability evidence` או קוורום RBC `READY` בלי המטען מבצע fetch דטרמיניסטי מהחותמים, ואז נופל לטופולוגיית הקומיט המלאה אם אין הצלחה.
 
 ## מדדים שנאספים
 
