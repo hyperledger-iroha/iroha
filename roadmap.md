@@ -4,7 +4,7 @@ This roadmap enumerates the outstanding efforts required to ship the optional
 NPoS Sumeragi mode and keep the broader Nexus transition on track. For every task listed here we are preparing the first public release, so teams can design and implement with a clean slate. Completed
 items continue to live in `status.md`; only tasks that still need engineering
 work appear here.
-Latest sync: standardize Connect SIDs on base64url-only across Torii/SDKs/CLI and tighten content auth headers; no new open items were added (see `status.md`).
+Latest sync: wire merge QC view to lane-tip view-change indices, persist VRF epoch snapshots for NPoS scheduling/telemetry, and enable censorship evidence attribution; integration-test re-runs remain open (see `status.md`).
 
 The repository now serves two release lines:
 - **Iroha 2** — the self-hosted deployment track for organisations running
@@ -45,7 +45,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [ ] Re-run `cargo test -p integration_tests -- --nocapture` after the targeted suite completes cleanly (compiles; current sandbox denies loopback binds required for runtime).
  - [x] Re-run `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` to confirm localnet tx-status fallbacks no longer emit WARN noise.
  - [ ] Re-run integration tests that previously stalled on tx confirmation streams to validate the poll-priority + queued/approved tracking, base64 rejection decoding, and listener-connect gating for early events (focus on trigger failure and pipeline event cases).
-- [ ] Re-run `cargo test -p integration_tests --test mod multiple_blocks_created -- --nocapture` (and unregister/soft-fork cases) after the commit-certificate/roster sidecar persistence fix to confirm block-sync roster validation no longer drops updates.
+- [ ] Re-run `cargo test -p integration_tests --test mod multiple_blocks_created -- --nocapture` (and unregister/soft-fork cases) after the merge QC view wiring (lane-tip view) and commit-certificate/roster sidecar persistence fix to confirm block-sync roster validation no longer drops updates.
  - [ ] Re-run `cargo test -p integration_tests --test sumeragi_kagami_localnet -- --nocapture` after the BlockSyncUpdate backpressure, missing-parent fetch, RBC chunk background drop, and proposal/RBC broadcast-order fixes; current sandbox run fails loopback binds and an escalated run timed out after 10m—retry outside the sandbox with `IROHA_KAGAMI_LOCALNET_KEEP=1` to retain logs.
  - [ ] Re-run `cargo test -p integration_tests --test mod network_stable_after_add_and_after_remove_peer -- --nocapture` after the RBC roster fallback; test now expects removed peers to sync, but sandboxed loopback binds (and a local `iroha3d` build error) still block execution here.
  - [ ] Re-run `cargo test -p integration_tests --test mod -- --nocapture` with `API_ADDRESS`/`PUBLIC_KEY` env overrides set to confirm test-network peers ignore host env config overrides.

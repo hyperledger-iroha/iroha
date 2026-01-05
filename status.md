@@ -1,6 +1,16 @@
 # Status
 
 ## Latest Updates
+- Sumeragi: realign NPoS epoch state and seed when on-chain epoch length changes (reset stale VRF inputs), and add regression coverage for epoch-length refresh behavior.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p iroha_core refresh_npos_seed_realigns_epoch_after_epoch_length_change -- --nocapture` (timed out after 120s during compile; warnings about unused methods in `crates/iroha_core/src/sumeragi/main_loop/pending_rbc.rs` and `crates/iroha_core/src/sumeragi/main_loop/votes.rs`).
+- Sumeragi: derive merge QC view from lane-tip view-change indices (view now part of QC digest/signatures), wire VRF epoch snapshots for NPoS scheduling/telemetry, and add regression coverage.
+- Penalties: derive censorship evidence epochs from receipt heights and attribute slashing to the leader at the receipt anchor; add unit tests.
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused `dropped_counts` in `crates/iroha_core/src/sumeragi/main_loop/pending_rbc.rs`, unused `roster_for_vote` in `crates/iroha_core/src/sumeragi/main_loop/votes.rs`, and dead-code field `Align64` in `crates/norito/src/core.rs`).
+- Norito fixtures: regenerated Android/Swift/Python/Norito-RPC manifests for the current Ed25519 seed-derived key, refreshed Swift parity payloads/.norito, and updated connect_norito_bridge expectations + Swift parity hashes.
+- Tests: `CARGO_TARGET_DIR=target/codex cargo test -p connect_norito_bridge`.
+- Core: fix iroha_core test regressions across keep-voting validation, block-sync QC cache collisions, executor fuel setup, IVM access header handling, Sumeragi worker-order expectations/RBC timestamps, commit outcome sidecar persistence, and NPoS replay leader signing.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core state::replay_validation_tests::replay_rotates_topology_for_npos_prf_leader --lib -- --nocapture` (passed); `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core` (aborted after ~10m).
 - Sumeragi: persist roster sidecars after recording commit certificates (with precommit signer fallback) to avoid block-sync roster gaps; add regression tests for commit-sidecar persistence and signer-based synthesis; fix roster-index test to use an Arc-backed provider.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
 - Tests: `cargo test --workspace` (failed: could not write dep-info/fingerprint files under `target/debug/.fingerprint`/`target/debug/deps` with `No such file or directory`).
@@ -1166,3 +1176,5 @@
 - Snapshot reader now falls back to temp Merkle metadata when the main metadata is corrupt, with coverage for the new behavior.
 - Kura disk-usage accounting now includes sidecar temp/debug files by summing block-store and pipeline directories, with a regression covering extra files.
 - Synced merge-ledger truncation and tiered snapshot pruning roots to harden crash consistency after pruning.
+- Aligned NPoS epoch manager initialization to the current height when no VRF record exists (mode flip + startup) and added epoch alignment tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options); `cargo test --workspace` (timed out after 600s; warnings about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450` and dead_code in `crates/norito/src/core.rs:6792`).

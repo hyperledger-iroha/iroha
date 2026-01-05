@@ -59,7 +59,7 @@ impl MergeQuorumCertificate {
 pub struct MergeCommitteeSignature {
     /// Merge-ledger entry epoch/height being signed.
     pub epoch_id: u64,
-    /// Merge-committee view index (0 until view-change handling is introduced).
+    /// Merge-committee view index aligned with lane tips for this entry.
     pub view: u64,
     /// Signer index in the merge-committee roster.
     pub signer: ValidatorIndex,

@@ -63,12 +63,7 @@ impl Actor {
                 consensus_mode,
             )
         } else {
-            self.roster_for_vote_with_mode(
-                vote.block_hash,
-                vote.height,
-                vote.view,
-                consensus_mode,
-            )
+            self.roster_for_vote_with_mode(vote.block_hash, vote.height, vote.view, consensus_mode)
         };
         if topology_peers.is_empty() {
             warn!(
@@ -89,9 +84,9 @@ impl Actor {
             mode_tag,
             prf_seed,
         };
-        let signature_topology = topology_for_view(&topology, vote.height, vote.view, mode_tag, prf_seed);
-        if !self.validate_and_record_vote(&vote, &signature_topology, &evidence_context, mode_tag)
-        {
+        let signature_topology =
+            topology_for_view(&topology, vote.height, vote.view, mode_tag, prf_seed);
+        if !self.validate_and_record_vote(&vote, &signature_topology, &evidence_context, mode_tag) {
             return;
         }
         match vote.phase {
@@ -120,10 +115,11 @@ impl Actor {
                             state_view.world.parameters().sumeragi().block_time()
                         };
                         let cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
-                        if self
-                            .block_sync_rebroadcast_log
-                            .allow(vote.block_hash, std::time::Instant::now(), cooldown)
-                        {
+                        if self.block_sync_rebroadcast_log.allow(
+                            vote.block_hash,
+                            std::time::Instant::now(),
+                            cooldown,
+                        ) {
                             let update = self.block_sync_update_for_precommit_vote(
                                 &pending.block,
                                 self.state.as_ref(),
@@ -167,11 +163,12 @@ impl Actor {
                             "ignoring NEW_VIEW highest certificate with non-commit phase"
                         );
                     } else {
-                        let count = self
-                            .subsystems
-                            .propose
-                            .new_view_tracker
-                            .record(vote.height, vote.view, vote.signer, highest);
+                        let count = self.subsystems.propose.new_view_tracker.record(
+                            vote.height,
+                            vote.view,
+                            vote.signer,
+                            highest,
+                        );
                         crate::sumeragi::new_view_stats::note_receipt(
                             vote.height,
                             vote.view,
@@ -422,10 +419,10 @@ impl Actor {
                 _ => None,
             };
             if let Some(phase) = cross_phase {
-                if let Some(previous) =
-                    self.vote_log
-                        .get(&(phase, vote.height, vote.view, vote.epoch, vote.signer))
-                        .cloned()
+                if let Some(previous) = self
+                    .vote_log
+                    .get(&(phase, vote.height, vote.view, vote.epoch, vote.signer))
+                    .cloned()
                 {
                     self.note_double_vote(Some(&previous), vote, evidence_context);
                 }
@@ -820,14 +817,9 @@ impl Actor {
             );
             return;
         }
-        let (consensus_mode, mode_tag, prf_seed) =
-            self.consensus_context_for_height(vote.height);
-        let topology_peers = self.roster_for_vote_with_mode(
-            vote.block_hash,
-            vote.height,
-            vote.view,
-            consensus_mode,
-        );
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(vote.height);
+        let topology_peers =
+            self.roster_for_vote_with_mode(vote.block_hash, vote.height, vote.view, consensus_mode);
         if topology_peers.is_empty() {
             warn!(
                 height = vote.height,

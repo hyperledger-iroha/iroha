@@ -640,6 +640,7 @@ mod tests {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
     use iroha_crypto::{KeyPair, Signature};
     use iroha_data_model::{
+        Registrable,
         account::Account,
         content::{ContentCachePolicy, ContentDaReceipt, ContentFileEntry},
         da::{
@@ -649,7 +650,6 @@ mod tests {
         domain::Domain,
         nexus::{DataSpaceId, LaneId},
         role::RoleId,
-        Registrable,
     };
 
     fn sample_manifest() -> ContentBundleManifest {

@@ -7150,7 +7150,7 @@ mod accel_tests {
         let seed = hex::decode("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032")
             .expect("valid seed hex");
         let expected_public =
-            hex::decode("1dd2aca3aabdac99534e8f9a59257522632aafafc4605bc38f6e24cf55af9e32")
+            hex::decode("1f857fe980524a2ee4fe65e5d346f7aaadcb636a640f1d191d1c6e158607ba1e")
                 .expect("valid public key hex");
         let mut out_private_ptr: *mut u8 = ptr::null_mut();
         let mut out_private_len: c_ulong = 0;
@@ -7266,7 +7266,7 @@ mod accel_tests {
         let _reset = ChainDiscriminantReset::new(42);
         let chain = cstring("00000042");
         let authority = cstring(
-            "ed01201DD2ACA3AABDAC99534E8F9A59257522632AAFAFC4605BC38F6E24CF55AF9E32@wonderland",
+            "ed01201F857FE980524A2EE4FE65E5D346F7AAADCB636A640F1D191D1C6E158607BA1E@wonderland",
         );
         let asset_definition = cstring("rose#wonderland");
         let quantity = cstring("15.7500");
@@ -7302,7 +7302,7 @@ mod accel_tests {
         };
         assert_eq!(result, 0, "expected success");
         let expected_hash =
-            decode_hex_32("d5e15af37d0dc7740880167dc3b2c8e3427505044a3a17862379eecd68f3b437");
+            decode_hex_32("a629da62f865c17dd280dd37e5a0fbe1d1a5705b012393f4d19225c049d7976b");
         assert_eq!(out_hash, expected_hash);
         unsafe {
             free(out_signed_ptr as *mut _);
@@ -7314,7 +7314,7 @@ mod accel_tests {
         let _reset = ChainDiscriminantReset::new(42);
         let chain = cstring("00000043");
         let authority = cstring(
-            "ed01201DD2ACA3AABDAC99534E8F9A59257522632AAFAFC4605BC38F6E24CF55AF9E32@wonderland",
+            "ed01201F857FE980524A2EE4FE65E5D346F7AAADCB636A640F1D191D1C6E158607BA1E@wonderland",
         );
         let asset_definition = cstring("rose#wonderland");
         let quantity = cstring("42.0100");
@@ -7350,7 +7350,7 @@ mod accel_tests {
         };
         assert_eq!(result, 0, "expected success");
         let expected_hash =
-            decode_hex_32("e10d501e6fad28974b3d54ef30021fa48e1af6a658e4e18d6f7f73f4834c7c3d");
+            decode_hex_32("fcf26e02e57afbbcdcc9fae28c8fcaff49e21c4a5ee2bb2216c82641cde27ee1");
         assert_eq!(out_hash, expected_hash);
         unsafe {
             free(out_signed_ptr as *mut _);
@@ -7362,7 +7362,7 @@ mod accel_tests {
         let _reset = ChainDiscriminantReset::new(42);
         let chain = cstring("00000044");
         let authority = cstring(
-            "ed01201DD2ACA3AABDAC99534E8F9A59257522632AAFAFC4605BC38F6E24CF55AF9E32@wonderland",
+            "ed01201F857FE980524A2EE4FE65E5D346F7AAADCB636A640F1D191D1C6E158607BA1E@wonderland",
         );
         let asset_definition = cstring("rose#wonderland");
         let quantity = cstring("5.2500");
@@ -7398,7 +7398,7 @@ mod accel_tests {
         };
         assert_eq!(result, 0, "expected success");
         let expected_hash =
-            decode_hex_32("6c8e3263504272d382dd9e7176960ea3459dad09a94d9611d20d8f7070f553db");
+            decode_hex_32("fbdfefe7764729312d6819e7c599abe06422a789d49b57d95066f1462b98c79b");
         assert_eq!(out_hash, expected_hash);
         unsafe {
             free(out_signed_ptr as *mut _);

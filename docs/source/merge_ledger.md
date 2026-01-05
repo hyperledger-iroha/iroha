@@ -93,7 +93,8 @@ merge_qc_digest = blake2b32(
 )
 ```
 
-- `view` is the merge-committee view (currently fixed to `0`).
+- `view` is the merge-committee view derived from the lane tips (max
+  `view_change_index` across the lane headers sealed by the entry).
 - `chain_id` is the configured chain identifier string (UTF-8 bytes).
 - The payload uses Norito encoding with the field order shown above.
 
