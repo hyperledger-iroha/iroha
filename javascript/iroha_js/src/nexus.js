@@ -19,12 +19,46 @@ function normalizeBytes(input, field) {
     return input;
   }
   if (typeof input === "string") {
-    return Buffer.from(input, "base64");
+    try {
+      return decodeBase64Strict(input);
+    } catch {
+      throw new TypeError(`${field} must be Buffer | Uint8Array | base64 string`);
+    }
   }
   if (Array.isArray(input)) {
     return Buffer.from(input);
   }
   throw new TypeError(`${field} must be Buffer | Uint8Array | base64 string`);
+}
+
+function decodeBase64Strict(value) {
+  const compact = value.replace(/\s+/g, "");
+  if (compact.length === 0) {
+    throw new Error("payload is empty");
+  }
+  let padded = compact;
+  const paddingIndex = compact.indexOf("=");
+  if (paddingIndex !== -1) {
+    const head = compact.slice(0, paddingIndex);
+    const padding = compact.slice(paddingIndex);
+    if (!/^[0-9A-Za-z+/]*$/.test(head) || !/^={1,2}$/.test(padding)) {
+      throw new Error("invalid base64 payload");
+    }
+    if (compact.length % 4 !== 0) {
+      throw new Error("invalid base64 payload");
+    }
+  } else {
+    if (!/^[0-9A-Za-z+/]+$/.test(compact) || compact.length % 4 === 1) {
+      throw new Error("invalid base64 payload");
+    }
+    const padLength = (4 - (compact.length % 4)) % 4;
+    padded = compact + "=".repeat(padLength);
+  }
+  const decoded = Buffer.from(padded, "base64");
+  if (decoded.toString("base64") !== padded) {
+    throw new Error("invalid base64 payload");
+  }
+  return decoded;
 }
 
 /**

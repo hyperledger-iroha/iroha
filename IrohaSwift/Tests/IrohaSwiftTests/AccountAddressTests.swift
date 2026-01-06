@@ -179,6 +179,20 @@ final class AccountAddressTests: XCTestCase {
         XCTAssertThrowsError(try AccountAddress.fromCompressedSora("invalid"))
     }
 
+    func testBridgePayloadRejectsFractionalField() {
+        let payload = AccountAddressError.BridgePayload(code: "ERR_INVALID_COMPRESSED_DIGIT",
+                                                        message: "ERR_INVALID_COMPRESSED_DIGIT",
+                                                        fields: ["digit": NSNumber(value: 1.5)])
+        XCTAssertNil(AccountAddressError.fromBridgePayload(payload))
+    }
+
+    func testBridgePayloadRejectsOutOfRangeUInt16() {
+        let payload = AccountAddressError.BridgePayload(code: "ERR_INVALID_IH58_PREFIX",
+                                                        message: "ERR_INVALID_IH58_PREFIX",
+                                                        fields: ["prefix": 70000])
+        XCTAssertNil(AccountAddressError.fromBridgePayload(payload))
+    }
+
     func testCompressedTooShort() {
         XCTAssertThrowsError(try AccountAddress.fromCompressedSora("snx1abc")) { error in
             guard let addressError = error as? AccountAddressError else {

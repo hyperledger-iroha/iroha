@@ -175,21 +175,38 @@ function decodeStringBinary(input, name) {
   if (/^[0-9a-fA-F]+$/.test(hexBody) && hexBody.length % 2 === 0) {
     return Buffer.from(hexBody, "hex");
   }
-  const normalized = normalizeBase64(trimmed);
   try {
-    return Buffer.from(normalized, "base64");
+    return decodeBase64UrlStrict(trimmed, name);
   } catch {
     throw new TypeError(`${name} must be hex or base64 data`);
   }
 }
 
-function normalizeBase64(value) {
-  const body = value.replace(/-/g, "+").replace(/_/g, "/");
-  const remainder = body.length % 4;
-  if (remainder === 0) {
-    return body;
+function decodeBase64UrlStrict(value, name) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  let padded = normalized;
+  const paddingIndex = normalized.indexOf("=");
+  if (paddingIndex !== -1) {
+    const head = normalized.slice(0, paddingIndex);
+    const padding = normalized.slice(paddingIndex);
+    if (!/^[0-9A-Za-z+/]*$/.test(head) || !/^={1,2}$/.test(padding)) {
+      throw new TypeError(`${name} must be hex or base64 data`);
+    }
+    if (normalized.length % 4 !== 0) {
+      throw new TypeError(`${name} must be hex or base64 data`);
+    }
+  } else {
+    if (!/^[0-9A-Za-z+/]+$/.test(normalized) || normalized.length % 4 === 1) {
+      throw new TypeError(`${name} must be hex or base64 data`);
+    }
+    const padLength = (4 - (normalized.length % 4)) % 4;
+    padded = normalized + "=".repeat(padLength);
   }
-  return body + "=".repeat(4 - remainder);
+  const decoded = Buffer.from(padded, "base64");
+  if (decoded.toString("base64") !== padded) {
+    throw new TypeError(`${name} must be hex or base64 data`);
+  }
+  return decoded;
 }
 
 function toBase64Url(buffer) {

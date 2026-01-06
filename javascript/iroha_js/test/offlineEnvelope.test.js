@@ -47,6 +47,19 @@ test("serialize/parse round-trips offline envelopes", () => {
   assert.deepEqual(parsed.signedTransaction, envelope.signedTransaction);
 });
 
+test("parseOfflineEnvelope rejects invalid base64 payloads", () => {
+  const { envelope } = buildSampleEnvelope();
+  const serialized = serializeOfflineEnvelope(envelope);
+  const bad = { ...serialized, signed_transaction_b64: "not*base64" };
+  assert.throws(
+    () => parseOfflineEnvelope(bad),
+    (error) =>
+      error instanceof TypeError &&
+      /signed_transaction_b64/.test(error.message) &&
+      /base64/.test(error.message),
+  );
+});
+
 test("write/read offline envelope file round-trips payloads", async () => {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "iroha-offline-"));
   try {

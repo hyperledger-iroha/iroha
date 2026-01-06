@@ -33,6 +33,7 @@ public final class ToriiWebSocketSubscription implements AutoCloseable {
   private final AtomicBoolean started = new AtomicBoolean(false);
   private final AtomicBoolean closed = new AtomicBoolean(false);
   private final AtomicLong nextBackoffMs;
+  private final AtomicLong sessionGeneration = new AtomicLong(0);
   private final AtomicReference<ToriiWebSocketSession> currentSession = new AtomicReference<>(null);
   private final AtomicReference<ScheduledFuture<?>> scheduledTask = new AtomicReference<>(null);
   private final List<ToriiWebSocketObserver> observers;
@@ -147,17 +148,22 @@ public final class ToriiWebSocketSubscription implements AutoCloseable {
     if (closed.get()) {
       return;
     }
+    final long generation = sessionGeneration.incrementAndGet();
+    final ManagedListener listener = new ManagedListener(generation);
     try {
-      final ToriiWebSocketSession session =
-          opener.open(new ManagedListener());
+      final ToriiWebSocketSession session = opener.open(listener);
       currentSession.set(session);
     } catch (final RuntimeException ex) {
-      handleFailure(null, ex);
+      handleFailure(generation, null, ex);
     }
   }
 
-  private void handleFailure(final ToriiWebSocketSession session, final Throwable error) {
+  private void handleFailure(
+      final long generation, final ToriiWebSocketSession session, final Throwable error) {
     if (closed.get()) {
+      return;
+    }
+    if (generation != sessionGeneration.get()) {
       return;
     }
     final ToriiWebSocketSession targetSession =
@@ -178,8 +184,21 @@ public final class ToriiWebSocketSubscription implements AutoCloseable {
   }
 
   private final class ManagedListener implements ToriiWebSocketListener {
+    private final long generation;
+
+    private ManagedListener(final long generation) {
+      this.generation = generation;
+    }
+
+    private boolean isCurrent() {
+      return generation == sessionGeneration.get();
+    }
+
     @Override
     public void onOpen(final ToriiWebSocketSession session) {
+      if (!isCurrent()) {
+        return;
+      }
       nextBackoffMs.set(initialBackoffMs);
       delegate.onOpen(session);
       notifySessionOpened();
@@ -190,6 +209,9 @@ public final class ToriiWebSocketSubscription implements AutoCloseable {
         final ToriiWebSocketSession session,
         final CharSequence data,
         final boolean last) {
+      if (!isCurrent()) {
+        return;
+      }
       delegate.onText(session, data, last);
     }
 
@@ -198,22 +220,34 @@ public final class ToriiWebSocketSubscription implements AutoCloseable {
         final ToriiWebSocketSession session,
         final java.nio.ByteBuffer data,
         final boolean last) {
+      if (!isCurrent()) {
+        return;
+      }
       delegate.onBinary(session, data, last);
     }
 
     @Override
     public void onPing(final ToriiWebSocketSession session, final java.nio.ByteBuffer message) {
+      if (!isCurrent()) {
+        return;
+      }
       delegate.onPing(session, message);
     }
 
     @Override
     public void onPong(final ToriiWebSocketSession session, final java.nio.ByteBuffer message) {
+      if (!isCurrent()) {
+        return;
+      }
       delegate.onPong(session, message);
     }
 
     @Override
     public void onClose(
         final ToriiWebSocketSession session, final int statusCode, final String reason) {
+      if (!isCurrent()) {
+        return;
+      }
       delegate.onClose(session, statusCode, reason);
       notifySessionClosed();
       scheduleReconnect(
@@ -222,7 +256,7 @@ public final class ToriiWebSocketSubscription implements AutoCloseable {
 
     @Override
     public void onError(final ToriiWebSocketSession session, final Throwable error) {
-      handleFailure(session, error);
+      handleFailure(generation, session, error);
     }
   }
 

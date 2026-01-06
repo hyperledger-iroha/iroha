@@ -515,7 +515,9 @@ stream.close();
 
 Listeners receive retry hints (via `retry:` frames) so applications can reuse
 Torii’s back-off guidance, and telemetry observers attached to the transport
-emit the same hashed-authority metadata recorded for HTTP submissions.
+emit the same hashed-authority metadata recorded for HTTP submissions. When the
+transport supports streaming responses (OkHttp/JDK/URLConnection), frames are
+parsed as they arrive; other executors buffer the response before parsing.
 
 Use `ToriiEventStreamSubscription` when a long-lived component needs automatic
 reconnects:

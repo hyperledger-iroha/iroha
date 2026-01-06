@@ -97,3 +97,15 @@ test("connect queue root resolves config before env and gates env usage", () => 
     }
   }
 });
+
+test("connect queue diagnostics fallback encodes non-base64 session ids as utf8", () => {
+  const rootDir = path.join(os.tmpdir(), "iroha-js-connect-fallback");
+  const sid = "session*id";
+  const sessionDir = deriveConnectSessionDirectory({ sid, rootDir });
+  const expected = Buffer.from(sid, "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+  assert.equal(path.basename(sessionDir), expected);
+});

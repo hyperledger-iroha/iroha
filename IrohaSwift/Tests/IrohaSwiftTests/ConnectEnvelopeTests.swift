@@ -35,6 +35,74 @@ final class ConnectEnvelopeTests: XCTestCase {
         }
     }
 
+    func testDecodeRejectsFractionalSequence() throws {
+        let payload: [String: Any] = [
+            "DisplayRequest": ["title": "Hello", "body": "World"]
+        ]
+        let envelope: [String: Any] = [
+            "seq": 1.5,
+            "payload": payload
+        ]
+        let json = try JSONSerialization.data(withJSONObject: envelope, options: [])
+
+        XCTAssertThrowsError(try ConnectEnvelope.decode(jsonData: json)) { error in
+            guard case ConnectEnvelopeError.invalidEnvelope = error else {
+                XCTFail("Expected invalidEnvelope, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testDecodeRejectsOutOfRangeControlCode() {
+        let payload: [String: Any] = [
+            "Close": [
+                "who": "wallet",
+                "code": 70000,
+                "retryable": false
+            ]
+        ]
+
+        XCTAssertThrowsError(try ConnectEnvelopePayload(kind: "Control", payload: payload)) { error in
+            guard case ConnectEnvelopeError.invalidPayload = error else {
+                XCTFail("Expected invalidPayload, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testDecodeRejectsMultiplePayloadKinds() throws {
+        let payload: [String: Any] = [
+            "DisplayRequest": ["title": "Hello", "body": "World"],
+            "SignResultErr": ["code": "oops", "message": "bad"]
+        ]
+        let envelope: [String: Any] = [
+            "seq": 1,
+            "payload": payload
+        ]
+        let json = try JSONSerialization.data(withJSONObject: envelope, options: [])
+
+        XCTAssertThrowsError(try ConnectEnvelope.decode(jsonData: json)) { error in
+            guard case ConnectEnvelopeError.invalidEnvelope = error else {
+                XCTFail("Expected invalidEnvelope, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testDecodeRejectsMultipleControlKinds() {
+        let payload: [String: Any] = [
+            "Close": ["who": "app", "code": 1000, "retryable": false],
+            "Reject": ["code": 1000, "code_id": "X", "reason": "dup"]
+        ]
+
+        XCTAssertThrowsError(try ConnectEnvelopePayload(kind: "Control", payload: payload)) { error in
+            guard case ConnectEnvelopeError.invalidPayload = error else {
+                XCTFail("Expected invalidPayload, got \(error)")
+                return
+            }
+        }
+    }
+
     func testDecryptControlCloseEnvelope() throws {
         try requireBridge()
         let key = Data(repeating: 0xCD, count: 32)

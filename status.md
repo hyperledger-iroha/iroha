@@ -1,6 +1,18 @@
 # Status
 
 ## Latest Updates
+- Swift SDK: reject multi-kind Connect envelope/control payloads, and enforce strict sequence parsing in the fallback native bridge; add regression coverage.
+- Tests: `swift test --filter ConnectEnvelopeTests` (from `IrohaSwift`).
+- JS SDK: tighten base64 validation for offline envelopes, Torii payload normalization, and Nexus helpers; add regression coverage.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Swift SDK: tighten JSON numeric parsing for Connect envelopes/balance snapshots, compute simulator limits, governance lock/tally amounts, prover report count fallback, and account address bridge fields; add regression coverage.
+- Tests: `swift test --filter ConnectEnvelopeTests` (from `IrohaSwift`); `swift test --filter ConnectEventsTests` (from `IrohaSwift`); `swift test --filter ComputeSimulatorTests` (from `IrohaSwift`); `swift test --filter AccountAddressTests` (from `IrohaSwift`); `swift test --filter ToriiGovernanceDecodingTests` (from `IrohaSwift`); `swift test --filter ToriiClientTests.testCountProverReportsRejectsFractionalCount` (from `IrohaSwift`).
+- JS SDK: enforce strict base64url decoding for Connect session input/queue journals/diagnostics and add regression coverage.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Swift SDK: harden Torii numeric parsing to reject fractional values and out-of-range ints across Connect status, DA manifests/sampling plans, and verdict metadata; add regression coverage.
+- Tests: `swift test --filter ToriiJSONValueTests` (from `IrohaSwift`); `swift test --filter ToriiNumericParsingTests` (from `IrohaSwift`); `swift test --filter OfflineVerdictJournalTests` (from `IrohaSwift`).
+- JS SDK: validate base64 inputs strictly in instruction builders (fixed-length + payload fields) and add regression coverage.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
 - Sumeragi/localnet: canonicalized the Sora profile BLS private key to satisfy multihash parsing in profile detection defaults.
 - Tests: `CARGO_TARGET_DIR=target/codex cargo test -p iroha_test_network sora_profile_detection_defaults_parse_with_bls_keys -- --nocapture`.
 - Tests: `CARGO_TARGET_DIR=target/codex IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (passed; warning about unused variable `epoch` in `crates/iroha_core/src/block_sync.rs:393`).
@@ -11,6 +23,14 @@
 - Swift SDK: guard Torii JSON numeric normalization against Int overflow and reuse the safer path for allowance/proof parsing; add regression coverage.
 - Tests: `swift test --filter ToriiJSONValueTests` (from `IrohaSwift`).
 - Java/Android SDK: avoid duplicate WebSocket reconnection scheduling when both error and close fire; add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: ignore stale WebSocket events from prior sessions to prevent reconnects after a new session opens; add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: apply WebSocket connect timeout options to OkHttp connectors and add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: stream SSE responses without buffering full bodies by adding streaming transport support (OkHttp/JDK/URLConnection) and add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: ignore stale SSE subscription events and avoid duplicate reconnect scheduling; add regression coverage.
 - Tests: not run (not requested).
 - Swift SDK: restrict canonical query encoding to ASCII unreserved characters so non-ASCII is percent-escaped; add regression coverage.
 - Tests: `swift test --filter CanonicalRequestTests` (from `IrohaSwift`).

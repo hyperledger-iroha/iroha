@@ -1,8 +1,10 @@
 package org.hyperledger.iroha.android.client.okhttp;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
@@ -45,7 +47,20 @@ public final class OkHttpWebSocketConnector implements ToriiWebSocketClient.WebS
       builder.addHeader("Sec-WebSocket-Protocol", String.join(",", options.subprotocols()));
     }
 
-    client.newWebSocket(builder.build(), socket);
+    final Duration timeout = request.timeout() != null ? request.timeout() : options.connectTimeout();
+    final OkHttpClient target = resolveClient(timeout);
+    target.newWebSocket(builder.build(), socket);
     return ready;
+  }
+
+  OkHttpClient resolveClient(final Duration timeout) {
+    if (timeout == null) {
+      return client;
+    }
+    final long timeoutMs = Math.max(0L, timeout.toMillis());
+    if (client.connectTimeoutMillis() == timeoutMs) {
+      return client;
+    }
+    return client.newBuilder().connectTimeout(timeoutMs, TimeUnit.MILLISECONDS).build();
   }
 }

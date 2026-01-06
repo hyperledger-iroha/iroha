@@ -3158,6 +3158,36 @@ id: 88
         waitForExpectations(timeout: 1)
     }
 
+    func testCountProverReportsRejectsFractionalCount() {
+        let expectation = expectation(description: "count prover reports")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/zk/prover/reports/count")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {"count":1.5}
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        makeClient().countProverReports { result in
+            switch result {
+            case .success:
+                XCTFail("expected failure for fractional count")
+            case .failure(let error):
+                guard case ToriiClientError.invalidPayload = error else {
+                    XCTFail("unexpected error: \(error)")
+                    break
+                }
+            }
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: 1)
+    }
+
     func testRegisterContractCodePostsJSON() {
         let expectation = expectation(description: "register contract")
         StubURLProtocol.handler = { request in
