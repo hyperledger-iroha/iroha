@@ -34,6 +34,8 @@ silence verification warnings in noisy CI logs. For local builds where the
 checksum manifest lags the compiled artifact, `IROHA_JS_ALLOW_UNVERIFIED_NATIVE=1`
 lets the loader accept the current hash while keeping verification enabled
 elsewhere.
+Set `IROHA_JS_FORCE_NATIVE=1` to throw when the native binding is unavailable
+or fails verification (useful for CI that must exercise native paths).
 
 When you only need the pure JS layer (for example, on machines where the native
 build is unavailable), run tests with `npm run test:js`, which sets
