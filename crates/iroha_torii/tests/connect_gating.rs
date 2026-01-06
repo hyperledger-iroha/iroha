@@ -200,6 +200,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             api_fee_receiver: None,
             api_allow_cidrs: Vec::new(),
             peer_telemetry_urls: Vec::new(),
+            peer_geo: A::ToriiPeerGeo::default(),
             strict_addresses: false,
             debug_match_filters: false,
             operator_auth: A::ToriiOperatorAuth::default(),

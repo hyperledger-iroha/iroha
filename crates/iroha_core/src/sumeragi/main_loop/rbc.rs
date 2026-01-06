@@ -2216,12 +2216,22 @@ impl Actor {
             return false;
         }
         for result in drained {
-            self.subsystems.da_rbc.rbc.persist_inflight.remove(&result.key);
+            self.subsystems
+                .da_rbc
+                .rbc
+                .persist_inflight
+                .remove(&result.key);
             match result.outcome {
                 Ok(outcome) => {
                     self.handle_rbc_store_evictions(&outcome.removed);
                     self.update_rbc_store_pressure(outcome.pressure);
-                    if self.subsystems.da_rbc.rbc.sessions.contains_key(&result.key) {
+                    if self
+                        .subsystems
+                        .da_rbc
+                        .rbc
+                        .sessions
+                        .contains_key(&result.key)
+                    {
                         self.subsystems
                             .da_rbc
                             .rbc
@@ -2254,13 +2264,7 @@ impl Actor {
         {
             return;
         }
-        if self
-            .subsystems
-            .da_rbc
-            .rbc
-            .persist_inflight
-            .contains(&key)
-        {
+        if self.subsystems.da_rbc.rbc.persist_inflight.contains(&key) {
             return;
         }
         if let Some(tx) = self.subsystems.da_rbc.rbc.persist_tx.as_ref() {
@@ -2276,7 +2280,10 @@ impl Actor {
                     self.subsystems.da_rbc.rbc.persist_inflight.insert(key);
                 }
                 Err(mpsc::TrySendError::Full(_work)) => {
-                    debug!(?key, "RBC persist queue full; deferring session persistence");
+                    debug!(
+                        ?key,
+                        "RBC persist queue full; deferring session persistence"
+                    );
                 }
                 Err(mpsc::TrySendError::Disconnected(_work)) => {
                     warn!(

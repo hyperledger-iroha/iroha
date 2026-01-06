@@ -225,8 +225,7 @@ fn zk_ballot_accepts_commit_nullifier_hint() {
         ),
         (
             "root_hint",
-            norito::json::to_value(&hex::encode(bundle.root_bytes()))
-                .expect("serialize root_hint"),
+            norito::json::to_value(&hex::encode(bundle.root_bytes())).expect("serialize root_hint"),
         ),
     ])
     .expect("serialize public inputs");

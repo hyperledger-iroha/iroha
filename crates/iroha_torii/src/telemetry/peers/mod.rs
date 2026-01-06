@@ -56,14 +56,40 @@ pub struct PeerInfoDto {
     pub connected_peers: Option<Vec<String>>,
 }
 
+#[derive(Clone, Debug)]
+pub struct GeoLookupConfig {
+    pub enabled: bool,
+    pub endpoint: Option<Url>,
+}
+
+impl GeoLookupConfig {
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            endpoint: None,
+        }
+    }
+}
+
+impl From<&iroha_config::parameters::actual::ToriiPeerGeo> for GeoLookupConfig {
+    fn from(config: &iroha_config::parameters::actual::ToriiPeerGeo) -> Self {
+        Self {
+            enabled: config.enabled,
+            endpoint: config.endpoint.clone(),
+        }
+    }
+}
+
 pub struct PeerTelemetryService {
     peers: RwLock<BTreeMap<ToriiUrl, PeerState>>,
+    geo_config: GeoLookupConfig,
 }
 
 impl PeerTelemetryService {
-    pub fn new(peer_urls: Vec<ToriiUrl>) -> Arc<Self> {
+    pub fn new(peer_urls: Vec<ToriiUrl>, geo_config: GeoLookupConfig) -> Arc<Self> {
         let service = Arc::new(Self {
             peers: RwLock::new(BTreeMap::new()),
+            geo_config,
         });
         for url in BTreeSet::from_iter(peer_urls) {
             service.spawn_monitor(url);
@@ -73,8 +99,9 @@ impl PeerTelemetryService {
 
     fn spawn_monitor(self: &Arc<Self>, url: ToriiUrl) {
         let service = Arc::clone(self);
+        let geo_config = service.geo_config.clone();
         tokio::spawn(async move {
-            let (mut rx, fut) = monitor::run(url.clone());
+            let (mut rx, fut) = monitor::run(url.clone(), geo_config);
             tokio::spawn(fut);
             while let Some(update) = rx.recv().await {
                 service.apply_update(url.clone(), update).await;
@@ -209,5 +236,32 @@ impl PeerConfigDto {
                 ms: cfg.network.transaction_gossip_period_ms.into(),
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn geo_lookup_config_respects_disable_helper() {
+        let config = GeoLookupConfig::disabled();
+        assert!(!config.enabled);
+        assert!(config.endpoint.is_none());
+    }
+
+    #[test]
+    fn geo_lookup_config_from_actual_copies_values() {
+        let endpoint = Url::parse("https://geo.example").expect("valid endpoint");
+        let actual = iroha_config::parameters::actual::ToriiPeerGeo {
+            enabled: true,
+            endpoint: Some(endpoint.clone()),
+        };
+        let config = GeoLookupConfig::from(&actual);
+        assert!(config.enabled);
+        assert_eq!(
+            config.endpoint.as_ref().map(Url::as_str),
+            Some(endpoint.as_str())
+        );
     }
 }

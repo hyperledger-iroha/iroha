@@ -710,6 +710,7 @@ mod tests {
                 api_fee_receiver: None,
                 api_allow_cidrs: Vec::new(),
                 peer_telemetry_urls: Vec::new(),
+                peer_geo: iroha_config::parameters::actual::ToriiPeerGeo::default(),
                 soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest::default(),
                 strict_addresses: true,
                 debug_match_filters: false,

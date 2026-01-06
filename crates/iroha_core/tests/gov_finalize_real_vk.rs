@@ -17,7 +17,10 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
     };
     use iroha_data_model::{
         confidential::ConfidentialStatus,
-        isi::{verifying_keys, zk::{CreateElection, FinalizeElection}},
+        isi::{
+            verifying_keys,
+            zk::{CreateElection, FinalizeElection},
+        },
         permission::Permission,
         prelude::{Grant, PeerId},
         proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
@@ -42,9 +45,7 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
     let mut stx = sblock.transaction();
 
     let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-public-v1", [0u8; 32]);
-    let vk_box = fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
+    let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
     let vk_commitment = iroha_core::zk::hash_vk(&vk_box);
     let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_tally");
     let mut vk_record = VerifyingKeyRecord::new(
@@ -89,11 +90,8 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
     create.execute(&ALICE_ID, &mut stx).expect("create ok");
 
     // Finalize with tally [4] and inline VK
-    let att = ProofAttachment::new_inline(
-        "halo2/ipa".into(),
-        fixture.proof_box("halo2/ipa"),
-        vk_box,
-    );
+    let att =
+        ProofAttachment::new_inline("halo2/ipa".into(), fixture.proof_box("halo2/ipa"), vk_box);
     let fin = FinalizeElection::new("ref-final".to_string(), vec![4], att);
     fin.execute(&ALICE_ID, &mut stx).expect("finalize ok");
 

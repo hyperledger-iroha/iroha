@@ -369,6 +369,10 @@ fn minimal_config_snapshot() {
                 },
                 api_allow_cidrs: [],
                 peer_telemetry_urls: [],
+                peer_geo: ToriiPeerGeo {
+                    enabled: false,
+                    endpoint: None,
+                },
                 strict_addresses: true,
                 debug_match_filters: false,
                 operator_auth: ToriiOperatorAuth {
