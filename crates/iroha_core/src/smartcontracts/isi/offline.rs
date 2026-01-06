@@ -2725,7 +2725,6 @@ mod attestation {
         VerifyingKey,
         signature::{DigestVerifier, hazmat::PrehashVerifier as _},
     };
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
     #[cfg(test)]
     use p256::ecdsa::{SigningKey, signature::DigestSigner};
     #[cfg(test)]

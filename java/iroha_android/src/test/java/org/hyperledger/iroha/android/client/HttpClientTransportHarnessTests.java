@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.client;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -11,6 +12,8 @@ import org.hyperledger.iroha.android.client.mock.ToriiMockServer.MockResponse;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.client.transport.UrlConnectionTransportExecutor;
+import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchOptions;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayProvider;
@@ -54,12 +57,7 @@ public final class HttpClientTransportHarnessTests {
                   .putDefaultHeader("Authorization", "Bearer harness")
                   .build());
 
-      final SignedTransaction transaction =
-          new SignedTransaction(
-              new byte[] {0x01, 0x02, 0x03},
-              new byte[] {0x04, 0x05, 0x06},
-              new byte[] {0x07, 0x08, 0x09},
-              "iroha.android.transaction.Payload.v1");
+      final SignedTransaction transaction = sampleTransaction((byte) 0x01);
       final String hashHex = SignedTransactionHasher.hashHex(transaction);
 
       server.enqueueSubmitResponse(MockResponse.json(202, "{\"status\":\"Accepted\"}"));
@@ -104,12 +102,7 @@ public final class HttpClientTransportHarnessTests {
               new UrlConnectionTransportExecutor(),
               ClientConfig.builder().setBaseUri(server.baseUri()).setRequestTimeout(Duration.ofSeconds(5)).build());
 
-      final SignedTransaction transaction =
-          new SignedTransaction(
-              new byte[] {0x0a},
-              new byte[] {0x0b},
-              new byte[] {0x0c},
-              "iroha.android.transaction.Payload.v1");
+      final SignedTransaction transaction = sampleTransaction((byte) 0x0a);
 
       server.enqueueSubmitResponse(
           MockResponse.bytes(
@@ -199,9 +192,7 @@ public final class HttpClientTransportHarnessTests {
                   .setRequestTimeout(Duration.ofSeconds(5))
                   .build());
 
-      final SignedTransaction transaction =
-          new SignedTransaction(
-              new byte[] {0x21}, new byte[] {0x22}, new byte[] {0x23}, "schema.v1");
+      final SignedTransaction transaction = sampleTransaction((byte) 0x21);
       final String hashHex = SignedTransactionHasher.hashHex(transaction);
 
       server.enqueueSubmitResponse(MockResponse.json(202, "{}"));
@@ -252,6 +243,31 @@ public final class HttpClientTransportHarnessTests {
   private static String statusPayload(final String kind) {
     return "{\"kind\":\"Transaction\",\"content\":{\"status\":{\"kind\":\""
         + kind + "\"}}}";
+  }
+
+  private static SignedTransaction sampleTransaction(final byte seed) {
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId(String.format("%08x", seed))
+            .setAuthority("alice@wonderland")
+            .setCreationTimeMs(1_700_000_000_000L + (seed & 0xFF))
+            .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
+            .setTimeToLiveMs(5_000L)
+            .setNonce((seed & 0xFF) + 1)
+            .setMetadata(Map.of("note", "tx-" + seed))
+            .build();
+    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
+    final byte[] encoded;
+    try {
+      encoded = codec.encodeTransaction(payload);
+    } catch (final Exception ex) {
+      throw new IllegalStateException("Failed to encode transaction payload", ex);
+    }
+    final byte[] signature = new byte[64];
+    final byte[] publicKey = new byte[32];
+    Arrays.fill(signature, (byte) (seed + 3));
+    Arrays.fill(publicKey, (byte) (seed + 5));
+    return new SignedTransaction(encoded, signature, publicKey, codec.schemaName());
   }
 
   private static GatewayFetchRequest sampleGatewayRequest() {

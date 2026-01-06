@@ -90,7 +90,10 @@ API العقود (deploy)
   - الطلب: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "alice@wonderland?", "private_key": "...?" }
   - الرد: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - الاثر على السلسلة (الهيكل الحالي): تنفيذ اقتراح deploy معتمد يدرج `ContractManifest` ادنى بمفتاح `code_hash` مع `abi_hash` المتوقع ويضع الاقتراح بحالة Enacted. اذا كان هناك manifest موجود لـ `code_hash` بقيمة `abi_hash` مختلفة، يتم رفض التنفيذ.
-  - ملاحظات: لانتخابات ZK، يجب على مسارات العقد استدعاء `ZK_VOTE_VERIFY_TALLY` قبل تنفيذ `FinalizeElection`; ويفرض المضيفون latch لمرة واحدة.
+  - ملاحظات:
+    - لانتخابات ZK، يجب على مسارات العقد استدعاء `ZK_VOTE_VERIFY_TALLY` قبل تنفيذ `FinalizeElection`; ويفرض المضيفون latch لمرة واحدة. يرفض `FinalizeReferendum` الاستفتاءات ZK حتى يتم انهاء tally للانتخابات.
+    - الاغلاق التلقائي عند `h_end` يصدر Approved/Rejected فقط للاستفتاءات Plain؛ تبقى استفتاءات ZK Closed حتى يتم ارسال tally منته ويجري تنفيذ `FinalizeReferendum`.
+    - فحوصات turnout تستخدم approve+reject فقط؛ abstain لا يحتسب ضمن turnout.
 
 - POST `/v1/gov/enact`
   - الطلب: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "alice@wonderland?", "private_key": "...?" }

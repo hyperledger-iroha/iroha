@@ -92,7 +92,10 @@ API חוזים (deploy)
   - בקשה: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "alice@wonderland?", "private_key": "...?" }
   - תשובה: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - אפקט on-chain (scaffold נוכחי): enact של הצעת deploy מאושרת מוסיף `ContractManifest` מינימלי במפתח `code_hash` עם `abi_hash` הצפוי ומסמן את ההצעה כ-Enacted. אם manifest כבר קיים עבור `code_hash` עם `abi_hash` שונה, ה-enactment נדחה.
-  - הערות: עבור בחירות ZK, נתיבי חוזה חייבים לקרוא ל-`ZK_VOTE_VERIFY_TALLY` לפני ביצוע `FinalizeElection`; המארחים אוכפים latch חד פעמי.
+  - הערות:
+    - עבור בחירות ZK, נתיבי חוזה חייבים לקרוא ל-`ZK_VOTE_VERIFY_TALLY` לפני ביצוע `FinalizeElection`; המארחים אוכפים latch חד פעמי. `FinalizeReferendum` דוחה רפרנדומים מסוג ZK עד שה-tally מסומן כ-finalized.
+    - סגירה אוטומטית ב-`h_end` מפיקה Approved/Rejected רק לרפרנדומים Plain; רפרנדומים ZK נשארים Closed עד שה-tally מסומן finalized ומבוצע `FinalizeReferendum`.
+    - בדיקות turnout משתמשות רק ב-approve+reject; abstain לא נספר.
 
 - POST `/v1/gov/enact`
   - בקשה: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "alice@wonderland?", "private_key": "...?" }

@@ -1462,28 +1462,65 @@ function normalizeVotingMode(value, name) {
 }
 
 function normalizeJsonPayload(value, name) {
+  if (value === null || value === undefined) {
+    return "{}";
+  }
+  let payload = value;
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (!trimmed) {
       fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
     }
-    return trimmed;
+    try {
+      payload = JSON.parse(trimmed);
+    } catch (error) {
+      fail(
+        ValidationErrorCode.INVALID_JSON_VALUE,
+        `${name} must be valid JSON`,
+        name,
+        error,
+      );
+    }
   }
-  if (value === null || value === undefined) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be provided`, name);
-  }
-  try {
-    return JSON.stringify(value);
-  } catch (error) {
+  const normalized = normalizeZkBallotPublicInputs(payload, name);
+  return JSON.stringify(normalized);
+}
+
+function normalizeZkBallotPublicInputs(value, name) {
+  const normalized = { ...assertPlainObject(value, name) };
+  normalizePublicInputAlias(normalized, "durationBlocks", "duration_blocks", name);
+  normalizePublicInputAlias(normalized, "nullifierHex", "nullifier_hex", name);
+  normalizePublicInputAlias(normalized, "rootHintHex", "root_hint", name);
+  normalizePublicInputAlias(normalized, "rootHint", "root_hint", name);
+
+  const hasOwner = normalized.owner !== undefined && normalized.owner !== null;
+  const hasAmount = normalized.amount !== undefined && normalized.amount !== null;
+  const hasDuration =
+    normalized.duration_blocks !== undefined && normalized.duration_blocks !== null;
+  const hasAnyLockHint = hasOwner || hasAmount || hasDuration;
+  if (hasAnyLockHint && !(hasOwner && hasAmount && hasDuration)) {
     fail(
-      ValidationErrorCode.INVALID_JSON_VALUE,
-      `failed to serialise ${name}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must include owner, amount, and duration_blocks when providing lock hints`,
       name,
-      error,
     );
   }
+  return normalized;
+}
+
+function normalizePublicInputAlias(target, aliasKey, canonicalKey, name) {
+  if (!Object.prototype.hasOwnProperty.call(target, aliasKey)) {
+    return;
+  }
+  if (Object.prototype.hasOwnProperty.call(target, canonicalKey)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} cannot include both ${aliasKey} and ${canonicalKey}`,
+      name,
+    );
+  }
+  target[canonicalKey] = target[aliasKey];
+  delete target[aliasKey];
 }
 
 function normalizeUintString(value, name) {

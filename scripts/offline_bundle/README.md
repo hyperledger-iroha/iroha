@@ -59,7 +59,9 @@ following structure:
       "invoice_id": "string",
       "platform_proof": {
         "kind": "apple_app_attest" | "android_marker_key" | "android_provisioned",
-        "...": "variant-specific fields"
+        "payload": {
+          "...": "variant-specific fields"
+        }
       },
       "sender_certificate": {
         "certificate_path": "../../fixtures/offline_allowance/ios-demo/certificate.json"
@@ -91,3 +93,8 @@ fixtures emitted by `scripts/offline_topup`. The metadata block inside
 `AggregateProofEnvelope` to help downstream tooling tag the proof payloads. Use
 `fastpq.parameter_set` plus the `fastpq.circuit.*` keys to advertise the FASTPQ
 parameter set and circuit identifiers used for the bundle proofs.
+
+Platform proof payload notes:
+- App Attest `key_id` must be canonical standard base64.
+- Android marker `marker_public_key` is hex-encoded SEC1 P-256 bytes (65 bytes), and
+  `marker_signature_hex` must be a raw 64-byte signature when present.

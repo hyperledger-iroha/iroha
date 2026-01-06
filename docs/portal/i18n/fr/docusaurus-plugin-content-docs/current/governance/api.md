@@ -90,7 +90,10 @@ Cap de taille de code
   - Requete: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "alice@wonderland?", "private_key": "...?" }
   - Reponse: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - Effet on-chain (scaffold actuel): enacter une proposition de deploy approuvee insere un `ContractManifest` minimal cle `code_hash` avec l'`abi_hash` attendu et marque la proposition Enacted. Si un manifeste existe deja pour le `code_hash` avec un `abi_hash` different, l'enactment est rejete.
-  - Notes: pour les elections ZK, les chemins de contrat doivent appeler `ZK_VOTE_VERIFY_TALLY` avant d'executer `FinalizeElection`; les hosts imposent un latch a une seule fois.
+  - Notes:
+    - Pour les elections ZK, les chemins de contrat doivent appeler `ZK_VOTE_VERIFY_TALLY` avant d'executer `FinalizeElection`; les hosts imposent un latch a usage unique. `FinalizeReferendum` rejette les referendums ZK tant que le tally n'est pas finalise.
+    - La cloture automatique a `h_end` emet Approved/Rejected uniquement pour les referendums Plain; les referendums ZK restent Closed jusqu'a ce qu'un tally finalise soit soumis et que `FinalizeReferendum` soit execute.
+    - Les verifications de turnout utilisent seulement approve+reject; abstain ne compte pas pour le turnout.
 
 - POST `/v1/gov/enact`
   - Requete: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "alice@wonderland?", "private_key": "...?" }

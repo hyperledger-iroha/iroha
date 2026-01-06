@@ -71,6 +71,25 @@ fn resolve_vote_mode(
     }
 }
 
+fn hint_present(map: &json::Map<String, json::Value>, key: &str) -> bool {
+    map.get(key)
+        .map(|value| !matches!(value, json::Value::Null))
+        .unwrap_or(false)
+}
+
+fn ensure_lock_hints_complete(map: &json::Map<String, json::Value>) -> Result<()> {
+    let has_owner = hint_present(map, "owner");
+    let has_amount = hint_present(map, "amount");
+    let has_duration = hint_present(map, "duration_blocks");
+    let any = has_owner || has_amount || has_duration;
+    if any && !(has_owner && has_amount && has_duration) {
+        return Err(eyre!(
+            "lock hints must include owner, amount, duration_blocks"
+        ));
+    }
+    Ok(())
+}
+
 #[derive(clap::Args, Debug)]
 pub struct VoteArgs {
     #[arg(long, value_name = "REFERENDUM_ID")]
@@ -243,6 +262,7 @@ impl Run for VoteZkArgs {
             let canonical = canonicalize_hex32(&nullifier_hex)?;
             public_obj.insert("nullifier_hex".to_owned(), json_value(&canonical)?);
         }
+        ensure_lock_hints_complete(public_obj)?;
         let body = json_object(vec![
             ("election_id", json_value(&self.election_id)?),
             ("proof_b64", json_value(&self.proof_b64)?),
@@ -558,6 +578,23 @@ mod tests {
             instr.get("nullifier_hex").and_then(json::Value::as_str),
             Some(nullifier.as_str())
         );
+    }
+
+    #[test]
+    fn lock_hints_require_complete_triplet() {
+        let mut map = json::Map::new();
+        map.insert(
+            "owner".to_string(),
+            json::Value::String("alice@wonderland".to_string()),
+        );
+        assert!(ensure_lock_hints_complete(&map).is_err());
+        map.insert(
+            "amount".to_string(),
+            json::Value::String("10".to_string()),
+        );
+        assert!(ensure_lock_hints_complete(&map).is_err());
+        map.insert("duration_blocks".to_string(), json::Value::from(64u64));
+        assert!(ensure_lock_hints_complete(&map).is_ok());
     }
 }
 

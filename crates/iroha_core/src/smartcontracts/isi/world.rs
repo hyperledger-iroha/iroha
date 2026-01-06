@@ -1713,10 +1713,8 @@ pub mod isi {
                     ));
                 }
             }
-            let lock_hint_present = lock_owner.is_some()
-                || lock_amount.is_some()
-                || lock_duration.is_some()
-                || lock_direction.is_some();
+            let lock_hint_present =
+                lock_owner.is_some() || lock_amount.is_some() || lock_duration.is_some();
             if lock_hint_present {
                 if lock_owner.is_none() || lock_amount.is_none() || lock_duration.is_none() {
                     state_transaction.world.emit_events(Some(
@@ -2046,8 +2044,8 @@ pub mod isi {
                         iroha_data_model::events::data::governance::GovernanceEvent::ReferendumOpened(
                             iroha_data_model::events::data::governance::GovernanceReferendumOpened {
                                 id: rid.clone(),
-                                h_start: 0,
-                                h_end: 0,
+                                h_start: rr.h_start,
+                                h_end: rr.h_end,
                             },
                         ),
                     ));
@@ -2398,8 +2396,8 @@ pub mod isi {
                 iroha_data_model::events::data::governance::GovernanceEvent::ReferendumOpened(
                     iroha_data_model::events::data::governance::GovernanceReferendumOpened {
                         id: ballot.referendum_id.clone(),
-                        h_start: 0,
-                        h_end: 0,
+                        h_start: rr.h_start,
+                        h_end: rr.h_end,
                     },
                 ),
             ));
@@ -3245,10 +3243,9 @@ pub mod isi {
             // Note: closing by height is automatic in State::block; no need to change status here.
             // Decide and emit Approved/Rejected with thresholds
             let turnout = approve.saturating_add(reject);
-            let turnout_all = turnout.saturating_add(0); // abstain ignored here; auto close uses abstain
             let num = state_transaction.gov.approval_threshold_q_num;
             let den = state_transaction.gov.approval_threshold_q_den.max(1);
-            let decision_approve = if turnout_all >= state_transaction.gov.min_turnout {
+            let decision_approve = if turnout >= state_transaction.gov.min_turnout {
                 let lhs = approve.saturating_mul(u128::from(den));
                 let rhs = turnout.saturating_mul(u128::from(num));
                 lhs >= rhs

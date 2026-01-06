@@ -92,7 +92,10 @@ Code Size Cap
   - Request: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "alice@wonderland?", "private_key": "...?" }
   - Response: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - On-chain effect (current scaffold): enact утвержденного deploy proposal вставляет минимальный `ContractManifest`, привязанный к `code_hash`, с ожидаемым `abi_hash` и помечает proposal как Enacted. Если manifest уже существует для `code_hash` с другим `abi_hash`, enactment отклоняется.
-  - Notes: Для ZK elections контракты должны вызвать `ZK_VOTE_VERIFY_TALLY` до `FinalizeElection`; хосты enforce одноразовый latch.
+  - Notes:
+    - Для ZK elections контракты должны вызвать `ZK_VOTE_VERIFY_TALLY` до `FinalizeElection`; хосты enforce одноразовый latch. `FinalizeReferendum` отклоняет ZK-референдумы, пока tally выборов не финализирован.
+    - Автозакрытие на `h_end` эмитит Approved/Rejected только для Plain-референдумов; ZK-референдумы остаются Closed, пока не будет отправлен финализированный tally и выполнен `FinalizeReferendum`.
+    - Проверки turnout используют только approve+reject; abstain не учитывается в turnout.
 
 - POST `/v1/gov/enact`
   - Request: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "alice@wonderland?", "private_key": "...?" }

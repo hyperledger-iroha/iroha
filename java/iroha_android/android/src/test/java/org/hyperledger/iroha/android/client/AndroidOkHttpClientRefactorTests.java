@@ -9,6 +9,7 @@ import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Map;
 import java.util.Objects;
@@ -35,6 +36,8 @@ import org.hyperledger.iroha.android.offline.attestation.HttpSafetyDetectService
 import org.hyperledger.iroha.android.offline.attestation.SafetyDetectAttestation;
 import org.hyperledger.iroha.android.offline.attestation.SafetyDetectOptions;
 import org.hyperledger.iroha.android.offline.attestation.SafetyDetectRequest;
+import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayProvider;
 import org.hyperledger.iroha.android.sorafs.SorafsGatewayClient;
@@ -173,8 +176,7 @@ public final class AndroidOkHttpClientRefactorTests {
               .setTelemetrySink(okSink)
               .build();
 
-      final SignedTransaction tx =
-          new SignedTransaction(new byte[] {0x01}, new byte[] {0x02}, new byte[] {0x03}, "schema");
+      final SignedTransaction tx = sampleTransaction((byte) 0x01);
       final HttpClientTransport okTransport = HttpClientTransport.createDefault(okConfig);
 
       okTransport.submitTransaction(tx).get(2, TimeUnit.SECONDS);
@@ -251,6 +253,31 @@ public final class AndroidOkHttpClientRefactorTests {
       final TelemetryRecord okResponse = okSink.awaitResponse();
       assertEquals(101, okResponse.statusCode().orElseThrow());
     }
+  }
+
+  private static SignedTransaction sampleTransaction(final byte seed) {
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId(String.format("%08x", seed))
+            .setAuthority("telemetry@wonderland")
+            .setCreationTimeMs(1_700_000_000_000L + (seed & 0xFF))
+            .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
+            .setTimeToLiveMs(5_000L)
+            .setNonce((seed & 0xFF) + 1)
+            .setMetadata(Map.of("note", "tx-" + seed))
+            .build();
+    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
+    final byte[] encoded;
+    try {
+      encoded = codec.encodeTransaction(payload);
+    } catch (final Exception ex) {
+      throw new IllegalStateException("Failed to encode transaction payload", ex);
+    }
+    final byte[] signature = new byte[64];
+    final byte[] publicKey = new byte[32];
+    Arrays.fill(signature, (byte) (seed + 1));
+    Arrays.fill(publicKey, (byte) (seed + 2));
+    return new SignedTransaction(encoded, signature, publicKey, codec.schemaName());
   }
 
   private static TelemetryOptions telemetryOptions() {
