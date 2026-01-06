@@ -9,7 +9,7 @@ public enum CanonicalRequestError: Error {
 
 @available(macOS 10.15, iOS 13.0, *)
 public struct CanonicalRequest {
-    private static let unreserved = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+    private static let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
     private static func percentEncode(_ value: String) -> String {
         let encoded = value.addingPercentEncoding(withAllowedCharacters: unreserved) ?? value

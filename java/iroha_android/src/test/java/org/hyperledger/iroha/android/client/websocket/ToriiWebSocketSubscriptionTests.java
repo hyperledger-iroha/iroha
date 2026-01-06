@@ -17,6 +17,7 @@ public final class ToriiWebSocketSubscriptionTests {
 
   public static void main(final String[] args) throws Exception {
     reconnectsAfterClosure();
+    reconnectsOnceWhenErrorAndClose();
     stopsWhenClosed();
     observerReceivesNotifications();
     System.out.println("[IrohaAndroid] ToriiWebSocketSubscriptionTests passed.");
@@ -44,6 +45,26 @@ public final class ToriiWebSocketSubscriptionTests {
     }
     if (payloads.size() != 2) {
       throw new AssertionError("Expected payloads not delivered: " + payloads);
+    }
+    subscription.close();
+  }
+
+  private static void reconnectsOnceWhenErrorAndClose() throws Exception {
+    final RecordingSessionOpener opener = new RecordingSessionOpener();
+    final ToriiWebSocketSubscription subscription =
+        ToriiWebSocketSubscription.builder(opener, new ForwardingListener(null, null, null))
+            .setInitialBackoff(Duration.ofMillis(100))
+            .setMaxBackoff(Duration.ofMillis(100))
+            .build()
+            .start();
+    opener.awaitSessionCount(1);
+    opener.failSession(0, new RuntimeException("boom"));
+    opener.closeSession(0);
+    opener.awaitSessionCount(2);
+    Thread.sleep(200);
+    if (opener.sessionCount.get() != 2) {
+      throw new AssertionError(
+          "Expected a single reconnection after error+close, saw " + opener.sessionCount.get());
     }
     subscription.close();
   }

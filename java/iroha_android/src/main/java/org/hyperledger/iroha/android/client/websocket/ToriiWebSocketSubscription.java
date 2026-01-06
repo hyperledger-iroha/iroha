@@ -103,6 +103,10 @@ public final class ToriiWebSocketSubscription implements AutoCloseable {
     if (closed.get()) {
       return;
     }
+    final ScheduledFuture<?> existing = scheduledTask.get();
+    if (existing != null && !existing.isDone() && !existing.isCancelled()) {
+      return;
+    }
     final long clampedDelay = Math.max(0L, delayMs);
     notifyReconnectScheduled(clampedDelay, reason);
     final ScheduledFuture<?> future =

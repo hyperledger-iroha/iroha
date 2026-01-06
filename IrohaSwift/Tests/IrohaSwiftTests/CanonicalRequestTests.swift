@@ -8,6 +8,12 @@ final class CanonicalRequestTests: XCTestCase {
         XCTAssertEqual(rendered, "a=3&b=1&b=2&space=a+b")
     }
 
+    func testCanonicalQueryEncodesNonAscii() {
+        let cafe = "caf\u{00E9}"
+        let rendered = CanonicalRequest.canonicalQueryString(from: "name=\(cafe)")
+        XCTAssertEqual(rendered, "name=caf%C3%A9")
+    }
+
     func testSigningHeadersAreVerifiable() throws {
         guard #available(macOS 10.15, iOS 13.0, *) else {
             throw XCTSkip("CryptoKit not available")

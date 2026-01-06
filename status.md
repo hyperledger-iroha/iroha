@@ -1,6 +1,16 @@
 # Status
 
 ## Latest Updates
+- Core: make block-sync Norito decode fallible for invalid GetBlocksAfter/ShareBlocks batches and add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: honor IROHA_JS_FORCE_NATIVE to fail fast when native binding is required; add verification tests and README note.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Swift SDK: guard Torii JSON numeric normalization against Int overflow and reuse the safer path for allowance/proof parsing; add regression coverage.
+- Tests: `swift test --filter ToriiJSONValueTests` (from `IrohaSwift`).
+- Java/Android SDK: avoid duplicate WebSocket reconnection scheduling when both error and close fire; add regression coverage.
+- Tests: not run (not requested).
+- Swift SDK: restrict canonical query encoding to ASCII unreserved characters so non-ASCII is percent-escaped; add regression coverage.
+- Tests: `swift test --filter CanonicalRequestTests` (from `IrohaSwift`).
 - JS SDK: gate native-only tests by required native capabilities (Norito/SM2/SoraDNS) and add helper coverage.
 - Tests: `npm run test:js` (from `javascript/iroha_js`).
 - Java/Android SDK: preserve baseUri path segments when building UAID request URLs; add regression coverage.

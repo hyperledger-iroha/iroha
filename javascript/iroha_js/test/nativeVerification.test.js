@@ -143,3 +143,60 @@ test("getNativeBinding honours IROHA_JS_DISABLE_NATIVE opt-out", async () => {
     __resetNativeStateForTests();
   }
 });
+
+test("getNativeBinding throws when IROHA_JS_FORCE_NATIVE is set and binding missing", async () => {
+  __resetNativeStateForTests();
+  const previousForce = process.env.IROHA_JS_FORCE_NATIVE;
+  const previousDisable = process.env.IROHA_JS_DISABLE_NATIVE;
+  const previousOverride = process.env.IROHA_JS_NATIVE_DIR;
+
+  try {
+    await withTempDir(async (dir) => {
+      process.env.IROHA_JS_FORCE_NATIVE = "1";
+      delete process.env.IROHA_JS_DISABLE_NATIVE;
+      process.env.IROHA_JS_NATIVE_DIR = dir;
+      assert.throws(() => getNativeBinding(), /IROHA_JS_FORCE_NATIVE/);
+    });
+  } finally {
+    if (previousForce === undefined) {
+      delete process.env.IROHA_JS_FORCE_NATIVE;
+    } else {
+      process.env.IROHA_JS_FORCE_NATIVE = previousForce;
+    }
+    if (previousDisable === undefined) {
+      delete process.env.IROHA_JS_DISABLE_NATIVE;
+    } else {
+      process.env.IROHA_JS_DISABLE_NATIVE = previousDisable;
+    }
+    if (previousOverride === undefined) {
+      delete process.env.IROHA_JS_NATIVE_DIR;
+    } else {
+      process.env.IROHA_JS_NATIVE_DIR = previousOverride;
+    }
+    __resetNativeStateForTests();
+  }
+});
+
+test("getNativeBinding rejects conflicting force/disable flags", () => {
+  __resetNativeStateForTests();
+  const previousForce = process.env.IROHA_JS_FORCE_NATIVE;
+  const previousDisable = process.env.IROHA_JS_DISABLE_NATIVE;
+
+  try {
+    process.env.IROHA_JS_FORCE_NATIVE = "1";
+    process.env.IROHA_JS_DISABLE_NATIVE = "1";
+    assert.throws(() => getNativeBinding(), /cannot be combined/);
+  } finally {
+    if (previousForce === undefined) {
+      delete process.env.IROHA_JS_FORCE_NATIVE;
+    } else {
+      process.env.IROHA_JS_FORCE_NATIVE = previousForce;
+    }
+    if (previousDisable === undefined) {
+      delete process.env.IROHA_JS_DISABLE_NATIVE;
+    } else {
+      process.env.IROHA_JS_DISABLE_NATIVE = previousDisable;
+    }
+    __resetNativeStateForTests();
+  }
+});
