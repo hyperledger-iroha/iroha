@@ -28,6 +28,7 @@ fn zk_ballot_verifies_with_registered_vk_add2inst_public() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(iroha_core::state::World::default(), kura, query);
+    state.gov.min_bond_amount = 0;
 
     // Ensure dev toggle is OFF explicitly
     let bundle = zk_testkit::add2inst_public_bundle(5, 8);

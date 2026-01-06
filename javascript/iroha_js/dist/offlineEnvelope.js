@@ -63,11 +63,17 @@ function normalizeIssuedAt(issuedAtMs) {
   if (issuedAtMs === undefined || issuedAtMs === null) {
     return Date.now();
   }
-  const asNumber = Number(issuedAtMs);
-  if (!Number.isFinite(asNumber) || asNumber < 0) {
-    throw new TypeError("issuedAtMs must be a non-negative number");
+  if (typeof issuedAtMs === "bigint") {
+    if (issuedAtMs < 0n || issuedAtMs > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new TypeError("issuedAtMs must be a non-negative integer");
+    }
+    return Number(issuedAtMs);
   }
-  return Math.floor(asNumber);
+  const asNumber = Number(issuedAtMs);
+  if (!Number.isFinite(asNumber) || !Number.isSafeInteger(asNumber) || asNumber < 0) {
+    throw new TypeError("issuedAtMs must be a non-negative integer");
+  }
+  return asNumber;
 }
 
 function normalizeOptionalBuffer(value, context) {
@@ -249,12 +255,42 @@ function ensureRecord(value, context) {
   return value;
 }
 
+function decodeBase64Strict(value) {
+  const compact = value.replace(/\s+/g, "");
+  if (compact.length === 0) {
+    throw new Error("payload is empty");
+  }
+  let padded = compact;
+  const paddingIndex = compact.indexOf("=");
+  if (paddingIndex !== -1) {
+    const head = compact.slice(0, paddingIndex);
+    const padding = compact.slice(paddingIndex);
+    if (!/^[0-9A-Za-z+/]*$/.test(head) || !/^={1,2}$/.test(padding)) {
+      throw new Error("invalid base64 payload");
+    }
+    if (compact.length % 4 !== 0) {
+      throw new Error("invalid base64 payload");
+    }
+  } else {
+    if (!/^[0-9A-Za-z+/]+$/.test(compact) || compact.length % 4 === 1) {
+      throw new Error("invalid base64 payload");
+    }
+    const padLength = (4 - (compact.length % 4)) % 4;
+    padded = compact + "=".repeat(padLength);
+  }
+  const decoded = Buffer.from(padded, "base64");
+  if (decoded.toString("base64") !== padded) {
+    throw new Error("invalid base64 payload");
+  }
+  return decoded;
+}
+
 function decodeBase64Field(value, context) {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new TypeError(`${context} must be a non-empty base64 string`);
   }
   try {
-    return Buffer.from(value, "base64");
+    return decodeBase64Strict(value);
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown error";
     throw new TypeError(`${context} must be valid base64 (${reason})`);

@@ -32,7 +32,7 @@ export class SoranetPuzzleClient {
     this._timeoutMs =
       options.timeoutMs === undefined || options.timeoutMs === null
         ? null
-        : coerceNonNegativeNumber(options.timeoutMs, "options.timeoutMs");
+        : coerceNonNegativeInteger(options.timeoutMs, "options.timeoutMs");
   }
 
   get baseUrl() {
@@ -154,7 +154,7 @@ export class SoranetPuzzleClient {
     const timeout =
       options.timeoutMs === undefined || options.timeoutMs === null
         ? this._timeoutMs
-        : coerceNonNegativeNumber(options.timeoutMs, "options.timeoutMs");
+        : coerceNonNegativeInteger(options.timeoutMs, "options.timeoutMs");
     const init = {
       method: (method ?? "GET").toUpperCase(),
       headers,
@@ -256,6 +256,9 @@ function coerceNonNegativeInteger(value, context) {
   const number = coerceNonNegativeNumber(Number(value), context);
   if (!Number.isInteger(number)) {
     throw new TypeError(`${context} must be an integer`);
+  }
+  if (!Number.isSafeInteger(number)) {
+    throw new TypeError(`${context} exceeds maximum safe integer`);
   }
   return number;
 }

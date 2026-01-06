@@ -1,5 +1,6 @@
 use super::*;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::ValueEnum;
 use core::convert::TryFrom;
 use iroha::data_model::{
@@ -1477,7 +1478,7 @@ mod bundle_inspect_tests {
 
         let receipt_amount = Numeric::from_str("42").unwrap();
         let platform_proof = OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
-            key_id: "shared-key".into(),
+            key_id: BASE64_STANDARD.encode(b"shared-key"),
             counter: 1,
             assertion: vec![9, 9, 9],
             challenge_hash: Hash::new(b"challenge"),
@@ -1852,7 +1853,7 @@ mod tests {
             issued_at_ms: 1_700_000_600_000,
             invoice_id: "INV-001".into(),
             platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
-                key_id: "apple-key".into(),
+                key_id: BASE64_STANDARD.encode(b"apple-key"),
                 counter: 1,
                 assertion: vec![],
                 challenge_hash: Hash::new(b"challenge"),

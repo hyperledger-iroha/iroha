@@ -42,6 +42,16 @@ fn remaining_amount_default() -> Numeric {
     Numeric::zero()
 }
 
+fn invalid_counter_scope_error(
+    platform: OfflineTransferRejectionPlatform,
+    reason: impl Into<String>,
+) -> OfflineProofRequestError {
+    OfflineProofRequestError::InvalidCounterScope {
+        platform,
+        reason: reason.into(),
+    }
+}
+
 /// Canonicalize an iOS App Attest key id to standard base64.
 ///
 /// # Errors
@@ -52,23 +62,25 @@ pub fn canonical_app_attest_key_id(
     key_id: &str,
 ) -> Result<String, OfflineProofRequestError> {
     if key_id.trim().is_empty() {
-        return Err(OfflineProofRequestError::InvalidCounterScope {
-            platform: OfflineTransferRejectionPlatform::Apple,
-            reason: "app attest key_id must be non-empty".to_string(),
-        });
+        return Err(invalid_counter_scope_error(
+            OfflineTransferRejectionPlatform::Apple,
+            "apple_app_attest.key_id must be non-empty",
+        ));
     }
-    let bytes = BASE64_STANDARD.decode(key_id.as_bytes()).map_err(|_| {
-        OfflineProofRequestError::InvalidCounterScope {
-            platform: OfflineTransferRejectionPlatform::Apple,
-            reason: "app attest key_id must use standard base64 encoding".to_string(),
-        }
-    })?;
+    let bytes = BASE64_STANDARD
+        .decode(key_id.as_bytes())
+        .map_err(|_| {
+            invalid_counter_scope_error(
+                OfflineTransferRejectionPlatform::Apple,
+                "apple_app_attest.key_id must use standard base64 encoding",
+            )
+        })?;
     let canonical = BASE64_STANDARD.encode(bytes);
     if canonical != key_id {
-        return Err(OfflineProofRequestError::InvalidCounterScope {
-            platform: OfflineTransferRejectionPlatform::Apple,
-            reason: "app attest key_id must use canonical base64 encoding".to_string(),
-        });
+        return Err(invalid_counter_scope_error(
+            OfflineTransferRejectionPlatform::Apple,
+            "apple_app_attest.key_id must use canonical base64 encoding",
+        ));
     }
     Ok(canonical)
 }
@@ -82,10 +94,10 @@ pub fn marker_series_from_public_key(
     marker_public_key: &[u8],
 ) -> Result<String, OfflineProofRequestError> {
     if marker_public_key.is_empty() {
-        return Err(OfflineProofRequestError::InvalidCounterScope {
-            platform: OfflineTransferRejectionPlatform::Android,
-            reason: "marker_public_key must be non-empty".to_string(),
-        });
+        return Err(invalid_counter_scope_error(
+            OfflineTransferRejectionPlatform::Android,
+            "marker_public_key must be non-empty",
+        ));
     }
     let hash = Hash::new(marker_public_key);
     Ok(format!("{MARKER_COUNTER_PREFIX}{hash}"))
@@ -106,7 +118,7 @@ pub fn canonical_receipts<'a>(
 pub fn receipts_are_canonical(receipts: &[OfflineSpendReceipt]) -> bool {
     receipts
         .windows(2)
-        .all(|pair| receipt_cmp(pair[0], pair[1]) != Ordering::Greater)
+        .all(|pair| receipt_cmp(&pair[0], &pair[1]) != Ordering::Greater)
 }
 
 /// Validate that receipts share a single counter scope.
@@ -160,10 +172,10 @@ fn receipt_counter_scope(
         OfflinePlatformProof::AndroidMarkerKey(proof) => {
             let derived = marker_series_from_public_key(&proof.marker_public_key)?;
             if proof.series != derived {
-                return Err(OfflineProofRequestError::InvalidCounterScope {
-                    platform: OfflineTransferRejectionPlatform::Android,
-                    reason: "marker series does not match marker_public_key".to_string(),
-                });
+                return Err(invalid_counter_scope_error(
+                    OfflineTransferRejectionPlatform::Android,
+                    "marker series does not match marker_public_key",
+                ));
             }
             Ok(CounterScope {
                 kind: CounterScopeKind::AndroidMarker,
@@ -182,10 +194,10 @@ fn provisioned_counter_scope(
 ) -> Result<String, OfflineProofRequestError> {
     let schema = proof.manifest_schema.trim();
     if schema.is_empty() {
-        return Err(OfflineProofRequestError::InvalidCounterScope {
-            platform: OfflineTransferRejectionPlatform::Android,
-            reason: "provisioned manifest_schema must be non-empty".to_string(),
-        });
+        return Err(invalid_counter_scope_error(
+            OfflineTransferRejectionPlatform::Android,
+            "provisioned manifest_schema must be non-empty",
+        ));
     }
     let device_id = provisioned_device_id(&proof.device_manifest)?;
     Ok(format!("{PROVISIONED_COUNTER_PREFIX}{schema}::{device_id}"))
@@ -195,33 +207,31 @@ fn provisioned_device_id(
     manifest: &Metadata,
 ) -> Result<String, OfflineProofRequestError> {
     let name = Name::from_str(ANDROID_PROVISIONED_DEVICE_ID_KEY).map_err(|err| {
-        OfflineProofRequestError::InvalidCounterScope {
-            platform: OfflineTransferRejectionPlatform::Android,
-            reason: format!("invalid metadata key `{ANDROID_PROVISIONED_DEVICE_ID_KEY}`: {err}"),
-        }
+        let _ = err;
+        invalid_counter_scope_error(
+            OfflineTransferRejectionPlatform::Android,
+            "invalid android.provisioned.device_id metadata key",
+        )
     })?;
     let value = manifest.get(&name).ok_or_else(|| {
-        OfflineProofRequestError::InvalidCounterScope {
-            platform: OfflineTransferRejectionPlatform::Android,
-            reason: format!(
-                "required metadata entry `{ANDROID_PROVISIONED_DEVICE_ID_KEY}` is missing"
-            ),
-        }
+        invalid_counter_scope_error(
+            OfflineTransferRejectionPlatform::Android,
+            "provisioned device_manifest missing android.provisioned.device_id",
+        )
     })?;
     let device_id: String = value.try_into_any().map_err(|err| {
-        OfflineProofRequestError::InvalidCounterScope {
-            platform: OfflineTransferRejectionPlatform::Android,
-            reason: format!(
-                "metadata entry `{ANDROID_PROVISIONED_DEVICE_ID_KEY}` is not a string: {err}"
-            ),
-        }
+        let _ = err;
+        invalid_counter_scope_error(
+            OfflineTransferRejectionPlatform::Android,
+            "provisioned device_id must be a string",
+        )
     })?;
     let trimmed = device_id.trim();
     if trimmed.is_empty() {
-        return Err(OfflineProofRequestError::InvalidCounterScope {
-            platform: OfflineTransferRejectionPlatform::Android,
-            reason: "android.provisioned.device_id must not be empty".to_string(),
-        });
+        return Err(invalid_counter_scope_error(
+            OfflineTransferRejectionPlatform::Android,
+            "provisioned device_id must be non-empty",
+        ));
     }
     Ok(trimmed.to_string())
 }

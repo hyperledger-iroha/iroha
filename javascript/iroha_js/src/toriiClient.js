@@ -15008,6 +15008,26 @@ function normalizeGovernanceZkBallotV1Payload(input) {
       "governanceSubmitZkBallotV1.owner",
     );
   }
+  if (record.amount !== undefined && record.amount !== null) {
+    payload.amount = normalizeNumericString(
+      record.amount,
+      "governanceSubmitZkBallotV1.amount",
+    );
+  }
+  const durationBlocks = record.duration_blocks ?? record.durationBlocks;
+  if (durationBlocks !== undefined && durationBlocks !== null) {
+    payload.duration_blocks = ToriiClient._normalizeUnsignedInteger(
+      durationBlocks,
+      "governanceSubmitZkBallotV1.durationBlocks",
+      { allowZero: false },
+    );
+  }
+  if (record.direction !== undefined && record.direction !== null) {
+    payload.direction = normalizeGovernanceBallotDirection(
+      record.direction,
+      "governanceSubmitZkBallotV1.direction",
+    );
+  }
   if (record.nullifier_hex ?? record.nullifierHex) {
     payload.nullifier_hex = normalizeHex32String(
       record.nullifier_hex ?? record.nullifierHex,

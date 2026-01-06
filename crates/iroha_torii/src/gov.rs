@@ -316,6 +316,15 @@ pub struct ZkBallotV1Dto {
     /// Optional owner account id (for lock hints when the circuit commits owner)
     #[norito(default)]
     pub owner: Option<String>,
+    /// Optional lock amount hint (decimal string).
+    #[norito(default)]
+    pub amount: Option<String>,
+    /// Optional lock duration hint in blocks.
+    #[norito(default)]
+    pub duration_blocks: Option<u64>,
+    /// Optional direction hint ("Aye" | "Nay" | "Abstain").
+    #[norito(default)]
+    pub direction: Option<String>,
     /// Optional nullifier hint (hex-32, 0x allowed)
     #[norito(default)]
     pub nullifier_hex: Option<String>,
@@ -380,6 +389,21 @@ pub async fn handle_gov_ballot_zk_v1(
     }
     if let Some(owner) = &body.owner {
         pub_map.insert("owner".into(), norito::json::Value::from(owner.clone()));
+    }
+    if let Some(amount) = &body.amount {
+        pub_map.insert("amount".into(), norito::json::Value::from(amount.clone()));
+    }
+    if let Some(duration_blocks) = body.duration_blocks {
+        pub_map.insert(
+            "duration_blocks".into(),
+            norito::json::Value::from(duration_blocks),
+        );
+    }
+    if let Some(direction) = &body.direction {
+        pub_map.insert(
+            "direction".into(),
+            norito::json::Value::from(direction.clone()),
+        );
     }
     if let Some(nullifier_hex) = &body.nullifier_hex {
         pub_map.insert(
@@ -464,6 +488,21 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
     }
     if let Some(owner) = &body.ballot.owner {
         pub_map.insert("owner".into(), norito::json::Value::from(owner.to_string()));
+    }
+    if let Some(amount) = &body.ballot.amount {
+        pub_map.insert("amount".into(), norito::json::Value::from(amount.clone()));
+    }
+    if let Some(duration_blocks) = body.ballot.duration_blocks {
+        pub_map.insert(
+            "duration_blocks".into(),
+            norito::json::Value::from(duration_blocks),
+        );
+    }
+    if let Some(direction) = &body.ballot.direction {
+        pub_map.insert(
+            "direction".into(),
+            norito::json::Value::from(direction.clone()),
+        );
     }
     if let Some(nullifier) = &body.ballot.nullifier {
         pub_map.insert(
@@ -3316,6 +3355,9 @@ mod tests {
                 "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
                     .to_string(),
             ),
+            amount: Some("100".to_string()),
+            duration_blocks: Some(200),
+            direction: Some("Aye".to_string()),
             nullifier_hex: Some(hex::encode([0x11u8; 32])),
             private_key: None,
         };
@@ -3382,6 +3424,9 @@ mod tests {
             root_hint: Some([0xAA; 32]),
             owner: None,
             nullifier: Some([0x11; 32]),
+            amount: Some("200".to_string()),
+            duration_blocks: Some(256),
+            direction: Some("Nay".to_string()),
         };
         let dto = super::ZkBallotV1BallotProofDto {
             authority:

@@ -9,6 +9,8 @@ import {
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
+const MAX_NUMERIC_SCALE = 28;
+const MAX_NUMERIC_BITS = 512;
 
 function crc16(tag, body) {
   let crc = 0xffff;
@@ -82,33 +84,102 @@ function assertString(value, name) {
   return value;
 }
 
-function asNumericQuantity(value, name) {
-  if (typeof value === "bigint") {
-    return value.toString();
-  }
-  if (typeof value === "number") {
+function normalizeNumericLiteral(value, name, { allowNegative = false } = {}) {
+  let raw;
+  if (typeof value === "string") {
+    raw = value.trim();
+  } else if (typeof value === "number") {
     if (!Number.isFinite(value)) {
       fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a finite number`, name);
     }
-    return value.toString();
+    raw = value.toString();
+  } else if (typeof value === "bigint") {
+    raw = value.toString();
+  } else {
+    fail(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a string, number, or bigint representing a Numeric`,
+      name,
+    );
   }
-  if (typeof value === "string") {
-    if (value.length === 0) {
-      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+
+  if (!raw) {
+    fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a valid Numeric literal`, name);
+  }
+
+  let digits = raw;
+  const sign = digits[0];
+  if (sign === "-" || sign === "+") {
+    if (sign === "-" && !allowNegative) {
+      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be non-negative`, name);
     }
-    return value;
+    digits = digits.slice(1);
   }
-  fail(
-    ValidationErrorCode.INVALID_NUMERIC,
-    `${name} must be a string, number, or bigint representing a Numeric`,
-    name,
-  );
+  if (!digits) {
+    fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a valid Numeric literal`, name);
+  }
+
+  let seenDot = false;
+  let scale = 0;
+  let mantissa = "";
+  for (const ch of digits) {
+    if (ch === ".") {
+      if (seenDot) {
+        fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a valid Numeric literal`, name);
+      }
+      seenDot = true;
+      continue;
+    }
+    if (ch < "0" || ch > "9") {
+      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a valid Numeric literal`, name);
+    }
+    mantissa += ch;
+    if (seenDot) {
+      scale += 1;
+    }
+  }
+  if (!mantissa) {
+    fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a valid Numeric literal`, name);
+  }
+  if (scale > MAX_NUMERIC_SCALE) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} scale exceeds ${MAX_NUMERIC_SCALE} decimal places`,
+      name,
+    );
+  }
+
+  let mantissaValue = BigInt(mantissa);
+  if (sign === "-") {
+    mantissaValue = -mantissaValue;
+  }
+  const absValue = mantissaValue < 0n ? -mantissaValue : mantissaValue;
+  if (absValue !== 0n && absValue.toString(2).length > MAX_NUMERIC_BITS) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} mantissa exceeds ${MAX_NUMERIC_BITS} bits`,
+      name,
+    );
+  }
+
+  return raw;
+}
+
+function asNumericQuantity(value, name) {
+  return normalizeNumericLiteral(value, name, { allowNegative: false });
 }
 
 function asU128JsonNumber(value, name) {
   if (typeof value === "number") {
     if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
       fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
+    }
+    if (!Number.isSafeInteger(value)) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name} must be between 0 and ${MAX_SAFE_INTEGER} (inclusive) for deterministic JSON encoding`,
+        name,
+      );
     }
     return value;
   }
@@ -144,11 +215,25 @@ function asPositiveInteger(value, name) {
     if (value <= 0n) {
       fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must be greater than zero`, name);
     }
+    if (value > MAX_SAFE_INTEGER_BIGINT) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name} exceeds JavaScript safe integer range`,
+        name,
+      );
+    }
     return Number(value);
   }
   if (typeof value === "number") {
     if (!Number.isInteger(value) || value <= 0) {
       fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a positive integer`, name);
+    }
+    if (!Number.isSafeInteger(value)) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name} exceeds JavaScript safe integer range`,
+        name,
+      );
     }
     return value;
   }
@@ -156,7 +241,15 @@ function asPositiveInteger(value, name) {
     if (!/^[1-9]\d*$/.test(value)) {
       fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a positive integer`, name);
     }
-    return Number.parseInt(value, 10);
+    const numeric = BigInt(value);
+    if (numeric > MAX_SAFE_INTEGER_BIGINT) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name} exceeds JavaScript safe integer range`,
+        name,
+      );
+    }
+    return Number(numeric);
   }
   fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a positive integer`, name);
 }
@@ -283,19 +376,26 @@ function asNonNegativeInteger(value, name) {
     if (value < 0n) {
       fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must be greater than or equal to zero`, name);
     }
-    const asNumber = Number(value);
-    if (!Number.isSafeInteger(asNumber)) {
+    if (value > MAX_SAFE_INTEGER_BIGINT) {
       fail(
         ValidationErrorCode.VALUE_OUT_OF_RANGE,
         `${name} exceeds JavaScript safe integer range`,
         name,
       );
     }
+    const asNumber = Number(value);
     return asNumber;
   }
   if (typeof value === "number") {
     if (!Number.isInteger(value) || value < 0) {
       fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
+    }
+    if (!Number.isSafeInteger(value)) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name} exceeds JavaScript safe integer range`,
+        name,
+      );
     }
     return value;
   }
@@ -303,7 +403,15 @@ function asNonNegativeInteger(value, name) {
     if (!/^(?:0|[1-9]\d*)$/.test(value)) {
       fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
     }
-    return Number.parseInt(value, 10);
+    const numeric = BigInt(value);
+    if (numeric > MAX_SAFE_INTEGER_BIGINT) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name} exceeds JavaScript safe integer range`,
+        name,
+      );
+    }
+    return Number(numeric);
   }
   fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
 }
@@ -330,9 +438,15 @@ function toBinaryBuffer(value, name) {
   if (value instanceof ArrayBuffer) {
     return Buffer.from(value);
   }
+  if (Array.isArray(value)) {
+    return Buffer.from(normalizeByteArray(value, name));
+  }
+  if (value && typeof value.length === "number" && typeof value !== "string") {
+    return Buffer.from(normalizeByteArray(Array.from(value), name));
+  }
   fail(
     ValidationErrorCode.INVALID_OBJECT,
-    `${name} must be a Buffer or ArrayBuffer view`,
+    `${name} must be a Buffer, ArrayBuffer view, or byte array`,
     name,
   );
 }
@@ -430,7 +544,7 @@ function normalizeFixedBytes(value, name, length = 32) {
     } else if (/^[0-9A-Fa-f]+$/.test(trimmed) && trimmed.length === length * 2) {
       buffer = Buffer.from(trimmed, "hex");
     } else {
-      buffer = Buffer.from(trimmed, "base64");
+      buffer = decodeBase64Strict(trimmed, name);
     }
   } else {
     buffer = toBinaryBuffer(value, name);
@@ -459,6 +573,9 @@ function normalizeByteArray(value, name) {
     fail(ValidationErrorCode.INVALID_OBJECT, `${name} is required`, name);
   }
   if (Array.isArray(value)) {
+    if (value.length === 0) {
+      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty byte array`, name);
+    }
     return value.map((byte, index) => {
       const numeric = Number(byte);
       if (!Number.isInteger(numeric) || numeric < 0 || numeric > 0xff) {
@@ -472,6 +589,9 @@ function normalizeByteArray(value, name) {
     });
   }
   if (Buffer.isBuffer(value)) {
+    if (value.length === 0) {
+      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty byte array`, name);
+    }
     return Array.from(value.values());
   }
   if (typeof value === "string") {
@@ -479,6 +599,9 @@ function normalizeByteArray(value, name) {
     return Array.from(Buffer.from(b64, "base64").values());
   }
   const buffer = toBinaryBuffer(value, name);
+  if (buffer.length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty byte array`, name);
+  }
   return Array.from(buffer.values());
 }
 
@@ -792,16 +915,50 @@ function normalizeAccessSetHints(value, context) {
   };
 }
 
+function decodeBase64Strict(value, name) {
+  const compact = value.replace(/\s+/g, "");
+  if (compact.length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be a non-empty base64 string`,
+      name,
+    );
+  }
+
+  let padded = compact;
+  const paddingIndex = compact.indexOf("=");
+  if (paddingIndex !== -1) {
+    const head = compact.slice(0, paddingIndex);
+    const padding = compact.slice(paddingIndex);
+    if (!/^[0-9A-Za-z+/]*$/.test(head) || !/^={1,2}$/.test(padding)) {
+      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a valid base64 string`, name);
+    }
+    if (compact.length % 4 !== 0) {
+      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a valid base64 string`, name);
+    }
+  } else {
+    if (!/^[0-9A-Za-z+/]+$/.test(compact) || compact.length % 4 === 1) {
+      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a valid base64 string`, name);
+    }
+    const padLength = (4 - (compact.length % 4)) % 4;
+    padded = compact + "=".repeat(padLength);
+  }
+
+  const decoded = Buffer.from(padded, "base64");
+  if (decoded.toString("base64") !== padded) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a valid base64 string`, name);
+  }
+  return decoded;
+}
+
 function normalizeBase64(value, name) {
   if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (trimmed.length === 0) {
-      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty base64 string`, name);
-    }
-    // Validate by attempting a decode/encode round trip.
-    return Buffer.from(trimmed, "base64").toString("base64");
+    return decodeBase64Strict(value.trim(), name).toString("base64");
   }
   const buffer = toBinaryBuffer(value, name);
+  if (buffer.length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty base64 string`, name);
+  }
   return buffer.toString("base64");
 }
 
@@ -2061,13 +2218,21 @@ export function buildRegisterSmartContractBytesInstruction(options) {
       "buildRegisterSmartContractBytesInstruction options must be an object",
     );
   }
+  const code = normalizeBase64(options.code, "registerSmartContractBytes.code");
+  if (code.length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      "registerSmartContractBytes.code must be a non-empty base64 string",
+      "registerSmartContractBytes.code",
+    );
+  }
   return {
     RegisterSmartContractBytes: {
       code_hash: normalizeHash(
         options.codeHash ?? options.code_hash,
         "registerSmartContractBytes.codeHash",
       ),
-      code: normalizeBase64(options.code, "registerSmartContractBytes.code"),
+      code,
     },
   };
 }

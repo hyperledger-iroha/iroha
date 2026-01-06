@@ -1349,6 +1349,22 @@ pub mod isi {
                     .as_u64()
                     .or_else(|| value.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
             };
+            let parse_ballot_direction = |value: &norito::json::Value| -> Option<u8> {
+                if let Some(n) = value.as_u64() {
+                    return u8::try_from(n).ok().filter(|v| *v <= 2);
+                }
+                let raw = value.as_str()?.trim();
+                if raw.eq_ignore_ascii_case("aye") {
+                    return Some(0);
+                }
+                if raw.eq_ignore_ascii_case("nay") {
+                    return Some(1);
+                }
+                if raw.eq_ignore_ascii_case("abstain") {
+                    return Some(2);
+                }
+                raw.parse::<u8>().ok().filter(|v| *v <= 2)
+            };
 
             if !has_permission(
                 &state_transaction.world,
@@ -1403,47 +1419,124 @@ pub mod isi {
 
             let public_inputs = if self.public_inputs_json.trim().is_empty() {
                 None
-            } else if let Ok(value) =
-                norito::json::from_str::<norito::json::Value>(self.public_inputs_json.as_str())
-            {
-                Some(value)
             } else {
-                state_transaction.world.emit_events(Some(
-                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                            referendum_id: self.election_id.clone(),
-                            reason: "public inputs must be valid JSON".into(),
-                        },
-                    ),
-                ));
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "public inputs must be valid JSON".into(),
-                ));
+                let value = match norito::json::from_str::<norito::json::Value>(
+                    self.public_inputs_json.as_str(),
+                ) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        state_transaction.world.emit_events(Some(
+                            iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                                iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                    referendum_id: self.election_id.clone(),
+                                    reason: "public inputs must be valid JSON".into(),
+                                },
+                            ),
+                        ));
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "public inputs must be valid JSON".into(),
+                        ));
+                    }
+                };
+                if !value.is_object() {
+                    state_transaction.world.emit_events(Some(
+                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                referendum_id: self.election_id.clone(),
+                                reason: "public inputs must be a JSON object".into(),
+                            },
+                        ),
+                    ));
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "public inputs must be a JSON object".into(),
+                    ));
+                }
+                Some(value)
             };
             let mut lock_owner: Option<iroha_data_model::account::AccountId> = None;
             let mut lock_amount: Option<u128> = None;
             let mut lock_duration: Option<u64> = None;
+            let mut lock_direction: Option<u8> = None;
             let mut root_hint_opt: Option<[u8; 32]> = None;
             let mut nullifier_hint: Option<[u8; 32]> = None;
             if let Some(val) = public_inputs.as_ref() {
-                if let Some(rh_str) = val.get("root_hint").and_then(|v| v.as_str()) {
+                if let Some(root_val) = val.get("root_hint") {
+                    let rh_str = root_val.as_str().ok_or_else(|| {
+                        state_transaction.world.emit_events(Some(
+                            iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                                iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                    referendum_id: self.election_id.clone(),
+                                    reason: "root_hint must be 32-byte hex".into(),
+                                },
+                            ),
+                        ));
+                        InstructionExecutionError::InvariantViolation(
+                            "root_hint must be 32-byte hex".into(),
+                        )
+                    })?;
                     if let Some(parsed) = parse_hex32_field(rh_str) {
                         root_hint_opt = Some(parsed);
+                    } else {
+                        state_transaction.world.emit_events(Some(
+                            iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                                iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                    referendum_id: self.election_id.clone(),
+                                    reason: "root_hint must be 32-byte hex".into(),
+                                },
+                            ),
+                        ));
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "root_hint must be 32-byte hex".into(),
+                        ));
                     }
                 }
-                if let Some(hex_str) = val
-                    .get("nullifier_hex")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| val.get("nullifier").and_then(|v| v.as_str()))
-                {
+                if let Some(null_val) = val.get("nullifier_hex") {
+                    let hex_str = null_val.as_str().ok_or_else(|| {
+                        state_transaction.world.emit_events(Some(
+                            iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                                iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                    referendum_id: self.election_id.clone(),
+                                    reason: "nullifier must be 32-byte hex".into(),
+                                },
+                            ),
+                        ));
+                        InstructionExecutionError::InvariantViolation(
+                            "nullifier must be 32-byte hex".into(),
+                        )
+                    })?;
                     if let Some(parsed) = parse_hex32_field(hex_str) {
                         nullifier_hint = Some(parsed);
+                    } else {
+                        state_transaction.world.emit_events(Some(
+                            iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                                iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                    referendum_id: self.election_id.clone(),
+                                    reason: "nullifier must be 32-byte hex".into(),
+                                },
+                            ),
+                        ));
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "nullifier must be 32-byte hex".into(),
+                        ));
                     }
                 }
             }
 
             if let Some(val) = public_inputs.as_ref() {
-                if let Some(owner_str) = val.get("owner").and_then(|v| v.as_str()) {
+                if let Some(owner_val) = val.get("owner") {
+                    let owner_str = owner_val.as_str().ok_or_else(|| {
+                        state_transaction.world.emit_events(Some(
+                            iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                                iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                    referendum_id: self.election_id.clone(),
+                                    reason: "owner must be a canonical account id".into(),
+                                },
+                            ),
+                        ));
+                        InstructionExecutionError::InvariantViolation(
+                            "owner must be a canonical account id".into(),
+                        )
+                    })?;
                     let owner_parsed: iroha_data_model::account::AccountId = if let Ok(id) =
                         owner_str.parse()
                     {
@@ -1510,6 +1603,23 @@ pub mod isi {
                         ));
                         return Err(InstructionExecutionError::InvariantViolation(
                             "duration_blocks must be u64".into(),
+                        ));
+                    }
+                }
+                if let Some(direction_val) = val.get("direction") {
+                    if let Some(parsed) = parse_ballot_direction(direction_val) {
+                        lock_direction = Some(parsed);
+                    } else {
+                        state_transaction.world.emit_events(Some(
+                            iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                                iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                    referendum_id: self.election_id.clone(),
+                                    reason: "direction must be Aye, Nay, or Abstain".into(),
+                                },
+                            ),
+                        ));
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "direction must be Aye, Nay, or Abstain".into(),
                         ));
                     }
                 }
@@ -1603,6 +1713,38 @@ pub mod isi {
                         "referendum closed".into(),
                     ));
                 }
+            }
+            let lock_hint_present = lock_owner.is_some()
+                || lock_amount.is_some()
+                || lock_duration.is_some()
+                || lock_direction.is_some();
+            if lock_hint_present {
+                if lock_owner.is_none() || lock_amount.is_none() || lock_duration.is_none() {
+                    state_transaction.world.emit_events(Some(
+                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                referendum_id: self.election_id.clone(),
+                                reason: "lock hints must include owner, amount, duration_blocks"
+                                    .into(),
+                            },
+                        ),
+                    ));
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "lock hints must include owner, amount, duration_blocks".into(),
+                    ));
+                }
+            } else if state_transaction.gov.min_bond_amount > 0 {
+                state_transaction.world.emit_events(Some(
+                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                            referendum_id: self.election_id.clone(),
+                            reason: "lock hints required for governance bond".into(),
+                        },
+                    ),
+                ));
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "lock hints required for governance bond".into(),
+                ));
             }
 
             // 3) Verify the proof against the resolved VK (ZK1/H2* envelope dispatch)
@@ -1956,6 +2098,7 @@ pub mod isi {
                 if let (Some(owner), Some(amount), Some(duration_blocks)) =
                     (lock_owner.clone(), lock_amount, lock_duration)
                 {
+                    let direction = lock_direction.unwrap_or(2);
                     if owner != *authority {
                         state_transaction.world.emit_events(Some(
                             iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
@@ -2035,7 +2178,7 @@ pub mod isi {
                         amount,
                         slashed: 0,
                         expiry_height: new_expiry,
-                        direction: 2,
+                        direction,
                         duration_blocks,
                     };
                     locks.locks.insert(owner.clone(), rec.clone());
@@ -3085,12 +3228,20 @@ pub mod isi {
                     }
                 }
             }
-            // ZK tally fallback: if an election exists, prefer its tally if shape matches 2 options
+            // ZK tally: require finalized election and use its tally for approve/reject.
             if let Some(e) = state_transaction.world.elections.get(&self.referendum_id) {
-                if e.tally.len() >= 2 {
-                    approve = u128::from(e.tally[0]);
-                    reject = u128::from(e.tally[1]);
+                if !e.finalized {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "election tally not finalized".into(),
+                    ));
                 }
+                if e.tally.len() < 2 {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "election tally missing options".into(),
+                    ));
+                }
+                approve = u128::from(e.tally[0]);
+                reject = u128::from(e.tally[1]);
             }
             // Note: closing by height is automatic in State::block; no need to change status here.
             // Decide and emit Approved/Rejected with thresholds

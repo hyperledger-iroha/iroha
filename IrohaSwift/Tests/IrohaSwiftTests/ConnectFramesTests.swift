@@ -25,11 +25,42 @@ final class ConnectFramesTests: XCTestCase {
         }
     }
 
+    func testOpenFrameRoundTrip() throws {
+        try requireConnectCodec()
+        let open = ConnectOpen(appPublicKey: Data(repeating: 0x11, count: 32),
+                               appMetadata: ConnectAppMetadata(name: "demo", iconURL: nil, description: nil),
+                               constraints: ConnectConstraints(chainID: "chain"),
+                               permissions: ConnectPermissions(methods: ["sign"]))
+        let frame = ConnectFrame(sessionID: Data(repeating: 0x22, count: 32),
+                                 direction: .appToWallet,
+                                 sequence: 1,
+                                 kind: .control(.open(open)))
+        let encoded = try ConnectCodec.encode(frame)
+        let decoded = try ConnectCodec.decode(encoded)
+        XCTAssertEqual(decoded.sessionID, frame.sessionID)
+        XCTAssertEqual(decoded.direction, frame.direction)
+        XCTAssertEqual(decoded.sequence, frame.sequence)
+        if case let .control(.open(decodedOpen)) = decoded.kind {
+            XCTAssertEqual(decodedOpen, open)
+        } else {
+            XCTFail("expected open frame")
+        }
+    }
+
     func testPermissionsJSONRoundTrip() throws {
         let permissions = ConnectPermissions(methods: ["sign"], events: ["event"], resources: ["accounts"])
         let data = ConnectCodec.encodePermissionsJSON(permissions)
         let decoded = try data.flatMap { try ConnectCodec.decodePermissionsJSON($0) }
         XCTAssertEqual(decoded, permissions)
+    }
+
+    func testPermissionsJSONAllowsMissingEvents() throws {
+        let json: [String: Any] = [
+            "methods": ["sign"]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: json, options: [])
+        let decoded = try ConnectCodec.decodePermissionsJSON(data)
+        XCTAssertEqual(decoded, ConnectPermissions(methods: ["sign"], events: [], resources: nil))
     }
 
     func testProofJSONRoundTrip() throws {
@@ -109,6 +140,28 @@ final class ConnectFramesTests: XCTestCase {
         ]
         let data = try JSONSerialization.data(withJSONObject: json, options: [])
         XCTAssertThrowsError(try ConnectCodec.decodeAppMetadataJSON(data))
+    }
+
+    func testAppMetadataJSONAcceptsIconUrlAlias() throws {
+        let json: [String: Any] = [
+            "name": "Demo",
+            "icon_url": "https://example.com/icon.png"
+        ]
+        let data = try JSONSerialization.data(withJSONObject: json, options: [])
+        let decoded = try ConnectCodec.decodeAppMetadataJSON(data)
+        XCTAssertEqual(decoded?.name, "Demo")
+        XCTAssertEqual(decoded?.iconURL, "https://example.com/icon.png")
+    }
+
+    func testAppMetadataJSONAllowsIconHash() throws {
+        let json: [String: Any] = [
+            "name": "Demo",
+            "icon_hash": "abc123"
+        ]
+        let data = try JSONSerialization.data(withJSONObject: json, options: [])
+        let decoded = try ConnectCodec.decodeAppMetadataJSON(data)
+        XCTAssertEqual(decoded?.name, "Demo")
+        XCTAssertNil(decoded?.iconURL)
     }
 
     func testProofJSONRejectsNonStringValue() throws {

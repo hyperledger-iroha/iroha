@@ -125,6 +125,21 @@ public final class OkHttpTransportExecutor
     return true;
   }
 
+  @Override
+  public void invalidateAndCancel() {
+    client.dispatcher().cancelAll();
+    client.connectionPool().evictAll();
+    final var cache = client.cache();
+    if (cache != null) {
+      try {
+        cache.close();
+      } catch (final IOException ignored) {
+        // Best-effort cleanup only.
+      }
+    }
+    client.dispatcher().executorService().shutdown();
+  }
+
   /** Exposes the underlying OkHttp client for callers that need connection pooling reuse. */
   public OkHttpClient unwrapClient() {
     return client;

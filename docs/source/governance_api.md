@@ -74,7 +74,8 @@ Code Size Cap
   - Request: { "authority": "alice@wonderland", "private_key": "…?", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": {…} }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
   - Notes:
-    - When the circuit’s public inputs include `owner`, `amount`, and `duration_blocks`, and the proof verifies against the configured VK, the node creates or extends a governance lock for `election_id` with that `owner`. Direction remains hidden (`unknown`); only amount/expiry are updated. Re-votes are monotonic: amount and expiry only increase (the node applies max(amount, prev.amount) and max(expiry, prev.expiry)).
+    - When the circuit’s public inputs include `owner`, `amount`, and `duration_blocks`, and the proof verifies against the configured VK, the node creates or extends a governance lock for `election_id` with that `owner`. Direction remains hidden (`unknown`) unless hinted; only amount/expiry are updated. Re-votes are monotonic: amount and expiry only increase (the node applies max(amount, prev.amount) and max(expiry, prev.expiry)).
+    - When `min_bond_amount > 0`, the ballot must supply `owner`, `amount`, and `duration_blocks`; missing lock hints are rejected.
     - ZK re-votes that attempt to shrink amount or expiry are rejected server-side with `BallotRejected` diagnostics.
     - Contract execution must call `ZK_VOTE_VERIFY_BALLOT` prior to enqueuing `SubmitBallot`; hosts enforce a one-shot latch.
 
@@ -87,7 +88,7 @@ Code Size Cap
   - Request: { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "alice@wonderland?", "private_key": "…?" }
   - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }
   - On-chain effect (current scaffold): enacting an approved deploy proposal inserts a minimal `ContractManifest` keyed by `code_hash` with the expected `abi_hash` and marks the proposal Enacted. If a manifest already exists for the `code_hash` with a different `abi_hash`, enactment is rejected.
-  - Notes: For ZK elections, contract paths must call `ZK_VOTE_VERIFY_TALLY` prior to executing `FinalizeElection`; hosts enforce a one-shot latch.
+  - Notes: For ZK elections, contract paths must call `ZK_VOTE_VERIFY_TALLY` prior to executing `FinalizeElection`; hosts enforce a one-shot latch. `FinalizeReferendum` rejects ZK referenda until the election tally is finalized.
 
 - POST `/v1/gov/enact`
   - Request: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "alice@wonderland?", "private_key": "…?" }
@@ -224,7 +225,7 @@ CLI Helpers
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
   - The one-line summary now surfaces a deterministic `fingerprint=<hex>` derived from the encoded `CastZkBallot` along with any decoded hints (`owner`, `amount`, `duration_blocks`, `direction` when provided).
   - CLI responses annotate `tx_instructions[]` with `payload_fingerprint_hex` plus decoded fields so downstream tooling can verify the skeleton without reimplementing Norito decoding.
-  - Supplying the lock hints allows the node to emit `LockCreated`/`LockExtended` events for ZK ballots once the circuit exposes the same values.
+  - When `min_bond_amount > 0`, ZK ballots must supply lock hints (`owner`, `amount`, `duration_blocks`); missing hints are rejected. Direction remains optional and is treated as a hint only.
 - `iroha gov vote-plain --referendum-id <id> --owner <account>@<domain> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - Aliases `--lock-amount`/`--lock-duration-blocks` mirror the ZK flag names for scripting parity.
   - Summary output mirrors `vote-zk` by including the encoded instruction fingerprint and human-readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`), providing quick confirmation before signing the skeleton.
@@ -254,6 +255,9 @@ Unlock Sweep (Operator/Audit)
       "envelope_b64": "AAECAwQ=",
       "root_hint_hex": "…64hex?",
       "owner": "alice@wonderland?",
+      "amount": "100?",
+      "duration_blocks": 6000?,
+      "direction": "Aye|Nay|Abstain?",
       "nullifier_hex": "…64hex?"
     }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
@@ -271,7 +275,10 @@ Unlock Sweep (Operator/Audit)
         "envelope_bytes": "AAECAwQ=",   // base64 of ZK1 or H2* container
         "root_hint": null,                // optional 32-byte array of bytes (eligibility root)
         "owner": null,                    // optional AccountId when circuit commits owner
-        "nullifier": null                 // optional 32-byte array of bytes (nullifier hint)
+        "nullifier": null,                // optional 32-byte array of bytes (nullifier hint)
+        "amount": "100",                  // optional lock amount hint (decimal string)
+        "duration_blocks": 6000,          // optional lock duration hint
+        "direction": "Aye"                // optional direction hint
       }
     }
   - Response:
@@ -285,12 +292,13 @@ Unlock Sweep (Operator/Audit)
     }
   - Notes:
     - When `private_key` is provided, Torii submits the signed transaction and sets `reason` to `submitted transaction`.
-    - The server maps optional `root_hint`/`owner`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
+    - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` (as `nullifier_hex`) from the ballot to `public_inputs_json` for `CastZkBallot`.
     - The envelope bytes are re-encoded as base64 for the instruction payload.
     - This endpoint is only available when the `zk-ballot` feature is enabled.
 
 CastZkBallot Verification Path
 - `CastZkBallot` decodes the supplied base64 proof and rejects empty or malformed payloads (`BallotRejected` with `invalid or empty proof`).
+- If `public_inputs_json` is supplied, it must be a JSON object; non-object payloads are rejected.
 - The host resolves the ballot verifying key from the referendum (`vk_ballot`) or governance defaults and requires the record to exist, be `Active`, and carry inline bytes.
 - Stored verifying-key bytes are re-hashed with `hash_vk`; any commitment mismatch aborts execution before verification to guard against tampered registry entries (`BallotRejected` with `verifying key commitment mismatch`).
 - Proof bytes are dispatched to the registered backend via `zk::verify_backend`; invalid transcripts surface as `BallotRejected` with `invalid proof` and the instruction fails deterministically.

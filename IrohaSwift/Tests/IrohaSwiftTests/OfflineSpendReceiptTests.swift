@@ -7,8 +7,9 @@ final class OfflineSpendReceiptTests: XCTestCase {
         let certificate = try OfflineWalletCertificate.load(from: fixtureURL("certificate.json"))
         let txId = IrohaHash.hash(Data("tx-id".utf8))
         let challengeHash = IrohaHash.hash(Data("challenge".utf8))
+        let keyId = Data("swift-tests".utf8).base64EncodedString()
         let proof = OfflinePlatformProof.appleAppAttest(
-            AppleAppAttestProof(keyId: "swift-tests",
+            AppleAppAttestProof(keyId: keyId,
                                 counter: 7,
                                 assertion: Data([1, 2, 3]),
                                 challengeHash: challengeHash)
