@@ -91,6 +91,36 @@ final class ToriiDaIngestTests: XCTestCase {
         XCTAssertEqual(rentQuote.egressCreditPerGibMicro, "2")
     }
 
+    func testRentQuoteRejectsFractionalNumber() {
+        let payload = """
+        {
+            "base_rent":100.5,
+            "protocol_reserve":25,
+            "provider_reward":75,
+            "pdp_bonus":5,
+            "potr_bonus":3,
+            "egress_credit_per_gib":2
+        }
+        """.data(using: .utf8)!
+
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiDaRentQuote.self, from: payload))
+    }
+
+    func testRentQuoteRejectsFractionalString() {
+        let payload = """
+        {
+            "base_rent":"100.5",
+            "protocol_reserve":"25",
+            "provider_reward":"75",
+            "pdp_bonus":"5",
+            "potr_bonus":"3",
+            "egress_credit_per_gib":"2"
+        }
+        """.data(using: .utf8)!
+
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiDaRentQuote.self, from: payload))
+    }
+
     func testMissingClientBlobIdFails() {
         let submission = ToriiDaBlobSubmission(payload: Data("hi".utf8))
         let builder = ToriiDaIngestRequestBuilder(submission: submission)

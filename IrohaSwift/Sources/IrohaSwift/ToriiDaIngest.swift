@@ -222,12 +222,40 @@ public struct ToriiDaRentQuote: Decodable, Sendable, Equatable {
             guard !trimmed.isEmpty else {
                 throw ToriiClientError.invalidPayload("rent_quote field \(key.stringValue) was empty")
             }
+            guard isAsciiDigits(trimmed) else {
+                throw ToriiClientError.invalidPayload("rent_quote field \(key.stringValue) must be an unsigned integer string")
+            }
             return trimmed
         }
         if let decimalValue = try? container.decode(Decimal.self, forKey: key) {
-            return NSDecimalNumber(decimal: decimalValue).stringValue
+            var source = decimalValue
+            var rounded = Decimal()
+            NSDecimalRound(&rounded, &source, 0, .plain)
+            guard rounded == source else {
+                throw ToriiClientError.invalidPayload("rent_quote field \(key.stringValue) must be an integer")
+            }
+            let number = NSDecimalNumber(decimal: rounded)
+            let zero = NSDecimalNumber(value: 0)
+            guard number.compare(zero) != .orderedAscending else {
+                throw ToriiClientError.invalidPayload("rent_quote field \(key.stringValue) must be non-negative")
+            }
+            let stringValue = number.stringValue
+            guard !stringValue.isEmpty, isAsciiDigits(stringValue) else {
+                throw ToriiClientError.invalidPayload("rent_quote field \(key.stringValue) must be an unsigned integer")
+            }
+            return stringValue
         }
         throw ToriiClientError.invalidPayload("rent_quote field \(key.stringValue) was missing or invalid")
+    }
+
+    private static func isAsciiDigits(_ value: String) -> Bool {
+        guard !value.isEmpty else { return false }
+        for scalar in value.unicodeScalars {
+            guard scalar.value >= 48 && scalar.value <= 57 else {
+                return false
+            }
+        }
+        return true
     }
 }
 

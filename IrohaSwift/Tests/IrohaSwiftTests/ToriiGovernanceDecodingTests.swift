@@ -25,4 +25,23 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
 
         XCTAssertThrowsError(try JSONDecoder().decode(ToriiGovernanceTallyResponse.self, from: json))
     }
+
+    func testGovernanceProposalKindRejectsMultipleKeys() {
+        let json = """
+        {
+            "DeployContract": {
+                "namespace": "apps",
+                "contract_id": "demo",
+                "code_hash_hex": "01",
+                "abi_hash_hex": "02",
+                "abi_version": "1"
+            },
+            "Extra": {
+                "foo": 1
+            }
+        }
+        """.data(using: .utf8)!
+
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiGovernanceProposalKind.self, from: json))
+    }
 }

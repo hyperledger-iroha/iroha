@@ -191,11 +191,11 @@ pub(super) fn dispatch_background_request(
 }
 
 fn background_request_allows_blocking(request: &BackgroundRequest) -> bool {
+    // Always allow backpressure for consensus payloads, including RBC chunks.
     match request {
-        BackgroundRequest::Post { msg, .. } | BackgroundRequest::Broadcast { msg } => {
-            !matches!(msg, BlockMessage::RbcChunk(_))
-        }
-        BackgroundRequest::PostControlFlow { .. }
+        BackgroundRequest::Post { .. }
+        | BackgroundRequest::Broadcast { .. }
+        | BackgroundRequest::PostControlFlow { .. }
         | BackgroundRequest::BroadcastControlFlow { .. } => true,
     }
 }

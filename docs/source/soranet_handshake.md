@@ -494,7 +494,7 @@ but SHOULD maintain the same ordering to simplify transcript analysis. The
 | 0x0101     | `snnet.pqkem`        | `kem_id:u8` `flags:u8`                                                         | `flags & 0x01` marks the KEM as *required* for the advertising side. |
 | 0x0102     | `snnet.pqsig`        | `sig_id:u8` `flags:u8`                                                         | Multiple TLVs allowed when dual-signing. |
 | 0x0103     | `snnet.transcript_commit` | `sha256` digest (32 bytes) of the descriptor-advertised capabilities.       | Binds directory metadata into the session. |
-| 0x0104     | `snnet.suite_list`   | `ordered:u8[]` handshake suite identifiers (first byte MSB marks *required*) | Values: `0x02` = `nk2.hybrid`, `0x03` = `nk3.pq_forward_secure`. Clients list suites in preference order; relays intersect and select the client's highest-ranked common entry. Negotiation aborts when the TLV is missing or no overlap exists. |
+| 0x0104     | `snnet.suite_list`   | `ordered:u8[]` handshake suite identifiers (first byte MSB marks *required*) | Values: `0x02` = `nk2.hybrid`, `0x03` = `nk3.pq_forward_secure`; unknown identifiers are ignored for negotiation. Clients list suites in preference order; relays intersect and select the client's highest-ranked common entry. Negotiation aborts when the TLV is missing or no overlap exists. |
 | 0x0201     | `snnet.role`         | `role_bits:u8` (`0x01` guard, `0x02` middle, `0x04` exit)                      | Relays MUST emit exactly one entry; clients omit. |
 | 0x0202     | `snnet.padding`      | `u16` padded cell size (little-endian)                                         | Used to negotiate circuit padding buckets. |
 | 0x7Fxx     | GREASE fillers       | Arbitrary bytes                                                                | Implementations MUST ignore and preserve order. Clients emit ≥2 per handshake. |
@@ -512,7 +512,7 @@ automatically. Negotiation proceeds as follows:
 > (and the client-side `sorafs.rollout_phase`) according to that playbook so
 > the SNNet-16G promotion progresses in lock-step across relays and SDKs.
 
-1. Parse both vectors and discard duplicates while preserving order.
+1. Parse both vectors, discard duplicates, and ignore unknown suite identifiers while preserving order.
 2. Identify the first suite in the client list that also appears in the relay
    list; that suite is selected.
 3. Emit downgrade telemetry if the chosen suite differs from either party’s

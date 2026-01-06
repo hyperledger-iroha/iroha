@@ -24666,7 +24666,7 @@ fn dispatch_background_request_full_blocks_until_space() {
 
 #[cfg(feature = "telemetry")]
 #[test]
-fn dispatch_background_request_rbc_chunk_drops_when_full() {
+fn dispatch_background_request_rbc_chunk_blocks_until_space() {
     use std::sync::{Arc, mpsc};
 
     let (tx, rx) = mpsc::sync_channel(1);
@@ -24694,28 +24694,23 @@ fn dispatch_background_request_rbc_chunk_drops_when_full() {
         let _ = done_tx.send(result);
     });
 
+    assert!(
+        done_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        "RbcChunk dispatch should block while the queue is full"
+    );
+    rx.recv_timeout(Duration::from_secs(1))
+        .expect("drain background queue");
     let result = done_rx
-        .recv_timeout(Duration::from_millis(200))
-        .expect("RbcChunk dispatch should not block on a full queue");
-    assert!(result.is_err());
+        .recv_timeout(Duration::from_secs(1))
+        .expect("RbcChunk dispatch completes after drain");
+    assert!(result.is_ok());
     handle.join().expect("thread joins");
-
-    match rx
-        .try_recv()
-        .expect("prefilled message should remain queued")
-    {
-        BackgroundPost::Broadcast {
-            msg: BlockMessage::ConsensusParams(_),
-            ..
-        } => {}
-        other => panic!("unexpected background task: {other:?}"),
-    }
     assert_eq!(
         metrics
             .sumeragi_bg_post_drop_total
             .with_label_values(&["Post"])
             .get(),
-        1
+        0
     );
     assert_eq!(
         metrics
@@ -24797,7 +24792,7 @@ fn dispatch_background_request_full_blocks_until_space() {
 
 #[cfg(not(feature = "telemetry"))]
 #[test]
-fn dispatch_background_request_rbc_chunk_drops_when_full() {
+fn dispatch_background_request_rbc_chunk_blocks_until_space() {
     use std::sync::mpsc;
 
     let (tx, rx) = mpsc::sync_channel(1);
@@ -24823,22 +24818,17 @@ fn dispatch_background_request_rbc_chunk_drops_when_full() {
         let _ = done_tx.send(result);
     });
 
+    assert!(
+        done_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        "RbcChunk dispatch should block while the queue is full"
+    );
+    rx.recv_timeout(Duration::from_secs(1))
+        .expect("drain background queue");
     let result = done_rx
-        .recv_timeout(Duration::from_millis(200))
-        .expect("RbcChunk dispatch should not block on a full queue");
-    assert!(result.is_err());
+        .recv_timeout(Duration::from_secs(1))
+        .expect("RbcChunk dispatch completes after drain");
+    assert!(result.is_ok());
     handle.join().expect("thread joins");
-
-    match rx
-        .try_recv()
-        .expect("prefilled message should remain queued")
-    {
-        BackgroundPost::Broadcast {
-            msg: BlockMessage::ConsensusParams(_),
-            ..
-        } => {}
-        other => panic!("unexpected background task: {other:?}"),
-    }
 }
 
 #[tokio::test(flavor = "current_thread")]

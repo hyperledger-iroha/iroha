@@ -464,12 +464,28 @@ fn parse_suite_list(cap: &CapabilityTlv) -> Result<SuiteList, HarnessError> {
         ));
     }
     let mut suites = Vec::with_capacity(cap.value.len());
+    let mut ignored = Vec::new();
     for &id in &cap.value {
-        let suite = HandshakeSuite::try_from(id)?;
-        if suites.contains(&suite) {
-            continue;
+        // Ignore unknown suite identifiers for forward compatibility.
+        match HandshakeSuite::try_from(id) {
+            Ok(suite) => {
+                if suites.contains(&suite) {
+                    continue;
+                }
+                suites.push(suite);
+            }
+            Err(_) => ignored.push(id),
         }
-        suites.push(suite);
+    }
+    if suites.is_empty() {
+        let unsupported = ignored
+            .iter()
+            .map(|id| format!("{id:#04x}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(HarnessError::Validation(format!(
+            "suite_list capability must include at least one supported identifier; got {unsupported}"
+        )));
     }
     Ok(SuiteList {
         suites,
@@ -4636,6 +4652,26 @@ mod tests {
             vec![u8::from(HandshakeSuite::Nk3PqForwardSecure)]
         );
         assert!(suite_cap.required, "required flag propagated");
+    }
+
+    #[test]
+    fn parse_suite_list_ignores_unknown_ids() {
+        let cap = CapabilityTlv {
+            ty: CAPABILITY_SUITE_LIST,
+            value: vec![
+                u8::from(HandshakeSuite::Nk2Hybrid),
+                0x01,
+                u8::from(HandshakeSuite::Nk3PqForwardSecure),
+                0x01,
+            ],
+            required: false,
+        };
+        let list = parse_suite_list(&cap).expect("parse suite list");
+        assert_eq!(
+            list.suites,
+            vec![HandshakeSuite::Nk2Hybrid, HandshakeSuite::Nk3PqForwardSecure]
+        );
+        assert!(!list.required);
     }
 
     #[test]

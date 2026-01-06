@@ -83,12 +83,8 @@ mod tests {
     #[test]
     fn computes_root_for_two_leaves() {
         let mut mmr = BlockMmr::default();
-        mmr.push(HashOf::from_untyped_unchecked(
-            Hash::prehashed([0x01; 32]),
-        ));
-        mmr.push(HashOf::from_untyped_unchecked(
-            Hash::prehashed([0x02; 32]),
-        ));
+        mmr.push(HashOf::from_untyped_unchecked(Hash::prehashed([0x01; 32])));
+        mmr.push(HashOf::from_untyped_unchecked(Hash::prehashed([0x02; 32])));
         let root = mmr.root().expect("root");
         assert_ne!(root, [0u8; 32]);
     }
@@ -96,9 +92,8 @@ mod tests {
     #[test]
     fn merges_peaks_in_stack_order() {
         let mut mmr = BlockMmr::default();
-        let leaves = [0x01, 0x02, 0x03, 0x04].map(|byte| {
-            HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32]))
-        });
+        let leaves = [0x01, 0x02, 0x03, 0x04]
+            .map(|byte| HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32])));
         for leaf in leaves {
             mmr.push(leaf);
         }
@@ -117,9 +112,8 @@ mod tests {
     #[test]
     fn bags_peaks_right_to_left() {
         let mut mmr = BlockMmr::default();
-        let leaves = [0x01, 0x02, 0x03].map(|byte| {
-            HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32]))
-        });
+        let leaves = [0x01, 0x02, 0x03]
+            .map(|byte| HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32])));
         for leaf in leaves {
             mmr.push(leaf);
         }

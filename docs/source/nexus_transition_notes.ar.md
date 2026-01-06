@@ -93,7 +93,7 @@ translation_last_reviewed: 2026-01-01
   (`.github/workflows/integration_tests_multilane.yml`)، بدلا من المرجع المتقاعد
   `pytests/nexus/test_multilane_pipeline.py`; حافظ على تجزيء
   `defaults/nexus/config.toml` (`nexus.enabled = true`, blake2b
-  `7adf4b54cfbe0e6a3d3fb407f020d78248654d4009e9458c1665f5a2f30ec50e`) متزامنا
+  `d69eefa2abb8886b0f3e280e88fe307a907cfe88053b5d60a1d459a5cf8549e1`) متزامنا
   مع tracker عند تحديث bundles التمرين.
 
 ## دورة حياة lane اثناء runtime

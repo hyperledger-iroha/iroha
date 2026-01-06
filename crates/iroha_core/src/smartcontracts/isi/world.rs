@@ -9111,7 +9111,10 @@ pub mod isi {
             );
 
             assert!(
-                stx.world.domain_endorsement_policies.get(&domain_id).is_some(),
+                stx.world
+                    .domain_endorsement_policies
+                    .get(&domain_id)
+                    .is_some(),
                 "policy should exist before unregister"
             );
             assert!(
@@ -9131,7 +9134,10 @@ pub mod isi {
                 .expect("unregister domain");
 
             assert!(
-                stx.world.domain_endorsement_policies.get(&domain_id).is_none(),
+                stx.world
+                    .domain_endorsement_policies
+                    .get(&domain_id)
+                    .is_none(),
                 "endorsement policy should be removed"
             );
             assert!(
@@ -9808,14 +9814,14 @@ pub mod isi {
                 metadata: Metadata::default(),
             };
             let msg_hash_dupe = endorsement_dupe.body_hash();
-            endorsement_dupe.signatures.push(DomainEndorsementSignature {
-                signer: kp.public_key().clone(),
-                signature: Signature::new(kp.private_key(), msg_hash_dupe.as_ref()),
-            });
+            endorsement_dupe
+                .signatures
+                .push(DomainEndorsementSignature {
+                    signer: kp.public_key().clone(),
+                    signature: Signature::new(kp.private_key(), msg_hash_dupe.as_ref()),
+                });
             let mut dup_domain = Domain::new(domain_id.clone());
-            dup_domain
-                .metadata
-                .insert(key, Json::new(endorsement_dupe));
+            dup_domain.metadata.insert(key, Json::new(endorsement_dupe));
 
             let err = Register::domain(dup_domain)
                 .execute(&ALICE_ID, &mut stx)

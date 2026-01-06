@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Swift SDK: enforce single-key governance proposal kinds and require DA rent quote micro amounts to be unsigned integers; add regression coverage.
+- Tests: `swift test --filter ToriiDaIngestTests` (from `IrohaSwift`); `swift test --filter ToriiGovernanceDecodingTests` (from `IrohaSwift`).
 - Swift SDK: reject multi-kind Connect envelope/control payloads, and enforce strict sequence parsing in the fallback native bridge; add regression coverage.
 - Tests: `swift test --filter ConnectEnvelopeTests` (from `IrohaSwift`).
 - JS SDK: tighten base64 validation for offline envelopes, Torii payload normalization, and Nexus helpers; add regression coverage.
@@ -13,6 +15,12 @@
 - Tests: `swift test --filter ToriiJSONValueTests` (from `IrohaSwift`); `swift test --filter ToriiNumericParsingTests` (from `IrohaSwift`); `swift test --filter OfflineVerdictJournalTests` (from `IrohaSwift`).
 - JS SDK: validate base64 inputs strictly in instruction builders (fixed-length + payload fields) and add regression coverage.
 - Tests: `npm run test:js` (from `javascript/iroha_js`).
+- SoraNet handshake: ignore unknown suite identifiers when parsing suite lists for negotiation; add unit coverage and update `docs/source/soranet_handshake.md`.
+- Tests: not run (not requested).
+- Integration tests: attempted 10x localnet smoke loop with `TEST_NETWORK_TMP_DIR=tmp/test_network_runs`; runs 1-4 passed, run 5 failed (`heights failed to converge to 2 within 15s`). Artifacts: `tmp/test_network_runs/irohad_test_network_{dHJSwc,pQlBYw,F6weXl,WkBXsw,b7tGbD}`.
+- Localnet log scan (failing run `tmp/test_network_runs/irohad_test_network_b7tGbD`): repeated `deferring RBC DELIVER` with READY 1-2/3 plus periodic `rebroadcasting RBC INIT and cached chunks`; `dropping block sync update: no verifiable roster available` in `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs:141` while height 2 proposal cached.
+- Integration tests: re-ran localnet smoke 3x; all passes (artifacts kept under `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_{muQPfy,SYbxqQ,INOD2L}`).
+- Tests: `CARGO_TARGET_DIR=target/codex IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (x3).
 - Sumeragi/localnet: canonicalized the Sora profile BLS private key to satisfy multihash parsing in profile detection defaults.
 - Tests: `CARGO_TARGET_DIR=target/codex cargo test -p iroha_test_network sora_profile_detection_defaults_parse_with_bls_keys -- --nocapture`.
 - Tests: `CARGO_TARGET_DIR=target/codex IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (passed; warning about unused variable `epoch` in `crates/iroha_core/src/block_sync.rs:393`).
