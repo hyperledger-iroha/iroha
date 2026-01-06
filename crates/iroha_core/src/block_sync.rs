@@ -2043,25 +2043,40 @@ pub mod message {
 
         impl<'de> norito::NoritoDeserialize<'de> for GetBlocksAfter {
             fn deserialize(archived: &'de norito::Archived<GetBlocksAfter>) -> Self {
+                Self::try_deserialize(archived).expect("invalid GetBlocksAfter")
+            }
+
+            fn try_deserialize(
+                archived: &'de norito::Archived<GetBlocksAfter>,
+            ) -> Result<Self, norito::Error> {
                 let candidate = <GetBlocksAfterCandidate as norito::NoritoDeserialize>::deserialize(
                     archived.cast(),
                 );
-                candidate.validate().expect("invalid GetBlocksAfter")
+                candidate.validate()
             }
         }
 
         impl<'de> norito::NoritoDeserialize<'de> for ShareBlocks {
             fn deserialize(archived: &'de norito::Archived<ShareBlocks>) -> Self {
+                Self::try_deserialize(archived).expect("invalid ShareBlocks")
+            }
+
+            fn try_deserialize(
+                archived: &'de norito::Archived<ShareBlocks>,
+            ) -> Result<Self, norito::Error> {
                 let candidate = <ShareBlocksCandidate as norito::NoritoDeserialize>::deserialize(
                     archived.cast(),
                 );
-                candidate.validate().expect("invalid ShareBlocks")
+                candidate.validate().map_err(Into::into)
             }
         }
 
         #[cfg(test)]
         mod tests {
+            use std::collections::BTreeSet;
+
             use iroha_crypto::{Hash, HashOf, KeyPair};
+            use norito::codec::{Decode, Encode};
 
             use super::*;
             use crate::block::ValidBlock;
@@ -2203,6 +2218,35 @@ pub mod message {
                     ],
                 };
                 assert!(candidate.validate().is_ok())
+            }
+
+            #[test]
+            fn decode_invalid_get_blocks_after_returns_error() {
+                let (leader_public_key, _) = KeyPair::random().into_parts();
+                let leader_peer = PeerId::new(leader_public_key);
+                let prev_hash =
+                    HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
+                let invalid = GetBlocksAfter::new(
+                    leader_peer,
+                    Some(prev_hash),
+                    None,
+                    BTreeSet::new(),
+                );
+                let bytes = invalid.encode();
+
+                let decoded = GetBlocksAfter::decode(&mut bytes.as_slice());
+                assert!(decoded.is_err());
+            }
+
+            #[test]
+            fn decode_invalid_share_blocks_returns_error() {
+                let (leader_public_key, _) = KeyPair::random().into_parts();
+                let leader_peer = PeerId::new(leader_public_key);
+                let invalid = ShareBlocks::new(Vec::new(), leader_peer, Vec::new(), Vec::new());
+                let bytes = invalid.encode();
+
+                let decoded = ShareBlocks::decode(&mut bytes.as_slice());
+                assert!(decoded.is_err());
             }
         }
     }
