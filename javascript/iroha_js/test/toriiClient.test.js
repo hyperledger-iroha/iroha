@@ -12510,20 +12510,31 @@ test("createConnectSession rejects invalid sid values", async () => {
   });
   await assert.rejects(
     () => client.createConnectSession({ sid: "not a valid sid" }),
-    /32-byte base64url string/i,
+    /32-byte.*(base64url|hex)/i,
   );
 });
 
-test("createConnectSession rejects hex sid", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not be called");
-    },
-  });
-  await assert.rejects(
-    () => client.createConnectSession({ sid: `0x${"ab".repeat(32)}` }),
-    /32-byte base64url string/i,
-  );
+test("createConnectSession accepts hex sid", async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: {
+        sid: "ab".repeat(32),
+        wallet_uri: "iroha://connect",
+        app_uri: "iroha://connect/app",
+        token_app: "token-app",
+        token_wallet: "token-wallet",
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const resp = await client.createConnectSession({ sid: `0x${"ab".repeat(32)}` });
+  assert.equal(resp.sid, "ab".repeat(32));
+  assert.equal(captured.url, `${BASE_URL}/v1/connect/session`);
+  assert.deepEqual(JSON.parse(captured.init.body), { sid: "ab".repeat(32) });
 });
 
 test("deleteConnectSession returns flag based on status", async () => {

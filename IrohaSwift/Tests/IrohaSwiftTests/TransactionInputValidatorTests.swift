@@ -23,6 +23,17 @@ final class TransactionInputValidatorTests: XCTestCase {
         }
     }
 
+    func testValidateRejectsAuthorityWithReservedCharacters() {
+        XCTAssertThrowsError(
+            try TransactionInputValidator.validate(chainId: "0000",
+                                                   authorityId: "alice#bad@wonderland",
+                                                   assetDefinitionId: "rose#wonderland")
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedAccountId(field: "authority", value: "alice#bad@wonderland"))
+        }
+    }
+
     func testValidateRejectsMalformedAssetDefinition() {
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "0000",
@@ -31,6 +42,17 @@ final class TransactionInputValidatorTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,
                            .malformedAssetDefinitionId("rose"))
+        }
+    }
+
+    func testValidateRejectsAssetDefinitionWithReservedCharacters() {
+        XCTAssertThrowsError(
+            try TransactionInputValidator.validate(chainId: "0000",
+                                                   authorityId: "alice@wonderland",
+                                                   assetDefinitionId: "rose$#wonderland")
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedAssetDefinitionId("rose$#wonderland"))
         }
     }
 
@@ -51,6 +73,13 @@ final class TransactionInputValidatorTests: XCTestCase {
         XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.asset("rose#wonderland"))) { error in
             XCTAssertEqual(error as? TransactionInputError,
                            .malformedAssetId("rose#wonderland"))
+        }
+    }
+
+    func testSanitizeMetadataTargetRejectsAssetNameWithReservedCharacters() {
+        XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.asset("ro$se##alice@wonderland"))) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedAssetId("ro$se##alice@wonderland"))
         }
     }
 

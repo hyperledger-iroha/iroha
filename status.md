@@ -1,10 +1,28 @@
 # Status
 
 ## Latest Updates
+- Java/Android SDK: treat verifying key `record.deprecation_height` as an alias of `record.withdraw_height`, reject mismatches, and add regression coverage.
+- Tests: `JAVA_HOME=/Library/Java/JavaVirtualMachines/openjdk-21.jdk/Contents/Home GRADLE_USER_HOME=java/iroha_android/.gradle ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests,org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests java/iroha_android/gradlew -p java/iroha_android :core:test --stacktrace`.
+- JS SDK: accept hex Connect SIDs, restore camelCase request aliases across Torii helpers (connect admin, governance, SNS, SoraFS, DA, runtime upgrade, contracts), and normalize SoraFS pin-register responses; update Connect SID tests.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Swift SDK: ensure account literal path encoding escapes `%` to prevent ambiguous path segments; add ToriiClient coverage for percent-escaped account literals.
+- Tests: `swift test --filter ToriiClientTests` (from `IrohaSwift`).
+- Swift SDK: canonicalize account-address domain labels to lowercase ASCII, reject invalid labels, and document the stricter domain rules; add regression coverage.
+- Tests: `swift test --filter AccountAddressTests` (from `IrohaSwift`).
+- Swift SDK: tighten offline/transaction ID validation to reject reserved characters, align asset/account parsing with name rules, and add OfflineNoritoEncoding coverage.
+- Tests: `swift test --filter OfflineNoritoEncodingTests` (from `IrohaSwift`); `swift test --filter TransactionInputValidatorTests` (from `IrohaSwift`); `swift test --filter OfflineReceiptBuilderTests` (from `IrohaSwift`).
+- Crypto/SoraNet: enforce canonical multihash hex parsing, reject admission tokens with non-zero flags or zero TTL, require PoW ticket version during raw/signed decode, and validate guard directory snapshot windows; add regression coverage and doc updates.
+- Tests: `cargo test -p iroha_crypto --lib decode_public_key_str_rejects`; `cargo test -p iroha_crypto --lib decode_private_key_str_rejects`; `cargo test -p iroha_crypto --lib decode_rejects`; `cargo test -p iroha_crypto unsupported_version`; `cargo test -p iroha_crypto snapshot_rejects`.
+- Core: fix MMR peak merging/bagging order for bridge commitments and keep live query cursors on cursor mismatch; add regression coverage.
+- Tests: not run (not requested).
+- WSV/IVM: mock WSV domain unregister now blocks domains that still have NFTs; add regression coverage.
+- Tests: not run (not requested).
+- SoraNet handshake: reject unknown non-GREASE capability TLVs, enforce singleton-only duplicates, and validate capability payload lengths; add regression coverage.
+- Tests: `cargo test -p iroha_crypto parse_capabilities_`.
 - Swift SDK: rebuild NoritoBridge xcframework to match the current encoder, refresh expected bridge hashes, and add a NoritoBridge artifact manifest with version/hash metadata.
 - Tests: `swift test --filter TransactionParityFixturesTests` (from `IrohaSwift`).
 - Java/Android SDK: apply Torii SSE timeout options to transport requests and add regression coverage.
-- Tests: not run (not requested).
+- Tests: `GRADLE_USER_HOME=java/iroha_android/.gradle ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests java/iroha_android/gradlew -p java/iroha_android :core:test --stacktrace` (failed: `IllegalArgumentException: 25` from `JavaVersion.parse`, likely unsupported JDK).
 - WSV: unregistering a domain now clears endorsement policies and stored endorsement records; add regression coverage.
 - Tests: not run (not requested).
 - JS SDK: make canonical ordering deterministic (UTF-16 code units), enforce strict multihash hex/length validation, and fix offline envelope README example; add multihash validation tests.

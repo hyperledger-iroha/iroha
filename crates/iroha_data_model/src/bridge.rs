@@ -271,6 +271,10 @@ pub struct BridgeCommitment {
     pub mmr_leaf_index: Option<u64>,
     /// Optional list of MMR peaks associated with `mmr_root` to help external
     /// verifiers reconstruct the root without replaying the full chain.
+    ///
+    /// Peaks are ordered from left to right (in insertion order). When
+    /// reconstructing the root, bag peaks from right to left:
+    /// `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
     pub mmr_peaks: Option<Vec<[u8; 32]>>,
     /// Optional next authority set advertised by this commitment.
     pub next_authority_set: Option<BridgeAuthoritySet>,

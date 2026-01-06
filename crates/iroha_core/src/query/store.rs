@@ -169,15 +169,18 @@ impl LiveQueryStore {
         cursor: NonZeroU64,
     ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<NonZeroU64>), QueryExecutionFail> {
         trace!(%query_id, "Advancing existing query");
-        let QueryInfo {
-            mut live_query,
-            authority,
-            ..
-        } = self.remove(&query_id).ok_or(QueryExecutionFail::Expired)?;
-        let (next_batch, next_cursor) = live_query.next_batch(cursor.get())?;
-        let remaining = live_query.remaining();
-        if next_cursor.is_some() {
-            self.insert(query_id, live_query, authority);
+        let (next_batch, remaining, next_cursor) = {
+            let mut entry = self
+                .queries
+                .get_mut(&query_id)
+                .ok_or(QueryExecutionFail::Expired)?;
+            let (next_batch, next_cursor) = entry.live_query.next_batch(cursor.get())?;
+            let remaining = entry.live_query.remaining();
+            entry.last_access_time = Instant::now();
+            (next_batch, remaining, next_cursor)
+        };
+        if next_cursor.is_none() {
+            self.remove(&query_id);
         }
         Ok((next_batch, remaining, next_cursor))
     }
@@ -325,12 +328,15 @@ impl LiveQueryStoreHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{num::NonZeroU64, time::Duration};
 
     use iroha_data_model::{
         permission::Permission,
         prelude::SelectorTuple,
-        query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
+        query::{
+            error::QueryExecutionFail,
+            parameters::{FetchSize, Pagination, QueryParams, Sorting},
+        },
     };
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
@@ -497,5 +503,46 @@ mod tests {
             .into_parts();
         let cursor = cursor.expect("cursor present");
         assert_eq!(cursor.gas_budget, Some(42));
+    }
+
+    #[test]
+    fn cursor_mismatch_does_not_evict_query() {
+        let handle = LiveQueryStore::start_test();
+        let query_output = (0..2).map(|i| Permission::new(format!("p{i}"), Json::from(false)));
+        let query_params = QueryParams {
+            fetch_size: FetchSize {
+                fetch_size: Some(nonzero!(1_u64)),
+            },
+            ..QueryParams::default()
+        };
+        let query_output = crate::smartcontracts::query::apply_query_postprocessing(
+            query_output,
+            SelectorTuple::default(),
+            &query_params,
+            QueryLimits::default(),
+        )
+        .unwrap();
+
+        let (_batch, _remaining, cursor) = handle
+            .handle_iter_start(query_output, &ALICE_ID, Some(7))
+            .unwrap()
+            .into_parts();
+        let cursor = cursor.expect("cursor present");
+
+        let mut bad_cursor = cursor.clone();
+        bad_cursor.cursor =
+            NonZeroU64::new(cursor.cursor.get().saturating_add(1)).expect("non-zero");
+        let err = handle
+            .handle_iter_continue(bad_cursor)
+            .expect_err("mismatch");
+        assert_eq!(err, QueryExecutionFail::CursorMismatch);
+
+        let (batch, remaining, next) = handle
+            .handle_iter_continue(cursor)
+            .expect("cursor still valid")
+            .into_parts();
+        assert_eq!(batch.len(), 1);
+        assert_eq!(remaining, 0);
+        assert!(next.is_none(), "query should be drained");
     }
 }

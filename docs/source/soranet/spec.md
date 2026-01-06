@@ -73,6 +73,8 @@ This document satisfies **SNNet-1** (handshake, salt rotation, capability TLVs) 
   evict the oldest non-expired entries when full. The Prometheus counter
   `soranet_token_verify_total{issuer,relay,outcome}` records accepted/replay/
   mismatch/expiry outcomes for dashboards and alerting.
+  The token body includes a reserved `flags` byte (must be `0` in v1) and
+  requires `issued_at < expires_at` for a non-zero validity window.
 - Transcript binding:
   - TLS exporter `tls-exporter("soranet handshake", 64)` hashed into Noise prologue.
   - Transcript hash logged in handshake logs for downgrade detection.

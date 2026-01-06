@@ -53,6 +53,9 @@ Placeholder actual: `mmr_root`/`mmr_peaks` se derivan recomputando un MMR de has
 memoria; aun no se retornan pruebas de inclusion. Los clientes aun pueden verificar el mismo hash
 via el payload de commitment hoy.
 
+MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
+from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+
 API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
 
 La verificacion es analoga a la prueba basica: recomputar `block_hash` desde el header, verificar

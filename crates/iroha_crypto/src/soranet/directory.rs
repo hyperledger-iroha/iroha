@@ -50,7 +50,43 @@ impl GuardDirectorySnapshotV2 {
     /// # Errors
     /// Returns an error if decoding fails.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, norito::Error> {
-        decode_from_bytes(bytes)
+        let snapshot: Self = decode_from_bytes(bytes)?;
+        snapshot.validate()?;
+        Ok(snapshot)
+    }
+
+    fn validate(&self) -> Result<(), norito::Error> {
+        if self.version != GUARD_DIRECTORY_VERSION_V2 {
+            return Err(norito::Error::Message(format!(
+                "guard directory snapshot version mismatch (expected {GUARD_DIRECTORY_VERSION_V2}, got {})",
+                self.version
+            )));
+        }
+        if decode_validation_phase(self.validation_phase).is_none() {
+            return Err(norito::Error::Message(format!(
+                "guard directory snapshot validation_phase {} is not recognised",
+                self.validation_phase
+            )));
+        }
+        if self.published_at_unix < 0
+            || self.valid_after_unix < 0
+            || self.valid_until_unix < 0
+        {
+            return Err(norito::Error::Message(
+                "guard directory snapshot timestamps must be non-negative".to_string(),
+            ));
+        }
+        if self.valid_after_unix > self.valid_until_unix {
+            return Err(norito::Error::Message(
+                "guard directory snapshot valid_after_unix exceeds valid_until_unix".to_string(),
+            ));
+        }
+        if self.published_at_unix > self.valid_until_unix {
+            return Err(norito::Error::Message(
+                "guard directory snapshot published_at_unix exceeds valid_until_unix".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -111,6 +147,25 @@ mod tests {
     use super::*;
     use crate::soranet::certificate::CertificateValidationPhase;
 
+    fn sample_snapshot() -> GuardDirectorySnapshotV2 {
+        GuardDirectorySnapshotV2 {
+            version: GUARD_DIRECTORY_VERSION_V2,
+            directory_hash: [0xAB; 32],
+            published_at_unix: 1_734_000_000,
+            valid_after_unix: 1_734_000_000,
+            valid_until_unix: 1_734_086_400,
+            validation_phase: encode_validation_phase(CertificateValidationPhase::Phase2PreferDual),
+            issuers: vec![GuardDirectoryIssuerV1 {
+                fingerprint: [0xCD; 32],
+                ed25519_public: [0x11; 32],
+                mldsa65_public: vec![0x44; 1952],
+            }],
+            relays: vec![GuardDirectoryRelayEntryV2 {
+                certificate: vec![0x99, 0x00, 0x01],
+            }],
+        }
+    }
+
     #[test]
     fn encode_decode_validation_phase_roundtrip() {
         for phase in [
@@ -143,25 +198,34 @@ mod tests {
 
     #[test]
     fn snapshot_roundtrip() {
-        let snapshot = GuardDirectorySnapshotV2 {
-            version: GUARD_DIRECTORY_VERSION_V2,
-            directory_hash: [0xAB; 32],
-            published_at_unix: 1_734_000_000,
-            valid_after_unix: 1_734_000_000,
-            valid_until_unix: 1_734_086_400,
-            validation_phase: encode_validation_phase(CertificateValidationPhase::Phase2PreferDual),
-            issuers: vec![GuardDirectoryIssuerV1 {
-                fingerprint: [0xCD; 32],
-                ed25519_public: [0x11; 32],
-                mldsa65_public: vec![0x44; 1952],
-            }],
-            relays: vec![GuardDirectoryRelayEntryV2 {
-                certificate: vec![0x99, 0x00, 0x01],
-            }],
-        };
+        let snapshot = sample_snapshot();
 
         let bytes = snapshot.to_bytes().expect("serialize");
         let decoded = GuardDirectorySnapshotV2::from_bytes(&bytes).expect("deserialize");
         assert_eq!(snapshot, decoded);
+    }
+
+    #[test]
+    fn snapshot_rejects_unknown_validation_phase() {
+        let mut snapshot = sample_snapshot();
+        snapshot.validation_phase = 0;
+        let bytes = snapshot.to_bytes().expect("serialize");
+        assert!(GuardDirectorySnapshotV2::from_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn snapshot_rejects_version_mismatch() {
+        let mut snapshot = sample_snapshot();
+        snapshot.version = 1;
+        let bytes = snapshot.to_bytes().expect("serialize");
+        assert!(GuardDirectorySnapshotV2::from_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn snapshot_rejects_invalid_time_window() {
+        let mut snapshot = sample_snapshot();
+        snapshot.valid_after_unix = snapshot.valid_until_unix + 1;
+        let bytes = snapshot.to_bytes().expect("serialize");
+        assert!(GuardDirectorySnapshotV2::from_bytes(&bytes).is_err());
     }
 }

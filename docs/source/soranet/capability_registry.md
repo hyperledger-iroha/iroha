@@ -20,6 +20,9 @@ approval plus updated fixtures and downgrade tests.
 | `0x0203`   | `snnet.constant_rate`   | `version:u8`, `flags:u8`, `cell_bytes:u16` (LE), followed by a `cell_bytes`-long constant-rate envelope sample | Advertises SNNet-17A pacing support. The envelope sample MUST match the relay’s dummy cell encoding. |
 | `0x7Fxx`   | GREASE fillers          | Arbitrary bytes                                                            | Emit ≥2 per message; parsers MUST preserve order and ignore contents. |
 
+Except for `snnet.pqkem`, `snnet.pqsig`, and GREASE fillers, capability TLVs are
+singletons and duplicates are rejected in v1.
+
 ## Algorithm identifier registries
 
 ### `snnet.pqkem`

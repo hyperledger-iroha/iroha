@@ -184,6 +184,9 @@ pub enum HarnessError {
     /// Supplied capability identifier was not recognised.
     #[error("invalid capability type: {0}")]
     CapabilityType(String),
+    /// Duplicate capability TLV encountered for a singleton type.
+    #[error("duplicate capability {0}")]
+    DuplicateCapability(String),
     /// Timestamp failed to parse according to RFC3339.
     #[error("invalid timestamp {timestamp}: {source}")]
     Timestamp {
@@ -228,6 +231,7 @@ pub enum HarnessError {
 pub fn parse_capabilities(buf: &[u8]) -> Result<Vec<CapabilityTlv>, HarnessError> {
     let mut offset = 0;
     let mut out = Vec::new();
+    let mut seen_singletons = std::collections::BTreeSet::new();
 
     while offset < buf.len() {
         if offset + 4 > buf.len() {
@@ -242,6 +246,17 @@ pub fn parse_capabilities(buf: &[u8]) -> Result<Vec<CapabilityTlv>, HarnessError
         }
         let mut value = buf[offset..offset + len].to_vec();
         offset += len;
+
+        let grease = (GREASE_RANGE_START..=GREASE_RANGE_END).contains(&ty);
+        if !grease && !capability_is_known(ty) {
+            return Err(HarnessError::CapabilityType(capability_label(ty)));
+        }
+        if !grease {
+            validate_capability_payload(ty, &value)?;
+            if !capability_allows_duplicates(ty) && !seen_singletons.insert(ty) {
+                return Err(HarnessError::DuplicateCapability(capability_label(ty)));
+            }
+        }
 
         let required = parse_required_flag(ty, &mut value);
 
@@ -319,6 +334,85 @@ fn capability_label(ty: u16) -> String {
         || format!("type=0x{ty:04x}"),
         |name| format!("type=0x{ty:04x} ({name})"),
     )
+}
+
+fn capability_is_known(ty: u16) -> bool {
+    matches!(
+        ty,
+        CAPABILITY_PQKEM
+            | CAPABILITY_PQSIG
+            | CAPABILITY_TRANSCRIPT_COMMIT
+            | CAPABILITY_SUITE_LIST
+            | CAPABILITY_ROLE
+            | CAPABILITY_PADDING
+            | CAPABILITY_CONSTANT_RATE
+    )
+}
+
+fn capability_allows_duplicates(ty: u16) -> bool {
+    matches!(ty, CAPABILITY_PQKEM | CAPABILITY_PQSIG)
+}
+
+fn validate_capability_payload(ty: u16, value: &[u8]) -> Result<(), HarnessError> {
+    match ty {
+        CAPABILITY_PQKEM => {
+            if value.len() != 2 {
+                return Err(HarnessError::Validation(format!(
+                    "snnet.pqkem capability must be 2 bytes, got {}",
+                    value.len()
+                )));
+            }
+        }
+        CAPABILITY_PQSIG => {
+            if value.len() != 2 {
+                return Err(HarnessError::Validation(format!(
+                    "snnet.pqsig capability must be 2 bytes, got {}",
+                    value.len()
+                )));
+            }
+        }
+        CAPABILITY_TRANSCRIPT_COMMIT => {
+            if value.len() != 32 {
+                return Err(HarnessError::Validation(format!(
+                    "snnet.transcript_commit capability must be 32 bytes, got {}",
+                    value.len()
+                )));
+            }
+        }
+        CAPABILITY_SUITE_LIST => {
+            if value.is_empty() {
+                return Err(HarnessError::Validation(
+                    "suite_list capability must contain at least one identifier".into(),
+                ));
+            }
+        }
+        CAPABILITY_ROLE => {
+            if value.len() != 1 {
+                return Err(HarnessError::Validation(format!(
+                    "snnet.role capability must be 1 byte, got {}",
+                    value.len()
+                )));
+            }
+        }
+        CAPABILITY_PADDING => {
+            if value.len() != 2 {
+                return Err(HarnessError::Validation(format!(
+                    "snnet.padding capability must be 2 bytes, got {}",
+                    value.len()
+                )));
+            }
+        }
+        CAPABILITY_CONSTANT_RATE => {
+            if value.len() < 2 {
+                return Err(HarnessError::Validation(format!(
+                    "snnet.constant_rate capability must be at least 2 bytes, got {}",
+                    value.len()
+                )));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn parse_required_flag(ty: u16, value: &mut [u8]) -> bool {
@@ -4542,6 +4636,60 @@ mod tests {
             vec![u8::from(HandshakeSuite::Nk3PqForwardSecure)]
         );
         assert!(suite_cap.required, "required flag propagated");
+    }
+
+    #[test]
+    fn parse_capabilities_rejects_unknown_type() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0x0301u16.to_be_bytes());
+        buf.extend_from_slice(&1u16.to_be_bytes());
+        buf.push(0);
+        let err = parse_capabilities(&buf).expect_err("unknown capability should fail");
+        assert!(matches!(err, HarnessError::CapabilityType(_)));
+    }
+
+    #[test]
+    fn parse_capabilities_rejects_duplicate_singleton() {
+        let entries = vec![
+            CapabilityTlv {
+                ty: CAPABILITY_ROLE,
+                value: vec![0x01],
+                required: false,
+            },
+            CapabilityTlv {
+                ty: CAPABILITY_ROLE,
+                value: vec![0x02],
+                required: false,
+            },
+        ];
+        let buf = encode_tlvs(&entries);
+        let err = parse_capabilities(&buf).expect_err("duplicate role should fail");
+        assert!(matches!(err, HarnessError::DuplicateCapability(_)));
+    }
+
+    #[test]
+    fn parse_capabilities_allows_duplicate_pqsig() {
+        let entries = vec![
+            CapabilityTlv {
+                ty: CAPABILITY_PQSIG,
+                value: vec![0x01, 0x00],
+                required: false,
+            },
+            CapabilityTlv {
+                ty: CAPABILITY_PQSIG,
+                value: vec![0x02, 0x00],
+                required: false,
+            },
+        ];
+        let buf = encode_tlvs(&entries);
+        let parsed = parse_capabilities(&buf).expect("pqsig duplicates allowed");
+        let pqsigs: Vec<_> = parsed
+            .iter()
+            .filter(|cap| cap.ty == CAPABILITY_PQSIG)
+            .collect();
+        assert_eq!(pqsigs.len(), 2);
+        assert_eq!(pqsigs[0].value, vec![0x01, 0x00]);
+        assert_eq!(pqsigs[1].value, vec![0x02, 0x00]);
     }
 
     #[test]
