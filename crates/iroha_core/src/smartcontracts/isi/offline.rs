@@ -39,13 +39,16 @@ use iroha_data_model::{
         AGGREGATE_PROOF_VERSION_V1, AndroidHmsSafetyDetectMetadata, AndroidIntegrityMetadata,
         AndroidIntegrityPolicy, AndroidMarkerKeyMetadata, AndroidPlayIntegrityMetadata,
         AndroidProvisionedMetadata, AndroidProvisionedProof, HmsSafetyDetectEvaluation,
-        OFFLINE_REJECTION_REASON_PREFIX, OfflineAllowanceRecord, OfflineBalanceProof,
-        OfflineCounterState, OfflineCounterSummary, OfflinePlatformProof,
-        OfflinePlatformTokenSnapshot, OfflineSpendReceipt, OfflineToOnlineTransfer,
-        OfflineTransferRecord, OfflineTransferRejectionPlatform, OfflineTransferRejectionReason,
-        OfflineTransferStatus, OfflineVerdictRevocation, OfflineVerdictSnapshot,
-        OfflineWalletCertificate, PlayIntegrityAppVerdict, PlayIntegrityDeviceVerdict,
-        PlayIntegrityEnvironment, chain_bound_receipt_hash, compute_receipts_root,
+        MARKER_COUNTER_PREFIX, OFFLINE_REJECTION_REASON_PREFIX, PROVISIONED_COUNTER_PREFIX,
+        OfflineAllowanceRecord, OfflineBalanceProof, OfflineCounterState, OfflineCounterSummary,
+        OfflinePlatformProof, OfflinePlatformTokenSnapshot, OfflineProofRequestError,
+        OfflineSpendReceipt, OfflineToOnlineTransfer, OfflineTransferRecord,
+        OfflineTransferRejectionPlatform, OfflineTransferRejectionReason, OfflineTransferStatus,
+        OfflineVerdictRevocation, OfflineVerdictSnapshot, OfflineWalletCertificate,
+        PlayIntegrityAppVerdict, PlayIntegrityDeviceVerdict, PlayIntegrityEnvironment,
+        canonical_app_attest_key_id, canonical_receipts, chain_bound_receipt_hash,
+        compute_receipts_root, ensure_single_counter_scope, marker_series_from_public_key,
+        receipts_are_canonical,
     },
     query::{
         dsl::{CompoundPredicate, EvaluatePredicate},
@@ -123,7 +126,6 @@ const ANDROID_PROVISIONED_MANIFEST_VERSION_KEY: &str = "android.provisioned.mani
 const ANDROID_PROVISIONED_MAX_AGE_KEY: &str = "android.provisioned.max_manifest_age_ms";
 #[cfg(test)]
 const ANDROID_PROVISIONED_MANIFEST_DIGEST_KEY: &str = "android.provisioned.manifest_digest";
-const PROVISIONED_COUNTER_PREFIX: &str = "provisioned::";
 
 const KM_TAG_PURPOSE: u32 = 1;
 const KM_TAG_ALGORITHM: u32 = 2;
@@ -172,6 +174,29 @@ fn map_platform_err<T>(
     platform: OfflineTransferRejectionPlatform,
 ) -> Result<T, InstructionExecutionError> {
     result.map_err(|err| rejection_error(reason, platform, err.to_string()))
+}
+
+fn map_counter_scope_error(err: OfflineProofRequestError) -> InstructionExecutionError {
+    match err {
+        OfflineProofRequestError::MissingReceipts => rejection_error(
+            OfflineTransferRejectionReason::EmptyBundle,
+            OfflineTransferRejectionPlatform::General,
+            "offline bundle must include at least one receipt",
+        ),
+        OfflineProofRequestError::MixedCounterScopes => rejection_error(
+            OfflineTransferRejectionReason::MixedCounterScopes,
+            OfflineTransferRejectionPlatform::General,
+            "offline bundle mixes counter scopes",
+        ),
+        OfflineProofRequestError::InvalidCounterScope { platform, reason } => rejection_error(
+            OfflineTransferRejectionReason::PlatformMetadataInvalid,
+            platform,
+            reason,
+        ),
+        other => InstructionExecutionError::InvariantViolation(
+            format!("unexpected counter scope error: {other}").into(),
+        ),
+    }
 }
 
 fn ensure_certificate_policy(
@@ -1471,6 +1496,13 @@ pub mod isi {
                 "offline bundle must include at least one receipt",
             ));
         }
+        if !receipts_are_canonical(&transfer.receipts) {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::ReceiptOrderInvalid,
+                OfflineTransferRejectionPlatform::General,
+                "offline bundle receipts must be ordered by (counter, tx_id)",
+            ));
+        }
 
         let mut invoice_ids = BTreeSet::new();
         for receipt in &transfer.receipts {
@@ -1504,6 +1536,10 @@ pub mod isi {
                 OfflineTransferRejectionPlatform::General,
                 "offline bundle mixes certificates from different wallets",
             ));
+        }
+
+        if let Err(err) = ensure_single_counter_scope(&transfer.receipts) {
+            return Err(map_counter_scope_error(err));
         }
 
         let record = state_transaction
@@ -2397,26 +2433,30 @@ pub mod isi {
         tx_id: &Hash,
     ) -> Result<(), InstructionExecutionError> {
         match proof {
-            OfflinePlatformProof::AppleAppAttest(app_attest) => enforce_monotonic_entry(
-                staged_state
-                    .apple_key_counters
-                    .entry(app_attest.key_id.clone()),
-                app_attest.counter,
-                "App Attest key",
-                app_attest.key_id.as_str(),
-                tx_id,
-                OfflineTransferRejectionPlatform::Apple,
-            ),
-            OfflinePlatformProof::AndroidMarkerKey(marker) => enforce_monotonic_entry(
-                staged_state
-                    .android_series_counters
-                    .entry(marker.series.clone()),
-                marker.counter,
-                "Android marker series",
-                marker.series.as_str(),
-                tx_id,
-                OfflineTransferRejectionPlatform::Android,
-            ),
+            OfflinePlatformProof::AppleAppAttest(app_attest) => {
+                let key_id = canonical_app_attest_key_id(&app_attest.key_id)
+                    .map_err(map_counter_scope_error)?;
+                enforce_monotonic_entry(
+                    staged_state.apple_key_counters.entry(key_id.clone()),
+                    app_attest.counter,
+                    "App Attest key",
+                    key_id.as_str(),
+                    tx_id,
+                    OfflineTransferRejectionPlatform::Apple,
+                )
+            }
+            OfflinePlatformProof::AndroidMarkerKey(marker) => {
+                let series = marker_series_from_public_key(&marker.marker_public_key)
+                    .map_err(map_counter_scope_error)?;
+                enforce_monotonic_entry(
+                    staged_state.android_series_counters.entry(series.clone()),
+                    marker.counter,
+                    "Android marker series",
+                    series.as_str(),
+                    tx_id,
+                    OfflineTransferRejectionPlatform::Android,
+                )
+            }
             OfflinePlatformProof::Provisioned(provisioned) => {
                 let scope = provisioned_counter_scope(provisioned)?;
                 enforce_monotonic_entry(
@@ -3055,6 +3095,48 @@ mod attestation {
             OfflineTransferRejectionReason::PlatformAttestationInvalid,
             platform,
         )?;
+        let spki = leaf_cert.public_key();
+        if spki.subject_public_key.data.is_empty() {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::PlatformAttestationInvalid,
+                platform,
+                "android attestation leaf missing public key",
+            ));
+        }
+        let leaf_key = VerifyingKey::from_sec1_bytes(spki.subject_public_key.data.as_ref())
+            .map_err(|_| {
+                rejection_error(
+                    OfflineTransferRejectionReason::PlatformAttestationInvalid,
+                    platform,
+                    "android attestation leaf contains invalid P-256 key",
+                )
+            })?;
+        let marker_key =
+            VerifyingKey::from_sec1_bytes(proof.marker_public_key.as_ref()).map_err(|_| {
+                rejection_error(
+                    OfflineTransferRejectionReason::PlatformAttestationInvalid,
+                    platform,
+                    "android marker_public_key is not valid P-256 SEC1 bytes",
+                )
+            })?;
+        if leaf_key.to_encoded_point(false).as_bytes()
+            != marker_key.to_encoded_point(false).as_bytes()
+        {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::PlatformAttestationInvalid,
+                platform,
+                "android marker_public_key does not match attestation leaf key",
+            ));
+        }
+        if let Ok(expected) = marker_series_from_public_key(&proof.marker_public_key) {
+            if proof.series != expected {
+                return Err(rejection_error(
+                    OfflineTransferRejectionReason::PlatformAttestationInvalid,
+                    platform,
+                    "android marker series does not match marker_public_key",
+                ));
+            }
+        }
         let key_description = map_platform_err(
             parse_key_description(&leaf_cert),
             OfflineTransferRejectionReason::PlatformAttestationInvalid,
@@ -4128,9 +4210,19 @@ mod attestation {
         challenge: &ReceiptChallenge,
     ) -> Result<(), InstructionExecutionError> {
         if let Some(signature) = &proof.marker_signature {
-            let digest = Sha256::digest(challenge.iroha_hash.as_ref());
-            signature
-                .verify(&proof.marker_public_key, digest.as_ref())
+            let marker_key =
+                VerifyingKey::from_sec1_bytes(proof.marker_public_key.as_ref()).map_err(|_| {
+                    InstructionExecutionError::InvariantViolation(
+                        "android marker_public_key is not valid P-256 SEC1 bytes".into(),
+                    )
+                })?;
+            let sig = P256Signature::from_slice(signature).map_err(|_| {
+                InstructionExecutionError::InvariantViolation(
+                    "android marker_signature must be a 64-byte raw signature".into(),
+                )
+            })?;
+            marker_key
+                .verify_prehash(challenge.client_data_hash.as_slice(), &sig)
                 .map_err(|_| {
                     InstructionExecutionError::InvariantViolation(
                         "android marker signature does not match marker_public_key".into(),

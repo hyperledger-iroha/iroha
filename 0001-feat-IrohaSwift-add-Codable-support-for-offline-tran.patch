@@ -1,0 +1,113 @@
+From 9ab50328fd5bc89e45a4864dfd333477fb85ddc1 Mon Sep 17 00:00:00 2001
+From: Nikolai Zhukov <coderobjc@gmail.com>
+Date: Tue, 6 Jan 2026 18:10:56 +0400
+Subject: [PATCH] feat(IrohaSwift): add Codable support for offline transfer
+ types and session cleanup
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Make ToriiOfflineTransferItem Codable (was Decodable only) by removing
+  redundant custom init(from:)/encode(to:) — Swift auto-synthesizes both
+- Make ToriiOfflinePlatformTokenSnapshot Codable for same reason
+- Add ToriiClient.invalidateAndCancel() method to properly release
+  URLSession resources when using custom sessions with certificate pinning
+
+These changes enable iOS clients to:
+1. Cache offline transfer list locally without needing wrapper structs
+2. Clean up custom URLSession without accessing private session property
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+---
+ .../Sources/IrohaSwift/ToriiClient.swift      | 45 ++++---------------
+ 1 file changed, 8 insertions(+), 37 deletions(-)
+
+diff --git a/IrohaSwift/Sources/IrohaSwift/ToriiClient.swift b/IrohaSwift/Sources/IrohaSwift/ToriiClient.swift
+index 1b01b7283..5c60c2f51 100644
+--- a/IrohaSwift/Sources/IrohaSwift/ToriiClient.swift
++++ b/IrohaSwift/Sources/IrohaSwift/ToriiClient.swift
+@@ -1553,7 +1553,7 @@ public struct ToriiOfflineTransferProofRequest: Encodable, Sendable {
+     }
+ }
+ 
+-public struct ToriiOfflineTransferItem: Decodable, Sendable {
++public struct ToriiOfflineTransferItem: Codable, Sendable {
+     public let bundleIdHex: String
+     public let controllerId: String
+     public let controllerDisplay: String
+@@ -1656,35 +1656,6 @@ public struct ToriiOfflineTransferItem: Decodable, Sendable {
+         self.transfer = transfer
+     }
+ 
+-    public init(from decoder: Decoder) throws {
+-        let container = try decoder.container(keyedBy: CodingKeys.self)
+-        self.bundleIdHex = try container.decode(String.self, forKey: .bundleIdHex)
+-        self.controllerId = try container.decode(String.self, forKey: .controllerId)
+-        self.controllerDisplay = try container.decode(String.self, forKey: .controllerDisplay)
+-        self.receiverId = try container.decode(String.self, forKey: .receiverId)
+-        self.receiverDisplay = try container.decode(String.self, forKey: .receiverDisplay)
+-        self.depositAccountId = try container.decode(String.self, forKey: .depositAccountId)
+-        self.depositAccountDisplay = try container.decode(String.self, forKey: .depositAccountDisplay)
+-        self.assetId = try container.decodeIfPresent(String.self, forKey: .assetId)
+-        self.receiptCount = try container.decode(UInt64.self, forKey: .receiptCount)
+-        self.totalAmount = try container.decode(String.self, forKey: .totalAmount)
+-        self.claimedDelta = try container.decode(String.self, forKey: .claimedDelta)
+-        self.status = try container.decode(String.self, forKey: .status)
+-        self.recordedAtMs = try container.decode(UInt64.self, forKey: .recordedAtMs)
+-        self.recordedAtHeight = try container.decode(UInt64.self, forKey: .recordedAtHeight)
+-        self.archivedAtHeight = try container.decodeIfPresent(UInt64.self, forKey: .archivedAtHeight)
+-        self.certificateIdHex = try container.decodeIfPresent(String.self, forKey: .certificateIdHex)
+-        self.certificateExpiresAtMs = try container.decodeIfPresent(UInt64.self, forKey: .certificateExpiresAtMs)
+-        self.policyExpiresAtMs = try container.decodeIfPresent(UInt64.self, forKey: .policyExpiresAtMs)
+-        self.refreshAtMs = try container.decodeIfPresent(UInt64.self, forKey: .refreshAtMs)
+-        self.verdictIdHex = try container.decodeIfPresent(String.self, forKey: .verdictIdHex)
+-        self.attestationNonceHex = try container.decodeIfPresent(String.self, forKey: .attestationNonceHex)
+-        self.platformPolicy = try container.decodeIfPresent(ToriiPlatformPolicy.self, forKey: .platformPolicy)
+-        self.platformTokenSnapshot = try container.decodeIfPresent(ToriiOfflinePlatformTokenSnapshot.self,
+-                                                                   forKey: .platformTokenSnapshot)
+-        self.transfer = try container.decode(ToriiJSONValue.self, forKey: .transfer)
+-    }
+-
+     public func decodeTransfer<T: Decodable>(as type: T.Type = T.self,
+                                              decoder: JSONDecoder = JSONDecoder()) throws -> T {
+         try transfer.decode(as: type, decoder: decoder)
+@@ -1784,7 +1755,7 @@ public struct ToriiOfflineStateResponse: Decodable, Sendable, Equatable {
+     }
+ }
+ 
+-public struct ToriiOfflinePlatformTokenSnapshot: Decodable, Sendable, Equatable {
++public struct ToriiOfflinePlatformTokenSnapshot: Codable, Sendable, Equatable {
+     public let policy: ToriiPlatformPolicy
+     public let attestationJwsB64: String
+ 
+@@ -1797,12 +1768,6 @@ public struct ToriiOfflinePlatformTokenSnapshot: Decodable, Sendable, Equatable
+         self.policy = policy
+         self.attestationJwsB64 = attestationJwsB64
+     }
+-
+-    public init(from decoder: Decoder) throws {
+-        let container = try decoder.container(keyedBy: CodingKeys.self)
+-        self.policy = try container.decode(ToriiPlatformPolicy.self, forKey: .policy)
+-        self.attestationJwsB64 = try container.decode(String.self, forKey: .attestationJwsB64)
+-    }
+ }
+ 
+ public struct ToriiOfflineReceiptSummary: Sendable, Equatable {
+@@ -6288,6 +6253,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable
+         self.session = session
+     }
+ 
++    /// Invalidates the underlying URLSession and cancels all outstanding tasks.
++    /// Call this method when you are done using the client to release resources.
++    public func invalidateAndCancel() {
++        session.invalidateAndCancel()
++    }
++
+     // MARK: - Public completion-based API
+ 
+     @discardableResult
+-- 
+2.50.1 (Apple Git-155)
+

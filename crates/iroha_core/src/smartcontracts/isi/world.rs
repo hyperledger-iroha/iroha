@@ -1736,10 +1736,9 @@ pub mod isi {
                 ));
             }
             if !verify_report.ok {
-                let slash_target = lock_owner.as_ref().unwrap_or(authority);
                 let _ = governance_slash_percent(
                     &self.election_id,
-                    slash_target,
+                    authority,
                     state_transaction.gov.slash_invalid_proof_bps,
                     GovernanceSlashReason::Misconduct,
                     "invalid_proof",
@@ -1761,10 +1760,9 @@ pub mod isi {
             let inputs = match extract_vote_public_inputs(backend, &proof_bytes) {
                 Ok(inputs) => inputs,
                 Err(err) => {
-                    let slash_target = lock_owner.as_ref().unwrap_or(authority);
                     let _ = governance_slash_percent(
                         &self.election_id,
-                        slash_target,
+                        authority,
                         state_transaction.gov.slash_invalid_proof_bps,
                         GovernanceSlashReason::Misconduct,
                         "invalid_proof_inputs",
@@ -1785,10 +1783,9 @@ pub mod isi {
                 if let Err(err) =
                     validate_vote_envelope_metadata("ballot", backend, envelope, &vk_rec)
                 {
-                    let slash_target = lock_owner.as_ref().unwrap_or(authority);
                     let _ = governance_slash_percent(
                         &self.election_id,
-                        slash_target,
+                        authority,
                         state_transaction.gov.slash_invalid_proof_bps,
                         GovernanceSlashReason::Misconduct,
                         "invalid_proof_inputs",
@@ -1808,10 +1805,9 @@ pub mod isi {
             let (commit_bytes, root_bytes) = match ballot_inputs_from_columns(&inputs.columns) {
                 Ok(v) => v,
                 Err(err) => {
-                    let slash_target = lock_owner.as_ref().unwrap_or(authority);
                     let _ = governance_slash_percent(
                         &self.election_id,
-                        slash_target,
+                        authority,
                         state_transaction.gov.slash_invalid_proof_bps,
                         GovernanceSlashReason::Misconduct,
                         "invalid_proof_inputs",
@@ -1844,10 +1840,9 @@ pub mod isi {
                 }
             }
             if root_bytes != st.eligible_root {
-                let slash_target = lock_owner.as_ref().unwrap_or(authority);
                 let _ = governance_slash_percent(
                     &self.election_id,
-                    slash_target,
+                    authority,
                     state_transaction.gov.slash_ineligible_proof_bps,
                     GovernanceSlashReason::IneligibleProof,
                     "ineligible_proof",
@@ -1936,10 +1931,9 @@ pub mod isi {
                 }
             }
             if !st.ballot_nullifiers.insert(nullifier) {
-                let slash_target = lock_owner.as_ref().unwrap_or(authority);
                 let _ = governance_slash_percent(
                     &self.election_id,
-                    slash_target,
+                    authority,
                     state_transaction.gov.slash_double_vote_bps,
                     GovernanceSlashReason::DoubleVote,
                     "double_vote",
@@ -1958,26 +1952,6 @@ pub mod isi {
                 ));
             }
 
-            // Record commitment bytes and enforce cap
-            st.ciphertexts.push(commit_bytes.to_vec());
-            let cap = state_transaction.zk.ballot_history_cap.max(1);
-            if st.ciphertexts.len() > cap {
-                let surplus = st.ciphertexts.len() - cap;
-                st.ciphertexts.drain(0..surplus);
-            }
-            state_transaction.world.elections.remove(id.clone());
-            state_transaction.world.elections.insert(id, st);
-            // Emit a governance ballot accepted event (mode = Zk, weight not revealed)
-            let rid_ev = self.election_id.clone();
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::governance::GovernanceEvent::BallotAccepted(
-                    iroha_data_model::events::data::governance::GovernanceBallotAccepted {
-                        referendum_id: rid_ev,
-                        mode: iroha_data_model::events::data::governance::GovernanceBallotMode::Zk,
-                        weight: None,
-                    },
-                ),
-            ));
             if proof_verified {
                 if let (Some(owner), Some(amount), Some(duration_blocks)) =
                     (lock_owner.clone(), lock_amount, lock_duration)
@@ -2094,6 +2068,26 @@ pub mod isi {
                     }
                 }
             }
+            // Record commitment bytes and enforce cap
+            st.ciphertexts.push(commit_bytes.to_vec());
+            let cap = state_transaction.zk.ballot_history_cap.max(1);
+            if st.ciphertexts.len() > cap {
+                let surplus = st.ciphertexts.len() - cap;
+                st.ciphertexts.drain(0..surplus);
+            }
+            state_transaction.world.elections.remove(id.clone());
+            state_transaction.world.elections.insert(id, st);
+            // Emit a governance ballot accepted event (mode = Zk, weight not revealed)
+            let rid_ev = self.election_id.clone();
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::BallotAccepted(
+                    iroha_data_model::events::data::governance::GovernanceBallotAccepted {
+                        referendum_id: rid_ev,
+                        mode: iroha_data_model::events::data::governance::GovernanceBallotMode::Zk,
+                        weight: None,
+                    },
+                ),
+            ));
             Ok(())
         }
     }

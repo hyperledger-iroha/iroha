@@ -1553,7 +1553,7 @@ public struct ToriiOfflineTransferProofRequest: Encodable, Sendable {
     }
 }
 
-public struct ToriiOfflineTransferItem: Decodable, Sendable {
+public struct ToriiOfflineTransferItem: Codable, Sendable {
     public let bundleIdHex: String
     public let controllerId: String
     public let controllerDisplay: String
@@ -1656,35 +1656,6 @@ public struct ToriiOfflineTransferItem: Decodable, Sendable {
         self.transfer = transfer
     }
 
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.bundleIdHex = try container.decode(String.self, forKey: .bundleIdHex)
-        self.controllerId = try container.decode(String.self, forKey: .controllerId)
-        self.controllerDisplay = try container.decode(String.self, forKey: .controllerDisplay)
-        self.receiverId = try container.decode(String.self, forKey: .receiverId)
-        self.receiverDisplay = try container.decode(String.self, forKey: .receiverDisplay)
-        self.depositAccountId = try container.decode(String.self, forKey: .depositAccountId)
-        self.depositAccountDisplay = try container.decode(String.self, forKey: .depositAccountDisplay)
-        self.assetId = try container.decodeIfPresent(String.self, forKey: .assetId)
-        self.receiptCount = try container.decode(UInt64.self, forKey: .receiptCount)
-        self.totalAmount = try container.decode(String.self, forKey: .totalAmount)
-        self.claimedDelta = try container.decode(String.self, forKey: .claimedDelta)
-        self.status = try container.decode(String.self, forKey: .status)
-        self.recordedAtMs = try container.decode(UInt64.self, forKey: .recordedAtMs)
-        self.recordedAtHeight = try container.decode(UInt64.self, forKey: .recordedAtHeight)
-        self.archivedAtHeight = try container.decodeIfPresent(UInt64.self, forKey: .archivedAtHeight)
-        self.certificateIdHex = try container.decodeIfPresent(String.self, forKey: .certificateIdHex)
-        self.certificateExpiresAtMs = try container.decodeIfPresent(UInt64.self, forKey: .certificateExpiresAtMs)
-        self.policyExpiresAtMs = try container.decodeIfPresent(UInt64.self, forKey: .policyExpiresAtMs)
-        self.refreshAtMs = try container.decodeIfPresent(UInt64.self, forKey: .refreshAtMs)
-        self.verdictIdHex = try container.decodeIfPresent(String.self, forKey: .verdictIdHex)
-        self.attestationNonceHex = try container.decodeIfPresent(String.self, forKey: .attestationNonceHex)
-        self.platformPolicy = try container.decodeIfPresent(ToriiPlatformPolicy.self, forKey: .platformPolicy)
-        self.platformTokenSnapshot = try container.decodeIfPresent(ToriiOfflinePlatformTokenSnapshot.self,
-                                                                   forKey: .platformTokenSnapshot)
-        self.transfer = try container.decode(ToriiJSONValue.self, forKey: .transfer)
-    }
-
     public func decodeTransfer<T: Decodable>(as type: T.Type = T.self,
                                              decoder: JSONDecoder = JSONDecoder()) throws -> T {
         try transfer.decode(as: type, decoder: decoder)
@@ -1784,7 +1755,7 @@ public struct ToriiOfflineStateResponse: Decodable, Sendable, Equatable {
     }
 }
 
-public struct ToriiOfflinePlatformTokenSnapshot: Decodable, Sendable, Equatable {
+public struct ToriiOfflinePlatformTokenSnapshot: Codable, Sendable, Equatable {
     public let policy: ToriiPlatformPolicy
     public let attestationJwsB64: String
 
@@ -1796,12 +1767,6 @@ public struct ToriiOfflinePlatformTokenSnapshot: Decodable, Sendable, Equatable 
     public init(policy: ToriiPlatformPolicy, attestationJwsB64: String) {
         self.policy = policy
         self.attestationJwsB64 = attestationJwsB64
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.policy = try container.decode(ToriiPlatformPolicy.self, forKey: .policy)
-        self.attestationJwsB64 = try container.decode(String.self, forKey: .attestationJwsB64)
     }
 }
 
@@ -6286,6 +6251,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public init(baseURL: URL, session: URLSession = .shared) {
         self.baseURL = baseURL
         self.session = session
+    }
+
+    /// Invalidates the underlying URLSession and cancels all outstanding tasks.
+    /// Call this method when you are done using the client to release resources.
+    public func invalidateAndCancel() {
+        session.invalidateAndCancel()
     }
 
     // MARK: - Public completion-based API
