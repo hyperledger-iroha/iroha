@@ -388,15 +388,16 @@ impl BlockSynchronizer {
         let block_hash = block.hash();
         let height = block.header().height().get();
         let view = u64::from(block.header().view_change_index());
-        let epoch = 0;
 
         if let Some(record) = status::precommit_signers_for(block_hash) {
-            if record.height != height || record.view != view || record.epoch != epoch {
+            let epoch = record.epoch;
+            if record.height != height || record.view != view {
                 iroha_logger::info!(
                     height,
                     view,
                     record_height = record.height,
                     record_view = record.view,
+                    record_epoch = record.epoch,
                     "block sync: cached precommit signer record does not match block metadata"
                 );
                 return None;
@@ -1158,6 +1159,59 @@ mod qc_build_tests {
 
         let qc = BlockSynchronizer::block_sync_qc_for(&block).expect("cached QC should be built");
         assert_eq!(qc.subject_block_hash, block_hash);
+        assert_eq!(qc.aggregate.bls_aggregate_signature, aggregate);
+    }
+
+    #[test]
+    fn block_sync_qc_for_accepts_nonzero_epoch() {
+        let chain_id = ChainId::from("block-sync-qc-epoch");
+        let mode_tag = NPOS_TAG;
+        let keypairs = vec![
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        ];
+        let peers: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let topology = Topology::new(peers);
+        let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+        let block = BlockBuilder::new(header).build_with_signature(0, keypairs[0].private_key());
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = u64::from(block.header().view_change_index());
+        let epoch = 4;
+
+        let mut signers = BTreeSet::new();
+        signers.insert(ValidatorIndex::try_from(0).expect("index 0"));
+        signers.insert(ValidatorIndex::try_from(1).expect("index 1"));
+        let aggregate = aggregate_signature_for_signers(
+            &chain_id,
+            mode_tag,
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            &signers,
+            &topology,
+            &keypairs,
+        );
+        status::record_precommit_signers(status::PrecommitSignerRecord {
+            block_hash,
+            height,
+            view,
+            epoch,
+            signers: signers.clone(),
+            roster_len: topology.as_ref().len(),
+            mode_tag: mode_tag.to_string(),
+            bls_aggregate_signature: aggregate.clone(),
+            validator_set: topology.as_ref().to_vec(),
+        });
+
+        let qc = BlockSynchronizer::block_sync_qc_for(&block).expect("cached QC should be built");
+        assert_eq!(qc.subject_block_hash, block_hash);
+        assert_eq!(qc.epoch, epoch);
         assert_eq!(qc.aggregate.bls_aggregate_signature, aggregate);
     }
 }

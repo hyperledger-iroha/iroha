@@ -333,7 +333,7 @@ pub fn evidence_subject_height_view(evidence: &Evidence) -> (Option<Height>, Opt
             let height = receipts
                 .iter()
                 .map(|receipt| receipt.payload.submitted_at_height)
-                .min();
+                .max();
             (height, None)
         }
     }
@@ -2047,6 +2047,25 @@ mod tests {
             !store.insert(&reordered, &context),
             "reordered receipts should not create a new evidence entry"
         );
+    }
+
+    #[test]
+    fn censorship_subject_height_uses_latest_receipt() {
+        let ctx = EvidenceTestContext::new(4);
+        let tx_hash = sample_tx_hash(0xEF);
+        let receipts = vec![
+            submission_receipt_for(&ctx, 0, tx_hash, 5),
+            submission_receipt_for(&ctx, 1, tx_hash, 12),
+            submission_receipt_for(&ctx, 2, tx_hash, 9),
+        ];
+        let evidence = Evidence {
+            kind: EvidenceKind::Censorship,
+            payload: EvidencePayload::Censorship { tx_hash, receipts },
+        };
+
+        let (height, view) = evidence_subject_height_view(&evidence);
+        assert_eq!(height, Some(12));
+        assert_eq!(view, None);
     }
 
     #[test]

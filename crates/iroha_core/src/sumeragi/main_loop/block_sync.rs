@@ -10,6 +10,7 @@ impl Actor {
             let block_hash = update.block.hash();
             let height = update.block.header().height().get();
             let view = u64::from(update.block.header().view_change_index());
+            let expected_epoch = self.epoch_for_height(height);
             Self::apply_cached_qcs_to_block_sync_update(
                 update,
                 &self.qc_cache,
@@ -17,6 +18,7 @@ impl Actor {
                 block_hash,
                 height,
                 view,
+                expected_epoch,
             );
         }
         self.schedule_background(BackgroundRequest::Post { peer, msg });
@@ -106,6 +108,7 @@ impl Actor {
                 .then(|| super::npos_seed_for_height(&view, block_height));
             (consensus_mode, mode_tag, prf_seed)
         };
+        let expected_epoch = self.epoch_for_height(block_height);
         let persisted_roster = persisted_roster_for_block(
             self.state.as_ref(),
             &self.kura,
@@ -418,6 +421,7 @@ impl Actor {
                 block_hash,
                 block_height,
                 block_view,
+                expected_epoch,
             )
             .and_then(|qc| {
                 validate_block_sync_qc(
@@ -450,11 +454,9 @@ impl Actor {
         };
         if incoming_qc.is_none() && had_incoming_qc {
             if let Some(qc) = original_candidate_qc {
-                let signature_topology =
-                    super::topology_for_view(&topology, qc.height, qc.view, mode_tag, prf_seed);
                 if super::qc_aggregate_consistent(
                     &qc,
-                    &signature_topology,
+                    &topology,
                     &self.common_config.chain,
                     mode_tag,
                 ) {
@@ -471,7 +473,6 @@ impl Actor {
             }
         }
         let incoming_qc_signers = incoming_qc.as_ref().map(qc_signer_count);
-        let expected_cert_epoch = self.epoch_for_height(block_height);
         let allow_nonextending_qc = selection.commit_certificate.is_some()
             || incoming_qc.as_ref().is_some_and(|cert| {
                 super::validate_commit_certificate_roster(
@@ -481,7 +482,9 @@ impl Actor {
                     Some(block_view),
                     consensus_mode,
                     stake_snapshot.as_ref(),
-                    expected_cert_epoch,
+                    expected_epoch,
+                    &self.common_config.chain,
+                    mode_tag,
                 )
                 .is_ok()
             })
@@ -562,8 +565,27 @@ impl Actor {
                 );
             }
         }
+        let mut dropped_votes = 0usize;
         for vote in commit_votes {
+            if vote.phase != crate::sumeragi::consensus::Phase::Commit
+                || vote.block_hash != block_hash
+                || vote.height != block_height
+                || vote.view != block_view
+                || vote.epoch != expected_epoch
+            {
+                dropped_votes = dropped_votes.saturating_add(1);
+                continue;
+            }
             self.handle_vote(vote);
+        }
+        if dropped_votes > 0 {
+            debug!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                dropped_votes,
+                "dropping mismatched commit votes from block sync update"
+            );
         }
 
         let qc_to_apply = if ready_for_qc {
@@ -890,6 +912,7 @@ impl Actor {
                     self.common_config.peer.id(),
                 );
                 let mut update = update;
+                let expected_epoch = self.epoch_for_height(block_height);
                 Self::apply_cached_qcs_to_block_sync_update(
                     &mut update,
                     &self.qc_cache,
@@ -897,6 +920,7 @@ impl Actor {
                     block_hash,
                     block_height,
                     block_view,
+                    expected_epoch,
                 );
                 let has_roster =
                     update.commit_certificate.is_some() || update.validator_checkpoint.is_some();
@@ -935,6 +959,7 @@ impl Actor {
                     self.common_config.peer.id(),
                 );
                 let mut update = update;
+                let expected_epoch = self.epoch_for_height(block_height);
                 Self::apply_cached_qcs_to_block_sync_update(
                     &mut update,
                     &self.qc_cache,
@@ -942,6 +967,7 @@ impl Actor {
                     block_hash,
                     block_height,
                     block_view,
+                    expected_epoch,
                 );
                 let has_roster =
                     update.commit_certificate.is_some() || update.validator_checkpoint.is_some();
@@ -975,6 +1001,7 @@ impl Actor {
                     self.common_config.peer.id(),
                 );
                 let mut update = update;
+                let expected_epoch = self.epoch_for_height(block_height);
                 Self::apply_cached_qcs_to_block_sync_update(
                     &mut update,
                     &self.qc_cache,
@@ -982,6 +1009,7 @@ impl Actor {
                     block_hash,
                     block_height,
                     block_view,
+                    expected_epoch,
                 );
                 let has_roster =
                     update.commit_certificate.is_some() || update.validator_checkpoint.is_some();
