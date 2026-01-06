@@ -45,6 +45,7 @@ final class ConnectFlowController {
         lock.lock()
         defer { lock.unlock() }
         let current = tokens[direction] ?? 0
-        tokens[direction] = current &+ amount
+        let (sum, overflow) = current.addingReportingOverflow(amount)
+        tokens[direction] = overflow ? UInt64.max : sum
     }
 }

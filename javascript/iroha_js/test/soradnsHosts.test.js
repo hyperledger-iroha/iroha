@@ -9,7 +9,7 @@ import {
 } from "../src/index.js";
 import { makeNativeTest } from "./helpers/native.js";
 
-const test = makeNativeTest(baseTest);
+const test = makeNativeTest(baseTest, { require: "soradnsDeriveGatewayHosts" });
 
 test("derives deterministic gateway hosts", () => {
   const bindings = deriveSoradnsGatewayHosts("App.Dao.Sora");

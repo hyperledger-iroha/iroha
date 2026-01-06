@@ -9,6 +9,7 @@ use std::{
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     ChainId,
+    block::BlockHeader,
     bridge::{
         BridgeAuthoritySet, BridgeCommitment, BridgeCommitmentJustification, BridgeFinalityBundle,
         BridgeFinalityProof,
@@ -23,6 +24,10 @@ use crate::{mmr::BlockMmr, state::StateReadOnly, sumeragi};
 struct MmrCache {
     mmr: BlockMmr,
     height: u64,
+    /// Chain id used to detect cross-ledger reuse in-process.
+    chain_id: Option<ChainId>,
+    /// Cached hash for the tip at `height` to detect top-block rewrites.
+    tip_hash: Option<HashOf<BlockHeader>>,
 }
 
 /// Errors returned when constructing a bridge finality proof.
@@ -58,30 +63,57 @@ fn compute_block_mmr(
 ) -> Result<BlockMmr, BridgeFinalityError> {
     static BLOCK_MMR_CACHE: OnceLock<Mutex<MmrCache>> = OnceLock::new();
 
+    if height == 0 {
+        return Err(BridgeFinalityError::InvalidHeight(height));
+    }
+
     let cache = BLOCK_MMR_CACHE.get_or_init(|| {
         Mutex::new(MmrCache {
             mmr: BlockMmr::default(),
             height: 0,
+            chain_id: None,
+            tip_hash: None,
         })
     });
 
     let mut guard = cache.lock().expect("mmr cache mutex poisoned");
+    let chain_id = state.chain_id().clone();
 
-    if height < guard.height {
+    let mut rebuild = height < guard.height;
+    if guard.chain_id.as_ref() != Some(&chain_id) {
+        rebuild = true;
+    }
+    if !rebuild && guard.height > 0 {
+        let cached_tip = guard.tip_hash;
+        let current_tip = block_hash_at(state, guard.height)?;
+        if cached_tip != Some(current_tip) {
+            rebuild = true;
+        }
+    }
+
+    if rebuild {
         // Rebuild from genesis to requested height to avoid rollback complexity.
         let mut fresh = BlockMmr::default();
+        let mut tip_hash = None;
         for h in 1..=height {
             let hash = block_hash_at(state, h)?;
             fresh.push(hash);
+            tip_hash = Some(hash);
         }
         guard.mmr = fresh;
         guard.height = height;
+        guard.chain_id = Some(chain_id);
+        guard.tip_hash = tip_hash;
     } else {
+        let mut tip_hash = guard.tip_hash;
         for h in (guard.height + 1)..=height {
             let hash = block_hash_at(state, h)?;
             guard.mmr.push(hash);
             guard.height = h;
+            tip_hash = Some(hash);
         }
+        guard.chain_id = Some(chain_id);
+        guard.tip_hash = tip_hash;
     }
 
     Ok(guard.mmr.clone())

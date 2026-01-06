@@ -147,6 +147,22 @@ final class AccountAddressTests: XCTestCase {
         }
     }
 
+    func testAccountAddressRejectsEmptyPublicKey() {
+        XCTAssertThrowsError(
+            try AccountAddress.fromAccount(domain: "wonderland", publicKey: Data())
+        ) { error in
+            XCTAssertEqual(error as? AccountAddressError, .invalidPublicKey)
+        }
+    }
+
+    func testAccountAddressRejectsInvalidEd25519KeyLength() {
+        XCTAssertThrowsError(
+            try AccountAddress.fromAccount(domain: "wonderland", publicKey: Data(repeating: 0x01, count: 31))
+        ) { error in
+            XCTAssertEqual(error as? AccountAddressError, .invalidPublicKey)
+        }
+    }
+
     func testIh58PrefixMismatch() throws {
         let address = try AccountAddress.fromAccount(domain: "default", publicKey: Data(repeating: 1, count: 32))
         let ih58 = try address.toIH58(networkPrefix: 5)
