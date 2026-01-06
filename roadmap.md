@@ -4,7 +4,7 @@ This roadmap enumerates the outstanding efforts required to ship the optional
 NPoS Sumeragi mode and keep the broader Nexus transition on track. For every task listed here we are preparing the first public release, so teams can design and implement with a clean slate. Completed
 items continue to live in `status.md`; only tasks that still need engineering
 work appear here.
-Latest sync: SoraFS proof token decode invariants hardened (empty entries/expiry ordering); no new open items added, but integration-test re-runs remain open (see `status.md`).
+Latest sync: WSV domain unregister cleanup for endorsement records/policies; no new open items added (see `status.md`).
 
 The repository now serves two release lines:
 - **Iroha 2** — the self-hosted deployment track for organisations running

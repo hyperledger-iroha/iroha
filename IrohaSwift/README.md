@@ -1073,6 +1073,8 @@ The release process for the Norito Swift bindings is documented in
 build the XCFramework, compute the checksum, and update both the Swift Package manifest
 and the CocoaPods podspec. The resulting artifacts should share the same semantic version
 as the `norito` Rust crate.
+`dist/NoritoBridge.artifacts.json` should accompany the XCFramework and record the
+bridge version plus per-platform SHA-256 hashes.
 
 ### NoritoBridge policy and troubleshooting
 - Default builds link `dist/NoritoBridge.xcframework`. The manifest fails fast when the

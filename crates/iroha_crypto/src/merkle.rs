@@ -1963,7 +1963,7 @@ mod tests {
     fn merkle_tree_decode_rejects_invalid_layout() {
         let bad_leaf = HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
         let bad_tree = MerkleTree::<()>(vec![Some(bad_leaf), Some(bad_leaf)]);
-        let bytes = norito::codec::encode_adaptive(&bad_tree);
+        let bytes = norito::to_bytes(&bad_tree).expect("encode merkle tree");
         let err = norito::decode_from_bytes::<MerkleTree<()>>(&bytes)
             .expect_err("invalid merkle layout should fail");
         assert!(matches!(err, norito::Error::Message(_)));
@@ -1972,7 +1972,7 @@ mod tests {
     #[test]
     fn merkle_tree_decode_rejects_missing_nodes() {
         let bad_tree = MerkleTree::<()>(vec![None]);
-        let bytes = norito::codec::encode_adaptive(&bad_tree);
+        let bytes = norito::to_bytes(&bad_tree).expect("encode merkle tree");
         let err = norito::decode_from_bytes::<MerkleTree<()>>(&bytes)
             .expect_err("missing nodes should fail");
         assert!(matches!(err, norito::Error::Message(_)));
@@ -1990,7 +1990,7 @@ mod tests {
             Some(leaf),
             Some(leaf),
         ]);
-        let bytes = norito::codec::encode_adaptive(&bad_tree);
+        let bytes = norito::to_bytes(&bad_tree).expect("encode merkle tree");
         let err = norito::decode_from_bytes::<MerkleTree<()>>(&bytes)
             .expect_err("missing parent should fail");
         assert!(matches!(err, norito::Error::Message(_)));

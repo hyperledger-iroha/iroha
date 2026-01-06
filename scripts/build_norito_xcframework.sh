@@ -97,3 +97,41 @@ xcodebuild -create-xcframework \
   -output "$OUT_DIR/${FRAMEWORK_NAME}.xcframework"
 
 echo "[+] XCFramework created: $OUT_DIR/${FRAMEWORK_NAME}.xcframework" >&2
+
+BRIDGE_VERSION="${NORITO_BRIDGE_VERSION:-}"
+if [[ -z "${BRIDGE_VERSION}" ]]; then
+  VERSION_SOURCE="$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
+  if command -v rg >/dev/null 2>&1; then
+    BRIDGE_VERSION=$(rg -n "expectedVersion" "$VERSION_SOURCE" | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
+  else
+    BRIDGE_VERSION=$(grep -m1 "expectedVersion" "$VERSION_SOURCE" | sed -E 's/.*"([^"]+)".*/\1/')
+  fi
+fi
+if [[ -z "${BRIDGE_VERSION}" ]]; then
+  echo "[-] Unable to determine NoritoBridge version for artifact manifest" >&2
+  exit 1
+fi
+
+MAC_BIN="$OUT_DIR/${FRAMEWORK_NAME}.xcframework/macos-arm64/${FRAMEWORK_NAME}.framework/${FRAMEWORK_NAME}"
+IOS_BIN="$OUT_DIR/${FRAMEWORK_NAME}.xcframework/ios-arm64/${FRAMEWORK_NAME}.framework/${FRAMEWORK_NAME}"
+SIM_BIN="$OUT_DIR/${FRAMEWORK_NAME}.xcframework/ios-arm64_x86_64-simulator/${FRAMEWORK_NAME}.framework/${FRAMEWORK_NAME}"
+if [[ ! -f "$MAC_BIN" || ! -f "$IOS_BIN" || ! -f "$SIM_BIN" ]]; then
+  echo "[-] Missing XCFramework binaries needed to emit NoritoBridge.artifacts.json" >&2
+  exit 1
+fi
+
+MAC_HASH=$(shasum -a 256 "$MAC_BIN" | awk '{print $1}')
+IOS_HASH=$(shasum -a 256 "$IOS_BIN" | awk '{print $1}')
+SIM_HASH=$(shasum -a 256 "$SIM_BIN" | awk '{print $1}')
+
+cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
+{
+  "version": "$BRIDGE_VERSION",
+  "hashes": {
+    "macos-arm64": "$MAC_HASH",
+    "ios-arm64": "$IOS_HASH",
+    "ios-arm64_x86_64-simulator": "$SIM_HASH"
+  }
+}
+EOF
+echo "[+] Wrote artifact manifest: $OUT_DIR/NoritoBridge.artifacts.json" >&2

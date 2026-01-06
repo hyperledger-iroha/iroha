@@ -1,7 +1,21 @@
 # Status
 
 ## Latest Updates
-- Crypto/SoraFS: reject proof tokens with empty entry lists or expiries at/before issuance during decode; add regression coverage.
+- Swift SDK: rebuild NoritoBridge xcframework to match the current encoder, refresh expected bridge hashes, and add a NoritoBridge artifact manifest with version/hash metadata.
+- Tests: `swift test --filter TransactionParityFixturesTests` (from `IrohaSwift`).
+- Java/Android SDK: apply Torii SSE timeout options to transport requests and add regression coverage.
+- Tests: not run (not requested).
+- WSV: unregistering a domain now clears endorsement policies and stored endorsement records; add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: make canonical ordering deterministic (UTF-16 code units), enforce strict multihash hex/length validation, and fix offline envelope README example; add multihash validation tests.
+- Tests: `npm run test:js` (failed: existing JS test failures in `javascript/iroha_js/test/axt.test.js` and multiple `javascript/iroha_js/test/toriiClient.test.js` cases unrelated to the ordering/normalizer changes).
+- Crypto/SoraNet: reject duplicate fields in SRCv2 certificate payloads to enforce canonical CBOR maps; add regression coverage.
+- Tests: `cargo test -p iroha_crypto parse_certificate_payload_rejects_duplicate_field`.
+- WSV: unregistering a domain now removes assets whose definitions live in that domain even when held by accounts in other domains; add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: reject non-canonical JSON numbers (leading zeros/overflow) and add JsonParser regression coverage.
+- Tests: `cargo test -p iroha_crypto decode_rejects`.
+- Crypto/SoraFS: reject proof tokens with unknown flags, empty entry lists, or expiries at/before issuance during decode; add regression coverage.
 - Tests: not run (not requested).
 - Docs: resolve merge conflicts in status.md and roadmap.md.
 - Tests: not run (not requested).

@@ -8,8 +8,8 @@ import java.util.Map;
 /**
  * Minimal JSON parser sufficient for the SDK polling helpers.
  *
- * <p>Only the subset required by pipeline status payloads is implemented (objects, arrays, strings,
- * booleans, null, integers).
+ * <p>Only the subset required by SDK payloads is implemented (objects, arrays, strings, booleans,
+ * null, numbers).
  */
 public final class JsonParser {
 
@@ -145,10 +145,22 @@ public final class JsonParser {
     if (index < input.length() && input.charAt(index) == '-') {
       index++;
     }
+    if (index >= input.length()) {
+      throw new IllegalStateException("Invalid number: expected digit");
+    }
     boolean hasDigits = false;
-    while (index < input.length() && Character.isDigit(input.charAt(index))) {
-      index++;
+    if (index < input.length() && isDigit(input.charAt(index))) {
       hasDigits = true;
+      if (input.charAt(index) == '0') {
+        index++;
+        if (index < input.length() && isDigit(input.charAt(index))) {
+          throw new IllegalStateException("Invalid number: leading zero");
+        }
+      } else {
+        while (index < input.length() && isDigit(input.charAt(index))) {
+          index++;
+        }
+      }
     }
     if (!hasDigits) {
       throw new IllegalStateException("Invalid number: expected digit");
@@ -157,10 +169,10 @@ public final class JsonParser {
     if (index < input.length() && input.charAt(index) == '.') {
       hasFraction = true;
       index++;
-      if (index >= input.length() || !Character.isDigit(input.charAt(index))) {
+      if (index >= input.length() || !isDigit(input.charAt(index))) {
         throw new IllegalStateException("Invalid number: missing digit after decimal point");
       }
-      while (index < input.length() && Character.isDigit(input.charAt(index))) {
+      while (index < input.length() && isDigit(input.charAt(index))) {
         index++;
       }
     }
@@ -176,10 +188,10 @@ public final class JsonParser {
             index++;
           }
         }
-        if (index >= input.length() || !Character.isDigit(input.charAt(index))) {
+        if (index >= input.length() || !isDigit(input.charAt(index))) {
           throw new IllegalStateException("Invalid number: missing exponent digits");
         }
-        while (index < input.length() && Character.isDigit(input.charAt(index))) {
+        while (index < input.length() && isDigit(input.charAt(index))) {
           index++;
         }
       }
@@ -189,7 +201,11 @@ public final class JsonParser {
       if (!hasFraction && !hasExponent) {
         return Long.parseLong(token);
       }
-      return Double.parseDouble(token);
+      final double value = Double.parseDouble(token);
+      if (!Double.isFinite(value)) {
+        throw new IllegalStateException("Invalid number: " + token);
+      }
+      return value;
     } catch (NumberFormatException ex) {
       throw new IllegalStateException("Invalid number: " + token, ex);
     }
@@ -222,5 +238,9 @@ public final class JsonParser {
 
   private boolean peek(final char expected) {
     return index < input.length() && input.charAt(index) == expected;
+  }
+
+  private static boolean isDigit(final char c) {
+    return c >= '0' && c <= '9';
   }
 }

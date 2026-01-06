@@ -38,6 +38,7 @@ public final class ToriiEventStreamClientTests {
     sseStreamEmitsRetryHints();
     sseStreamStopsAfterClose();
     observersReceiveLifecycleCallbacks();
+    sseRequestPropagatesTimeout();
     System.out.println("[IrohaAndroid] Torii SSE client tests passed.");
   }
 
@@ -171,6 +172,38 @@ public final class ToriiEventStreamClientTests {
     if (listener.events.isEmpty() || !"ok".equals(listener.events.get(0).data())) {
       throw new AssertionError("expected SSE payload to be parsed");
     }
+  }
+
+  private static void sseRequestPropagatesTimeout() throws Exception {
+    final RecordingObserver observer = new RecordingObserver();
+    final TransportExecutor executor =
+        request -> {
+          final TransportResponse response =
+              TransportResponse.builder()
+                  .setStatusCode(200)
+                  .setBody("data: ok\n\n".getBytes(StandardCharsets.UTF_8))
+                  .setMessage("OK")
+                  .addHeader("Content-Type", "text/event-stream")
+                  .build();
+          return CompletableFuture.completedFuture(response);
+        };
+
+    final RecordingListener listener = new RecordingListener(1);
+    final ToriiEventStreamClient client =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("http://example.com/base"))
+            .setTransportExecutor(executor)
+            .addObserver(observer)
+            .build();
+    final Duration timeout = Duration.ofSeconds(5);
+    final ToriiEventStreamOptions options =
+        ToriiEventStreamOptions.builder().setTimeout(timeout).build();
+    final ToriiEventStream stream = client.openSseStream("/events", options, listener);
+    stream.completion().get(1, TimeUnit.SECONDS);
+
+    final TransportRequest recorded =
+        observer.lastRequest.orElseThrow(() -> new AssertionError("missing observed request"));
+    assertEquals(timeout, recorded.timeout(), "timeout should propagate to request");
   }
 
   private static void assertEquals(

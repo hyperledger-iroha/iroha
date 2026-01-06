@@ -1,5 +1,7 @@
 "use strict";
 
+import { compareUtf16 } from "./ordering.js";
+
 function normalizePositiveInteger(value, context, { allowZero = false, max = Number.MAX_SAFE_INTEGER } = {}) {
   if (value === null || value === undefined) {
     throw new TypeError(`${context} is required`);
@@ -83,7 +85,7 @@ class MultisigSpec {
 
   toPayload() {
     const sortedEntries = Array.from(this.signatories.entries()).sort(([left], [right]) =>
-      left.localeCompare(right),
+      compareUtf16(left, right),
     );
     const sortedSignatories = Object.fromEntries(sortedEntries);
     return {
