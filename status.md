@@ -1,6 +1,20 @@
 # Status
 
 ## Latest Updates
+- Sumeragi: require cached QC lookups and block-sync vote/QC attachments to match the expected epoch, plus regression coverage for epoch-filtered cached QCs.
+- Tests: not run (not requested).
+- Sumeragi: reject non-commit-phase commit-certificate roster hints, enforce mode-tag and aggregate-signature validation, and add regression coverage for phase/tag/signature checks.
+- Tests: not run (not requested).
+- Sumeragi: reject QCs with mismatched mode tags during validation/aggregate salvage and add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi: validate commit-certificate roster hints with mode-tag and aggregate-signature checks, plus regression coverage for signature and tag validation alongside block-sync roster test updates.
+- Tests: not run (not requested).
+- Sumeragi: static production bug hunt; flagged empty-topology panic paths, QC/signature mismatch handling, and gossip target randomness as potential risks.
+- Tests: not run (analysis only).
+- Sumeragi: validate block-sync QC aggregate salvage against canonical topology to avoid view-rotation mismatches; add regression coverage.
+- Tests: not run (not requested).
+- Block sync: allow cached precommit QCs to reuse nonzero epochs from signer records and add regression coverage.
+- Tests: not run (not requested).
 - Client: match committed transactions by entrypoint hash during confirmation fallback to avoid tx-status timeouts; extend unit coverage for entrypoint hash matching.
 - Tests: `cargo test -p integration_tests --test asset client_add_asset_quantity_to_existing_asset_should_increase_asset_amount -- --nocapture`; `cargo test -p integration_tests --test asset find_rate_and_make_exchange_isi_should_succeed -- --nocapture`; `cargo test -p iroha tx_hash_tests::committed_transaction_matches_signed_hash_for_external_entrypoint -- --nocapture`.
 - Integration tests: parallelize status polling in `sumeragi_localnet_smoke` to avoid serial Torii stalls while waiting for block convergence.

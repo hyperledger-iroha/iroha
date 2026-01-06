@@ -198,6 +198,7 @@ impl Actor {
         block_hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
+        epoch: u64,
     ) {
         update.commit_certificate = cached_qc_for(
             qc_cache,
@@ -205,10 +206,11 @@ impl Actor {
             block_hash,
             height,
             view,
+            epoch,
         );
         if update.commit_certificate.is_none() {
             if let Some(record) = crate::sumeragi::status::precommit_signers_for(block_hash) {
-                if record.height == height && record.view == view {
+                if record.height == height && record.view == view && record.epoch == epoch {
                     if let Some(derived) = super::derive_block_sync_qc_from_signers(
                         block_hash,
                         height,
@@ -232,6 +234,7 @@ impl Actor {
                         && vote.block_hash == block_hash
                         && vote.height == height
                         && vote.view == view
+                        && vote.epoch == epoch
                 })
                 .cloned()
                 .collect();
@@ -830,6 +833,7 @@ impl Actor {
                     self.common_config.trusted_peers.value(),
                     self.common_config.peer.id(),
                 );
+                let expected_epoch = self.epoch_for_height(pending_height);
                 Self::apply_cached_qcs_to_block_sync_update(
                     &mut sync_update,
                     &self.qc_cache,
@@ -837,6 +841,7 @@ impl Actor {
                     block_hash,
                     pending_height,
                     pending_view,
+                    expected_epoch,
                 );
                 let world_peers = {
                     let view = self.state.view();
@@ -3017,6 +3022,7 @@ impl Actor {
                 self.common_config.trusted_peers.value(),
                 self.common_config.peer.id(),
             );
+            let expected_epoch = qc.epoch;
             Self::apply_cached_qcs_to_block_sync_update(
                 &mut update,
                 &self.qc_cache,
@@ -3024,6 +3030,7 @@ impl Actor {
                 block_hash,
                 block_height,
                 qc.view,
+                expected_epoch,
             );
             debug!(
                 height = block_height,
@@ -4541,6 +4548,7 @@ mod tests {
             block_hash,
             4,
             0,
+            0,
         );
 
         assert_eq!(update.commit_certificate, Some(qc_precommit));
@@ -4606,6 +4614,7 @@ mod tests {
             block_hash,
             height,
             view,
+            epoch,
         );
 
         let qc = update
@@ -4800,6 +4809,7 @@ mod tests {
             &vote_log,
             block_hash,
             4,
+            0,
             0,
         );
 
