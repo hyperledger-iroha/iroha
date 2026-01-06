@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="org.hyperledger.iroha.android.client.stream.ToriiEventStreamOkHttpTests" tests="1" skipped="0" failures="0" errors="0" timestamp="2025-12-31T14:11:48.280Z" hostname="takemiyacStudio.lan" time="0.004">
-  <properties/>
-  <testcase name="okHttpExecutorConsumesSseEvents" classname="org.hyperledger.iroha.android.client.stream.ToriiEventStreamOkHttpTests" time="0.004"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>
