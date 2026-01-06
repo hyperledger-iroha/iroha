@@ -1886,6 +1886,78 @@ async fn rbc_session_persists_only_after_full_payload_arrives() {
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_persist_worker_persists_full_session() {
+    let rbc_dir = tempfile::tempdir().expect("tempdir");
+    let cfg = crate::sumeragi::RbcStoreConfig {
+        dir: rbc_dir.path().to_path_buf(),
+        max_sessions: 16,
+        soft_sessions: 8,
+        max_bytes: 1 << 20,
+        soft_bytes: 1 << 20,
+        ttl: Duration::from_secs(60),
+    };
+    let mut harness = test_actor_harness_with_rbc_store(1, Some(cfg)).await;
+    let worker_join = harness
+        .actor
+        .attach_rbc_persist_worker()
+        .expect("persist worker");
+
+    let key: SessionKey = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x12; 32])),
+        3,
+        1,
+    );
+    let payload = vec![0xCD; 16];
+    let payload_hash = Hash::new(&payload);
+    let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
+    session.test_note_chunk(0, payload, 0);
+    harness.actor.persist_rbc_session(key, &session);
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        harness.actor.poll_rbc_persist_results();
+        if harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persisted_full_sessions
+            .contains(&key)
+        {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for RBC persistence worker");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persist_inflight
+            .contains(&key)
+    );
+    let persisted = crate::sumeragi::rbc_store::load_session_from_dir(
+        rbc_dir.path(),
+        &key,
+        &harness.actor.chain_hash,
+        &harness.actor.subsystems.da_rbc.rbc.manifest,
+    )
+    .expect("load session");
+    assert!(persisted.is_some(), "worker should persist full session");
+
+    harness.shutdown.send();
+    drop(harness);
+    if let Err(err) = worker_join.join() {
+        panic!("persist worker panicked: {err:?}");
+    }
+}
+
 fn lane_config_with_manifest_policy(policy: DaManifestPolicy) -> LaneConfigSnapshot {
     let mut metadata = BTreeMap::new();
     metadata.insert(
@@ -2015,6 +2087,70 @@ async fn block_sync_update_drops_conflicting_committed_block_without_roster_coun
     assert_eq!(
         after, before,
         "conflicting committed blocks should skip roster selection and counters"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_accepts_uncertified_next_height_in_permissioned_mode() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let (committed_height, committed_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(u64::MAX),
+            view.latest_block_hash(),
+        )
+    };
+    let block_height = committed_height.saturating_add(1).max(1);
+    let view_index = 0_u64;
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let signature_topology =
+        super::topology_for_view(&topology, block_height, view_index, PERMISSIONED_TAG, None);
+    let signer_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("signer in topology");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair exists in harness");
+    let signer_idx = signature_topology
+        .position(signer_kp.public_key())
+        .expect("signer index in topology");
+    let prev_hash = if block_height == 1 {
+        None
+    } else {
+        Some(committed_hash)
+    };
+    let header = BlockHeader::new(
+        NonZeroU64::new(block_height).expect("block height"),
+        prev_hash,
+        None,
+        None,
+        0,
+        u32::try_from(view_index).expect("view fits u32"),
+    );
+    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let block_signature = BlockSignature::new(
+        u64::try_from(signer_idx).expect("signer index fits u64"),
+        signature,
+    );
+    let block = SignedBlock::presigned(block_signature, header, Vec::new());
+    let update = super::message::BlockSyncUpdate::from(&block);
+
+    actor
+        .handle_block_sync_update(update)
+        .expect("block sync update");
+
+    assert!(
+        actor.block_known_locally(block.hash()),
+        "block sync should accept next-height block without QC in permissioned mode"
     );
 
     harness.shutdown.send();

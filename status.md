@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Sumeragi/block sync: allow permissioned next-height block sync updates without QC/cert to use local roster fallback, avoiding localnet stalls; add regression coverage.
+- Tests: not run (not requested).
 - Tests: `cargo test -p iroha_core --lib active_topology_sorts_world_peers_when_commit_topology_empty -- --nocapture` (x10; all passes; periodic build-dir locks; warnings about unused `mut` in `crates/iroha_core/src/smartcontracts/isi/world.rs:9010` and `crates/iroha_core/src/smartcontracts/isi/world.rs:9071`).
 - Sumeragi: canonicalize world-peers ordering when commit topology is empty to keep leader selection deterministic across nodes; add regression coverage for initial roster sorting.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
