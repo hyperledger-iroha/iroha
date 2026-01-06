@@ -232,6 +232,83 @@ fn zk_ballot_rejects_missing_lock_hints_when_bond_required() {
 }
 
 #[test]
+fn zk_ballot_accepts_direction_hint_without_lock_hints_when_bond_disabled() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    state.gov.min_bond_amount = 0;
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let mut sblock = state.block(header);
+    let mut stx = sblock.transaction();
+
+    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let vk_id = bundle.vk_id.clone();
+
+    let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
+    Grant::account_permission(perm, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant VK management");
+
+    iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
+        id: vk_id.clone(),
+        record: bundle.vk_record.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect("register verifying key");
+    let parliament_perm: Permission = CanManageParliament.into();
+    Grant::account_permission(parliament_perm, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant CanManageParliament");
+    let election_id = "referendum-direction-only".to_string();
+    let ballot_perm: Permission = CanSubmitGovernanceBallot {
+        referendum_id: election_id.clone(),
+    }
+    .into();
+    Grant::account_permission(ballot_perm, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant CanSubmitGovernanceBallot");
+
+    let create = CreateElection {
+        election_id: election_id.clone(),
+        options: 2,
+        eligible_root: bundle.root_bytes(),
+        start_ts: 0,
+        end_ts: 0,
+        vk_ballot: vk_id.clone(),
+        vk_tally: vk_id,
+        domain_tag: "gov:ballot:v1".to_string(),
+    };
+    create.execute(&ALICE_ID, &mut stx).expect("create ok");
+    stx.world.governance_referenda_mut().insert(
+        election_id.clone(),
+        iroha_core::state::GovernanceReferendumRecord {
+            h_start: 0,
+            h_end: 100,
+            status: iroha_core::state::GovernanceReferendumStatus::Proposed,
+            mode: iroha_core::state::GovernanceReferendumMode::Zk,
+        },
+    );
+
+    CastZkBallot {
+        election_id: election_id.clone(),
+        proof_b64: bundle.proof_b64.clone(),
+        public_inputs_json: r#"{"direction":"Aye"}"#.to_string(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect("ballot ok");
+
+    let events = stx.world.take_external_events();
+    assert!(events.iter().any(|event| matches!(
+        event.as_data_event(),
+        Some(DataEvent::Governance(GovernanceEvent::BallotAccepted(_)))
+    )));
+    assert!(
+        stx.world.governance_locks.get(&election_id).is_none(),
+        "direction-only hints must not create a lock"
+    );
+}
+
+#[test]
 fn zk_ballot_accepts_commit_nullifier_hint() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();

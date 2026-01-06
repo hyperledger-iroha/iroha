@@ -62,6 +62,93 @@ final class OfflineSpendReceiptTests: XCTestCase {
         XCTAssertEqual(baseBytes, try withSnapshot.signingBytes())
     }
 
+    func testSigningBytesCanonicalizeAccountIds() throws {
+        let publicKey = Data(repeating: 0x11, count: 32)
+        let domain = "wonderland"
+        let rawAccountId = AccountId.make(publicKey: publicKey, domain: domain)
+        let address = try AccountAddress.fromAccount(domain: domain, publicKey: publicKey, algorithm: "ed25519")
+        let ih58 = try address.toIH58(networkPrefix: 0x02F1)
+        let canonicalAccountId = "\(ih58)@\(domain)"
+        let rawAssetId = "xor##\(rawAccountId)"
+        let canonicalAssetId = "xor##\(canonicalAccountId)"
+
+        let allowanceRaw = OfflineAllowanceCommitment(
+            assetId: rawAssetId,
+            amount: "10",
+            commitment: Data(repeating: 0x01, count: 32)
+        )
+        let allowanceCanonical = OfflineAllowanceCommitment(
+            assetId: canonicalAssetId,
+            amount: "10",
+            commitment: Data(repeating: 0x01, count: 32)
+        )
+        let policy = OfflineWalletPolicy(maxBalance: "100", maxTxValue: "50", expiresAtMs: 1)
+        let spendPublicKey = "ed0120" + publicKey.hexUppercased()
+        let issuedAtMs: UInt64 = 1_700_000_000_000
+        let operatorSignature = Data(repeating: 0x02, count: 64)
+
+        let certificateRaw = OfflineWalletCertificate(
+            controller: rawAccountId,
+            allowance: allowanceRaw,
+            spendPublicKey: spendPublicKey,
+            attestationReport: Data([0x01, 0x02]),
+            issuedAtMs: issuedAtMs,
+            expiresAtMs: issuedAtMs + 10,
+            policy: policy,
+            operatorSignature: operatorSignature
+        )
+        let certificateCanonical = OfflineWalletCertificate(
+            controller: canonicalAccountId,
+            allowance: allowanceCanonical,
+            spendPublicKey: spendPublicKey,
+            attestationReport: Data([0x01, 0x02]),
+            issuedAtMs: issuedAtMs,
+            expiresAtMs: issuedAtMs + 10,
+            policy: policy,
+            operatorSignature: operatorSignature
+        )
+
+        let txId = IrohaHash.hash(Data("tx-id".utf8))
+        let challengeHash = IrohaHash.hash(Data("challenge".utf8))
+        let proof = OfflinePlatformProof.appleAppAttest(
+            AppleAppAttestProof(
+                keyId: "swift-tests",
+                counter: 1,
+                assertion: Data([0x01]),
+                challengeHash: challengeHash
+            )
+        )
+
+        let receiptRaw = OfflineSpendReceipt(
+            txId: txId,
+            from: rawAccountId,
+            to: rawAccountId,
+            assetId: rawAssetId,
+            amount: "10",
+            issuedAtMs: issuedAtMs,
+            invoiceId: "inv-raw",
+            platformProof: proof,
+            platformSnapshot: nil,
+            senderCertificate: certificateRaw,
+            senderSignature: Data(repeating: 0x00, count: 64)
+        )
+        let receiptCanonical = OfflineSpendReceipt(
+            txId: txId,
+            from: canonicalAccountId,
+            to: canonicalAccountId,
+            assetId: canonicalAssetId,
+            amount: "10",
+            issuedAtMs: issuedAtMs,
+            invoiceId: "inv-raw",
+            platformProof: proof,
+            platformSnapshot: nil,
+            senderCertificate: certificateCanonical,
+            senderSignature: Data(repeating: 0x00, count: 64)
+        )
+
+        XCTAssertEqual(try receiptRaw.signingBytes(), try receiptCanonical.signingBytes())
+    }
+
     // MARK: - Helpers
 
     private func fixtureURL(_ name: String) -> URL {

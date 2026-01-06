@@ -21,6 +21,10 @@ public final class GovernanceInstructionBuilderTests {
   public static void main(final String[] args) {
     proposeDeployContractRoundTrip();
     castZkBallotRoundTrip();
+    castZkBallotNormalizesPublicInputs();
+    castZkBallotFromArgumentsNormalizesPublicInputs();
+    castZkBallotRejectsIncompleteLockHints();
+    castZkBallotRejectsNonObjectPublicInputs();
     castPlainBallotRoundTrip();
     enactReferendumRoundTrip();
     finalizeReferendumRoundTrip();
@@ -65,6 +69,63 @@ public final class GovernanceInstructionBuilderTests {
     final CastZkBallotInstruction payload = (CastZkBallotInstruction) decoded.payload();
     assert "election-1".equals(payload.electionId()) : "election id mismatch";
     assert "AQID".equals(payload.proofBase64()) : "proof mismatch";
+  }
+
+  private static void castZkBallotNormalizesPublicInputs() {
+    final CastZkBallotInstruction instruction =
+        CastZkBallotInstruction.builder()
+            .setElectionId("election-2")
+            .setProofBase64("AQID")
+            .setPublicInputsJson(
+                "{\"durationBlocks\":64,\"owner\":\"alice@wonderland\",\"amount\":\"100\",\"rootHintHex\":\"aa\"}")
+            .build();
+    final String normalized = instruction.publicInputsJson();
+    assert normalized.contains("\"duration_blocks\"") : "duration_blocks alias not normalized";
+    assert !normalized.contains("durationBlocks") : "alias key should be removed";
+    assert normalized.contains("\"root_hint\"") : "root hint alias not normalized";
+  }
+
+  private static void castZkBallotFromArgumentsNormalizesPublicInputs() {
+    final Map<String, String> args = new java.util.LinkedHashMap<>();
+    args.put("action", "CastZkBallot");
+    args.put("election_id", "election-args");
+    args.put("proof_b64", "AQID");
+    args.put(
+        "public_inputs_json",
+        "{\"durationBlocks\":12,\"owner\":\"alice@wonderland\",\"amount\":\"100\"}");
+    final CastZkBallotInstruction instruction = CastZkBallotInstruction.fromArguments(args);
+    final String normalized = instruction.toArguments().get("public_inputs_json");
+    assert normalized != null && normalized.contains("\"duration_blocks\"")
+        : "fromArguments should normalize public inputs";
+    assert !normalized.contains("durationBlocks") : "fromArguments should strip alias keys";
+  }
+
+  private static void castZkBallotRejectsIncompleteLockHints() {
+    boolean failed = false;
+    try {
+      CastZkBallotInstruction.builder()
+          .setElectionId("election-3")
+          .setProofBase64("AQID")
+          .setPublicInputsJson("{\"owner\":\"alice@wonderland\"}")
+          .build();
+    } catch (final IllegalArgumentException ex) {
+      failed = ex.getMessage().contains("lock hints");
+    }
+    assert failed : "expected lock hint validation failure";
+  }
+
+  private static void castZkBallotRejectsNonObjectPublicInputs() {
+    boolean failed = false;
+    try {
+      CastZkBallotInstruction.builder()
+          .setElectionId("election-4")
+          .setProofBase64("AQID")
+          .setPublicInputsJson("[1,2,3]")
+          .build();
+    } catch (final IllegalArgumentException ex) {
+      failed = ex.getMessage().contains("JSON object");
+    }
+    assert failed : "expected non-object public inputs to be rejected";
   }
 
   private static void castPlainBallotRoundTrip() {

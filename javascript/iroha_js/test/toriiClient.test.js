@@ -8540,10 +8540,20 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
     chainId: "chain-0",
     electionId: "ref-zk",
     proof: [1, 2, 3],
-    public: { owner: "bob@wonderland", amount: "42" },
+    public: {
+      owner: "bob@wonderland",
+      amount: "42",
+      durationBlocks: 128,
+      direction: "Aye",
+    },
   });
   assert.equal(calls[0].body.proof_b64, "AQID");
-  assert.deepEqual(calls[0].body.public, { owner: "bob@wonderland", amount: "42" });
+  assert.deepEqual(calls[0].body.public, {
+    owner: "bob@wonderland",
+    amount: "42",
+    duration_blocks: 128,
+    direction: "Aye",
+  });
   assert.equal(zkResult.accepted, true);
 
   const zkV1Result = await client.governanceSubmitZkBallotV1({
@@ -8561,6 +8571,75 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
   assert.equal(calls[1].body.nullifier_hex, "ff".repeat(32));
   assert.equal(zkV1Result.accepted, false);
   assert.equal(zkV1Result.reason, "build transaction skeleton");
+});
+
+test("governanceSubmitZk ballots reject partial lock hints", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.governanceSubmitZkBallot({
+        authority: "bob@wonderland",
+        chainId: "chain-0",
+        electionId: "ref-zk",
+        proof: [1, 2, 3],
+        public: { owner: "bob@wonderland", amount: "42" },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /owner, amount, and duration_blocks/i);
+      return true;
+    },
+  );
+});
+
+test("governanceSubmitZkBallotV1 rejects partial lock hints", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.governanceSubmitZkBallotV1({
+        authority: "bob@wonderland",
+        chainId: "chain-0",
+        electionId: "ref-zk",
+        backend: "halo2/ipa",
+        envelope: [4, 5],
+        owner: "bob@wonderland",
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /owner, amount, and duration_blocks/i);
+      return true;
+    },
+  );
+});
+
+test("governanceSubmitZkBallotProofV1 rejects partial lock hints", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.governanceSubmitZkBallotProofV1({
+        authority: "bob@wonderland",
+        chainId: "chain-0",
+        electionId: "ref-zk",
+        ballot: { owner: "bob@wonderland" },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /owner, amount, and duration_blocks/i);
+      return true;
+    },
+  );
 });
 
 test("getGovernanceCouncilCurrent normalizes roster payload", async () => {

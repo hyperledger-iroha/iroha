@@ -14946,6 +14946,69 @@ function normalizeGovernanceBallotDirection(value, name) {
   throw new TypeError(`${name} must be one of Aye, Nay, or Abstain`);
 }
 
+function normalizeGovernancePublicInputs(value, name) {
+  const cloned = cloneJsonValue(value, name);
+  if (!isPlainObject(cloned)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be an object`,
+      name,
+    );
+  }
+  const normalized = { ...cloned };
+  normalizeGovernancePublicInputAlias(
+    normalized,
+    "durationBlocks",
+    "duration_blocks",
+    name,
+  );
+  normalizeGovernancePublicInputAlias(
+    normalized,
+    "nullifierHex",
+    "nullifier_hex",
+    name,
+  );
+  normalizeGovernancePublicInputAlias(
+    normalized,
+    "rootHintHex",
+    "root_hint",
+    name,
+  );
+  normalizeGovernancePublicInputAlias(normalized, "rootHint", "root_hint", name);
+  ensureGovernanceLockHintsComplete(normalized, name);
+  return normalized;
+}
+
+function normalizeGovernancePublicInputAlias(target, aliasKey, canonicalKey, name) {
+  if (!Object.prototype.hasOwnProperty.call(target, aliasKey)) {
+    return;
+  }
+  if (Object.prototype.hasOwnProperty.call(target, canonicalKey)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} cannot include both ${aliasKey} and ${canonicalKey}`,
+      name,
+    );
+  }
+  target[canonicalKey] = target[aliasKey];
+  delete target[aliasKey];
+}
+
+function ensureGovernanceLockHintsComplete(source, name) {
+  const hasOwner = source.owner !== undefined && source.owner !== null;
+  const hasAmount = source.amount !== undefined && source.amount !== null;
+  const hasDuration =
+    source.duration_blocks !== undefined && source.duration_blocks !== null;
+  const hasAnyLockHint = hasOwner || hasAmount || hasDuration;
+  if (hasAnyLockHint && !(hasOwner && hasAmount && hasDuration)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must include owner, amount, and duration_blocks when providing lock hints`,
+      name,
+    );
+  }
+}
+
 function normalizeGovernanceZkBallotPayload(input) {
   const record = ensureRecord(input, "governanceSubmitZkBallot payload");
   const payload = {
@@ -14967,7 +15030,10 @@ function normalizeGovernanceZkBallotPayload(input) {
     ),
   };
   if (record.public !== undefined && record.public !== null) {
-    payload.public = cloneJsonValue(record.public, "governanceSubmitZkBallot.public");
+    payload.public = normalizeGovernancePublicInputs(
+      record.public,
+      "governanceSubmitZkBallot.public",
+    );
   }
   return payload;
 }
@@ -15034,11 +15100,20 @@ function normalizeGovernanceZkBallotV1Payload(input) {
       "governanceSubmitZkBallotV1.nullifierHex",
     );
   }
+  ensureGovernanceLockHintsComplete(payload, "governanceSubmitZkBallotV1");
   return payload;
 }
 
 function normalizeGovernanceZkBallotProofPayload(input) {
   const record = ensureRecord(input, "governanceSubmitZkBallotProofV1 payload");
+  const ballot = ensureRecord(
+    record.ballot,
+    "governanceSubmitZkBallotProofV1.ballot",
+  );
+  ensureGovernanceLockHintsComplete(
+    ballot,
+    "governanceSubmitZkBallotProofV1.ballot",
+  );
   const payload = {
     authority: requireNonEmptyString(
       record.authority,
@@ -15052,7 +15127,7 @@ function normalizeGovernanceZkBallotProofPayload(input) {
       record.election_id ?? record.electionId,
       "governanceSubmitZkBallotProofV1.electionId",
     ),
-    ballot: ensureRecord(record.ballot, "governanceSubmitZkBallotProofV1.ballot"),
+    ballot,
   };
   return payload;
 }

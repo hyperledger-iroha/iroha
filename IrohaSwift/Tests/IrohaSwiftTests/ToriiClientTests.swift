@@ -4164,6 +4164,47 @@ id: 88
         waitForExpectations(timeout: 1)
     }
 
+    func testSubmitGovernanceZkBallotRejectsIncompleteLockHints() {
+        let request = ToriiGovernanceZkBallotRequest(authority: "alice@wonderland",
+                                                     chainId: "chain",
+                                                     electionId: "election-1",
+                                                     proofB64: "AAAA",
+                                                     publicInputs: ["owner": .string("alice@wonderland")])
+        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
+            guard case let ToriiClientError.invalidPayload(message) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("owner, amount, and duration_blocks"))
+        }
+    }
+
+    func testSubmitGovernanceZkBallotNormalizesPublicInputAliases() throws {
+        let request = ToriiGovernanceZkBallotRequest(authority: "alice@wonderland",
+                                                     chainId: "chain",
+                                                     electionId: "election-1",
+                                                     proofB64: "AAAA",
+                                                     publicInputs: [
+                                                        "owner": .string("alice@wonderland"),
+                                                        "amount": .string("250"),
+                                                        "durationBlocks": .number(12),
+                                                        "rootHintHex": .string("aa"),
+                                                        "nullifierHex": .string("bb"),
+                                                     ])
+        let data = try JSONEncoder().encode(request)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let publicInputs = json["public"] as? [String: Any] else {
+            return XCTFail("missing public inputs")
+        }
+        XCTAssertEqual(publicInputs["owner"] as? String, "alice@wonderland")
+        XCTAssertEqual(publicInputs["amount"] as? String, "250")
+        XCTAssertEqual(publicInputs["duration_blocks"] as? Int, 12)
+        XCTAssertNil(publicInputs["durationBlocks"])
+        XCTAssertEqual(publicInputs["root_hint"] as? String, "aa")
+        XCTAssertNil(publicInputs["rootHintHex"])
+        XCTAssertEqual(publicInputs["nullifier_hex"] as? String, "bb")
+        XCTAssertNil(publicInputs["nullifierHex"])
+    }
+
     func testGetGovernanceProposalDecodesRecord() {
         let expectation = expectation(description: "proposal get")
         let proposalId = String(repeating: "6", count: 64)

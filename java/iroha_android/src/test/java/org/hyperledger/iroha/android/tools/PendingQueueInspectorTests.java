@@ -6,6 +6,8 @@ import java.nio.file.Path;
 import java.util.Base64;
 import java.util.List;
 import org.hyperledger.iroha.android.tools.PendingQueueInspector.EntrySummary;
+import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.hyperledger.iroha.android.tx.offline.OfflineSigningEnvelope;
 import org.hyperledger.iroha.android.tx.offline.OfflineSigningEnvelopeCodec;
@@ -25,16 +27,32 @@ public final class PendingQueueInspectorTests {
   private static void inspectModernEntries() throws Exception {
     final Path queue = Files.createTempFile("pending-queue-modern-", ".txt");
     final long issuedAt = 1_706_000_000_000L;
-    final byte[] payload = new byte[] {0x01, 0x02};
     final byte[] signature = new byte[] {0x03};
     final byte[] publicKey = new byte[] {0x04};
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId("00000002")
+            .setAuthority("inspector@wonderland")
+            .setCreationTimeMs(issuedAt)
+            .setInstructionBytes(new byte[] {0x01, 0x02})
+            .setTimeToLiveMs(5_000L)
+            .setNonce(2)
+            .setMetadata(java.util.Map.of("queue", "modern"))
+            .build();
+    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
+    final byte[] encodedPayload;
+    try {
+      encodedPayload = codec.encodeTransaction(payload);
+    } catch (final Exception ex) {
+      throw new IllegalStateException("Failed to encode transaction payload", ex);
+    }
 
     final OfflineSigningEnvelope envelope =
         OfflineSigningEnvelope.builder()
-            .setEncodedPayload(payload)
+            .setEncodedPayload(encodedPayload)
             .setSignature(signature)
             .setPublicKey(publicKey)
-            .setSchemaName("iroha.android.transaction.Payload.v1")
+            .setSchemaName(codec.schemaName())
             .setKeyAlias("pixel-strongbox")
             .setIssuedAtMs(issuedAt)
             .build();

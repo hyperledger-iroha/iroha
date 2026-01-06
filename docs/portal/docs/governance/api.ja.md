@@ -92,7 +92,10 @@ translation_last_reviewed: 2026-01-01
   - リクエスト: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "alice@wonderland?", "private_key": "...?" }
   - レスポンス: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - オンチェーン効果 (現在のスキャフォールド): 承認済みのdeploy提案をenactすると、`code_hash` をキーにした最小 `ContractManifest` を `abi_hash` 期待値で挿入し、提案を Enacted にします。`code_hash` に異なる `abi_hash` の manifest が既に存在する場合、enactment は拒否されます。
-  - 注記: ZK選挙では、コントラクト経路は `FinalizeElection` の前に `ZK_VOTE_VERIFY_TALLY` を呼ぶ必要があり、ホストはワンショット・ラッチを強制します。
+  - 注記:
+    - ZK選挙では、コントラクト経路は `FinalizeElection` の前に `ZK_VOTE_VERIFY_TALLY` を呼ぶ必要があり、ホストはワンショット・ラッチを強制します。`FinalizeReferendum` は選挙集計が確定するまで ZK レファレンダムを拒否します。
+    - `h_end` の自動クローズは Plain レファレンダムのみ Approved/Rejected を発行します。ZK は集計が確定して `FinalizeReferendum` が実行されるまで Closed のままです。
+    - ターンアウト判定は approve+reject のみを使用し、abstain はカウントしません。
 
 - POST `/v1/gov/enact`
   - リクエスト: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "alice@wonderland?", "private_key": "...?" }

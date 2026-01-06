@@ -1803,7 +1803,7 @@ impl CoreHost {
             self.axt_expiry_slot_with_skew(handle.expiry_slot, handle.max_clock_skew_ms);
         let retention_cap =
             current_slot.saturating_add(self.axt_timing.replay_retention_slots.get());
-        expiry_slot.min(retention_cap)
+        expiry_slot.max(retention_cap)
     }
 
     pub(crate) fn hydrate_axt_replay_ledger(&mut self, state: &impl StateReadOnly) {
@@ -2147,7 +2147,6 @@ impl CoreHost {
             let manifest_tlv = Self::expect_tlv(vm, manifest_ptr, PointerType::NoritoBytes)?;
             Self::decode_header_or_bare(manifest_tlv.payload)?
         };
-        let state = self.axt_state.as_mut().expect("axt_state checked above");
         if let Err(err) = self.axt_policy.allow_touch(dsid, &manifest) {
             let lane = self.policy_entry_for(dsid).map(|policy| policy.target_lane);
             self.record_axt_reject_detail(
@@ -2160,13 +2159,28 @@ impl CoreHost {
             );
             return Err(err);
         }
-        state.record_touch(dsid, manifest)?;
+        let record_result = {
+            let state = self.axt_state.as_mut().expect("axt_state checked above");
+            state.record_touch(dsid, manifest)
+        };
+        if let Err(err) = record_result {
+            let lane = self.policy_entry_for(dsid).map(|policy| policy.target_lane);
+            self.record_axt_reject_detail(
+                AxtRejectReason::Descriptor,
+                Some(dsid),
+                lane,
+                "touch manifest rejected by descriptor",
+                None,
+                None,
+            );
+            return Err(err);
+        }
         Ok(0)
     }
 
     fn handle_axt_verify_ds_proof(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
         self.clear_axt_reject();
-        let Some(state_view) = self.axt_state.as_ref() else {
+        if self.axt_state.is_none() {
             self.record_axt_reject_detail(
                 AxtRejectReason::Descriptor,
                 None,
@@ -2185,9 +2199,13 @@ impl CoreHost {
                 let _ = err;
                 err
             })?;
-        if !state_view.expected_dsids().contains(&dsid) {
+        let expected = {
+            let state_view = self.axt_state.as_ref().expect("axt_state checked above");
+            state_view.expected_dsids().contains(&dsid)
+        };
+        if !expected {
             self.record_axt_reject_detail(
-                AxtRejectReason::MissingPolicy,
+                AxtRejectReason::Descriptor,
                 Some(dsid),
                 None,
                 "proof references undeclared dataspace",
@@ -2228,6 +2246,14 @@ impl CoreHost {
                 #[cfg(test)]
                 eprintln!("decode proof failed: {err:?}");
                 let _ = err;
+                self.record_axt_reject_detail(
+                    AxtRejectReason::Proof,
+                    Some(dsid),
+                    Some(policy.target_lane),
+                    "proof payload failed to decode",
+                    None,
+                    None,
+                );
                 ivm::VMError::NoritoInvalid
             })?;
         self.validate_axt_proof(dsid, &proof, policy)?;
@@ -2371,9 +2397,10 @@ impl CoreHost {
                 .and_then(Self::policy_current_slot)
                 .unwrap_or(0);
         }
+        let retention_slots = self.axt_timing.replay_retention_slots.get();
         self.prune_axt_replay_ledger(record_slot);
         if let Some(entry) = self.axt_replay_ledger.get(&key)
-            && (record_slot == 0 || record_slot <= entry.retain_until_slot)
+            && !entry.is_expired(record_slot, retention_slots)
         {
             let (next_handle_era, next_sub_nonce) =
                 policy_bounds.map_or((None, None), |(era, sub)| (Some(era), Some(sub)));
@@ -2435,9 +2462,33 @@ impl CoreHost {
         let handle_ptr = vm.register(10);
         let handle_tlv = Self::expect_tlv(vm, handle_ptr, PointerType::AssetHandle)?;
         let handle: AssetHandle = Self::decode_header_or_bare(handle_tlv.payload)?;
-        let binding = handle.binding_array().ok_or(ivm::VMError::NoritoInvalid)?;
-        let state_ref = self.axt_state.as_ref().expect("axt_state checked above");
-        if binding != state_ref.binding() {
+        let binding = handle.binding_array().ok_or_else(|| {
+            self.record_axt_reject(
+                AxtRejectReason::Descriptor,
+                None,
+                Some(handle.target_lane),
+                "handle binding is not 32 bytes",
+            );
+            ivm::VMError::NoritoInvalid
+        })?;
+        if handle.manifest_view_root.len() != 32 {
+            self.record_axt_reject(
+                AxtRejectReason::Manifest,
+                None,
+                Some(handle.target_lane),
+                "handle manifest root must be 32 bytes",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        let (state_binding, dsid_expected, has_touch) = {
+            let state_ref = self.axt_state.as_ref().expect("axt_state checked above");
+            (
+                state_ref.binding(),
+                state_ref.expected_dsids().contains(&intent.asset_dsid),
+                state_ref.has_touch(&intent.asset_dsid),
+            )
+        };
+        if binding != state_binding {
             self.record_axt_reject(
                 AxtRejectReason::Descriptor,
                 None,
@@ -2450,16 +2501,16 @@ impl CoreHost {
         let intent_ptr = vm.register(11);
         let intent_tlv = Self::expect_tlv(vm, intent_ptr, PointerType::NoritoBytes)?;
         let intent: RemoteSpendIntent = Self::decode_header_or_bare(intent_tlv.payload)?;
-        if !state_ref.expected_dsids().contains(&intent.asset_dsid) {
+        if !dsid_expected {
             self.record_axt_reject(
-                AxtRejectReason::MissingPolicy,
+                AxtRejectReason::Descriptor,
                 Some(intent.asset_dsid),
                 Some(handle.target_lane),
                 "intent references undeclared dataspace",
             );
             return Err(ivm::VMError::PermissionDenied);
         }
-        if !state_ref.has_touch(&intent.asset_dsid) {
+        if !has_touch {
             self.record_axt_reject(
                 AxtRejectReason::Descriptor,
                 Some(intent.asset_dsid),
@@ -2469,11 +2520,96 @@ impl CoreHost {
             return Err(ivm::VMError::PermissionDenied);
         }
 
+        if handle.handle_era == 0 {
+            self.record_axt_reject(
+                AxtRejectReason::HandleEra,
+                Some(intent.asset_dsid),
+                Some(handle.target_lane),
+                "handle era is zero",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        if handle.sub_nonce == 0 {
+            self.record_axt_reject(
+                AxtRejectReason::SubNonce,
+                Some(intent.asset_dsid),
+                Some(handle.target_lane),
+                "handle sub-nonce is zero",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        if handle.expiry_slot == 0 {
+            self.record_axt_reject(
+                AxtRejectReason::Expiry,
+                Some(intent.asset_dsid),
+                Some(handle.target_lane),
+                "handle expiry slot is zero",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        if handle.scope.is_empty() {
+            self.record_axt_reject(
+                AxtRejectReason::PolicyDenied,
+                Some(intent.asset_dsid),
+                Some(handle.target_lane),
+                "handle scope is empty",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        if handle
+            .scope
+            .iter()
+            .all(|scope| scope != &intent.op.kind)
+        {
+            self.record_axt_reject(
+                AxtRejectReason::PolicyDenied,
+                Some(intent.asset_dsid),
+                Some(handle.target_lane),
+                "handle scope does not permit intent kind",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        if handle.subject.account != intent.op.from {
+            self.record_axt_reject(
+                AxtRejectReason::PolicyDenied,
+                Some(intent.asset_dsid),
+                Some(handle.target_lane),
+                "handle subject does not match intent sender",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        if handle.group_binding.composability_group_id.is_empty() {
+            self.record_axt_reject(
+                AxtRejectReason::PolicyDenied,
+                Some(intent.asset_dsid),
+                Some(handle.target_lane),
+                "handle composability group id is empty",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
+
         let amount = intent
             .op
             .amount
             .parse::<u128>()
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            .map_err(|_| {
+                self.record_axt_reject(
+                    AxtRejectReason::Budget,
+                    Some(intent.asset_dsid),
+                    Some(handle.target_lane),
+                    "intent amount is not a valid u128",
+                );
+                ivm::VMError::NoritoInvalid
+            })?;
+        if amount == 0 {
+            self.record_axt_reject(
+                AxtRejectReason::Budget,
+                Some(intent.asset_dsid),
+                Some(handle.target_lane),
+                "handle amount must be non-zero",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
 
         if amount > handle.budget.remaining {
             self.record_axt_reject(
@@ -2504,7 +2640,15 @@ impl CoreHost {
             None
         } else {
             let proof_tlv = Self::expect_tlv(vm, proof_ptr, PointerType::ProofBlob)?;
-            let blob: ProofBlob = Self::decode_header_or_bare(proof_tlv.payload)?;
+            let blob: ProofBlob = Self::decode_header_or_bare(proof_tlv.payload).map_err(|err| {
+                self.record_axt_reject(
+                    AxtRejectReason::Proof,
+                    Some(intent.asset_dsid),
+                    Some(handle.target_lane),
+                    "proof payload failed to decode",
+                );
+                err
+            })?;
             Some(blob)
         };
         if let Some(blob) = proof.as_ref() {
@@ -3655,6 +3799,43 @@ mod pointer_abi_tests {
     }
 
     #[test]
+    fn axt_verify_ds_proof_rejects_undeclared_dataspace() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(3);
+        let other = DataSpaceId::new(4);
+        let manifest_root = [0xAB; 32];
+        let descriptor = axt::AxtDescriptor {
+            dsids: vec![dsid],
+            touches: Vec::new(),
+        };
+        let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
+        let mut vm = IVM::new(10_000);
+        begin_axt_envelope(&mut host, &mut vm, &descriptor);
+
+        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&other));
+        let proof = ProofBlob {
+            payload: manifest_root.to_vec(),
+            expiry_slot: Some(20),
+        };
+        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &norito_blob(&proof));
+        vm.set_register(10, ds_ptr);
+        vm.set_register(11, proof_ptr);
+
+        let err = host
+            .syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
+            .expect_err("undeclared dataspace should be rejected");
+        assert!(matches!(err, VMError::PermissionDenied));
+        let ctx = host
+            .take_axt_reject_for_tests()
+            .expect("reject context recorded");
+        assert_eq!(ctx.reason, AxtRejectReason::Descriptor);
+        assert_eq!(ctx.dataspace, Some(other));
+        assert!(ctx.lane.is_none());
+    }
+
+    #[test]
     fn axt_verify_ds_proof_cache_tracks_slot_and_manifest_root() {
         crate::test_alias::ensure();
         let dsid = DataSpaceId::new(7);
@@ -3723,6 +3904,282 @@ mod pointer_abi_tests {
         assert_eq!(entry.manifest_root, Some(new_manifest_root));
         let expected_digest: [u8; 32] = Hash::new(&new_proof.payload).into();
         assert_eq!(entry.digest, expected_digest);
+    }
+
+    #[test]
+    fn axt_touch_rejects_manifest_prefix_violation_with_context() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(5);
+        let manifest_root = [0x22; 32];
+        let descriptor = axt::AxtDescriptor {
+            dsids: vec![dsid],
+            touches: vec![axt::AxtTouchSpec {
+                dsid,
+                read: vec!["orders/".into()],
+                write: vec!["ledger/".into()],
+            }],
+        };
+        let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
+        let mut vm = IVM::new(10_000);
+        begin_axt_envelope(&mut host, &mut vm, &descriptor);
+
+        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
+        let manifest = TouchManifest {
+            read: vec!["payments/1".into()],
+            write: Vec::new(),
+        };
+        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&manifest));
+        vm.set_register(10, ds_ptr);
+        vm.set_register(11, manifest_ptr);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm)
+            .expect_err("prefix violation must be rejected");
+        assert!(matches!(err, VMError::PermissionDenied));
+        let ctx = host
+            .take_axt_reject_for_tests()
+            .expect("reject context recorded");
+        assert_eq!(ctx.reason, AxtRejectReason::Descriptor);
+        assert_eq!(ctx.dataspace, Some(dsid));
+        assert_eq!(ctx.lane, Some(LaneId::new(1)));
+    }
+
+    #[test]
+    fn axt_use_asset_handle_rejects_zero_handle_era() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(12);
+        let manifest_root = [0x44; 32];
+        let descriptor = axt::AxtDescriptor {
+            dsids: vec![dsid],
+            touches: Vec::new(),
+        };
+        let mut snapshot = make_policy_snapshot(dsid, manifest_root, 5);
+        snapshot.entries[0].policy.min_handle_era = 0;
+        snapshot.entries[0].policy.min_sub_nonce = 0;
+        snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
+        let mut vm = IVM::new(10_000);
+        begin_axt_envelope(&mut host, &mut vm, &descriptor);
+
+        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
+        let manifest = TouchManifest {
+            read: Vec::new(),
+            write: Vec::new(),
+        };
+        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&manifest));
+        vm.set_register(10, ds_ptr);
+        vm.set_register(11, manifest_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
+            Ok(0)
+        );
+
+        let binding = axt::compute_binding(&descriptor).expect("binding");
+        let handle = AssetHandle {
+            scope: vec!["transfer".into()],
+            subject: HandleSubject {
+                account: authority.to_string(),
+                origin_dsid: Some(dsid),
+            },
+            budget: HandleBudget {
+                remaining: 10,
+                per_use: Some(10),
+            },
+            handle_era: 0,
+            sub_nonce: 1,
+            group_binding: GroupBinding {
+                composability_group_id: vec![0xAA; 32],
+                epoch_id: 1,
+            },
+            target_lane: LaneId::new(1),
+            axt_binding: binding.to_vec(),
+            manifest_view_root: manifest_root.to_vec(),
+            expiry_slot: 40,
+            max_clock_skew_ms: Some(0),
+        };
+        let intent = RemoteSpendIntent {
+            asset_dsid: dsid,
+            op: SpendOp {
+                kind: "transfer".into(),
+                from: authority.to_string(),
+                to: "bob@wonderland".into(),
+                amount: "5".into(),
+            },
+        };
+        let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &norito_blob(&handle));
+        let intent_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&intent));
+        vm.set_register(10, handle_ptr);
+        vm.set_register(11, intent_ptr);
+        vm.set_register(12, 0);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_USE_ASSET_HANDLE, &mut vm)
+            .expect_err("zero handle era must be rejected");
+        assert!(matches!(err, VMError::PermissionDenied));
+        let ctx = host
+            .take_axt_reject_for_tests()
+            .expect("reject context captured");
+        assert_eq!(ctx.reason, AxtRejectReason::HandleEra);
+        assert_eq!(ctx.dataspace, Some(dsid));
+        assert_eq!(ctx.lane, Some(LaneId::new(1)));
+    }
+
+    #[test]
+    fn axt_use_asset_handle_rejects_invalid_manifest_root_length() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(13);
+        let manifest_root = [0x45; 32];
+        let descriptor = axt::AxtDescriptor {
+            dsids: vec![dsid],
+            touches: Vec::new(),
+        };
+        let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
+        let mut vm = IVM::new(10_000);
+        begin_axt_envelope(&mut host, &mut vm, &descriptor);
+
+        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
+        let manifest = TouchManifest {
+            read: Vec::new(),
+            write: Vec::new(),
+        };
+        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&manifest));
+        vm.set_register(10, ds_ptr);
+        vm.set_register(11, manifest_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
+            Ok(0)
+        );
+
+        let binding = axt::compute_binding(&descriptor).expect("binding");
+        let handle = AssetHandle {
+            scope: vec!["transfer".into()],
+            subject: HandleSubject {
+                account: authority.to_string(),
+                origin_dsid: Some(dsid),
+            },
+            budget: HandleBudget {
+                remaining: 10,
+                per_use: Some(10),
+            },
+            handle_era: 1,
+            sub_nonce: 1,
+            group_binding: GroupBinding {
+                composability_group_id: vec![0xAA; 32],
+                epoch_id: 1,
+            },
+            target_lane: LaneId::new(1),
+            axt_binding: binding.to_vec(),
+            manifest_view_root: vec![0x11; 31],
+            expiry_slot: 40,
+            max_clock_skew_ms: Some(0),
+        };
+        let intent = RemoteSpendIntent {
+            asset_dsid: dsid,
+            op: SpendOp {
+                kind: "transfer".into(),
+                from: authority.to_string(),
+                to: "bob@wonderland".into(),
+                amount: "5".into(),
+            },
+        };
+        let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &norito_blob(&handle));
+        let intent_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&intent));
+        vm.set_register(10, handle_ptr);
+        vm.set_register(11, intent_ptr);
+        vm.set_register(12, 0);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_USE_ASSET_HANDLE, &mut vm)
+            .expect_err("invalid manifest root length must be rejected");
+        assert!(matches!(err, VMError::PermissionDenied));
+        let ctx = host
+            .take_axt_reject_for_tests()
+            .expect("reject context captured");
+        assert_eq!(ctx.reason, AxtRejectReason::Manifest);
+        assert!(ctx.dataspace.is_none());
+        assert_eq!(ctx.lane, Some(LaneId::new(1)));
+    }
+
+    #[test]
+    fn axt_use_asset_handle_rejects_invalid_binding_length() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(14);
+        let manifest_root = [0x46; 32];
+        let descriptor = axt::AxtDescriptor {
+            dsids: vec![dsid],
+            touches: Vec::new(),
+        };
+        let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
+        let mut vm = IVM::new(10_000);
+        begin_axt_envelope(&mut host, &mut vm, &descriptor);
+
+        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
+        let manifest = TouchManifest {
+            read: Vec::new(),
+            write: Vec::new(),
+        };
+        let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&manifest));
+        vm.set_register(10, ds_ptr);
+        vm.set_register(11, manifest_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
+            Ok(0)
+        );
+
+        let handle = AssetHandle {
+            scope: vec!["transfer".into()],
+            subject: HandleSubject {
+                account: authority.to_string(),
+                origin_dsid: Some(dsid),
+            },
+            budget: HandleBudget {
+                remaining: 10,
+                per_use: Some(10),
+            },
+            handle_era: 1,
+            sub_nonce: 1,
+            group_binding: GroupBinding {
+                composability_group_id: vec![0xAA; 32],
+                epoch_id: 1,
+            },
+            target_lane: LaneId::new(1),
+            axt_binding: vec![0xAA; 31],
+            manifest_view_root: manifest_root.to_vec(),
+            expiry_slot: 40,
+            max_clock_skew_ms: Some(0),
+        };
+        let intent = RemoteSpendIntent {
+            asset_dsid: dsid,
+            op: SpendOp {
+                kind: "transfer".into(),
+                from: authority.to_string(),
+                to: "bob@wonderland".into(),
+                amount: "5".into(),
+            },
+        };
+        let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &norito_blob(&handle));
+        let intent_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&intent));
+        vm.set_register(10, handle_ptr);
+        vm.set_register(11, intent_ptr);
+        vm.set_register(12, 0);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_USE_ASSET_HANDLE, &mut vm)
+            .expect_err("invalid binding length must be rejected");
+        assert!(matches!(err, VMError::NoritoInvalid));
+        let ctx = host
+            .take_axt_reject_for_tests()
+            .expect("reject context captured");
+        assert_eq!(ctx.reason, AxtRejectReason::Descriptor);
+        assert!(ctx.dataspace.is_none());
+        assert_eq!(ctx.lane, Some(LaneId::new(1)));
     }
 
     #[cfg(feature = "telemetry")]
@@ -4310,6 +4767,168 @@ mod pointer_abi_tests {
         let err = host
             .enforce_axt_policy(&usage)
             .expect_err("replay guard must reject reused handle");
+        assert_eq!(err, VMError::PermissionDenied);
+        let ctx = host
+            .take_axt_reject_for_tests()
+            .expect("reject context recorded");
+        assert_eq!(ctx.reason, AxtRejectReason::ReplayCache);
+    }
+
+    #[test]
+    fn axt_replay_ledger_records_retention_floor() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(23);
+        let lane = LaneId::new(1);
+        let manifest_root = [0x44; 32];
+        let current_slot = 10;
+        let retention_slots = 10;
+        let timing = iroha_config::parameters::actual::NexusAxt {
+            slot_length_ms: NonZeroU64::new(1).expect("slot length"),
+            max_clock_skew_ms: 0,
+            proof_cache_ttl_slots: NonZeroU64::new(1).expect("ttl slots"),
+            replay_retention_slots: NonZeroU64::new(retention_slots)
+                .expect("non-zero retention window"),
+        };
+        let snapshot = make_policy_snapshot(dsid, manifest_root, current_slot);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority.clone())
+            .with_axt_policy_snapshot(&snapshot)
+            .with_axt_timing(timing);
+
+        let binding = AxtBinding::new([0xAB; 32]);
+        let handle = AssetHandle {
+            scope: vec!["transfer".into()],
+            subject: HandleSubject {
+                account: authority.to_string(),
+                origin_dsid: Some(dsid),
+            },
+            budget: HandleBudget {
+                remaining: 10,
+                per_use: Some(10),
+            },
+            handle_era: 1,
+            sub_nonce: 1,
+            group_binding: GroupBinding {
+                composability_group_id: vec![0; 32],
+                epoch_id: 1,
+            },
+            target_lane: lane,
+            axt_binding: binding.as_bytes().to_vec(),
+            manifest_view_root: manifest_root.to_vec(),
+            expiry_slot: current_slot + 2,
+            max_clock_skew_ms: Some(0),
+        };
+        let intent = RemoteSpendIntent {
+            asset_dsid: dsid,
+            op: SpendOp {
+                kind: "transfer".into(),
+                from: authority.to_string(),
+                to: "bob@wonderland".into(),
+                amount: "5".into(),
+            },
+        };
+        let usage = axt::HandleUsage {
+            handle,
+            intent,
+            proof: None,
+            amount: 5,
+        };
+
+        host.enforce_axt_policy(&usage)
+            .expect("policy should accept handle");
+        let key = AxtHandleReplayKey {
+            binding,
+            handle_era: 1,
+            sub_nonce: 1,
+            target_lane: lane,
+        };
+        let entry = host
+            .axt_replay_ledger
+            .get(&key)
+            .copied()
+            .expect("replay entry recorded");
+        let retention_cap = current_slot.saturating_add(retention_slots);
+        assert_eq!(entry.retain_until_slot, retention_cap);
+    }
+
+    #[test]
+    fn axt_replay_ledger_rejects_reuse_with_short_retain_until_slot() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(24);
+        let lane = LaneId::new(1);
+        let manifest_root = [0x33; 32];
+        let current_slot = 5;
+        let retention_slots = 10;
+        let timing = iroha_config::parameters::actual::NexusAxt {
+            slot_length_ms: NonZeroU64::new(1).expect("slot length"),
+            max_clock_skew_ms: 0,
+            proof_cache_ttl_slots: NonZeroU64::new(1).expect("ttl slots"),
+            replay_retention_slots: NonZeroU64::new(retention_slots)
+                .expect("non-zero retention window"),
+        };
+        let snapshot = make_policy_snapshot(dsid, manifest_root, current_slot);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority.clone())
+            .with_axt_policy_snapshot(&snapshot)
+            .with_axt_timing(timing);
+
+        let binding_bytes = [0xCD; 32];
+        let replay_key = AxtHandleReplayKey {
+            binding: AxtBinding::new(binding_bytes),
+            handle_era: 1,
+            sub_nonce: 1,
+            target_lane: lane,
+        };
+        host.axt_replay_ledger.insert(
+            replay_key,
+            AxtReplayRecord {
+                dataspace: dsid,
+                used_slot: 1,
+                retain_until_slot: 2,
+            },
+        );
+
+        let handle = AssetHandle {
+            scope: vec!["transfer".into()],
+            subject: HandleSubject {
+                account: authority.to_string(),
+                origin_dsid: Some(dsid),
+            },
+            budget: HandleBudget {
+                remaining: 10,
+                per_use: Some(10),
+            },
+            handle_era: 1,
+            sub_nonce: 1,
+            group_binding: GroupBinding {
+                composability_group_id: vec![0; 32],
+                epoch_id: 1,
+            },
+            target_lane: lane,
+            axt_binding: binding_bytes.to_vec(),
+            manifest_view_root: manifest_root.to_vec(),
+            expiry_slot: current_slot + 20,
+            max_clock_skew_ms: Some(0),
+        };
+        let intent = RemoteSpendIntent {
+            asset_dsid: dsid,
+            op: SpendOp {
+                kind: "transfer".into(),
+                from: authority.to_string(),
+                to: "bob@wonderland".into(),
+                amount: "5".into(),
+            },
+        };
+        let usage = axt::HandleUsage {
+            handle,
+            intent,
+            proof: None,
+            amount: 5,
+        };
+
+        let err = host
+            .enforce_axt_policy(&usage)
+            .expect_err("replay should be rejected within retention window");
         assert_eq!(err, VMError::PermissionDenied);
         let ctx = host
             .take_axt_reject_for_tests()

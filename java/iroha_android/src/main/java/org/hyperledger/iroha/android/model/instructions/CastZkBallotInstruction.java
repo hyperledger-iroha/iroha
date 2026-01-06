@@ -4,8 +4,17 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.client.JsonEncoder;
+import org.hyperledger.iroha.android.client.JsonParser;
 
-/** Typed builder for {@code CastZkBallot} instructions. */
+/**
+ * Typed builder for {@code CastZkBallot} instructions.
+ *
+ * <p>Public inputs must be provided as a JSON object. The builder normalizes common alias keys
+ * (camelCase to snake_case) and emits canonical JSON ordering so ballot fingerprints remain stable.
+ * When any lock hint is supplied, all of {@code owner}, {@code amount}, and {@code duration_blocks}
+ * are required.
+ */
 public final class CastZkBallotInstruction implements InstructionTemplate {
 
   private static final String ACTION = "CastZkBallot";
@@ -59,7 +68,7 @@ public final class CastZkBallotInstruction implements InstructionTemplate {
             .setElectionId(require(arguments, "election_id"))
             .setProofBase64(require(arguments, "proof_b64"))
             .setPublicInputsJson(require(arguments, "public_inputs_json"));
-    return new CastZkBallotInstruction(builder, new LinkedHashMap<>(arguments));
+    return new CastZkBallotInstruction(builder, builder.canonicalArguments());
   }
 
   private static String require(final Map<String, String> arguments, final String key) {
@@ -121,7 +130,7 @@ public final class CastZkBallotInstruction implements InstructionTemplate {
       if (publicInputsJson == null || publicInputsJson.isBlank()) {
         throw new IllegalArgumentException("publicInputsJson must not be blank");
       }
-      this.publicInputsJson = publicInputsJson;
+      this.publicInputsJson = normalizePublicInputsJson(publicInputsJson);
       return this;
     }
 
@@ -145,6 +154,52 @@ public final class CastZkBallotInstruction implements InstructionTemplate {
       args.put("proof_b64", proofBase64);
       args.put("public_inputs_json", publicInputsJson);
       return args;
+    }
+  }
+
+  private static String normalizePublicInputsJson(final String publicInputsJson) {
+    final String trimmed = publicInputsJson.trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException("publicInputsJson must not be blank");
+    }
+    final Object parsed;
+    try {
+      parsed = JsonParser.parse(trimmed);
+    } catch (final IllegalStateException ex) {
+      throw new IllegalArgumentException("publicInputsJson must be valid JSON", ex);
+    }
+    if (!(parsed instanceof Map<?, ?>)) {
+      throw new IllegalArgumentException("publicInputsJson must be a JSON object");
+    }
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> normalized = new LinkedHashMap<>((Map<String, Object>) parsed);
+    normalizePublicInputsAlias(normalized, "durationBlocks", "duration_blocks");
+    normalizePublicInputsAlias(normalized, "nullifierHex", "nullifier_hex");
+    normalizePublicInputsAlias(normalized, "rootHintHex", "root_hint");
+    normalizePublicInputsAlias(normalized, "rootHint", "root_hint");
+    ensureLockHintsComplete(normalized);
+    return JsonEncoder.encode(normalized);
+  }
+
+  private static void normalizePublicInputsAlias(
+      final Map<String, Object> target, final String aliasKey, final String canonicalKey) {
+    if (!target.containsKey(aliasKey)) {
+      return;
+    }
+    if (target.containsKey(canonicalKey)) {
+      throw new IllegalArgumentException(
+          "publicInputsJson cannot include both " + aliasKey + " and " + canonicalKey);
+    }
+    target.put(canonicalKey, target.remove(aliasKey));
+  }
+
+  private static void ensureLockHintsComplete(final Map<String, Object> publicInputs) {
+    final boolean hasOwner = publicInputs.get("owner") != null;
+    final boolean hasAmount = publicInputs.get("amount") != null;
+    final boolean hasDuration = publicInputs.get("duration_blocks") != null;
+    if ((hasOwner || hasAmount || hasDuration) && !(hasOwner && hasAmount && hasDuration)) {
+      throw new IllegalArgumentException(
+          "publicInputsJson must include owner, amount, and duration_blocks when providing lock hints");
     }
   }
 }

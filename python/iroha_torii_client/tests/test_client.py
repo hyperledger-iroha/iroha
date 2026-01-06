@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import pytest
+
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
@@ -2196,3 +2198,74 @@ def test_decode_pdp_commitment_header_rejects_invalid_payload() -> None:
 def test_decode_pdp_commitment_header_returns_none_when_missing() -> None:
     assert decode_pdp_commitment_header({}) is None
     assert decode_pdp_commitment_header(None) is None
+
+
+def test_submit_zk_ballot_normalizes_public_aliases() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "ok": True,
+                "accepted": True,
+                "reason": None,
+                "tx_instructions": [],
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    client.submit_zk_ballot(
+        authority="alice@wonderland",
+        chain_id="chain",
+        election_id="election-1",
+        proof_b64="AAAA",
+        public={
+            "owner": "alice@wonderland",
+            "amount": "100",
+            "durationBlocks": 5,
+            "rootHintHex": "aa",
+            "nullifierHex": "bb",
+        },
+    )
+
+    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
+    public = payload["public"]
+    assert public["owner"] == "alice@wonderland"
+    assert public["amount"] == "100"
+    assert public["duration_blocks"] == 5
+    assert "durationBlocks" not in public
+    assert public["root_hint"] == "aa"
+    assert "rootHintHex" not in public
+    assert public["nullifier_hex"] == "bb"
+    assert "nullifierHex" not in public
+
+
+def test_submit_zk_ballot_rejects_incomplete_lock_hints() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload={"ok": True}))
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="owner, amount, duration_blocks"):
+        client.submit_zk_ballot(
+            authority="alice@wonderland",
+            chain_id="chain",
+            election_id="election-1",
+            proof_b64="AAAA",
+            public={"owner": "alice@wonderland"},
+        )
+
+
+def test_submit_zk_ballot_v1_rejects_incomplete_lock_hints() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload={"ok": True}))
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="owner, amount, duration_blocks"):
+        client.submit_zk_ballot_v1(
+            authority="alice@wonderland",
+            chain_id="chain",
+            election_id="election-1",
+            backend="halo2/ipa",
+            envelope_b64="AAAA",
+            owner="alice@wonderland",
+        )

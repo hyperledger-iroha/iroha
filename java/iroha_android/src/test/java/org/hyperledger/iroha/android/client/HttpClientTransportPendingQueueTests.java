@@ -13,6 +13,8 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import org.hyperledger.iroha.android.client.mock.ToriiMockServer;
 import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
+import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.telemetry.TelemetryOptions;
 import org.hyperledger.iroha.android.telemetry.TelemetrySink;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
@@ -46,29 +48,32 @@ public final class HttpClientTransportPendingQueueTests {
                 .enableDirectoryPendingQueue(queueDir)
                 .build();
         final PendingTransactionQueue queue = config.pendingQueue();
-        queue.enqueue(fakeTransaction("queued-one"));
-        queue.enqueue(fakeTransaction("queued-two"));
+        final SignedTransaction queuedOne = fakeTransaction("queued-one");
+        final SignedTransaction queuedTwo = fakeTransaction("queued-two");
+        queue.enqueue(queuedOne);
+        queue.enqueue(queuedTwo);
 
         final HttpClientTransport transport =
             new HttpClientTransport(new UrlConnectionTransportExecutor(), config);
-        transport.submitTransaction(fakeTransaction("live-three")).get(5, TimeUnit.SECONDS);
+        final SignedTransaction live = fakeTransaction("live-three");
+        transport.submitTransaction(live).get(5, TimeUnit.SECONDS);
 
         final List<ToriiMockServer.SubmitRequest> submissions = server.submittedTransactions();
         assert submissions.size() == 3 : "expected queued transactions to flush before live submit";
         assert submissions
             .get(0)
             .bodyUtf8()
-            .contains("\"payload\":\"" + base64("queued-one") + "\"")
+            .contains("\"payload\":\"" + base64Payload(queuedOne) + "\"")
             : "first submission should flush the first queued payload";
         assert submissions
             .get(1)
             .bodyUtf8()
-            .contains("\"payload\":\"" + base64("queued-two") + "\"")
+            .contains("\"payload\":\"" + base64Payload(queuedTwo) + "\"")
             : "second submission should flush the second queued payload";
         assert submissions
             .get(2)
             .bodyUtf8()
-            .contains("\"payload\":\"" + base64("live-three") + "\"")
+            .contains("\"payload\":\"" + base64Payload(live) + "\"")
             : "final submission should be the live transaction";
         assert queue.size() == 0 : "pending queue should be empty after successful flush";
       } finally {
@@ -116,14 +121,31 @@ public final class HttpClientTransportPendingQueueTests {
   }
 
   private static SignedTransaction fakeTransaction(final String marker) {
-    final byte[] payload = marker.getBytes(StandardCharsets.UTF_8);
+    final int nonce = Math.floorMod(marker.hashCode(), 1000) + 1;
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId(String.format("%08x", nonce))
+            .setAuthority("queue@wonderland")
+            .setCreationTimeMs(1_700_000_000_000L + nonce)
+            .setInstructionBytes(marker.getBytes(StandardCharsets.UTF_8))
+            .setTimeToLiveMs(5_000L)
+            .setNonce(nonce)
+            .setMetadata(Map.of("marker", marker))
+            .build();
+    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
+    final byte[] encoded;
+    try {
+      encoded = codec.encodeTransaction(payload);
+    } catch (final Exception ex) {
+      throw new IllegalStateException("Failed to encode transaction payload", ex);
+    }
     final byte[] signature = ("sig-" + marker).getBytes(StandardCharsets.UTF_8);
     final byte[] publicKey = ("pk-" + marker).getBytes(StandardCharsets.UTF_8);
-    return new SignedTransaction(payload, signature, publicKey, "test.schema/" + marker);
+    return new SignedTransaction(encoded, signature, publicKey, codec.schemaName());
   }
 
-  private static String base64(final String value) {
-    return Base64.getEncoder().encodeToString(value.getBytes(StandardCharsets.UTF_8));
+  private static String base64Payload(final SignedTransaction transaction) {
+    return Base64.getEncoder().encodeToString(transaction.encodedPayload());
   }
 
   private static void deleteRecursively(final Path root) throws Exception {

@@ -1963,7 +1963,12 @@ const zkBallotTx = buildCastZkBallotTransaction({
   ballot: {
     electionId: "referendum-1",
     proof: Buffer.from(proofBytes),
-    publicInputs: { tally: "aye" },
+    publicInputs: {
+      owner: authority,
+      amount: "5000",
+      duration_blocks: 7_200,
+      direction: "Aye",
+    },
   },
   privateKey,
 });
@@ -3220,7 +3225,12 @@ await torii.governanceSubmitZkBallot({
   chainId: "00000000-0000-0000-0000-000000000000",
   electionId: "ref-zk",
   proof: Buffer.from(proofBytes),
-  public: { owner: authority, amount: "5000" },
+  public: {
+    owner: authority,
+    amount: "5000",
+    duration_blocks: 7_200,
+    direction: "Aye",
+  },
 }, { signal: writeController.signal });
 
 // The JS SDK also exposes governanceSubmitZkBallotV1 / governanceSubmitZkBallotProofV1

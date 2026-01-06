@@ -1865,12 +1865,12 @@ impl Queue {
     }
 
     /// Rebuild the hash queue when it is empty but transactions remain in the map.
-    fn resync_hash_queue_if_needed(&self, state_view: &StateView) -> bool {
+    fn resync_hash_queue_if_needed(&self, _state_view: &StateView) -> bool {
         if !self.tx_hashes.is_empty() || self.txs.is_empty() {
             return false;
         }
         #[cfg(feature = "telemetry")]
-        let backpressure_telemetry: Option<&StateTelemetry> = Some(state_view.telemetry);
+        let backpressure_telemetry: Option<&StateTelemetry> = Some(_state_view.telemetry);
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
 

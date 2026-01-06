@@ -1482,7 +1482,7 @@ private enum OfflineReceiptPoseidon {
         let txField = reduceBytes(receipt.txId)
         let (mantissaField, scaleField) = try numericFields(receipt.amount)
         let counterField = reduceU64(receipt.platformProof.counter)
-        let receiverPayload = OfflineNorito.encodeString(receipt.to)
+        let receiverPayload = try OfflineNorito.encodeAccountId(receipt.to)
         let receiverBytes = OfflineNorito.wrap(typeName: accountIdTypeName, payload: receiverPayload)
         let receiverHash = IrohaHash.hash(receiverBytes)
         let receiverField = reduceBytes(receiverHash)

@@ -4,7 +4,7 @@ This roadmap enumerates the outstanding efforts required to ship the optional
 NPoS Sumeragi mode and keep the broader Nexus transition on track. For every task listed here we are preparing the first public release, so teams can design and implement with a clean slate. Completed
 items continue to live in `status.md`; only tasks that still need engineering
 work appear here.
-Latest sync: ZK voting now enforces object-only public inputs with strict owner typing and `nullifier_hex` hints, SDK v1 payloads expose lock hints, and governance docs are refreshed; full workspace test run still blocked by the current `iroha_core` compile error (see `status.md` for details).
+Latest sync: Governance ZK ballot public-input validation is now enforced in Torii/CLI/JS/Swift/Python/Android (object-only + complete lock hints, alias normalization), docs now call out partial hint rejection, and JS governance examples refreshed; full workspace test run remains pending (see `status.md` for details).
 
 The repository now serves two release lines:
 - **Iroha 2** — the self-hosted deployment track for organisations running
