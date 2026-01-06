@@ -10692,6 +10692,8 @@ pub struct Torii {
     online_peers: OnlinePeersProvider,
     #[cfg(all(feature = "app_api", feature = "telemetry"))]
     peer_telemetry_urls: Vec<telemetry::peers::ToriiUrl>,
+    #[cfg(all(feature = "app_api", feature = "telemetry"))]
+    peer_geo: telemetry::peers::GeoLookupConfig,
     sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     p2p: Option<iroha_core::IrohaNetwork>,
@@ -12417,6 +12419,8 @@ impl Torii {
             .cloned()
             .map(telemetry::peers::ToriiUrl::from)
             .collect::<Vec<_>>();
+        #[cfg(all(feature = "app_api", feature = "telemetry"))]
+        let peer_geo = telemetry::peers::GeoLookupConfig::from(&config.peer_geo);
 
         #[cfg(feature = "telemetry")]
         telemetry.with_metrics(|metrics| {
@@ -12508,6 +12512,8 @@ impl Torii {
             online_peers,
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
             peer_telemetry_urls,
+            #[cfg(all(feature = "app_api", feature = "telemetry"))]
+            peer_geo,
             sumeragi,
             telemetry,
             telemetry_profile,
@@ -12717,10 +12723,10 @@ impl Torii {
         });
 
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
-        let peer_telemetry = telemetry::peers::PeerTelemetryService::new(collect_peer_urls(
-            &self.online_peers,
-            &self.peer_telemetry_urls,
-        ));
+        let peer_telemetry = telemetry::peers::PeerTelemetryService::new(
+            collect_peer_urls(&self.online_peers, &self.peer_telemetry_urls),
+            self.peer_geo.clone(),
+        );
 
         let app_state: SharedAppState = Arc::new(AppState {
             events: self.events.clone(),
@@ -14407,7 +14413,10 @@ pub(crate) mod tests_runtime_handlers {
         ));
 
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
-        let peer_telemetry = telemetry::peers::PeerTelemetryService::new(Vec::new());
+        let peer_telemetry = telemetry::peers::PeerTelemetryService::new(
+            Vec::new(),
+            telemetry::peers::GeoLookupConfig::disabled(),
+        );
 
         let content_config_snapshot = state.view().content.clone();
         let soranet_privacy_ingest =

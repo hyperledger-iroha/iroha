@@ -458,6 +458,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             api_fee_receiver: None,
             api_allow_cidrs: Vec::new(),
             peer_telemetry_urls: Vec::new(),
+            peer_geo: A::ToriiPeerGeo::default(),
             soranet_privacy_ingest: A::SoranetPrivacyIngest::default(),
             strict_addresses: false,
             debug_match_filters: false,

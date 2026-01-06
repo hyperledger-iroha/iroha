@@ -4026,7 +4026,11 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn pipeline_status_queued_skips_committed_query() {
+    fn pipeline_status_queued_checks_committed_query() {
+        use iroha_data_model::query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
+        };
+
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let payload = norito::json!({
             "content": { "status": { "kind": "Queued" } },
@@ -4040,6 +4044,16 @@ mod evidence_http_tests {
                 match path.as_str() {
                     "/v1/pipeline/transactions/status" => {
                         Ok(json_response(StatusCode::OK, &status_body))
+                    }
+                    "/query" => {
+                        let response = QueryResponse::Iterable(QueryOutput {
+                            batch: QueryOutputBatchBoxTuple {
+                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(Vec::new())],
+                            },
+                            remaining_items: 0,
+                            continue_cursor: None,
+                        });
+                        Ok(norito_response(StatusCode::OK, &response))
                     }
                     path => Err(eyre::eyre!("unexpected request path: {path}")),
                 }
@@ -4062,12 +4076,104 @@ mod evidence_http_tests {
             Some(super::TxConfirmationStatus::Queued)
         );
         let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots.len(), 2);
         assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+        assert_eq!(snapshots[1].url.path(), "/query");
     }
 
     #[test]
-    fn pipeline_status_approved_with_height_skips_committed_query() {
+    fn pipeline_status_queued_prefers_committed_result() {
+        use iroha_data_model::query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
+        };
+
+        use crate::{
+            crypto::{MerkleProof, PrivateKey, PublicKey},
+            data_model::{
+                prelude::{AccountId, ChainId, DomainId, TransactionBuilder},
+                query::CommittedTransaction,
+                transaction::{DataTriggerSequence, TransactionEntrypoint, TransactionResult},
+            },
+        };
+
+        let chain: ChainId = "hash-chain".parse().unwrap();
+        let domain: DomainId = "wonderland".parse().unwrap();
+        let public_key: PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .unwrap();
+        let authority = AccountId::new(domain, public_key);
+        let private_key: PrivateKey =
+            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                .parse()
+                .unwrap();
+        let tx = TransactionBuilder::new(chain, authority.clone()).sign(&private_key);
+        let hash = tx.hash();
+        let entry = TransactionEntrypoint::External(tx);
+        let entry_hash = entry.hash();
+        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let committed = CommittedTransaction {
+            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x25; Hash::LENGTH])),
+            entrypoint_hash: entry_hash,
+            entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
+            entrypoint: entry,
+            result_hash: result.hash(),
+            result_proof: MerkleProof::from_audit_path(0, Vec::new()),
+            result,
+        };
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let payload = norito::json!({
+            "content": { "status": { "kind": "Queued" } },
+        });
+        let status_body = norito::json::to_string(&payload).expect("status payload");
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_string();
+                store.lock().expect("lock snapshot store").push(snapshot);
+                match path.as_str() {
+                    "/v1/pipeline/transactions/status" => {
+                        Ok(json_response(StatusCode::OK, &status_body))
+                    }
+                    "/query" => {
+                        let response = QueryResponse::Iterable(QueryOutput {
+                            batch: QueryOutputBatchBoxTuple {
+                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(vec![
+                                    committed.clone(),
+                                ])],
+                            },
+                            remaining_items: 0,
+                            continue_cursor: None,
+                        });
+                        Ok(norito_response(StatusCode::OK, &response))
+                    }
+                    path => Err(eyre::eyre!("unexpected request path: {path}")),
+                }
+            }
+        };
+
+        let result = with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            client.transaction_confirmation_status(hash, entry_hash)
+        });
+
+        assert_eq!(
+            result.expect("confirmation status query"),
+            Some(super::TxConfirmationStatus::Applied)
+        );
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+        assert_eq!(snapshots[1].url.path(), "/query");
+    }
+
+    #[test]
+    fn pipeline_status_approved_with_height_checks_committed_query() {
+        use iroha_data_model::query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
+        };
+
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let payload = norito::json!({
             "content": { "status": { "kind": "Approved", "block_height": 9 } },
@@ -4081,6 +4187,16 @@ mod evidence_http_tests {
                 match path.as_str() {
                     "/v1/pipeline/transactions/status" => {
                         Ok(json_response(StatusCode::OK, &status_body))
+                    }
+                    "/query" => {
+                        let response = QueryResponse::Iterable(QueryOutput {
+                            batch: QueryOutputBatchBoxTuple {
+                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(Vec::new())],
+                            },
+                            remaining_items: 0,
+                            continue_cursor: None,
+                        });
+                        Ok(norito_response(StatusCode::OK, &response))
                     }
                     path => Err(eyre::eyre!("unexpected request path: {path}")),
                 }
@@ -4105,8 +4221,9 @@ mod evidence_http_tests {
             ))
         );
         let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots.len(), 2);
         assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+        assert_eq!(snapshots[1].url.path(), "/query");
     }
 
     #[test]
@@ -5121,7 +5238,9 @@ impl Client {
     ) -> Result<Option<TxConfirmationStatus>> {
         match self.transaction_pipeline_status(hash, entry_hash) {
             Ok(Some(status)) => match status {
-                TxConfirmationStatus::Rejected(None) | TxConfirmationStatus::Approved(None) => {
+                TxConfirmationStatus::Queued
+                | TxConfirmationStatus::Approved(_)
+                | TxConfirmationStatus::Rejected(None) => {
                     let committed = self.transaction_committed(hash, entry_hash)?;
                     Ok(committed.or(Some(status)))
                 }

@@ -843,7 +843,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         {
             return Ok(());
         }
-        if status_or_skip(
+        last_non_empty_height = match status_or_skip(
             sync_after_submission(
                 &network,
                 &rt,
@@ -858,11 +858,10 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
                 "sync after seed mint; torii={torii}, env_dir={}",
                 env_dir.display()
             ))
-        })?
-        .is_none()
-        {
-            return Ok(());
-        }
+        })? {
+            Some(status) => status.blocks_non_empty,
+            None => return Ok(()),
+        };
         let get_value = |id: &AssetId| -> Result<Numeric> {
             retry_query(|| {
                 test_client

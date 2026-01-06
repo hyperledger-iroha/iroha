@@ -267,7 +267,13 @@ fn new_view_target(
     target_view: Option<u64>,
 ) -> (u64, u64) {
     let height = target_height.unwrap_or_else(|| highest_qc.height.saturating_add(1));
-    let view = target_view.unwrap_or_else(|| highest_qc.view.saturating_add(1));
+    let view = target_view.unwrap_or_else(|| {
+        if height > highest_qc.height {
+            0
+        } else {
+            highest_qc.view.saturating_add(1)
+        }
+    });
     (height, view)
 }
 
@@ -6132,6 +6138,8 @@ impl Actor {
                 return;
             }
         }
+        let prev_height = self.phase_tracker.round_height;
+        let prev_view = self.phase_tracker.round_view;
         let now = Instant::now();
         let duration = if let Some(duration) = self.phase_tracker.record(phase, height, view, now) {
             Some(duration)
@@ -6141,6 +6149,18 @@ impl Actor {
         };
         if let Some(duration) = duration {
             self.update_phase_metrics(phase, duration);
+        }
+
+        super::status::set_view_change_index(view);
+        let advanced = match prev_height {
+            Some(prev_height) if prev_height == height => view > prev_view,
+            _ => view > 0,
+        };
+        if advanced {
+            super::status::inc_view_change_install();
+            if let Some(telemetry) = self.telemetry_handle() {
+                telemetry.inc_view_change_install();
+            }
         }
     }
 
@@ -6849,12 +6869,27 @@ impl Actor {
                 session.sent_ready = true;
                 Ok(Some(ready))
             } else {
-                debug!(
-                    height = key.1,
-                    view = key.2,
-                    "unable to build RBC READY (no validator index)"
-                );
-                session.sent_ready = true;
+                let commit_topology = self.rbc_session_roster(key);
+                if commit_topology.is_empty() {
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        "deferring RBC READY until commit roster is available"
+                    );
+                } else if session.expected_chunk_root.is_none() {
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        "deferring RBC READY until chunk root is available"
+                    );
+                } else {
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        "local peer not in commit topology; skipping RBC READY"
+                    );
+                    session.sent_ready = true;
+                }
                 Ok(None)
             }
         })();
@@ -7155,6 +7190,44 @@ impl Actor {
         let mut progress = false;
 
         for key in keys {
+            let attempt_ready =
+                self.subsystems
+                    .da_rbc
+                    .rbc
+                    .sessions
+                    .get(&key)
+                    .is_some_and(|session| {
+                        !session.sent_ready && !session.is_invalid() && !session.delivered
+                    });
+            if attempt_ready {
+                let was_sent = self
+                    .subsystems
+                    .da_rbc
+                    .rbc
+                    .sessions
+                    .get(&key)
+                    .map(|session| session.sent_ready)
+                    .unwrap_or(true);
+                if let Err(err) = self.maybe_emit_rbc_ready(key) {
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        ?err,
+                        "failed to re-attempt RBC READY emission"
+                    );
+                }
+                let now_sent = self
+                    .subsystems
+                    .da_rbc
+                    .rbc
+                    .sessions
+                    .get(&key)
+                    .map(|session| session.sent_ready)
+                    .unwrap_or(was_sent);
+                if !was_sent && now_sent {
+                    progress = true;
+                }
+            }
             let Some((payload_bundle, ready_bundle, ready_count)) = (|| {
                 let session = self.subsystems.da_rbc.rbc.sessions.get(&key)?;
                 if session.delivered || session.is_invalid() {
@@ -7649,6 +7722,7 @@ impl Actor {
             }
         }
         let now = Instant::now();
+        let prev_view = self.phase_tracker.current_view(height);
         let base_view = self
             .phase_tracker
             .current_view(height)
@@ -7668,6 +7742,18 @@ impl Actor {
             base_view,
             now,
         );
+        super::status::set_view_change_index(next_view);
+        super::status::inc_view_change_suggest();
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.inc_view_change_suggest();
+        }
+        let advanced = prev_view.map_or(next_view > 0, |prev| next_view > prev);
+        if advanced {
+            super::status::inc_view_change_install();
+            if let Some(telemetry) = self.telemetry_handle() {
+                telemetry.inc_view_change_install();
+            }
+        }
         self.subsystems.propose.forced_view_after_timeout = Some((height, next_view));
         record_view_change_cause_with_telemetry(cause, self.telemetry_handle());
         let committed_qc = self.latest_committed_qc();

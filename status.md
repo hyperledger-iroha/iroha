@@ -1,6 +1,30 @@
 # Status
 
 ## Latest Updates
+- Integration tests: refresh `last_non_empty_height` after the seed mint in `fail_if_dont_satisfy_spec` so later syncs wait for the correct non-empty block.
+- Tests: not run (not requested).
+- Sumeragi tests: make pacemaker NEW_VIEW tests resilient when committed QC is missing by falling back to a commit-phase sample QC.
+- Tests: `cargo test -p iroha_core --lib pacemaker_ignores_stale_new_view_entries -- --nocapture` (x10; all pass; warnings about unused `state_view` in `crates/iroha_core/src/queue.rs:1868` and unused `mut` in `crates/iroha_core/src/smartcontracts/isi/world.rs:9010` and `crates/iroha_core/src/smartcontracts/isi/world.rs:9071`).
+- Sumeragi: pacemaker now prunes stale NEW_VIEW entries, keeps NEW_VIEW votes when proposal assembly defers (missing parent), and `assemble_and_broadcast_proposal` reports whether a proposal was built; add regression coverage.
+- Tests: `cargo test --workspace` (timed out after 30m; warnings about dead-code `Align64` in `crates/norito/src/core.rs:6792` and unused `mut` in `crates/iroha_core/src/smartcontracts/isi/world.rs:9010` and `crates/iroha_core/src/smartcontracts/isi/world.rs:9071`).
+- Client: check committed transactions when pipeline status returns queued/approved to avoid tx confirmation timeouts; add unit coverage for queued committed fallback.
+- Tests: not run (cargo tests already running; build lock held).
+- Sumeragi: reset empty-child view targets to 0 for new heights, avoid advancing view state on proposal attempts that bail early, and wire view-change index/suggest/install tracking to triggers + phase samples; update docs and unit tests.
+- Tests: not run (not requested).
+- Sumeragi: view-change bug hunt flagged empty-child fallback view derived from prior height, view-change counters/index not updated in status/telemetry, and phase tracker advancing before proposal when parent is missing.
+- Tests: not run (analysis only).
+- Torii config: fix test fixtures/helpers to include the new `peer_geo` field after introducing opt-in geo lookups.
+- Tests: not run (not requested).
+- Sumeragi tests: fix permissioned block-sync update test to pass the optional previous hash directly (avoids `Option<Option<_>>` compile error).
+- Integration tests: re-ran localnet smoke test 3x; all passes.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (x3).
+- Tests: `cargo test -p iroha_core rbc_persist_worker_persists_full_session -- --nocapture` (failed before fix: `Option<Option<_>>` in block-sync update test; not re-run yet).
+- Tests: `cargo test --workspace` (failed: unstable `IpAddr::is_global` in `crates/iroha_torii/src/telemetry/peers/monitor.rs` from existing local changes).
+- Torii telemetry: make peer geo lookups opt-in via `torii.peer_geo` (disabled by default), allow custom endpoints, and add geo query/disabled-config coverage.
+- Tests: not run (not requested).
+- Torii telemetry: skip geo lookups for non-public Torii hosts to avoid reserved-range errors in localnet; add unit coverage for host filtering and collect-geo short-circuit.
+- Tests: not run (not requested).
 - Sumeragi/block sync: allow permissioned next-height block sync updates without QC/cert to use local roster fallback, avoiding localnet stalls; add regression coverage.
 - Tests: not run (not requested).
 - Tests: `cargo test -p iroha_core --lib active_topology_sorts_world_peers_when_commit_topology_empty -- --nocapture` (x10; all passes; periodic build-dir locks; warnings about unused `mut` in `crates/iroha_core/src/smartcontracts/isi/world.rs:9010` and `crates/iroha_core/src/smartcontracts/isi/world.rs:9071`).
