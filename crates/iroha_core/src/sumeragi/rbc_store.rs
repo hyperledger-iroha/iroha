@@ -127,6 +127,7 @@ pub(super) struct LoadResult {
 }
 
 /// Result of persisting a session snapshot.
+#[derive(Debug)]
 pub(super) struct PersistOutcome {
     /// Session keys removed while enforcing limits after persist.
     #[cfg_attr(not(test), allow(dead_code))]
