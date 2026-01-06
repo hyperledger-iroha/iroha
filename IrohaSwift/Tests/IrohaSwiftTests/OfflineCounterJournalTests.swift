@@ -64,6 +64,35 @@ final class OfflineCounterJournalTests: XCTestCase {
         }
     }
 
+    func testCounterOverflowThrows() throws {
+        let journal = try OfflineCounterJournal(storageURL: temporaryURL())
+        _ = try journal.updateCounter(
+            certificateIdHex: "deadbeef",
+            controllerId: "alice@sora",
+            controllerDisplay: nil,
+            platform: .appleKey,
+            scope: "key-1",
+            counter: UInt64.max,
+            recordedAtMs: 1
+        )
+
+        XCTAssertThrowsError(
+            try journal.updateCounter(
+                certificateIdHex: "deadbeef",
+                controllerId: "alice@sora",
+                controllerDisplay: nil,
+                platform: .appleKey,
+                scope: "key-1",
+                counter: 0,
+                recordedAtMs: 2
+            )
+        ) { error in
+            guard case OfflineCounterError.counterOverflow = error else {
+                return XCTFail("expected counter overflow error")
+            }
+        }
+    }
+
     func testSummaryHashMismatchThrows() throws {
         let payload: [String: Any] = [
             "items": [

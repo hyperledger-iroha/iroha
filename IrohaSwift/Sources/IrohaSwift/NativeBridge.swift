@@ -56,9 +56,9 @@ enum NoritoBridgeLoader {
 
     static let expectedVersion = "0.1.0"
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "77e2065d4f17c2bd2ae74ce980c1343393b56bea63712134c39ab14df008168a",
-        "ios-arm64": "5608d3cb3d3a62e539a2669db62a9c045d0bf0311fba8a6a2fc92de0dd155c6c",
-        "ios-arm64_x86_64-simulator": "6c61ffe17442483629e4093b4f6269a9b642174f000410134bb90eaaeb9e796d"
+        "macos-arm64": "d86136d264617bbca46963c5c10ffa70ffa2dee7b00d5dd228578a0588a05c80",
+        "ios-arm64": "26c056b3dca0664b8794e279dbf0cbe94e8c19e90ac6d923f5f270aaff3d6ece",
+        "ios-arm64_x86_64-simulator": "09be7b509631e1d8f7fd4466fe6c530bf55f4eeaf20acc21e35a472a79977892"
     ]
 
     static func openHandle() -> (UnsafeMutableRawPointer?, ValidationStatus) {

@@ -144,6 +144,11 @@ print(try address.toIH58(networkPrefix: 753))
 print(try address.toCompressedSora())
 ```
 
+Account address domain labels are canonicalized to lowercase ASCII and must not contain whitespace
+or reserved characters (`@`, `#`, `$`). Use canonical ASCII/punycode labels when working with IDNs.
+Account addresses also validate public key lengths for known algorithms (ed25519 requires 32 bytes;
+secp256k1 requires 33 bytes when enabled), and reject empty keys.
+
 ### Pipeline submission defaults
 
 `IrohaSDK` posts signed payloads to `/v1/pipeline/transactions` and polls
@@ -1073,6 +1078,8 @@ The release process for the Norito Swift bindings is documented in
 build the XCFramework, compute the checksum, and update both the Swift Package manifest
 and the CocoaPods podspec. The resulting artifacts should share the same semantic version
 as the `norito` Rust crate.
+`dist/NoritoBridge.artifacts.json` should accompany the XCFramework and record the
+bridge version plus per-platform SHA-256 hashes.
 
 ### NoritoBridge policy and troubleshooting
 - Default builds link `dist/NoritoBridge.xcframework`. The manifest fails fast when the

@@ -82,6 +82,24 @@ final class ConnectQueueJournalTests: XCTestCase {
         XCTAssertEqual(remaining.map(\.sequence), [12])
     }
 
+    func testPopOldestRejectsNonPositiveCount() throws {
+        try requireBlake3()
+        let tmp = makeTemporaryDirectory()
+        let journal = ConnectQueueJournal(sessionID: Data("session-3b".utf8),
+                                          configuration: .init(rootDirectory: tmp,
+                                                               maxRecordsPerQueue: 8,
+                                                               maxBytesPerQueue: 1 << 20,
+                                                               retentionInterval: 60))
+
+        XCTAssertThrowsError(
+            try journal.popOldest(direction: .walletToApp, count: 0, nowMs: 100)
+        ) { error in
+            guard case ConnectQueueError.invalidCount(0) = error else {
+                return XCTFail("Expected invalidCount error, got \(error)")
+            }
+        }
+    }
+
     func testPayloadHashUsesBlake3() throws {
         try requireBlake3()
         let payload = Data("payload-hash".utf8)
@@ -120,6 +138,25 @@ final class ConnectQueueJournalTests: XCTestCase {
                            ttlOverrideMs: 1)
         let records = try journal.records(direction: .appToWallet, nowMs: 5)
         XCTAssertTrue(records.isEmpty)
+    }
+
+    func testAppendClampsExpiryOverflow() throws {
+        try requireBlake3()
+        let tmp = makeTemporaryDirectory()
+        let journal = ConnectQueueJournal(sessionID: Data("session-expiry-overflow".utf8),
+                                          configuration: .init(rootDirectory: tmp,
+                                                               maxRecordsPerQueue: 8,
+                                                               maxBytesPerQueue: 1 << 20,
+                                                               retentionInterval: 60))
+        let nearMax = UInt64.max - 1
+        try journal.append(direction: .appToWallet,
+                           sequence: 1,
+                           ciphertext: Data([0x0A]),
+                           receivedAtMs: nearMax,
+                           ttlOverrideMs: 10)
+        let records = try journal.records(direction: .appToWallet, nowMs: 0)
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?.expiresAtMs, UInt64.max)
     }
 
     func testRejectsOversizedQueueFile() throws {

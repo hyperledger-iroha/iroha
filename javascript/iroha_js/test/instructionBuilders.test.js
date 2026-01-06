@@ -47,9 +47,9 @@ import {
   encodeInstruction,
 } from "../src/instructionBuilders.js";
 import { noritoDecodeInstruction, noritoEncodeInstruction } from "../src/norito.js";
-import { hasNativeBinding, makeNativeTest } from "./helpers/native.js";
+import { hasNoritoBinding, makeNativeTest, noritoRequiredMethods } from "./helpers/native.js";
 
-const test = makeNativeTest(baseTest);
+const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
@@ -151,13 +151,13 @@ const ACCOUNT_SIGNATORY =
   "ED0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const ACCOUNT_ID = `${ACCOUNT_SIGNATORY}@wonderland`;
 const ACCOUNT_ID_INPUT = `${ACCOUNT_SIGNATORY_CANONICAL_HEX.toUpperCase()}@wonderland`;
-const ACCOUNT_ID_CANONICAL = hasNativeBinding
+const ACCOUNT_ID_CANONICAL = hasNoritoBinding()
   ? canonicalizeAccountIdUsingNorito(ACCOUNT_ID)
   : ACCOUNT_ID;
 const ASSET_DEFINITION_ID = "rose#wonderland";
 const ASSET_ID = `rose##${ACCOUNT_ID}`;
 const ASSET_ID_INPUT = `rose##${ACCOUNT_ID_INPUT}`;
-const ASSET_ID_CANONICAL = hasNativeBinding
+const ASSET_ID_CANONICAL = hasNoritoBinding()
   ? canonicalizeAssetIdUsingNorito(ASSET_ID)
   : ASSET_ID;
 const DOMAIN_ID = "wonderland";

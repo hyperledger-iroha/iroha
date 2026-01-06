@@ -539,7 +539,7 @@ public final class HttpClientTransport implements IrohaClient {
       return;
     }
     final Map<String, Object> fields = new LinkedHashMap<>();
-    maybePutAuthorityHash(fields, request, sink.get());
+    maybePutAuthorityHash(fields, request, sink.get(), RETRY_SIGNAL_ID);
     fields.put("route", resolveRoute(request));
     fields.put("retry_count", attempt);
     fields.put("error_code", buildRetryErrorCode(lastResponse, lastError));
@@ -562,7 +562,7 @@ public final class HttpClientTransport implements IrohaClient {
       return;
     }
     final Map<String, Object> fields = new LinkedHashMap<>();
-    maybePutAuthorityHash(fields, request, sink.get());
+    maybePutAuthorityHash(fields, request, sink.get(), PIPELINE_STATUS_SIGNAL);
     if (transactionHash != null && !transactionHash.isBlank()) {
       fields.put("tx_hash", transactionHash);
     }
@@ -575,21 +575,22 @@ public final class HttpClientTransport implements IrohaClient {
   private void maybePutAuthorityHash(
       final Map<String, Object> fields,
       final TransportRequest request,
-      final TelemetrySink sink) {
+      final TelemetrySink sink,
+      final String signalId) {
     final TelemetryOptions.Redaction redaction = config.telemetryOptions().redaction();
     if (!redaction.enabled()) {
       return;
     }
     final String authority = resolveAuthority(request).trim();
     if (authority.isEmpty()) {
-      emitRedactionFailure(sink, "blank_authority");
+      emitRedactionFailure(sink, signalId, "blank_authority");
       return;
     }
     final Optional<String> hashed = redaction.hashAuthority(authority);
     if (hashed.isPresent()) {
       fields.put("authority_hash", hashed.get());
     } else {
-      emitRedactionFailure(sink, "hash_failed");
+      emitRedactionFailure(sink, signalId, "hash_failed");
     }
   }
 
@@ -642,11 +643,11 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   private static void emitRedactionFailure(
-      final TelemetrySink sink, final String reason) {
+      final TelemetrySink sink, final String signalId, final String reason) {
     sink.emitSignal(
         REDACTION_FAILURE_SIGNAL,
         Map.of(
-            "signal_id", RETRY_SIGNAL_ID,
+            "signal_id", signalId,
             "reason", reason));
   }
 
@@ -851,8 +852,16 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   private URI resolvePath(final String path) {
-    final String normalized = path.startsWith("/") ? path : "/" + path;
-    return config.baseUri().resolve(normalized);
+    if (path == null || path.isBlank()) {
+      return config.baseUri();
+    }
+    if (path.startsWith("http://") || path.startsWith("https://")) {
+      return URI.create(path);
+    }
+    final String normalized = path.startsWith("/") ? path.substring(1) : path;
+    final String base = config.baseUri().toString();
+    final String joined = base.endsWith("/") ? base + normalized : base + "/" + normalized;
+    return URI.create(joined);
   }
 
   private static URI appendQuery(final URI target, final Map<String, String> params) {

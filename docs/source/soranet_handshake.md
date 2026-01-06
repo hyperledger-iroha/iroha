@@ -693,8 +693,9 @@ fn parse_cap_vector(buf):
     return caps
 ```
 
-Implementations MUST preserve duplicate TLVs (e.g., multiple `snnet.pqsig`
-entries) and reject malformed lengths.
+Implementations MUST preserve duplicate TLVs for multi-entry capabilities
+(`snnet.pqkem`, `snnet.pqsig`) and reject duplicate singleton TLVs. Unknown
+non-GREASE types are rejected in v1. Malformed lengths are rejected.
 
 ### Interop fixtures
 

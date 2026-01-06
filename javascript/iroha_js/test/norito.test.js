@@ -4,9 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { noritoEncodeInstruction, noritoDecodeInstruction } from "../src/norito.js";
-import { makeNativeTest } from "./helpers/native.js";
+import { makeNativeTest, noritoRequiredMethods } from "./helpers/native.js";
 
-const test = makeNativeTest(baseTest);
+const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
 
 const REGISTER_DOMAIN = {
   Register: {

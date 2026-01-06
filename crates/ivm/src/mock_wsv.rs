@@ -1024,12 +1024,13 @@ impl MockWorldStateView {
         self.domains.insert(id, ()).is_none()
     }
 
-    /// Unregister a domain if it exists and has no accounts or assets.
+    /// Unregister a domain if it exists and has no accounts, assets, or NFTs.
     pub fn unregister_domain(&mut self, id: &DomainId) -> bool {
         // deny removal if any account or asset belongs to the domain
         let has_accounts = self.accounts.keys().any(|aid| aid.domain() == id);
         let has_assets = self.asset_definitions.keys().any(|ad| ad.domain() == id);
-        if has_accounts || has_assets {
+        let has_nfts = self.nfts.keys().any(|nft_id| nft_id.domain() == id);
+        if has_accounts || has_assets || has_nfts {
             return false;
         }
         self.domains.remove(id).is_some()

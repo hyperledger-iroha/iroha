@@ -7606,6 +7606,14 @@ pub mod isi {
                 ));
             }
 
+            if state_transaction.world.domains.get(&canonical_id).is_some() {
+                return Err(RepetitionError {
+                    instruction: InstructionType::Register,
+                    id: IdBox::DomainId(canonical_id.clone()),
+                }
+                .into());
+            }
+
             let mut domain = new_domain.build(authority);
             domain.id = canonical_id.clone();
             let requires_endorsement = state_transaction
@@ -8232,6 +8240,28 @@ pub mod isi {
                         .expect("should succeed")
                 });
 
+            state_transaction
+                .world
+                .domain_endorsement_policies
+                .remove(domain_id.clone());
+
+            let mut endorsement_hashes = BTreeSet::new();
+            if let Some(hashes) = state_transaction
+                .world
+                .domain_endorsements_by_domain
+                .remove(domain_id.clone())
+            {
+                endorsement_hashes.extend(hashes);
+            }
+            for (hash, record) in state_transaction.world.domain_endorsements.iter() {
+                if record.endorsement.domain_id == domain_id {
+                    endorsement_hashes.insert(hash.clone());
+                }
+            }
+            for hash in endorsement_hashes {
+                state_transaction.world.domain_endorsements.remove(hash);
+            }
+
             let remove_accounts: Vec<AccountId> = state_transaction
                 .world
                 .accounts_in_domain_iter(&domain_id)
@@ -8288,6 +8318,17 @@ pub mod isi {
                 if let Some(uaid) = account_value.uaid().copied() {
                     state_transaction.rebuild_space_directory_bindings(uaid);
                 }
+            }
+
+            let remove_assets: Vec<AssetId> = state_transaction
+                .world
+                .assets
+                .iter()
+                .filter(|(asset_id, _)| asset_id.definition().domain() == &domain_id)
+                .map(|(asset_id, _)| asset_id.clone())
+                .collect();
+            for asset_id in remove_assets {
+                state_transaction.world.remove_asset_and_metadata(&asset_id);
             }
 
             let remove_asset_definitions: Vec<AssetDefinitionId> = state_transaction
@@ -8740,7 +8781,8 @@ pub mod isi {
             metadata::Metadata,
             nexus::{
                 DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, DomainEndorsement,
-                DomainEndorsementScope, DomainEndorsementSignature, LaneId,
+                DomainEndorsementPolicy, DomainEndorsementScope, DomainEndorsementSignature,
+                LaneId,
             },
             permission::Permission,
             proof::{
@@ -8958,6 +9000,150 @@ pub mod isi {
             assert!(
                 stx.world.asset_metadata.get(&asset_id).is_none(),
                 "asset metadata should be removed with assets"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_removes_assets_with_definitions_in_other_domains() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "defs.world".parse().expect("domain id parses");
+            let holder_domain: DomainId = "holder.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register defs domain");
+            Register::domain(Domain::new(holder_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register holder domain");
+
+            let (holder_id, _) = gen_account_in(&holder_domain);
+            Register::account(Account::new(holder_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register holder account");
+
+            let asset_def_id: AssetDefinitionId =
+                AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
+            Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register asset definition");
+
+            let asset_id = AssetId::new(asset_def_id.clone(), holder_id.clone());
+            let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
+            let (asset_id, asset_value) = asset.into_key_value();
+            stx.world.assets.insert(asset_id.clone(), asset_value);
+            stx.world
+                .asset_metadata
+                .insert(asset_id.clone(), Metadata::default());
+
+            Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("unregister defs domain");
+
+            assert!(
+                stx.world.accounts.get(&holder_id).is_some(),
+                "holder account should remain"
+            );
+            assert!(
+                stx.world.asset_definitions.get(&asset_def_id).is_none(),
+                "asset definition should be removed"
+            );
+            assert!(
+                stx.world.assets.get(&asset_id).is_none(),
+                "assets with definitions in the removed domain should be removed"
+            );
+            assert!(
+                stx.world.asset_metadata.get(&asset_id).is_none(),
+                "asset metadata should be removed with assets"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_clears_endorsements_and_policy() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId = "endorsed.world".parse().expect("domain id parses");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register domain");
+
+            let policy = DomainEndorsementPolicy {
+                committee_id: "default".to_owned(),
+                max_endorsement_age: 10,
+                required: false,
+            };
+            stx.world
+                .domain_endorsement_policies
+                .insert(domain_id.clone(), policy);
+
+            let statement_hash = Hash::new(domain_id.to_string().as_bytes());
+            let endorsement = DomainEndorsement {
+                version: iroha_data_model::nexus::DOMAIN_ENDORSEMENT_VERSION_V1,
+                domain_id: domain_id.clone(),
+                committee_id: "default".to_owned(),
+                statement_hash,
+                issued_at_height: stx.block_height(),
+                expires_at_height: stx.block_height() + 5,
+                scope: DomainEndorsementScope::default(),
+                signatures: Vec::new(),
+                metadata: Metadata::default(),
+            };
+            let msg_hash = endorsement.body_hash();
+            persist_endorsement_record(
+                &domain_id,
+                endorsement,
+                stx.block_height(),
+                msg_hash,
+                &mut stx,
+            );
+
+            assert!(
+                stx.world.domain_endorsement_policies.get(&domain_id).is_some(),
+                "policy should exist before unregister"
+            );
+            assert!(
+                stx.world
+                    .domain_endorsements_by_domain
+                    .get(&domain_id)
+                    .is_some(),
+                "endorsement index should exist before unregister"
+            );
+            assert!(
+                stx.world.domain_endorsements.get(&msg_hash).is_some(),
+                "endorsement record should exist before unregister"
+            );
+
+            Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("unregister domain");
+
+            assert!(
+                stx.world.domain_endorsement_policies.get(&domain_id).is_none(),
+                "endorsement policy should be removed"
+            );
+            assert!(
+                stx.world
+                    .domain_endorsements_by_domain
+                    .get(&domain_id)
+                    .is_none(),
+                "endorsement index should be removed"
+            );
+            assert!(
+                stx.world.domain_endorsements.get(&msg_hash).is_none(),
+                "endorsement record should be removed"
             );
         }
 
@@ -9544,6 +9730,116 @@ pub mod isi {
             let domain_id: DomainId = "endorse-missing".parse().expect("domain id parses");
             let res = Register::domain(Domain::new(domain_id)).execute(&ALICE_ID, &mut stx);
             assert!(res.is_err(), "missing endorsement must be rejected");
+        }
+
+        #[test]
+        fn register_domain_duplicate_does_not_persist_endorsement() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.nexus.enabled = true;
+            stx.nexus.endorsement.quorum = 1;
+            let kp = KeyPair::random();
+            stx.nexus
+                .endorsement
+                .committee_keys
+                .push(kp.public_key().to_string());
+            let endorsement_key_id =
+                ConsensusKeyId::new(ConsensusKeyRole::Endorsement, "committee-key");
+            let endorsement_record = ConsensusKeyRecord {
+                id: endorsement_key_id.clone(),
+                public_key: kp.public_key().clone(),
+                activation_height: stx.block_height(),
+                expiry_height: None,
+                hsm: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            stx.world
+                .consensus_keys
+                .insert(endorsement_key_id.clone(), endorsement_record);
+            stx.world
+                .consensus_keys_by_pk
+                .insert(kp.public_key().to_string(), vec![endorsement_key_id]);
+
+            let domain_id: DomainId = "endorsed".parse().expect("domain id parses");
+            let canonical_label =
+                name::canonicalize_domain_label(domain_id.name.as_ref()).expect("canonical");
+            let canonical_id: DomainId = canonical_label.parse().expect("canonical domain");
+            let statement_hash = Hash::new(canonical_id.to_string().as_bytes());
+
+            let mut endorsement = DomainEndorsement {
+                version: iroha_data_model::nexus::DOMAIN_ENDORSEMENT_VERSION_V1,
+                domain_id: canonical_id.clone(),
+                committee_id: "default".into(),
+                statement_hash,
+                issued_at_height: stx.block_height(),
+                expires_at_height: stx.block_height() + 10,
+                scope: DomainEndorsementScope::default(),
+                signatures: Vec::new(),
+                metadata: Metadata::default(),
+            };
+            let msg_hash = endorsement.body_hash();
+            endorsement.signatures.push(DomainEndorsementSignature {
+                signer: kp.public_key().clone(),
+                signature: Signature::new(kp.private_key(), msg_hash.as_ref()),
+            });
+            let key: iroha_data_model::name::Name = "endorsement".parse().expect("name");
+            let mut domain = Domain::new(domain_id.clone());
+            domain.metadata.insert(key.clone(), Json::new(endorsement));
+
+            Register::domain(domain)
+                .execute(&ALICE_ID, &mut stx)
+                .expect("initial register should succeed");
+
+            let mut endorsement_dupe = DomainEndorsement {
+                version: iroha_data_model::nexus::DOMAIN_ENDORSEMENT_VERSION_V1,
+                domain_id: canonical_id.clone(),
+                committee_id: "default".into(),
+                statement_hash,
+                issued_at_height: stx.block_height(),
+                expires_at_height: stx.block_height() + 20,
+                scope: DomainEndorsementScope::default(),
+                signatures: Vec::new(),
+                metadata: Metadata::default(),
+            };
+            let msg_hash_dupe = endorsement_dupe.body_hash();
+            endorsement_dupe.signatures.push(DomainEndorsementSignature {
+                signer: kp.public_key().clone(),
+                signature: Signature::new(kp.private_key(), msg_hash_dupe.as_ref()),
+            });
+            let mut dup_domain = Domain::new(domain_id.clone());
+            dup_domain
+                .metadata
+                .insert(key, Json::new(endorsement_dupe));
+
+            let err = Register::domain(dup_domain)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("duplicate domain should be rejected");
+            assert!(matches!(err, InstructionExecutionError::Repetition(_)));
+
+            assert!(
+                stx.world.domain_endorsements.get(&msg_hash).is_some(),
+                "initial endorsement should remain recorded"
+            );
+            assert!(
+                stx.world.domain_endorsements.get(&msg_hash_dupe).is_none(),
+                "duplicate attempt must not persist endorsement"
+            );
+            let hashes = stx
+                .world
+                .domain_endorsements_by_domain
+                .get(&canonical_id)
+                .cloned()
+                .unwrap_or_default();
+            assert!(
+                !hashes.contains(&msg_hash_dupe),
+                "duplicate endorsement hash must not be indexed"
+            );
         }
 
         #[test]

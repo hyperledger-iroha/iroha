@@ -154,6 +154,8 @@ The `--guard-directory` flag now expects a Norito-encoded
 - `relays` — a list of SRCv2 bundles (`RelayCertificateBundleV2::to_cbor()` output). Each bundle
   carries the relay descriptor, capability flags, ML-KEM policy, and dual Ed25519/ML-DSA-65
   signatures.
+Snapshots are rejected if the version or validation phase is unknown or if the validity window is
+inconsistent (`valid_after_unix > valid_until_unix` or `published_at_unix > valid_until_unix`).
 
 The CLI verifies every bundle against the declared issuer keys before merging the directory with
 

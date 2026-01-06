@@ -57,6 +57,9 @@ servers `CommitCertificateHashMismatch` reject اور log کرتے ہیں۔
 کر کے نکالا جاتا ہے؛ inclusion proofs ابھی واپس نہیں کی جاتیں۔ Clients آج بھی commitment
 payload کے ذریعے وہی hash verify کر سکتے ہیں۔
 
+MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
+from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+
 API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
 
 Verification بنیادی proof جیسی ہے: header سے `block_hash` دوبارہ compute کریں، commit

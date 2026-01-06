@@ -52,6 +52,30 @@ enum Field {
     PqKemPublic = 18,
 }
 
+fn field_label(field: Field) -> &'static str {
+    match field {
+        Field::Version => "certificate.version",
+        Field::RelayId => "certificate.relay_id",
+        Field::IdentityEd25519 => "certificate.identity_ed25519",
+        Field::IdentityMlDsa65 => "certificate.identity_mldsa65",
+        Field::DescriptorCommit => "certificate.descriptor_commit",
+        Field::Roles => "certificate.roles",
+        Field::GuardWeight => "certificate.guard_weight",
+        Field::BandwidthBytesPerSec => "certificate.bandwidth_bytes_per_sec",
+        Field::ReputationWeight => "certificate.reputation_weight",
+        Field::Endpoints => "certificate.endpoints",
+        Field::CapabilityFlags => "certificate.capability_flags",
+        Field::KemPolicy => "certificate.kem_policy",
+        Field::HandshakeSuites => "certificate.handshake_suites",
+        Field::PublishedAt => "certificate.published_at",
+        Field::ValidAfter => "certificate.valid_after",
+        Field::ValidUntil => "certificate.valid_until",
+        Field::DirectoryHash => "certificate.directory_hash",
+        Field::IssuerFingerprint => "certificate.issuer_fingerprint",
+        Field::PqKemPublic => "certificate.pq_kem_public",
+    }
+}
+
 /// `SRCv2` signature map field identifiers.
 #[repr(u8)]
 enum SignatureField {
@@ -772,6 +796,7 @@ impl RelayCertificateBundleV2 {
 
 #[derive(Default)]
 struct CertificateFieldAccumulator {
+    version_seen: bool,
     relay_id: Option<[u8; 32]>,
     identity_ed25519: Option<[u8; 32]>,
     identity_mldsa65: Option<Vec<u8>>,
@@ -793,6 +818,20 @@ struct CertificateFieldAccumulator {
 }
 
 impl CertificateFieldAccumulator {
+    fn set_once<T>(
+        slot: &mut Option<T>,
+        value: T,
+        field: Field,
+    ) -> Result<(), CertificateError> {
+        if slot.is_some() {
+            return Err(CertificateError::DuplicateField {
+                field: field_label(field),
+            });
+        }
+        *slot = Some(value);
+        Ok(())
+    }
+
     fn decode(
         mut self,
         decoder: &mut CborDecoder<'_>,
@@ -812,62 +851,84 @@ impl CertificateFieldAccumulator {
     ) -> Result<(), CertificateError> {
         match field {
             Field::Version => {
+                if self.version_seen {
+                    return Err(CertificateError::DuplicateField {
+                        field: field_label(field),
+                    });
+                }
+                self.version_seen = true;
                 verify_certificate_version(decoder)?;
             }
             Field::RelayId => {
-                self.relay_id = Some(decoder.read_array32()?);
+                Self::set_once(&mut self.relay_id, decoder.read_array32()?, field)?;
             }
             Field::IdentityEd25519 => {
-                self.identity_ed25519 = Some(decoder.read_array32()?);
+                Self::set_once(&mut self.identity_ed25519, decoder.read_array32()?, field)?;
             }
             Field::IdentityMlDsa65 => {
-                self.identity_mldsa65 = Some(decoder.read_bytes()?);
+                Self::set_once(&mut self.identity_mldsa65, decoder.read_bytes()?, field)?;
             }
             Field::DescriptorCommit => {
-                self.descriptor_commit = Some(decoder.read_array32()?);
+                Self::set_once(&mut self.descriptor_commit, decoder.read_array32()?, field)?;
             }
             Field::Roles => {
-                self.roles = Some(decode_roles(decoder)?);
+                Self::set_once(&mut self.roles, decode_roles(decoder)?, field)?;
             }
             Field::GuardWeight => {
-                self.guard_weight = Some(decoder.read_u32()?);
+                Self::set_once(&mut self.guard_weight, decoder.read_u32()?, field)?;
             }
             Field::BandwidthBytesPerSec => {
-                self.bandwidth_bytes_per_sec = Some(decoder.read_unsigned()?);
+                Self::set_once(
+                    &mut self.bandwidth_bytes_per_sec,
+                    decoder.read_unsigned()?,
+                    field,
+                )?;
             }
             Field::ReputationWeight => {
-                self.reputation_weight = Some(decoder.read_u32()?);
+                Self::set_once(&mut self.reputation_weight, decoder.read_u32()?, field)?;
             }
             Field::Endpoints => {
-                self.endpoints = Some(decode_endpoints(decoder)?);
+                Self::set_once(&mut self.endpoints, decode_endpoints(decoder)?, field)?;
             }
             Field::CapabilityFlags => {
                 let bits = decoder.read_u16()?;
-                self.capability_flags = Some(RelayCapabilityFlagsV1::from_bits(bits));
+                Self::set_once(
+                    &mut self.capability_flags,
+                    RelayCapabilityFlagsV1::from_bits(bits),
+                    field,
+                )?;
             }
             Field::KemPolicy => {
-                self.kem_policy = Some(KemRotationPolicyV1::decode(decoder)?);
+                Self::set_once(&mut self.kem_policy, KemRotationPolicyV1::decode(decoder)?, field)?;
             }
             Field::HandshakeSuites => {
-                self.handshake_suites = Some(decode_handshake_suites(decoder)?);
+                Self::set_once(
+                    &mut self.handshake_suites,
+                    decode_handshake_suites(decoder)?,
+                    field,
+                )?;
             }
             Field::PublishedAt => {
-                self.published_at = Some(decoder.read_i64()?);
+                Self::set_once(&mut self.published_at, decoder.read_i64()?, field)?;
             }
             Field::ValidAfter => {
-                self.valid_after = Some(decoder.read_i64()?);
+                Self::set_once(&mut self.valid_after, decoder.read_i64()?, field)?;
             }
             Field::ValidUntil => {
-                self.valid_until = Some(decoder.read_i64()?);
+                Self::set_once(&mut self.valid_until, decoder.read_i64()?, field)?;
             }
             Field::DirectoryHash => {
-                self.directory_hash = Some(decoder.read_array32()?);
+                Self::set_once(&mut self.directory_hash, decoder.read_array32()?, field)?;
             }
             Field::IssuerFingerprint => {
-                self.issuer_fingerprint = Some(decoder.read_array32()?);
+                Self::set_once(
+                    &mut self.issuer_fingerprint,
+                    decoder.read_array32()?,
+                    field,
+                )?;
             }
             Field::PqKemPublic => {
-                self.pq_kem_public = Some(decoder.read_bytes()?);
+                Self::set_once(&mut self.pq_kem_public, decoder.read_bytes()?, field)?;
             }
         }
         Ok(())
@@ -1044,6 +1105,12 @@ pub enum CertificateError {
         field: &'static str,
         /// Human-readable explanation of the validation failure.
         reason: String,
+    },
+    /// A field appeared more than once in the CBOR map.
+    #[error("duplicate certificate field `{field}`")]
+    DuplicateField {
+        /// Name of the duplicated field.
+        field: &'static str,
     },
     /// Signature verification or creation failed.
     #[error("{0}")]
@@ -1498,6 +1565,25 @@ mod tests {
         match err {
             CertificateError::InvalidFieldValue { field, .. } => {
                 assert_eq!(field, "certificate.handshake_suites");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_certificate_payload_rejects_duplicate_field() {
+        let mut encoder = CborEncoder::new();
+        encoder.write_map_header(2);
+        encoder.write_unsigned(u64::from(Field::Version as u8));
+        encoder.write_unsigned(u64::from(SRC_CERTIFICATE_VERSION));
+        encoder.write_unsigned(u64::from(Field::Version as u8));
+        encoder.write_unsigned(u64::from(SRC_CERTIFICATE_VERSION));
+        let bytes = encoder.finish();
+
+        let err = parse_certificate_payload(&bytes).expect_err("duplicate field should fail");
+        match err {
+            CertificateError::DuplicateField { field } => {
+                assert_eq!(field, "certificate.version");
             }
             other => panic!("unexpected error: {other:?}"),
         }

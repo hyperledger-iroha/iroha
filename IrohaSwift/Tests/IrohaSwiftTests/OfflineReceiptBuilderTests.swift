@@ -254,6 +254,36 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         }
     }
 
+    func testBuildSignedReceiptRejectsReservedAccountIdCharacters() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x09, count: 32))
+        let certificate = try makeCertificate(signingKey: signingKey)
+        let issuedAtMs = validIssuedAtMs(for: certificate)
+        let txId = IrohaHash.hash(Data("reserved-account".utf8))
+        let proof = try makeProof(txId: txId,
+                                  receiver: certificate.controller,
+                                  assetId: certificate.allowance.assetId,
+                                  amount: "9",
+                                  invoiceId: "inv-reserved",
+                                  issuedAtMs: issuedAtMs)
+
+        XCTAssertThrowsError(
+            try OfflineReceiptBuilder.buildSignedReceipt(
+                txId: txId,
+                chainId: chainId,
+                receiverAccountId: "alice$@wonderland",
+                amount: "9",
+                invoiceId: "inv-reserved",
+                platformProof: proof,
+                senderCertificate: certificate,
+                signingKey: signingKey,
+                issuedAtMs: issuedAtMs
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineReceiptBuilderError,
+                           .invalidAccountId(field: "receiver", value: "alice$@wonderland"))
+        }
+    }
+
     func testBuildSignedReceiptRejectsWhitespaceAccountId() throws {
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x12, count: 32))
         let certificate = try makeCertificate(signingKey: signingKey)

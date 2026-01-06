@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use iroha_data_model::prelude::PublicKey;
 use ivm::mock_wsv::{
-    AccountId, AssetDefinitionId, DomainId, Mintable, MockWorldStateView, PermissionToken,
+    AccountId, AssetDefinitionId, DomainId, Mintable, MockWorldStateView, NftId, PermissionToken,
 };
 
 #[test]
@@ -195,4 +195,29 @@ fn unregister_account_clears_permissions_and_roles() {
     assert!(wsv.unregister_account(&acc));
     assert!(!wsv.has_permission(&acc, &PermissionToken::MintAsset(asset.clone())));
     assert!(!wsv.has_permission(&acc, &PermissionToken::ReadAccountAssets(acc.clone())));
+}
+
+#[test]
+fn unregister_domain_rejects_cross_domain_nfts() {
+    let nft_domain: DomainId = "nft-domain".parse().unwrap();
+    let holder_domain: DomainId = "holder-domain".parse().unwrap();
+    let pk: PublicKey = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
+        .parse()
+        .unwrap();
+    let owner: AccountId = format!("{pk}@{holder_domain}").parse().unwrap();
+    let nft_id: NftId = format!("artifact${nft_domain}").parse().unwrap();
+
+    let mut wsv = MockWorldStateView::new();
+    wsv.grant_permission(&owner, PermissionToken::RegisterDomain);
+    wsv.grant_permission(&owner, PermissionToken::RegisterAccount);
+
+    assert!(wsv.register_domain(&owner, nft_domain.clone()));
+    assert!(wsv.register_domain(&owner, holder_domain.clone()));
+    assert!(wsv.register_account(&owner, owner.clone()));
+
+    assert!(wsv.create_nft(owner.clone(), owner.clone(), nft_id.clone()));
+    assert!(!wsv.unregister_domain(&nft_domain));
+
+    assert!(wsv.burn_nft(&owner, &nft_id));
+    assert!(wsv.unregister_domain(&nft_domain));
 }

@@ -50,6 +50,11 @@ final class ConnectErrorTests: XCTestCase {
         XCTAssertEqual(overflow.category, .queueOverflow)
         XCTAssertEqual(overflow.code, "queue.overflow")
         XCTAssertTrue(overflow.message.contains("10"))
+
+        let invalidCount = ConnectQueueError.invalidCount(0).asConnectError()
+        XCTAssertEqual(invalidCount.category, .internalError)
+        XCTAssertEqual(invalidCount.code, "queue.invalid_count")
+        XCTAssertTrue(invalidCount.message.contains("0"))
     }
 
     func testURLErrorMapping() {

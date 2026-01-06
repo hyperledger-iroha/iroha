@@ -7770,7 +7770,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
     private func encodePathComponent(_ value: String) -> String {
         var allowed = CharacterSet.urlPathAllowed
-        allowed.remove(charactersIn: "/:@?&=#")
+        allowed.remove(charactersIn: "/:@?&=#%")
         return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 
