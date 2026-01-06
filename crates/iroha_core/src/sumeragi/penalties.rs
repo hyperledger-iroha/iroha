@@ -354,7 +354,15 @@ fn roster_for_evidence(
     commit_certs: &[CommitCertificate],
     checkpoints: &[ValidatorSetCheckpoint],
 ) -> Option<Vec<PeerId>> {
-    for (height, hash) in super::evidence::evidence_block_refs(evidence) {
+    let refs = super::evidence::evidence_block_refs(evidence);
+    if refs.is_empty() {
+        let view = state.view();
+        let roster: Vec<_> = view.commit_topology().iter().cloned().collect();
+        if !roster.is_empty() {
+            return Some(roster);
+        }
+    }
+    for (height, hash) in refs {
         if let Some(snapshot) = state.commit_roster_snapshot_for_block(height, hash) {
             let roster = snapshot.validator_checkpoint.validator_set;
             if !roster.is_empty() {
@@ -631,7 +639,7 @@ fn jail_in_transaction(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, time::Duration};
+    use std::{collections::BTreeSet, num::NonZeroU32, time::Duration};
 
     use eyre::Result;
     use iroha_config::parameters::actual::{
@@ -640,9 +648,14 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        account::AccountId,
+        Registrable,
+        account::{AccountDetails, AccountId},
+        asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::consensus::{Evidence, EvidenceKind, EvidencePayload, EvidenceRecord},
+        common::Owned,
         consensus::{CommitCertificate, ValidatorSetCheckpoint, VrfEpochRecord},
+        domain::Domain,
+        nexus::{LaneCatalog, LaneConfig},
         parameter::system::SumeragiConsensusMode,
         prelude::{BlockHeader, DomainId, PeerId},
         transaction::{TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload},
@@ -1363,12 +1376,61 @@ mod tests {
 
         let domain: DomainId = "test".parse().expect("domain id");
         let validator: AccountId = AccountId::new(domain.clone(), key_pair.public_key().clone());
+        let escrow_key_pair = KeyPair::random();
+        let escrow_account: AccountId =
+            AccountId::new(domain.clone(), escrow_key_pair.public_key().clone());
+        let stake_asset_id: AssetDefinitionId = "xor#test".parse().expect("asset definition id");
+        let slash_amount = Numeric::new(100, 0);
+        {
+            let mut block = state.world.block();
+            block.domains.insert(
+                domain.clone(),
+                Domain::new(domain.clone()).build(&validator),
+            );
+            block
+                .accounts
+                .insert(validator.clone(), Owned::new(AccountDetails::default()));
+            block.accounts.insert(
+                escrow_account.clone(),
+                Owned::new(AccountDetails::default()),
+            );
+            block.asset_definitions.insert(
+                stake_asset_id.clone(),
+                AssetDefinition::numeric(stake_asset_id.clone()).build(&validator),
+            );
+            block.assets.insert(
+                AssetId::new(stake_asset_id.clone(), escrow_account.clone()),
+                Owned::new(slash_amount.clone()),
+            );
+            block.commit();
+        }
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.staking.stake_asset_id = stake_asset_id.to_string();
+            nexus.staking.stake_escrow_account_id = escrow_account.to_string();
+            nexus.staking.slash_sink_account_id = escrow_account.to_string();
+            nexus.lane_catalog = LaneCatalog::new(
+                NonZeroU32::new(2).expect("lane count"),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: LaneId::new(1),
+                        alias: "lane-1".to_string(),
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("lane catalog");
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
         let record = iroha_data_model::nexus::PublicLaneValidatorRecord {
             lane_id: LaneId::new(1),
             validator: validator.clone(),
             stake_account: validator.clone(),
-            total_stake: Numeric::new(100, 0),
-            self_stake: Numeric::new(50, 0),
+            total_stake: slash_amount.clone(),
+            self_stake: slash_amount.clone(),
             metadata: iroha_data_model::metadata::Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
             activation_epoch: None,

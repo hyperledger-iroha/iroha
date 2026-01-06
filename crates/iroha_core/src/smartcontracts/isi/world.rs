@@ -7606,6 +7606,14 @@ pub mod isi {
                 ));
             }
 
+            if state_transaction.world.domains.get(&canonical_id).is_some() {
+                return Err(RepetitionError {
+                    instruction: InstructionType::Register,
+                    id: IdBox::DomainId(canonical_id.clone()),
+                }
+                .into());
+            }
+
             let mut domain = new_domain.build(authority);
             domain.id = canonical_id.clone();
             let requires_endorsement = state_transaction
@@ -8259,8 +8267,7 @@ pub mod isi {
                 .accounts_in_domain_iter(&domain_id)
                 .map(|account| account.id().clone())
                 .collect();
-            let account_set: BTreeSet<AccountId> =
-                remove_accounts.iter().cloned().collect();
+            let account_set: BTreeSet<AccountId> = remove_accounts.iter().cloned().collect();
 
             let mut remove_nfts: BTreeSet<NftId> = state_transaction
                 .world
@@ -8296,10 +8303,7 @@ pub mod isi {
                     state_transaction.world.remove_asset_and_metadata(&asset_id);
                 }
 
-                state_transaction
-                    .world
-                    .tx_sequences
-                    .remove(account.clone());
+                state_transaction.world.tx_sequences.remove(account.clone());
                 let removed = state_transaction.world.accounts.remove(account.clone());
                 let Some(account_value) = removed else {
                     iroha_logger::error!(
@@ -8309,10 +8313,7 @@ pub mod isi {
                     continue;
                 };
                 if let Some(label) = account_value.label().cloned() {
-                    state_transaction
-                        .world
-                        .account_rekey_records
-                        .remove(label);
+                    state_transaction.world.account_rekey_records.remove(label);
                 }
                 if let Some(uaid) = account_value.uaid().copied() {
                     state_transaction.rebuild_space_directory_bindings(uaid);
@@ -8767,6 +8768,7 @@ pub mod isi {
         use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
         #[allow(unused_imports)]
         use iroha_data_model::{
+            IntoKeyValue,
             account::{AccountId, MultisigMember, MultisigPolicy},
             bridge::BridgeReceipt,
             confidential::ConfidentialStatus,
@@ -8788,7 +8790,6 @@ pub mod isi {
             },
             query::error::FindError,
             zk::BackendTag,
-            IntoKeyValue,
         };
         use iroha_data_model::{
             account::{NewAccount, rekey::AccountLabel},
@@ -8906,7 +8907,7 @@ pub mod isi {
         fn unregister_domain_cleans_account_records_and_owned_nfts() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let state = State::new(World::default(), kura, query_handle);
 
             let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
             let other_domain_id: DomainId = "other.world".parse().expect("domain id parses");
@@ -8982,7 +8983,10 @@ pub mod isi {
                 "tx sequence should be removed"
             );
             assert!(
-                stx.world.account_rekey_records.get(&account_label).is_none(),
+                stx.world
+                    .account_rekey_records
+                    .get(&account_label)
+                    .is_none(),
                 "account label record should be removed"
             );
             assert!(

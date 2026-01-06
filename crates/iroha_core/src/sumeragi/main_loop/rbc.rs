@@ -87,9 +87,6 @@ pub(super) fn apply_hydrated_payload(
 ) -> HydrationOutcome {
     let mut outcome = HydrationOutcome::default();
     let chunk_bytes = chunk_payload_bytes(payload_bytes, chunk_max_bytes);
-    if chunk_bytes.is_empty() {
-        return outcome;
-    }
 
     let chunk_count = if let Ok(count) = u32::try_from(chunk_bytes.len()) {
         count
@@ -1173,6 +1170,15 @@ impl Actor {
             return Ok(());
         }
         let key = Self::session_key(&init.block_hash, init.height, init.view);
+        if init.total_chunks == 0 {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                "rejecting RBC init with zero total chunks"
+            );
+            return Ok(());
+        }
         if init.total_chunks > RBC_MAX_TOTAL_CHUNKS {
             warn!(
                 height = init.height,

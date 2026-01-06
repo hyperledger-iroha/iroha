@@ -2136,12 +2136,12 @@ mod run {
         async fn send(&mut self) -> Result<(), Error> {
             let chunk = self.queue.chunk();
             if !chunk.is_empty() {
-            let n = self.write.write(chunk).await?;
-            self.queue.advance(n);
-            self.write.flush().await?;
+                let n = self.write.write(chunk).await?;
+                self.queue.advance(n);
+                self.write.flush().await?;
+            }
+            Ok(())
         }
-        Ok(())
-    }
 
         /// Check if message sender has data ready to be sent.
         fn ready(&self) -> bool {
@@ -3955,10 +3955,7 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        fn poll_shutdown(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<std::io::Result<()>> {
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
             Poll::Ready(Ok(()))
         }
     }

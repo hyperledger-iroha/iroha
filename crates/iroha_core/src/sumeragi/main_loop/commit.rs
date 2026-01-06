@@ -3095,6 +3095,16 @@ impl Actor {
         qc: crate::sumeragi::consensus::QcHeaderRef,
         topology_peers: &[PeerId],
     ) -> Option<crate::sumeragi::consensus::Qc> {
+        if topology_peers.is_empty() {
+            debug!(
+                height = qc.height,
+                view = qc.view,
+                phase = ?qc.phase,
+                block = %qc.subject_block_hash,
+                "skipping QC materialization: empty commit topology"
+            );
+            return None;
+        }
         let key = (
             qc.phase,
             qc.subject_block_hash,

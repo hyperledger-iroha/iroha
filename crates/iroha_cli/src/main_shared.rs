@@ -816,6 +816,11 @@ fn load_client_toml_fallback(path: &Path) -> Option<Config> {
         .and_then(|raw| raw.as_str())
         .and_then(|s| humantime::parse_duration(s).ok())
         .unwrap_or(iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT);
+    let torii_request_timeout = value
+        .get("torii_request_timeout_ms")
+        .and_then(parse_duration_value)
+        .or_else(|| value.get("torii_request_timeout").and_then(parse_duration_value))
+        .unwrap_or(iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT);
 
     let account_table = value.get("account")?.as_table()?;
     let domain: DomainId = account_table.get("domain")?.as_str()?.parse().ok()?;
@@ -858,6 +863,7 @@ fn load_client_toml_fallback(path: &Path) -> Option<Config> {
         torii_api_url: Url::parse(&torii_url).ok()?,
         torii_api_version: iroha::config::default_torii_api_version(),
         torii_api_min_proof_version: iroha::config::DEFAULT_TORII_API_MIN_PROOF_VERSION.to_string(),
+        torii_request_timeout,
         transaction_ttl,
         transaction_status_timeout,
         transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
@@ -890,6 +896,7 @@ fn fallback_config() -> Config {
         key_pair,
         basic_auth: None,
         torii_api_url: Url::parse("http://127.0.0.1:8080/").expect("fallback url"),
+        torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
         transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
         transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
         transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
@@ -920,6 +927,10 @@ fn config_to_json(config: &Config) -> Result<norito::json::Value> {
         (
             "torii_api_url",
             json_utils::json_value(&config.torii_api_url)?,
+        ),
+        (
+            "torii_request_timeout",
+            json_utils::json_value(&config.torii_request_timeout)?,
         ),
         (
             "transaction_ttl",
@@ -6058,6 +6069,7 @@ mod tests {
                 torii_api_version: iroha::config::default_torii_api_version(),
                 torii_api_min_proof_version: iroha::config::DEFAULT_TORII_API_MIN_PROOF_VERSION
                     .to_string(),
+                torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
                 transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
                 transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
                 transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,

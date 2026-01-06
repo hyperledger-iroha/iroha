@@ -2451,18 +2451,38 @@ fn is_peer_admin_instruction(instr: &iroha_data_model::isi::InstructionBox) -> b
 )]
 impl Actor {
     fn active_pending_blocks_len(&self) -> usize {
+        let view = self.state.view();
+        let tip_height = view.height();
+        let tip_hash = view.latest_block_hash();
         self.pending
             .pending_blocks
             .values()
-            .filter(|pending| !pending.aborted)
+            // Only pending blocks that extend the current tip should gate proposals/view changes.
+            .filter(|pending| {
+                !pending.aborted
+                    && pending_extends_tip(
+                        pending.height,
+                        pending.block.header().prev_block_hash(),
+                        tip_height,
+                        tip_hash,
+                    )
+            })
             .count()
     }
 
     fn has_active_pending_blocks(&self) -> bool {
-        self.pending
-            .pending_blocks
-            .values()
-            .any(|pending| !pending.aborted)
+        let view = self.state.view();
+        let tip_height = view.height();
+        let tip_hash = view.latest_block_hash();
+        self.pending.pending_blocks.values().any(|pending| {
+            !pending.aborted
+                && pending_extends_tip(
+                    pending.height,
+                    pending.block.header().prev_block_hash(),
+                    tip_height,
+                    tip_hash,
+                )
+        })
     }
 
     fn is_peer_admin_transaction(tx: &AcceptedTransaction<'_>) -> bool {
@@ -3264,6 +3284,10 @@ enum RosterValidationError {
         expected: u64,
         actual: u64,
     },
+    EpochMismatch {
+        expected: u64,
+        actual: u64,
+    },
     EmptyRoster,
     ValidatorSetHashVersionMismatch {
         expected: u16,
@@ -3560,7 +3584,7 @@ fn selection_from_roster_artifacts(
     state: &State,
     mode_tag: &'static str,
 ) -> Option<BlockSyncRosterSelection> {
-    let epoch = epoch_for_height_from_state(state, block_height, consensus_mode);
+    let expected_epoch = epoch_for_height_from_state(state, block_height, consensus_mode);
     let validated_cert =
         commit_certificate.and_then(|cert| {
             match validate_commit_certificate_roster(
@@ -3570,6 +3594,7 @@ fn selection_from_roster_artifacts(
                 block_view,
                 consensus_mode,
                 stake_snapshot,
+                expected_epoch,
             ) {
                 Ok(roster) => Some((roster, cert)),
                 Err(err) => {
@@ -3582,6 +3607,11 @@ fn selection_from_roster_artifacts(
                 }
             }
         });
+    let epoch = match (consensus_mode, validated_cert.as_ref()) {
+        (ConsensusMode::Npos, Some((_roster, cert))) => cert.epoch,
+        (ConsensusMode::Npos, None) => expected_epoch,
+        _ => 0,
+    };
     let validated_checkpoint = checkpoint.and_then(|chk| {
         match validate_checkpoint_roster(
             chk,
@@ -3890,6 +3920,7 @@ fn validate_commit_certificate_roster(
     block_view: Option<u64>,
     consensus_mode: ConsensusMode,
     stake_snapshot: Option<&CommitStakeSnapshot>,
+    expected_epoch: u64,
 ) -> Result<Vec<PeerId>, RosterValidationError> {
     if cert.subject_block_hash != block_hash {
         return Err(RosterValidationError::BlockHashMismatch);
@@ -3907,6 +3938,12 @@ fn validate_commit_certificate_roster(
                 actual: cert.view,
             });
         }
+    }
+    if cert.epoch != expected_epoch {
+        return Err(RosterValidationError::EpochMismatch {
+            expected: expected_epoch,
+            actual: cert.epoch,
+        });
     }
     if cert.validator_set.is_empty() {
         return Err(RosterValidationError::EmptyRoster);
@@ -4602,9 +4639,17 @@ impl Actor {
     }
 
     fn epoch_for_height(&self, height: u64) -> u64 {
-        self.epoch_manager
-            .as_ref()
-            .map_or(0, |manager| manager.epoch_for_height(height))
+        let consensus_mode = {
+            let view = self.state.view();
+            super::effective_consensus_mode_for_height(&view, height, self.config.consensus_mode)
+        };
+        if matches!(consensus_mode, ConsensusMode::Permissioned) {
+            return 0;
+        }
+        self.epoch_manager.as_ref().map_or_else(
+            || epoch_for_height_from_state(self.state.as_ref(), height, consensus_mode),
+            |manager| manager.epoch_for_height(height),
+        )
     }
 
     fn genesis_block_hash(&self) -> Option<HashOf<BlockHeader>> {
@@ -7485,8 +7530,18 @@ impl Actor {
                     next_view,
                     consensus_mode,
                 );
-                let topology = super::network_topology::Topology::new(roster);
-                self.emit_new_view_vote(height, next_view, highest_qc, &topology);
+                if roster.is_empty() {
+                    debug!(
+                        height,
+                        view = next_view,
+                        highest_height = highest_qc.height,
+                        highest_view = highest_qc.view,
+                        "skipping NEW_VIEW vote: empty commit topology"
+                    );
+                } else {
+                    let topology = super::network_topology::Topology::new(roster);
+                    self.emit_new_view_vote(height, next_view, highest_qc, &topology);
+                }
             } else {
                 debug!(
                     height,

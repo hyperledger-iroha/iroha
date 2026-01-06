@@ -42,6 +42,9 @@ pub struct Root {
     pub torii_api_min_proof_version: WithOrigin<String>,
     /// Optional HTTP Basic Auth credentials.
     pub basic_auth: Option<BasicAuth>,
+    /// Timeout for Torii HTTP requests.
+    #[config(default = "super::DEFAULT_TORII_REQUEST_TIMEOUT.into()")]
+    pub torii_request_timeout_ms: WithOrigin<DurationMs>,
     #[config(nested)]
     /// Account configuration.
     pub account: Account,
@@ -113,6 +116,7 @@ impl Root {
             torii_api_version,
             torii_api_min_proof_version,
             basic_auth,
+            torii_request_timeout_ms,
             account:
                 Account {
                     domain: domain_id,
@@ -307,6 +311,7 @@ impl Root {
             torii_api_version,
             torii_api_min_proof_version,
             basic_auth,
+            torii_request_timeout: torii_request_timeout_ms.into_value().get(),
             transaction_ttl: tx_ttl.into_value().get(),
             transaction_status_timeout: tx_timeout.into_value().get(),
             transaction_add_nonce: tx_add_nonce,
@@ -464,6 +469,9 @@ mod tests {
                 defaults::torii::api_min_proof_version(),
             ),
             basic_auth: None,
+            torii_request_timeout_ms: WithOrigin::inline(DurationMs::from(
+                crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+            )),
             account: Account {
                 domain: DomainId::from_str("wonderland").expect("domain id"),
                 public_key: WithOrigin::inline(key_pair.public_key().clone()),
@@ -489,6 +497,17 @@ mod tests {
 
         assert_eq!(config.transaction_ttl, ttl);
         assert_eq!(config.transaction_status_timeout, timeout);
+    }
+
+    #[test]
+    fn parse_preserves_torii_request_timeout() {
+        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
+        let timeout = Duration::from_secs(7);
+        root.torii_request_timeout_ms = WithOrigin::inline(DurationMs::from(timeout));
+
+        let config = root.parse().expect("configuration should be valid");
+
+        assert_eq!(config.torii_request_timeout, timeout);
     }
 
     #[test]

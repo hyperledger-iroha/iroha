@@ -315,7 +315,8 @@ Determinism
 - Validators cache both proposal hints (height/view/highest certificate metadata) and full proposals (header + payload hash). On `BlockCreated` ingress they enforce:
   - hint metadata must match the `BlockCreated` header `(height, view, parent)`;
   - the cached proposal header’s `parent_hash` and `tx_root` must equal the block header;
-  - the cached proposal payload hash must equal the recomputed hash of the block transactions.
+  - the cached proposal payload hash must equal the recomputed canonical payload hash
+    (header + transactions + DA bundles, without signatures or execution results).
 - Header/payload mismatches immediately drop the block. Proposal mismatches emit `Evidence::InvalidProposal` (broadcast on the control topic) so collectors can quarantine faulty leaders. Hint-only mismatches are dropped without evidence because the full proposal may still arrive later in the view.
 - When the proposal has not arrived yet, the node logs a trace entry and accepts the block after standard validation; the sanity checks re-run if the proposal subsequently appears.
 

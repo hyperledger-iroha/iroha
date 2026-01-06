@@ -190,18 +190,9 @@ fn unregister_account_clears_permissions_and_roles() {
     wsv.grant_permission(&acc, PermissionToken::ReadAccountAssets(acc.clone()));
 
     assert!(wsv.has_permission(&acc, &PermissionToken::MintAsset(asset.clone())));
-    assert!(wsv.has_permission(
-        &acc,
-        &PermissionToken::ReadAccountAssets(acc.clone())
-    ));
+    assert!(wsv.has_permission(&acc, &PermissionToken::ReadAccountAssets(acc.clone())));
 
     assert!(wsv.unregister_account(&acc));
-    assert!(!wsv.has_permission(
-        &acc,
-        &PermissionToken::MintAsset(asset.clone())
-    ));
-    assert!(!wsv.has_permission(
-        &acc,
-        &PermissionToken::ReadAccountAssets(acc.clone())
-    ));
+    assert!(!wsv.has_permission(&acc, &PermissionToken::MintAsset(asset.clone())));
+    assert!(!wsv.has_permission(&acc, &PermissionToken::ReadAccountAssets(acc.clone())));
 }

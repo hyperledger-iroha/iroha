@@ -1525,6 +1525,7 @@ mod tests {
                 torii_api_version: config::default_torii_api_version(),
                 torii_api_min_proof_version: config::DEFAULT_TORII_API_MIN_PROOF_VERSION
                     .to_string(),
+                torii_request_timeout: config::DEFAULT_TORII_REQUEST_TIMEOUT,
                 transaction_ttl: config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
                 transaction_status_timeout: config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
                 transaction_add_nonce: config::DEFAULT_TRANSACTION_NONCE,
