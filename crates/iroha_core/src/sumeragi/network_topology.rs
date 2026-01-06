@@ -282,9 +282,9 @@ impl Topology {
         }
 
         signatures.into_iter().filter(move |signature| {
-            filtered.contains(
-                &(usize::try_from(signature.index()).expect("Peer index should fit into usize")),
-            )
+            usize::try_from(signature.index())
+                .ok()
+                .is_some_and(|idx| filtered.contains(&idx))
         })
     }
 
@@ -664,6 +664,33 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(set_b_signatures.len(), 2);
         assert!(set_b_signatures.iter().map(|s| s.index()).eq(5..7));
+    }
+
+    #[test]
+    fn filter_by_role_ignores_invalid_signature_indices() {
+        let key_pairs = core::iter::repeat_with(KeyPair::random)
+            .take(3)
+            .collect::<Vec<_>>();
+        let topology = test_topology_with_keys(key_pairs.iter().take(3));
+
+        let dummy_block = ValidBlock::new_dummy(key_pairs[0].private_key());
+        let dummy_signature = dummy_block
+            .as_ref()
+            .signatures()
+            .next()
+            .unwrap()
+            .signature()
+            .clone();
+        let dummy_signatures = vec![
+            BlockSignature::new(0, dummy_signature.clone()),
+            BlockSignature::new(u64::MAX, dummy_signature.clone()),
+        ];
+
+        let leader_signatures = topology
+            .filter_signatures_by_roles(&[Role::Leader], dummy_signatures.iter())
+            .collect::<Vec<_>>();
+        assert_eq!(leader_signatures.len(), 1);
+        assert_eq!(leader_signatures[0].index(), 0);
     }
 
     #[test]

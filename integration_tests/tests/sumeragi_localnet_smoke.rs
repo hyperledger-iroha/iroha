@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use eyre::{Result, WrapErr, ensure, eyre};
+use futures_util::future::try_join_all;
 use integration_tests::sandbox;
 use iroha::data_model::{
     Level,
@@ -133,15 +134,12 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
 }
 
 async fn collect_statuses(network: &Network) -> Result<Vec<iroha::client::Status>> {
-    let mut statuses = Vec::new();
-    for peer in network.peers() {
-        let status = peer
-            .status()
+    try_join_all(network.peers().iter().map(|peer| async move {
+        peer.status()
             .await
-            .wrap_err_with(|| format!("status request failed for peer {}", peer.mnemonic()))?;
-        statuses.push(status);
-    }
-    Ok(statuses)
+            .wrap_err_with(|| format!("status request failed for peer {}", peer.mnemonic()))
+    }))
+    .await
 }
 
 async fn wait_for_status_responses(network: &Network, timeout: Duration) -> Result<()> {

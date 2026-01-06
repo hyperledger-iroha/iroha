@@ -12,11 +12,11 @@ impl Actor {
         }
 
         let reschedule_start = Instant::now();
-        let commit_topology =
-            super::network_topology::Topology::new(self.effective_commit_topology());
-        if commit_topology.as_ref().is_empty() {
+        let commit_roster = self.effective_commit_topology();
+        if commit_roster.is_empty() {
             return false;
         }
+        let commit_topology = super::network_topology::Topology::new(commit_roster);
 
         let roster_len = commit_topology.as_ref().len();
         let local_peer_id = self.common_config.peer.id().clone();

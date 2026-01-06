@@ -129,8 +129,7 @@ impl<'de, T> norito::core::NoritoDeserialize<'de> for MerkleTree<T> {
         let inner = norito::core::NoritoDeserialize::try_deserialize(unsafe {
             &*core::ptr::from_ref(archived).cast::<norito::core::Archived<Vec<Option<HashOf<T>>>>>()
         })?;
-        Self::from_nodes_checked(inner)
-            .map_err(|err| norito::core::Error::Message(err.to_string()))
+        Self::from_nodes_checked(inner).map_err(|err| norito::core::Error::Message(err.to_string()))
     }
 }
 

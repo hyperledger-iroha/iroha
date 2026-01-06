@@ -70,6 +70,7 @@ impl PendingRbcMessages {
         self.chunks.len()
     }
 
+    #[allow(dead_code)]
     pub(super) fn dropped_counts(&self) -> (u64, u64) {
         (self.dropped_chunks, self.dropped_bytes)
     }
