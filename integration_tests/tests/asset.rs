@@ -90,6 +90,54 @@ fn wait_for_asset_definition_owner(
     }
 }
 
+fn wait_for_asset_value(
+    client: &Client,
+    asset_id: &AssetId,
+    expected: &Numeric,
+    context: &'static str,
+) -> Result<()> {
+    let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
+    loop {
+        match client.query_single(FindAssetById::new(asset_id.clone())) {
+            Ok(asset) if asset.value() == expected => return Ok(()),
+            Ok(_) => {}
+            Err(QueryError::Validation(ValidationFail::QueryFailed(
+                QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
+            ))) => {}
+            Err(_) => {}
+        }
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "timed out waiting for {context} after {NON_EMPTY_BLOCK_TIMEOUT:?}"
+            ));
+        }
+        sleep(QUERY_RETRY_DELAY);
+    }
+}
+
+fn wait_for_asset_absent(
+    client: &Client,
+    asset_id: &AssetId,
+    context: &'static str,
+) -> Result<()> {
+    let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
+    loop {
+        match client.query_single(FindAssetById::new(asset_id.clone())) {
+            Ok(_) => {}
+            Err(QueryError::Validation(ValidationFail::QueryFailed(
+                QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
+            ))) => return Ok(()),
+            Err(_) => {}
+        }
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "timed out waiting for {context} after {NON_EMPTY_BLOCK_TIMEOUT:?}"
+            ));
+        }
+        sleep(QUERY_RETRY_DELAY);
+    }
+}
+
 /// Ensure noisy tracing is silenced before any network is spawned.
 fn install_quiet_tracing() {
     static QUIET_TRACE: OnceLock<()> = OnceLock::new();
@@ -293,14 +341,20 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() ->
     {
         return Ok(());
     }
+    wait_for_asset_definition_owner(
+        &test_client,
+        &asset_definition_id,
+        &account_id,
+        "asset definition not found after registration",
+        "unexpected asset definition owner after registration",
+        "asset definition registration",
+    )?;
 
     let metadata = iroha::data_model::metadata::Metadata::default();
     //When
     let quantity = numeric!(200);
-    let mint = Mint::asset_numeric(
-        quantity.clone(),
-        AssetId::new(asset_definition_id.clone(), account_id.clone()),
-    );
+    let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
+    let mint = Mint::asset_numeric(quantity.clone(), asset_id.clone());
     let instructions: [InstructionBox; 1] = [mint.into()];
     let tx = test_client.build_transaction(instructions, metadata);
     if submit_tx_or_skip(&test_client, &tx, "mint asset")?.is_none() {
@@ -315,17 +369,7 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() ->
         return Ok(());
     }
 
-    let asset = retry_query(|| {
-        test_client
-            .query(FindAssets::new())
-            .execute_all()
-            .map_err(eyre::Report::new)
-    })?
-    .into_iter()
-    .filter(|asset| asset.id().account() == &account_id)
-    .find(|asset| *asset.id().definition() == asset_definition_id)
-    .ok_or_else(|| eyre::eyre!("expected asset to exist"))?;
-    assert_eq!(*asset.value(), quantity);
+    wait_for_asset_value(&test_client, &asset_id, &quantity, "mint asset")?;
     Ok(())
 }
 
@@ -349,14 +393,20 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
     {
         return Ok(());
     }
+    wait_for_asset_definition_owner(
+        &test_client,
+        &asset_definition_id,
+        &account_id,
+        "asset definition not found after registration",
+        "unexpected asset definition owner after registration",
+        "asset definition registration",
+    )?;
 
     let metadata = iroha::data_model::metadata::Metadata::default();
     // When
     let quantity = Numeric::new(2_u128.pow(65), 0);
-    let mint = Mint::asset_numeric(
-        quantity.clone(),
-        AssetId::new(asset_definition_id.clone(), account_id.clone()),
-    );
+    let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
+    let mint = Mint::asset_numeric(quantity.clone(), asset_id.clone());
     let instructions: [InstructionBox; 1] = [mint.into()];
     let tx = test_client.build_transaction(instructions, metadata);
     if submit_tx_or_skip(&test_client, &tx, "mint large asset")?.is_none() {
@@ -371,17 +421,7 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
         return Ok(());
     }
 
-    let asset = retry_query(|| {
-        test_client
-            .query(FindAssets::new())
-            .execute_all()
-            .map_err(eyre::Report::new)
-    })?
-    .into_iter()
-    .filter(|asset| asset.id().account() == &account_id)
-    .find(|asset| *asset.id().definition() == asset_definition_id)
-    .ok_or_else(|| eyre!("expected asset to exist"))?;
-    assert_eq!(*asset.value(), quantity);
+    wait_for_asset_value(&test_client, &asset_id, &quantity, "mint large asset")?;
     Ok(())
 }
 
@@ -414,15 +454,27 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
     {
         return Ok(());
     }
+    wait_for_asset_definition_owner(
+        &test_client,
+        &asset_definition_id,
+        &account_id,
+        "asset definition not found after registration",
+        "unexpected asset definition owner after registration",
+        "asset definition registration",
+    )
+    .map_err(|err| {
+        err.wrap_err(format!(
+            "asset definition registration wait; torii={torii}, env_dir={}",
+            env_dir.display()
+        ))
+    })?;
 
     let metadata = iroha::data_model::metadata::Metadata::default();
 
     //When
     let quantity = numeric!(123.456);
-    let mint = Mint::asset_numeric(
-        quantity.clone(),
-        AssetId::new(asset_definition_id.clone(), account_id.clone()),
-    );
+    let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
+    let mint = Mint::asset_numeric(quantity.clone(), asset_id.clone());
     let instructions: [InstructionBox; 1] = [mint.into()];
     let tx = test_client.build_transaction(instructions, metadata);
     if submit_tx_or_skip(&test_client, &tx, "mint decimal asset")
@@ -437,24 +489,11 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
         return Ok(());
     }
 
-    let asset = retry_query(|| {
-        test_client
-            .query(FindAssets::new())
-            .execute_all()
-            .map_err(eyre::Report::new)
-    })?
-    .into_iter()
-    .filter(|asset| asset.id().account() == &account_id)
-    .find(|asset| *asset.id().definition() == asset_definition_id)
-    .ok_or_else(|| eyre!("expected asset to exist"))?;
-    assert_eq!(*asset.value(), quantity);
+    wait_for_asset_value(&test_client, &asset_id, &quantity, "mint decimal asset")?;
 
     // Add some fractional part
     let quantity2 = numeric!(0.55);
-    let mint = Mint::asset_numeric(
-        quantity2.clone(),
-        AssetId::new(asset_definition_id.clone(), account_id.clone()),
-    );
+    let mint = Mint::asset_numeric(quantity2.clone(), asset_id.clone());
     // and check that it is added without errors
     let sum = quantity
         .checked_add(quantity2)
@@ -471,17 +510,7 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
         return Ok(());
     }
 
-    let asset = retry_query(|| {
-        test_client
-            .query(FindAssets::new())
-            .execute_all()
-            .map_err(eyre::Report::new)
-    })?
-    .into_iter()
-    .filter(|asset| asset.id().account() == &account_id)
-    .find(|asset| *asset.id().definition() == asset_definition_id)
-    .unwrap();
-    assert_eq!(*asset.value(), sum);
+    wait_for_asset_value(&test_client, &asset_id, &sum, "mint fractional asset")?;
 
     Ok(())
 }
@@ -637,13 +666,6 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             return Ok(());
         }
 
-        let assert_purged = |asset_id: AssetId| {
-            let exists = fetch_asset(&asset_id).is_some();
-            assert!(
-                !exists,
-                "query should fail, as zero assets are purged from accounts"
-            );
-        };
         let seller_eth: AssetId = format!("eth#crypto#{}", &seller_id)
             .parse()
             .expect("should be valid");
@@ -651,10 +673,10 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             .parse()
             .expect("should be valid");
         // after: seller has $ETH200 and buyer has $BTC10
-        assert_purged(seller_btc);
-        assert_purged(buyer_eth);
-        assert_balance(seller_eth, numeric!(200));
-        assert_balance(buyer_btc, numeric!(10));
+        wait_for_asset_absent(&test_client, &seller_btc, "seller BTC purge")?;
+        wait_for_asset_absent(&test_client, &buyer_eth, "buyer ETH purge")?;
+        wait_for_asset_value(&test_client, &seller_eth, &numeric!(200), "seller ETH balance")?;
+        wait_for_asset_value(&test_client, &buyer_btc, &numeric!(10), "buyer BTC balance")?;
 
         Ok(())
     })();
@@ -919,8 +941,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         if sync_after("integer mint")?.is_none() {
             return Ok(());
         }
-        let after_mint = get_value(&asset_id)?;
-        assert_eq!(after_mint, expected_after_mint);
+        wait_for_asset_value(&test_client, &asset_id, &expected_after_mint, "integer mint")?;
 
         if submit_or_tolerate_timeout(
             &test_client,
@@ -934,8 +955,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         if sync_after("integer burn")?.is_none() {
             return Ok(());
         }
-        let after_burn = get_value(&asset_id)?;
-        assert_eq!(after_burn, before);
+        wait_for_asset_value(&test_client, &asset_id, &before, "integer burn")?;
 
         if submit_or_tolerate_timeout(
             &test_client,
