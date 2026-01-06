@@ -4025,6 +4025,8 @@ pub struct Torii {
     pub api_allow_cidrs: Vec<String>,
     /// Optional Torii base URLs used to fetch peer telemetry metadata.
     pub peer_telemetry_urls: Vec<Url>,
+    /// Peer telemetry geo lookup configuration.
+    pub peer_geo: ToriiPeerGeo,
     /// Require canonical IH58/compressed account literals at Torii boundaries.
     pub strict_addresses: bool,
     /// Emit filter-match debug traces (developer diagnostics only).
@@ -4316,6 +4318,24 @@ impl OperatorWebAuthnAlgorithm {
         match self {
             Self::Es256 => "es256",
             Self::Ed25519 => "ed25519",
+        }
+    }
+}
+
+/// Peer telemetry geo lookup configuration.
+#[derive(Debug, Clone)]
+pub struct ToriiPeerGeo {
+    /// Enable geo lookups for peer telemetry.
+    pub enabled: bool,
+    /// Optional geo endpoint (ip-api compatible).
+    pub endpoint: Option<Url>,
+}
+
+impl Default for ToriiPeerGeo {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::torii::peer_geo::ENABLED,
+            endpoint: defaults::torii::peer_geo::endpoint(),
         }
     }
 }

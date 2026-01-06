@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeSet, VecDeque},
     future::Future,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
@@ -22,8 +23,10 @@ use tokio::{
 use tracing::{Instrument, info_span};
 use url::Url;
 
-use super::{GeoLocation, ToriiUrl};
+use super::{GeoLocation, GeoLookupConfig, ToriiUrl};
 
+const DEFAULT_GEO_ENDPOINT: &str = "http://ip-api.com/json";
+const GEO_QUERY_FIELDS: &str = "status,message,lat,lon,country,city";
 const GET_STATUS_INTERVAL: Duration = Duration::from_secs(5);
 const GET_STATUS_DISCONNECT_TIMEOUT: Duration = Duration::from_mins(1);
 const GET_PEERS_INTERVAL: Duration = Duration::from_mins(1);
@@ -52,7 +55,10 @@ pub enum Update {
     Peers(BTreeSet<PublicKey>),
 }
 
-pub fn run(torii_url: ToriiUrl) -> (mpsc::Receiver<Update>, impl Future<Output = ()> + Sized) {
+pub fn run(
+    torii_url: ToriiUrl,
+    geo_config: GeoLookupConfig,
+) -> (mpsc::Receiver<Update>, impl Future<Output = ()> + Sized) {
     let (tx, rx) = mpsc::channel(128);
     let url = Arc::new(torii_url);
 
@@ -62,22 +68,44 @@ pub fn run(torii_url: ToriiUrl) -> (mpsc::Receiver<Update>, impl Future<Output =
         async move {
             let mut set = JoinSet::new();
 
-            let geo_span_url = Arc::clone(&url);
-            set.spawn({
-                let tx = tx.clone();
-                let url = Arc::clone(&geo_span_url);
-                async move {
-                    let geo = match collect_geo(&url).await {
-                        Ok(geo) => geo,
-                        Err(err) => {
-                            iroha_logger::error!(?err, "failed to collect geo data");
-                            return;
-                        }
-                    };
-                    let _: Result<_, _> = tx.send(Update::Geo(geo)).await;
-                }
-                .instrument(info_span!("peer_geo", torii_url = %geo_span_url.as_ref()))
-            });
+            if geo_config.enabled {
+                let geo_span_url = Arc::clone(&url);
+                let geo_config = geo_config.clone();
+                set.spawn({
+                    let tx = tx.clone();
+                    let url = Arc::clone(&geo_span_url);
+                    async move {
+                        let geo = match collect_geo(&url, geo_config).await {
+                            Ok(geo) => geo,
+                            Err(GeoLookupError::Disabled) => {
+                                iroha_logger::debug!("geo lookup disabled for peer telemetry");
+                                return;
+                            }
+                            Err(GeoLookupError::NonPublicHost { host }) => {
+                                iroha_logger::debug!(
+                                    %host,
+                                    "skipping geo lookup for non-public torii host"
+                                );
+                                return;
+                            }
+                            Err(GeoLookupError::MissingHost) => {
+                                iroha_logger::warn!(
+                                    "Torii URL does not have host; skipping geo lookup"
+                                );
+                                return;
+                            }
+                            Err(err) => {
+                                iroha_logger::error!(?err, "failed to collect geo data");
+                                return;
+                            }
+                        };
+                        let _: Result<_, _> = tx.send(Update::Geo(geo)).await;
+                    }
+                    .instrument(info_span!("peer_geo", torii_url = %geo_span_url.as_ref()))
+                });
+            } else {
+                iroha_logger::debug!("peer geo lookups disabled by configuration");
+            }
 
             let monitor_span_url = Arc::clone(&url);
             set.spawn(
@@ -140,6 +168,20 @@ enum RequestError {
     InvalidResponse(String),
 }
 
+#[derive(thiserror::Error, Debug)]
+enum GeoLookupError {
+    #[error("geo lookup disabled")]
+    Disabled,
+    #[error("Torii URL does not have host")]
+    MissingHost,
+    #[error("Torii host is not public: {host}")]
+    NonPublicHost { host: String },
+    #[error("geo endpoint is not a base URL: {endpoint}")]
+    InvalidEndpoint { endpoint: String },
+    #[error(transparent)]
+    Request(#[from] RequestError),
+}
+
 fn decode_ip_api_response(bytes: &[u8]) -> Result<IpApiComResponse, RequestError> {
     let value: Value =
         json::from_slice(bytes).map_err(|err| RequestError::InvalidResponse(err.to_string()))?;
@@ -200,9 +242,15 @@ fn decode_ip_api_response(bytes: &[u8]) -> Result<IpApiComResponse, RequestError
     }
 }
 
-async fn collect_geo(torii_url: &ToriiUrl) -> eyre::Result<GeoLocation> {
+async fn collect_geo(
+    torii_url: &ToriiUrl,
+    geo_config: GeoLookupConfig,
+) -> Result<GeoLocation, GeoLookupError> {
+    if !geo_config.enabled {
+        return Err(GeoLookupError::Disabled);
+    }
     let client = Client::new();
-    let url = construct_ip_api_com_query(torii_url)?;
+    let url = construct_geo_query(torii_url, geo_config.endpoint.as_ref())?;
 
     let do_request = || async {
         let bytes = client.get(url.clone()).send().await?.bytes().await?;
@@ -222,24 +270,116 @@ async fn collect_geo(torii_url: &ToriiUrl) -> eyre::Result<GeoLocation> {
             }
             Err(RequestError::FailResponse { message }) => {
                 iroha_logger::error!(%message, "failed to fetch geo (service error)");
-                return Err(eyre!(message));
+                return Err(GeoLookupError::Request(RequestError::FailResponse {
+                    message,
+                }));
             }
             Err(RequestError::InvalidResponse(message)) => {
                 iroha_logger::error!(%message, "failed to parse geo response");
-                return Err(eyre!(message));
+                return Err(GeoLookupError::Request(RequestError::InvalidResponse(
+                    message,
+                )));
             }
         }
     }
 }
 
-fn construct_ip_api_com_query(torii_url: &ToriiUrl) -> Result<Url, eyre::Error> {
+fn is_public_geo_host(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return false;
+    }
+    match host.parse::<IpAddr>() {
+        Ok(ip) => is_public_ip(ip),
+        Err(_) => true,
+    }
+}
+
+fn is_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(addr) => is_public_ipv4(addr),
+        IpAddr::V6(addr) => is_public_ipv6(addr),
+    }
+}
+
+fn is_public_ipv4(addr: Ipv4Addr) -> bool {
+    if addr.is_private()
+        || addr.is_loopback()
+        || addr.is_link_local()
+        || addr.is_multicast()
+        || addr.is_broadcast()
+        || addr.is_unspecified()
+    {
+        return false;
+    }
+    let octets = addr.octets();
+    if octets[0] == 100 && (64..=127).contains(&octets[1]) {
+        return false;
+    }
+    if octets[0] == 198 && (18..=19).contains(&octets[1]) {
+        return false;
+    }
+    if octets[0] == 192 && octets[1] == 0 && octets[2] == 0 {
+        return false;
+    }
+    if (octets[0] == 192 && octets[1] == 0 && octets[2] == 2)
+        || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100)
+        || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
+    {
+        return false;
+    }
+    if octets[0] >= 240 {
+        return false;
+    }
+    true
+}
+
+fn is_public_ipv6(addr: Ipv6Addr) -> bool {
+    if addr.is_loopback()
+        || addr.is_unspecified()
+        || addr.is_multicast()
+        || addr.is_unique_local()
+        || addr.is_unicast_link_local()
+    {
+        return false;
+    }
+    let seg0 = addr.segments()[0];
+    if (seg0 & 0xffc0) == 0xfec0 {
+        return false;
+    }
+    let segments = addr.segments();
+    if segments[0] == 0x2001 && segments[1] == 0x0db8 {
+        return false;
+    }
+    true
+}
+
+fn construct_geo_query(
+    torii_url: &ToriiUrl,
+    endpoint: Option<&Url>,
+) -> Result<Url, GeoLookupError> {
     let Some(host) = torii_url.host_str() else {
-        return Err(eyre!("Torii URL does not have host"));
+        return Err(GeoLookupError::MissingHost);
     };
-    let mut url = Url::parse("http://ip-api.com/json").expect("valid base URL");
-    url.path_segments_mut().expect("base path").push(host);
+    if !is_public_geo_host(host) {
+        return Err(GeoLookupError::NonPublicHost {
+            host: host.to_owned(),
+        });
+    }
+    let mut url = match endpoint {
+        Some(endpoint) => endpoint.clone(),
+        None => Url::parse(DEFAULT_GEO_ENDPOINT).expect("default geo endpoint is valid"),
+    };
+    let endpoint_label = url.to_string();
+    {
+        let mut segments =
+            url.path_segments_mut()
+                .map_err(|_| GeoLookupError::InvalidEndpoint {
+                    endpoint: endpoint_label,
+                })?;
+        segments.push(host);
+    }
     url.query_pairs_mut()
-        .append_pair("fields", "status,message,lat,lon,country,city");
+        .append_pair("fields", GEO_QUERY_FIELDS);
     Ok(url)
 }
 
@@ -485,6 +625,68 @@ mod tests {
                 assert_eq!(message, "invalid query");
             }
             other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn geo_host_publicity_checks() {
+        assert!(!is_public_geo_host("127.0.0.1"));
+        assert!(!is_public_geo_host("10.0.0.1"));
+        assert!(!is_public_geo_host("::1"));
+        assert!(!is_public_geo_host("localhost"));
+        assert!(!is_public_geo_host("192.0.2.1"));
+        assert!(!is_public_geo_host("2001:db8::1"));
+        assert!(is_public_geo_host("8.8.8.8"));
+        assert!(is_public_geo_host("example.com"));
+    }
+
+    #[test]
+    fn construct_geo_query_uses_default_endpoint() {
+        let torii_url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
+        let url = construct_geo_query(&torii_url, None).expect("geo query should build");
+        assert_eq!(
+            url.as_str(),
+            "http://ip-api.com/json/example.com?fields=status,message,lat,lon,country,city"
+        );
+    }
+
+    #[test]
+    fn construct_geo_query_uses_custom_endpoint() {
+        let torii_url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
+        let endpoint = Url::parse("https://geo.internal/api").expect("valid endpoint");
+        let url = construct_geo_query(&torii_url, Some(&endpoint)).expect("geo query should build");
+        assert_eq!(
+            url.as_str(),
+            "https://geo.internal/api/example.com?fields=status,message,lat,lon,country,city"
+        );
+    }
+
+    #[tokio::test]
+    async fn collect_geo_respects_disabled_config() {
+        let url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
+        let err = collect_geo(&url, GeoLookupConfig::disabled())
+            .await
+            .expect_err("disabled config should short-circuit");
+        assert!(matches!(err, GeoLookupError::Disabled));
+    }
+
+    #[tokio::test]
+    async fn collect_geo_rejects_non_public_hosts() {
+        let url: ToriiUrl = "http://127.0.0.1:8080".parse().expect("valid torii url");
+        let err = collect_geo(
+            &url,
+            GeoLookupConfig {
+                enabled: true,
+                endpoint: None,
+            },
+        )
+        .await
+        .expect_err("non-public host should be rejected");
+        match err {
+            GeoLookupError::NonPublicHost { host } => {
+                assert_eq!(host, "127.0.0.1");
+            }
+            other => panic!("unexpected error: {other:?}"),
         }
     }
 }

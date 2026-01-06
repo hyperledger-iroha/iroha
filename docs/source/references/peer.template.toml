@@ -103,6 +103,10 @@
 # query_store_capacity_per_user = 128
 # ws_message_timeout_ms = 10_000
 
+[torii.peer_geo]
+# enabled = false
+# endpoint = "http://ip-api.com/json" # Optional ip-api compatible endpoint for peer geo lookups.
+
 [torii.operator_auth]
 # enabled = false
 # require_mtls = false

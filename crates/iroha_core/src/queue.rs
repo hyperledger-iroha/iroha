@@ -1789,7 +1789,15 @@ impl Queue {
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
         loop {
-            let hash = self.tx_hashes.pop()?;
+            let hash = match self.tx_hashes.pop() {
+                Some(hash) => hash,
+                None => {
+                    if self.resync_hash_queue_if_needed(state_view) {
+                        continue;
+                    }
+                    return None;
+                }
+            };
             if self.removed_hashes.remove(&hash).is_some() {
                 continue;
             }
@@ -1856,9 +1864,55 @@ impl Queue {
         }
     }
 
+    /// Rebuild the hash queue when it is empty but transactions remain in the map.
+    fn resync_hash_queue_if_needed(&self, state_view: &StateView) -> bool {
+        if !self.tx_hashes.is_empty() || self.txs.is_empty() {
+            return false;
+        }
+        #[cfg(feature = "telemetry")]
+        let backpressure_telemetry: Option<&StateTelemetry> = Some(state_view.telemetry);
+        #[cfg(not(feature = "telemetry"))]
+        let backpressure_telemetry: Option<&StateTelemetry> = None;
+
+        let _guard = self.push_remove_lock.lock();
+        if !self.tx_hashes.is_empty() || self.txs.is_empty() {
+            return false;
+        }
+
+        let total = self.txs.len();
+        // Sort by hash to keep the recovery order deterministic across peers.
+        let mut hashes: Vec<SignedTxHash> = self.txs.iter().map(|entry| *entry.key()).collect();
+        hashes.sort();
+
+        let mut inserted = 0usize;
+        for hash in hashes {
+            if self.tx_hashes.push(hash).is_err() {
+                warn!(
+                    queued = self.tx_hashes.len(),
+                    total,
+                    "queue hash resync reached capacity before re-enqueuing all transactions"
+                );
+                break;
+            }
+            self.removed_hashes.remove(&hash);
+            inserted = inserted.saturating_add(1);
+        }
+
+        if inserted > 0 {
+            self.publish_backpressure_state(self.tx_hashes.len(), backpressure_telemetry);
+            warn!(
+                queued = self.tx_hashes.len(),
+                total, "queue hash index was empty; rebuilt from queued transactions"
+            );
+            return true;
+        }
+
+        false
+    }
+
     /// Return the number of transactions in the queue.
     pub fn tx_len(&self) -> usize {
-        self.txs.len()
+        self.tx_hashes.len()
     }
 
     /// Gets transactions till they fill whole block or till the end of queue.
@@ -5039,6 +5093,32 @@ pub mod tests {
 
         rx.changed().await.expect("backpressure update to healthy");
         assert!(!rx.borrow().is_saturated());
+    }
+
+    #[tokio::test]
+    async fn resync_rebuilds_hash_queue_when_empty() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        for _ in 0..3 {
+            queue
+                .push(accepted_tx_by_someone(&time_source), state.view())
+                .expect("push succeeds");
+        }
+
+        while queue.tx_hashes.pop().is_some() {}
+        assert_eq!(queue.tx_len(), 0, "hash queue should be empty");
+        assert_eq!(queue.txs.len(), 3, "tx map retains queued entries");
+
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block(&state.view(), nonzero!(2_usize), &mut guards);
+        assert_eq!(guards.len(), 2, "resync should repopulate hashes");
+        drop(guards);
+
+        assert_eq!(queue.tx_len(), 1, "remaining queue size should be tracked");
     }
 
     #[tokio::test]

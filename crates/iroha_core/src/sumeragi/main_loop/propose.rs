@@ -169,10 +169,9 @@ impl Actor {
         topology: &mut super::network_topology::Topology,
         leader_index: usize,
         local_validator_index: u32,
-        now: Instant,
-    ) -> Result<()> {
+        _now: Instant,
+    ) -> Result<bool> {
         super::status::set_leader_index(leader_index as u64);
-        self.phase_tracker.on_view_change(height, view, now);
         let required_for_commit = topology.min_votes_for_commit();
         debug!(
             height,
@@ -189,14 +188,14 @@ impl Actor {
                     height,
                     view, "view exceeds u32::MAX; skipping proposal assembly"
                 );
-                return Ok(());
+                return Ok(false);
             }
             Err(ViewConversionError::USizeOverflow) => {
                 warn!(
                     height,
                     view, "view exceeds usize::MAX; skipping proposal assembly"
                 );
-                return Ok(());
+                return Ok(false);
             }
         };
         self.init_collector_plan(topology, proposal_height, view);
@@ -215,7 +214,7 @@ impl Actor {
                 highest_hash = %highest_qc.subject_block_hash,
                 "deferring proposal assembly: parent block not available locally"
             );
-            return Ok(());
+            return Ok(false);
         }
 
         let queue_len = self.queue.tx_len();
@@ -327,7 +326,7 @@ impl Actor {
                 queue_len = queue_len_after_pop,
                 "deferring empty proposal while transactions are queued"
             );
-            return Ok(());
+            return Ok(false);
         }
 
         let da_enabled = self.runtime_da_enabled();
@@ -925,7 +924,7 @@ impl Actor {
             }
         }
 
-        Ok(())
+        Ok(true)
     }
 
     /// Enforce DA proof/commitment caps before embedding them into a block.
@@ -1114,6 +1113,13 @@ impl Actor {
         }
         let current_view = self.phase_tracker.current_view(tracked_height);
         let bootstrap_view = current_view.is_none_or(|view| view == 0);
+        if let Some(view) = current_view {
+            // Avoid proposing stale views by pruning NEW_VIEW entries below the local view.
+            self.subsystems
+                .propose
+                .new_view_tracker
+                .drop_below_view(tracked_height, view);
+        }
         if pending_queue_len > 0
             && self
                 .subsystems
@@ -1754,7 +1760,7 @@ impl Actor {
             }
         }
 
-        if let Err(err) = self.assemble_and_broadcast_proposal(
+        let assembled = match self.assemble_and_broadcast_proposal(
             height,
             view_idx,
             highest_qc,
@@ -1763,7 +1769,14 @@ impl Actor {
             local_idx_val,
             now,
         ) {
-            warn!(?err, height, view = view_idx, "failed to assemble proposal");
+            Ok(assembled) => assembled,
+            Err(err) => {
+                warn!(?err, height, view = view_idx, "failed to assemble proposal");
+                return false;
+            }
+        };
+
+        if !assembled {
             return false;
         }
 
