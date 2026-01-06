@@ -340,12 +340,30 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() ->
         return Ok(());
     };
     let test_client = network.client();
+    let mut last_non_empty_height =
+        match status_or_skip(get_status_with_retry(&test_client), "initial status")? {
+            Some(status) => status.blocks_non_empty,
+            None => return Ok(()),
+        };
 
     if submit_or_tolerate_timeout(&test_client, create_asset, "register asset definition")?
         .is_none()
     {
         return Ok(());
     }
+    last_non_empty_height = match status_or_skip(
+        sync_after_submission(
+            &network,
+            &rt,
+            &test_client,
+            last_non_empty_height,
+            "register asset definition",
+        ),
+        "register asset definition",
+    )? {
+        Some(status) => status.blocks_non_empty,
+        None => return Ok(()),
+    };
     wait_for_asset_definition_owner(
         &test_client,
         &asset_definition_id,
@@ -365,14 +383,19 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() ->
     if submit_tx_or_skip(&test_client, &tx, "mint asset")?.is_none() {
         return Ok(());
     }
-    if sandbox::handle_result(
-        rt.block_on(async { network.ensure_blocks(2).await }),
-        "wait for block with minted asset",
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
+    last_non_empty_height = match status_or_skip(
+        sync_after_submission(
+            &network,
+            &rt,
+            &test_client,
+            last_non_empty_height,
+            "mint asset",
+        ),
+        "mint asset",
+    )? {
+        Some(status) => status.blocks_non_empty,
+        None => return Ok(()),
+    };
 
     wait_for_asset_value(&test_client, &asset_id, &quantity, "mint asset")?;
     Ok(())
@@ -393,12 +416,30 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
         return Ok(());
     };
     let test_client = network.client();
+    let mut last_non_empty_height =
+        match status_or_skip(get_status_with_retry(&test_client), "initial status")? {
+            Some(status) => status.blocks_non_empty,
+            None => return Ok(()),
+        };
 
     if submit_or_tolerate_timeout(&test_client, create_asset, "register asset definition")?
         .is_none()
     {
         return Ok(());
     }
+    last_non_empty_height = match status_or_skip(
+        sync_after_submission(
+            &network,
+            &rt,
+            &test_client,
+            last_non_empty_height,
+            "register asset definition",
+        ),
+        "register asset definition",
+    )? {
+        Some(status) => status.blocks_non_empty,
+        None => return Ok(()),
+    };
     wait_for_asset_definition_owner(
         &test_client,
         &asset_definition_id,
@@ -418,14 +459,19 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
     if submit_tx_or_skip(&test_client, &tx, "mint large asset")?.is_none() {
         return Ok(());
     }
-    if sandbox::handle_result(
-        rt.block_on(async { network.ensure_blocks(2).await }),
-        "wait for block with large minted asset",
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
+    last_non_empty_height = match status_or_skip(
+        sync_after_submission(
+            &network,
+            &rt,
+            &test_client,
+            last_non_empty_height,
+            "mint large asset",
+        ),
+        "mint large asset",
+    )? {
+        Some(status) => status.blocks_non_empty,
+        None => return Ok(()),
+    };
 
     wait_for_asset_value(&test_client, &asset_id, &quantity, "mint large asset")?;
     Ok(())
@@ -443,12 +489,17 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
 
     let builder = quiet_network_builder();
 
-    let Some((network, _rt)) = start_test_network_with_builder(builder) else {
+    let Some((network, rt)) = start_test_network_with_builder(builder) else {
         return Ok(());
     };
     let env_dir = network.env_dir().to_path_buf();
     let test_client = network.client();
     let torii = test_client.torii_url.clone();
+    let mut last_non_empty_height =
+        match status_or_skip(get_status_with_retry(&test_client), "initial status")? {
+            Some(status) => status.blocks_non_empty,
+            None => return Ok(()),
+        };
 
     if submit_or_skip(&test_client, create_asset, "register asset definition")
         .map_err(|err| {
@@ -461,6 +512,19 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
     {
         return Ok(());
     }
+    last_non_empty_height = match status_or_skip(
+        sync_after_submission(
+            &network,
+            &rt,
+            &test_client,
+            last_non_empty_height,
+            "register asset definition",
+        ),
+        "register asset definition",
+    )? {
+        Some(status) => status.blocks_non_empty,
+        None => return Ok(()),
+    };
     wait_for_asset_definition_owner(
         &test_client,
         &asset_definition_id,
@@ -495,6 +559,19 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
     {
         return Ok(());
     }
+    last_non_empty_height = match status_or_skip(
+        sync_after_submission(
+            &network,
+            &rt,
+            &test_client,
+            last_non_empty_height,
+            "mint decimal asset",
+        ),
+        "mint decimal asset",
+    )? {
+        Some(status) => status.blocks_non_empty,
+        None => return Ok(()),
+    };
 
     wait_for_asset_value(&test_client, &asset_id, &quantity, "mint decimal asset")?;
 
@@ -516,6 +593,19 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
     {
         return Ok(());
     }
+    last_non_empty_height = match status_or_skip(
+        sync_after_submission(
+            &network,
+            &rt,
+            &test_client,
+            last_non_empty_height,
+            "mint fractional asset",
+        ),
+        "mint fractional asset",
+    )? {
+        Some(status) => status.blocks_non_empty,
+        None => return Ok(()),
+    };
 
     wait_for_asset_value(&test_client, &asset_id, &sum, "mint fractional asset")?;
 

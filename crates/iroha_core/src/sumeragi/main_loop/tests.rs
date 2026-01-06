@@ -349,6 +349,27 @@ fn sign_vote_for_view(
     vote.bls_sig = sig.payload().to_vec();
 }
 
+fn sign_vote_for_canonical_signer(
+    vote: &mut crate::sumeragi::consensus::Vote,
+    chain: &ChainId,
+    topology: &super::network_topology::Topology,
+    keypairs: &[KeyPair],
+) {
+    let signature_topology = super::topology_for_view(
+        topology,
+        vote.height,
+        vote.view,
+        super::PERMISSIONED_TAG,
+        None,
+    );
+    let canonical = ValidatorIndex::try_from(vote.signer).expect("signer fits u32");
+    let view_idx =
+        super::view_index_for_canonical_signer(canonical, &signature_topology, topology)
+            .expect("canonical signer maps to view index");
+    vote.signer = u32::try_from(view_idx).expect("view index fits u32");
+    sign_vote_for_view(vote, chain, topology, keypairs);
+}
+
 fn default_missing_block_signer_fallback_attempts() -> u32 {
     iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS
 }
@@ -1262,6 +1283,8 @@ async fn test_actor_harness_with_config_and_height(
         for peer in &other_peers {
             let _ = vec.push(peer.id().clone());
         }
+        let params = block.parameters.get_mut();
+        params.sumeragi.da_enabled = consensus_cfg.da_enabled;
         block.commit();
     }
     let kura = Kura::blank_kura_for_testing();
@@ -10594,7 +10617,8 @@ fn active_topology_falls_back_to_world_peers() {
     let view = state.view();
 
     let roster = derive_active_topology(&view, &trusted, &me_id);
-    let expected = vec![me_id, other_id];
+    let mut expected = vec![me_id, other_id];
+    expected.sort();
     assert_eq!(roster, expected);
 }
 
@@ -13203,7 +13227,8 @@ fn active_topology_preserves_quorum_with_incomplete_pop_map() {
     let view = state.view();
 
     let roster = derive_active_topology(&view, &trusted, &me_id);
-    let expected = vec![me_id, other_id];
+    let mut expected = vec![me_id, other_id];
+    expected.sort();
     assert_eq!(
         roster, expected,
         "missing PoP entries should not shrink the roster below commit quorum"
@@ -15682,6 +15707,7 @@ fn record_view_change_cause_helper_updates_status() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn trigger_view_change_with_cause_uses_current_view_for_stale_input() {
+    let _guard = super::status::view_change_proof_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let height = 1;
@@ -15730,6 +15756,7 @@ async fn trigger_view_change_updates_view_change_counters_and_index() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn trigger_view_change_with_cause_ignores_stale_height() {
+    let _guard = super::status::view_change_proof_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let height = 2u64;
@@ -15751,6 +15778,7 @@ async fn trigger_view_change_with_cause_ignores_stale_height() {
 async fn trigger_view_change_uses_commit_certificate_roster_for_new_view_vote() {
     use crate::sumeragi::status;
 
+    let _guard = status::view_change_proof_test_guard();
     status::reset_commit_certs_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -15853,6 +15881,7 @@ async fn trigger_view_change_uses_commit_certificate_roster_for_new_view_vote() 
 async fn trigger_view_change_skips_new_view_vote_when_roster_empty() {
     use crate::sumeragi::status;
 
+    let _guard = status::view_change_proof_test_guard();
     status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -15884,6 +15913,7 @@ async fn trigger_view_change_skips_new_view_vote_when_roster_empty() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn record_phase_sample_skips_stale_height_and_view() {
+    let _guard = super::status::view_change_proof_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let height = 3u64;
@@ -16444,7 +16474,7 @@ fn rebuild_qc_from_votes_forms_qc_when_cache_missing() {
             signer,
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(&mut vote, &chain, &topology, &keypairs);
+        sign_vote_for_canonical_signer(&mut vote, &chain, &topology, &keypairs);
         votes.push(vote);
     }
 
@@ -16606,7 +16636,7 @@ fn rebuild_qc_from_votes_ignores_other_phase_votes() {
             signer,
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(&mut vote, &chain, &topology, &keypairs);
+        sign_vote_for_canonical_signer(&mut vote, &chain, &topology, &keypairs);
         votes.push(vote);
     }
 
@@ -21522,7 +21552,7 @@ fn validate_qc_against_votes_requires_quorum() {
             signer,
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(&mut vote, &chain, &topology, &keypairs);
+        sign_vote_for_canonical_signer(&mut vote, &chain, &topology, &keypairs);
         vote_log.insert(
             (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
             vote,
@@ -21614,7 +21644,7 @@ fn validate_qc_against_votes_rejects_epoch_mismatch() {
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut vote, &chain, &topology, &keypairs);
+    sign_vote_for_canonical_signer(&mut vote, &chain, &topology, &keypairs);
     vote_log.insert(
         (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
         vote,
@@ -21663,7 +21693,7 @@ fn validate_qc_against_votes_rejects_view_mismatch() {
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut vote, &chain, &topology, &keypairs);
+    sign_vote_for_canonical_signer(&mut vote, &chain, &topology, &keypairs);
     vote_log.insert(
         (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
         vote,
@@ -21844,7 +21874,7 @@ fn validate_qc_against_votes_rejects_old_epoch_after_roster_change() {
             signer,
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(&mut vote, &chain, &topology_new, &peer_keys);
+        sign_vote_for_canonical_signer(&mut vote, &chain, &topology_new, &peer_keys);
         vote_log.insert(
             (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
             vote,
@@ -23043,7 +23073,7 @@ fn tally_qc_against_votes_counts_full_roster() {
             signer,
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(&mut vote, &chain, &topology, &peer_keys);
+        sign_vote_for_canonical_signer(&mut vote, &chain, &topology, &peer_keys);
         vote_log.insert(
             (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
             vote,
@@ -23105,7 +23135,7 @@ fn tally_qc_against_votes_rejects_wrong_signature_key() {
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut vote_a, &chain, &topology, &peer_keys);
+    sign_vote_for_canonical_signer(&mut vote_a, &chain, &topology, &peer_keys);
     vote_log.insert(
         (
             vote_a.phase,
@@ -23296,7 +23326,7 @@ fn validate_qc_against_votes_accepts_single_node_quorum() {
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut vote, &chain, &topology, &keypairs);
+    sign_vote_for_canonical_signer(&mut vote, &chain, &topology, &keypairs);
     vote_log.insert(
         (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
         vote,
@@ -23385,7 +23415,7 @@ fn validate_qc_against_votes_accepts_any_quorum_signers() {
             signer,
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(&mut vote, &chain, &topology, &peer_keys);
+        sign_vote_for_canonical_signer(&mut vote, &chain, &topology, &peer_keys);
         vote_log.insert(
             (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
             vote,
@@ -23469,7 +23499,7 @@ fn bitmap_count_matches_min_votes_for_commit() {
             signer,
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(&mut vote, &chain, &topology, &peer_keys);
+        sign_vote_for_canonical_signer(&mut vote, &chain, &topology, &peer_keys);
         vote_log.insert(
             (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
             vote,
@@ -23525,7 +23555,7 @@ fn validate_qc_against_votes_rejects_duplicate_signer_bits() {
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut vote0, &chain, &topology, &keypairs);
+    sign_vote_for_canonical_signer(&mut vote0, &chain, &topology, &keypairs);
     vote_log.insert(
         (
             vote0.phase,
@@ -24000,7 +24030,7 @@ fn validate_qc_against_votes_accepts_full_bitmap_with_all_votes_present() {
             signer,
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(&mut vote, &chain, &topology, &keypairs);
+        sign_vote_for_canonical_signer(&mut vote, &chain, &topology, &keypairs);
         vote_log.insert(
             (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
             vote,
@@ -24055,7 +24085,7 @@ fn validate_qc_against_votes_rejects_invalid_signature() {
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut vote0, &chain, &topology, &peer_keys);
+    sign_vote_for_canonical_signer(&mut vote0, &chain, &topology, &peer_keys);
     vote_log.insert(
         (
             vote0.phase,
@@ -24078,7 +24108,7 @@ fn validate_qc_against_votes_rejects_invalid_signature() {
         signer: 1,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut vote1, &chain, &topology, &peer_keys);
+    sign_vote_for_canonical_signer(&mut vote1, &chain, &topology, &peer_keys);
     vote1.bls_sig[0] ^= 0xFF;
     vote_log.insert(
         (
@@ -24144,9 +24174,15 @@ fn validate_qc_against_votes_rejects_signature_from_wrong_signer_key() {
     };
     let rotated =
         super::topology_for_view(&topology, qc.height, qc.view, super::PERMISSIONED_TAG, None);
+    let canonical = ValidatorIndex::try_from(mismatched_vote.signer).expect("signer fits u32");
+    let view_idx =
+        super::view_index_for_canonical_signer(canonical, &rotated, &topology)
+            .expect("canonical signer maps to view index");
+    let view_idx_usize = usize::try_from(view_idx).expect("view index fits usize");
+    mismatched_vote.signer = u32::try_from(view_idx).expect("view index fits u32");
     let expected_peer = rotated
         .as_ref()
-        .first()
+        .get(view_idx_usize)
         .expect("signer present in rotated topology");
     let wrong_kp = if expected_peer.public_key() == kp0.public_key() {
         &kp1
@@ -24178,7 +24214,7 @@ fn validate_qc_against_votes_rejects_signature_from_wrong_signer_key() {
         signer: 1,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut valid_vote, &chain, &topology, &peer_keys);
+    sign_vote_for_canonical_signer(&mut valid_vote, &chain, &topology, &peer_keys);
     vote_log.insert(
         (
             valid_vote.phase,
@@ -24248,8 +24284,25 @@ fn validate_qc_against_votes_records_invalid_signature_reason_for_mismatched_sig
         signer: 0,
         bls_sig: Vec::new(),
     };
+    let rotated =
+        super::topology_for_view(&topology, qc.height, qc.view, super::PERMISSIONED_TAG, None);
+    let canonical = ValidatorIndex::try_from(mismatched_vote.signer).expect("signer fits u32");
+    let view_idx =
+        super::view_index_for_canonical_signer(canonical, &rotated, &topology)
+            .expect("canonical signer maps to view index");
+    let view_idx_usize = usize::try_from(view_idx).expect("view index fits usize");
+    mismatched_vote.signer = u32::try_from(view_idx).expect("view index fits u32");
+    let expected_peer = rotated
+        .as_ref()
+        .get(view_idx_usize)
+        .expect("signer present in rotated topology");
+    let wrong_kp = if expected_peer.public_key() == kp0.public_key() {
+        &kp1
+    } else {
+        &kp0
+    };
     let bad_preimage = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &mismatched_vote);
-    let bad_sig = Signature::new(kp1.private_key(), &bad_preimage);
+    let bad_sig = Signature::new(wrong_kp.private_key(), &bad_preimage);
     mismatched_vote.bls_sig = bad_sig.payload().to_vec();
     vote_log.insert(
         (
@@ -24273,7 +24326,7 @@ fn validate_qc_against_votes_records_invalid_signature_reason_for_mismatched_sig
         signer: 1,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut valid_vote, &chain, &topology, &peer_keys);
+    sign_vote_for_canonical_signer(&mut valid_vote, &chain, &topology, &peer_keys);
     vote_log.insert(
         (
             valid_vote.phase,
@@ -24365,8 +24418,15 @@ fn validate_qc_against_votes_fuzzes_mismatched_signers_and_tags_telemetry() {
             permutation.swap(0, 1);
         }
         let mut vote_log = BTreeMap::new();
+        let signature_topology =
+            super::topology_for_view(&topology, qc.height, qc.view, super::PERMISSIONED_TAG, None);
         for (signer_idx, key_idx) in permutation.iter().enumerate() {
             let kp = &peer_keys[*key_idx];
+            let canonical =
+                ValidatorIndex::try_from(signer_idx).expect("signer index fits u16");
+            let view_idx =
+                super::view_index_for_canonical_signer(canonical, &signature_topology, &topology)
+                    .expect("canonical signer maps to view index");
             let mut vote = crate::sumeragi::consensus::Vote {
                 phase: crate::sumeragi::consensus::Phase::Commit,
                 block_hash,
@@ -24374,7 +24434,7 @@ fn validate_qc_against_votes_fuzzes_mismatched_signers_and_tags_telemetry() {
                 view: qc.view,
                 epoch: qc.epoch,
                 highest_cert: None,
-                signer: u32::try_from(signer_idx).expect("signer index fits"),
+                signer: u32::try_from(view_idx).expect("view index fits u32"),
                 bls_sig: Vec::new(),
             };
             let preimage = super::vote_preimage(&chain, super::PERMISSIONED_TAG, &vote);
@@ -24530,7 +24590,7 @@ fn validate_qc_against_votes_rejects_subject_mismatch() {
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut vote, &chain, &topology, &keypairs);
+    sign_vote_for_canonical_signer(&mut vote, &chain, &topology, &keypairs);
     vote_log.insert(
         (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
         vote,
@@ -24640,7 +24700,7 @@ fn validate_qc_against_votes_rejects_replayed_roster_with_new_keys() {
             signer,
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(&mut vote, &chain, &old_topology, &keypairs);
+        sign_vote_for_canonical_signer(&mut vote, &chain, &old_topology, &keypairs);
         vote_log.insert(
             (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
             vote,
@@ -24711,7 +24771,7 @@ fn validate_qc_against_votes_accepts_signed_votes() {
             signer,
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(&mut vote, &chain, &topology, &keypairs);
+        sign_vote_for_canonical_signer(&mut vote, &chain, &topology, &keypairs);
         let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
         vote_log.insert(key, vote);
     }
@@ -24752,7 +24812,7 @@ fn validate_qc_against_votes_rotates_topology_for_view() {
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut vote_leader, &chain, &topology, &keypairs);
+    sign_vote_for_canonical_signer(&mut vote_leader, &chain, &topology, &keypairs);
 
     let mut vote_follower = crate::sumeragi::consensus::Vote {
         phase: crate::sumeragi::consensus::Phase::Commit,
@@ -24764,7 +24824,7 @@ fn validate_qc_against_votes_rotates_topology_for_view() {
         signer: 1,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut vote_follower, &chain, &topology, &keypairs);
+    sign_vote_for_canonical_signer(&mut vote_follower, &chain, &topology, &keypairs);
 
     let mut signers_bitmap = vec![0u8; topology.as_ref().len().div_ceil(8)];
     signers_bitmap[0] = 0b11;

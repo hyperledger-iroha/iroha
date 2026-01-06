@@ -11,11 +11,11 @@ use iroha::client::{Client, Status};
 use iroha_test_network::Network;
 use tokio::runtime::Runtime;
 
-// Integration submissions occasionally need more time to commit under heavy load; give
-// the network a bounded window before failing. Keep short by default to avoid long hangs
-// when Torii is unreachable, but allow env overrides for slower hosts.
+// Integration submissions occasionally need more time to commit under DA-enabled consensus;
+// give the network a bounded window before failing. Keep bounded to avoid long hangs when
+// Torii is unreachable, but allow env overrides for slower hosts.
 const STATUS_RETRY_DELAY: Duration = Duration::from_millis(300);
-const STATUS_RETRY_DEFAULT: Duration = Duration::from_secs(5);
+const STATUS_RETRY_DEFAULT: Duration = Duration::from_secs(30);
 
 /// Poll `/status` with a bounded retry budget to tolerate startup jitter.
 ///

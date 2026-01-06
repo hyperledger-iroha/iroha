@@ -261,17 +261,17 @@ async fn collect_statuses(
 
 async fn wait_for_status_responses(network: &Network, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
-    let mut last_error = None;
     loop {
         match collect_statuses(network, STATUS_POLL_TIMEOUT).await {
             Ok(_) => return Ok(()),
-            Err(err) => last_error = Some(format!("{err:?}")),
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "status responses did not converge within {:?}; last_error={last_error:?}",
-                timeout,
-            ));
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    return Err(eyre!(
+                        "status responses did not converge within {:?}; last_error={err:?}",
+                        timeout,
+                    ));
+                }
+            }
         }
         sleep(Duration::from_millis(200)).await;
     }
@@ -284,11 +284,9 @@ async fn wait_for_converged_height(
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
     let mut last_snapshot: Vec<StatusSnapshot> = Vec::new();
-    let mut last_error = None;
     loop {
         match collect_statuses(network, STATUS_POLL_TIMEOUT).await {
             Ok(statuses) => {
-                last_error = None;
                 last_snapshot.clear();
                 last_snapshot.extend(statuses.iter().map(StatusSnapshot::from_status));
                 if statuses.iter().all(|status| status.blocks >= target_height) {
@@ -300,14 +298,21 @@ async fn wait_for_converged_height(
                         return Ok(());
                     }
                 }
+                if Instant::now() >= deadline {
+                    return Err(eyre!(
+                        "heights failed to converge to {target_height} within {:?}: last_snapshot={last_snapshot:?}",
+                        timeout
+                    ));
+                }
             }
-            Err(err) => last_error = Some(format!("{err:?}")),
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "heights failed to converge to {target_height} within {:?}: last_snapshot={last_snapshot:?}, last_error={last_error:?}",
-                timeout
-            ));
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    return Err(eyre!(
+                        "heights failed to converge to {target_height} within {:?}: last_snapshot={last_snapshot:?}, last_error={err:?}",
+                        timeout
+                    ));
+                }
+            }
         }
         sleep(Duration::from_millis(200)).await;
     }

@@ -2,8 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::block::{BlockHeader, BlockPayload, SignedBlock};
+use iroha_data_model::transaction::signed::TransactionEntrypoint;
 use norito::codec::Encode as _;
 
 use crate::sumeragi::{consensus::Proposal, message::ProposalHint};
@@ -201,6 +202,12 @@ pub(super) fn detect_proposal_mismatch(
 pub(super) fn block_payload_bytes(block: &SignedBlock) -> Vec<u8> {
     let mut header = block.header();
     header.result_merkle_root = None;
+    let entry_merkle: MerkleTree<TransactionEntrypoint> = block
+        .transactions_vec()
+        .iter()
+        .map(|tx| tx.hash_as_entrypoint())
+        .collect();
+    header.merkle_root = entry_merkle.root();
     BlockPayload {
         header,
         transactions: block.transactions_vec().clone(),
