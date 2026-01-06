@@ -1,6 +1,9 @@
 # Status
 
 ## Latest Updates
+- Sumeragi/localnet: canonicalized the Sora profile BLS private key to satisfy multihash parsing in profile detection defaults.
+- Tests: `CARGO_TARGET_DIR=target/codex cargo test -p iroha_test_network sora_profile_detection_defaults_parse_with_bls_keys -- --nocapture`.
+- Tests: `CARGO_TARGET_DIR=target/codex IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (passed; warning about unused variable `epoch` in `crates/iroha_core/src/block_sync.rs:393`).
 - Sumeragi penalties/status: seed staking config + escrow assets for censorship slashing tests; add reentrant test guards for view-change/validation-reject counters and commit-history snapshots to avoid cross-test interference.
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core consensus_penalties_apply_censorship_evidence --lib -- --nocapture`.
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core sumeragi::status::tests::view_change_cause --lib -- --nocapture`.

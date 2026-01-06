@@ -390,7 +390,6 @@ impl BlockSynchronizer {
         let view = u64::from(block.header().view_change_index());
 
         if let Some(record) = status::precommit_signers_for(block_hash) {
-            let epoch = record.epoch;
             if record.height != height || record.view != view {
                 iroha_logger::info!(
                     height,
