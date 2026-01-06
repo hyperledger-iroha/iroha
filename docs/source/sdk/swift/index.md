@@ -46,7 +46,7 @@ network.
 
 ### Bridge delivery and platform minimums
 - Toolchain/platform: Swift 5.9+ with iOS 15+ or macOS 12+ for both SPM and CocoaPods.
-- Bridge: `dist/NoritoBridge.xcframework` and `dist/NoritoBridge.artifacts.json` must ship with the app or pod. `ci/check_swift_spm_validation.sh` exercises the manifest with and without the bridge and fails when a required build sees a missing xcframework; `ci/check_swift_pod_bridge.sh` lints the podspec with the bundled bridge so pod consumers stay in parity with SwiftPM binary targets. Both run in `.github/workflows/swift-packaging.yml`.
+- Bridge: `dist/NoritoBridge.xcframework` and `dist/NoritoBridge.artifacts.json` must ship with the app or pod (the manifest records the bridge version plus per-platform SHA-256 hashes). `ci/check_swift_spm_validation.sh` exercises the manifest with and without the bridge and fails when a required build sees a missing xcframework; `ci/check_swift_pod_bridge.sh` lints the podspec with the bundled bridge so pod consumers stay in parity with SwiftPM binary targets. Both run in `.github/workflows/swift-packaging.yml`.
 - Overrides: only allow `NORITO_BRIDGE_*` debug overrides during development; production builds should rely on the signed xcframework baked into the repo or your internal mirror.
 - Policy: the bridge is required by default; set `IROHASWIFT_USE_BRIDGE=optional` to compile
   with the Swift-only fallback or `IROHASWIFT_USE_BRIDGE=0` to disable bridge loading for

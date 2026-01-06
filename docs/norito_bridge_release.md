@@ -39,6 +39,9 @@ artifacts inside an app (Xcode project wiring, ChaChaPoly usage, etc.), see
 
    The script compiles the Rust bridge library for iOS and macOS targets and bundles the
    resulting static libraries under a single XCFramework directory.
+   It also emits `dist/NoritoBridge.artifacts.json`, capturing the bridge version and
+   per-platform SHA-256 hashes (override the version with `NORITO_BRIDGE_VERSION` if
+   needed).
 
 2. Zip the XCFramework for distribution:
 

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { blake2b256 } from "./blake2b.js";
+import { compareUtf16 } from "./ordering.js";
 
 const DEFAULT_ROOT = path.join(os.homedir(), ".iroha", "offline_counters");
 const DEFAULT_FILENAME = "journal.json";
@@ -225,7 +226,7 @@ function encodeString(value) {
 
 function encodeCounterMap(map) {
   const entries = Object.entries(map ?? {});
-  entries.sort(([a], [b]) => a.localeCompare(b));
+  entries.sort(([a], [b]) => compareUtf16(a, b));
   const chunks = [encodeU64LE(entries.length)];
   for (const [key, rawValue] of entries) {
     const value = normalizeCounterValue(rawValue, `counter.${key}`);
@@ -535,7 +536,7 @@ export class OfflineCounterJournal {
     const dir = path.dirname(this.#storagePath);
     await fs.mkdir(dir, { recursive: true });
     const serialized = {};
-    const keys = Array.from(this.#entries.keys()).sort();
+    const keys = Array.from(this.#entries.keys()).sort(compareUtf16);
     for (const key of keys) {
       serialized[key] = this.#entries.get(key);
     }

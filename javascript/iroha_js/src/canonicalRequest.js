@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { signEd25519 } from "./crypto.js";
+import { compareUtf16 } from "./ordering.js";
 
 function encodeComponent(value) {
   return encodeURIComponent(value).replace(/%20/gu, "+");
@@ -18,10 +19,11 @@ export function canonicalQueryString(raw) {
   const params = raw instanceof URLSearchParams ? raw : new URLSearchParams(String(raw));
   const pairs = Array.from(params.entries()).map(([k, v]) => [k, v]);
   pairs.sort((a, b) => {
-    if (a[0] === b[0]) {
-      return a[1].localeCompare(b[1]);
+    const keyOrder = compareUtf16(a[0], b[0]);
+    if (keyOrder !== 0) {
+      return keyOrder;
     }
-    return a[0].localeCompare(b[0]);
+    return compareUtf16(a[1], b[1]);
   });
   return pairs.map(([k, v]) => `${encodeComponent(k)}=${encodeComponent(v)}`).join("&");
 }
