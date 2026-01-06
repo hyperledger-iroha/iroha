@@ -542,4 +542,8 @@ extension Data {
     func hexUppercased() -> String {
         map { String(format: "%02X", $0) }.joined()
     }
+
+    func hexLowercased() -> String {
+        map { String(format: "%02x", $0) }.joined()
+    }
 }

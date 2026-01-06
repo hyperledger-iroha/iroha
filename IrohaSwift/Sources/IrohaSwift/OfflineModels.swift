@@ -366,13 +366,13 @@ public struct AppleAppAttestProof: Sendable, Equatable {
 public struct AndroidMarkerKeyProof: Sendable, Equatable {
     public let series: String
     public let counter: UInt64
-    public let markerPublicKey: String
+    public let markerPublicKey: Data
     public let markerSignature: Data?
     public let attestation: Data
 
     public init(series: String,
                 counter: UInt64,
-                markerPublicKey: String,
+                markerPublicKey: Data,
                 markerSignature: Data?,
                 attestation: Data) {
         self.series = series
@@ -386,7 +386,7 @@ public struct AndroidMarkerKeyProof: Sendable, Equatable {
         var writer = OfflineNoritoWriter()
         writer.writeField(OfflineNorito.encodeString(series))
         writer.writeField(OfflineNorito.encodeUInt64(counter))
-        writer.writeField(OfflineNorito.encodeString(markerPublicKey))
+        writer.writeField(OfflineNorito.encodeBytesVec(markerPublicKey))
         writer.writeField(try OfflineNorito.encodeOption(markerSignature, encode: OfflineNorito.encodeBytesVec))
         writer.writeField(OfflineNorito.encodeBytesVec(attestation))
         return writer.data

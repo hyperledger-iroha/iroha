@@ -2878,12 +2878,12 @@ const summaries = await torii.listOfflineSummaries({ limit: 50 });
 await journal.upsert(summaries, { recordedAtMs: Date.now() });
 
 const summary = summaries.items[0];
-const nextCounter = (summary.apple_key_counters["AAPLDEMO1"] ?? 0) + 1;
+const nextCounter = (summary.apple_key_counters["QUFQTERFTU8x"] ?? 0) + 1;
 await journal.updateCounter({
   certificateIdHex: summary.certificate_id_hex,
   controllerId: summary.controller_id,
   platform: OfflineCounterPlatform.APPLE_KEY,
-  scope: "AAPLDEMO1",
+  scope: "QUFQTERFTU8x",
   counter: nextCounter,
 });
 ```

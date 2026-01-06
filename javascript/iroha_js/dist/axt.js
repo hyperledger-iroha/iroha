@@ -9,7 +9,7 @@ function assertOptionalUnsigned(value, context) {
     if (value < 0n) {
       throw new TypeError(`${context} must be non-negative`);
     }
-    if (value > Number.MAX_SAFE_INTEGER) {
+    if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
       throw new TypeError(`${context} exceeds safe integer range`);
     }
     return Number(value);
@@ -18,7 +18,10 @@ function assertOptionalUnsigned(value, context) {
     if (!Number.isFinite(value) || value < 0) {
       throw new TypeError(`${context} must be a non-negative finite number`);
     }
-    return Math.trunc(value);
+    if (!Number.isInteger(value) || !Number.isSafeInteger(value)) {
+      throw new TypeError(`${context} must be a safe integer`);
+    }
+    return value;
   }
   throw new TypeError(`${context} must be a number`);
 }
@@ -57,23 +60,23 @@ function sortAndDeduplicate(strings) {
 
 function normalizeStringList(input, context) {
   const items = [];
-  let index = 0;
-  for (const value of input ?? []) {
+  const values = Array.from(input ?? []);
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
     if (typeof value !== "string") {
       throw new TypeError(`${context}[${index}] must be a string`);
     }
     items.push(value);
-    index += 1;
   }
   return sortAndDeduplicate(items);
 }
 
 function canonicalizeDataspaceIds(input) {
   const dsids = [];
-  let index = 0;
-  for (const value of input ?? []) {
+  const values = Array.from(input ?? []);
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
     dsids.push(assertUnsigned(value, `dsids[${index}]`));
-    index += 1;
   }
   if (dsids.length === 0) {
     throw new Error("dsids must not be empty");
@@ -90,8 +93,9 @@ export function buildTouchManifest(read, write) {
 
 function canonicalizeTouches(input) {
   const touches = new Map();
-  let index = 0;
-  for (const value of input ?? []) {
+  const values = Array.from(input ?? []);
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
     const record = ensureObject(value ?? {}, `touches[${index}]`);
     const dsid = assertUnsigned(
       record.dsid ?? record.dataspace ?? record.dataspaceId,
@@ -105,7 +109,6 @@ function canonicalizeTouches(input) {
       record.write ?? record.manifest?.write ?? [],
     );
     touches.set(dsid, manifest);
-    index += 1;
   }
   return [...touches.entries()]
     .sort(([left], [right]) => left - right)
@@ -114,8 +117,9 @@ function canonicalizeTouches(input) {
 
 function canonicalizeTouchFragments(input) {
   const fragments = new Map();
-  let index = 0;
-  for (const value of input ?? []) {
+  const values = Array.from(input ?? []);
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
     const record = ensureObject(value ?? {}, `touchManifest[${index}]`);
     const dsid = assertUnsigned(
       record.dsid ?? record.dataspace ?? record.dataspaceId,
@@ -129,7 +133,6 @@ function canonicalizeTouchFragments(input) {
       dsid,
       buildTouchManifest(record.read ?? manifest.read ?? [], record.write ?? manifest.write ?? []),
     );
-    index += 1;
   }
   return [...fragments.entries()]
     .sort(([left], [right]) => left - right)
@@ -167,6 +170,20 @@ function resolveAxtNative() {
  */
 export function normalizeAxtRejectContext(input, context = "axt reject context") {
   const record = ensureObject(input ?? {}, context);
+  const camelKeys = [
+    "dataspaceId",
+    "targetLane",
+    "snapshotVersion",
+    "nextMinHandleEra",
+    "nextMinSubNonce",
+  ];
+  for (const key of camelKeys) {
+    if (record[key] !== undefined) {
+      throw new TypeError(
+        `${context}.dataspace must use snake_case fields (dataspace, target_lane, snapshot_version, next_min_handle_era, next_min_sub_nonce)`,
+      );
+    }
+  }
   const reasonValue = record.reason ?? "unknown";
   const reason = typeof reasonValue === "string" ? reasonValue : String(reasonValue);
   const dataspaceRaw = record.dataspace ?? null;

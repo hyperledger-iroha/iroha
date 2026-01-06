@@ -42,6 +42,14 @@ public enum ConnectCodec {
 }
 
 extension ConnectCodec {
+    private static func trimTrailingNulls(_ data: Data) -> Data {
+        var trimmed = data
+        while trimmed.last == 0 {
+            trimmed.removeLast()
+        }
+        return trimmed
+    }
+
     static func encodePermissionsJSON(_ permissions: ConnectPermissions?) -> Data? {
         guard let permissions else { return nil }
         var json: [String: Any] = [
@@ -55,20 +63,19 @@ extension ConnectCodec {
     }
 
     static func decodePermissionsJSON(_ data: Data) throws -> ConnectPermissions? {
-        guard !data.isEmpty else { return nil }
-        let json = try JSONSerialization.jsonObject(with: data)
+        let sanitized = trimTrailingNulls(data)
+        guard !sanitized.isEmpty else { return nil }
+        let json = try JSONSerialization.jsonObject(with: sanitized)
         guard let object = json as? [String: Any] else { throw ConnectCodecError.decodeFailed }
         if object.isEmpty { return nil }
         let allowedKeys: Set<String> = ["methods", "events", "resources"]
         for key in object.keys where !allowedKeys.contains(key) {
             throw ConnectCodecError.decodeFailed
         }
-        guard let methodsRaw = object["methods"],
-              let eventsRaw = object["events"] else {
+        guard let methods = try decodeOptionalStringArray(object["methods"]) else {
             throw ConnectCodecError.decodeFailed
         }
-        let methods = try decodeStringArray(methodsRaw)
-        let events = try decodeStringArray(eventsRaw)
+        let events = try decodeOptionalStringArray(object["events"]) ?? []
         let resources = try decodeOptionalStringArray(object["resources"])
         return ConnectPermissions(methods: methods, events: events, resources: resources)
     }
@@ -88,18 +95,21 @@ extension ConnectCodec {
     }
 
     static func decodeAppMetadataJSON(_ data: Data) throws -> ConnectAppMetadata? {
-        guard !data.isEmpty else { return nil }
-        let json = try JSONSerialization.jsonObject(with: data)
+        let sanitized = trimTrailingNulls(data)
+        guard !sanitized.isEmpty else { return nil }
+        let json = try JSONSerialization.jsonObject(with: sanitized)
         guard let object = json as? [String: Any] else { throw ConnectCodecError.decodeFailed }
         if object.isEmpty { return nil }
-        let allowedKeys: Set<String> = ["name", "url"]
+        let allowedKeys: Set<String> = ["name", "url", "icon_url", "icon_hash", "description"]
         for key in object.keys where !allowedKeys.contains(key) {
             throw ConnectCodecError.decodeFailed
         }
         let name = try decodeOptionalString(object["name"])
-        let iconURL = try decodeOptionalString(object["url"])
-        guard name != nil || iconURL != nil else { return nil }
-        return ConnectAppMetadata(name: name, iconURL: iconURL, description: nil)
+        let iconURL = try decodeOptionalString(object["url"]) ?? decodeOptionalString(object["icon_url"])
+        let description = try decodeOptionalString(object["description"])
+        // TODO: Map icon_hash once ConnectAppMetadata exposes it.
+        guard name != nil || iconURL != nil || description != nil else { return nil }
+        return ConnectAppMetadata(name: name, iconURL: iconURL, description: description)
     }
 
     static func encodeProofJSON(_ proof: ConnectSignInProof?) -> Data? {

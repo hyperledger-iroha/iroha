@@ -265,18 +265,52 @@ async function selectStore(sessionKey, config) {
 
 function normalizeSessionId(input) {
   if (input instanceof Uint8Array) {
-    return new Uint8Array(input);
+    return ensureNonEmptyBytes(new Uint8Array(input), "sessionId");
   }
   if (ArrayBuffer.isView(input)) {
-    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+    const view = new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+    return ensureNonEmptyBytes(view.slice(), "sessionId");
   }
   if (input instanceof ArrayBuffer) {
-    return new Uint8Array(input);
+    const view = new Uint8Array(input);
+    return ensureNonEmptyBytes(view.slice(), "sessionId");
+  }
+  if (Array.isArray(input)) {
+    return normalizeByteArray(input, "sessionId");
   }
   if (typeof input === "string") {
-    return decodeBase64Url(input.trim());
+    const decoded = decodeBase64Url(input);
+    if (decoded.length === 0) {
+      throw new ConnectJournalError("sessionId must not be empty");
+    }
+    return decoded;
+  }
+  if (input && typeof input.length === "number") {
+    return normalizeByteArray(input, "sessionId");
   }
   throw new ConnectJournalError("sessionId must be binary data or base64url string");
+}
+
+function ensureNonEmptyBytes(bytes, name) {
+  if (bytes.length === 0) {
+    throw new ConnectJournalError(`${name} must not be empty`);
+  }
+  return bytes;
+}
+
+function normalizeByteArray(value, name) {
+  const bytes = Array.from(value);
+  if (bytes.length === 0) {
+    throw new ConnectJournalError(`${name} must not be empty`);
+  }
+  const normalized = bytes.map((entry, index) => {
+    const numeric = Number(entry);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 0xff) {
+      throw new ConnectJournalError(`${name}[${index}] must be a byte`);
+    }
+    return numeric;
+  });
+  return new Uint8Array(normalized);
 }
 
 async function hashSessionId(bytes) {
@@ -294,18 +328,34 @@ function decodeBase64Url(input) {
   if (!input) {
     throw new ConnectJournalError("sessionId must not be empty");
   }
-  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
-  const padding = normalized.length % 4 === 0 ? "" : "=".repeat(4 - (normalized.length % 4));
-  const body = normalized + padding;
-  if (typeof atob === "function") {
-    const binary = atob(body);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index);
-    }
-    return bytes;
+  const trimmed = input.trim();
+  if (!trimmed) {
+    throw new ConnectJournalError("sessionId must not be empty");
   }
-  return new Uint8Array(Buffer.from(body, "base64"));
+  const normalized = trimmed.replace(/-/g, "+").replace(/_/g, "/");
+  let padded = normalized;
+  const paddingIndex = normalized.indexOf("=");
+  if (paddingIndex !== -1) {
+    const head = normalized.slice(0, paddingIndex);
+    const padding = normalized.slice(paddingIndex);
+    if (!/^[0-9A-Za-z+/]*$/.test(head) || !/^={1,2}$/.test(padding)) {
+      throw new ConnectJournalError("sessionId must be a valid base64url string");
+    }
+    if (normalized.length % 4 !== 0) {
+      throw new ConnectJournalError("sessionId must be a valid base64url string");
+    }
+  } else {
+    if (!/^[0-9A-Za-z+/]+$/.test(normalized) || normalized.length % 4 === 1) {
+      throw new ConnectJournalError("sessionId must be a valid base64url string");
+    }
+    const padLength = (4 - (normalized.length % 4)) % 4;
+    padded = normalized + "=".repeat(padLength);
+  }
+  const decoded = Buffer.from(padded, "base64");
+  if (decoded.toString("base64") !== padded) {
+    throw new ConnectJournalError("sessionId must be a valid base64url string");
+  }
+  return new Uint8Array(decoded);
 }
 
 function hasIndexedDbSupport(factory) {
@@ -361,10 +411,15 @@ function normalizeDirection(direction) {
 
 function normalizePositive(value, name) {
   const number = Number(value);
-  if (!Number.isFinite(number) || number <= 0) {
-    throw new ConnectJournalError(`${name} must be a positive number`);
+  if (
+    !Number.isFinite(number) ||
+    !Number.isInteger(number) ||
+    !Number.isSafeInteger(number) ||
+    number <= 0
+  ) {
+    throw new ConnectJournalError(`${name} must be a positive integer`);
   }
-  return Math.trunc(number);
+  return number;
 }
 
 function requestToPromise(request) {

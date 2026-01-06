@@ -33,19 +33,63 @@ function parseEnvFlag(value) {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
+function forceNativeError(reason) {
+  return new Error(
+    `Native binding required because IROHA_JS_FORCE_NATIVE=1; ${reason}`,
+  );
+}
+
+function formatForceNativeVerificationError(verification, paths) {
+  switch (verification.status) {
+    case "missing_file":
+      return forceNativeError(
+        `binding missing at ${paths.bindingPath}; run \`npm run build:native\`.`,
+      );
+    case "manifest_error":
+      return forceNativeError(
+        `checksum manifest at ${paths.checksumPath} is unreadable: ${
+          verification.error?.message ?? verification.error
+        }.`,
+      );
+    case "missing_manifest":
+    case "missing_expected_entry":
+      return forceNativeError(
+        `checksum manifest missing entries for ${verification.platform}; run \`npm run build:native\`.`,
+      );
+    case "hash_mismatch":
+      return forceNativeError(
+        `checksum mismatch for ${paths.bindingPath}; expected ${verification.expectedSha256}, found ${verification.sha256}.`,
+      );
+    case "hash_error":
+    default:
+      return forceNativeError(
+        `verification failed (${verification.status}).`,
+      );
+  }
+}
+
 /**
  * Attempt to load the native `iroha_js_host` binding.
  * Returns `null` when the compiled module is not present or fails verification.
  */
 export function getNativeBinding() {
   const paths = resolveNativePaths();
+  const forceNative = isNativeForced();
   if (cachedBindingPath !== paths.bindingPath) {
     cachedBinding = undefined;
   }
-  if (cachedBinding !== undefined) {
+  if (cachedBinding !== undefined && !(forceNative && cachedBinding === null)) {
     return cachedBinding;
   }
+  if (forceNative && cachedBinding === null) {
+    cachedBinding = undefined;
+  }
   if (isNativeDisabled()) {
+    if (forceNative) {
+      throw new Error(
+        "IROHA_JS_FORCE_NATIVE=1 cannot be combined with IROHA_JS_DISABLE_NATIVE=1",
+      );
+    }
     if (shouldWarn()) {
       console.warn(
         "[iroha-js] native binding disabled via IROHA_JS_DISABLE_NATIVE; using pure JS implementation.",
@@ -60,6 +104,9 @@ export function getNativeBinding() {
     manifestPath: paths.checksumPath,
   });
   if (!verification.ok) {
+    if (forceNative) {
+      throw formatForceNativeVerificationError(verification, paths);
+    }
     logVerificationFailure(verification, paths);
     cachedBindingPath = paths.bindingPath;
     cachedBinding = null;
@@ -71,6 +118,11 @@ export function getNativeBinding() {
     cachedBinding = require(paths.bindingPath);
   } catch (error) {
     cachedBinding = null;
+    if (forceNative) {
+      throw forceNativeError(
+        `failed to load binding from ${paths.bindingPath}: ${error?.message ?? error}.`,
+      );
+    }
     if (shouldWarn()) {
       console.warn(
         `[iroha-js] Failed to load native binding from ${paths.bindingPath}: ${

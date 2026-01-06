@@ -11,6 +11,17 @@ function ensureNative(methodName) {
   return native;
 }
 
+function normalizeByteArray(value, field) {
+  const bytes = value.map((entry, index) => {
+    const numeric = Number(entry);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 0xff) {
+      throw new TypeError(`${field}[${index}] must be a byte`);
+    }
+    return numeric;
+  });
+  return Buffer.from(bytes);
+}
+
 function normalizeBytes(input, field) {
   if (input instanceof Uint8Array && !Buffer.isBuffer(input)) {
     return Buffer.from(input);
@@ -18,13 +29,89 @@ function normalizeBytes(input, field) {
   if (Buffer.isBuffer(input)) {
     return input;
   }
-  if (typeof input === "string") {
-    return Buffer.from(input, "base64");
+  if (ArrayBuffer.isView(input)) {
+    return Buffer.from(input.buffer, input.byteOffset, input.byteLength);
   }
-  if (Array.isArray(input)) {
+  if (input instanceof ArrayBuffer) {
     return Buffer.from(input);
   }
-  throw new TypeError(`${field} must be Buffer | Uint8Array | base64 string`);
+  if (typeof input === "string") {
+    try {
+      return decodeBase64Strict(input);
+    } catch {
+      throw new TypeError(
+        `${field} must be Buffer | ArrayBufferView | ArrayBuffer | base64 string`,
+      );
+    }
+  }
+  if (Array.isArray(input)) {
+    return normalizeByteArray(input, field);
+  }
+  throw new TypeError(
+    `${field} must be Buffer | ArrayBufferView | ArrayBuffer | base64 string`,
+  );
+}
+
+function normalizeRelayInteger(value, label) {
+  if (typeof value === "bigint") {
+    if (value < 0n) {
+      throw new TypeError(`${label} must be a non-negative integer`);
+    }
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || !Number.isInteger(value) || !Number.isSafeInteger(value)) {
+      throw new TypeError(`${label} must be a non-negative integer`);
+    }
+    if (value < 0) {
+      throw new TypeError(`${label} must be a non-negative integer`);
+    }
+    return BigInt(value);
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      throw new TypeError(`${label} must be a non-negative integer`);
+    }
+    if (/^0x[0-9a-fA-F]+$/.test(trimmed) || /^[0-9]+$/.test(trimmed)) {
+      const parsed = BigInt(trimmed);
+      if (parsed < 0n) {
+        throw new TypeError(`${label} must be a non-negative integer`);
+      }
+      return parsed;
+    }
+  }
+  throw new TypeError(`${label} must be a non-negative integer`);
+}
+
+function decodeBase64Strict(value) {
+  const compact = value.replace(/\s+/g, "");
+  if (compact.length === 0) {
+    throw new Error("payload is empty");
+  }
+  let padded = compact;
+  const paddingIndex = compact.indexOf("=");
+  if (paddingIndex !== -1) {
+    const head = compact.slice(0, paddingIndex);
+    const padding = compact.slice(paddingIndex);
+    if (!/^[0-9A-Za-z+/]*$/.test(head) || !/^={1,2}$/.test(padding)) {
+      throw new Error("invalid base64 payload");
+    }
+    if (compact.length % 4 !== 0) {
+      throw new Error("invalid base64 payload");
+    }
+  } else {
+    if (!/^[0-9A-Za-z+/]+$/.test(compact) || compact.length % 4 === 1) {
+      throw new Error("invalid base64 payload");
+    }
+    const padLength = (4 - (compact.length % 4)) % 4;
+    padded = compact + "=".repeat(padLength);
+  }
+  const decoded = Buffer.from(padded, "base64");
+  if (decoded.toString("base64") !== padded) {
+    throw new Error("invalid base64 payload");
+  }
+  return decoded;
 }
 
 /**
@@ -68,19 +155,24 @@ export function verifyLaneRelayEnvelopes(envelopes) {
   for (let i = 0; i < envelopes.length; i += 1) {
     const envelope = envelopes[i];
     verifyLaneRelayEnvelopeJson(envelope);
-    const laneId = Number(envelope?.lane_id);
-    const dataspaceId = Number(envelope?.dataspace_id);
-    const blockHeight = Number(envelope?.block_height);
-    if (
-      Number.isNaN(laneId) ||
-      Number.isNaN(dataspaceId) ||
-      Number.isNaN(blockHeight)
-    ) {
-      throw new TypeError(
-        `envelope ${i} missing numeric lane_id, dataspace_id, or block_height`,
-      );
+    let record = envelope;
+    if (typeof envelope === "string") {
+      try {
+        record = JSON.parse(envelope);
+      } catch {
+        throw new TypeError(`envelope ${i} must be valid JSON`);
+      }
     }
-    const key = `${laneId}:${dataspaceId}:${blockHeight}`;
+    const laneId = normalizeRelayInteger(record?.lane_id, `envelope ${i}.lane_id`);
+    const dataspaceId = normalizeRelayInteger(
+      record?.dataspace_id,
+      `envelope ${i}.dataspace_id`,
+    );
+    const blockHeight = normalizeRelayInteger(
+      record?.block_height,
+      `envelope ${i}.block_height`,
+    );
+    const key = `${laneId.toString()}:${dataspaceId.toString()}:${blockHeight.toString()}`;
     if (seen.has(key)) {
       throw new Error(
         `duplicate relay envelope for lane ${laneId}, dataspace ${dataspaceId}, height ${blockHeight}`,

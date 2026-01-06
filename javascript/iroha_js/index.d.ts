@@ -3005,6 +3005,9 @@ export interface ToriiGovernanceZkBallotV1Request {
   envelopeB64?: BinaryLike | string;
   rootHintHex?: string | BinaryLike | null;
   owner?: string | null;
+  amount?: NumericLike | null;
+  durationBlocks?: number | string | bigint | null;
+  direction?: ToriiGovernanceBallotDirection | string | null;
   nullifierHex?: string | BinaryLike | null;
 }
 

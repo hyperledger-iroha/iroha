@@ -15,6 +15,7 @@ use iroha_data_model::{
         OfflinePlatformTokenSnapshot, OfflineProofRequestReplay, OfflineSpendReceipt,
         OfflineToOnlineTransfer, OfflineTransferRecord, OfflineTransferStatus,
         OfflineWalletCertificate, OfflineWalletPolicy, PoseidonDigest,
+        canonical_app_attest_key_id,
     },
 };
 use norito::{
@@ -441,12 +442,14 @@ impl PlatformProofSpec {
                 assertion_b64,
                 challenge_hash_hex,
             } => {
+                let key_id = canonical_app_attest_key_id(key_id)
+                    .wrap_err("invalid App Attest key id")?;
                 let assertion = BASE64
                     .decode(assertion_b64)
                     .wrap_err("invalid App Attest assertion base64")?;
                 let challenge_hash = parse_hash_or_hex("challenge_hash_hex", challenge_hash_hex)?;
                 Ok(OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
-                    key_id: key_id.clone(),
+                    key_id,
                     counter: *counter,
                     assertion,
                     challenge_hash,
@@ -459,13 +462,30 @@ impl PlatformProofSpec {
                 marker_signature_hex,
                 attestation_b64,
             } => {
-                let marker_public_key =
-                    PublicKey::from_str(marker_public_key).wrap_err("invalid marker public key")?;
+                let marker_public_key = hex::decode(marker_public_key).wrap_err_with(|| {
+                    format!("invalid marker public key hex `{marker_public_key}`")
+                })?;
+                if marker_public_key.len() != 65 {
+                    return Err(eyre!(
+                        "invalid marker public key length: expected 65 bytes (got {})",
+                        marker_public_key.len()
+                    ));
+                }
                 let marker_signature = marker_signature_hex
                     .as_ref()
-                    .map(Signature::from_hex)
-                    .transpose()
-                    .wrap_err("invalid marker signature hex")?;
+                    .map(|hex| {
+                        hex::decode(hex)
+                            .wrap_err_with(|| format!("invalid marker signature hex `{hex}`"))
+                    })
+                    .transpose()?;
+                if let Some(signature) = &marker_signature {
+                    if signature.len() != 64 {
+                        return Err(eyre!(
+                            "invalid marker signature length: expected 64 bytes (got {})",
+                            signature.len()
+                        ));
+                    }
+                }
                 let attestation = BASE64
                     .decode(attestation_b64)
                     .wrap_err("invalid attestation base64")?;
@@ -672,8 +692,9 @@ mod tests {
 
     #[test]
     fn platform_proof_apple_roundtrip() {
+        let key_id = BASE64.encode(b"demo");
         let spec = PlatformProofSpec::Apple {
-            key_id: "demo".into(),
+            key_id: key_id.clone(),
             counter: 42,
             assertion_b64: BASE64.encode([1, 2, 3]),
             challenge_hash_hex: "E8A8D90BF72F280BBB4AB6D1F759521D29A08DA83CCFBB3E2EE0EDE22606FB9B"
@@ -682,7 +703,7 @@ mod tests {
         let proof = spec.to_model().expect("proof");
         match proof {
             OfflinePlatformProof::AppleAppAttest(inner) => {
-                assert_eq!(inner.key_id, "demo");
+                assert_eq!(inner.key_id, key_id);
                 assert_eq!(inner.counter, 42);
                 assert_eq!(inner.assertion, vec![1, 2, 3]);
             }

@@ -5,6 +5,7 @@ mod offline_balance_proof_utils;
 
 use std::{str::FromStr, sync::Arc};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use axum::{
     Router,
     body::Body,
@@ -164,7 +165,7 @@ fn build_fixtures() -> Fixtures {
         issued_at_ms: certificate.issued_at_ms + 100,
         invoice_id: "INV-001".into(),
         platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
-            key_id: "apple".into(),
+            key_id: BASE64_STANDARD.encode(b"apple"),
             counter: 1,
             assertion: vec![],
             challenge_hash: Hash::new(b"challenge"),

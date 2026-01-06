@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="org.hyperledger.iroha.android.client.okhttp.OkHttpClientProviderTests" tests="2" skipped="0" failures="0" errors="0" timestamp="2025-12-31T14:11:48.069Z" hostname="takemiyacStudio.lan" time="0.002">
-  <properties/>
-  <testcase name="resetRebuildsClient" classname="org.hyperledger.iroha.android.client.okhttp.OkHttpClientProviderTests" time="0.001"/>
-  <testcase name="sharedClientIsSingletonAndSwappable" classname="org.hyperledger.iroha.android.client.okhttp.OkHttpClientProviderTests" time="0.001"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

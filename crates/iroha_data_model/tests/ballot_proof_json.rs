@@ -10,6 +10,9 @@ fn ballot_proof_json_base64() {
         root_hint: None,
         owner: None,
         nullifier: None,
+        amount: Some("900".to_string()),
+        duration_blocks: Some(32),
+        direction: Some("Abstain".to_string()),
     };
     // Serialize to JSON string (via norito::json for consistency)
     let s = norito::json::to_json(&v).expect("json");
@@ -26,4 +29,7 @@ fn ballot_proof_json_base64() {
     // Deserialize back
     let round: BallotProof = norito::json::from_str(&s).unwrap();
     assert_eq!(round.envelope_bytes, v.envelope_bytes);
+    assert_eq!(round.amount.as_deref(), Some("900"));
+    assert_eq!(round.duration_blocks, Some(32));
+    assert_eq!(round.direction.as_deref(), Some("Abstain"));
 }

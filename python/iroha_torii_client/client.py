@@ -3301,9 +3301,16 @@ class ToriiClient:
         envelope_b64: str,
         root_hint_hex: Optional[str] = None,
         owner: Optional[str] = None,
-        salt_hex: Optional[str] = None,
+        amount: Optional[str] = None,
+        duration_blocks: Optional[int] = None,
+        direction: Optional[str] = None,
+        nullifier_hex: Optional[str] = None,
     ) -> BallotSubmitResult:
-        """Submit a BallotProof-style payload via ``POST /v1/gov/ballots/zk-v1``."""
+        """Submit a BallotProof-style payload via ``POST /v1/gov/ballots/zk-v1``.
+
+        Optional hints mirror BallotProof fields: root_hint_hex, owner, amount,
+        duration_blocks, direction, and nullifier_hex.
+        """
 
         payload: Dict[str, Any] = {
             "authority": authority,
@@ -3316,8 +3323,14 @@ class ToriiClient:
             payload["root_hint_hex"] = root_hint_hex
         if owner:
             payload["owner"] = owner
-        if salt_hex:
-            payload["salt_hex"] = salt_hex
+        if amount is not None:
+            payload["amount"] = amount
+        if duration_blocks is not None:
+            payload["duration_blocks"] = duration_blocks
+        if direction:
+            payload["direction"] = direction
+        if nullifier_hex:
+            payload["nullifier_hex"] = nullifier_hex
         body = self._post_json(
             "/v1/gov/ballots/zk-v1",
             payload,

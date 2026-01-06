@@ -163,6 +163,12 @@ pub struct BallotProof {
         norito(with = "crate::json_helpers::fixed_bytes::option")
     )]
     pub nullifier: Option<[u8; 32]>,
+    /// Optional lock amount hint (decimal string).
+    pub amount: Option<String>,
+    /// Optional lock duration hint in blocks.
+    pub duration_blocks: Option<u64>,
+    /// Optional direction hint (Aye/Nay/Abstain).
+    pub direction: Option<String>,
 }
 
 /// Cast a non‑ZK quadratic ballot (optional mode)

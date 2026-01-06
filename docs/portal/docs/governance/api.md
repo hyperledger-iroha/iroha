@@ -194,7 +194,7 @@ CLI Helpers
   - Useful for auditing protected namespaces or verifying governance-controlled deploy workflows.
 - `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including optional `gov_manifest_approvers` for satisfying manifest quorum rules.
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — lock hints are required when `min_bond_amount > 0`.
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
   - The one-line summary now surfaces a deterministic `fingerprint=<hex>` derived from the encoded `CastZkBallot` along with any decoded hints (`owner`, `amount`, `duration_blocks`, `direction` when provided).
@@ -229,6 +229,9 @@ Unlock Sweep (Operator/Audit)
       "envelope_b64": "AAECAwQ=",
       "root_hint_hex": "…64hex?",
       "owner": "alice@wonderland?",
+      "amount": "100?",
+      "duration_blocks": 6000?,
+      "direction": "Aye|Nay|Abstain?",
       "nullifier_hex": "…64hex?"
     }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
@@ -246,7 +249,10 @@ Unlock Sweep (Operator/Audit)
         "envelope_bytes": "AAECAwQ=",   // base64 of ZK1 or H2* container
         "root_hint": null,                // optional 32-byte array of bytes (eligibility root)
         "owner": null,                    // optional AccountId when circuit commits owner
-        "nullifier": null                 // optional 32-byte array of bytes (nullifier hint)
+        "nullifier": null,                // optional 32-byte array of bytes (nullifier hint)
+        "amount": "100",                  // optional lock amount hint (decimal string)
+        "duration_blocks": 6000,          // optional lock duration hint
+        "direction": "Aye"                // optional direction hint
       }
     }
   - Response:
@@ -259,13 +265,14 @@ Unlock Sweep (Operator/Audit)
       ]
     }
   - Notes:
-    - The server maps optional `root_hint`/`owner`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
+    - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` (as `nullifier_hex`) from the ballot to `public_inputs_json` for `CastZkBallot`.
     - The envelope bytes are re-encoded as base64 for the instruction payload.
     - The response `reason` changes to `submitted transaction` when Torii submits the ballot.
     - This endpoint is only available when the `zk-ballot` feature is enabled.
 
 CastZkBallot Verification Path
 - `CastZkBallot` decodes the supplied base64 proof and rejects empty or malformed payloads (`BallotRejected` with `invalid or empty proof`).
+- If `public_inputs_json` is supplied, it must be a JSON object; non-object payloads are rejected.
 - The host resolves the ballot verifying key from the referendum (`vk_ballot`) or governance defaults and requires the record to exist, be `Active`, and carry inline bytes.
 - Stored verifying-key bytes are re-hashed with `hash_vk`; any commitment mismatch aborts execution before verification to guard against tampered registry entries (`BallotRejected` with `verifying key commitment mismatch`).
 - Proof bytes are dispatched to the registered backend via `zk::verify_backend`; invalid transcripts surface as `BallotRejected` with `invalid proof` and the instruction fails deterministically.

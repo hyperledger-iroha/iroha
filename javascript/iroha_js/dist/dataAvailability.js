@@ -549,10 +549,30 @@ function toBuffer(value, name) {
   if (ArrayBuffer.isView(value)) {
     return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
   }
+  if (Array.isArray(value)) {
+    return normalizeByteArray(value, name);
+  }
+  if (value && typeof value.length === "number" && typeof value !== "string") {
+    return normalizeByteArray(value, name);
+  }
   if (typeof value === "string") {
     return Buffer.from(value, "utf8");
   }
-  throw new TypeError(`${name} must be a Buffer, ArrayBuffer, typed array, or string`);
+  throw new TypeError(
+    `${name} must be a Buffer, ArrayBuffer, typed array, byte array, or string`,
+  );
+}
+
+function normalizeByteArray(value, name) {
+  const bytes = Array.from(value);
+  const normalized = bytes.map((entry, index) => {
+    const numeric = Number(entry);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 0xff) {
+      throw new TypeError(`${name}[${index}] must be a byte`);
+    }
+    return numeric;
+  });
+  return Buffer.from(normalized);
 }
 
 function normalizeUnsignedInteger(value, name, { allowZero = true } = {}) {

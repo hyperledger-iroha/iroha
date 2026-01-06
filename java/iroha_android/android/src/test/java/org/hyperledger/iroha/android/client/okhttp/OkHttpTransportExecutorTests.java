@@ -4,6 +4,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -66,5 +67,13 @@ public final class OkHttpTransportExecutorTests {
               ExecutionException.class, () -> executor.execute(request).get(2, TimeUnit.SECONDS));
       assertNotNull(error.getCause());
     }
+  }
+
+  @Test
+  public void invalidateAndCancelShutsDownDispatcher() {
+    final OkHttpClient client = new OkHttpClient();
+    final OkHttpTransportExecutor executor = new OkHttpTransportExecutor(client);
+    executor.invalidateAndCancel();
+    assertTrue(client.dispatcher().executorService().isShutdown());
   }
 }

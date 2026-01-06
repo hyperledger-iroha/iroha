@@ -66,11 +66,16 @@ function coercePositiveInt(value, name, allowZero = false) {
   if (number === null) {
     return null;
   }
-  const rounded = Math.floor(number);
-  if (rounded < 0 || (!allowZero && rounded === 0)) {
+  if (!Number.isInteger(number)) {
+    throw new TypeError(`${name} must be an integer`);
+  }
+  if (!Number.isSafeInteger(number)) {
+    throw new RangeError(`${name} must be a safe integer`);
+  }
+  if (number < 0 || (!allowZero && number === 0)) {
     throw new TypeError(`${name} must be ${allowZero ? "non-negative" : "positive"}`);
   }
-  return rounded;
+  return number;
 }
 
 function toSetFromIterable(iterable, transform) {
