@@ -1,6 +1,38 @@
 # Status
 
 ## Latest Updates
+- Java/Android SDK: reject fractional numeric fields when parsing SoraFS gateway summaries and client config manifests; add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: reject empty byte payloads when base64 fields are required (e.g., deployContract code_b64) and add regression coverage.
+- Tests: `node --test test/toriiClient.test.js` (from `javascript/iroha_js`).
+- JS SDK: reject mismatched verifying key lengths when vk_len contradicts inline vk_bytes; add regression coverage.
+- Tests: `node --test test/toriiClient.test.js` (from `javascript/iroha_js`).
+- Java/Android SDK: reject fractional counter journal values on load and add regression coverage.
+- Tests: not run (not requested).
+- Swift SDK: reject invalid proof event hex fields (proof hash, commitment, call/envelope hashes) and add regression coverage.
+- Tests: `swift test --filter ToriiClientTests.testStreamProofEventsRejectsInvalidProofHashHex`; `swift test --filter ToriiClientTests.testStreamProofEventsRejectsInvalidCommitmentHex` (from `IrohaSwift`).
+- JS SDK: enforce Numeric literal validation (scale/bit bounds) for instruction builders and Torii amount inputs, add safe-integer guards for u128 JSON and multisig weights, and harden SoraFS gateway options (manifest/base64 + integer-only knobs); add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: validate SoraFS gateway streamTokenB64 inputs (base64/base64url) for Torii provider normalization and native gateway wrappers; add regression coverage.
+- Tests: `node --test test/toriiClient.test.js`; `node --test test/sorafsGatewayFetch.wrapper.test.js` (from `javascript/iroha_js`).
+- Swift SDK: validate proof attachment verifying key fields (non-empty, no separators, non-empty inline bytes) and preflight commitment/envelope hash lengths; add regression coverage.
+- Tests: `swift test --filter ProofAttachmentNoritoTests` (from `IrohaSwift`).
+- Java/Android SDK: reject fractional numeric fields when parsing offline verdict metadata, audit logs, Android provisioned proofs, and Safety Detect OAuth expiry; add regression coverage.
+- Tests: not run (not requested).
+- Swift SDK: enforce single-key SSE event payloads for verifying key, trigger, and proof events; add regression coverage.
+- Tests: `swift test --filter ToriiClientTests.testStreamVerifyingKeyEventsRejectsMultiplePayloadKinds`; `swift test --filter ToriiClientTests.testStreamTriggerEventsRejectsMultiplePayloadKinds`; `swift test --filter ToriiClientTests.testStreamProofEventsRejectsMultiplePayloadKinds` (from `IrohaSwift`).
+- Java/Android SDK: ignore cancellation errors when SSE streams are closed before the response arrives, unwrap CompletionException failures, and reject fractional numeric fields in UAID/offline JSON parsers; add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: tighten ISO bridge positive-integer parsing and validate DA proof manifest base64 before decoding; add regression coverage.
+- Tests: `node --test test/isoBridge.test.js`; `node --test test/toriiClient.test.js` (from `javascript/iroha_js`).
+- Swift SDK: clamp Connect queue retention interval to avoid negative/overflow conversions and add regression coverage.
+- Tests: `swift test --filter ConnectQueueJournalTests` (from `IrohaSwift`).
+- Swift SDK: make Connect codec JSON decoding strict (reject unknown keys and non-string values) and add regression coverage.
+- Tests: `swift test --filter ConnectFramesTests` (from `IrohaSwift`).
+- Swift SDK: validate DA ingest receipt digest tuples (single entry, 32-byte length) and add regression coverage.
+- Tests: `swift test --filter ToriiDaIngestTests` (from `IrohaSwift`).
+- JS SDK: tighten Norito base64 heuristics, validate trigger-action and DA pdp_commitment base64, and enforce integer getBlock heights; add regression coverage.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
 - Swift SDK: enforce single-key governance proposal kinds and require DA rent quote micro amounts to be unsigned integers; add regression coverage.
 - Tests: `swift test --filter ToriiDaIngestTests` (from `IrohaSwift`); `swift test --filter ToriiGovernanceDecodingTests` (from `IrohaSwift`).
 - Swift SDK: reject multi-kind Connect envelope/control payloads, and enforce strict sequence parsing in the fallback native bridge; add regression coverage.

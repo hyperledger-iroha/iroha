@@ -425,6 +425,9 @@ public final class OfflineVerdictJournal {
 
   private static Long optionalLong(final Object value) {
     if (value instanceof Number number) {
+      if (number instanceof Float || number instanceof Double) {
+        return null;
+      }
       return number.longValue();
     }
     if (value == null) {
@@ -439,6 +442,9 @@ public final class OfflineVerdictJournal {
 
   private static Integer optionalInteger(final Object value) {
     if (value instanceof Number number) {
+      if (number instanceof Float || number instanceof Double) {
+        return null;
+      }
       return number.intValue();
     }
     if (value == null) {

@@ -362,6 +362,9 @@ public final class ClientConfigManifestLoader {
       return null;
     }
     if (value instanceof Number number) {
+      if (number instanceof Float || number instanceof Double) {
+        throw new IllegalStateException("Fractional numbers are not supported: " + value);
+      }
       return number.intValue();
     }
     final String normalized = optionalString(value);
@@ -376,6 +379,9 @@ public final class ClientConfigManifestLoader {
       return null;
     }
     if (value instanceof Number number) {
+      if (number instanceof Float || number instanceof Double) {
+        throw new IllegalStateException("Fractional numbers are not supported: " + value);
+      }
       return number.longValue();
     }
     final String normalized = optionalString(value);

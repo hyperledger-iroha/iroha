@@ -968,6 +968,33 @@ test("buildCamt052Message renders account reports", () => {
   assert.match(xml, /<TxsSummry>/);
 });
 
+test("buildCamt052Message rejects non-integer pagination and sequence values", () => {
+  const base = {
+    messageId: "camt052-invalid",
+    creationDateTime: "2026-02-01T00:00:00Z",
+    reportId: "camt052-invalid-report",
+    account: { otherId: "ledger-account" },
+  };
+
+  assert.throws(
+    () =>
+      buildCamt052Message({
+        ...base,
+        pagination: { pageNumber: "1.5", lastPage: true },
+      }),
+    /pagination\.pageNumber must be a positive integer/,
+  );
+
+  assert.throws(
+    () =>
+      buildCamt052Message({
+        ...base,
+        sequenceNumber: "12abc",
+      }),
+    /sequenceNumber must be a positive integer/,
+  );
+});
+
 test("buildCamt052Message enforces chronological report ranges", () => {
   assert.throws(
     () =>

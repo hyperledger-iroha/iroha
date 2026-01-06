@@ -168,6 +168,9 @@ public final class GatewayFetchSummary {
   private static long requireLong(final Map<String, Object> map, final String key) {
     final Object value = map.get(key);
     if (value instanceof Number number) {
+      if (number instanceof Float || number instanceof Double) {
+        throw new SorafsStorageException("Expected integer for `" + key + "`");
+      }
       return number.longValue();
     }
     throw new SorafsStorageException("Expected number for `" + key + "`");

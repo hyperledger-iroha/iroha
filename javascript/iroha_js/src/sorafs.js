@@ -501,6 +501,62 @@ function assertNonEmptyString(value, label) {
   return value.trim();
 }
 
+function normalizeHex32(value, label) {
+  const trimmed = assertNonEmptyString(value, label);
+  const body = trimmed.startsWith("0x") || trimmed.startsWith("0X") ? trimmed.slice(2) : trimmed;
+  if (body.length !== 64 || !/^[0-9a-fA-F]+$/.test(body)) {
+    throw new TypeError(`${label} must be a 32-byte hex string`);
+  }
+  return body.toLowerCase();
+}
+
+function normalizeBase64Payload(value, label) {
+  const compact = assertNonEmptyString(value, label).replace(/\s+/g, "");
+  if (compact.length === 0) {
+    throw new TypeError(`${label} must be a non-empty base64 string`);
+  }
+  let padded = compact;
+  const paddingIndex = compact.indexOf("=");
+  if (paddingIndex !== -1) {
+    const head = compact.slice(0, paddingIndex);
+    const padding = compact.slice(paddingIndex);
+    if (!/^[0-9A-Za-z+/]*$/.test(head) || !/^={1,2}$/.test(padding)) {
+      throw new TypeError(`${label} must be a valid base64 string`);
+    }
+    if (compact.length % 4 !== 0) {
+      throw new TypeError(`${label} must be a valid base64 string`);
+    }
+  } else {
+    if (!/^[0-9A-Za-z+/]+$/.test(compact) || compact.length % 4 === 1) {
+      throw new TypeError(`${label} must be a valid base64 string`);
+    }
+    const padLength = (4 - (compact.length % 4)) % 4;
+    padded = compact + "=".repeat(padLength);
+  }
+  const decoded = Buffer.from(padded, "base64");
+  if (decoded.length === 0 || decoded.toString("base64") !== padded) {
+    throw new TypeError(`${label} must be a valid base64 string`);
+  }
+  return decoded.toString("base64");
+}
+
+function normalizeBase64PayloadMaybeUrl(value, label) {
+  const trimmed = assertNonEmptyString(value, label);
+  try {
+    return normalizeBase64Payload(trimmed, label);
+  } catch (error) {
+    if (!/[-_]/.test(trimmed)) {
+      throw error;
+    }
+  }
+  const normalized = trimmed.replace(/-/g, "+").replace(/_/g, "/");
+  try {
+    return normalizeBase64Payload(normalized, label);
+  } catch {
+    throw new TypeError(`${label} must be a valid base64 or base64url string`);
+  }
+}
+
 function assertPositiveIntegerLike(value, label) {
   if (typeof value === "bigint") {
     if (value <= 0n) {
@@ -518,6 +574,9 @@ function assertPositiveIntegerLike(value, label) {
     }
     if (coerced !== value) {
       throw new TypeError(`${label} must be an integer`);
+    }
+    if (!Number.isSafeInteger(coerced)) {
+      throw new TypeError(`${label} must be a safe integer`);
     }
     return coerced;
   }
@@ -538,6 +597,12 @@ function assertNonNegativeIntegerLike(value, label) {
     const coerced = Math.trunc(value);
     if (coerced < 0) {
       throw new TypeError(`${label} must be a non-negative integer`);
+    }
+    if (coerced !== value) {
+      throw new TypeError(`${label} must be an integer`);
+    }
+    if (!Number.isSafeInteger(coerced)) {
+      throw new TypeError(`${label} must be a safe integer`);
     }
     return coerced;
   }
@@ -568,7 +633,10 @@ function normaliseGatewayProvider(spec) {
     throw new TypeError("provider.providerIdHex must be a 32-byte hex string");
   }
   const baseUrl = assertNonEmptyString(spec.baseUrl, "provider.baseUrl");
-  const streamTokenB64 = assertNonEmptyString(spec.streamTokenB64, "provider.streamTokenB64");
+  const streamTokenB64 = normalizeBase64PayloadMaybeUrl(
+    spec.streamTokenB64,
+    "provider.streamTokenB64",
+  );
   const native = {
     name,
     provider_id_hex: normalizedProviderId.toLowerCase(),
@@ -677,10 +745,13 @@ function normaliseGatewayOptions(options = {}) {
   }
   const native = {};
   if (typeof options.manifestEnvelopeB64 === "string" && options.manifestEnvelopeB64.trim() !== "") {
-    native.manifest_envelope_b64 = options.manifestEnvelopeB64.trim();
+    native.manifest_envelope_b64 = normalizeBase64Payload(
+      options.manifestEnvelopeB64,
+      "manifestEnvelopeB64",
+    );
   }
   if (typeof options.manifestCidHex === "string" && options.manifestCidHex.trim() !== "") {
-    native.manifest_cid_hex = options.manifestCidHex.trim().toLowerCase();
+    native.manifest_cid_hex = normalizeHex32(options.manifestCidHex, "manifestCidHex");
   }
   if (typeof options.clientId === "string" && options.clientId.trim() !== "") {
     native.client_id = options.clientId.trim();
@@ -691,21 +762,29 @@ function normaliseGatewayOptions(options = {}) {
   if (typeof options.rolloutPhase === "string" && options.rolloutPhase.trim() !== "") {
     native.rollout_phase = options.rolloutPhase.trim();
   }
-  if (typeof options.maxPeers === "number") {
-    native.max_peers = Math.max(1, Math.trunc(options.maxPeers));
+  if (options.maxPeers !== undefined && options.maxPeers !== null) {
+    if (
+      typeof options.maxPeers !== "number" ||
+      !Number.isFinite(options.maxPeers) ||
+      !Number.isInteger(options.maxPeers) ||
+      !Number.isSafeInteger(options.maxPeers) ||
+      options.maxPeers < 1
+    ) {
+      throw new TypeError("maxPeers must be a positive safe integer");
+    }
+    native.max_peers = options.maxPeers;
   }
   if (options.retryBudget !== undefined && options.retryBudget !== null) {
-    if (typeof options.retryBudget !== "number" || Number.isNaN(options.retryBudget)) {
-      throw new TypeError("retryBudget must be a non-negative integer");
+    if (
+      typeof options.retryBudget !== "number" ||
+      !Number.isFinite(options.retryBudget) ||
+      !Number.isInteger(options.retryBudget) ||
+      !Number.isSafeInteger(options.retryBudget) ||
+      options.retryBudget < 0
+    ) {
+      throw new TypeError("retryBudget must be a non-negative safe integer");
     }
-    if (!Number.isFinite(options.retryBudget)) {
-      throw new TypeError("retryBudget must be a finite number");
-    }
-    const coerced = Math.trunc(options.retryBudget);
-    if (coerced < 0) {
-      throw new TypeError("retryBudget must be a non-negative integer");
-    }
-    native.retry_budget = coerced;
+    native.retry_budget = options.retryBudget;
   }
   if (typeof options.transportPolicy === "string" && options.transportPolicy.trim() !== "") {
     native.transport_policy = options.transportPolicy.trim();
@@ -1119,6 +1198,9 @@ export function sorafsGatewayFetch(
   if (!isPlainObject(baseOptions)) {
     throw new TypeError("sorafsGatewayFetch options must be a plain object");
   }
+  const normalizedManifestId = normalizeHex32(manifestIdHex, "manifestIdHex");
+  const normalizedChunkerHandle = assertNonEmptyString(chunkerHandle, "chunkerHandle");
+  const normalizedPlanJson = assertNonEmptyString(planJson, "planJson");
   const { __nativeBinding: injectedBinding, ...restOptions } = baseOptions;
   if (
     restOptions.allowSingleSourceFallback !== undefined &&
@@ -1151,9 +1233,9 @@ export function sorafsGatewayFetch(
   const nativeOptions = normaliseGatewayOptions(restOptions);
   try {
     const raw = binding.sorafsGatewayFetch(
-      manifestIdHex,
-      chunkerHandle,
-      planJson,
+      normalizedManifestId,
+      normalizedChunkerHandle,
+      normalizedPlanJson,
       nativeProviders,
       nativeOptions,
     );

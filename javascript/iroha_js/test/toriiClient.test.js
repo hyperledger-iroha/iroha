@@ -927,6 +927,23 @@ test("registerVerifyingKey canonicalizes payload", async () => {
   assert.equal(body.activation_height, 0);
 });
 
+test("registerVerifyingKey rejects mismatched vk_len", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("unexpected fetch");
+    },
+  });
+  const payload = {
+    ...sampleVerifyingKeyRegisterPayload(),
+    vk_bytes: Buffer.from("abc"),
+    vk_len: 4,
+  };
+  await assert.rejects(
+    () => client.registerVerifyingKey(payload),
+    /vk_len/,
+  );
+});
+
 test("verifying key endpoints reject unsupported option fields", async () => {
   const fetchImpl = async () => {
     throw new Error("unexpected fetch");
@@ -3201,6 +3218,43 @@ test("fetchDaPayloadViaGateway rejects non-boolean allowSingleSourceFallback", a
   );
 });
 
+test("fetchDaPayloadViaGateway rejects invalid stream tokens", async () => {
+  const manifestBundle = {
+    storage_ticket_hex: "aa".repeat(32),
+    client_blob_id_hex: "bb".repeat(32),
+    blob_hash_hex: "cc".repeat(32),
+    manifest_hash_hex: "dd".repeat(32),
+    chunk_root_hex: "ee".repeat(32),
+    chunk_plan: [
+      { chunk_index: 0, offset: 0, length: 32, digest_blake3: "ff".repeat(32) },
+    ],
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({ status: 200, jsonData: {} }),
+    sorafsGatewayFetch: () => {
+      throw new Error("unexpected sorafsGatewayFetch call");
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      client.fetchDaPayloadViaGateway({
+        manifestBundle,
+        chunkerHandle: "sorafs.sf1@1.0.0",
+        gatewayProviders: [
+          {
+            name: "alpha",
+            providerIdHex: "11".repeat(32),
+            baseUrl: "https://gateway.one",
+            streamTokenB64: "not-base64!!",
+          },
+        ],
+        fetchOptions: { allowSingleSourceFallback: true },
+      }),
+    /streamTokenB64/,
+  );
+});
+
 test("fetchDaPayloadViaGateway uses custom hooks", async (t) => {
   const manifestBytes = Buffer.from("sample-manifest");
   const manifestBundle = {
@@ -3507,6 +3561,37 @@ test("fetchDaPayloadViaGateway attaches proof summary when requested", async (t)
   assert.equal(payloadArg, gatewayResult.payload);
   assert.deepEqual(optionsArg, { sampleCount: 2, leafIndexes: [0] });
   assert.equal(gatewayMock.mock.callCount(), 1);
+});
+
+test("fetchDaPayloadViaGateway rejects invalid manifest_b64 for proof summary", async (t) => {
+  const manifestBundle = {
+    manifest_hash_hex: "aa".repeat(32),
+    manifest_b64: "AAAA====",
+    chunk_plan: [
+      { chunk_index: 0, offset: 0, length: 1, digest_blake3: "ff".repeat(32) },
+    ],
+  };
+  const gatewayMock = t.mock.fn(() => ({ payload: Buffer.from([1]) }));
+  const client = new ToriiClient(BASE_URL, {
+    sorafsGatewayFetch: gatewayMock,
+  });
+  await assert.rejects(
+    () =>
+      client.fetchDaPayloadViaGateway({
+        manifestBundle,
+        chunkerHandle: "sorafs.sf1@1.0.0",
+        gatewayProviders: [
+          {
+            name: "alpha",
+            providerIdHex: "bb".repeat(32),
+            baseUrl: "https://gateway.test/",
+            streamTokenB64: "dG9rZW4=",
+          },
+        ],
+        proofSummary: true,
+      }),
+    /manifest_b64/,
+  );
 });
 
 test("submitDaBlob rejects invalid pdp_commitment payloads", async () => {
@@ -8048,6 +8133,30 @@ test("governanceSubmitPlainBallot normalizes amount and direction", async () => 
   assert.equal(capturedBody.duration_blocks, 600);
   assert.equal(capturedBody.direction, "Nay");
   assert.equal(ballot.accepted, true);
+});
+
+test("governanceSubmitPlainBallot accepts decimal Numeric amounts", async () => {
+  let capturedBody;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      capturedBody = JSON.parse(init.body);
+      return createResponse({
+        status: 200,
+        jsonData: cloneFixture(toriiFixtures.governance.plainBallotResponse),
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  await client.governanceSubmitPlainBallot({
+    authority: "alice@wonderland",
+    chainId: "chain-0",
+    referendumId: "ref-plain-decimal",
+    owner: "alice@wonderland",
+    amount: "12.500",
+    durationBlocks: 1,
+    direction: "aye",
+  });
+  assert.equal(capturedBody.amount, "12.500");
 });
 
 test("governanceSubmitPlainBallot forwards AbortSignal to fetch", async () => {
@@ -13082,6 +13191,23 @@ test("deployContract rejects invalid base64 payloads", async () => {
   );
 });
 
+test("deployContract rejects empty code bytes", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("should not fetch");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.deployContract({
+        authority: "alice@wonderland",
+        privateKey: "ed25519:deadbeef",
+        codeB64: Buffer.alloc(0),
+      }),
+    /deployContract\.codeB64/,
+  );
+});
+
 test("deployContractInstance posts combined payload", async () => {
   let captured;
   const responsePayload = {
@@ -14195,6 +14321,37 @@ test("issueOfflineCertificate posts draft and parses response", async () => {
   assert.deepEqual(body.certificate.attestation_report, [4, 5, 6]);
   assert.equal(response.certificate_id_hex, certId);
   assert.equal(response.certificate.controller, "alice@wonderland");
+});
+
+test("issueOfflineCertificate rejects invalid Numeric amounts", async () => {
+  let fetchCalled = false;
+  const fetchImpl = async () => {
+    fetchCalled = true;
+    return createResponse({ status: 500 });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const draft = {
+    controller: "alice@wonderland",
+    allowance: {
+      asset: "usd#wonderland",
+      amount: "1e-3",
+      commitment: Buffer.from([1, 2, 3]),
+    },
+    spend_public_key: "ed0120deadbeef",
+    attestation_report: new Uint8Array([4, 5, 6]),
+    issued_at_ms: 100,
+    expires_at_ms: 200,
+    policy: {
+      max_balance: "10",
+      max_tx_value: "5",
+      expires_at_ms: 200,
+    },
+  };
+  await assert.rejects(
+    () => client.issueOfflineCertificate(draft),
+    /Numeric literal/i,
+  );
+  assert.equal(fetchCalled, false);
 });
 
 test("issueOfflineCertificateRenewal posts to renewal path", async () => {

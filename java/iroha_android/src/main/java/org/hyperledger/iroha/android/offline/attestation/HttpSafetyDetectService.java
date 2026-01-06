@@ -172,6 +172,9 @@ public final class HttpSafetyDetectService implements SafetyDetectService {
 
   private static long asLong(final Object value, final String field) {
     if (value instanceof Number number) {
+      if (number instanceof Float || number instanceof Double) {
+        throw new SafetyDetectException("Safety Detect OAuth field " + field + " must be an integer");
+      }
       return number.longValue();
     }
     if (value == null) {

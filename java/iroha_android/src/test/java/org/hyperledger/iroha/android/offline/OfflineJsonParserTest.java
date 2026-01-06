@@ -13,6 +13,8 @@ public final class OfflineJsonParserTest {
     handlesOptionalAssetId();
     extractsReceiptSummary();
     parsesRevocationPayload();
+    rejectsFractionalTotals();
+    rejectsFractionalOptionalTimestamp();
     System.out.println("[IrohaAndroid] OfflineJsonParserTest passed.");
   }
 
@@ -203,5 +205,54 @@ public final class OfflineJsonParserTest {
     assert "hardware breach".equals(item.note()) : "note mismatch";
     assert "eu".equals(item.metadataAsMap().get("jurisdiction")) : "metadata mismatch";
     assert item.recordAsMap().containsKey("verdict_id") : "record JSON missing";
+  }
+
+  private static void rejectsFractionalTotals() {
+    final String json =
+        """
+        {
+          "total": 1.5,
+          "items": []
+        }
+        """;
+    boolean thrown = false;
+    try {
+      OfflineJsonParser.parseAllowances(json.getBytes(StandardCharsets.UTF_8));
+    } catch (Exception ex) {
+      thrown = true;
+    }
+    assert thrown : "expected non-integer totals to be rejected";
+  }
+
+  private static void rejectsFractionalOptionalTimestamp() {
+    final String json =
+        """
+        {
+          "total": 1,
+          "items": [
+            {
+              "certificate_id_hex": "deadbeef",
+              "controller_id": "alice@wonderland",
+              "controller_display": "alice@wonderland",
+              "asset_id": "usd#wonderland",
+              "registered_at_ms": 1700000000000,
+              "expires_at_ms": 1700500000000,
+              "policy_expires_at_ms": 1700600000000,
+              "refresh_at_ms": 1700400000000.5,
+              "verdict_id_hex": "feedface",
+              "attestation_nonce_hex": "1234abcd",
+              "remaining_amount": "42",
+              "record": { "policy": { "max_tx_value": "10" } }
+            }
+          ]
+        }
+        """;
+    boolean thrown = false;
+    try {
+      OfflineJsonParser.parseAllowances(json.getBytes(StandardCharsets.UTF_8));
+    } catch (Exception ex) {
+      thrown = true;
+    }
+    assert thrown : "expected non-integer timestamps to be rejected";
   }
 }

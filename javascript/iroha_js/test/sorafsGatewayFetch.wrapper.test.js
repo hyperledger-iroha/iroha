@@ -271,6 +271,226 @@ test("sorafsGatewayFetch rejects non-hex provider ids", () => {
   assert.equal(calls, 0);
 });
 
+test("sorafsGatewayFetch rejects invalid manifest ids", () => {
+  let calls = 0;
+  const stubBinding = {
+    sorafsGatewayFetch: () => {
+      calls += 1;
+      return createStubResult();
+    },
+  };
+  const providers = [
+    {
+      name: "alpha",
+      providerIdHex: PROVIDER_ID_HEX,
+      baseUrl: "https://gateway.test/",
+      streamTokenB64: "dG9rZW4=",
+    },
+  ];
+  assert.throws(
+    () =>
+      sorafsGatewayFetch(
+        "zz",
+        "sorafs.sf1@1.0.0",
+        "[]",
+        providers,
+        { allowSingleSourceFallback: true, __nativeBinding: stubBinding },
+      ),
+    /manifestIdHex must be a 32-byte hex string/,
+  );
+  assert.equal(calls, 0);
+});
+
+test("sorafsGatewayFetch rejects invalid manifest envelopes", () => {
+  let calls = 0;
+  const stubBinding = {
+    sorafsGatewayFetch: () => {
+      calls += 1;
+      return createStubResult();
+    },
+  };
+  const providers = [
+    {
+      name: "alpha",
+      providerIdHex: PROVIDER_ID_HEX,
+      baseUrl: "https://gateway.test/",
+      streamTokenB64: "dG9rZW4=",
+    },
+    {
+      name: "beta",
+      providerIdHex: SECOND_PROVIDER_ID_HEX,
+      baseUrl: "https://beta-gateway.test/",
+      streamTokenB64: "bWV0cmljc19hY2Nlc3M=",
+    },
+  ];
+  assert.throws(
+    () =>
+      sorafsGatewayFetch(
+        MANIFEST_HEX,
+        "sorafs.sf1@1.0.0",
+        "[]",
+        providers,
+        { manifestEnvelopeB64: "not*base64", __nativeBinding: stubBinding },
+      ),
+    /manifestEnvelopeB64 must be a valid base64 string/,
+  );
+  assert.equal(calls, 0);
+});
+
+test("sorafsGatewayFetch rejects fractional maxPeers", () => {
+  let calls = 0;
+  const stubBinding = {
+    sorafsGatewayFetch: () => {
+      calls += 1;
+      return createStubResult();
+    },
+  };
+  const providers = [
+    {
+      name: "alpha",
+      providerIdHex: PROVIDER_ID_HEX,
+      baseUrl: "https://gateway.test/",
+      streamTokenB64: "dG9rZW4=",
+    },
+    {
+      name: "beta",
+      providerIdHex: SECOND_PROVIDER_ID_HEX,
+      baseUrl: "https://beta-gateway.test/",
+      streamTokenB64: "bWV0cmljc19hY2Nlc3M=",
+    },
+  ];
+  assert.throws(
+    () =>
+      sorafsGatewayFetch(
+        MANIFEST_HEX,
+        "sorafs.sf1@1.0.0",
+        "[]",
+        providers,
+        { maxPeers: 1.5, __nativeBinding: stubBinding },
+      ),
+    /maxPeers must be a positive safe integer/,
+  );
+  assert.equal(calls, 0);
+});
+
+test("sorafsGatewayFetch rejects invalid stream tokens", () => {
+  let calls = 0;
+  const stubBinding = {
+    sorafsGatewayFetch: () => {
+      calls += 1;
+      return createStubResult();
+    },
+  };
+  const providers = [
+    {
+      name: "alpha",
+      providerIdHex: PROVIDER_ID_HEX,
+      baseUrl: "https://gateway.test/",
+      streamTokenB64: "not-base64!!",
+    },
+  ];
+  assert.throws(
+    () =>
+      sorafsGatewayFetch(
+        MANIFEST_HEX,
+        "sorafs.sf1@1.0.0",
+        "[]",
+        providers,
+        { allowSingleSourceFallback: true, __nativeBinding: stubBinding },
+      ),
+    /streamTokenB64 must be a valid base64/i,
+  );
+  assert.equal(calls, 0);
+});
+
+test("sorafsGatewayFetch rejects fractional scoreboardNowUnixSecs", () => {
+  let calls = 0;
+  const stubBinding = {
+    sorafsGatewayFetch: () => {
+      calls += 1;
+      return createStubResult();
+    },
+  };
+  const providers = [
+    {
+      name: "alpha",
+      providerIdHex: PROVIDER_ID_HEX,
+      baseUrl: "https://gateway.test/",
+      streamTokenB64: "dG9rZW4=",
+    },
+    {
+      name: "beta",
+      providerIdHex: SECOND_PROVIDER_ID_HEX,
+      baseUrl: "https://beta-gateway.test/",
+      streamTokenB64: "bWV0cmljc19hY2Nlc3M=",
+    },
+  ];
+  assert.throws(
+    () =>
+      sorafsGatewayFetch(
+        MANIFEST_HEX,
+        "sorafs.sf1@1.0.0",
+        "[]",
+        providers,
+        { scoreboardNowUnixSecs: 1.5, __nativeBinding: stubBinding },
+      ),
+    /scoreboardNowUnixSecs must be an integer/i,
+  );
+  assert.equal(calls, 0);
+});
+
+test("sorafsGatewayFetch rejects fractional taikai cache burst multipliers", () => {
+  let calls = 0;
+  const stubBinding = {
+    sorafsGatewayFetch: () => {
+      calls += 1;
+      return createStubResult();
+    },
+  };
+  const providers = [
+    {
+      name: "alpha",
+      providerIdHex: PROVIDER_ID_HEX,
+      baseUrl: "https://gateway.test/",
+      streamTokenB64: "dG9rZW4=",
+    },
+    {
+      name: "beta",
+      providerIdHex: SECOND_PROVIDER_ID_HEX,
+      baseUrl: "https://beta-gateway.test/",
+      streamTokenB64: "bWV0cmljc19hY2Nlc3M=",
+    },
+  ];
+  assert.throws(
+    () =>
+      sorafsGatewayFetch(
+        MANIFEST_HEX,
+        "sorafs.sf1@1.0.0",
+        "[]",
+        providers,
+        {
+          taikaiCache: {
+            hotCapacityBytes: 8_388_608,
+            hotRetentionSecs: 45,
+            warmCapacityBytes: 33_554_432,
+            warmRetentionSecs: 180,
+            coldCapacityBytes: 268_435_456,
+            coldRetentionSecs: 3_600,
+            qos: {
+              priorityRateBps: 83_886_080,
+              standardRateBps: 41_943_040,
+              bulkRateBps: 12_582_912,
+              burstMultiplier: 1.5,
+            },
+          },
+          __nativeBinding: stubBinding,
+        },
+      ),
+    /taikaiCache\.qos\.burstMultiplier must be an integer/i,
+  );
+  assert.equal(calls, 0);
+});
+
 test("sorafsGatewayFetch forwards retryBudget zero to disable cap", () => {
   const calls = [];
   const stubResult = createStubResult();

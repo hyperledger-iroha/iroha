@@ -296,11 +296,17 @@ public final class OfflineVerdictMetadata {
     if (!(value instanceof Number number)) {
       throw new IllegalStateException(field + " is not a number");
     }
+    if (number instanceof Float || number instanceof Double) {
+      throw new IllegalStateException(field + " must be an integer");
+    }
     return number.longValue();
   }
 
   private static Long asOptionalLong(final Object value) {
     if (value instanceof Number number) {
+      if (number instanceof Float || number instanceof Double) {
+        return null;
+      }
       return number.longValue();
     }
     return null;
@@ -459,6 +465,9 @@ public final class OfflineVerdictMetadata {
       if (!(fetchedValue instanceof Number number)) {
         return null;
       }
+      if (number instanceof Float || number instanceof Double) {
+        return null;
+      }
       return new PlayIntegrityTokenSnapshot(tokenString, number.longValue());
     }
   }
@@ -567,6 +576,9 @@ public final class OfflineVerdictMetadata {
       if (!(fetchedValue instanceof Number number)) {
         return null;
       }
+      if (number instanceof Float || number instanceof Double) {
+        return null;
+      }
       return new SafetyDetectTokenSnapshot(tokenString, number.longValue());
     }
   }
@@ -655,6 +667,9 @@ public final class OfflineVerdictMetadata {
 
   private static Integer asOptionalInteger(final Object value) {
     if (value instanceof Number number) {
+      if (number instanceof Float || number instanceof Double) {
+        return null;
+      }
       return number.intValue();
     }
     if (value == null) {

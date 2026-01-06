@@ -2322,6 +2322,162 @@ data: {"VerifyingKey":{"Updated":{"id":{"backend":"halo2/ipa","name":"vk_main"},
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testStreamVerifyingKeyEventsRejectsMultiplePayloadKinds() async throws {
+        let ssePayload = """
+id: 91
+data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}},"Updated":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        let stream = makeClient().streamVerifyingKeyEvents()
+        var iterator = stream.makeAsyncIterator()
+        do {
+            _ = try await iterator.next()
+            XCTFail("Expected verifying key event decoding error")
+        } catch {
+            guard case ToriiClientError.decoding = error else {
+                return XCTFail("Expected ToriiClientError.decoding")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamVerifyingKeyEventsRejectsInvalidIdComponent() async throws {
+        let ssePayload = """
+id: 92
+data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2:ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        let stream = makeClient().streamVerifyingKeyEvents()
+        var iterator = stream.makeAsyncIterator()
+        do {
+            _ = try await iterator.next()
+            XCTFail("Expected verifying key event decoding error")
+        } catch {
+            guard case ToriiClientError.decoding = error else {
+                return XCTFail("Expected ToriiClientError.decoding")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamVerifyingKeyEventsRejectsInvalidRecordHex() async throws {
+        let ssePayload = """
+id: 93
+data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"zz","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        let stream = makeClient().streamVerifyingKeyEvents()
+        var iterator = stream.makeAsyncIterator()
+        do {
+            _ = try await iterator.next()
+            XCTFail("Expected verifying key event decoding error")
+        } catch {
+            guard case ToriiClientError.decoding = error else {
+                return XCTFail("Expected ToriiClientError.decoding")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamVerifyingKeyEventsRejectsNegativeVkLength() async throws {
+        let ssePayload = """
+id: 94
+data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":-1,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active"}}}}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        let stream = makeClient().streamVerifyingKeyEvents()
+        var iterator = stream.makeAsyncIterator()
+        do {
+            _ = try await iterator.next()
+            XCTFail("Expected verifying key event decoding error")
+        } catch {
+            guard case ToriiClientError.decoding = error else {
+                return XCTFail("Expected ToriiClientError.decoding")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamVerifyingKeyEventsRejectsEmptyInlineKeyBytes() async throws {
+        let ssePayload = """
+id: 95
+data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":96,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active","key":{"backend":"halo2/ipa","bytes_b64":""}}}}}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        let stream = makeClient().streamVerifyingKeyEvents()
+        var iterator = stream.makeAsyncIterator()
+        do {
+            _ = try await iterator.next()
+            XCTFail("Expected verifying key event decoding error")
+        } catch {
+            guard case ToriiClientError.decoding = error else {
+                return XCTFail("Expected ToriiClientError.decoding")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testStreamVerifyingKeyEventsIncludesLastEventIdHeader() async throws {
         let ssePayload = """
 id: 21
@@ -2474,6 +2630,19 @@ data: {"VerifyingKey":{"Updated":{"id":{"backend":"halo2/ipa","name":"vk_main"},
         }
     }
 
+    func testVerifyingKeyEventFilterRejectsInvalidBackendOrName() {
+        XCTAssertThrowsError(try ToriiVerifyingKeyEventFilter(backend: " ", name: "vk").queryItems()) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+        XCTAssertThrowsError(try ToriiVerifyingKeyEventFilter(backend: "halo2/ipa", name: "vk:main").queryItems()) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testStreamTriggerEventsAsync() async throws {
         let ssePayload = """
@@ -2569,6 +2738,38 @@ data: {"Trigger":{"MetadataRemoved":{"target":"nightly-tick","key":"mode","value
 
         let finished = try await iterator.next()
         XCTAssertNil(finished)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamTriggerEventsRejectsMultiplePayloadKinds() async throws {
+        let ssePayload = """
+id: 301
+data: {"Trigger":{"Created":"nightly-tick","Deleted":"nightly-tick"}}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        let stream = makeClient().streamTriggerEvents()
+        var iterator = stream.makeAsyncIterator()
+        do {
+            _ = try await iterator.next()
+            XCTFail("Expected trigger event decoding error")
+        } catch {
+            guard case ToriiClientError.decoding = error else {
+                return XCTFail("Expected ToriiClientError.decoding")
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2698,6 +2899,131 @@ id: 43
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testStreamProofEventsRejectsMultiplePayloadKinds() async throws {
+        let ssePayload = """
+id: 77
+data: {"Proof":{"Verified":{"id":{"backend":"halo2/ipa","proof_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},"Rejected":{"id":{"backend":"halo2/ipa","proof_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        let stream = makeClient().streamProofEvents()
+        var iterator = stream.makeAsyncIterator()
+        do {
+            _ = try await iterator.next()
+            XCTFail("Expected proof event decoding error")
+        } catch {
+            guard case ToriiClientError.decoding = error else {
+                return XCTFail("Expected ToriiClientError.decoding")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamProofEventsRejectsInvalidProofHashHex() async throws {
+        let ssePayload = """
+id: 90
+data: {"Proof":{"Rejected":{"id":{"backend":"halo2/ipa","proof_hash_hex":"abcd"}}}}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        let stream = makeClient().streamProofEvents()
+        var iterator = stream.makeAsyncIterator()
+        do {
+            _ = try await iterator.next()
+            XCTFail("Expected proof event decoding error")
+        } catch {
+            guard case ToriiClientError.decoding = error else {
+                return XCTFail("Expected ToriiClientError.decoding")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamProofEventsRejectsInvalidCommitmentHex() async throws {
+        let ssePayload = """
+id: 91
+data: {"Proof":{"Verified":{"id":{"backend":"halo2/ipa","proof_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"vk_commitment":"zzzz"}}}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        let stream = makeClient().streamProofEvents()
+        var iterator = stream.makeAsyncIterator()
+        do {
+            _ = try await iterator.next()
+            XCTFail("Expected proof event decoding error")
+        } catch {
+            guard case ToriiClientError.decoding = error else {
+                return XCTFail("Expected ToriiClientError.decoding")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamProofEventsRejectsInvalidBackend() async throws {
+        let ssePayload = """
+id: 92
+data: {"Proof":{"Rejected":{"id":{"backend":"halo2:ipa","proof_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        let stream = makeClient().streamProofEvents()
+        var iterator = stream.makeAsyncIterator()
+        do {
+            _ = try await iterator.next()
+            XCTFail("Expected proof event decoding error")
+        } catch {
+            guard case ToriiClientError.decoding = error else {
+                return XCTFail("Expected ToriiClientError.decoding")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testStreamProofEventsIncludesLastEventIdHeader() async throws {
         let ssePayload = """
 id: 88
@@ -2737,6 +3063,26 @@ id: 88
         }
         XCTAssertThrowsError(try ToriiProofEventFilter(backend: "halo2/ipa",
                                                        proofHashHex: "abc",
+                                                       includeVerified: true,
+                                                       includeRejected: true).queryItems()) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+    }
+
+    func testProofEventFilterRejectsInvalidBackendOrHash() {
+        let invalidHash = String(repeating: "z", count: 64)
+        XCTAssertThrowsError(try ToriiProofEventFilter(backend: "halo2:ipa",
+                                                       proofHashHex: String(repeating: "a", count: 64),
+                                                       includeVerified: true,
+                                                       includeRejected: true).queryItems()) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+        XCTAssertThrowsError(try ToriiProofEventFilter(backend: "halo2/ipa",
+                                                       proofHashHex: invalidHash,
                                                        includeVerified: true,
                                                        includeRejected: true).queryItems()) { error in
             guard case ToriiClientError.invalidPayload = error else {

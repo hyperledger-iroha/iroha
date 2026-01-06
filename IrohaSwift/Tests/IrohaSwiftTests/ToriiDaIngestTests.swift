@@ -121,6 +121,45 @@ final class ToriiDaIngestTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(ToriiDaRentQuote.self, from: payload))
     }
 
+    func testReceiptRejectsDigestWrongLength() {
+        let bytes = (0..<31).map { UInt8($0) }
+        let digestJSON = "[[\(bytes.map(String.init).joined(separator: ","))]]"
+        let payload = """
+        {
+            "client_blob_id":\(digestJSON),
+            "lane_id":5,
+            "epoch":7,
+            "blob_hash":\(digestJSON),
+            "chunk_root":\(digestJSON),
+            "manifest_hash":\(digestJSON),
+            "storage_ticket":\(digestJSON),
+            "queued_at_unix":1700000000,
+            "operator_signature":"DEADBEEF"
+        }
+        """.data(using: .utf8)!
+
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiDaIngestReceipt.self, from: payload))
+    }
+
+    func testReceiptRejectsDigestWithMultipleTupleEntries() {
+        let digestJSON = "[[1],[2]]"
+        let payload = """
+        {
+            "client_blob_id":\(digestJSON),
+            "lane_id":5,
+            "epoch":7,
+            "blob_hash":\(digestJSON),
+            "chunk_root":\(digestJSON),
+            "manifest_hash":\(digestJSON),
+            "storage_ticket":\(digestJSON),
+            "queued_at_unix":1700000000,
+            "operator_signature":"DEADBEEF"
+        }
+        """.data(using: .utf8)!
+
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiDaIngestReceipt.self, from: payload))
+    }
+
     func testMissingClientBlobIdFails() {
         let submission = ToriiDaBlobSubmission(payload: Data("hi".utf8))
         let builder = ToriiDaIngestRequestBuilder(submission: submission)

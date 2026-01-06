@@ -3529,9 +3529,13 @@ public struct ToriiVerifyingKeyInline: Decodable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        backend = try container.decode(String.self, forKey: .backend)
+        let rawBackend = try container.decode(String.self, forKey: .backend)
+        backend = try ToriiValidation.normalizedBackend(rawBackend,
+                                                        field: "backend",
+                                                        codingPath: container.codingPath + [CodingKeys.backend])
         let b64 = try container.decode(String.self, forKey: .bytesB64)
-        guard let data = Data(base64Encoded: b64) else {
+        let trimmed = b64.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let data = Data(base64Encoded: trimmed), !data.isEmpty else {
             throw DecodingError.dataCorruptedError(forKey: .bytesB64,
                                                    in: container,
                                                    debugDescription: "Invalid base64 verifying key bytes")
@@ -3577,14 +3581,42 @@ public struct ToriiVerifyingKeyRecord: Decodable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        version = try container.decode(Int.self, forKey: .version)
-        circuitId = try container.decode(String.self, forKey: .circuitId)
-        backend = try container.decode(String.self, forKey: .backend)
-        curve = try container.decode(String.self, forKey: .curve)
-        publicInputsSchemaHashHex = try container.decode(String.self, forKey: .publicInputsSchemaHashHex)
-        commitmentHex = try container.decode(String.self, forKey: .commitmentHex)
-        verifyingKeyLength = try container.decode(Int.self, forKey: .verifyingKeyLength)
-        maxProofBytes = try container.decode(Int.self, forKey: .maxProofBytes)
+        let versionValue = try container.decode(Int.self, forKey: .version)
+        version = try ToriiValidation.validatedUInt32(versionValue,
+                                                      field: "version",
+                                                      codingPath: container.codingPath + [CodingKeys.version])
+        let rawCircuitId = try container.decode(String.self, forKey: .circuitId)
+        circuitId = try ToriiValidation.normalizedNonEmpty(rawCircuitId,
+                                                           field: "circuit_id",
+                                                           codingPath: container.codingPath + [CodingKeys.circuitId])
+        let rawBackend = try container.decode(String.self, forKey: .backend)
+        backend = try ToriiValidation.normalizedBackend(rawBackend,
+                                                        field: "backend",
+                                                        codingPath: container.codingPath + [CodingKeys.backend])
+        let rawCurve = try container.decode(String.self, forKey: .curve)
+        curve = try ToriiValidation.normalizedNonEmpty(rawCurve,
+                                                       field: "curve",
+                                                       codingPath: container.codingPath + [CodingKeys.curve])
+        let rawSchema = try container.decode(String.self, forKey: .publicInputsSchemaHashHex)
+        publicInputsSchemaHashHex = try ToriiValidation.normalized32ByteHex(
+            rawSchema,
+            field: "public_inputs_schema_hash",
+            codingPath: container.codingPath + [CodingKeys.publicInputsSchemaHashHex]
+        )
+        let rawCommitment = try container.decode(String.self, forKey: .commitmentHex)
+        commitmentHex = try ToriiValidation.normalized32ByteHex(
+            rawCommitment,
+            field: "commitment",
+            codingPath: container.codingPath + [CodingKeys.commitmentHex]
+        )
+        let vkLenValue = try container.decode(Int.self, forKey: .verifyingKeyLength)
+        verifyingKeyLength = try ToriiValidation.validatedUInt32(vkLenValue,
+                                                                 field: "vk_len",
+                                                                 codingPath: container.codingPath + [CodingKeys.verifyingKeyLength])
+        let maxProofValue = try container.decode(Int.self, forKey: .maxProofBytes)
+        maxProofBytes = try ToriiValidation.validatedUInt32(maxProofValue,
+                                                            field: "max_proof_bytes",
+                                                            codingPath: container.codingPath + [CodingKeys.maxProofBytes])
         gasScheduleId = try container.decodeIfPresent(String.self, forKey: .gasScheduleId)
         metadataUriCid = try container.decodeIfPresent(String.self, forKey: .metadataUriCid)
         verifyingKeyBytesCid = try container.decodeIfPresent(String.self, forKey: .verifyingKeyBytesCid)
@@ -3598,6 +3630,32 @@ public struct ToriiVerifyingKeyRecord: Decodable, Sendable {
 public struct ToriiVerifyingKeyId: Decodable, Sendable {
     public let backend: String
     public let name: String
+
+    private enum CodingKeys: String, CodingKey {
+        case backend
+        case name
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let rawBackend = try container.decode(String.self, forKey: .backend)
+        backend = try ToriiValidation.normalizedBackend(rawBackend,
+                                                        field: "backend",
+                                                        codingPath: container.codingPath + [CodingKeys.backend])
+        let rawName = try container.decode(String.self, forKey: .name)
+        let normalizedName = try ToriiValidation.normalizedNonEmpty(rawName,
+                                                                    field: "name",
+                                                                    codingPath: container.codingPath + [CodingKeys.name])
+        if normalizedName.contains(":") {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: container.codingPath + [CodingKeys.name],
+                    debugDescription: "name must not contain ':' characters"
+                )
+            )
+        }
+        name = normalizedName
+    }
 }
 
 public struct ToriiVerifyingKeyDetail: Decodable, Sendable {
@@ -3930,7 +3988,9 @@ public struct ToriiVerifyingKeyEventFilter: Sendable {
                     "Provide both backend and name when filtering verifying key events by id."
                 )
             }
-            body["id_matcher"] = ["backend": backend, "name": name]
+            let normalizedBackend = try Self.normalizedIdComponent(backend, field: "backend")
+            let normalizedName = try Self.normalizedIdComponent(name, field: "name")
+            body["id_matcher"] = ["backend": normalizedBackend, "name": normalizedName]
         }
 
         let filterPayload: [String: Any] = ["VerifyingKey": body]
@@ -3939,6 +3999,17 @@ public struct ToriiVerifyingKeyEventFilter: Sendable {
             throw ToriiClientError.invalidPayload("Failed to encode verifying key event filter.")
         }
         return [URLQueryItem(name: "filter", value: json)]
+    }
+
+    private static func normalizedIdComponent(_ value: String, field: String) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+        }
+        if trimmed.contains(":") {
+            throw ToriiClientError.invalidPayload("\(field) must not contain ':' characters.")
+        }
+        return trimmed
     }
 }
 
@@ -3959,8 +4030,83 @@ public struct ToriiProofId: Decodable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let backend = try container.decode(String.self, forKey: .backend)
+        let normalizedBackend = try ToriiValidation.normalizedBackend(
+            backend,
+            field: "backend",
+            codingPath: container.codingPath + [CodingKeys.backend]
+        )
         let hashHex = try container.decode(String.self, forKey: .proofHashHex)
-        self.init(backend: backend, proofHashHex: hashHex)
+        let normalizedHash = try ToriiValidation.normalized32ByteHex(
+            hashHex,
+            field: "proof_hash_hex",
+            codingPath: container.codingPath + [CodingKeys.proofHashHex]
+        )
+        self.backend = normalizedBackend
+        self.proofHashHex = normalizedHash
+    }
+}
+
+fileprivate enum ToriiValidation {
+    static func normalizedNonEmpty(_ value: String,
+                                   field: String,
+                                   codingPath: [CodingKey]) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: codingPath,
+                    debugDescription: "\(field) must be a non-empty string"
+                )
+            )
+        }
+        return trimmed
+    }
+
+    static func normalizedBackend(_ value: String,
+                                  field: String,
+                                  codingPath: [CodingKey]) throws -> String {
+        let trimmed = try normalizedNonEmpty(value, field: field, codingPath: codingPath)
+        if trimmed.contains(":") {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: codingPath,
+                    debugDescription: "\(field) must not contain ':' characters"
+                )
+            )
+        }
+        return trimmed
+    }
+
+    static func normalized32ByteHex(_ value: String,
+                                    field: String,
+                                    codingPath: [CodingKey]) throws -> String {
+        var trimmed = try normalizedNonEmpty(value, field: field, codingPath: codingPath)
+        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
+            trimmed = String(trimmed.dropFirst(2))
+        }
+        guard trimmed.count == 64, Data(hexString: trimmed) != nil else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: codingPath,
+                    debugDescription: "\(field) must be a 32-byte hex string"
+                )
+            )
+        }
+        return trimmed.lowercased()
+    }
+
+    static func validatedUInt32(_ value: Int,
+                                field: String,
+                                codingPath: [CodingKey]) throws -> Int {
+        guard value >= 0, value <= Int(UInt32.max) else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: codingPath,
+                    debugDescription: "\(field) must fit in a u32"
+                )
+            )
+        }
+        return value
     }
 }
 
@@ -3983,9 +4129,33 @@ public struct ToriiProofEventBody: Decodable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(ToriiProofId.self, forKey: .id)
         verifyingKeyId = try container.decodeIfPresent(ToriiVerifyingKeyId.self, forKey: .verifyingKeyId)
-        verifyingKeyCommitmentHex = try container.decodeIfPresent(String.self, forKey: .verifyingKeyCommitmentHex)
-        callHashHex = try container.decodeIfPresent(String.self, forKey: .callHashHex)
-        envelopeHashHex = try container.decodeIfPresent(String.self, forKey: .envelopeHashHex)
+        if let commitment = try container.decodeIfPresent(String.self, forKey: .verifyingKeyCommitmentHex) {
+            verifyingKeyCommitmentHex = try ToriiValidation.normalized32ByteHex(
+                commitment,
+                field: "vk_commitment",
+                codingPath: container.codingPath + [CodingKeys.verifyingKeyCommitmentHex]
+            )
+        } else {
+            verifyingKeyCommitmentHex = nil
+        }
+        if let callHash = try container.decodeIfPresent(String.self, forKey: .callHashHex) {
+            callHashHex = try ToriiValidation.normalized32ByteHex(
+                callHash,
+                field: "call_hash",
+                codingPath: container.codingPath + [CodingKeys.callHashHex]
+            )
+        } else {
+            callHashHex = nil
+        }
+        if let envelopeHash = try container.decodeIfPresent(String.self, forKey: .envelopeHashHex) {
+            envelopeHashHex = try ToriiValidation.normalized32ByteHex(
+                envelopeHash,
+                field: "envelope_hash",
+                codingPath: container.codingPath + [CodingKeys.envelopeHashHex]
+            )
+        } else {
+            envelopeHashHex = nil
+        }
     }
 }
 
@@ -4029,13 +4199,11 @@ public struct ToriiProofEventFilter: Sendable {
                     "Provide both backend and proofHashHex when filtering proof events by id."
                 )
             }
-            let normalized = proofHashHex.lowercased()
-            if normalized.count != 64 {
-                throw ToriiClientError.invalidPayload("Expected 32-byte proof hash in hex form.")
-            }
+            let normalizedBackend = try Self.normalizedBackend(backend)
+            let normalizedHash = try Self.normalizedHashHex(proofHashHex)
             let filterPayload: [String: Any] = [
                 "Proof": [
-                    "id_matcher": ["backend": backend, "hash_hex": normalized],
+                    "id_matcher": ["backend": normalizedBackend, "hash_hex": normalizedHash],
                     "event_set": [
                         "Verified": includeVerified,
                         "Rejected": includeRejected,
@@ -4062,6 +4230,31 @@ public struct ToriiProofEventFilter: Sendable {
             throw ToriiClientError.invalidPayload("Failed to encode proof event filter.")
         }
         return [URLQueryItem(name: "filter", value: json)]
+    }
+
+    private static func normalizedBackend(_ value: String) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw ToriiClientError.invalidPayload("backend must be a non-empty string.")
+        }
+        if trimmed.contains(":") {
+            throw ToriiClientError.invalidPayload("backend must not contain ':' characters.")
+        }
+        return trimmed
+    }
+
+    private static func normalizedHashHex(_ value: String) throws -> String {
+        var trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw ToriiClientError.invalidPayload("proofHashHex must be a non-empty string.")
+        }
+        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
+            trimmed = String(trimmed.dropFirst(2))
+        }
+        guard trimmed.count == 64, Data(hexString: trimmed) != nil else {
+            throw ToriiClientError.invalidPayload("Expected 32-byte proof hash in hex form.")
+        }
+        return trimmed.lowercased()
     }
 }
 
@@ -7884,17 +8077,21 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            if let payload = try container.decodeIfPresent(ToriiVerifyingKeyEventRecordPayload.self, forKey: .registered) {
-                self = .registered(payload)
-                return
+            let keys = container.allKeys
+            guard keys.count == 1 else {
+                throw DecodingError.dataCorrupted(
+                    DecodingError.Context(
+                        codingPath: decoder.codingPath,
+                        debugDescription: "Expected exactly one verifying key event payload."
+                    )
+                )
             }
-            if let payload = try container.decodeIfPresent(ToriiVerifyingKeyEventRecordPayload.self, forKey: .updated) {
-                self = .updated(payload)
-                return
+            switch keys[0] {
+            case .registered:
+                self = .registered(try container.decode(ToriiVerifyingKeyEventRecordPayload.self, forKey: .registered))
+            case .updated:
+                self = .updated(try container.decode(ToriiVerifyingKeyEventRecordPayload.self, forKey: .updated))
             }
-            throw DecodingError.dataCorruptedError(forKey: .registered,
-                                                   in: container,
-                                                   debugDescription: "Unknown verifying key event payload.")
         }
 
         func toEvent() -> ToriiVerifyingKeyEvent {
@@ -7963,33 +8160,29 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            if let value = try container.decodeIfPresent(String.self, forKey: .created) {
-                self = .created(value)
-                return
+            let keys = container.allKeys
+            guard keys.count == 1 else {
+                throw DecodingError.dataCorrupted(
+                    DecodingError.Context(
+                        codingPath: decoder.codingPath,
+                        debugDescription: "Expected exactly one trigger event payload."
+                    )
+                )
             }
-            if let value = try container.decodeIfPresent(String.self, forKey: .deleted) {
-                self = .deleted(value)
-                return
+            switch keys[0] {
+            case .created:
+                self = .created(try container.decode(String.self, forKey: .created))
+            case .deleted:
+                self = .deleted(try container.decode(String.self, forKey: .deleted))
+            case .extended:
+                self = .extended(try container.decode(ToriiTriggerNumberOfExecutionsChanged.self, forKey: .extended))
+            case .shortened:
+                self = .shortened(try container.decode(ToriiTriggerNumberOfExecutionsChanged.self, forKey: .shortened))
+            case .metadataInserted:
+                self = .metadataInserted(try container.decode(ToriiTriggerMetadataChanged.self, forKey: .metadataInserted))
+            case .metadataRemoved:
+                self = .metadataRemoved(try container.decode(ToriiTriggerMetadataChanged.self, forKey: .metadataRemoved))
             }
-            if let value = try container.decodeIfPresent(ToriiTriggerNumberOfExecutionsChanged.self, forKey: .extended) {
-                self = .extended(value)
-                return
-            }
-            if let value = try container.decodeIfPresent(ToriiTriggerNumberOfExecutionsChanged.self, forKey: .shortened) {
-                self = .shortened(value)
-                return
-            }
-            if let value = try container.decodeIfPresent(ToriiTriggerMetadataChanged.self, forKey: .metadataInserted) {
-                self = .metadataInserted(value)
-                return
-            }
-            if let value = try container.decodeIfPresent(ToriiTriggerMetadataChanged.self, forKey: .metadataRemoved) {
-                self = .metadataRemoved(value)
-                return
-            }
-            throw DecodingError.dataCorruptedError(forKey: .created,
-                                                   in: container,
-                                                   debugDescription: "Unknown trigger event payload.")
         }
 
         func toEvent() -> ToriiTriggerEvent {
@@ -8053,17 +8246,21 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            if let payload = try container.decodeIfPresent(ToriiProofEventBody.self, forKey: .verified) {
-                self = .verified(payload)
-                return
+            let keys = container.allKeys
+            guard keys.count == 1 else {
+                throw DecodingError.dataCorrupted(
+                    DecodingError.Context(
+                        codingPath: decoder.codingPath,
+                        debugDescription: "Expected exactly one proof event payload."
+                    )
+                )
             }
-            if let payload = try container.decodeIfPresent(ToriiProofEventBody.self, forKey: .rejected) {
-                self = .rejected(payload)
-                return
+            switch keys[0] {
+            case .verified:
+                self = .verified(try container.decode(ToriiProofEventBody.self, forKey: .verified))
+            case .rejected:
+                self = .rejected(try container.decode(ToriiProofEventBody.self, forKey: .rejected))
             }
-            throw DecodingError.dataCorruptedError(forKey: .verified,
-                                                   in: container,
-                                                   debugDescription: "Unknown proof event payload.")
         }
 
         func toEvent() -> ToriiProofEvent {

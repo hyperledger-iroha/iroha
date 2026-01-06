@@ -5,6 +5,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import org.hyperledger.iroha.android.client.JsonParser;
 
 public final class OfflineVerdictJournalTest {
 
@@ -17,6 +19,11 @@ public final class OfflineVerdictJournalTest {
     storesPlayIntegrityToken();
     parsesPlayIntegrityMetadata();
     parsesProvisionedMetadata();
+    rejectsFractionalRequiredMetadataFields();
+    dropsFractionalTokenTimestamps();
+    dropsFractionalProvisionedVersion();
+    dropsFractionalPlayIntegrityMaxAge();
+    dropsFractionalIntegrityMetadataFields();
     System.out.println("[IrohaAndroid] OfflineVerdictJournalTest passed.");
   }
 
@@ -136,6 +143,126 @@ public final class OfflineVerdictJournalTest {
     Files.deleteIfExists(tempFile);
   }
 
+  private static void rejectsFractionalRequiredMetadataFields() {
+    final String json =
+        """
+        {
+          "controller_id": "alice@wonderland",
+          "controller_display": "alice@wonderland",
+          "certificate_expires_at_ms": 1700000000000.5,
+          "policy_expires_at_ms": 1700000000000,
+          "recorded_at_ms": 1700000000000
+        }
+        """;
+    boolean thrown = false;
+    try {
+      OfflineVerdictMetadata.fromJson("deadbeef", parseObject(json));
+    } catch (final IllegalStateException ex) {
+      thrown = true;
+    }
+    assert thrown : "expected fractional timestamps to be rejected";
+  }
+
+  private static void dropsFractionalTokenTimestamps() {
+    final String json =
+        """
+        {
+          "controller_id": "alice@wonderland",
+          "controller_display": "alice@wonderland",
+          "certificate_expires_at_ms": 1700000000000,
+          "policy_expires_at_ms": 1700000000000,
+          "recorded_at_ms": 1700000000000,
+          "play_integrity_token": {
+            "token": "play-token",
+            "fetched_at_ms": 1700000000000.25
+          },
+          "hms_safety_detect_token": {
+            "token": "hms-token",
+            "fetched_at_ms": 1700000000000.5
+          }
+        }
+        """;
+    final OfflineVerdictMetadata metadata =
+        OfflineVerdictMetadata.fromJson("deadbeef", parseObject(json));
+    assert metadata.playIntegrityToken() == null : "expected play integrity token to be dropped";
+    assert metadata.hmsSafetyDetectToken() == null : "expected HMS token to be dropped";
+  }
+
+  private static void dropsFractionalProvisionedVersion() {
+    final String json =
+        """
+        {
+          "controller_id": "alice@wonderland",
+          "controller_display": "alice@wonderland",
+          "certificate_expires_at_ms": 1700000000000,
+          "policy_expires_at_ms": 1700000000000,
+          "recorded_at_ms": 1700000000000,
+          "android_provisioned": {
+            "inspector_public_key": "ed0120C0FFEE",
+            "manifest_schema": "offline_provisioning_v1",
+            "manifest_version": 1.5
+          }
+        }
+        """;
+    final OfflineVerdictMetadata metadata =
+        OfflineVerdictMetadata.fromJson("deadbeef", parseObject(json));
+    final OfflineVerdictMetadata.ProvisionedMetadata provisioned =
+        metadata.provisionedMetadata();
+    assert provisioned != null : "expected provisioned metadata to parse";
+    assert provisioned.manifestVersion() == null : "expected fractional version to be dropped";
+  }
+
+  private static void dropsFractionalPlayIntegrityMaxAge() {
+    final String json =
+        """
+        {
+          "controller_id": "alice@wonderland",
+          "controller_display": "alice@wonderland",
+          "certificate_expires_at_ms": 1700000000000,
+          "policy_expires_at_ms": 1700000000000,
+          "recorded_at_ms": 1700000000000,
+          "play_integrity": {
+            "cloud_project_number": 4242,
+            "environment": "testing",
+            "package_names": ["com.example.pos"],
+            "signing_digests_sha256": ["ab12"],
+            "allowed_app_verdicts": ["PLAY_RECOGNIZED"],
+            "allowed_device_verdicts": ["MEETS_DEVICE_INTEGRITY"],
+            "max_token_age_ms": 3600.5
+          }
+        }
+        """;
+    final OfflineVerdictMetadata metadata =
+        OfflineVerdictMetadata.fromJson("deadbeef", parseObject(json));
+    final OfflineVerdictMetadata.PlayIntegrityMetadata play = metadata.playIntegrity();
+    assert play != null : "expected play integrity metadata";
+    assert play.maxTokenAgeMs() == null : "expected fractional max age to be dropped";
+  }
+
+  private static void dropsFractionalIntegrityMetadataFields() throws IOException {
+    final Path tempFile = Files.createTempFile("offline-verdict-journal", ".json");
+    try {
+      final OfflineVerdictJournal journal = new OfflineVerdictJournal(tempFile);
+      journal.upsert(
+          List.of(fractionalPlayIntegrityAllowance(), fractionalProvisionedAllowance()),
+          Instant.now());
+      final OfflineVerdictMetadata play =
+          journal.find("fractional-play")
+              .orElseThrow(() -> new IllegalStateException("missing play metadata"));
+      assert play.playIntegrity() != null : "expected play integrity metadata";
+      assert play.playIntegrity().maxTokenAgeMs() == null
+          : "expected fractional play integrity max age to be dropped";
+      final OfflineVerdictMetadata provisioned =
+          journal.find("fractional-prov")
+              .orElseThrow(() -> new IllegalStateException("missing provisioned metadata"));
+      assert provisioned.provisionedMetadata() != null : "expected provisioned metadata";
+      assert provisioned.provisionedMetadata().manifestVersion() == null
+          : "expected fractional manifest version to be dropped";
+    } finally {
+      Files.deleteIfExists(tempFile);
+    }
+  }
+
   private static OfflineAllowanceList.OfflineAllowanceItem sampleAllowance() {
     return new OfflineAllowanceList.OfflineAllowanceItem(
         "deadbeef",
@@ -184,6 +311,38 @@ public final class OfflineVerdictJournalTest {
         playIntegrityRecordJson());
   }
 
+  private static OfflineAllowanceList.OfflineAllowanceItem fractionalPlayIntegrityAllowance() {
+    return new OfflineAllowanceList.OfflineAllowanceItem(
+        "fractional-play",
+        "play@integrity",
+        "Play Integrity",
+        "usd#wonderland",
+        1_700_000_000_000L,
+        1_700_200_000_000L,
+        1_700_300_000_000L,
+        1_700_100_000_000L,
+        "feedbead",
+        "nonce",
+        "50",
+        fractionalPlayIntegrityRecordJson());
+  }
+
+  private static OfflineAllowanceList.OfflineAllowanceItem fractionalProvisionedAllowance() {
+    return new OfflineAllowanceList.OfflineAllowanceItem(
+        "fractional-prov",
+        "inspector@nexus",
+        "inspector@nexus",
+        "usd#wonderland",
+        1_800_000_000_000L,
+        1_800_400_000_000L,
+        1_800_500_000_000L,
+        1_800_050_000_000L,
+        null,
+        null,
+        "0",
+        fractionalProvisionedRecordJson());
+  }
+
   private static String playIntegrityRecordJson() {
     return """
         {
@@ -218,5 +377,50 @@ public final class OfflineVerdictJournalTest {
           }
         }
         """;
+  }
+
+  private static String fractionalPlayIntegrityRecordJson() {
+    return """
+        {
+          "certificate": {
+            "metadata": {
+              "android.integrity.policy": "play_integrity",
+              "android.play_integrity.cloud_project_number": 4242,
+              "android.play_integrity.environment": "testing",
+              "android.play_integrity.package_names": ["com.example.pos"],
+              "android.play_integrity.signing_digests_sha256": ["ab12"],
+              "android.play_integrity.allowed_app_verdicts": ["PLAY_RECOGNIZED"],
+              "android.play_integrity.allowed_device_verdicts": ["MEETS_DEVICE_INTEGRITY"],
+              "android.play_integrity.max_token_age_ms": 3600.5
+            }
+          }
+        }
+        """;
+  }
+
+  private static String fractionalProvisionedRecordJson() {
+    return """
+        {
+          "certificate": {
+            "metadata": {
+              "android.integrity.policy": "provisioned",
+              "android.provisioned.inspector_public_key": "ed0120C0FFEE",
+              "android.provisioned.manifest_schema": "offline_provisioning_v1",
+              "android.provisioned.manifest_version": 1.5,
+              "android.provisioned.max_manifest_age_ms": 604800000,
+              "android.provisioned.manifest_digest": "00ff"
+            }
+          }
+        }
+        """;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> parseObject(final String json) {
+    final Object parsed = JsonParser.parse(json);
+    if (!(parsed instanceof Map<?, ?> map)) {
+      throw new IllegalStateException("expected JSON object");
+    }
+    return (Map<String, Object>) map;
   }
 }
