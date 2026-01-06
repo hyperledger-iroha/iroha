@@ -174,22 +174,21 @@ pub(super) fn derive_active_topology(
     let world_peers = view.world.peers();
     let commit_topology = view.commit_topology();
     let use_commit = !commit_topology.is_empty();
-    let mut roster = if trusted.pops.is_empty() {
-        if use_commit {
-            filter_roster_bls(commit_topology.iter().cloned())
-        } else if !world_peers.is_empty() {
-            filter_roster_bls(world_peers.iter().cloned())
-        } else {
-            filter_roster_bls(crate::sumeragi::filter_validators_from_trusted(trusted))
-        }
+    let mut baseline = if use_commit {
+        commit_topology.iter().cloned().collect()
+    } else if !world_peers.is_empty() {
+        world_peers.iter().cloned().collect()
     } else {
-        let baseline = if use_commit {
-            filter_roster_bls(commit_topology.iter().cloned())
-        } else if !world_peers.is_empty() {
-            filter_roster_bls(world_peers.iter().cloned())
-        } else {
-            filter_roster_bls(crate::sumeragi::filter_validators_from_trusted(trusted))
-        };
+        crate::sumeragi::filter_validators_from_trusted(trusted)
+    };
+    if !use_commit {
+        // Canonicalize unordered sources to avoid peer-order divergence before the first commit.
+        baseline.sort();
+    }
+    let baseline = filter_roster_bls(baseline);
+    let mut roster = if trusted.pops.is_empty() {
+        baseline
+    } else {
         let filtered = filter_roster_with_pops(baseline.clone(), &trusted.pops);
         if filtered.len() < baseline.len() {
             iroha_logger::warn!(
@@ -287,7 +286,16 @@ pub(super) fn apply_roster_indices_to_manager(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
+    use iroha_data_model::peer::Peer;
+    use iroha_primitives::unique_vec::UniqueVec;
 
     use super::*;
 
@@ -354,5 +362,46 @@ mod tests {
 
         assert_eq!(guarded, filtered);
         assert_eq!(guarded.len(), 2);
+    }
+
+    #[test]
+    fn active_topology_sorts_world_peers_when_commit_topology_empty() {
+        let mut peers: Vec<PeerId> = (0..4)
+            .map(|_| {
+                PeerId::new(
+                    KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect();
+        peers.sort();
+
+        let mut reversed = peers.clone();
+        reversed.reverse();
+
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let peers_cell = block.peers.get_mut();
+            for peer in reversed {
+                let _ = peers_cell.push(peer);
+            }
+            block.commit();
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(world, kura, LiveQueryStore::start_test());
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: Peer::new("127.0.0.1:10000".parse().expect("addr"), peers[0].clone()),
+            others: UniqueVec::new(),
+            pops: BTreeMap::new(),
+        };
+
+        let view = state.view();
+        assert!(view.commit_topology().is_empty());
+        let roster = derive_active_topology(&view, &trusted, &peers[0]);
+
+        assert_eq!(roster, peers);
     }
 }

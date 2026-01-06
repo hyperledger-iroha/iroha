@@ -615,7 +615,10 @@ mod selection_tests {
         assert_eq!(targets.len(), 3);
         assert!(targets.iter().any(|peer| !world_peers.contains(peer)));
         assert_eq!(
-            targets.iter().filter(|peer| world_peers.contains(*peer)).count(),
+            targets
+                .iter()
+                .filter(|peer| world_peers.contains(*peer))
+                .count(),
             2
         );
     }
@@ -2019,8 +2022,12 @@ pub mod message {
                 if self.blocks.is_empty() {
                     return Err(ShareBlocksError::Empty);
                 }
-                validate_share_blocks_lengths(self.blocks.len(), self.qcs.len(), self.rosters.len())
-                    .map_err(ShareBlocksError::from)?;
+                validate_share_blocks_lengths(
+                    self.blocks.len(),
+                    self.qcs.len(),
+                    self.rosters.len(),
+                )
+                .map_err(ShareBlocksError::from)?;
 
                 self.blocks.windows(2).try_for_each(|wnd| {
                     if wnd[1].header().height().get() != wnd[0].header().height().get() + 1 {
@@ -2226,12 +2233,8 @@ pub mod message {
                 let leader_peer = PeerId::new(leader_public_key);
                 let prev_hash =
                     HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
-                let invalid = GetBlocksAfter::new(
-                    leader_peer,
-                    Some(prev_hash),
-                    None,
-                    BTreeSet::new(),
-                );
+                let invalid =
+                    GetBlocksAfter::new(leader_peer, Some(prev_hash), None, BTreeSet::new());
                 let bytes = invalid.encode();
 
                 let decoded = GetBlocksAfter::decode(&mut bytes.as_slice());

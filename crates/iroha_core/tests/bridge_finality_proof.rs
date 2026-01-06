@@ -486,7 +486,8 @@ fn finality_bundle_rebuilds_mmr_after_top_block_replace() {
     let builder = iroha_data_model::block::builder::BlockBuilder::new(header2_replacement);
     let replacement = builder.build_with_signature(0, kp.private_key());
     let replacement_hash = replacement.hash();
-    kura.replace_top_block(replacement).expect("replace top block");
+    kura.replace_top_block(replacement)
+        .expect("replace top block");
 
     let cert_replacement = build_commit_certificate(
         &state.view().chain_id().clone(),
