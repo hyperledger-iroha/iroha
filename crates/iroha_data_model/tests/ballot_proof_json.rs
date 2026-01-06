@@ -9,7 +9,7 @@ fn ballot_proof_json_base64() {
         envelope_bytes: vec![0u8, 1, 2, 3, 4],
         root_hint: None,
         owner: None,
-        salt: None,
+        nullifier: None,
     };
     // Serialize to JSON string (via norito::json for consistency)
     let s = norito::json::to_json(&v).expect("json");

@@ -257,8 +257,8 @@ console.log(typedStatus?.status?.kind); // e.g. "Committed"
 await torii.waitForTransactionStatusTyped(sampleHashHex, { intervalMs: 500 });
 await torii.submitTransactionAndWaitTyped(encoded, { hashHex: sampleHashHex });
 // Note: the polling helpers require `options` to be a plain object. intervalMs/timeoutMs
-// must be non-negative (use timeoutMs: null to disable the deadline), maxAttempts must
-// be a positive integer when provided, and onStatus must be a function.
+// must be non-negative integers (use timeoutMs: null to disable the deadline), maxAttempts
+// must be a positive integer when provided, and onStatus must be a function.
 
 // Submit while re-signing with a fresh private key (mutating buffer supported)
 await submitSignedTransaction(torii, encoded, { privateKey });

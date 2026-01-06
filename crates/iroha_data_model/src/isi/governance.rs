@@ -157,12 +157,12 @@ pub struct BallotProof {
     pub root_hint: Option<[u8; 32]>,
     /// Optional owner account id (when the circuit commits to it in public inputs).
     pub owner: Option<crate::account::AccountId>,
-    /// Optional salt (32-byte) used for nullifier derivation.
+    /// Optional nullifier hint (32-byte) derived from the proof's commitment.
     #[cfg_attr(
         feature = "json",
         norito(with = "crate::json_helpers::fixed_bytes::option")
     )]
-    pub salt: Option<[u8; 32]>,
+    pub nullifier: Option<[u8; 32]>,
 }
 
 /// Cast a non‑ZK quadratic ballot (optional mode)

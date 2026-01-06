@@ -58,6 +58,49 @@ test("fromCiphertext applies retention automatically", () => {
   assert.equal(record.expiresAtMs, start + 5_000);
 });
 
+test("ConnectJournalRecord accepts array-like ciphertext and payload hash", () => {
+  const payloadHash = Array.from({ length: 32 }, () => 7);
+  const record = new ConnectJournalRecord({
+    direction: ConnectDirection.APP_TO_WALLET,
+    sequence: 5,
+    ciphertext: [9, 8, 7],
+    payloadHash,
+    receivedAtMs: 10,
+    expiresAtMs: 20,
+  });
+  assert.deepEqual(Array.from(record.ciphertext), [9, 8, 7]);
+  assert.equal(record.payloadHash.length, 32);
+});
+
+test("ConnectJournalRecord rejects non-byte array payloads", () => {
+  assert.throws(
+    () =>
+      new ConnectJournalRecord({
+        direction: ConnectDirection.APP_TO_WALLET,
+        sequence: 5,
+        ciphertext: [256],
+        receivedAtMs: 10,
+        expiresAtMs: 20,
+      }),
+    (error) =>
+      error instanceof ConnectJournalError &&
+      /must be a byte/i.test(error.message),
+  );
+});
+
+test("decode accepts array-like payloads", () => {
+  const encoded = new ConnectJournalRecord({
+    direction: ConnectDirection.APP_TO_WALLET,
+    sequence: 2n,
+    ciphertext: new Uint8Array([1, 2, 3]),
+    receivedAtMs: 100,
+    expiresAtMs: 200,
+  }).encode();
+  const { record } = ConnectJournalRecord.decode(Array.from(encoded));
+  assert.equal(record.sequence, 2n);
+  assert.deepEqual(Array.from(record.ciphertext), [1, 2, 3]);
+});
+
 test("ConnectJournalRecord rejects non-integer inputs", () => {
   assert.throws(
     () =>

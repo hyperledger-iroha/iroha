@@ -101,10 +101,8 @@ public final class RegisterKaigiRelayInstruction implements InstructionTemplate 
     }
 
     public Builder setHpkePublicKeyBase64(final String base64) {
-      if (base64 == null || base64.isBlank()) {
-        throw new IllegalArgumentException("hpkePublicKey must not be blank");
-      }
-      this.hpkePublicKeyBase64 = base64;
+      this.hpkePublicKeyBase64 =
+          KaigiInstructionUtils.requireBase64(base64, "hpkePublicKey");
       return this;
     }
 
@@ -136,4 +134,3 @@ public final class RegisterKaigiRelayInstruction implements InstructionTemplate 
     }
   }
 }
-

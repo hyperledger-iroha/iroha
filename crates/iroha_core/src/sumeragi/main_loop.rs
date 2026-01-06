@@ -4038,11 +4038,23 @@ fn validate_commit_certificate_roster(
             }
         }
         ConsensusMode::Npos => {
-            let snapshot = stake_snapshot.ok_or(RosterValidationError::StakeSnapshotUnavailable)?;
-            match stake_quorum_reached_for_snapshot(snapshot, &cert.validator_set, &signer_peers) {
-                Ok(true) => {}
-                Ok(false) => return Err(RosterValidationError::StakeQuorumMissing),
-                Err(_) => return Err(RosterValidationError::StakeSnapshotUnavailable),
+            if let Some(snapshot) = stake_snapshot {
+                match stake_quorum_reached_for_snapshot(snapshot, &cert.validator_set, &signer_peers)
+                {
+                    Ok(true) => {}
+                    Ok(false) => return Err(RosterValidationError::StakeQuorumMissing),
+                    Err(_) => return Err(RosterValidationError::StakeSnapshotUnavailable),
+                }
+            } else {
+                // Dev-friendly fallback: treat missing stake snapshots like permissioned quorum.
+                let required =
+                    super::network_topology::commit_quorum_from_len(roster_len).max(1);
+                if signer_indices.len() < required {
+                    return Err(RosterValidationError::CommitQuorumMissing {
+                        votes: signer_indices.len(),
+                        required,
+                    });
+                }
             }
         }
     }

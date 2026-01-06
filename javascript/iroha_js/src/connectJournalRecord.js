@@ -98,7 +98,27 @@ function asUint8Array(value, name) {
   if (value instanceof ArrayBuffer) {
     return new Uint8Array(value);
   }
-  throw new TypeError(`${name ?? "data"} must be an ArrayBuffer or Uint8Array`);
+  if (Array.isArray(value)) {
+    return normalizeByteArray(value, name);
+  }
+  if (value && typeof value.length === "number" && typeof value !== "string") {
+    return normalizeByteArray(value, name);
+  }
+  throw new TypeError(`${name ?? "data"} must be binary data`);
+}
+
+function normalizeByteArray(value, name) {
+  const bytes = Array.from(value);
+  const normalized = bytes.map((entry, index) => {
+    const numeric = Number(entry);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 0xff) {
+      throw new ConnectJournalError(
+        `${name ?? "data"}[${index}] must be a byte`,
+      );
+    }
+    return numeric;
+  });
+  return new Uint8Array(normalized);
 }
 
 function normalizeDirection(direction) {

@@ -6914,17 +6914,16 @@ fn prepare_contract_deployment(
             ))
         })?;
 
-    let code_hash = iroha_crypto::Hash::new(&code_bytes);
-
-    let metadata = ivm::ProgramMetadata::parse(&code_bytes)
+    let parsed = ivm::ProgramMetadata::parse(&code_bytes)
         .map_err(|_| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(
                     "invalid IVM header".into(),
                 ),
             ))
-        })?
-        .metadata;
+        })?;
+    let code_hash = iroha_crypto::Hash::new(&code_bytes[parsed.header_len..]);
+    let metadata = parsed.metadata;
 
     if metadata.abi_version != 1 {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(

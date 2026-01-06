@@ -68,22 +68,23 @@ public final class GatewayProvider {
     private String streamTokenBase64;
 
     public Builder setName(final String name) {
-      this.name = requireNonEmpty(name, "name");
+      this.name = SorafsInputValidator.requireNonEmpty(name, "name");
       return this;
     }
 
     public Builder setProviderIdHex(final String providerIdHex) {
-      this.providerIdHex = requireNonEmpty(providerIdHex, "providerIdHex");
+      this.providerIdHex = SorafsInputValidator.normalizeHexBytes(providerIdHex, "providerIdHex", 32);
       return this;
     }
 
     public Builder setBaseUrl(final String baseUrl) {
-      this.baseUrl = requireNonEmpty(baseUrl, "baseUrl");
+      this.baseUrl = SorafsInputValidator.requireNonEmpty(baseUrl, "baseUrl");
       return this;
     }
 
     public Builder setStreamTokenBase64(final String streamTokenBase64) {
-      this.streamTokenBase64 = requireNonEmpty(streamTokenBase64, "streamTokenBase64");
+      this.streamTokenBase64 =
+          SorafsInputValidator.normalizeBase64MaybeUrl(streamTokenBase64, "streamTokenBase64");
       return this;
     }
 
@@ -94,13 +95,5 @@ public final class GatewayProvider {
       Objects.requireNonNull(streamTokenBase64, "streamTokenBase64");
       return new GatewayProvider(this);
     }
-
-    private static String requireNonEmpty(final String value, final String field) {
-      if (value == null || value.trim().isEmpty()) {
-        throw new IllegalArgumentException(field + " must not be empty");
-      }
-      return value.trim();
-    }
   }
 }
-

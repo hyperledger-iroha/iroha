@@ -9,11 +9,11 @@ function normalizePositiveInteger(value, context, { allowZero = false, max = Num
 
   let numeric;
   if (typeof value === "bigint") {
-    if (value > BigInt(max)) {
-      throw new RangeError(`${context} exceeds the supported maximum (${max})`);
-    }
     if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
       throw new RangeError(`${context} exceeds JavaScript safe integer range`);
+    }
+    if (value > BigInt(max)) {
+      throw new RangeError(`${context} exceeds the supported maximum (${max})`);
     }
     numeric = Number(value);
   } else if (typeof value === "number") {

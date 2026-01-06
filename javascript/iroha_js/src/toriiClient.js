@@ -7844,11 +7844,11 @@ export class ToriiClient {
     } else if (value instanceof ArrayBuffer) {
       buffer = Buffer.from(value);
     } else if (Array.isArray(value)) {
-      buffer = Buffer.from(value);
+      buffer = normalizeByteArray(value, path);
     } else {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
-        `${path} must be a Buffer, byte array, ArrayBuffer view, or hex string`,
+        `${path} must be a Buffer, byte array, ArrayBuffer view, ArrayBuffer, or hex string`,
         path,
       );
     }
@@ -13544,18 +13544,24 @@ function toBuffer(value) {
     if (value.length === 0) {
       return Buffer.alloc(0);
     }
-    const bytes = value.map((entry, index) => {
-      const numeric = Number(entry);
-      if (!Number.isInteger(numeric) || numeric < 0 || numeric > 255) {
-        throw new TypeError(
-          `payload array entries must be byte values (0-255); invalid entry at index ${index}`,
-        );
-      }
-      return numeric & 0xff;
-    });
-    return Buffer.from(bytes);
+    return normalizeByteArray(value, "payload");
   }
   throw new TypeError("payload must be a Buffer or ArrayBuffer view");
+}
+
+function normalizeByteArray(value, context) {
+  const bytes = value.map((entry, index) => {
+    const numeric = Number(entry);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 255) {
+      throw createValidationError(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${context}[${index}] must be an integer between 0 and 255`,
+        `${context}[${index}]`,
+      );
+    }
+    return numeric;
+  });
+  return Buffer.from(bytes);
 }
 
 function toXmlBuffer(value, name) {
@@ -14158,6 +14164,9 @@ function normalizeHex32String(value, name, options = {}) {
   if (value instanceof ArrayBuffer) {
     return normalizeHex32String(Buffer.from(value).toString("hex"), name, options);
   }
+  if (Array.isArray(value)) {
+    return normalizeHex32String(normalizeByteArray(value, name).toString("hex"), name, options);
+  }
   const normalized = requireNonEmptyString(value, name);
   const hex =
     normalized.startsWith("0x") || normalized.startsWith("0X")
@@ -14188,6 +14197,9 @@ function normalizeHashLike32(value, name, options = {}) {
   }
   if (value instanceof ArrayBuffer) {
     return normalizeHex32String(Buffer.from(value).toString("hex"), name, options);
+  }
+  if (Array.isArray(value)) {
+    return normalizeHex32String(normalizeByteArray(value, name).toString("hex"), name, options);
   }
   const normalized = requireNonEmptyString(value, name);
   const trimmed = normalized.trim();
@@ -14996,10 +15008,10 @@ function normalizeGovernanceZkBallotV1Payload(input) {
       "governanceSubmitZkBallotV1.owner",
     );
   }
-  if (record.salt_hex ?? record.saltHex) {
-    payload.salt_hex = normalizeHex32String(
-      record.salt_hex ?? record.saltHex,
-      "governanceSubmitZkBallotV1.saltHex",
+  if (record.nullifier_hex ?? record.nullifierHex) {
+    payload.nullifier_hex = normalizeHex32String(
+      record.nullifier_hex ?? record.nullifierHex,
+      "governanceSubmitZkBallotV1.nullifierHex",
     );
   }
   return payload;

@@ -365,7 +365,11 @@ public final class ClientConfigManifestLoader {
       if (number instanceof Float || number instanceof Double) {
         throw new IllegalStateException("Fractional numbers are not supported: " + value);
       }
-      return number.intValue();
+      final long longValue = number.longValue();
+      if (longValue < Integer.MIN_VALUE || longValue > Integer.MAX_VALUE) {
+        throw new IllegalStateException("Integer value out of range: " + value);
+      }
+      return (int) longValue;
     }
     final String normalized = optionalString(value);
     if (normalized == null) {

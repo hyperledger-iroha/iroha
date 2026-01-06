@@ -265,18 +265,52 @@ async function selectStore(sessionKey, config) {
 
 function normalizeSessionId(input) {
   if (input instanceof Uint8Array) {
-    return new Uint8Array(input);
+    return ensureNonEmptyBytes(new Uint8Array(input), "sessionId");
   }
   if (ArrayBuffer.isView(input)) {
-    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+    const view = new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+    return ensureNonEmptyBytes(view.slice(), "sessionId");
   }
   if (input instanceof ArrayBuffer) {
-    return new Uint8Array(input);
+    const view = new Uint8Array(input);
+    return ensureNonEmptyBytes(view.slice(), "sessionId");
+  }
+  if (Array.isArray(input)) {
+    return normalizeByteArray(input, "sessionId");
   }
   if (typeof input === "string") {
-    return decodeBase64Url(input.trim());
+    const decoded = decodeBase64Url(input);
+    if (decoded.length === 0) {
+      throw new ConnectJournalError("sessionId must not be empty");
+    }
+    return decoded;
+  }
+  if (input && typeof input.length === "number") {
+    return normalizeByteArray(input, "sessionId");
   }
   throw new ConnectJournalError("sessionId must be binary data or base64url string");
+}
+
+function ensureNonEmptyBytes(bytes, name) {
+  if (bytes.length === 0) {
+    throw new ConnectJournalError(`${name} must not be empty`);
+  }
+  return bytes;
+}
+
+function normalizeByteArray(value, name) {
+  const bytes = Array.from(value);
+  if (bytes.length === 0) {
+    throw new ConnectJournalError(`${name} must not be empty`);
+  }
+  const normalized = bytes.map((entry, index) => {
+    const numeric = Number(entry);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 0xff) {
+      throw new ConnectJournalError(`${name}[${index}] must be a byte`);
+    }
+    return numeric;
+  });
+  return new Uint8Array(normalized);
 }
 
 async function hashSessionId(bytes) {

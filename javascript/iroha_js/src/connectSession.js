@@ -143,6 +143,18 @@ function normalizeBinary(value, name, expectedLength) {
   return buffer;
 }
 
+function normalizeByteArray(value, name) {
+  const bytes = Array.from(value);
+  const normalized = bytes.map((entry, index) => {
+    const numeric = Number(entry);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 0xff) {
+      throw new TypeError(`${name}[${index}] must be a byte`);
+    }
+    return numeric;
+  });
+  return Buffer.from(normalized);
+}
+
 function toBuffer(value, name) {
   if (Buffer.isBuffer(value)) {
     return Buffer.from(value);
@@ -154,13 +166,13 @@ function toBuffer(value, name) {
     return Buffer.from(value);
   }
   if (Array.isArray(value)) {
-    return Buffer.from(value);
+    return normalizeByteArray(value, name);
   }
   if (typeof value === "string") {
     return decodeStringBinary(value, name);
   }
   if (value && typeof value.length === "number") {
-    return Buffer.from(Array.from(value));
+    return normalizeByteArray(value, name);
   }
   throw new TypeError(`${name} must be binary data`);
 }

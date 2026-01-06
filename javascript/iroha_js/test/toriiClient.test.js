@@ -8287,6 +8287,54 @@ test("governanceProposeDeployContract normalizes payloads", async () => {
   assert.equal(result.proposal_id, "cd".repeat(32));
 });
 
+test("governanceProposeDeployContract accepts byte-array hashes", async () => {
+  let capturedBody;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      capturedBody = JSON.parse(init.body);
+      return createResponse({
+        status: 200,
+        jsonData: cloneFixture(toriiFixtures.governance.deployContractDraft),
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  await client.governanceProposeDeployContract({
+    namespace: "apps",
+    contractId: "calc.v1",
+    codeHash: Array.from(Buffer.alloc(32, 0x1a)),
+    abiHash: Array.from(Buffer.alloc(32, 0xbb)),
+  });
+
+  assert.equal(capturedBody.code_hash, "1a".repeat(32));
+  assert.equal(capturedBody.abi_hash, "bb".repeat(32));
+});
+
+test("governanceProposeDeployContract rejects non-byte hash arrays", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: cloneFixture(toriiFixtures.governance.deployContractDraft),
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  await assert.rejects(
+    () =>
+      client.governanceProposeDeployContract({
+        namespace: "apps",
+        contractId: "calc.v1",
+        codeHash: [256],
+        abiHash: Array.from(Buffer.alloc(32, 0xbb)),
+      }),
+    (error) =>
+      error?.name === "ValidationError" &&
+      /governanceProposeDeployContract\.code_hash\[0\]/i.test(error.message),
+  );
+});
+
 test("governanceSubmitPlainBallot normalizes amount and direction", async () => {
   let capturedBody;
   const client = new ToriiClient(BASE_URL, {
@@ -8506,11 +8554,11 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
     envelope: [4, 5],
     rootHintHex: `0x${"ab".repeat(32)}`,
     owner: null,
-    saltHex: Buffer.alloc(32, 0xff),
+    nullifierHex: Buffer.alloc(32, 0xff),
   });
   assert.equal(calls[1].body.envelope_b64, "BAU=");
   assert.equal(calls[1].body.root_hint_hex, "ab".repeat(32));
-  assert.equal(calls[1].body.salt_hex, "ff".repeat(32));
+  assert.equal(calls[1].body.nullifier_hex, "ff".repeat(32));
   assert.equal(zkV1Result.accepted, false);
   assert.equal(zkV1Result.reason, "build transaction skeleton");
 });
@@ -12789,7 +12837,8 @@ test("getConnectStatus rejects non-integer policy values", async () => {
   await assert.rejects(
     () => client.getConnectStatus(),
     (error) => {
-      assert(error instanceof RangeError);
+      assert(error instanceof TypeError);
+      assert.equal(error.name, "ValidationError");
       assert.match(error.message, /session_ttl_ms/);
       return true;
     },
@@ -13179,6 +13228,29 @@ test("getConnectAppPolicy normalizes controls", async () => {
   const policy = await client.getConnectAppPolicy();
   assert.equal(policy.relayEnabled, true);
   assert.equal(policy.wsMaxSessions, 25);
+});
+
+test("getConnectAppPolicy rejects non-integer policy controls", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        policy: {
+          relay_enabled: true,
+          ws_max_sessions: 25.5,
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.getConnectAppPolicy(),
+    (error) => {
+      assert(error instanceof RangeError);
+      assert.match(error.message, /ws_max_sessions/);
+      return true;
+    },
+  );
 });
 
 test("updateConnectAppPolicy serializes camelCase updates", async () => {

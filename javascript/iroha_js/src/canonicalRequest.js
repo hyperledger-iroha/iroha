@@ -1,10 +1,20 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { signEd25519 } from "./crypto.js";
-import { compareUtf16 } from "./ordering.js";
-
-function encodeComponent(value) {
-  return encodeURIComponent(value).replace(/%20/gu, "+");
+function compareUtf8(left, right) {
+  if (left === right) {
+    return 0;
+  }
+  const a = Buffer.from(String(left), "utf8");
+  const b = Buffer.from(String(right), "utf8");
+  const min = Math.min(a.length, b.length);
+  for (let index = 0; index < min; index += 1) {
+    const diff = a[index] - b[index];
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return a.length - b.length;
 }
 
 /**
@@ -19,13 +29,17 @@ export function canonicalQueryString(raw) {
   const params = raw instanceof URLSearchParams ? raw : new URLSearchParams(String(raw));
   const pairs = Array.from(params.entries()).map(([k, v]) => [k, v]);
   pairs.sort((a, b) => {
-    const keyOrder = compareUtf16(a[0], b[0]);
+    const keyOrder = compareUtf8(a[0], b[0]);
     if (keyOrder !== 0) {
       return keyOrder;
     }
-    return compareUtf16(a[1], b[1]);
+    return compareUtf8(a[1], b[1]);
   });
-  return pairs.map(([k, v]) => `${encodeComponent(k)}=${encodeComponent(v)}`).join("&");
+  const serializer = new URLSearchParams();
+  for (const [key, value] of pairs) {
+    serializer.append(key, value);
+  }
+  return serializer.toString();
 }
 
 /**

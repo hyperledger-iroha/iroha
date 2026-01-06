@@ -82,7 +82,9 @@ public final class GatewayFetchSummary {
 
   private static GatewayFetchSummary fromJsonObject(final Map<String, Object> root) {
     final Builder builder = new Builder();
-    builder.manifestIdHex = requireString(root, "manifest_id_hex");
+    builder.manifestIdHex =
+        SorafsInputValidator.normalizeHexBytes(
+            requireString(root, "manifest_id_hex"), "manifest_id_hex", 32);
     builder.chunkerHandle = requireString(root, "chunker_handle");
     builder.clientId = optionalString(root, "client_id");
     builder.chunkCount = requireLong(root, "chunk_count");
@@ -139,7 +141,7 @@ public final class GatewayFetchSummary {
       final Map<String, Object> map = (Map<String, Object>) item;
       receipts.add(
           new ChunkReceipt(
-              (int) requireLong(map, "chunk_index"),
+              requireInt(map, "chunk_index"),
               requireString(map, "provider"),
               requireLong(map, "attempts")));
     }
@@ -174,6 +176,14 @@ public final class GatewayFetchSummary {
       return number.longValue();
     }
     throw new SorafsStorageException("Expected number for `" + key + "`");
+  }
+
+  private static int requireInt(final Map<String, Object> map, final String key) {
+    final long value = requireLong(map, key);
+    if (value < 0 || value > Integer.MAX_VALUE) {
+      throw new SorafsStorageException("Expected int range for `" + key + "`");
+    }
+    return (int) value;
   }
 
   private static double requireDouble(final Map<String, Object> map, final String key) {

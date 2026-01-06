@@ -199,14 +199,15 @@ CLIヘルパー
   - 保護されたnamespaceの監査やガバナンス制御デプロイフローの検証に有用。
 - `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - 保護namespaceへのデプロイ時に使うmetadata JSONスケルトンを出力し、manifest quorum を満たすための `gov_manifest_approvers` を任意で含めます。
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --salt-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
-  - 正規の account id を検証し、32バイトの非ゼロsaltを強制し、`public_inputs_json` にヒントをマージします (`--public <path>` で追加上書き)。
+- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+  - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
+  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
   - 1行サマリは、`CastZkBallot` から導出された決定的な `fingerprint=<hex>` と、デコードされたヒント (`owner`, `amount`, `duration_blocks`, `direction` 提供時) を表示します。
   - CLIレスポンスは `tx_instructions[]` に `payload_fingerprint_hex` とデコード済みフィールドを付与し、下流ツールがNoritoデコードを再実装せずスケルトンを検証できます。
   - ロックヒントを提供すると、回路が同じ値を公開した際にZK ballotに対して `LockCreated`/`LockExtended` イベントが発行されます。
 - `iroha gov vote-plain --referendum-id <id> --owner <account>@<domain> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - `--lock-amount`/`--lock-duration-blocks` エイリアスは ZK のフラグ名と揃えてスクリプト互換性を確保します。
-  - サマリ出力は `vote-zk` と同様に、エンコード済み命令の fingerprint と人間可読の ballot フィールド (`owner`, `amount`, `duration_blocks`, `direction`, `salt_hex` がある場合) を含み、署名前の迅速確認を提供します。
+  - サマリ出力は `vote-zk` と同様に、エンコード済み命令の fingerprint と人間可読の ballot フィールド (`owner`, `amount`, `duration_blocks`, `direction`) を含み、署名前の迅速確認を提供します。
 
 インスタンス一覧
 - GET `/v1/gov/instances/{ns}` - namespace のアクティブな契約インスタンスを一覧表示します。
@@ -233,7 +234,7 @@ Unlock sweep (オペレータ/監査)
       "envelope_b64": "AAECAwQ=",
       "root_hint_hex": "...64hex?",
       "owner": "alice@wonderland?",
-      "salt_hex": "...64hex?"
+      "nullifier_hex": "...64hex?"
     }
   - レスポンス: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
 
@@ -248,9 +249,9 @@ Unlock sweep (オペレータ/監査)
       "ballot": {
         "backend": "halo2/ipa",
         "envelope_bytes": "AAECAwQ=",   // ZK1 または H2* コンテナのbase64
-        "root_hint": null,                // オプションの32バイトhex (eligibility root)
+        "root_hint": null,                // optional 32-byte array of bytes (eligibility root)
         "owner": null,                    // 回路が owner をコミットする場合のAccountId
-        "salt": null                      // nullifier導出用の32バイトhex
+        "nullifier": null                 // optional 32-byte array of bytes (nullifier hint)
       }
     }
   - レスポンス:
@@ -263,7 +264,7 @@ Unlock sweep (オペレータ/監査)
       ]
     }
   - 注記:
-    - サーバは ballot の `root_hint`/`owner`/`salt` を `CastZkBallot` の `public_inputs_json` にマップします。
+    - サーバは ballot の `root_hint`/`owner`/`nullifier` を `CastZkBallot` の `public_inputs_json` にマップします。
     - envelope bytes は命令payloadのためにbase64で再エンコードされます。
     - Torii が ballot を送信すると `reason` は `submitted transaction` に変わります。
     - この endpoint は `zk-ballot` feature が有効な場合のみ利用可能です。
@@ -273,6 +274,7 @@ CastZkBallot 検証パス
 - ホストは referendum (`vk_ballot`) またはガバナンスデフォルトから ballot 検証鍵を解決し、レコードが存在し `Active` でインラインバイトを持つことを要求します。
 - 保存された検証鍵バイトは `hash_vk` で再ハッシュされ、コミットメント不一致は検証前に実行を中断して改ざんされたレジストリエントリを防ぎます (`BallotRejected` with `verifying key commitment mismatch`)。
 - proof bytes は `zk::verify_backend` により登録済みバックエンドへ送られ、無効なトランスクリプトは `BallotRejected` の `invalid proof` として決定的に失敗します。
+- The proof must expose a ballot commitment and eligibility root as public inputs; the root must match the election’s `eligible_root`, and the derived nullifier must match any provided hint.
 - 成功したproofは `BallotAccepted` を発行し、重複nullifier、古いeligibility root、lockの退行は本書の既存の拒否理由が適用されます。
 
 ## バリデータ不正と共同コンセンサス

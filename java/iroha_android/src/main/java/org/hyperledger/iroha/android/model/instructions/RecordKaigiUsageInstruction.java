@@ -153,7 +153,8 @@ public final class RecordKaigiUsageInstruction implements InstructionTemplate {
     }
 
     public Builder setProofBase64(final String proofBase64) {
-      this.proofBase64 = proofBase64;
+      this.proofBase64 =
+          proofBase64 == null ? null : KaigiInstructionUtils.requireBase64(proofBase64, "proof");
       return this;
     }
 
@@ -186,4 +187,3 @@ public final class RecordKaigiUsageInstruction implements InstructionTemplate {
     }
   }
 }
-

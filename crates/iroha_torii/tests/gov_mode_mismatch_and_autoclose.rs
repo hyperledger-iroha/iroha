@@ -177,10 +177,6 @@ fn zk_public_inputs(owner: &iroha_data_model::account::AccountId) -> String {
                 "owner",
                 norito::json::to_value(&owner.to_string()).expect("serialize owner"),
             ),
-            (
-                "salt",
-                norito::json::to_value(&"aa".repeat(32)).expect("serialize salt"),
-            ),
         ])
         .expect("serialize public inputs"),
     )

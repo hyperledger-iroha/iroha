@@ -18,8 +18,12 @@ public final class SorafsManifestInstructionBuilderTests {
 
   public static void main(final String[] args) {
     approvePinManifestRoundTrip();
+    approvePinManifestRejectsInvalidEnvelope();
+    approvePinManifestRejectsNegativeEpoch();
     retirePinManifestRoundTrip();
+    retirePinManifestRejectsNegativeEpoch();
     bindManifestAliasRoundTrip();
+    bindManifestAliasRejectsNegativeEpoch();
     System.out.println("[IrohaAndroid] SorafsManifestInstructionBuilderTests passed.");
   }
 
@@ -55,6 +59,31 @@ public final class SorafsManifestInstructionBuilderTests {
     assert envelopeBase64.equals(payload.councilEnvelopeBase64()) : "payload envelope mismatch";
   }
 
+  private static void approvePinManifestRejectsInvalidEnvelope() {
+    boolean threw = false;
+    try {
+      ApprovePinManifestInstruction.builder()
+          .setDigestHex("a0".repeat(32))
+          .setApprovedEpoch(42)
+          .setCouncilEnvelopeBase64("not!base64");
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected invalid council envelope base64 to throw";
+  }
+
+  private static void approvePinManifestRejectsNegativeEpoch() {
+    boolean threw = false;
+    try {
+      ApprovePinManifestInstruction.builder()
+          .setDigestHex("a0".repeat(32))
+          .setApprovedEpoch(-1);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected negative approved epoch to throw";
+  }
+
   private static void retirePinManifestRoundTrip() {
     final RetirePinManifestInstruction instruction =
         RetirePinManifestInstruction.builder()
@@ -72,6 +101,18 @@ public final class SorafsManifestInstructionBuilderTests {
     final RetirePinManifestInstruction payload =
         (RetirePinManifestInstruction) decoded.payload();
     assert payload.retiredEpoch() == 99 : "retired epoch mismatch";
+  }
+
+  private static void retirePinManifestRejectsNegativeEpoch() {
+    boolean threw = false;
+    try {
+      RetirePinManifestInstruction.builder()
+          .setDigestHex("c0".repeat(32))
+          .setRetiredEpoch(-1);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected negative retired epoch to throw";
   }
 
   private static void bindManifestAliasRoundTrip() {
@@ -96,5 +137,31 @@ public final class SorafsManifestInstructionBuilderTests {
         (BindManifestAliasInstruction) decoded.payload();
     assert payload.boundEpoch() == 12 : "bound epoch mismatch";
     assert "docs".equals(payload.aliasBinding().name()) : "alias binding mismatch";
+  }
+
+  private static void bindManifestAliasRejectsNegativeEpoch() {
+    boolean threw = false;
+    try {
+      BindManifestAliasInstruction.builder()
+          .setDigestHex("d0".repeat(32))
+          .setAliasBinding("docs", "sora", "f0".repeat(32))
+          .setBoundEpoch(-1)
+          .setExpiryEpoch(1);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected negative bound epoch to throw";
+
+    threw = false;
+    try {
+      BindManifestAliasInstruction.builder()
+          .setDigestHex("d0".repeat(32))
+          .setAliasBinding("docs", "sora", "f0".repeat(32))
+          .setBoundEpoch(1)
+          .setExpiryEpoch(-1);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected negative expiry epoch to throw";
   }
 }

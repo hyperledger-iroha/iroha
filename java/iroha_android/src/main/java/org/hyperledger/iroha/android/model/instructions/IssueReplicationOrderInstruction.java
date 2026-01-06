@@ -76,6 +76,23 @@ public final class IssueReplicationOrderInstruction implements InstructionTempla
     return value;
   }
 
+  private static String requireBase64(final String value, final String fieldName) {
+    final String trimmed = Objects.requireNonNull(value, fieldName).trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException(fieldName + " must not be blank");
+    }
+    final byte[] decoded;
+    try {
+      decoded = Base64.getDecoder().decode(trimmed);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException(fieldName + " must be base64", ex);
+    }
+    if (decoded.length == 0) {
+      throw new IllegalArgumentException(fieldName + " must decode to non-empty bytes");
+    }
+    return trimmed;
+  }
+
   private static long requireLong(final Map<String, String> arguments, final String key) {
     final String value = require(arguments, key);
     try {
@@ -133,8 +150,7 @@ public final class IssueReplicationOrderInstruction implements InstructionTempla
     }
 
     public Builder setOrderPayloadBase64(final String orderPayloadBase64) {
-      this.orderPayloadBase64 =
-          Objects.requireNonNull(orderPayloadBase64, "orderPayloadBase64");
+      this.orderPayloadBase64 = requireBase64(orderPayloadBase64, "orderPayloadBase64");
       return this;
     }
 
@@ -145,11 +161,17 @@ public final class IssueReplicationOrderInstruction implements InstructionTempla
     }
 
     public Builder setIssuedEpoch(final long issuedEpoch) {
+      if (issuedEpoch < 0) {
+        throw new IllegalArgumentException("issuedEpoch must be non-negative");
+      }
       this.issuedEpoch = issuedEpoch;
       return this;
     }
 
     public Builder setDeadlineEpoch(final long deadlineEpoch) {
+      if (deadlineEpoch < 0) {
+        throw new IllegalArgumentException("deadlineEpoch must be non-negative");
+      }
       this.deadlineEpoch = deadlineEpoch;
       return this;
     }

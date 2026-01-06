@@ -129,11 +129,11 @@ public final class AndroidOkHttpClientRefactorTests {
       final URI base = URI.create(server.url("/").toString());
       final GatewayFetchRequest request =
           GatewayFetchRequest.builder()
-              .setManifestIdHex("abcd")
+              .setManifestIdHex("ab".repeat(32))
               .addProvider(
                   GatewayProvider.builder()
                       .setName("provider-1")
-                      .setProviderIdHex("01")
+                      .setProviderIdHex("01".repeat(32))
                       .setBaseUrl("https://provider.example")
                       .setStreamTokenBase64(
                           Base64.getEncoder().encodeToString("token".getBytes(StandardCharsets.UTF_8)))

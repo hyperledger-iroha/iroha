@@ -313,12 +313,12 @@ pub struct ZkBallotV1Dto {
     /// Optional eligibility root hint (hex-32, 0x allowed)
     #[norito(default)]
     pub root_hint_hex: Option<String>,
-    /// Optional owner account id for nullifier derivation
+    /// Optional owner account id (for lock hints when the circuit commits owner)
     #[norito(default)]
     pub owner: Option<String>,
-    /// Optional salt for nullifier derivation (hex-32, 0x allowed)
+    /// Optional nullifier hint (hex-32, 0x allowed)
     #[norito(default)]
-    pub salt_hex: Option<String>,
+    pub nullifier_hex: Option<String>,
     /// Optional private key to submit the ballot directly.
     #[norito(default)]
     pub private_key: Option<String>,
@@ -381,8 +381,11 @@ pub async fn handle_gov_ballot_zk_v1(
     if let Some(owner) = &body.owner {
         pub_map.insert("owner".into(), norito::json::Value::from(owner.clone()));
     }
-    if let Some(salt) = &body.salt_hex {
-        pub_map.insert("salt".into(), norito::json::Value::from(salt.clone()));
+    if let Some(nullifier_hex) = &body.nullifier_hex {
+        pub_map.insert(
+            "nullifier_hex".into(),
+            norito::json::Value::from(nullifier_hex.clone()),
+        );
     }
     let public_inputs_json = norito::json::to_json(&norito::json::Value::Object(pub_map))
         .unwrap_or_else(|_| "{}".into());
@@ -462,8 +465,11 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
     if let Some(owner) = &body.ballot.owner {
         pub_map.insert("owner".into(), norito::json::Value::from(owner.to_string()));
     }
-    if let Some(salt) = &body.ballot.salt {
-        pub_map.insert("salt".into(), norito::json::Value::from(hex::encode(salt)));
+    if let Some(nullifier) = &body.ballot.nullifier {
+        pub_map.insert(
+            "nullifier_hex".into(),
+            norito::json::Value::from(hex::encode(nullifier)),
+        );
     }
     let public_inputs_json = norito::json::to_json(&norito::json::Value::Object(pub_map))
         .unwrap_or_else(|_| "{}".into());
@@ -3310,7 +3316,7 @@ mod tests {
                 "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
                     .to_string(),
             ),
-            salt_hex: Some(hex::encode([0x11u8; 32])),
+            nullifier_hex: Some(hex::encode([0x11u8; 32])),
             private_key: None,
         };
         let req = http::Request::builder()
@@ -3375,7 +3381,7 @@ mod tests {
             envelope_bytes: vec![1u8, 2, 3, 4],
             root_hint: Some([0xAA; 32]),
             owner: None,
-            salt: Some([0x11; 32]),
+            nullifier: Some([0x11; 32]),
         };
         let dto = super::ZkBallotV1BallotProofDto {
             authority:
