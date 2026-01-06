@@ -258,12 +258,28 @@ function tryDecodeBase64(value) {
     return null;
   }
   const compact = value.replace(/\s+/g, "");
-  if (compact.length % 4 !== 0 || /[^0-9A-Za-z+/=]/.test(compact)) {
+  if (compact.length === 0 || compact.length % 4 !== 0) {
+    return null;
+  }
+  const paddingIndex = compact.indexOf("=");
+  if (paddingIndex !== -1) {
+    const head = compact.slice(0, paddingIndex);
+    const padding = compact.slice(paddingIndex);
+    if (!/^[0-9A-Za-z+/]*$/.test(head) || !/^={1,2}$/.test(padding)) {
+      return null;
+    }
+  } else if (!/^[0-9A-Za-z+/]+$/.test(compact)) {
     return null;
   }
   try {
     const decoded = Buffer.from(compact, "base64");
-    return decoded.length > 0 ? decoded : null;
+    if (decoded.length === 0) {
+      return null;
+    }
+    if (decoded.toString("base64") !== compact) {
+      return null;
+    }
+    return decoded;
   } catch {
     return null;
   }

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { blake2b256 } from "./blake2b.js";
+import { compareUtf16 } from "./ordering.js";
 
 const DEFAULT_ROOT = path.join(os.homedir(), ".iroha", "offline_counters");
 const DEFAULT_FILENAME = "journal.json";
@@ -50,13 +51,21 @@ function normalizeRecordTimestamp(value) {
   if (value === undefined || value === null) {
     return Date.now();
   }
+  if (typeof value === "bigint") {
+    if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new OfflineCounterJournalError("recordedAtMs must be a non-negative integer", {
+        code: "invalid_recorded_at",
+      });
+    }
+    return Number(value);
+  }
   const asNumber = Number(value);
-  if (!Number.isFinite(asNumber) || asNumber < 0) {
-    throw new OfflineCounterJournalError("recordedAtMs must be a non-negative number", {
+  if (!Number.isFinite(asNumber) || !Number.isSafeInteger(asNumber) || asNumber < 0) {
+    throw new OfflineCounterJournalError("recordedAtMs must be a non-negative integer", {
       code: "invalid_recorded_at",
     });
   }
-  return Math.floor(asNumber);
+  return asNumber;
 }
 
 function normalizeNonEmptyString(value, context) {
@@ -225,7 +234,7 @@ function encodeString(value) {
 
 function encodeCounterMap(map) {
   const entries = Object.entries(map ?? {});
-  entries.sort(([a], [b]) => a.localeCompare(b));
+  entries.sort(([a], [b]) => compareUtf16(a, b));
   const chunks = [encodeU64LE(entries.length)];
   for (const [key, rawValue] of entries) {
     const value = normalizeCounterValue(rawValue, `counter.${key}`);
@@ -535,7 +544,7 @@ export class OfflineCounterJournal {
     const dir = path.dirname(this.#storagePath);
     await fs.mkdir(dir, { recursive: true });
     const serialized = {};
-    const keys = Array.from(this.#entries.keys()).sort();
+    const keys = Array.from(this.#entries.keys()).sort(compareUtf16);
     for (const key of keys) {
       serialized[key] = this.#entries.get(key);
     }

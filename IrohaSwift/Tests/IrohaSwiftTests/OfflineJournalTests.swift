@@ -118,7 +118,7 @@ final class OfflineJournalTests: XCTestCase {
         let txId = IrohaHash.hash(Data("receipt".utf8))
         let challengeHash = IrohaHash.hash(Data("challenge".utf8))
         let proof = OfflinePlatformProof.appleAppAttest(
-            AppleAppAttestProof(keyId: "swift-tests",
+            AppleAppAttestProof(keyId: Data("swift-tests".utf8).base64EncodedString(),
                                 counter: 1,
                                 assertion: Data([0xAA]),
                                 challengeHash: challengeHash)

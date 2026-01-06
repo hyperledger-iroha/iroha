@@ -5,6 +5,7 @@ import XCTest
 
 final class OfflineWalletReceiptTests: XCTestCase {
     private let chainId = "testnet"
+    private let appAttestKeyId = Data("swift-tests".utf8).base64EncodedString()
 
     func testBuildSignedReceiptRecordsJournalAndAudit() throws {
         let logger = try OfflineAuditLogger(storageURL: temporaryLogURL(), isEnabled: true)
@@ -51,7 +52,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
         XCTAssertEqual(entry.timestampMs, issuedAtMs)
 
         let checkpoint = try XCTUnwrap(counterJournal.checkpoint(for: try certificate.certificateIdHex()))
-        XCTAssertEqual(checkpoint.appleKeyCounters["swift-tests"], 1)
+        XCTAssertEqual(checkpoint.appleKeyCounters[appAttestKeyId], 1)
     }
 
     func testBuildSignedReceiptRejectsCounterJump() throws {
@@ -69,7 +70,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
             controllerId: certificate.controller,
             controllerDisplay: nil,
             platform: .appleKey,
-            scope: "swift-tests",
+            scope: appAttestKeyId,
             counter: 1,
             recordedAtMs: 1
         )
@@ -120,7 +121,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
                                           amount: amount,
                                           issuedAtMs: issuedAtMs,
                                           invoiceId: invoiceId)
-        let proof = AppleAppAttestProof(keyId: "swift-tests",
+        let proof = AppleAppAttestProof(keyId: appAttestKeyId,
                                         counter: counter,
                                         assertion: Data([0xAA]),
                                         challengeHash: challenge)

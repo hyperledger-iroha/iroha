@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.offline;
 
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -118,6 +119,35 @@ public final class OfflineTransferList {
     }
 
     /**
+     * Serialises this transfer item into a JSON-ready map.
+     *
+     * <p>Use {@link org.hyperledger.iroha.android.client.JsonEncoder#encode(Object)} to cache the
+     * resulting structure locally.</p>
+     */
+    public Map<String, Object> toJsonMap() {
+      final Map<String, Object> json = new LinkedHashMap<>();
+      json.put("bundle_id_hex", bundleIdHex);
+      json.put("receiver_id", receiverId);
+      json.put("receiver_display", receiverDisplay);
+      json.put("deposit_account_id", depositAccountId);
+      json.put("deposit_account_display", depositAccountDisplay);
+      if (assetId != null) {
+        json.put("asset_id", assetId);
+      }
+      json.put("receipt_count", receiptCount);
+      json.put("total_amount", totalAmount);
+      json.put("claimed_delta", claimedDelta);
+      if (platformPolicy != null) {
+        json.put("platform_policy", platformPolicy);
+      }
+      if (platformTokenSnapshot != null) {
+        json.put("platform_token_snapshot", platformTokenSnapshot.toJsonMap());
+      }
+      json.put("transfer", transferAsMap());
+      return Collections.unmodifiableMap(json);
+    }
+
+    /**
      * Parses the raw transfer JSON into an immutable map representation.
      *
      * @throws IllegalStateException if the JSON payload is malformed or not an object
@@ -227,6 +257,14 @@ public final class OfflineTransferList {
 
       public String attestationJwsB64() {
         return attestationJwsB64;
+      }
+
+      /** Returns a JSON-ready map representation of the snapshot. */
+      public Map<String, String> toJsonMap() {
+        final Map<String, String> snapshot = new LinkedHashMap<>();
+        snapshot.put("policy", policy);
+        snapshot.put("attestation_jws_b64", attestationJwsB64);
+        return Collections.unmodifiableMap(snapshot);
       }
     }
   }

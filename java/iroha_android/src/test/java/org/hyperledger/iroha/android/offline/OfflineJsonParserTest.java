@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.offline;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 
 public final class OfflineJsonParserTest {
 
@@ -11,6 +12,7 @@ public final class OfflineJsonParserTest {
     parsesAllowancePayload();
     parsesTransferPayload();
     handlesOptionalAssetId();
+    encodesTransferItem();
     extractsReceiptSummary();
     parsesRevocationPayload();
     rejectsFractionalTotals();
@@ -127,6 +129,40 @@ public final class OfflineJsonParserTest {
         OfflineJsonParser.parseTransfers(json.getBytes(StandardCharsets.UTF_8));
     final OfflineTransferList.OfflineTransferItem item = list.items().get(0);
     assert item.assetId() == null : "asset should be null when field omitted";
+  }
+
+  private static void encodesTransferItem() {
+    final OfflineTransferList.OfflineTransferItem.PlatformTokenSnapshot snapshot =
+        new OfflineTransferList.OfflineTransferItem.PlatformTokenSnapshot("play_integrity", "token");
+    final OfflineTransferList.OfflineTransferItem item =
+        new OfflineTransferList.OfflineTransferItem(
+            "cafebabe",
+            "merchant@wonderland",
+            "merchant@wonderland",
+            "merchant@wonderland",
+            "merchant@wonderland",
+            null,
+            2,
+            "15",
+            "15",
+            null,
+            snapshot,
+            "{\"bundle\":\"payload\"}");
+    final Map<String, Object> json = item.toJsonMap();
+    assert "cafebabe".equals(json.get("bundle_id_hex")) : "bundle id mismatch";
+    assert "merchant@wonderland".equals(json.get("receiver_id")) : "receiver mismatch";
+    assert !json.containsKey("asset_id") : "asset_id should be omitted when null";
+    assert !json.containsKey("platform_policy") : "platform_policy should be omitted when null";
+    final Object snapshotNode = json.get("platform_token_snapshot");
+    assert snapshotNode instanceof Map<?, ?> : "snapshot must be a JSON map";
+    final Map<?, ?> snapshotMap = (Map<?, ?>) snapshotNode;
+    assert "play_integrity".equals(snapshotMap.get("policy")) : "snapshot policy mismatch";
+    assert "token".equals(snapshotMap.get("attestation_jws_b64"))
+        : "snapshot attestation mismatch";
+    final Object transferNode = json.get("transfer");
+    assert transferNode instanceof Map<?, ?> : "transfer must be a JSON map";
+    final Map<?, ?> transferMap = (Map<?, ?>) transferNode;
+    assert "payload".equals(transferMap.get("bundle")) : "transfer payload mismatch";
   }
 
   private static void extractsReceiptSummary() {

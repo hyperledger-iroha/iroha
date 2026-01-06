@@ -263,6 +263,7 @@ fn proposal_record_exposes_deploy_payload() {
 #[test]
 fn zk_ballot_rejects_oversized_proof() {
     let (mut state, authority) = mk_state_and_authority();
+    state.gov.min_bond_amount = 0;
     let mut zk_cfg = state.view().zk.clone();
     zk_cfg.preverify_max_bytes = 4;
     state.set_zk(zk_cfg);

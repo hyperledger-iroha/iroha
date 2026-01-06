@@ -35444,7 +35444,7 @@ fn sample_transfer_record() -> OfflineTransferRecord {
         issued_at_ms: 1_700_000_100_000,
         invoice_id: "invoice-1".into(),
         platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
-            key_id: "key".into(),
+            key_id: "a2V5".into(),
             counter: 10,
             assertion: vec![],
             challenge_hash: Hash::new(b"challenge"),

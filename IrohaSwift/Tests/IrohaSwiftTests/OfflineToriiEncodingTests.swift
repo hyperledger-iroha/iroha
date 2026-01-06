@@ -9,7 +9,7 @@ final class OfflineToriiEncodingTests: XCTestCase {
         let txId = IrohaHash.hash(Data("tx-id".utf8))
         let challengeHash = IrohaHash.hash(Data("challenge".utf8))
         let proof = OfflinePlatformProof.appleAppAttest(
-            AppleAppAttestProof(keyId: "swift-tests",
+            AppleAppAttestProof(keyId: Data("swift-tests".utf8).base64EncodedString(),
                                 counter: 9,
                                 assertion: Data([1, 2, 3, 4]),
                                 challengeHash: challengeHash)
@@ -140,11 +140,11 @@ final class OfflineToriiEncodingTests: XCTestCase {
     }
 
     func testPlatformProofVariantsToriiJSONEncoding() throws {
-        let certificate = try OfflineWalletCertificate.load(from: fixtureURL("certificate.json"))
+        let markerPublicKey = Data([0x04] + Array(repeating: 0x01, count: 64))
         let markerProof = AndroidMarkerKeyProof(
             series: "series-1",
             counter: 12,
-            markerPublicKey: certificate.spendPublicKey,
+            markerPublicKey: markerPublicKey,
             markerSignature: Data(repeating: 0x02, count: 64),
             attestation: Data([0x01, 0x02])
         )
@@ -156,8 +156,14 @@ final class OfflineToriiEncodingTests: XCTestCase {
         guard case let .object(markerPayload) = markerObject["proof"] else {
             return XCTFail("expected marker-key proof payload")
         }
-        XCTAssertEqual(markerPayload["marker_signature"]?.normalizedString,
-                       markerProof.markerSignature?.hexUppercased())
+        guard let markerKeyBytes = bytes(from: markerPayload["marker_public_key"]) else {
+            return XCTFail("expected marker_public_key bytes")
+        }
+        XCTAssertEqual(markerKeyBytes, [UInt8](markerPublicKey))
+        guard let signatureBytes = bytes(from: markerPayload["marker_signature"]) else {
+            return XCTFail("expected marker_signature bytes")
+        }
+        XCTAssertEqual(signatureBytes, [UInt8](markerProof.markerSignature ?? Data()))
         guard let attestationBytes = bytes(from: markerPayload["attestation"]) else {
             return XCTFail("expected marker-key attestation bytes")
         }
@@ -229,7 +235,7 @@ final class OfflineToriiEncodingTests: XCTestCase {
         let txId = IrohaHash.hash(Data("receipt".utf8))
         let challengeHash = IrohaHash.hash(Data("challenge".utf8))
         let proof = OfflinePlatformProof.appleAppAttest(
-            AppleAppAttestProof(keyId: "swift-tests",
+            AppleAppAttestProof(keyId: Data("swift-tests".utf8).base64EncodedString(),
                                 counter: 1,
                                 assertion: Data([0xAA]),
                                 challengeHash: challengeHash)

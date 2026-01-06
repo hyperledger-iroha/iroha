@@ -1,6 +1,17 @@
 # Status
 
 ## Latest Updates
+- Swift SDK: refresh offline receipt poseidon platform-proof hash vectors for the sample receipts.
+- Tests: `swift test --disable-sandbox` (from `IrohaSwift`).
+- Java/Android SDK: add JSON-ready encoders for offline transfer items/platform snapshots plus `invalidateAndCancel()` on transports/OkHttp executors; document the cleanup hook and add regression coverage.
+- Tests: not run (not requested).
+- Governance ZK voting: require `public_inputs_json` to be an object, enforce owner type strictly, accept only `nullifier_hex` hints, and add regression coverage; updated JS/Python SDKs for v1 lock hints, refreshed JS dist, and synced governance API docs (source/portal + ja/he).
+- Tests: not run (not requested).
+- Core: AXT block validation now rejects duplicate handle sub-nonces across dataspaces to match replay-key semantics; add regression coverage.
+- Tests: not run (not requested).
+- Swift SDK: accept `icon_hash` in Connect app metadata decode, allow missing events in permissions JSON, and add open-frame + JSON decode coverage.
+- Tests: `swift test --filter IrohaSwiftTests.ConnectFramesTests`; `swift test --filter IrohaSwiftTests.ConnectClientTests/testSendFrameUsesCoder`; `swift test --filter IrohaSwiftTests.ConnectSessionTests/testSendOpenSendsControlFrame` (from `IrohaSwift`).
+- Core: ZK ballot flow now validates lock parameters before recording ballots, and slashing always targets the submitting authority (not JSON-provided owner hints).
 - Tests: `cargo test -p iroha_core sumeragi:: -- --nocapture` (failed: 117 tests, mainly `sumeragi::evidence`, `sumeragi::main_loop`, and `sumeragi::status`; warning about unused `state_view` in `crates/iroha_core/src/queue.rs:1868`).
 - Core: fix `extract_vote_public_inputs` error construction, add invalid-payload regression test, and resolve mutable borrow in `ivm_corehost_halo2_enabled_vendor_ok.rs`.
 - Tests: `cargo test -p iroha_core --lib extract_vote_public_inputs_rejects_invalid_payload -- --nocapture` (pass; warning about unused `state_view` in `crates/iroha_core/src/queue.rs:1868`).

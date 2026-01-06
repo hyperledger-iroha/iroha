@@ -2157,7 +2157,7 @@ pub(crate) mod valid {
             .max()
             .unwrap_or_else(|| block.header().height().get());
         let retention_slots = state_block.nexus.axt.replay_retention_slots.get();
-        let mut seen: BTreeSet<(AxtBinding, u64, u64, LaneId, DataSpaceId)> = BTreeSet::new();
+        let mut seen: BTreeSet<AxtHandleReplayKey> = BTreeSet::new();
 
         if let Some(envelopes) = block.axt_envelopes() {
             #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -2617,14 +2617,7 @@ pub(crate) mod valid {
                         }
                     }
 
-                    let key = (
-                        binding,
-                        fragment.handle.handle_era,
-                        fragment.handle.sub_nonce,
-                        fragment.handle.target_lane,
-                        fragment.intent.asset_dsid,
-                    );
-                    if !seen.insert(key) {
+                    if !seen.insert(replay_key) {
                         return Err(make_env_error(
                             envelope_lane,
                             AxtRejectReason::ReplayCache,
@@ -8838,6 +8831,71 @@ mod commit {
                     },
                 }],
                 handles: vec![handle.clone(), handle],
+                commit_height: Some(1),
+            };
+            let snapshot = state.axt_policy_snapshot();
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+
+            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
+            expect_axt_error(
+                err,
+                AxtRejectReason::ReplayCache,
+                "duplicate handle usage in block",
+            );
+        }
+
+        #[test]
+        fn axt_validation_rejects_duplicate_handle_use_across_dataspaces() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            let dsid_a = DataSpaceId::new(7);
+            let dsid_b = DataSpaceId::new(8);
+            let lane = LaneId::new(1);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x11; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 0,
+            };
+            state.set_axt_policy(dsid_a, policy);
+            state.set_axt_policy(dsid_b, policy);
+
+            let binding = AxtBinding::new([0xAA; 32]);
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid_a, dsid_b],
+                touches: Vec::new(),
+            };
+            let handle = sample_handle(binding, lane, dsid_a, 5, policy.manifest_root);
+            let mut other = handle.clone();
+            other.intent.asset_dsid = dsid_b;
+
+            let proofs = vec![
+                AxtProofFragment {
+                    dsid: dsid_a,
+                    proof: ProofBlob {
+                        payload: policy.manifest_root.to_vec(),
+                        expiry_slot: Some(12),
+                    },
+                },
+                AxtProofFragment {
+                    dsid: dsid_b,
+                    proof: ProofBlob {
+                        payload: policy.manifest_root.to_vec(),
+                        expiry_slot: Some(12),
+                    },
+                },
+            ];
+
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: Vec::new(),
+                proofs,
+                handles: vec![handle, other],
                 commit_height: Some(1),
             };
             let snapshot = state.axt_policy_snapshot();

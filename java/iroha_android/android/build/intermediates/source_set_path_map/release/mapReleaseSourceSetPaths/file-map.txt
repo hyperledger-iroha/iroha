@@ -1,8 +1,0 @@
-org.hyperledger.iroha.android-pngs-0 /Users/mtakemiya/dev/iroha/java/iroha_android/android/build/generated/res/pngs/release
-org.hyperledger.iroha.android-resValues-1 /Users/mtakemiya/dev/iroha/java/iroha_android/android/build/generated/res/resValues/release
-org.hyperledger.iroha.android-updated_navigation_xml-2 /Users/mtakemiya/dev/iroha/java/iroha_android/android/build/generated/updated_navigation_xml/release
-org.hyperledger.iroha.android-mergeReleaseResources-3 /Users/mtakemiya/dev/iroha/java/iroha_android/android/build/intermediates/incremental/release/mergeReleaseResources/merged.dir
-org.hyperledger.iroha.android-mergeReleaseResources-4 /Users/mtakemiya/dev/iroha/java/iroha_android/android/build/intermediates/incremental/release/mergeReleaseResources/stripped.dir
-org.hyperledger.iroha.android-release-5 /Users/mtakemiya/dev/iroha/java/iroha_android/android/build/intermediates/merged_res/release/mergeReleaseResources
-org.hyperledger.iroha.android-main-6 /Users/mtakemiya/dev/iroha/java/iroha_android/android/src/main/res
-org.hyperledger.iroha.android-release-7 /Users/mtakemiya/dev/iroha/java/iroha_android/android/src/release/res

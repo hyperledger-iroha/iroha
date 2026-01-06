@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="org.hyperledger.iroha.android.client.AndroidTransportTelemetryTests" tests="3" skipped="0" failures="0" errors="0" timestamp="2025-12-31T14:11:48.012Z" hostname="takemiyacStudio.lan" time="0.01">
-  <properties/>
-  <testcase name="sorafsFetchEmitsTelemetryWithDefaultExecutor" classname="org.hyperledger.iroha.android.client.AndroidTransportTelemetryTests" time="0.004"/>
-  <testcase name="sseEmitsTelemetryWithDefaultTransport" classname="org.hyperledger.iroha.android.client.AndroidTransportTelemetryTests" time="0.003"/>
-  <testcase name="webSocketEmitsTelemetryWithDefaultConnector" classname="org.hyperledger.iroha.android.client.AndroidTransportTelemetryTests" time="0.003"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

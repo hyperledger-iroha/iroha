@@ -64,6 +64,11 @@ function unsupported(operation) {
   throw new Error(`${operation} is unavailable in browser-only crypto builds.`);
 }
 
+/**
+ * Generate an Ed25519 key pair. Seed material is hashed to 32 bytes when needed.
+ * @param {{seed?: ArrayBufferView | ArrayBuffer | Buffer}} [options]
+ * @returns {{algorithm: "ed25519", publicKey: Buffer, privateKey: Buffer}}
+ */
 export function generateKeyPair(options = {}) {
   const seed = options.seed ? normalizeSeed(options.seed) : Buffer.from(ed25519.utils.randomPrivateKey());
   return {
@@ -73,17 +78,35 @@ export function generateKeyPair(options = {}) {
   };
 }
 
+/**
+ * Derive the public key for a given private key (32-byte seed or 64-byte seed+public concatenation).
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey
+ * @returns {Buffer}
+ */
 export function publicKeyFromPrivate(privateKey) {
   const seed = extractSeed(privateKey);
   return Buffer.from(ed25519.getPublicKey(seed));
 }
 
+/**
+ * Sign a message using an Ed25519 private key.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer | string} message
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey
+ * @returns {Buffer}
+ */
 export function signEd25519(message, privateKey) {
   const messageBuffer = toBuffer(message, "message");
   const seed = extractSeed(privateKey);
   return Buffer.from(ed25519.sign(messageBuffer, seed));
 }
 
+/**
+ * Verify an Ed25519 signature.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer | string} message
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} signature
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} publicKey
+ * @returns {boolean}
+ */
 export function verifyEd25519(message, signature, publicKey) {
   const messageBuffer = toBuffer(message, "message");
   const signatureBuffer = toBuffer(signature, "signature");

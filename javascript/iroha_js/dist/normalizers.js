@@ -32,6 +32,13 @@ export function canonicalizeMultihashHex(value, name) {
       name,
     );
   }
+  if (!/^[0-9A-Fa-f]+$/.test(trimmed)) {
+    fail(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must be an even-length hexadecimal string`,
+      name,
+    );
+  }
   let bytes;
   try {
     bytes = Buffer.from(trimmed, "hex");
@@ -78,12 +85,48 @@ export function canonicalizeMultihashHex(value, name) {
       name,
     );
   }
+  const declaredLength = decodeVarint(bytes, fnEnd + 1, lenEnd, name);
+  if (declaredLength !== payload.length) {
+    fail(
+      ValidationErrorCode.INVALID_MULTIHASH,
+      `${name} declares ${declaredLength} bytes but contains ${payload.length} bytes`,
+      name,
+    );
+  }
 
   const fnHex = bytes.subarray(0, fnEnd + 1).toString("hex").toUpperCase();
   const lenHex = bytes.subarray(fnEnd + 1, lenEnd + 1).toString("hex").toUpperCase();
   const payloadHex = payload.toString("hex").toUpperCase();
 
   return `${fnHex}${lenHex}${payloadHex}`;
+}
+
+function decodeVarint(bytes, start, end, name) {
+  let value = 0n;
+  let shift = 0n;
+  for (let index = start; index <= end; index += 1) {
+    const byte = BigInt(bytes[index]);
+    value |= (byte & 0x7fn) << shift;
+    if ((byte & 0x80n) === 0n) {
+      break;
+    }
+    shift += 7n;
+    if (shift > 63n) {
+      fail(
+        ValidationErrorCode.INVALID_MULTIHASH,
+        `${name} contains an invalid multihash length`,
+        name,
+      );
+    }
+  }
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    fail(
+      ValidationErrorCode.INVALID_MULTIHASH,
+      `${name} contains an oversized multihash length`,
+      name,
+    );
+  }
+  return Number(value);
 }
 
 function tryParseCanonicalSignatory(signatory) {

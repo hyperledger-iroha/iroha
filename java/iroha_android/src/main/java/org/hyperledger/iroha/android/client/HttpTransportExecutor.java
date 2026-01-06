@@ -20,4 +20,11 @@ public interface HttpTransportExecutor extends TransportExecutor {
   default boolean supportsClientUnwrap() {
     return false;
   }
+
+  /**
+   * Cancels in-flight requests and releases any underlying resources when supported by the transport.
+   *
+   * <p>Default implementation is a no-op so executors without lifecycle hooks are unaffected.</p>
+   */
+  default void invalidateAndCancel() {}
 }

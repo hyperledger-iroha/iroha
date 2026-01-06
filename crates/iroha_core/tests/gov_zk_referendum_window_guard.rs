@@ -22,6 +22,7 @@ fn zk_ballot_rejected_when_referendum_absent_or_out_of_window() {
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), kura, query_handle);
     let mut gov_cfg = state.gov.clone();
+    gov_cfg.min_bond_amount = 0;
     gov_cfg.min_enactment_delay = 0;
     gov_cfg.window_span = 10;
     state.set_gov(gov_cfg);

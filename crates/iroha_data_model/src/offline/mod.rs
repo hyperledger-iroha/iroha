@@ -1,7 +1,7 @@
 //! Offline allowance certificates, platform proofs, and deposit bundles.
 
 #[allow(unused_imports)]
-use core::{fmt, str::FromStr};
+use core::{cmp::Ordering, fmt, str::FromStr};
 use std::collections::{BTreeMap, BTreeSet};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -32,8 +32,219 @@ pub use poseidon::*;
 /// (alias for `allowance_depleted`).
 pub const OFFLINE_REJECTION_REASON_PREFIX: &str = "offline_reason::";
 
+/// Prefix used for Android marker-key series counter scopes.
+pub const MARKER_COUNTER_PREFIX: &str = "marker::";
+
+/// Prefix used for Android provisioned counter scopes.
+pub const PROVISIONED_COUNTER_PREFIX: &str = "provisioned::";
+
 fn remaining_amount_default() -> Numeric {
     Numeric::zero()
+}
+
+fn invalid_counter_scope_error(
+    platform: OfflineTransferRejectionPlatform,
+    reason: impl Into<String>,
+) -> OfflineProofRequestError {
+    OfflineProofRequestError::InvalidCounterScope {
+        platform,
+        reason: reason.into(),
+    }
+}
+
+/// Canonicalize an iOS App Attest key id to standard base64.
+///
+/// # Errors
+///
+/// Returns [`OfflineProofRequestError::InvalidCounterScope`] if the key id is empty,
+/// not valid base64, or not in canonical standard base64 form.
+pub fn canonical_app_attest_key_id(
+    key_id: &str,
+) -> Result<String, OfflineProofRequestError> {
+    if key_id.trim().is_empty() {
+        return Err(invalid_counter_scope_error(
+            OfflineTransferRejectionPlatform::Apple,
+            "apple_app_attest.key_id must be non-empty",
+        ));
+    }
+    let bytes = BASE64_STANDARD
+        .decode(key_id.as_bytes())
+        .map_err(|_| {
+            invalid_counter_scope_error(
+                OfflineTransferRejectionPlatform::Apple,
+                "apple_app_attest.key_id must use standard base64 encoding",
+            )
+        })?;
+    let canonical = BASE64_STANDARD.encode(bytes);
+    if canonical != key_id {
+        return Err(invalid_counter_scope_error(
+            OfflineTransferRejectionPlatform::Apple,
+            "apple_app_attest.key_id must use canonical base64 encoding",
+        ));
+    }
+    Ok(canonical)
+}
+
+/// Derive the canonical Android marker-key series identifier from a raw public key.
+///
+/// # Errors
+///
+/// Returns [`OfflineProofRequestError::InvalidCounterScope`] if the public key is empty.
+pub fn marker_series_from_public_key(
+    marker_public_key: &[u8],
+) -> Result<String, OfflineProofRequestError> {
+    if marker_public_key.is_empty() {
+        return Err(invalid_counter_scope_error(
+            OfflineTransferRejectionPlatform::Android,
+            "marker_public_key must be non-empty",
+        ));
+    }
+    let hash = Hash::new(marker_public_key);
+    Ok(format!("{MARKER_COUNTER_PREFIX}{hash}"))
+}
+
+/// Return receipts sorted by `(counter, tx_id)` for deterministic processing.
+#[must_use]
+pub fn canonical_receipts<'a>(
+    receipts: &'a [OfflineSpendReceipt],
+) -> Vec<&'a OfflineSpendReceipt> {
+    let mut ordered: Vec<&OfflineSpendReceipt> = receipts.iter().collect();
+    ordered.sort_by(|lhs, rhs| receipt_cmp(lhs, rhs));
+    ordered
+}
+
+/// Return true when receipts are already ordered by `(counter, tx_id)`.
+#[must_use]
+pub fn receipts_are_canonical(receipts: &[OfflineSpendReceipt]) -> bool {
+    receipts
+        .windows(2)
+        .all(|pair| receipt_cmp(&pair[0], &pair[1]) != Ordering::Greater)
+}
+
+/// Validate that receipts share a single counter scope.
+///
+/// # Errors
+///
+/// Returns [`OfflineProofRequestError::MissingReceipts`] when receipts are empty,
+/// [`OfflineProofRequestError::MixedCounterScopes`] when receipts mix scopes, or
+/// [`OfflineProofRequestError::InvalidCounterScope`] when a receipt scope is malformed.
+pub fn ensure_single_counter_scope(
+    receipts: &[OfflineSpendReceipt],
+) -> Result<(), OfflineProofRequestError> {
+    let mut iter = receipts.iter();
+    let first = iter
+        .next()
+        .ok_or(OfflineProofRequestError::MissingReceipts)?;
+    let expected = receipt_counter_scope(first)?;
+    for receipt in iter {
+        let current = receipt_counter_scope(receipt)?;
+        if current != expected {
+            return Err(OfflineProofRequestError::MixedCounterScopes);
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CounterScopeKind {
+    Apple,
+    AndroidMarker,
+    AndroidProvisioned,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CounterScope {
+    kind: CounterScopeKind,
+    scope: String,
+}
+
+fn receipt_counter_scope(
+    receipt: &OfflineSpendReceipt,
+) -> Result<CounterScope, OfflineProofRequestError> {
+    match &receipt.platform_proof {
+        OfflinePlatformProof::AppleAppAttest(proof) => {
+            let key_id = canonical_app_attest_key_id(&proof.key_id)?;
+            Ok(CounterScope {
+                kind: CounterScopeKind::Apple,
+                scope: key_id,
+            })
+        }
+        OfflinePlatformProof::AndroidMarkerKey(proof) => {
+            let derived = marker_series_from_public_key(&proof.marker_public_key)?;
+            if proof.series != derived {
+                return Err(invalid_counter_scope_error(
+                    OfflineTransferRejectionPlatform::Android,
+                    "marker series does not match marker_public_key",
+                ));
+            }
+            Ok(CounterScope {
+                kind: CounterScopeKind::AndroidMarker,
+                scope: derived,
+            })
+        }
+        OfflinePlatformProof::Provisioned(proof) => Ok(CounterScope {
+            kind: CounterScopeKind::AndroidProvisioned,
+            scope: provisioned_counter_scope(proof)?,
+        }),
+    }
+}
+
+fn provisioned_counter_scope(
+    proof: &AndroidProvisionedProof,
+) -> Result<String, OfflineProofRequestError> {
+    let schema = proof.manifest_schema.trim();
+    if schema.is_empty() {
+        return Err(invalid_counter_scope_error(
+            OfflineTransferRejectionPlatform::Android,
+            "provisioned manifest_schema must be non-empty",
+        ));
+    }
+    let device_id = provisioned_device_id(&proof.device_manifest)?;
+    Ok(format!("{PROVISIONED_COUNTER_PREFIX}{schema}::{device_id}"))
+}
+
+fn provisioned_device_id(
+    manifest: &Metadata,
+) -> Result<String, OfflineProofRequestError> {
+    let name = Name::from_str(ANDROID_PROVISIONED_DEVICE_ID_KEY).map_err(|err| {
+        let _ = err;
+        invalid_counter_scope_error(
+            OfflineTransferRejectionPlatform::Android,
+            "invalid android.provisioned.device_id metadata key",
+        )
+    })?;
+    let value = manifest.get(&name).ok_or_else(|| {
+        invalid_counter_scope_error(
+            OfflineTransferRejectionPlatform::Android,
+            "provisioned device_manifest missing android.provisioned.device_id",
+        )
+    })?;
+    let device_id: String = value.try_into_any().map_err(|err| {
+        let _ = err;
+        invalid_counter_scope_error(
+            OfflineTransferRejectionPlatform::Android,
+            "provisioned device_id must be a string",
+        )
+    })?;
+    let trimmed = device_id.trim();
+    if trimmed.is_empty() {
+        return Err(invalid_counter_scope_error(
+            OfflineTransferRejectionPlatform::Android,
+            "provisioned device_id must be non-empty",
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn receipt_cmp(lhs: &OfflineSpendReceipt, rhs: &OfflineSpendReceipt) -> Ordering {
+    match lhs
+        .platform_proof
+        .counter()
+        .cmp(&rhs.platform_proof.counter())
+    {
+        Ordering::Equal => lhs.tx_id.cmp(&rhs.tx_id),
+        other => other,
+    }
 }
 
 /// Canonical payload signed by operators when issuing offline wallet certificates.
@@ -1033,6 +1244,8 @@ mod model {
     )]
     pub struct AppleAppAttestProof {
         /// Stable identifier for the App Attest key.
+        ///
+        /// Must use canonical standard base64 encoding.
         pub key_id: String,
         /// Monotonic hardware counter.
         pub counter: u64,
@@ -1066,10 +1279,12 @@ mod model {
         pub series: String,
         /// Monotonic counter encoded in the alias sequence.
         pub counter: u64,
-        /// Hardware-backed marker public key.
-        pub marker_public_key: PublicKey,
-        /// Optional signature produced by the marker key over the spend hash.
-        pub marker_signature: Option<Signature>,
+        /// Hardware-backed marker public key (SEC1-encoded P-256).
+        pub marker_public_key: Vec<u8>,
+        /// Optional signature produced by the marker key over the receipt challenge hash.
+        ///
+        /// When present, this must be a raw 64-byte `r||s` signature.
+        pub marker_signature: Option<Vec<u8>>,
         /// Hardware attestation statement proving key provenance.
         pub attestation: Vec<u8>,
     }
@@ -1893,6 +2108,12 @@ mod model {
         }
     }
 
+    impl fmt::Display for OfflineTransferRejectionPlatform {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.as_label())
+        }
+    }
+
     /// Classification for offline bundle validation failures surfaced via telemetry/admin APIs.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1915,6 +2136,10 @@ mod model {
         DeltaMismatch,
         /// Receipts referenced multiple certificates.
         MixedCertificates,
+        /// Receipts are not in canonical `(counter, tx_id)` order.
+        ReceiptOrderInvalid,
+        /// Receipts referenced multiple counter scopes.
+        MixedCounterScopes,
         /// Referenced allowance certificate was not registered on-ledger.
         AllowanceNotRegistered,
         /// Certificate validity window elapsed.
@@ -1983,6 +2208,8 @@ mod model {
                 Self::MaxTxValueExceeded => "max_tx_value_exceeded",
                 Self::DeltaMismatch => "delta_mismatch",
                 Self::MixedCertificates => "mixed_certificates",
+                Self::ReceiptOrderInvalid => "receipt_order_invalid",
+                Self::MixedCounterScopes => "mixed_counter_scopes",
                 Self::AllowanceNotRegistered => "allowance_not_registered",
                 Self::CertificateExpired => "certificate_expired",
                 Self::PolicyExpired => "policy_expired",
@@ -2026,6 +2253,8 @@ mod model {
                 "max_tx_value_exceeded" => Ok(Self::MaxTxValueExceeded),
                 "delta_mismatch" => Ok(Self::DeltaMismatch),
                 "mixed_certificates" => Ok(Self::MixedCertificates),
+                "receipt_order_invalid" => Ok(Self::ReceiptOrderInvalid),
+                "mixed_counter_scopes" => Ok(Self::MixedCounterScopes),
                 "allowance_not_registered" => Ok(Self::AllowanceNotRegistered),
                 "certificate_expired" => Ok(Self::CertificateExpired),
                 "policy_expired" => Ok(Self::PolicyExpired),
@@ -2093,6 +2322,13 @@ mod model {
     }
 
     impl OfflineToOnlineTransfer {
+        fn ordered_receipts(
+            &self,
+        ) -> Result<Vec<&OfflineSpendReceipt>, OfflineProofRequestError> {
+            ensure_single_counter_scope(&self.receipts)?;
+            Ok(canonical_receipts(&self.receipts))
+        }
+
         /// Determine the inferred counter checkpoint for this bundle.
         ///
         /// # Errors
@@ -2102,8 +2338,8 @@ mod model {
         /// [`OfflineProofRequestError::InvalidCounterSequence`] if the receipt
         /// counter cannot be decremented safely.
         pub fn counter_checkpoint_hint(&self) -> Result<u64, OfflineProofRequestError> {
-            let first = self
-                .receipts
+            let receipts = self.ordered_receipts()?;
+            let first = receipts
                 .first()
                 .ok_or(OfflineProofRequestError::MissingReceipts)?;
             first
@@ -2121,6 +2357,7 @@ mod model {
         pub fn to_proof_request_header(
             &self,
         ) -> Result<OfflineProofRequestHeader, OfflineProofRequestError> {
+            ensure_single_counter_scope(&self.receipts)?;
             let receipts_root = compute_receipts_root(&self.receipts)?;
             let certificate_id = self
                 .primary_certificate()
@@ -2145,16 +2382,12 @@ mod model {
             let header = self.to_proof_request_header()?;
             let certificate_id = header.certificate_id;
             let balance_proof = &self.balance_proof;
-            if self.receipts.is_empty() {
-                return Err(OfflineProofRequestError::MissingReceipts);
-            }
-            let receipt_amounts: Vec<_> = self
-                .receipts
+            let receipts = self.ordered_receipts()?;
+            let receipt_amounts: Vec<_> = receipts
                 .iter()
                 .map(|receipt| receipt.amount.clone())
                 .collect();
-            let blinding_seeds = self
-                .receipts
+            let blinding_seeds = receipts
                 .iter()
                 .map(|receipt| {
                     OfflineProofBlindingSeed::derive(
@@ -2183,11 +2416,8 @@ mod model {
             counter_checkpoint: u64,
         ) -> Result<OfflineProofRequestCounter, OfflineProofRequestError> {
             let header = self.to_proof_request_header()?;
-            if self.receipts.is_empty() {
-                return Err(OfflineProofRequestError::MissingReceipts);
-            }
-            let counters = self
-                .receipts
+            let receipts = self.ordered_receipts()?;
+            let counters = receipts
                 .iter()
                 .map(|receipt| receipt.platform_proof.counter())
                 .collect();
@@ -2209,10 +2439,8 @@ mod model {
             replay_log_tail: Hash,
         ) -> Result<OfflineProofRequestReplay, OfflineProofRequestError> {
             let header = self.to_proof_request_header()?;
-            if self.receipts.is_empty() {
-                return Err(OfflineProofRequestError::MissingReceipts);
-            }
-            let tx_ids = self.receipts.iter().map(|receipt| receipt.tx_id).collect();
+            let receipts = self.ordered_receipts()?;
+            let tx_ids = receipts.iter().map(|receipt| receipt.tx_id).collect();
             Ok(OfflineProofRequestReplay {
                 header,
                 replay_log_head,
@@ -2369,6 +2597,17 @@ mod model {
         /// The first receipt counter cannot produce a checkpoint.
         #[error("first receipt counter is zero; provide an explicit checkpoint")]
         InvalidCounterSequence,
+        /// Receipts reference multiple counter scopes.
+        #[error("offline transfer mixes counter scopes")]
+        MixedCounterScopes,
+        /// Counter scope metadata is malformed.
+        #[error("invalid counter scope for {platform}: {reason}")]
+        InvalidCounterScope {
+            /// Platform classification for the scope.
+            platform: OfflineTransferRejectionPlatform,
+            /// Reason the scope is invalid.
+            reason: String,
+        },
         /// Poseidon hashing failed while building the proof header.
         #[error(transparent)]
         Poseidon(#[from] crate::offline::poseidon::OfflineReceiptMerkleError),
@@ -3118,7 +3357,7 @@ mod tests {
             issued_at_ms: 1_700_000_500,
             invoice_id: "inv-001".into(),
             platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
-                key_id: "AA_KEY".into(),
+                key_id: BASE64_STANDARD.encode(b"AA_KEY"),
                 counter: 42,
                 assertion: vec![0xAA, 0xBB],
                 challenge_hash: Hash::new(b"challenge"),
@@ -3204,6 +3443,77 @@ mod tests {
         assert!(matches!(
             record.counter_checkpoint_hint(),
             Err(OfflineProofRequestError::InvalidCounterSequence)
+        ));
+    }
+
+    #[test]
+    fn counter_checkpoint_hint_orders_receipts() {
+        let mut receipt_a = sample_receipt_with_counter(10);
+        receipt_a.tx_id = Hash::new(b"tx-a");
+        let mut receipt_b = sample_receipt_with_counter(8);
+        receipt_b.tx_id = Hash::new(b"tx-b");
+        let transfer = OfflineToOnlineTransfer {
+            bundle_id: Hash::new(b"bundle-order"),
+            receiver: receipt_a.to.clone(),
+            deposit_account: receipt_a.to.clone(),
+            receipts: vec![receipt_a, receipt_b],
+            balance_proof: OfflineBalanceProof {
+                initial_commitment: sample_commitment(0x22),
+                resulting_commitment: vec![0u8; 32],
+                claimed_delta: Numeric::new(0, 0),
+                zk_proof: None,
+            },
+            aggregate_proof: None,
+            attachments: None,
+            platform_snapshot: None,
+        };
+        assert_eq!(transfer.counter_checkpoint_hint().unwrap(), 7);
+    }
+
+    #[test]
+    fn canonical_app_attest_key_id_accepts_standard_base64() {
+        let key_id = BASE64_STANDARD.encode(b"app-attest-key");
+        let canonical = canonical_app_attest_key_id(&key_id).expect("canonical key id");
+        assert_eq!(canonical, key_id);
+    }
+
+    #[test]
+    fn canonical_app_attest_key_id_rejects_non_canonical() {
+        let err = canonical_app_attest_key_id("AA_KEY").expect_err("non-canonical key id");
+        assert!(matches!(
+            err,
+            OfflineProofRequestError::InvalidCounterScope {
+                platform: OfflineTransferRejectionPlatform::Apple,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn marker_series_derives_prefix() {
+        let series = marker_series_from_public_key(&[0x01, 0x02, 0x03]).expect("series");
+        assert!(series.starts_with(MARKER_COUNTER_PREFIX));
+    }
+
+    #[test]
+    fn receipts_canonical_ordering_helpers() {
+        let receipt_a = sample_receipt_with_counter(2);
+        let receipt_b = sample_receipt_with_counter(1);
+        assert!(!receipts_are_canonical(&[receipt_a.clone(), receipt_b.clone()]));
+        let ordered = canonical_receipts(&[receipt_a, receipt_b]);
+        assert_eq!(ordered.first().unwrap().platform_proof.counter(), 1);
+    }
+
+    #[test]
+    fn ensure_single_counter_scope_rejects_mixed_keys() {
+        let receipt_a = sample_receipt_with_counter(1);
+        let mut receipt_b = sample_receipt_with_counter(2);
+        if let OfflinePlatformProof::AppleAppAttest(proof) = &mut receipt_b.platform_proof {
+            proof.key_id = BASE64_STANDARD.encode(b"OTHER_KEY");
+        }
+        assert!(matches!(
+            ensure_single_counter_scope(&[receipt_a, receipt_b]),
+            Err(OfflineProofRequestError::MixedCounterScopes)
         ));
     }
 
@@ -3506,7 +3816,7 @@ mod receipt_challenge_tests {
 
     fn sample_platform_proof(challenge_hash: Hash) -> OfflinePlatformProof {
         OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
-            key_id: "TEST_KEY".into(),
+            key_id: BASE64_STANDARD.encode(b"TEST_KEY"),
             counter: 42,
             assertion: vec![0xCA, 0xFE],
             challenge_hash,

@@ -39,13 +39,15 @@ use iroha_data_model::{
         AGGREGATE_PROOF_VERSION_V1, AndroidHmsSafetyDetectMetadata, AndroidIntegrityMetadata,
         AndroidIntegrityPolicy, AndroidMarkerKeyMetadata, AndroidPlayIntegrityMetadata,
         AndroidProvisionedMetadata, AndroidProvisionedProof, HmsSafetyDetectEvaluation,
-        OFFLINE_REJECTION_REASON_PREFIX, OfflineAllowanceRecord, OfflineBalanceProof,
-        OfflineCounterState, OfflineCounterSummary, OfflinePlatformProof,
-        OfflinePlatformTokenSnapshot, OfflineSpendReceipt, OfflineToOnlineTransfer,
-        OfflineTransferRecord, OfflineTransferRejectionPlatform, OfflineTransferRejectionReason,
-        OfflineTransferStatus, OfflineVerdictRevocation, OfflineVerdictSnapshot,
-        OfflineWalletCertificate, PlayIntegrityAppVerdict, PlayIntegrityDeviceVerdict,
-        PlayIntegrityEnvironment, chain_bound_receipt_hash, compute_receipts_root,
+        OFFLINE_REJECTION_REASON_PREFIX, PROVISIONED_COUNTER_PREFIX,
+        OfflineAllowanceRecord, OfflineBalanceProof, OfflineCounterState, OfflineCounterSummary,
+        OfflinePlatformProof, OfflinePlatformTokenSnapshot, OfflineProofRequestError,
+        OfflineSpendReceipt, OfflineToOnlineTransfer, OfflineTransferRecord,
+        OfflineTransferRejectionPlatform, OfflineTransferRejectionReason, OfflineTransferStatus,
+        OfflineVerdictRevocation, OfflineVerdictSnapshot, OfflineWalletCertificate,
+        PlayIntegrityAppVerdict, PlayIntegrityDeviceVerdict, PlayIntegrityEnvironment,
+        canonical_app_attest_key_id, chain_bound_receipt_hash, compute_receipts_root,
+        ensure_single_counter_scope, marker_series_from_public_key, receipts_are_canonical,
     },
     query::{
         dsl::{CompoundPredicate, EvaluatePredicate},
@@ -123,7 +125,6 @@ const ANDROID_PROVISIONED_MANIFEST_VERSION_KEY: &str = "android.provisioned.mani
 const ANDROID_PROVISIONED_MAX_AGE_KEY: &str = "android.provisioned.max_manifest_age_ms";
 #[cfg(test)]
 const ANDROID_PROVISIONED_MANIFEST_DIGEST_KEY: &str = "android.provisioned.manifest_digest";
-const PROVISIONED_COUNTER_PREFIX: &str = "provisioned::";
 
 const KM_TAG_PURPOSE: u32 = 1;
 const KM_TAG_ALGORITHM: u32 = 2;
@@ -172,6 +173,29 @@ fn map_platform_err<T>(
     platform: OfflineTransferRejectionPlatform,
 ) -> Result<T, InstructionExecutionError> {
     result.map_err(|err| rejection_error(reason, platform, err.to_string()))
+}
+
+fn map_counter_scope_error(err: OfflineProofRequestError) -> InstructionExecutionError {
+    match err {
+        OfflineProofRequestError::MissingReceipts => rejection_error(
+            OfflineTransferRejectionReason::EmptyBundle,
+            OfflineTransferRejectionPlatform::General,
+            "offline bundle must include at least one receipt",
+        ),
+        OfflineProofRequestError::MixedCounterScopes => rejection_error(
+            OfflineTransferRejectionReason::MixedCounterScopes,
+            OfflineTransferRejectionPlatform::General,
+            "offline bundle mixes counter scopes",
+        ),
+        OfflineProofRequestError::InvalidCounterScope { platform, reason } => rejection_error(
+            OfflineTransferRejectionReason::PlatformMetadataInvalid,
+            platform,
+            reason,
+        ),
+        other => InstructionExecutionError::InvariantViolation(
+            format!("unexpected counter scope error: {other}").into(),
+        ),
+    }
 }
 
 fn ensure_certificate_policy(
@@ -700,6 +724,7 @@ pub mod isi {
     mod register_tests {
         use std::{str::FromStr, sync::Arc, time::Duration};
 
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
         use iroha_crypto::Algorithm;
         use iroha_data_model::{
             account::Account,
@@ -789,7 +814,7 @@ pub mod isi {
                 issued_at_ms: 1_700_000_100,
                 invoice_id: "INV-001".into(),
                 platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
-                    key_id: "apple".into(),
+                    key_id: BASE64_STANDARD.encode(b"apple"),
                     counter: 1,
                     assertion: vec![],
                     challenge_hash: Hash::new(b"challenge"),
@@ -858,7 +883,7 @@ pub mod isi {
                 issued_at_ms,
                 invoice_id: "INV-TS".into(),
                 platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
-                    key_id: "apple".into(),
+                    key_id: BASE64_STANDARD.encode(b"apple"),
                     counter: 1,
                     assertion: vec![],
                     challenge_hash: Hash::new(b"challenge"),
@@ -910,7 +935,7 @@ pub mod isi {
                 issued_at_ms: 1_700_000_100,
                 invoice_id: "INV-MAX".into(),
                 platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
-                    key_id: "apple".into(),
+                    key_id: BASE64_STANDARD.encode(b"apple"),
                     counter: 1,
                     assertion: vec![],
                     challenge_hash: Hash::new(b"challenge"),
@@ -967,7 +992,7 @@ pub mod isi {
                 issued_at_ms: 1_700_000_100,
                 invoice_id: "INV-FRAC".into(),
                 platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
-                    key_id: "apple".into(),
+                    key_id: BASE64_STANDARD.encode(b"apple"),
                     counter: 1,
                     assertion: vec![],
                     challenge_hash: Hash::new(b"challenge"),
@@ -1471,6 +1496,13 @@ pub mod isi {
                 "offline bundle must include at least one receipt",
             ));
         }
+        if !receipts_are_canonical(&transfer.receipts) {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::ReceiptOrderInvalid,
+                OfflineTransferRejectionPlatform::General,
+                "offline bundle receipts must be ordered by (counter, tx_id)",
+            ));
+        }
 
         let mut invoice_ids = BTreeSet::new();
         for receipt in &transfer.receipts {
@@ -1504,6 +1536,10 @@ pub mod isi {
                 OfflineTransferRejectionPlatform::General,
                 "offline bundle mixes certificates from different wallets",
             ));
+        }
+
+        if let Err(err) = ensure_single_counter_scope(&transfer.receipts) {
+            return Err(map_counter_scope_error(err));
         }
 
         let record = state_transaction
@@ -2397,26 +2433,30 @@ pub mod isi {
         tx_id: &Hash,
     ) -> Result<(), InstructionExecutionError> {
         match proof {
-            OfflinePlatformProof::AppleAppAttest(app_attest) => enforce_monotonic_entry(
-                staged_state
-                    .apple_key_counters
-                    .entry(app_attest.key_id.clone()),
-                app_attest.counter,
-                "App Attest key",
-                app_attest.key_id.as_str(),
-                tx_id,
-                OfflineTransferRejectionPlatform::Apple,
-            ),
-            OfflinePlatformProof::AndroidMarkerKey(marker) => enforce_monotonic_entry(
-                staged_state
-                    .android_series_counters
-                    .entry(marker.series.clone()),
-                marker.counter,
-                "Android marker series",
-                marker.series.as_str(),
-                tx_id,
-                OfflineTransferRejectionPlatform::Android,
-            ),
+            OfflinePlatformProof::AppleAppAttest(app_attest) => {
+                let key_id = canonical_app_attest_key_id(&app_attest.key_id)
+                    .map_err(map_counter_scope_error)?;
+                enforce_monotonic_entry(
+                    staged_state.apple_key_counters.entry(key_id.clone()),
+                    app_attest.counter,
+                    "App Attest key",
+                    key_id.as_str(),
+                    tx_id,
+                    OfflineTransferRejectionPlatform::Apple,
+                )
+            }
+            OfflinePlatformProof::AndroidMarkerKey(marker) => {
+                let series = marker_series_from_public_key(&marker.marker_public_key)
+                    .map_err(map_counter_scope_error)?;
+                enforce_monotonic_entry(
+                    staged_state.android_series_counters.entry(series.clone()),
+                    marker.counter,
+                    "Android marker series",
+                    series.as_str(),
+                    tx_id,
+                    OfflineTransferRejectionPlatform::Android,
+                )
+            }
             OfflinePlatformProof::Provisioned(provisioned) => {
                 let scope = provisioned_counter_scope(provisioned)?;
                 enforce_monotonic_entry(
@@ -2680,9 +2720,16 @@ mod attestation {
     use norito::json::{Map as JsonMap, Value as JsonValue};
     #[cfg(test)]
     use once_cell::sync::OnceCell;
-    use p256::ecdsa::{Signature as P256Signature, VerifyingKey, signature::DigestVerifier};
+    use p256::ecdsa::{
+        Signature as P256Signature,
+        VerifyingKey,
+        signature::{DigestVerifier, hazmat::PrehashVerifier as _},
+    };
+    use p256::elliptic_curve::sec1::ToEncodedPoint;
     #[cfg(test)]
     use p256::ecdsa::{SigningKey, signature::DigestSigner};
+    #[cfg(test)]
+    use p256::ecdsa::signature::hazmat::PrehashSigner as _;
     #[cfg(test)]
     use p256::pkcs8::DecodePrivateKey;
     #[cfg(test)]
@@ -3055,6 +3102,48 @@ mod attestation {
             OfflineTransferRejectionReason::PlatformAttestationInvalid,
             platform,
         )?;
+        let spki = leaf_cert.public_key();
+        if spki.subject_public_key.data.is_empty() {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::PlatformAttestationInvalid,
+                platform,
+                "android attestation leaf missing public key",
+            ));
+        }
+        let leaf_key = VerifyingKey::from_sec1_bytes(spki.subject_public_key.data.as_ref())
+            .map_err(|_| {
+                rejection_error(
+                    OfflineTransferRejectionReason::PlatformAttestationInvalid,
+                    platform,
+                    "android attestation leaf contains invalid P-256 key",
+                )
+            })?;
+        let marker_key =
+            VerifyingKey::from_sec1_bytes(proof.marker_public_key.as_ref()).map_err(|_| {
+                rejection_error(
+                    OfflineTransferRejectionReason::PlatformAttestationInvalid,
+                    platform,
+                    "android marker_public_key is not valid P-256 SEC1 bytes",
+                )
+            })?;
+        if leaf_key.to_encoded_point(false).as_bytes()
+            != marker_key.to_encoded_point(false).as_bytes()
+        {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::PlatformAttestationInvalid,
+                platform,
+                "android marker_public_key does not match attestation leaf key",
+            ));
+        }
+        if let Ok(expected) = marker_series_from_public_key(&proof.marker_public_key) {
+            if proof.series != expected {
+                return Err(rejection_error(
+                    OfflineTransferRejectionReason::PlatformAttestationInvalid,
+                    platform,
+                    "android marker series does not match marker_public_key",
+                ));
+            }
+        }
         let key_description = map_platform_err(
             parse_key_description(&leaf_cert),
             OfflineTransferRejectionReason::PlatformAttestationInvalid,
@@ -4128,9 +4217,19 @@ mod attestation {
         challenge: &ReceiptChallenge,
     ) -> Result<(), InstructionExecutionError> {
         if let Some(signature) = &proof.marker_signature {
-            let digest = Sha256::digest(challenge.iroha_hash.as_ref());
-            signature
-                .verify(&proof.marker_public_key, digest.as_ref())
+            let marker_key =
+                VerifyingKey::from_sec1_bytes(proof.marker_public_key.as_ref()).map_err(|_| {
+                    InstructionExecutionError::InvariantViolation(
+                        "android marker_public_key is not valid P-256 SEC1 bytes".into(),
+                    )
+                })?;
+            let sig = P256Signature::from_slice(signature).map_err(|_| {
+                InstructionExecutionError::InvariantViolation(
+                    "android marker_signature must be a 64-byte raw signature".into(),
+                )
+            })?;
+            marker_key
+                .verify_prehash(challenge.client_data_hash.as_ref(), &sig)
                 .map_err(|_| {
                     InstructionExecutionError::InvariantViolation(
                         "android marker signature does not match marker_public_key".into(),
@@ -4595,15 +4694,16 @@ mod attestation {
     }
 
     fn decode_key_id(key_id: &str) -> Result<Vec<u8>, InstructionExecutionError> {
-        if let Ok(bytes) = BASE64_STANDARD.decode(key_id.as_bytes()) {
-            return Ok(bytes);
-        }
-        if let Ok(bytes) = URL_SAFE_NO_PAD.decode(key_id.as_bytes()) {
-            return Ok(bytes);
-        }
-        Err(InstructionExecutionError::InvariantViolation(
-            "invalid app attest key identifier encoding".into(),
-        ))
+        let canonical = canonical_app_attest_key_id(key_id).map_err(|err| {
+            InstructionExecutionError::InvariantViolation(
+                format!("invalid app attest key identifier: {err}").into(),
+            )
+        })?;
+        BASE64_STANDARD.decode(canonical.as_bytes()).map_err(|_| {
+            InstructionExecutionError::InvariantViolation(
+                "invalid app attest key identifier encoding".into(),
+            )
+        })
     }
 
     fn expected_aaguid(env: AppleEnvironment) -> &'static [u8; 16] {
@@ -5511,22 +5611,33 @@ mod attestation {
 
             fn from_chain(chain: &AndroidIssuerChain) -> Self {
                 let metadata = AndroidFixtureMetadata::default();
-                let marker_pair = spend_keypair();
                 let spend_pair = spend_keypair();
                 let operator_pair = operator_keypair();
                 let certificate = chain.build_certificate(&metadata, &spend_pair, &operator_pair);
+                let marker_leaf = RcgenKeyPair::generate().expect("marker key");
+                let marker_signing_key =
+                    SigningKey::from_pkcs8_der(&marker_leaf.serialize_der())
+                        .expect("marker signing key");
+                let marker_public_key = VerifyingKey::from(&marker_signing_key)
+                    .to_encoded_point(false)
+                    .as_bytes()
+                    .to_vec();
                 let mut receipt =
-                    chain.build_receipt(&certificate, &spend_pair, marker_pair.public_key());
+                    chain.build_receipt(&certificate, &spend_pair, &marker_public_key);
                 let chain_id = sample_chain_id();
                 let challenge = derive_receipt_challenge(&receipt, &chain_id).expect("challenge");
-                let attestation = chain.issue_attestation(&challenge, &metadata);
-                let digest = Sha256::digest(challenge.iroha_hash.as_ref());
-                let marker_signature = Signature::new(marker_pair.private_key(), digest.as_ref());
+                let attestation = chain.issue_attestation(&challenge, &metadata, marker_leaf);
+                let marker_signature = marker_signing_key
+                    .sign_prehash(challenge.client_data_hash.as_ref())
+                    .expect("marker signature")
+                    .to_bytes()
+                    .to_vec();
                 receipt.platform_proof =
                     OfflinePlatformProof::AndroidMarkerKey(AndroidMarkerKeyProof {
-                        series: "series-A".into(),
+                        series: marker_series_from_public_key(&marker_public_key)
+                            .expect("marker series"),
                         counter: 7,
-                        marker_public_key: marker_pair.public_key().clone(),
+                        marker_public_key,
                         marker_signature: Some(marker_signature),
                         attestation,
                     });
@@ -6333,8 +6444,10 @@ mod attestation {
             &self,
             certificate: &OfflineWalletCertificate,
             spend_pair: &KeyPair,
-            marker_public_key: &iroha_crypto::PublicKey,
+            marker_public_key: &[u8],
         ) -> OfflineSpendReceipt {
+            let series = marker_series_from_public_key(marker_public_key)
+                .expect("marker series");
             let mut receipt = OfflineSpendReceipt {
                 tx_id: Hash::new(b"android-offline"),
                 from: certificate.controller.clone(),
@@ -6344,9 +6457,9 @@ mod attestation {
                 issued_at_ms: certificate.issued_at_ms + 1_000,
                 invoice_id: "inv-android-attest".into(),
                 platform_proof: OfflinePlatformProof::AndroidMarkerKey(AndroidMarkerKeyProof {
-                    series: "series-A".into(),
+                    series,
                     counter: 7,
-                    marker_public_key: marker_public_key.clone(),
+                    marker_public_key: marker_public_key.to_vec(),
                     marker_signature: None,
                     attestation: Vec::new(),
                 }),
@@ -6363,6 +6476,7 @@ mod attestation {
             &self,
             challenge: &ReceiptChallenge,
             metadata: &AndroidFixtureMetadata,
+            leaf_key: RcgenKeyPair,
         ) -> Vec<u8> {
             let mut params = Self::leaf_params("Android Marker Leaf");
             params
@@ -6371,7 +6485,6 @@ mod attestation {
                     ANDROID_KEY_DESCRIPTION_OID,
                     build_key_description_der(challenge.iroha_bytes.as_ref(), metadata),
                 ));
-            let leaf_key = RcgenKeyPair::generate().expect("leaf key");
             let leaf = CertifiedIssuer::signed_by(params, leaf_key, &*self.intermediate)
                 .expect("android leaf");
             let mut buf = Vec::new();
@@ -6583,6 +6696,7 @@ mod attestation {
     mod counter_state_tests {
         use std::str::FromStr;
 
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
         use iroha_data_model::{
             account::AccountId,
             asset::{AssetDefinitionId, AssetId},
@@ -6599,20 +6713,22 @@ mod attestation {
         #[test]
         fn counter_state_rejects_non_contiguous_increment() {
             let mut staged = OfflineCounterState::default();
-            staged.apple_key_counters.insert("key-1".to_string(), 2);
+            let key_id = BASE64_STANDARD.encode(b"key-1");
+            staged.apple_key_counters.insert(key_id.clone(), 2);
 
-            let receipt = sample_receipt(4, "key-1");
+            let receipt = sample_receipt(4, &key_id);
             assert!(stage_receipt_counters(&mut staged, &[receipt]).is_err());
         }
 
         #[test]
         fn counter_state_accepts_contiguous_increment() {
             let mut staged = OfflineCounterState::default();
-            staged.apple_key_counters.insert("key-1".to_string(), 2);
+            let key_id = BASE64_STANDARD.encode(b"key-1");
+            staged.apple_key_counters.insert(key_id.clone(), 2);
 
-            let receipt = sample_receipt(3, "key-1");
+            let receipt = sample_receipt(3, &key_id);
             stage_receipt_counters(&mut staged, &[receipt]).expect("counter should increment");
-            assert_eq!(staged.apple_key_counters.get("key-1"), Some(&3));
+            assert_eq!(staged.apple_key_counters.get(&key_id), Some(&3));
         }
 
         fn sample_receipt(counter: u64, key_id: &str) -> OfflineSpendReceipt {
@@ -6676,6 +6792,7 @@ mod attestation {
 mod aggregate_proof_tests {
     use std::{str::FromStr, sync::OnceLock};
 
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use blake2::{
         Blake2bVar,
         digest::{Update, VariableOutput},
@@ -6958,7 +7075,7 @@ mod aggregate_proof_tests {
             issued_at_ms: 1_700_000_100,
             invoice_id: "invoice-agg-a".into(),
             platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
-                key_id: "agg-key".into(),
+                key_id: BASE64_STANDARD.encode(b"agg-key"),
                 counter: 10,
                 assertion: Vec::new(),
                 challenge_hash: Hash::new(b"challenge-a"),
@@ -6976,7 +7093,7 @@ mod aggregate_proof_tests {
             issued_at_ms: 1_700_000_200,
             invoice_id: "invoice-agg-b".into(),
             platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
-                key_id: "agg-key".into(),
+                key_id: BASE64_STANDARD.encode(b"agg-key"),
                 counter: 11,
                 assertion: Vec::new(),
                 challenge_hash: Hash::new(b"challenge-b"),

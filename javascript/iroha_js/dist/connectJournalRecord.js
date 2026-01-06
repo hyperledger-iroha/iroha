@@ -21,6 +21,7 @@ const MAX_HEADER_PADDING = 64;
 const SCHEMA_NAME = "ConnectJournalRecordV1";
 const SCHEMA_HASH = computeSchemaHash(SCHEMA_NAME);
 const PAYLOAD_FIXED_LEN = 1 + 8 + 8 + 8 + 4 + 32;
+const MAX_UINT64 = (1n << 64n) - 1n;
 
 export class ConnectJournalError extends Error {
   constructor(message, options = {}) {
@@ -97,7 +98,27 @@ function asUint8Array(value, name) {
   if (value instanceof ArrayBuffer) {
     return new Uint8Array(value);
   }
-  throw new TypeError(`${name ?? "data"} must be an ArrayBuffer or Uint8Array`);
+  if (Array.isArray(value)) {
+    return normalizeByteArray(value, name);
+  }
+  if (value && typeof value.length === "number" && typeof value !== "string") {
+    return normalizeByteArray(value, name);
+  }
+  throw new TypeError(`${name ?? "data"} must be binary data`);
+}
+
+function normalizeByteArray(value, name) {
+  const bytes = Array.from(value);
+  const normalized = bytes.map((entry, index) => {
+    const numeric = Number(entry);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 0xff) {
+      throw new ConnectJournalError(
+        `${name ?? "data"}[${index}] must be a byte`,
+      );
+    }
+    return numeric;
+  });
+  return new Uint8Array(normalized);
 }
 
 function normalizeDirection(direction) {
@@ -120,24 +141,50 @@ function normalizeDirection(direction) {
 
 function normalizeUint64(value, name) {
   if (typeof value === "bigint") {
+    if (value < 0n) {
+      throw new ConnectJournalError(`${name} must be non-negative`);
+    }
+    if (value > MAX_UINT64) {
+      throw new ConnectJournalError(`${name} must fit into a uint64`);
+    }
     return value;
   }
   if (typeof value === "number") {
-    if (!Number.isFinite(value) || value < 0) {
-      throw new ConnectJournalError(`${name} must be a non-negative finite number`);
+    if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+      throw new ConnectJournalError(`${name} must be a non-negative integer`);
     }
-    return BigInt(Math.trunc(value));
+    if (!Number.isSafeInteger(value)) {
+      throw new ConnectJournalError(`${name} must be a safe integer`);
+    }
+    return BigInt(value);
   }
   if (typeof value === "string" && value.trim().length > 0) {
-    const normalized = value.trim().startsWith("0x")
-      ? BigInt(value.trim())
-      : BigInt(value.trim());
-    if (normalized < 0) {
+    let normalized;
+    try {
+      normalized = BigInt(value.trim());
+    } catch {
+      throw new ConnectJournalError(`${name} must be a non-negative integer`);
+    }
+    if (normalized < 0n) {
       throw new ConnectJournalError(`${name} must be non-negative`);
+    }
+    if (normalized > MAX_UINT64) {
+      throw new ConnectJournalError(`${name} must fit into a uint64`);
     }
     return normalized;
   }
   throw new ConnectJournalError(`${name} must be a bigint, number, or numeric string`);
+}
+
+function normalizeTimestampMs(value, name) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || !Number.isInteger(numeric) || numeric < 0) {
+    throw new ConnectJournalError(`${name} must be a non-negative integer`);
+  }
+  if (!Number.isSafeInteger(numeric)) {
+    throw new ConnectJournalError(`${name} must be a safe integer`);
+  }
+  return numeric;
 }
 
 function ensurePayloadHash(bytes) {
@@ -166,12 +213,9 @@ export class ConnectJournalRecord {
       payloadHash !== undefined && payloadHash !== null
         ? ensurePayloadHash(payloadHash)
         : blake2b256(this.ciphertext);
-    this.receivedAtMs = Number(receivedAtMs ?? Date.now());
-    this.expiresAtMs = Number(expiresAtMs ?? this.receivedAtMs);
-    if (!Number.isFinite(this.receivedAtMs) || this.receivedAtMs < 0) {
-      throw new ConnectJournalError("receivedAtMs must be a positive number");
-    }
-    if (!Number.isFinite(this.expiresAtMs) || this.expiresAtMs < this.receivedAtMs) {
+    this.receivedAtMs = normalizeTimestampMs(receivedAtMs ?? Date.now(), "receivedAtMs");
+    this.expiresAtMs = normalizeTimestampMs(expiresAtMs ?? this.receivedAtMs, "expiresAtMs");
+    if (this.expiresAtMs < this.receivedAtMs) {
       throw new ConnectJournalError("expiresAtMs must be >= receivedAtMs");
     }
   }

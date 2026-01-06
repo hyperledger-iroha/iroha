@@ -106,6 +106,15 @@ public final class HttpClientTransport implements IrohaClient {
     return config;
   }
 
+  /**
+   * Cancels in-flight HTTP requests and releases any underlying resources held by the executor.
+   *
+   * <p>This is a no-op for executors that do not expose lifecycle hooks.</p>
+   */
+  public void invalidateAndCancel() {
+    executor.invalidateAndCancel();
+  }
+
   /** Creates a Norito RPC client that reuses this transport's configuration (and HTTP client when possible). */
   public NoritoRpcClient newNoritoRpcClient() {
     return config.toNoritoRpcClient(executor);

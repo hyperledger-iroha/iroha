@@ -8,22 +8,80 @@ const DEFAULT_CONNECT_QUEUE_ROOT = path.join(os.homedir(), ".iroha", "connect");
 
 function bufferFromSessionId(sessionId) {
   if (sessionId instanceof Uint8Array) {
-    return Buffer.from(sessionId);
+    return ensureNonEmptyBytes(Buffer.from(sessionId), "Connect session id");
+  }
+  if (ArrayBuffer.isView(sessionId)) {
+    const view = new Uint8Array(sessionId.buffer, sessionId.byteOffset, sessionId.byteLength);
+    return ensureNonEmptyBytes(Buffer.from(view), "Connect session id");
+  }
+  if (sessionId instanceof ArrayBuffer) {
+    const view = new Uint8Array(sessionId);
+    return ensureNonEmptyBytes(Buffer.from(view), "Connect session id");
+  }
+  if (Array.isArray(sessionId)) {
+    return normalizeByteArray(sessionId, "Connect session id");
   }
   if (typeof sessionId === "string") {
     const trimmed = sessionId.trim();
     if (!trimmed) {
       throw new TypeError("Connect session id must be non-empty");
     }
-    const asBase64 = trimmed.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = asBase64.padEnd(Math.ceil(asBase64.length / 4) * 4, "=");
-    try {
-      return Buffer.from(padded, "base64");
-    } catch {
-      return Buffer.from(trimmed, "utf8");
-    }
+    const decoded = tryDecodeBase64Url(trimmed);
+    return decoded ?? Buffer.from(trimmed, "utf8");
   }
-  throw new TypeError("Connect session id must be a string or Uint8Array");
+  if (sessionId && typeof sessionId.length === "number") {
+    return normalizeByteArray(sessionId, "Connect session id");
+  }
+  throw new TypeError("Connect session id must be a string or byte array");
+}
+
+function ensureNonEmptyBytes(bytes, context) {
+  if (bytes.length === 0) {
+    throw new TypeError(`${context} must be non-empty`);
+  }
+  return bytes;
+}
+
+function normalizeByteArray(value, context) {
+  const bytes = Array.from(value);
+  if (bytes.length === 0) {
+    throw new TypeError(`${context} must be non-empty`);
+  }
+  const normalized = bytes.map((entry, index) => {
+    const numeric = Number(entry);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 0xff) {
+      throw new TypeError(`${context}[${index}] must be a byte`);
+    }
+    return numeric;
+  });
+  return Buffer.from(normalized);
+}
+
+function tryDecodeBase64Url(value) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  let padded = normalized;
+  const paddingIndex = normalized.indexOf("=");
+  if (paddingIndex !== -1) {
+    const head = normalized.slice(0, paddingIndex);
+    const padding = normalized.slice(paddingIndex);
+    if (!/^[0-9A-Za-z+/]*$/.test(head) || !/^={1,2}$/.test(padding)) {
+      return null;
+    }
+    if (normalized.length % 4 !== 0) {
+      return null;
+    }
+  } else {
+    if (!/^[0-9A-Za-z+/]+$/.test(normalized) || normalized.length % 4 === 1) {
+      return null;
+    }
+    const padLength = (4 - (normalized.length % 4)) % 4;
+    padded = normalized + "=".repeat(padLength);
+  }
+  const decoded = Buffer.from(padded, "base64");
+  if (decoded.toString("base64") !== padded) {
+    return null;
+  }
+  return decoded;
 }
 
 function toBase64Url(buffer) {
