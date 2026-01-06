@@ -3491,6 +3491,11 @@ impl Actor {
             .rbc
             .persisted_full_sessions
             .retain(|(hash, _, _)| *hash != block_hash);
+        self.subsystems
+            .da_rbc
+            .rbc
+            .persist_inflight
+            .retain(|(hash, _, _)| *hash != block_hash);
         self.pending.pending_replay_last_sent.remove(&block_hash);
 
         let telemetry_ref = self.telemetry_handle();
@@ -4082,6 +4087,7 @@ impl Actor {
             .ready_rebroadcast_last_sent
             .clear();
         self.subsystems.da_rbc.rbc.persisted_full_sessions.clear();
+        self.subsystems.da_rbc.rbc.persist_inflight.clear();
         self.subsystems.da_rbc.rbc.status_handle.clear();
         self.subsystems.da_rbc.da.da_bundles.clear();
         self.subsystems.da_rbc.da.da_pin_bundles.clear();

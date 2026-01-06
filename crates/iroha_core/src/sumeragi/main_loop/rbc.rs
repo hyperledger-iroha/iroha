@@ -2,6 +2,8 @@
 
 use std::{
     collections::BTreeMap,
+    io,
+    sync::mpsc,
     time::{Duration, Instant, SystemTime},
 };
 
@@ -34,7 +36,7 @@ use crate::{
         },
         message::{BlockCreated, BlockMessage},
         rbc_status,
-        rbc_store::{ChunkStore, SessionKey, StorePressure},
+        rbc_store::{ChunkStore, PersistOutcome, PersistedSession, SessionKey, StorePressure},
         status,
     },
     tx::AcceptedTransaction,
@@ -52,6 +54,60 @@ pub(super) struct RbcSessionPlan {
 pub(super) struct RbcPlan {
     pub(super) primary: RbcSessionPlan,
     pub(super) duplicate: Option<RbcSessionPlan>,
+}
+
+const RBC_PERSIST_WORK_QUEUE_CAP: usize = 8;
+const RBC_PERSIST_RESULT_QUEUE_CAP: usize = 8;
+
+#[derive(Debug)]
+pub(super) struct RbcPersistWork {
+    pub(super) key: SessionKey,
+    pub(super) persisted: PersistedSession,
+}
+
+#[derive(Debug)]
+pub(super) struct RbcPersistResult {
+    pub(super) key: SessionKey,
+    pub(super) outcome: io::Result<PersistOutcome>,
+}
+
+#[derive(Debug)]
+pub(super) struct RbcPersistWorkerHandle {
+    pub(super) work_tx: mpsc::SyncSender<RbcPersistWork>,
+    pub(super) result_rx: mpsc::Receiver<RbcPersistResult>,
+    pub(super) join_handle: std::thread::JoinHandle<()>,
+}
+
+fn spawn_rbc_persist_worker(
+    cfg: crate::sumeragi::RbcStoreConfig,
+) -> io::Result<RbcPersistWorkerHandle> {
+    let (work_tx, work_rx) = mpsc::sync_channel::<RbcPersistWork>(RBC_PERSIST_WORK_QUEUE_CAP);
+    let (result_tx, result_rx) =
+        mpsc::sync_channel::<RbcPersistResult>(RBC_PERSIST_RESULT_QUEUE_CAP);
+    let store = ChunkStore::new(
+        cfg.dir.clone(),
+        cfg.ttl,
+        cfg.soft_sessions,
+        cfg.soft_bytes,
+        cfg.max_sessions,
+        cfg.max_bytes,
+    )?;
+    let join_handle = std::thread::Builder::new()
+        .name("sumeragi-rbc-persist".to_owned())
+        .spawn(move || {
+            while let Ok(work) = work_rx.recv() {
+                let key = work.key;
+                let outcome = store.persist_snapshot(&work.persisted);
+                if result_tx.send(RbcPersistResult { key, outcome }).is_err() {
+                    break;
+                }
+            }
+        })?;
+    Ok(RbcPersistWorkerHandle {
+        work_tx,
+        result_rx,
+        join_handle,
+    })
 }
 
 pub(super) fn chunk_payload_bytes(payload: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
@@ -2113,6 +2169,74 @@ impl Actor {
         self.subsystems.da_rbc.rbc.chunk_store.is_some()
     }
 
+    pub(super) fn attach_rbc_persist_worker(&mut self) -> Option<std::thread::JoinHandle<()>> {
+        if self.subsystems.da_rbc.rbc.persist_tx.is_some() {
+            return None;
+        }
+        let cfg = self.subsystems.da_rbc.rbc.store_cfg.clone()?;
+        if cfg.max_sessions == 0 || cfg.max_bytes == 0 {
+            return None;
+        }
+        match spawn_rbc_persist_worker(cfg) {
+            Ok(handle) => {
+                self.subsystems.da_rbc.rbc.persist_tx = Some(handle.work_tx);
+                self.subsystems.da_rbc.rbc.persist_rx = Some(handle.result_rx);
+                self.subsystems.da_rbc.rbc.persist_inflight.clear();
+                Some(handle.join_handle)
+            }
+            Err(err) => {
+                warn!(?err, "failed to spawn RBC persist worker thread");
+                None
+            }
+        }
+    }
+
+    pub(super) fn poll_rbc_persist_results(&mut self) -> bool {
+        let Some(rx) = self.subsystems.da_rbc.rbc.persist_rx.as_ref() else {
+            return false;
+        };
+        let mut drained = Vec::new();
+        let mut disconnected = false;
+        loop {
+            match rx.try_recv() {
+                Ok(result) => drained.push(result),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+        if disconnected {
+            self.subsystems.da_rbc.rbc.persist_tx = None;
+            self.subsystems.da_rbc.rbc.persist_rx = None;
+            self.subsystems.da_rbc.rbc.persist_inflight.clear();
+        }
+        if drained.is_empty() {
+            return false;
+        }
+        for result in drained {
+            self.subsystems.da_rbc.rbc.persist_inflight.remove(&result.key);
+            match result.outcome {
+                Ok(outcome) => {
+                    self.handle_rbc_store_evictions(&outcome.removed);
+                    self.update_rbc_store_pressure(outcome.pressure);
+                    if self.subsystems.da_rbc.rbc.sessions.contains_key(&result.key) {
+                        self.subsystems
+                            .da_rbc
+                            .rbc
+                            .persisted_full_sessions
+                            .insert(result.key);
+                    }
+                }
+                Err(err) => {
+                    warn!(?err, ?result.key, "failed to persist RBC session snapshot");
+                }
+            }
+        }
+        true
+    }
+
     pub(super) fn persist_rbc_session(&mut self, key: SessionKey, session: &RbcSession) {
         let total_chunks = session.total_chunks();
         if total_chunks == 0 {
@@ -2129,6 +2253,43 @@ impl Actor {
             .contains(&key)
         {
             return;
+        }
+        if self
+            .subsystems
+            .da_rbc
+            .rbc
+            .persist_inflight
+            .contains(&key)
+        {
+            return;
+        }
+        if let Some(tx) = self.subsystems.da_rbc.rbc.persist_tx.as_ref() {
+            let session_roster = self.rbc_session_roster(key);
+            let persisted = session.to_persisted(
+                key,
+                self.chain_hash,
+                &self.subsystems.da_rbc.rbc.manifest,
+                session_roster.as_slice(),
+            );
+            match tx.try_send(RbcPersistWork { key, persisted }) {
+                Ok(()) => {
+                    self.subsystems.da_rbc.rbc.persist_inflight.insert(key);
+                }
+                Err(mpsc::TrySendError::Full(_work)) => {
+                    debug!(?key, "RBC persist queue full; deferring session persistence");
+                }
+                Err(mpsc::TrySendError::Disconnected(_work)) => {
+                    warn!(
+                        ?key,
+                        "RBC persist worker disconnected; falling back to sync persistence"
+                    );
+                    self.subsystems.da_rbc.rbc.persist_tx = None;
+                    self.subsystems.da_rbc.rbc.persist_inflight.clear();
+                }
+            }
+            if self.subsystems.da_rbc.rbc.persist_tx.is_some() {
+                return;
+            }
         }
         if !self.ensure_rbc_chunk_store() {
             trace!(
@@ -2193,6 +2354,7 @@ impl Actor {
                 .rbc
                 .persisted_full_sessions
                 .remove(key);
+            self.subsystems.da_rbc.rbc.persist_inflight.remove(key);
             if existed {
                 debug!(
                     block_hash = ?key.0,

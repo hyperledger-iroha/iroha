@@ -5638,6 +5638,7 @@ impl SumeragiWorker {
             }
         };
         let commit_worker_join = actor.attach_commit_worker();
+        let rbc_persist_worker_join = actor.attach_rbc_persist_worker();
         let vote_rx_drain_budget = vote_rx_drain_budget(
             block_time,
             commit_time,
@@ -5692,6 +5693,11 @@ impl SumeragiWorker {
         drop(actor);
         if let Err(err) = commit_worker_join.join() {
             iroha_logger::warn!(?err, "sumeragi commit worker thread exited with error");
+        }
+        if let Some(join) = rbc_persist_worker_join {
+            if let Err(err) = join.join() {
+                iroha_logger::warn!(?err, "sumeragi RBC persist worker thread exited with error");
+            }
         }
     }
 }
