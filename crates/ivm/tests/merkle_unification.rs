@@ -17,10 +17,10 @@ fn byte_tree_parallel_cross_crate_equivalence() {
     let chunk = 32;
 
     // Canonical sequential vs parallel must match
-    let canonical_seq = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, chunk)
-        .expect("valid chunk");
-    let canonical_par = MerkleTree::<[u8; 32]>::from_chunked_bytes_parallel(&data, chunk)
-        .expect("valid chunk");
+    let canonical_seq =
+        MerkleTree::<[u8; 32]>::from_byte_chunks(&data, chunk).expect("valid chunk");
+    let canonical_par =
+        MerkleTree::<[u8; 32]>::from_chunked_bytes_parallel(&data, chunk).expect("valid chunk");
     assert_eq!(canonical_seq.root(), canonical_par.root());
 
     // Cross-crate: IVM helpers (seq and par) must match canonical
@@ -39,8 +39,7 @@ fn byte_tree_root_and_proof_equivalence() {
     let chunk = 32;
 
     // Canonical tree from iroha_crypto
-    let canonical =
-        MerkleTree::<[u8; 32]>::from_byte_chunks(&data, chunk).expect("valid chunk");
+    let canonical = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, chunk).expect("valid chunk");
     let canonical_root = canonical.root().expect("root");
 
     // IVM byte-chunk helper

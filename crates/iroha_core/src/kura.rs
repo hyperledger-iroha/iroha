@@ -2622,8 +2622,12 @@ impl Kura {
             };
             let (data_len, temp_index_sane) = match data_len {
                 Ok(data_len) => {
-                    let temp_index_sane =
-                        Self::sidecar_index_sane_with_label(&temp_index_path, data_len, kind, "temp");
+                    let temp_index_sane = Self::sidecar_index_sane_with_label(
+                        &temp_index_path,
+                        data_len,
+                        kind,
+                        "temp",
+                    );
                     (Some(data_len), temp_index_sane)
                 }
                 Err(err) => {
@@ -7211,9 +7215,7 @@ mod tests {
         }
         .to_bytes();
         let mut temp_index = std::fs::File::create(&temp_index_path).expect("create temp index");
-        temp_index
-            .write_all(&temp_entry)
-            .expect("write temp index");
+        temp_index.write_all(&temp_entry).expect("write temp index");
         temp_index.flush().expect("flush temp index");
         temp_index.sync_data().expect("sync temp index");
 
@@ -7226,9 +7228,7 @@ mod tests {
 
         let mut buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
         let mut index_file = std::fs::File::open(&index_path).expect("open sidecar index");
-        index_file
-            .read_exact(&mut buf)
-            .expect("read sidecar index");
+        index_file.read_exact(&mut buf).expect("read sidecar index");
         let entry = SidecarIndexEntry::from_bytes(buf);
         assert_eq!(entry.offset, 0);
         assert_eq!(entry.len, payload.len() as u64);

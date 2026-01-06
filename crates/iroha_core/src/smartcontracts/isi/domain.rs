@@ -586,6 +586,7 @@ mod tests {
 
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
+        IntoKeyValue,
         account::{NewAccount, rekey::AccountLabel},
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
@@ -597,7 +598,6 @@ mod tests {
         nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
         nft::{Nft, NftId},
         prelude::Domain,
-        IntoKeyValue,
     };
     use iroha_primitives::{json::Json, numeric::Numeric};
     use iroha_test_samples::ALICE_ID;

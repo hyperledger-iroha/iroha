@@ -409,6 +409,8 @@ static VIEW_CHANGE_INSTALL_TOTAL: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
 static VIEW_CHANGE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[cfg(test)]
+static VIEW_CHANGE_CAUSE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+#[cfg(test)]
 static LANE_RELAY_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[cfg(test)]
 static MISSING_BLOCK_FETCH_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -423,11 +425,15 @@ static DA_GATE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[cfg(test)]
 static QC_STATUS_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[cfg(test)]
+static VALIDATION_REJECT_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+#[cfg(test)]
 thread_local! {
     static COMMIT_HISTORY_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
     static KURA_STORE_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
     static DA_GATE_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
     static QC_STATUS_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
+    static VIEW_CHANGE_CAUSE_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
+    static VALIDATION_REJECT_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
 }
 
 static AVAILABILITY_STATS: OnceLock<Mutex<AvailabilityStats>> = OnceLock::new();
@@ -3463,6 +3469,8 @@ pub fn record_validation_reject(
     view: u64,
     block_hash: HashOf<BlockHeader>,
 ) {
+    #[cfg(test)]
+    let _guard = validation_reject_test_guard();
     VALIDATION_REJECT_TOTAL.fetch_add(1, Ordering::Relaxed);
     match reason {
         "stateless" => {
@@ -3609,6 +3617,8 @@ pub fn inc_block_sync_roster_drop_missing() {
 
 /// Record the cause of a view change and timestamp it.
 pub fn record_view_change_cause(cause: &str) {
+    #[cfg(test)]
+    let _guard = view_change_cause_test_guard();
     let now_ms = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
@@ -3781,6 +3791,7 @@ pub(crate) fn reset_precommit_signer_history_for_tests() {
 
 #[cfg(test)]
 pub(crate) fn reset_view_change_cause_counters_for_tests() {
+    let _guard = view_change_cause_test_guard();
     VIEW_CHANGE_CAUSE_COMMIT_FAILURE_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_QUORUM_TIMEOUT_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_DA_GATE_TOTAL.store(0, Ordering::Relaxed);
@@ -3806,6 +3817,7 @@ pub(crate) fn reset_view_change_cause_counters_for_tests() {
 #[cfg(test)]
 #[allow(dead_code)]
 pub(crate) fn reset_validation_reject_counters_for_tests() {
+    let _guard = validation_reject_test_guard();
     VALIDATION_REJECT_TOTAL.store(0, Ordering::Relaxed);
     VALIDATION_REJECT_STATELESS_TOTAL.store(0, Ordering::Relaxed);
     VALIDATION_REJECT_EXECUTION_TOTAL.store(0, Ordering::Relaxed);
@@ -5174,6 +5186,18 @@ pub(crate) fn prevote_timeout_test_guard() -> std::sync::MutexGuard<'static, ()>
 
 #[cfg(test)]
 #[allow(private_interfaces)]
+pub(crate) fn view_change_cause_test_guard() -> TestLockGuard<'static> {
+    reentrant_test_guard(&VIEW_CHANGE_CAUSE_TEST_LOCK, &VIEW_CHANGE_CAUSE_LOCK_HELD)
+}
+
+#[cfg(test)]
+#[allow(private_interfaces)]
+pub(crate) fn validation_reject_test_guard() -> TestLockGuard<'static> {
+    reentrant_test_guard(&VALIDATION_REJECT_TEST_LOCK, &VALIDATION_REJECT_LOCK_HELD)
+}
+
+#[cfg(test)]
+#[allow(private_interfaces)]
 pub(crate) fn commit_history_test_guard() -> TestLockGuard<'static> {
     reentrant_test_guard(&COMMIT_HISTORY_TEST_LOCK, &COMMIT_HISTORY_LOCK_HELD)
 }
@@ -5489,6 +5513,7 @@ mod tests {
 
     #[test]
     fn validator_checkpoint_history_is_capped_and_ordered() {
+        let _guard = super::commit_history_test_guard();
         super::reset_validator_checkpoints_for_tests();
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
             [0xAB; UntypedHash::LENGTH],
@@ -5521,6 +5546,7 @@ mod tests {
 
     #[test]
     fn commit_certificate_history_is_capped_and_ordered() {
+        let _guard = super::commit_history_test_guard();
         super::reset_commit_certs_for_tests();
         let old_cap = super::commit_cert_history_cap();
         super::set_commit_cert_history_cap(8);
@@ -5585,6 +5611,7 @@ mod tests {
 
     #[test]
     fn commit_certificate_snapshot_tracks_latest() {
+        let _guard = super::commit_history_test_guard();
         super::reset_commit_certs_for_tests();
         let block_hash_a = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
             [0xC1; UntypedHash::LENGTH],
@@ -5864,6 +5891,7 @@ mod tests {
 
     #[test]
     fn view_change_cause_counters_surface_in_snapshot() {
+        let _guard = super::view_change_cause_test_guard();
         super::reset_view_change_cause_counters_for_tests();
         super::record_view_change_cause("commit_failure");
         super::record_view_change_cause("quorum_timeout");
@@ -5887,6 +5915,7 @@ mod tests {
 
     #[test]
     fn view_change_cause_timestamps_surface_in_snapshot() {
+        let _guard = super::view_change_cause_test_guard();
         super::reset_view_change_cause_counters_for_tests();
         super::record_view_change_cause("missing_payload");
 
@@ -5905,6 +5934,7 @@ mod tests {
 
     #[test]
     fn validation_reject_snapshot_tracks_last_reject() {
+        let _guard = super::validation_reject_test_guard();
         super::reset_validation_reject_counters_for_tests();
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
             [0xA1; UntypedHash::LENGTH],
@@ -5943,6 +5973,7 @@ mod tests {
 
     #[test]
     fn validation_reject_snapshot_counts_all_buckets() {
+        let _guard = super::validation_reject_test_guard();
         super::reset_validation_reject_counters_for_tests();
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
             [0xB2; UntypedHash::LENGTH],

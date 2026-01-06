@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::{BlockHeader, SignedBlock};
-use iroha_version::codec::EncodeVersioned;
+use iroha_data_model::block::{BlockHeader, BlockPayload, SignedBlock};
+use norito::codec::Encode as _;
 
 use crate::sumeragi::{consensus::Proposal, message::ProposalHint};
 
@@ -196,28 +196,19 @@ pub(super) fn detect_proposal_mismatch(
 }
 
 /// Canonicalize block payload encoding before hashing to avoid layout drift from Norito’s adaptive
-/// encode heuristics. Strip execution results and non-leader signatures so the payload hash stays
-/// stable across validation and signature collection.
+/// encode heuristics. Strip execution results and signatures so the payload hash stays stable across
+/// validation and signature collection.
 pub(super) fn block_payload_bytes(block: &SignedBlock) -> Vec<u8> {
     let mut header = block.header();
     header.result_merkle_root = None;
-    let leader_sig = block
-        .signatures()
-        .find(|sig| sig.index() == 0)
-        .cloned()
-        .or_else(|| block.signatures().next().cloned());
-    let Some(signature) = leader_sig else {
-        return block.encode_versioned();
-    };
-    let mut sanitized = SignedBlock::presigned_with_da(
-        signature,
+    BlockPayload {
         header,
-        block.transactions_vec().clone(),
-        block.da_commitments().cloned(),
-    );
-    sanitized.set_da_proof_policies(block.da_proof_policies().cloned());
-    sanitized.set_da_pin_intents(block.da_pin_intents().cloned());
-    sanitized.encode_versioned()
+        transactions: block.transactions_vec().clone(),
+        da_commitments: block.da_commitments().cloned(),
+        da_proof_policies: block.da_proof_policies().cloned(),
+        da_pin_intents: block.da_pin_intents().cloned(),
+    }
+    .encode()
 }
 
 fn parent_hash_from_header(header: &BlockHeader) -> HashOf<BlockHeader> {

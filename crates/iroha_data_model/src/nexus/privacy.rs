@@ -169,8 +169,7 @@ mod tests {
         let mut leaves = Vec::new();
         leaves.extend_from_slice(&[0xAA_u8; 32]);
         leaves.extend_from_slice(&[0xBB_u8; 32]);
-        let tree =
-            MerkleTree::<[u8; 32]>::from_byte_chunks(&leaves, 32).expect("valid chunk");
+        let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&leaves, 32).expect("valid chunk");
         let leaf: [u8; 32] = *tree.leaves().next().expect("merkle leaf present").as_ref();
         let proof = tree.get_proof(0).expect("merkle proof");
 

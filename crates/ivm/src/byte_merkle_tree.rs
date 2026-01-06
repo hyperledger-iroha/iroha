@@ -176,8 +176,7 @@ impl ByteMerkleTree {
         assert!(chunk > 0 && chunk <= 32);
         let zero_hash = Self::compute_zero_hash(chunk);
         // Build via canonical helper to keep hashing/padding semantics exactly the same.
-        let canonical =
-            MerkleTree::<[u8; 32]>::from_byte_chunks(data, chunk).expect("valid chunk");
+        let canonical = MerkleTree::<[u8; 32]>::from_byte_chunks(data, chunk).expect("valid chunk");
         // Extract leaves as raw bytes (HashOf::as_ref bytes) for update paths.
         let leaves: Vec<[u8; 32]> = canonical
             .leaves()
@@ -588,8 +587,7 @@ impl ByteMerkleTree {
         }
 
         // CPU fallback
-        let canonical =
-            MerkleTree::<[u8; 32]>::from_byte_chunks(data, chunk).expect("valid chunk");
+        let canonical = MerkleTree::<[u8; 32]>::from_byte_chunks(data, chunk).expect("valid chunk");
         let metrics = iroha_telemetry::metrics::global_or_default();
         metrics.merkle_root_cpu_total.inc();
         *canonical.root().expect("non-empty").as_ref()

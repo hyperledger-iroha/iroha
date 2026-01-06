@@ -80,7 +80,9 @@ use crate::{
             TransactionEventFilter, TransactionStatus,
         },
         prelude::*,
-        transaction::{TransactionBuilder, error::TransactionRejectionReason},
+        transaction::{
+            TransactionBuilder, TransactionEntrypoint, error::TransactionRejectionReason,
+        },
     },
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
     http_default::{self, DefaultRequest, DefaultRequestBuilder, WebSocketError, WebSocketMessage},
@@ -3157,6 +3159,7 @@ mod evidence_http_tests {
             torii_api_version: crate::config::default_torii_api_version(),
             torii_api_min_proof_version: crate::config::DEFAULT_TORII_API_MIN_PROOF_VERSION
                 .to_string(),
+            torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             basic_auth: None,
             transaction_add_nonce: false,
             transaction_ttl: Duration::from_secs(5),
@@ -3959,7 +3962,9 @@ mod evidence_http_tests {
                 HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
                     Hash::prehashed([0x11; Hash::LENGTH]),
                 );
-            client.transaction_pipeline_status(hash)
+            let entry_hash: HashOf<crate::data_model::transaction::TransactionEntrypoint> =
+                HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
+            client.transaction_pipeline_status(hash, entry_hash)
         });
 
         let status = result.expect("pipeline status query");
@@ -4006,7 +4011,9 @@ mod evidence_http_tests {
                 HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
                     Hash::prehashed([0x22; Hash::LENGTH]),
                 );
-            client.transaction_confirmation_status(hash)
+            let entry_hash: HashOf<crate::data_model::transaction::TransactionEntrypoint> =
+                HashOf::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
+            client.transaction_confirmation_status(hash, entry_hash)
         });
 
         let status = result.expect("confirmation status query");
@@ -4045,7 +4052,9 @@ mod evidence_http_tests {
                 HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
                     Hash::prehashed([0x23; Hash::LENGTH]),
                 );
-            client.transaction_confirmation_status(hash)
+            let entry_hash: HashOf<crate::data_model::transaction::TransactionEntrypoint> =
+                HashOf::from_untyped_unchecked(Hash::prehashed([0x23; Hash::LENGTH]));
+            client.transaction_confirmation_status(hash, entry_hash)
         });
 
         assert_eq!(
@@ -4084,7 +4093,9 @@ mod evidence_http_tests {
                 HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
                     Hash::prehashed([0x24; Hash::LENGTH]),
                 );
-            client.transaction_confirmation_status(hash)
+            let entry_hash: HashOf<crate::data_model::transaction::TransactionEntrypoint> =
+                HashOf::from_untyped_unchecked(Hash::prehashed([0x24; Hash::LENGTH]));
+            client.transaction_confirmation_status(hash, entry_hash)
         });
 
         assert_eq!(
@@ -4139,7 +4150,9 @@ mod evidence_http_tests {
                 HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
                     Hash::prehashed([0x24; Hash::LENGTH]),
                 );
-            client.transaction_confirmation_status(hash)
+            let entry_hash: HashOf<crate::data_model::transaction::TransactionEntrypoint> =
+                HashOf::from_untyped_unchecked(Hash::prehashed([0x24; Hash::LENGTH]));
+            client.transaction_confirmation_status(hash, entry_hash)
         });
 
         assert_eq!(
@@ -4184,13 +4197,14 @@ mod evidence_http_tests {
         let tx = TransactionBuilder::new(chain, authority.clone()).sign(&private_key);
         let hash = tx.hash();
         let entry = TransactionEntrypoint::External(tx);
+        let entry_hash = entry.hash();
         let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "nope".to_string(),
         ));
         let result = TransactionResult(Err(reason.clone()));
         let committed = CommittedTransaction {
             block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x33; Hash::LENGTH])),
-            entrypoint_hash: entry.hash(),
+            entrypoint_hash: entry_hash,
             entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
             entrypoint: entry,
             result_hash: result.hash(),
@@ -4235,7 +4249,7 @@ mod evidence_http_tests {
 
         let result = with_mock_http(responder, || {
             let client = client_with_base_url(base_url());
-            client.transaction_confirmation_status(hash)
+            client.transaction_confirmation_status(hash, entry_hash)
         });
 
         assert_eq!(
@@ -4350,6 +4364,8 @@ pub struct Client {
     pub transaction_ttl: Option<Duration>,
     /// Transaction status timeout
     pub transaction_status_timeout: Duration,
+    /// Timeout for Torii HTTP requests.
+    pub torii_request_timeout: Duration,
     /// Current account
     pub account: AccountId,
     /// Http headers which will be appended to each request
@@ -4376,6 +4392,7 @@ impl fmt::Debug for Client {
                 "transaction_status_timeout",
                 &self.transaction_status_timeout,
             )
+            .field("torii_request_timeout", &self.torii_request_timeout)
             .field("account", &self.account)
             .field("headers", &self.headers)
             .field("add_transaction_nonce", &self.add_transaction_nonce)
@@ -4408,6 +4425,7 @@ impl Client {
             torii_api_url,
             torii_api_version,
             torii_api_min_proof_version: _torii_api_min_proof_version,
+            torii_request_timeout,
             key_pair,
             basic_auth,
             transaction_add_nonce,
@@ -4440,6 +4458,7 @@ impl Client {
             key_pair,
             transaction_ttl: Some(transaction_ttl),
             transaction_status_timeout,
+            torii_request_timeout,
             account,
             headers,
             add_transaction_nonce: transaction_add_nonce,
@@ -4450,9 +4469,13 @@ impl Client {
     }
 
     pub(crate) fn default_request(&self, method: HttpMethod, url: Url) -> DefaultRequestBuilder {
-        DefaultRequestBuilder::new(method, url)
+        let mut builder = DefaultRequestBuilder::new(method, url)
             .headers(&self.headers)
-            .header(http::header::ACCEPT, APPLICATION_JSON)
+            .header(http::header::ACCEPT, APPLICATION_JSON);
+        if self.torii_request_timeout != Duration::ZERO {
+            builder = builder.timeout(self.torii_request_timeout);
+        }
+        builder
     }
 
     fn send_builder(&self, builder: DefaultRequestBuilder) -> Result<Response<Vec<u8>>> {
@@ -4752,6 +4775,7 @@ impl Client {
     ) -> Result<HashOf<SignedTransaction>> {
         let (init_sender, init_receiver) = tokio::sync::oneshot::channel();
         let hash = transaction.hash();
+        let entry_hash = transaction.hash_as_entrypoint();
         tracing::debug!(%hash, ?transaction, "Submitting transaction");
 
         thread::scope(|spawner| {
@@ -4763,7 +4787,7 @@ impl Client {
                 Ok(())
             });
 
-            let confirmation_res = self.listen_for_tx_confirmation(init_sender, hash);
+            let confirmation_res = self.listen_for_tx_confirmation(init_sender, hash, entry_hash);
 
             match submitter_handle.join() {
                 Ok(Ok(())) => confirmation_res,
@@ -4790,6 +4814,7 @@ impl Client {
         &self,
         init_sender: tokio::sync::oneshot::Sender<bool>,
         hash: HashOf<SignedTransaction>,
+        entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<HashOf<SignedTransaction>> {
         debug!(
             %hash,
@@ -4843,6 +4868,7 @@ impl Client {
                         let poll_interval =
                             Self::tx_confirmation_poll_interval(client.transaction_status_timeout);
                         let hash_for_check = hash;
+                        let entry_hash_for_check = entry_hash;
                         let result = if let Some(ref mut iterator) = event_iterator {
                             tokio::time::timeout_at(
                                 deadline,
@@ -4851,7 +4877,12 @@ impl Client {
                                     hash,
                                     max_queued_duration,
                                     poll_interval,
-                                    || client.transaction_confirmation_status(hash_for_check),
+                                    || {
+                                        client.transaction_confirmation_status(
+                                            hash_for_check,
+                                            entry_hash_for_check,
+                                        )
+                                    },
                                 ),
                             )
                             .await
@@ -4864,7 +4895,12 @@ impl Client {
                                     hash,
                                     max_queued_duration,
                                     poll_interval,
-                                    || client.transaction_confirmation_status(hash_for_check),
+                                    || {
+                                        client.transaction_confirmation_status(
+                                            hash_for_check,
+                                            entry_hash_for_check,
+                                        )
+                                    },
                                 ),
                             )
                             .await
@@ -4886,7 +4922,7 @@ impl Client {
                                         "tx confirmation stream returned error; falling back to pipeline status query"
                                     );
                                     Self::resolve_committed_fallback(
-                                        || client.transaction_confirmation_status(hash),
+                                        || client.transaction_confirmation_status(hash, entry_hash),
                                         hash,
                                         Duration::from_millis(200),
                                         3,
@@ -4902,7 +4938,7 @@ impl Client {
                                     "tx confirmation timed out; falling back to pipeline status query"
                                 );
                                 Self::resolve_committed_fallback(
-                                    || client.transaction_confirmation_status(hash),
+                                    || client.transaction_confirmation_status(hash, entry_hash),
                                     hash,
                                     Duration::from_millis(200),
                                     3,
@@ -5062,7 +5098,11 @@ impl Client {
     fn committed_transaction_matches_hash(
         tx: &crate::data_model::query::CommittedTransaction,
         target: HashOf<SignedTransaction>,
+        entry_hash: HashOf<TransactionEntrypoint>,
     ) -> bool {
+        if tx.entrypoint_hash().as_ref() == entry_hash.as_ref() {
+            return true;
+        }
         if hashes_match(&target, tx.entrypoint_hash().as_ref()) {
             return true;
         }
@@ -5077,23 +5117,24 @@ impl Client {
     fn transaction_confirmation_status(
         &self,
         hash: HashOf<SignedTransaction>,
+        entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<Option<TxConfirmationStatus>> {
-        match self.transaction_pipeline_status(hash) {
+        match self.transaction_pipeline_status(hash, entry_hash) {
             Ok(Some(status)) => match status {
                 TxConfirmationStatus::Rejected(None) | TxConfirmationStatus::Approved(None) => {
-                    let committed = self.transaction_committed(hash)?;
+                    let committed = self.transaction_committed(hash, entry_hash)?;
                     Ok(committed.or(Some(status)))
                 }
                 _ => Ok(Some(status)),
             },
-            Ok(None) => self.transaction_committed(hash),
+            Ok(None) => self.transaction_committed(hash, entry_hash),
             Err(err) => {
                 warn!(
                     %hash,
                     ?err,
                     "pipeline status query failed; falling back to committed query"
                 );
-                self.transaction_committed(hash)
+                self.transaction_committed(hash, entry_hash)
             }
         }
     }
@@ -5101,6 +5142,7 @@ impl Client {
     fn transaction_pipeline_status(
         &self,
         hash: HashOf<SignedTransaction>,
+        entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<Option<TxConfirmationStatus>> {
         let hash_hex = bytes_to_hex(hash.as_ref());
         let url = join_torii_url(&self.torii_url, "v1/pipeline/transactions/status");
@@ -5122,7 +5164,7 @@ impl Client {
                     %hash,
                     "pipeline status query returned 404; falling back to committed query"
                 );
-                self.transaction_committed(hash)
+                self.transaction_committed(hash, entry_hash)
             }
             status => Err(eyre!(
                 "Failed to get pipeline transaction status: {} {}",
@@ -5135,13 +5177,14 @@ impl Client {
     fn transaction_committed(
         &self,
         hash: HashOf<SignedTransaction>,
+        entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<Option<TxConfirmationStatus>> {
         use crate::data_model::query::transaction::prelude::FindTransactions;
 
         let snapshot = self.query(FindTransactions::new()).execute_all()?;
         let outcome = snapshot
             .iter()
-            .find(|tx| Self::committed_transaction_matches_hash(tx, hash))
+            .find(|tx| Self::committed_transaction_matches_hash(tx, hash, entry_hash))
             .map(|tx| tx_confirmation_status_from_committed_result(tx.result()));
         debug!(
             %hash,
@@ -5422,10 +5465,16 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, response is non-OK, or decoding fails.
     pub fn get_status(&self) -> Result<Status> {
-        let resp = self.send_builder(
-            self.prepare_status_request::<DefaultRequestBuilder>()
-                .header(http::header::ACCEPT, "application/x-norito"),
-        )?;
+        let mut builder = DefaultRequestBuilder::new(
+            HttpMethod::GET,
+            join_torii_url(&self.torii_url, torii_uri::STATUS),
+        )
+        .headers(self.headers.clone());
+        if self.torii_request_timeout != Duration::ZERO {
+            builder = builder.timeout(self.torii_request_timeout);
+        }
+        let resp =
+            self.send_builder(builder.header(http::header::ACCEPT, "application/x-norito"))?;
         match decode_status_response(&resp) {
             Ok(status) => Ok(status),
             Err(first_err) => {
@@ -8523,10 +8572,11 @@ mod tx_hash_tests {
 
         let tx = TransactionBuilder::new(chain, authority.clone()).sign(&private_key);
         let entry = TransactionEntrypoint::External(tx.clone());
+        let entry_hash = entry.hash();
         let result = TransactionResult(Ok(DataTriggerSequence::default()));
         let committed = CommittedTransaction {
             block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([1_u8; Hash::LENGTH])),
-            entrypoint_hash: entry.hash(),
+            entrypoint_hash: entry_hash,
             entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
             entrypoint: entry,
             result_hash: result.hash(),
@@ -8536,7 +8586,13 @@ mod tx_hash_tests {
 
         assert!(super::Client::committed_transaction_matches_hash(
             &committed,
-            tx.hash()
+            tx.hash(),
+            entry_hash
+        ));
+        let other_hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([9_u8; Hash::LENGTH]));
+        assert!(super::Client::committed_transaction_matches_hash(
+            &committed, other_hash, entry_hash
         ));
 
         let time_entry = crate::data_model::trigger::TimeTriggerEntrypoint {
@@ -8544,10 +8600,11 @@ mod tx_hash_tests {
             instructions: ExecutionStep(ConstVec::<InstructionBox>::from(vec![])),
             authority,
         };
+        let time_entry_hash = time_entry.hash_as_entrypoint();
         let time_result = TransactionResult(Ok(DataTriggerSequence::default()));
         let time_committed = CommittedTransaction {
             block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([2_u8; Hash::LENGTH])),
-            entrypoint_hash: time_entry.hash_as_entrypoint(),
+            entrypoint_hash: time_entry_hash,
             entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
             entrypoint: TransactionEntrypoint::Time(time_entry),
             result_hash: time_result.hash(),
@@ -8555,9 +8612,17 @@ mod tx_hash_tests {
             result: time_result,
         };
 
+        assert!(super::Client::committed_transaction_matches_hash(
+            &time_committed,
+            tx.hash(),
+            time_entry_hash
+        ));
+        let mismatched_entry_hash: HashOf<TransactionEntrypoint> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
         assert!(!super::Client::committed_transaction_matches_hash(
             &time_committed,
-            tx.hash()
+            tx.hash(),
+            mismatched_entry_hash
         ));
     }
 }
@@ -9501,6 +9566,7 @@ mod tests {
             torii_api_version: crate::config::default_torii_api_version(),
             torii_api_min_proof_version: crate::config::DEFAULT_TORII_API_MIN_PROOF_VERSION
                 .to_string(),
+            torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             basic_auth: None,
             transaction_add_nonce: false,
             transaction_ttl: Duration::from_secs(5),
