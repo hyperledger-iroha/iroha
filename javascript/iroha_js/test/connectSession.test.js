@@ -85,3 +85,16 @@ test("generateConnectSid rejects invalid base64 inputs", () => {
       error instanceof TypeError && /hex or base64/.test(error.message),
   );
 });
+
+test("generateConnectSid rejects invalid byte arrays", () => {
+  const chainId = "test-chain";
+  const appPublicKey = new Array(32).fill(0);
+  appPublicKey[0] = 256;
+  const nonce = new Array(16).fill(1);
+
+  assert.throws(
+    () => generateConnectSid({ chainId, appPublicKey, nonce }),
+    (error) =>
+      error instanceof TypeError && /appPublicKey\[0\] must be a byte/.test(error.message),
+  );
+});

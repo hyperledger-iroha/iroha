@@ -79,7 +79,7 @@ public final class GatewayFetchRequest {
     private final List<GatewayProvider> providers = new ArrayList<>();
 
     public Builder setManifestIdHex(final String manifestIdHex) {
-      this.manifestIdHex = requireNonEmpty(manifestIdHex, "manifestIdHex");
+      this.manifestIdHex = SorafsInputValidator.normalizeHexBytes(manifestIdHex, "manifestIdHex", 32);
       return this;
     }
 
@@ -109,13 +109,6 @@ public final class GatewayFetchRequest {
         throw new IllegalStateException("at least one provider must be configured");
       }
       return new GatewayFetchRequest(this);
-    }
-
-    private static String requireNonEmpty(final String value, final String field) {
-      if (value == null || value.trim().isEmpty()) {
-        throw new IllegalArgumentException(field + " must not be empty");
-      }
-      return value.trim();
     }
   }
 }

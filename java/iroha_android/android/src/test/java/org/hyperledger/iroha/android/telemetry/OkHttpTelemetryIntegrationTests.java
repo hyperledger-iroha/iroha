@@ -55,13 +55,13 @@ public final class OkHttpTelemetryIntegrationTests {
     final TelemetryObserver observer = new TelemetryObserver(options, sink);
     final GatewayFetchRequest request =
         GatewayFetchRequest.builder()
-            .setManifestIdHex("bead")
+            .setManifestIdHex("bead".repeat(16))
             .setChunkerHandle("sorafs.sf1@1.0.0")
             .setOptions(GatewayFetchOptions.builder().build())
             .addProvider(
                 GatewayProvider.builder()
                     .setName("alpha")
-                    .setProviderIdHex("01")
+                    .setProviderIdHex("01".repeat(32))
                     .setBaseUrl("https://provider.example")
                     .setStreamTokenBase64("c3RyZWFtLXRva2Vu")
                     .build())

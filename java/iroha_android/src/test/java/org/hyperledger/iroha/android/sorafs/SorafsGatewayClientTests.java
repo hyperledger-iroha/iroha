@@ -28,6 +28,7 @@ public final class SorafsGatewayClientTests {
     fetchSummaryParsesResponse();
     fetchSummaryInvalidJsonFails();
     fetchSummaryRejectsFractionalCounts();
+    fetchSummaryRejectsChunkIndexOverflow();
     customEncoderOverridesDefault();
     System.out.println("[IrohaAndroid] SoraFS gateway client tests passed.");
   }
@@ -141,7 +142,7 @@ public final class SorafsGatewayClientTests {
         String.join(
             "\n",
             "{",
-            "  \"manifest_id_hex\": \"0123\",",
+            "  \"manifest_id_hex\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",",
             "  \"chunker_handle\": \"sorafs.sf1@1.0.0\",",
             "  \"client_id\": \"android-sdk\",",
             "  \"chunk_count\": 2,",
@@ -181,7 +182,8 @@ public final class SorafsGatewayClientTests {
             .build();
 
     final GatewayFetchSummary summary = client.fetchSummary(request).join();
-    assert "0123".equals(summary.manifestIdHex());
+    assert "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        .equals(summary.manifestIdHex());
     assert "sorafs.sf1@1.0.0".equals(summary.chunkerHandle());
     assert "android-sdk".equals(summary.clientId());
     assert summary.chunkCount() == 2;
@@ -232,7 +234,7 @@ public final class SorafsGatewayClientTests {
         String.join(
             "\n",
             "{",
-            "  \"manifest_id_hex\": \"0123\",",
+            "  \"manifest_id_hex\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",",
             "  \"chunker_handle\": \"sorafs.sf1@1.0.0\",",
             "  \"client_id\": \"android-sdk\",",
             "  \"chunk_count\": 2,",
@@ -245,6 +247,58 @@ public final class SorafsGatewayClientTests {
             "  \"chunk_receipts\": [",
             "    {\"chunk_index\":0,\"provider\":\"alpha\",\"attempts\":1},",
             "    {\"chunk_index\":1.5,\"provider\":\"beta\",\"attempts\":2}",
+            "  ],",
+            "  \"anonymity_policy\": \"anon-guard-pq\",",
+            "  \"anonymity_status\": \"met\",",
+            "  \"anonymity_reason\": \"satisfied\",",
+            "  \"anonymity_soranet_selected\": 1,",
+            "  \"anonymity_pq_selected\": 1,",
+            "  \"anonymity_classical_selected\": 0,",
+            "  \"anonymity_classical_ratio\": 0.0,",
+            "  \"anonymity_pq_ratio\": 1.0,",
+            "  \"anonymity_candidate_ratio\": 0.5,",
+            "  \"anonymity_deficit_ratio\": 0.0,",
+            "  \"anonymity_supply_delta\": -0.5,",
+            "  \"anonymity_brownout\": false,",
+            "  \"anonymity_brownout_effective\": false,",
+            "  \"anonymity_uses_classical\": false",
+            "}");
+    final RecordingExecutor executor =
+        new RecordingExecutor(
+            new TransportResponse(
+                200, json.getBytes(StandardCharsets.UTF_8), "OK", Map.of()));
+    final SorafsGatewayClient client =
+        SorafsGatewayClient.builder()
+            .setExecutor(executor)
+            .setBaseUri(URI.create("https://gateway.example"))
+            .build();
+
+    try {
+      client.fetchSummary(request).join();
+      throw new AssertionError("expected summary parsing to fail");
+    } catch (final CompletionException ex) {
+      final Throwable cause = ex.getCause();
+      assert cause instanceof SorafsStorageException : "expected SorafsStorageException";
+    }
+  }
+
+  private static void fetchSummaryRejectsChunkIndexOverflow() {
+    final GatewayFetchRequest request = sampleRequest();
+    final String json =
+        String.join(
+            "\n",
+            "{",
+            "  \"manifest_id_hex\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",",
+            "  \"chunker_handle\": \"sorafs.sf1@1.0.0\",",
+            "  \"client_id\": \"android-sdk\",",
+            "  \"chunk_count\": 2,",
+            "  \"content_length\": 1024,",
+            "  \"assembled_bytes\": 1024,",
+            "  \"provider_reports\": [",
+            "    {\"provider\":\"alpha\",\"successes\":2,\"failures\":1,\"disabled\":false}",
+            "  ],",
+            "  \"chunk_receipts\": [",
+            "    {\"chunk_index\":2147483648,\"provider\":\"alpha\",\"attempts\":1}",
             "  ],",
             "  \"anonymity_policy\": \"anon-guard-pq\",",
             "  \"anonymity_status\": \"met\",",

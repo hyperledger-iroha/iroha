@@ -60,23 +60,23 @@ function sortAndDeduplicate(strings) {
 
 function normalizeStringList(input, context) {
   const items = [];
-  let index = 0;
-  for (const value of input ?? []) {
+  const values = Array.from(input ?? []);
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
     if (typeof value !== "string") {
       throw new TypeError(`${context}[${index}] must be a string`);
     }
     items.push(value);
-    index += 1;
   }
   return sortAndDeduplicate(items);
 }
 
 function canonicalizeDataspaceIds(input) {
   const dsids = [];
-  let index = 0;
-  for (const value of input ?? []) {
+  const values = Array.from(input ?? []);
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
     dsids.push(assertUnsigned(value, `dsids[${index}]`));
-    index += 1;
   }
   if (dsids.length === 0) {
     throw new Error("dsids must not be empty");
@@ -93,8 +93,9 @@ export function buildTouchManifest(read, write) {
 
 function canonicalizeTouches(input) {
   const touches = new Map();
-  let index = 0;
-  for (const value of input ?? []) {
+  const values = Array.from(input ?? []);
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
     const record = ensureObject(value ?? {}, `touches[${index}]`);
     const dsid = assertUnsigned(
       record.dsid ?? record.dataspace ?? record.dataspaceId,
@@ -108,7 +109,6 @@ function canonicalizeTouches(input) {
       record.write ?? record.manifest?.write ?? [],
     );
     touches.set(dsid, manifest);
-    index += 1;
   }
   return [...touches.entries()]
     .sort(([left], [right]) => left - right)
@@ -117,8 +117,9 @@ function canonicalizeTouches(input) {
 
 function canonicalizeTouchFragments(input) {
   const fragments = new Map();
-  let index = 0;
-  for (const value of input ?? []) {
+  const values = Array.from(input ?? []);
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
     const record = ensureObject(value ?? {}, `touchManifest[${index}]`);
     const dsid = assertUnsigned(
       record.dsid ?? record.dataspace ?? record.dataspaceId,
@@ -132,7 +133,6 @@ function canonicalizeTouchFragments(input) {
       dsid,
       buildTouchManifest(record.read ?? manifest.read ?? [], record.write ?? manifest.write ?? []),
     );
-    index += 1;
   }
   return [...fragments.entries()]
     .sort(([left], [right]) => left - right)

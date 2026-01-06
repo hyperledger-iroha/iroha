@@ -199,14 +199,15 @@ Endpoint للراحة
   - مفيد لتدقيق namespaces المحمية او التحقق من تدفقات deploy الخاضعة للحوكمة.
 - `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - يصدر هيكل JSON للـ metadata المستخدم عند نشر deploy الى namespaces المحمية، بما في ذلك `gov_manifest_approvers` الاختيارية لتلبية قواعد quorum للmanifest.
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --salt-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
-  - يتحقق من account ids القانونية، يفرض salts بطول 32 بايت غير صفرية، ويدمج hints في `public_inputs_json` (مع `--public <path>` للتجاوزات الاضافية).
+- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+  - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
+  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
   - الملخص في سطر واحد يعرض الان `fingerprint=<hex>` حتميا مشتقا من `CastZkBallot` المشفر مع hints المفككة (`owner`, `amount`, `duration_blocks`, `direction` عند توفيرها).
   - ردود CLI تضع تعليقات على `tx_instructions[]` مع `payload_fingerprint_hex` بالاضافة الى حقول مفكوكة كي تتحقق الادوات اللاحقة من الهيكل بدون اعادة تنفيذ فك ترميز Norito.
   - توفير hints للـ lock يسمح للعقدة باصدار احداث `LockCreated`/`LockExtended` للـ ZK ballots بمجرد ان تكشف الدائرة القيم نفسها.
 - `iroha gov vote-plain --referendum-id <id> --owner <account>@<domain> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - الـ aliases `--lock-amount`/`--lock-duration-blocks` تعكس اسماء flags الخاصة بـ ZK لتحقيق تماثل السكربتات.
-  - ناتج الملخص يعكس `vote-zk` باضافة fingerprint للتعليمة المشفرة وحقول ballot المقروءة (`owner`, `amount`, `duration_blocks`, `direction`, `salt_hex` عند توفره)، لتاكيد سريع قبل توقيع الهيكل.
+  - ناتج الملخص يعكس `vote-zk` باضافة fingerprint للتعليمة المشفرة وحقول ballot المقروءة (`owner`, `amount`, `duration_blocks`, `direction`)، لتاكيد سريع قبل توقيع الهيكل.
 
 قائمة المثيلات
 - GET `/v1/gov/instances/{ns}` - يسرد مثيلات العقود النشطة لnamespace.
@@ -233,7 +234,7 @@ Endpoint للراحة
       "envelope_b64": "AAECAwQ=",
       "root_hint_hex": "...64hex?",
       "owner": "alice@wonderland?",
-      "salt_hex": "...64hex?"
+      "nullifier_hex": "...64hex?"
     }
   - الرد: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
 
@@ -248,9 +249,9 @@ Endpoint للراحة
       "ballot": {
         "backend": "halo2/ipa",
         "envelope_bytes": "AAECAwQ=",   // base64 لحاوية ZK1 او H2*
-        "root_hint": null,                // hex اختياري 32 بايت (جذر الاهلية)
+        "root_hint": null,                // optional 32-byte array of bytes (eligibility root)
         "owner": null,                    // AccountId اختياري عندما تلتزم الدائرة بـ owner
-        "salt": null                      // hex اختياري 32 بايت لاشتقاق nullifier
+        "nullifier": null                 // optional 32-byte array of bytes (nullifier hint)
       }
     }
   - الرد:
@@ -263,7 +264,7 @@ Endpoint للراحة
       ]
     }
   - ملاحظات:
-    - يقوم الخادم بربط `root_hint`/`owner`/`salt` الاختيارية من ballot الى `public_inputs_json` لـ `CastZkBallot`.
+    - يقوم الخادم بربط `root_hint`/`owner`/`nullifier` الاختيارية من ballot الى `public_inputs_json` لـ `CastZkBallot`.
     - يعاد ترميز bytes الخاصة بالenvelope كـ base64 في payload التعليمة.
     - تتغير `reason` الى `submitted transaction` عندما يقدم Torii ballot.
     - هذا endpoint متاح فقط عندما يكون feature `zk-ballot` مفعلا.
@@ -273,6 +274,7 @@ Endpoint للراحة
 - المضيف يحل مفتاح التحقق للballot من referendum (`vk_ballot`) او افتراضات الحوكمة ويتطلب ان يكون السجل موجودا و`Active` ويحمل bytes inline.
 - bytes الخاصة بمفتاح التحقق المخزن يعاد hashing لها عبر `hash_vk`; اي عدم تطابق للالتزام يوقف التنفيذ قبل التحقق للحماية من ادخالات سجل معبث بها (`BallotRejected` مع `verifying key commitment mismatch`).
 - bytes الخاصة بالبرهان ترسل الى backend المسجل عبر `zk::verify_backend`; تظهر النصوص غير الصالحة كـ `BallotRejected` مع `invalid proof` وتفشل التعليمة بشكل حتمي.
+- The proof must expose a ballot commitment and eligibility root as public inputs; the root must match the election’s `eligible_root`, and the derived nullifier must match any provided hint.
 - البراهين الناجحة تصدر `BallotAccepted`; nullifiers المكررة او جذور اهلية قديمة او تراجعات lock تستمر في انتاج اسباب الرفض المذكورة سابقا في هذا المستند.
 
 ## سوء سلوك المدققين والتوافق المشترك

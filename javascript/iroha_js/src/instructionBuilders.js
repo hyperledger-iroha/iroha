@@ -438,9 +438,15 @@ function toBinaryBuffer(value, name) {
   if (value instanceof ArrayBuffer) {
     return Buffer.from(value);
   }
+  if (Array.isArray(value)) {
+    return Buffer.from(normalizeByteArray(value, name));
+  }
+  if (value && typeof value.length === "number" && typeof value !== "string") {
+    return Buffer.from(normalizeByteArray(Array.from(value), name));
+  }
   fail(
     ValidationErrorCode.INVALID_OBJECT,
-    `${name} must be a Buffer or ArrayBuffer view`,
+    `${name} must be a Buffer, ArrayBuffer view, or byte array`,
     name,
   );
 }
@@ -567,6 +573,9 @@ function normalizeByteArray(value, name) {
     fail(ValidationErrorCode.INVALID_OBJECT, `${name} is required`, name);
   }
   if (Array.isArray(value)) {
+    if (value.length === 0) {
+      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty byte array`, name);
+    }
     return value.map((byte, index) => {
       const numeric = Number(byte);
       if (!Number.isInteger(numeric) || numeric < 0 || numeric > 0xff) {
@@ -580,6 +589,9 @@ function normalizeByteArray(value, name) {
     });
   }
   if (Buffer.isBuffer(value)) {
+    if (value.length === 0) {
+      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty byte array`, name);
+    }
     return Array.from(value.values());
   }
   if (typeof value === "string") {
@@ -587,6 +599,9 @@ function normalizeByteArray(value, name) {
     return Array.from(Buffer.from(b64, "base64").values());
   }
   const buffer = toBinaryBuffer(value, name);
+  if (buffer.length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty byte array`, name);
+  }
   return Array.from(buffer.values());
 }
 
@@ -941,6 +956,9 @@ function normalizeBase64(value, name) {
     return decodeBase64Strict(value.trim(), name).toString("base64");
   }
   const buffer = toBinaryBuffer(value, name);
+  if (buffer.length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty base64 string`, name);
+  }
   return buffer.toString("base64");
 }
 

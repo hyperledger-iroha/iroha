@@ -147,12 +147,22 @@ public final class GatewayFetchOptions {
     private WriteModeHint writeModeHint = WriteModeHint.READ_ONLY;
 
     public Builder setManifestEnvelopeBase64(final String manifestEnvelopeBase64) {
-      this.manifestEnvelopeBase64 = emptyToNull(manifestEnvelopeBase64);
+      if (manifestEnvelopeBase64 == null || manifestEnvelopeBase64.trim().isEmpty()) {
+        this.manifestEnvelopeBase64 = null;
+      } else {
+        this.manifestEnvelopeBase64 =
+            SorafsInputValidator.normalizeBase64MaybeUrl(
+                manifestEnvelopeBase64, "manifestEnvelopeBase64");
+      }
       return this;
     }
 
     public Builder setManifestCidHex(final String manifestCidHex) {
-      this.manifestCidHex = emptyToNull(manifestCidHex);
+      if (manifestCidHex == null || manifestCidHex.trim().isEmpty()) {
+        this.manifestCidHex = null;
+      } else {
+        this.manifestCidHex = SorafsInputValidator.normalizeHex(manifestCidHex, "manifestCidHex");
+      }
       return this;
     }
 
@@ -172,11 +182,17 @@ public final class GatewayFetchOptions {
     }
 
     public Builder setMaxPeers(final Integer maxPeers) {
+      if (maxPeers != null && maxPeers < 1) {
+        throw new IllegalArgumentException("maxPeers must be greater than zero");
+      }
       this.maxPeers = maxPeers;
       return this;
     }
 
     public Builder setRetryBudget(final Integer retryBudget) {
+      if (retryBudget != null && retryBudget < 0) {
+        throw new IllegalArgumentException("retryBudget must be non-negative");
+      }
       this.retryBudget = retryBudget;
       return this;
     }

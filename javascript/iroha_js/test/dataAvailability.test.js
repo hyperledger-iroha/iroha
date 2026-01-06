@@ -126,6 +126,33 @@ test("generateDaProofSummary normalizes native output for JS callers", () => {
   assert.equal(proof.verified, true);
 });
 
+test("generateDaProofSummary accepts array-like payloads", () => {
+  const nativeCalls = [];
+  const summary = generateDaProofSummary([1, 2], [3, 4], {
+    __nativeBinding: {
+      daGenerateProofs(manifest, payload, options) {
+        nativeCalls.push({ manifest, payload, options });
+        return createNativeProofSummary();
+      },
+    },
+  });
+
+  assert.equal(nativeCalls.length, 1);
+  assert.deepEqual(Array.from(nativeCalls[0].manifest.values()), [1, 2]);
+  assert.deepEqual(Array.from(nativeCalls[0].payload.values()), [3, 4]);
+  assert.equal(summary.proofs.length, 1);
+});
+
+test("generateDaProofSummary rejects non-byte arrays", () => {
+  assert.throws(
+    () =>
+      generateDaProofSummary([256], [1], {
+        __nativeBinding: { daGenerateProofs: () => createNativeProofSummary() },
+      }),
+    (error) => error instanceof TypeError && /manifestBytes\[0\]/i.test(error.message),
+  );
+});
+
 test("emitDaProofSummaryArtifact writes JSON artifacts with normalized fields", async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "da-proof-"));
   const outputPath = path.join(tmpDir, "artifact.json");

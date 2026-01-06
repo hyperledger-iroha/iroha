@@ -169,13 +169,13 @@ public final class DefaultOkHttpWiringTests {
       final GatewayProvider provider =
           GatewayProvider.builder()
               .setName("alpha")
-              .setProviderIdHex("aa")
+              .setProviderIdHex("aa".repeat(32))
               .setBaseUrl("https://providers.example")
               .setStreamTokenBase64(Base64.getEncoder().encodeToString("token".getBytes(StandardCharsets.UTF_8)))
               .build();
       final GatewayFetchRequest request =
           GatewayFetchRequest.builder()
-              .setManifestIdHex("deadbeef")
+              .setManifestIdHex("deadbeef".repeat(8))
               .setOptions(GatewayFetchOptions.builder().build())
               .addProvider(provider)
               .build();
@@ -194,7 +194,7 @@ public final class DefaultOkHttpWiringTests {
       assertEquals("/v1/sorafs/gateway/fetch", recorded.getPath());
       assertEquals("POST", recorded.getMethod());
       final String body = recorded.getBody().readString(StandardCharsets.UTF_8);
-      assertTrue(body.contains("\"manifest_id_hex\":\"deadbeef\""));
+      assertTrue(body.contains("\"manifest_id_hex\":\"" + "deadbeef".repeat(8) + "\""));
       assertEquals("application/json", recorded.getHeader("Content-Type"));
     }
   }

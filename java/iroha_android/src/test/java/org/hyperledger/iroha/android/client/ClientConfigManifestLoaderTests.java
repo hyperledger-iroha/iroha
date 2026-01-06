@@ -28,6 +28,7 @@ public final class ClientConfigManifestLoaderTests {
       tests.customizerCanMutateBuilder();
       tests.rejectsFractionalTimeoutMs();
       tests.rejectsFractionalRetryAttempts();
+      tests.rejectsOutOfRangeRetryAttempts();
       System.out.println("[IrohaAndroid] ClientConfigManifestLoaderTests passed.");
     } finally {
       tests.cleanup();
@@ -193,6 +194,30 @@ public final class ClientConfigManifestLoaderTests {
       assertTrue(
           ex.getMessage() == null || ex.getMessage().contains("Fractional"),
           "error should mention fractional value");
+    }
+  }
+
+  private void rejectsOutOfRangeRetryAttempts() throws Exception {
+    final Path manifest = tempDir.resolve("out_of_range_retry.json");
+    final String json =
+        """
+        {
+          "torii": { "base_uri": "https://range.example" },
+          "retry": {
+            "max_attempts": 3000000000
+          },
+          "telemetry": { "enabled": false }
+        }
+        """;
+    Files.writeString(manifest, json, StandardCharsets.UTF_8);
+
+    try {
+      ClientConfigManifestLoader.load(manifest);
+      throw new AssertionError("expected out-of-range retry attempt to be rejected");
+    } catch (final IllegalStateException ex) {
+      assertTrue(
+          ex.getMessage() == null || ex.getMessage().contains("out of range"),
+          "error should mention out-of-range value");
     }
   }
 

@@ -3427,12 +3427,11 @@ public struct ToriiRuntimeUpgradeManifest: Codable, Sendable {
         description = try container.decode(String.self, forKey: .description)
         abiVersion = try container.decode(UInt16.self, forKey: .abiVersion)
         let hashHex = try container.decode(String.self, forKey: .abiHashHex)
-        guard Data(hexString: hashHex) != nil else {
-            throw DecodingError.dataCorruptedError(forKey: .abiHashHex,
-                                                   in: container,
-                                                   debugDescription: "Invalid abi_hash hex string")
-        }
-        abiHashHex = hashHex.lowercased()
+        abiHashHex = try ToriiValidation.normalized32ByteHex(
+            hashHex,
+            field: "abi_hash",
+            codingPath: container.codingPath + [CodingKeys.abiHashHex]
+        )
         addedSyscalls = try container.decodeIfPresent([UInt16].self, forKey: .addedSyscalls) ?? []
         addedPointerTypes = try container.decodeIfPresent([UInt16].self, forKey: .addedPointerTypes) ?? []
         startHeight = try container.decode(UInt64.self, forKey: .startHeight)
@@ -3444,7 +3443,8 @@ public struct ToriiRuntimeUpgradeManifest: Codable, Sendable {
         try container.encode(name, forKey: .name)
         try container.encode(description, forKey: .description)
         try container.encode(abiVersion, forKey: .abiVersion)
-        try container.encode(abiHashHex.lowercased(), forKey: .abiHashHex)
+        let normalizedHash = try ToriiRequestValidation.normalized32ByteHex(abiHashHex, field: "abi_hash")
+        try container.encode(normalizedHash, forKey: .abiHashHex)
         if !addedSyscalls.isEmpty {
             try container.encode(addedSyscalls, forKey: .addedSyscalls)
         } else {
@@ -3481,6 +3481,17 @@ public struct ToriiRuntimeUpgradeListItem: Decodable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case idHex = "id_hex"
         case record
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let idHex = try container.decode(String.self, forKey: .idHex)
+        self.idHex = try ToriiValidation.normalized32ByteHex(
+            idHex,
+            field: "id_hex",
+            codingPath: container.codingPath + [CodingKeys.idHex]
+        )
+        record = try container.decode(ToriiRuntimeUpgradeRecord.self, forKey: .record)
     }
 }
 
@@ -3975,35 +3986,175 @@ public struct ToriiVerifyingKeyUpdateRequest: Encodable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
+        let normalizedAuthority = try ToriiVerifyingKeyRequestValidation.normalizedNonEmpty(authority,
+                                                                                            field: "authority")
+        let normalizedPrivateKey = try ToriiVerifyingKeyRequestValidation.normalizedNonEmpty(privateKey,
+                                                                                              field: "private_key")
+        let normalizedBackend = try ToriiVerifyingKeyRequestValidation.normalizedBackend(backend, field: "backend")
+        let normalizedName = try ToriiVerifyingKeyRequestValidation.normalizedName(name, field: "name")
+        let normalizedCircuitId = try ToriiVerifyingKeyRequestValidation.normalizedNonEmpty(circuitId,
+                                                                                             field: "circuit_id")
+        let normalizedSchemaHash = try ToriiVerifyingKeyRequestValidation.normalized32ByteHex(
+            publicInputsSchemaHashHex,
+            field: "public_inputs_schema_hash_hex"
+        )
+        let normalizedCurve = try ToriiVerifyingKeyRequestValidation.normalizedOptionalNonEmpty(curve,
+                                                                                                field: "curve")
+        let normalizedGasSchedule = try ToriiVerifyingKeyRequestValidation.normalizedOptionalNonEmpty(gasScheduleId,
+                                                                                                      field: "gas_schedule_id")
+        let normalizedCommitment = try ToriiVerifyingKeyRequestValidation.normalizedOptional32ByteHex(
+            commitmentHex,
+            field: "commitment_hex"
+        )
+        let normalizedMetadataCid = try ToriiVerifyingKeyRequestValidation.normalizedOptionalNonEmpty(
+            metadataUriCid,
+            field: "metadata_uri_cid"
+        )
+        let normalizedVkBytesCid = try ToriiVerifyingKeyRequestValidation.normalizedOptionalNonEmpty(
+            verifyingKeyBytesCid,
+            field: "vk_bytes_cid"
+        )
+        let vkPayload = try ToriiVerifyingKeyRequestValidation.verifyingKeyPayload(
+            bytes: verifyingKeyBytes,
+            explicitLength: verifyingKeyLength
+        )
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(authority, forKey: .authority)
-        try container.encode(privateKey, forKey: .privateKey)
-        try container.encode(backend, forKey: .backend)
-        try container.encode(name, forKey: .name)
+        try container.encode(normalizedAuthority, forKey: .authority)
+        try container.encode(normalizedPrivateKey, forKey: .privateKey)
+        try container.encode(normalizedBackend, forKey: .backend)
+        try container.encode(normalizedName, forKey: .name)
         try container.encode(version, forKey: .version)
-        try container.encode(circuitId, forKey: .circuitId)
-        try container.encode(publicInputsSchemaHashHex, forKey: .publicInputsSchemaHashHex)
-        try container.encodeIfPresent(curve, forKey: .curve)
-        try container.encodeIfPresent(gasScheduleId, forKey: .gasScheduleId)
-        try container.encodeIfPresent(commitmentHex, forKey: .commitmentHex)
-        if let bytes = verifyingKeyBytes {
-            try container.encode(bytes.base64EncodedString(), forKey: .verifyingKeyBytes)
-            if let explicitLen = verifyingKeyLength {
-                try container.encode(explicitLen, forKey: .verifyingKeyLength)
-            } else {
-                try container.encode(UInt32(bytes.count), forKey: .verifyingKeyLength)
-            }
+        try container.encode(normalizedCircuitId, forKey: .circuitId)
+        try container.encode(normalizedSchemaHash, forKey: .publicInputsSchemaHashHex)
+        try container.encodeIfPresent(normalizedCurve, forKey: .curve)
+        try container.encodeIfPresent(normalizedGasSchedule, forKey: .gasScheduleId)
+        try container.encodeIfPresent(normalizedCommitment, forKey: .commitmentHex)
+        if let vkPayload {
+            try container.encode(vkPayload.bytesBase64, forKey: .verifyingKeyBytes)
+            try container.encode(vkPayload.length, forKey: .verifyingKeyLength)
         } else if let len = verifyingKeyLength {
             try container.encode(len, forKey: .verifyingKeyLength)
         }
         try container.encodeIfPresent(maxProofBytes, forKey: .maxProofBytes)
-        try container.encodeIfPresent(metadataUriCid, forKey: .metadataUriCid)
-        try container.encodeIfPresent(verifyingKeyBytesCid, forKey: .verifyingKeyBytesCid)
+        try container.encodeIfPresent(normalizedMetadataCid, forKey: .metadataUriCid)
+        try container.encodeIfPresent(normalizedVkBytesCid, forKey: .verifyingKeyBytesCid)
         try container.encodeIfPresent(activationHeight, forKey: .activationHeight)
         try container.encodeIfPresent(withdrawHeight, forKey: .withdrawHeight)
         if let status {
             try container.encode(status.rawValue, forKey: .status)
         }
+    }
+}
+
+fileprivate enum ToriiVerifyingKeyRequestValidation {
+    struct VkPayload {
+        let bytesBase64: String
+        let length: UInt32
+    }
+
+    static func normalizedNonEmpty(_ value: String, field: String) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+        }
+        return trimmed
+    }
+
+    static func normalizedBackend(_ value: String, field: String) throws -> String {
+        let trimmed = try normalizedNonEmpty(value, field: field)
+        if trimmed.contains(":") {
+            throw ToriiClientError.invalidPayload("\(field) must not contain ':' characters.")
+        }
+        return trimmed
+    }
+
+    static func normalizedName(_ value: String, field: String) throws -> String {
+        let trimmed = try normalizedNonEmpty(value, field: field)
+        if trimmed.contains(":") {
+            throw ToriiClientError.invalidPayload("\(field) must not contain ':' characters.")
+        }
+        return trimmed
+    }
+
+    static func normalizedOptionalNonEmpty(_ value: String?, field: String) throws -> String? {
+        guard let value else { return nil }
+        return try normalizedNonEmpty(value, field: field)
+    }
+
+    static func normalized32ByteHex(_ value: String, field: String) throws -> String {
+        var trimmed = try normalizedNonEmpty(value, field: field)
+        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
+            trimmed = String(trimmed.dropFirst(2))
+        }
+        guard trimmed.count == 64, Data(hexString: trimmed) != nil else {
+            throw ToriiClientError.invalidPayload("\(field) must be a 32-byte hex string.")
+        }
+        return trimmed.lowercased()
+    }
+
+    static func normalizedOptional32ByteHex(_ value: String?, field: String) throws -> String? {
+        guard let value else { return nil }
+        return try normalized32ByteHex(value, field: field)
+    }
+
+    static func verifyingKeyPayload(bytes: Data?, explicitLength: UInt32?) throws -> VkPayload? {
+        guard let bytes else {
+            return nil
+        }
+        guard !bytes.isEmpty else {
+            throw ToriiClientError.invalidPayload("vk_bytes must not be empty.")
+        }
+        guard bytes.count <= Int(UInt32.max) else {
+            throw ToriiClientError.invalidPayload("vk_bytes length must fit in a u32.")
+        }
+        let length = UInt32(bytes.count)
+        if let explicitLength, explicitLength != length {
+            throw ToriiClientError.invalidPayload("vk_len must match vk_bytes length.")
+        }
+        return VkPayload(bytesBase64: bytes.base64EncodedString(),
+                         length: explicitLength ?? length)
+    }
+}
+
+fileprivate enum ToriiRequestValidation {
+    static func normalizedNonEmpty(_ value: String, field: String) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+        }
+        return trimmed
+    }
+
+    static func normalizedOptionalNonEmpty(_ value: String?, field: String) throws -> String? {
+        guard let value else { return nil }
+        return try normalizedNonEmpty(value, field: field)
+    }
+
+    static func normalized32ByteHex(_ value: String, field: String) throws -> String {
+        var trimmed = try normalizedNonEmpty(value, field: field)
+        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
+            trimmed = String(trimmed.dropFirst(2))
+        }
+        guard trimmed.count == 64, Data(hexString: trimmed) != nil else {
+            throw ToriiClientError.invalidPayload("\(field) must be a 32-byte hex string.")
+        }
+        return trimmed.lowercased()
+    }
+
+    static func normalizedOptional32ByteHex(_ value: String?, field: String) throws -> String? {
+        guard let value else { return nil }
+        return try normalized32ByteHex(value, field: field)
+    }
+
+    static func normalizedBase64(_ value: String, field: String) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw ToriiClientError.invalidPayload("\(field) must be a non-empty base64 string.")
+        }
+        guard let data = Data(base64Encoded: trimmed), !data.isEmpty else {
+            throw ToriiClientError.invalidPayload("\(field) must be valid base64.")
+        }
+        return trimmed
     }
 }
 
@@ -4158,6 +4309,21 @@ fileprivate enum ToriiValidation {
             )
         }
         return trimmed.lowercased()
+    }
+
+    static func normalizedBase64(_ value: String,
+                                 field: String,
+                                 codingPath: [CodingKey]) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let data = Data(base64Encoded: trimmed), !data.isEmpty else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: codingPath,
+                    debugDescription: "\(field) must be valid base64"
+                )
+            )
+        }
+        return trimmed
     }
 
     static func validatedUInt32(_ value: Int,
@@ -4480,6 +4646,51 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
         case featuresBitmap = "features_bitmap"
         case accessSetHints = "access_set_hints"
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let codeHash = try container.decodeIfPresent(String.self, forKey: .codeHash) {
+            self.codeHash = try ToriiValidation.normalized32ByteHex(
+                codeHash,
+                field: "code_hash",
+                codingPath: container.codingPath + [CodingKeys.codeHash]
+            )
+        } else {
+            self.codeHash = nil
+        }
+        if let abiHash = try container.decodeIfPresent(String.self, forKey: .abiHash) {
+            self.abiHash = try ToriiValidation.normalized32ByteHex(
+                abiHash,
+                field: "abi_hash",
+                codingPath: container.codingPath + [CodingKeys.abiHash]
+            )
+        } else {
+            self.abiHash = nil
+        }
+        compilerFingerprint = try container.decodeIfPresent(String.self, forKey: .compilerFingerprint)
+        featuresBitmap = try container.decodeIfPresent(UInt64.self, forKey: .featuresBitmap)
+        accessSetHints = try container.decodeIfPresent(ToriiContractAccessSetHints.self,
+                                                       forKey: .accessSetHints)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let codeHash {
+            try container.encode(
+                try ToriiRequestValidation.normalized32ByteHex(codeHash, field: "code_hash"),
+                forKey: .codeHash
+            )
+        }
+        if let abiHash {
+            try container.encode(
+                try ToriiRequestValidation.normalized32ByteHex(abiHash, field: "abi_hash"),
+                forKey: .abiHash
+            )
+        }
+        try container.encodeIfPresent(compilerFingerprint, forKey: .compilerFingerprint)
+        try container.encodeIfPresent(featuresBitmap, forKey: .featuresBitmap)
+        try container.encodeIfPresent(accessSetHints, forKey: .accessSetHints)
+    }
 }
 
 public struct ToriiRegisterContractCodeRequest: Encodable, Sendable {
@@ -4504,7 +4715,20 @@ public struct ToriiRegisterContractCodeRequest: Encodable, Sendable {
         case authority
         case privateKey = "private_key"
         case manifest
-        case codeBytes = "code_bytes"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        if codeBytes != nil {
+            throw ToriiClientError.invalidPayload("code_bytes is not accepted by /v1/contracts/code")
+        }
+        let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
+                                                                                field: "authority")
+        let normalizedPrivateKey = try ToriiRequestValidation.normalizedNonEmpty(privateKey,
+                                                                                  field: "private_key")
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(normalizedAuthority, forKey: .authority)
+        try container.encode(normalizedPrivateKey, forKey: .privateKey)
+        try container.encode(manifest, forKey: .manifest)
     }
 }
 
@@ -4515,6 +4739,20 @@ public struct ToriiContractManifestRecord: Decodable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case manifest
         case codeBytes = "code_bytes"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        manifest = try container.decode(ToriiContractManifest.self, forKey: .manifest)
+        if let codeBytes = try container.decodeIfPresent(String.self, forKey: .codeBytes) {
+            self.codeBytes = try ToriiValidation.normalizedBase64(
+                codeBytes,
+                field: "code_bytes",
+                codingPath: container.codingPath + [CodingKeys.codeBytes]
+            )
+        } else {
+            self.codeBytes = nil
+        }
     }
 }
 
@@ -4548,6 +4786,21 @@ public struct ToriiDeployContractRequest: Encodable, Sendable {
         case abiHash = "abi_hash"
         case manifest
     }
+
+    public func encode(to encoder: Encoder) throws {
+        if codeHash != nil || abiHash != nil || manifest != nil {
+            throw ToriiClientError.invalidPayload("code_hash, abi_hash, and manifest are not accepted by /v1/contracts/deploy")
+        }
+        let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
+                                                                                field: "authority")
+        let normalizedPrivateKey = try ToriiRequestValidation.normalizedNonEmpty(privateKey,
+                                                                                  field: "private_key")
+        let normalizedCodeB64 = try ToriiRequestValidation.normalizedBase64(codeB64, field: "code_b64")
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(normalizedAuthority, forKey: .authority)
+        try container.encode(normalizedPrivateKey, forKey: .privateKey)
+        try container.encode(normalizedCodeB64, forKey: .codeB64)
+    }
 }
 
 public struct ToriiDeployContractResponse: Decodable, Sendable {
@@ -4560,6 +4813,29 @@ public struct ToriiDeployContractResponse: Decodable, Sendable {
         case codeHashHex = "code_hash_hex"
         case abiHashHex = "abi_hash_hex"
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try container.decode(Bool.self, forKey: .ok)
+        if let codeHashHex = try container.decodeIfPresent(String.self, forKey: .codeHashHex) {
+            self.codeHashHex = try ToriiValidation.normalized32ByteHex(
+                codeHashHex,
+                field: "code_hash_hex",
+                codingPath: container.codingPath + [CodingKeys.codeHashHex]
+            )
+        } else {
+            self.codeHashHex = nil
+        }
+        if let abiHashHex = try container.decodeIfPresent(String.self, forKey: .abiHashHex) {
+            self.abiHashHex = try ToriiValidation.normalized32ByteHex(
+                abiHashHex,
+                field: "abi_hash_hex",
+                codingPath: container.codingPath + [CodingKeys.abiHashHex]
+            )
+        } else {
+            self.abiHashHex = nil
+        }
+    }
 }
 
 public struct ToriiContractCodeBytes: Decodable, Sendable {
@@ -4567,6 +4843,14 @@ public struct ToriiContractCodeBytes: Decodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case codeB64 = "code_b64"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let codeB64 = try container.decode(String.self, forKey: .codeB64)
+        self.codeB64 = try ToriiValidation.normalizedBase64(codeB64,
+                                                            field: "code_b64",
+                                                            codingPath: container.codingPath + [CodingKeys.codeB64])
     }
 }
 
@@ -4600,6 +4884,25 @@ public struct ToriiDeployContractInstanceRequest: Encodable, Sendable {
         case codeB64 = "code_b64"
         case manifest
     }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
+                                                                                field: "authority")
+        let normalizedPrivateKey = try ToriiRequestValidation.normalizedNonEmpty(privateKey,
+                                                                                  field: "private_key")
+        let normalizedNamespace = try ToriiRequestValidation.normalizedNonEmpty(namespace,
+                                                                                field: "namespace")
+        let normalizedContractId = try ToriiRequestValidation.normalizedNonEmpty(contractId,
+                                                                                 field: "contract_id")
+        let normalizedCodeB64 = try ToriiRequestValidation.normalizedBase64(codeB64, field: "code_b64")
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(normalizedAuthority, forKey: .authority)
+        try container.encode(normalizedPrivateKey, forKey: .privateKey)
+        try container.encode(normalizedNamespace, forKey: .namespace)
+        try container.encode(normalizedContractId, forKey: .contractId)
+        try container.encode(normalizedCodeB64, forKey: .codeB64)
+        try container.encodeIfPresent(manifest, forKey: .manifest)
+    }
 }
 
 public struct ToriiDeployContractInstanceResponse: Decodable, Sendable {
@@ -4615,6 +4918,25 @@ public struct ToriiDeployContractInstanceResponse: Decodable, Sendable {
         case contractId = "contract_id"
         case codeHashHex = "code_hash_hex"
         case abiHashHex = "abi_hash_hex"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try container.decode(Bool.self, forKey: .ok)
+        namespace = try container.decode(String.self, forKey: .namespace)
+        contractId = try container.decode(String.self, forKey: .contractId)
+        let codeHashHex = try container.decode(String.self, forKey: .codeHashHex)
+        self.codeHashHex = try ToriiValidation.normalized32ByteHex(
+            codeHashHex,
+            field: "code_hash_hex",
+            codingPath: container.codingPath + [CodingKeys.codeHashHex]
+        )
+        let abiHashHex = try container.decode(String.self, forKey: .abiHashHex)
+        self.abiHashHex = try ToriiValidation.normalized32ByteHex(
+            abiHashHex,
+            field: "abi_hash_hex",
+            codingPath: container.codingPath + [CodingKeys.abiHashHex]
+        )
     }
 }
 
@@ -4643,6 +4965,24 @@ public struct ToriiActivateContractInstanceRequest: Encodable, Sendable {
         case namespace
         case contractId = "contract_id"
         case codeHash = "code_hash"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
+                                                                                field: "authority")
+        let normalizedPrivateKey = try ToriiRequestValidation.normalizedNonEmpty(privateKey,
+                                                                                  field: "private_key")
+        let normalizedNamespace = try ToriiRequestValidation.normalizedNonEmpty(namespace,
+                                                                                field: "namespace")
+        let normalizedContractId = try ToriiRequestValidation.normalizedNonEmpty(contractId,
+                                                                                 field: "contract_id")
+        let normalizedCodeHash = try ToriiRequestValidation.normalized32ByteHex(codeHash, field: "code_hash")
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(normalizedAuthority, forKey: .authority)
+        try container.encode(normalizedPrivateKey, forKey: .privateKey)
+        try container.encode(normalizedNamespace, forKey: .namespace)
+        try container.encode(normalizedContractId, forKey: .contractId)
+        try container.encode(normalizedCodeHash, forKey: .codeHash)
     }
 }
 
@@ -4939,6 +5279,21 @@ public struct ToriiGovernanceDeployContractProposalRequest: Encodable, Sendable 
         self.abiVersion = abiVersion
         self.window = window
     }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedNamespace = try ToriiRequestValidation.normalizedNonEmpty(namespace, field: "namespace")
+        let normalizedContractId = try ToriiRequestValidation.normalizedNonEmpty(contractId, field: "contract_id")
+        let normalizedCodeHash = try ToriiRequestValidation.normalized32ByteHex(codeHashHex, field: "code_hash")
+        let normalizedAbiHash = try ToriiRequestValidation.normalized32ByteHex(abiHashHex, field: "abi_hash")
+        let normalizedAbiVersion = try ToriiRequestValidation.normalizedNonEmpty(abiVersion, field: "abi_version")
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(normalizedNamespace, forKey: .namespace)
+        try container.encode(normalizedContractId, forKey: .contractId)
+        try container.encode(normalizedCodeHash, forKey: .codeHashHex)
+        try container.encode(normalizedAbiHash, forKey: .abiHashHex)
+        try container.encode(normalizedAbiVersion, forKey: .abiVersion)
+        try container.encodeIfPresent(window, forKey: .window)
+    }
 }
 
 public struct ToriiGovernanceZkBallotRequest: Encodable, Sendable {
@@ -4966,6 +5321,19 @@ public struct ToriiGovernanceZkBallotRequest: Encodable, Sendable {
         self.electionId = electionId
         self.proofB64 = proofB64
         self.publicInputs = publicInputs
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority, field: "authority")
+        let normalizedChainId = try ToriiRequestValidation.normalizedNonEmpty(chainId, field: "chain_id")
+        let normalizedElectionId = try ToriiRequestValidation.normalizedNonEmpty(electionId, field: "election_id")
+        let normalizedProof = try ToriiRequestValidation.normalizedBase64(proofB64, field: "proof_b64")
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(normalizedAuthority, forKey: .authority)
+        try container.encode(normalizedChainId, forKey: .chainId)
+        try container.encode(normalizedElectionId, forKey: .electionId)
+        try container.encode(normalizedProof, forKey: .proofB64)
+        try container.encodeIfPresent(publicInputs, forKey: .publicInputs)
     }
 }
 
@@ -5018,6 +5386,16 @@ public struct ToriiGovernanceFinalizeRequest: Encodable, Sendable {
         self.referendumId = referendumId
         self.proposalId = proposalId
     }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedReferendumId = try ToriiRequestValidation.normalizedNonEmpty(referendumId,
+                                                                                   field: "referendum_id")
+        let normalizedProposalId = try ToriiRequestValidation.normalized32ByteHex(proposalId,
+                                                                                  field: "proposal_id")
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(normalizedReferendumId, forKey: .referendumId)
+        try container.encode(normalizedProposalId, forKey: .proposalId)
+    }
 }
 
 public struct ToriiGovernanceEnactRequest: Encodable, Sendable {
@@ -5038,6 +5416,17 @@ public struct ToriiGovernanceEnactRequest: Encodable, Sendable {
         self.preimageHash = preimageHash
         self.window = window
     }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedProposalId = try ToriiRequestValidation.normalized32ByteHex(proposalId,
+                                                                                  field: "proposal_id")
+        let normalizedPreimage = try ToriiRequestValidation.normalizedOptional32ByteHex(preimageHash,
+                                                                                        field: "preimage_hash")
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(normalizedProposalId, forKey: .proposalId)
+        try container.encodeIfPresent(normalizedPreimage, forKey: .preimageHash)
+        try container.encodeIfPresent(window, forKey: .window)
+    }
 }
 
 public struct ToriiGovernanceProposalResponse: Decodable, Sendable {
@@ -5057,6 +5446,18 @@ public struct ToriiGovernanceProposalResponse: Decodable, Sendable {
         self.ok = ok
         self.proposalId = proposalId
         self.txInstructions = txInstructions
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try container.decode(Bool.self, forKey: .ok)
+        let proposalId = try container.decode(String.self, forKey: .proposalId)
+        self.proposalId = try ToriiValidation.normalized32ByteHex(
+            proposalId,
+            field: "proposal_id",
+            codingPath: container.codingPath + [CodingKeys.proposalId]
+        )
+        txInstructions = try container.decode([ToriiGovernanceInstruction].self, forKey: .txInstructions)
     }
 }
 
@@ -5150,6 +5551,25 @@ public struct ToriiGovernanceDeployContractKind: Decodable, Sendable, Equatable 
         case codeHashHex = "code_hash_hex"
         case abiHashHex = "abi_hash_hex"
         case abiVersion = "abi_version"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        namespace = try container.decode(String.self, forKey: .namespace)
+        contractId = try container.decode(String.self, forKey: .contractId)
+        let codeHashHex = try container.decode(String.self, forKey: .codeHashHex)
+        self.codeHashHex = try ToriiValidation.normalized32ByteHex(
+            codeHashHex,
+            field: "code_hash_hex",
+            codingPath: container.codingPath + [CodingKeys.codeHashHex]
+        )
+        let abiHashHex = try container.decode(String.self, forKey: .abiHashHex)
+        self.abiHashHex = try ToriiValidation.normalized32ByteHex(
+            abiHashHex,
+            field: "abi_hash_hex",
+            codingPath: container.codingPath + [CodingKeys.abiHashHex]
+        )
+        abiVersion = try container.decode(String.self, forKey: .abiVersion)
     }
 }
 
@@ -6802,7 +7222,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     public func getAttachment(id: String) async throws -> (Data, String?) {
-        let request = try makeRequest(path: "/v1/zk/attachments/\(id)")
+        let normalizedId = try ToriiRequestValidation.normalizedNonEmpty(id, field: "id")
+        let encodedId = encodePathComponent(normalizedId)
+        let request = try makeRequest(path: "/v1/zk/attachments/\(encodedId)")
         let (data, response) = try await send(request)
         try ensureStatus(response, in: 200..<300)
         let contentType = response.value(forHTTPHeaderField: "Content-Type")
@@ -6810,7 +7232,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     public func deleteAttachment(id: String) async throws {
-        let request = try makeRequest(path: "/v1/zk/attachments/\(id)", method: .delete)
+        let normalizedId = try ToriiRequestValidation.normalizedNonEmpty(id, field: "id")
+        let encodedId = encodePathComponent(normalizedId)
+        let request = try makeRequest(path: "/v1/zk/attachments/\(encodedId)", method: .delete)
         let (_, response) = try await send(request)
         try ensureStatus(response, equals: 204)
     }
@@ -7060,8 +7484,10 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     public func getGovernanceProposal(idHex: String) async throws -> ToriiGovernanceProposalGetResponse {
-        try await getGovernanceJSON(path: "/v1/gov/proposals/\(idHex)",
-                                    responseType: ToriiGovernanceProposalGetResponse.self)
+        let normalized = try ToriiRequestValidation.normalized32ByteHex(idHex, field: "idHex")
+        let encoded = encodePathComponent(normalized)
+        return try await getGovernanceJSON(path: "/v1/gov/proposals/\(encoded)",
+                                           responseType: ToriiGovernanceProposalGetResponse.self)
     }
 
     public func getGovernanceLocks(referendumId: String) async throws -> ToriiGovernanceLocksResponse {
@@ -7089,7 +7515,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             items.append(URLQueryItem(name: "referendum_id", value: referendumId))
         }
         let queryItems = items.isEmpty ? nil : items
-        return try await getGovernanceJSON(path: "/v1/gov/locks/stats",
+        return try await getGovernanceJSON(path: "/v1/gov/unlocks/stats",
                                            queryItems: queryItems,
                                            responseType: ToriiGovernanceUnlockStatsResponse.self)
     }
@@ -7101,13 +7527,17 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     public func getProverReport(id: String) async throws -> ToriiProverReport {
-        let request = try makeRequest(path: "/v1/zk/prover/reports/\(id)")
+        let normalizedId = try ToriiRequestValidation.normalizedNonEmpty(id, field: "id")
+        let encodedId = encodePathComponent(normalizedId)
+        let request = try makeRequest(path: "/v1/zk/prover/reports/\(encodedId)")
         let data = try await data(for: request)
         return try decodeJSON(ToriiProverReport.self, from: data)
     }
 
     public func deleteProverReport(id: String) async throws {
-        let request = try makeRequest(path: "/v1/zk/prover/reports/\(id)", method: .delete)
+        let normalizedId = try ToriiRequestValidation.normalizedNonEmpty(id, field: "id")
+        let encodedId = encodePathComponent(normalizedId)
+        let request = try makeRequest(path: "/v1/zk/prover/reports/\(encodedId)", method: .delete)
         let (_, response) = try await send(request)
         try ensureStatus(response, equals: 204)
     }
@@ -7187,7 +7617,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     public func fetchContractManifest(codeHashHex: String) async throws -> ToriiContractManifestRecord {
-        let request = try makeRequest(path: "/v1/contracts/code/\(codeHashHex)")
+        let normalized = try ToriiRequestValidation.normalized32ByteHex(codeHashHex, field: "codeHashHex")
+        let encoded = encodePathComponent(normalized)
+        let request = try makeRequest(path: "/v1/contracts/code/\(encoded)")
         let data = try await data(for: request)
         return try decodeJSON(ToriiContractManifestRecord.self, from: data)
     }
@@ -7223,7 +7655,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     public func fetchContractCodeBytes(codeHashHex: String) async throws -> ToriiContractCodeBytes {
-        let request = try makeRequest(path: "/v1/contracts/code-bytes/\(codeHashHex)")
+        let normalized = try ToriiRequestValidation.normalized32ByteHex(codeHashHex, field: "codeHashHex")
+        let encoded = encodePathComponent(normalized)
+        let request = try makeRequest(path: "/v1/contracts/code-bytes/\(encoded)")
         let data = try await data(for: request)
         return try decodeJSON(ToriiContractCodeBytes.self, from: data)
     }
@@ -7328,8 +7762,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     public func activateRuntimeUpgrade(idHex: String) async throws -> ToriiRuntimeUpgradeActionResponse {
-        let trimmed = idHex.trimmingCharacters(in: .whitespacesAndNewlines)
-        let request = try makeRequest(path: "/v1/runtime/upgrades/activate/\(trimmed)",
+        let normalized = try ToriiRequestValidation.normalized32ByteHex(idHex, field: "idHex")
+        let encoded = encodePathComponent(normalized)
+        let request = try makeRequest(path: "/v1/runtime/upgrades/activate/\(encoded)",
                                       method: .post,
                                       body: Data(),
                                       headers: ["Content-Type": "application/json"])
@@ -7339,8 +7774,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     public func cancelRuntimeUpgrade(idHex: String) async throws -> ToriiRuntimeUpgradeActionResponse {
-        let trimmed = idHex.trimmingCharacters(in: .whitespacesAndNewlines)
-        let request = try makeRequest(path: "/v1/runtime/upgrades/cancel/\(trimmed)",
+        let normalized = try ToriiRequestValidation.normalized32ByteHex(idHex, field: "idHex")
+        let encoded = encodePathComponent(normalized)
+        let request = try makeRequest(path: "/v1/runtime/upgrades/cancel/\(encoded)",
                                       method: .post,
                                       body: Data(),
                                       headers: ["Content-Type": "application/json"])
@@ -8044,7 +8480,18 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
     private func decodeAssetBalances(from data: Data) throws -> [ToriiAssetBalance] {
         let decoder = JSONDecoder()
+        if let balances = try? decoder.decode([ToriiAssetBalance].self, from: data) {
+            return balances
+        }
+        if let envelope = try? decoder.decode(ToriiAssetBalanceEnvelope.self, from: data) {
+            return envelope.items
+        }
         return try decoder.decode([ToriiAssetBalance].self, from: data)
+    }
+
+    private struct ToriiAssetBalanceEnvelope: Decodable {
+        let items: [ToriiAssetBalance]
+        let total: UInt64
     }
 
     private func parseVerifyingKeyEvent(from lines: [String]) throws -> ToriiVerifyingKeyEventMessage? {

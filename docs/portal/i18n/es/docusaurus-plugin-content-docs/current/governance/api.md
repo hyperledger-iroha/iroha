@@ -199,14 +199,15 @@ Helpers CLI
   - Util para auditar namespaces protegidos o verificar flujos de deploy controlados por gobernanza.
 - `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - Emite el esqueleto JSON de metadata usado al enviar deployments a namespaces protegidos, incluyendo `gov_manifest_approvers` opcionales para satisfacer reglas de quorum del manifiesto.
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --salt-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
-  - Valida account ids canonicos, impone salts de 32 bytes no cero, y mezcla los hints en `public_inputs_json` (con `--public <path>` para overrides adicionales).
+- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+  - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
+  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
   - El resumen de una linea ahora expone un `fingerprint=<hex>` determinista derivado del `CastZkBallot` codificado junto con hints decodificados (`owner`, `amount`, `duration_blocks`, `direction` cuando se proporcionan).
   - Las respuestas CLI anotan `tx_instructions[]` con `payload_fingerprint_hex` mas campos decodificados para que herramientas downstream verifiquen el esqueleto sin reimplementar decodificacion Norito.
   - Proveer los hints de bloqueo permite que el nodo emita eventos `LockCreated`/`LockExtended` para ballots ZK una vez que el circuito exponga los mismos valores.
 - `iroha gov vote-plain --referendum-id <id> --owner <account>@<domain> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - Los alias `--lock-amount`/`--lock-duration-blocks` reflejan los nombres de flags de ZK para paridad en scripts.
-  - La salida de resumen refleja `vote-zk` al incluir el fingerprint de la instruccion codificada y campos de ballot legibles (`owner`, `amount`, `duration_blocks`, `direction`, `salt_hex` cuando esta presente), ofreciendo confirmacion rapida antes de firmar el esqueleto.
+  - La salida de resumen refleja `vote-zk` al incluir el fingerprint de la instruccion codificada y campos de ballot legibles (`owner`, `amount`, `duration_blocks`, `direction`), ofreciendo confirmacion rapida antes de firmar el esqueleto.
 
 Listado de instancias
 - GET `/v1/gov/instances/{ns}` - lista instancias de contrato activas para un namespace.
@@ -233,7 +234,7 @@ Barrido de unlocks (Operador/Auditoria)
       "envelope_b64": "AAECAwQ=",
       "root_hint_hex": "...64hex?",
       "owner": "alice@wonderland?",
-      "salt_hex": "...64hex?"
+      "nullifier_hex": "...64hex?"
     }
   - Respuesta: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
 
@@ -248,9 +249,9 @@ Barrido de unlocks (Operador/Auditoria)
       "ballot": {
         "backend": "halo2/ipa",
         "envelope_bytes": "AAECAwQ=",   // base64 de contenedor ZK1 o H2*
-        "root_hint": null,                // hex opcional de 32 bytes (root de elegibilidad)
+        "root_hint": null,                // optional 32-byte array of bytes (eligibility root)
         "owner": null,                    // AccountId opcional cuando el circuito compromete owner
-        "salt": null                      // hex opcional de 32 bytes para derivar nullifier
+        "nullifier": null                 // optional 32-byte array of bytes (nullifier hint)
       }
     }
   - Respuesta:
@@ -263,7 +264,7 @@ Barrido de unlocks (Operador/Auditoria)
       ]
     }
   - Notas:
-    - El servidor mapea `root_hint`/`owner`/`salt` opcionales desde el ballot a `public_inputs_json` para `CastZkBallot`.
+    - El servidor mapea `root_hint`/`owner`/`nullifier` opcionales desde el ballot a `public_inputs_json` para `CastZkBallot`.
     - Los bytes del envelope se re-encodan como base64 para el payload de la instruccion.
     - La respuesta `reason` cambia a `submitted transaction` cuando Torii envia el ballot.
     - Este endpoint solo esta disponible cuando el feature `zk-ballot` esta habilitado.
@@ -273,6 +274,7 @@ Ruta de verificacion de CastZkBallot
 - El host resuelve la clave verificadora del ballot desde el referendum (`vk_ballot`) o defaults de gobernanza y requiere que el registro exista, sea `Active`, y lleve bytes inline.
 - Los bytes de la clave verificadora almacenada se re-hashean con `hash_vk`; cualquier desajuste de compromiso aborta la ejecucion antes de verificar para proteger contra entradas de registro adulteradas (`BallotRejected` con `verifying key commitment mismatch`).
 - Los bytes de la prueba se despachan al backend registrado via `zk::verify_backend`; transcripciones invalidas aparecen como `BallotRejected` con `invalid proof` y la instruccion falla deterministamente.
+- The proof must expose a ballot commitment and eligibility root as public inputs; the root must match the election’s `eligible_root`, and the derived nullifier must match any provided hint.
 - Pruebas exitosas emiten `BallotAccepted`; nullifiers duplicados, roots de elegibilidad viejos o regresiones de lock siguen produciendo las razones de rechazo existentes descritas antes en este documento.
 
 ## Mala conducta de validadores y consenso conjunto

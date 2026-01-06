@@ -13,6 +13,14 @@ public final class SorafsGatewayFetchOptionsTests {
     builderSerialisesExplicitOptions();
     defaultsProvideGuardPolicy();
     gatewayFetchRequestSerialisesProviders();
+    rejectsInvalidProviderIdHex();
+    rejectsShortProviderIdHex();
+    rejectsInvalidStreamTokenBase64();
+    rejectsInvalidManifestIdHex();
+    rejectsShortManifestIdHex();
+    rejectsInvalidManifestEnvelopeBase64();
+    rejectsInvalidManifestCidHex();
+    rejectsInvalidNumericOptions();
     System.out.println("[IrohaAndroid] SoraFS gateway option tests passed.");
   }
 
@@ -84,7 +92,7 @@ public final class SorafsGatewayFetchOptionsTests {
     final GatewayProvider provider =
         GatewayProvider.builder()
             .setName("primary")
-            .setProviderIdHex("0123")
+            .setProviderIdHex("01".repeat(32))
             .setBaseUrl("https://gateway.example/fetch")
             .setStreamTokenBase64("c3RyZWFt")
             .build();
@@ -115,7 +123,7 @@ public final class SorafsGatewayFetchOptionsTests {
         (Iterable<Map<String, Object>>) json.get("providers");
     final Map<String, Object> providerJson = providers.iterator().next();
     assert "primary".equals(providerJson.get("name"));
-    assert "0123".equals(providerJson.get("provider_id_hex"));
+    assert "01".repeat(32).equals(providerJson.get("provider_id_hex"));
     assert "https://gateway.example/fetch".equals(providerJson.get("base_url"));
     assert "c3RyZWFt".equals(providerJson.get("stream_token_b64"));
 
@@ -124,5 +132,71 @@ public final class SorafsGatewayFetchOptionsTests {
         "\"manifest_id_hex\":\"deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef\"");
     assert jsonString.contains("\"telemetry_region\":\"ap-southeast-1\"");
     assert jsonString.contains("\"providers\"");
+  }
+
+  private static void rejectsInvalidProviderIdHex() {
+    assertThrows(
+        () -> GatewayProvider.builder().setName("primary").setProviderIdHex("zz"),
+        "expected invalid providerIdHex to throw");
+  }
+
+  private static void rejectsShortProviderIdHex() {
+    assertThrows(
+        () -> GatewayProvider.builder().setName("primary").setProviderIdHex("aa".repeat(16)),
+        "expected short providerIdHex to throw");
+  }
+
+  private static void rejectsInvalidStreamTokenBase64() {
+    assertThrows(
+        () ->
+            GatewayProvider.builder()
+                .setName("primary")
+                .setProviderIdHex("01".repeat(32))
+                .setBaseUrl("https://gateway.example")
+                .setStreamTokenBase64("not!base64")
+                .build(),
+        "expected invalid base64 stream token to throw");
+  }
+
+  private static void rejectsInvalidManifestIdHex() {
+    assertThrows(
+        () -> GatewayFetchRequest.builder().setManifestIdHex("not-hex"),
+        "expected invalid manifestIdHex to throw");
+  }
+
+  private static void rejectsShortManifestIdHex() {
+    assertThrows(
+        () -> GatewayFetchRequest.builder().setManifestIdHex("aa".repeat(16)),
+        "expected short manifestIdHex to throw");
+  }
+
+  private static void rejectsInvalidManifestEnvelopeBase64() {
+    assertThrows(
+        () -> GatewayFetchOptions.builder().setManifestEnvelopeBase64("not!base64"),
+        "expected invalid manifest envelope to throw");
+  }
+
+  private static void rejectsInvalidManifestCidHex() {
+    assertThrows(
+        () -> GatewayFetchOptions.builder().setManifestCidHex("not-hex"),
+        "expected invalid manifest cid to throw");
+  }
+
+  private static void rejectsInvalidNumericOptions() {
+    assertThrows(
+        () -> GatewayFetchOptions.builder().setMaxPeers(0),
+        "expected maxPeers <= 0 to throw");
+    assertThrows(
+        () -> GatewayFetchOptions.builder().setRetryBudget(-1),
+        "expected negative retryBudget to throw");
+  }
+
+  private static void assertThrows(final Runnable runnable, final String message) {
+    try {
+      runnable.run();
+    } catch (final IllegalArgumentException expected) {
+      return;
+    }
+    throw new AssertionError(message);
   }
 }

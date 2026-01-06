@@ -16,6 +16,11 @@ test("canonical request signing: canonical query sorts pairs", () => {
   assert.equal(rendered, "a=3&b=1&b=2&space=a+b");
 });
 
+test("canonical request signing: canonical query uses form encoding", () => {
+  const rendered = canonicalQueryString("b=!*()~'&a=1");
+  assert.equal(rendered, "a=1&b=%21*%28%29%7E%27");
+});
+
 test("canonical request signing: headers include a verifiable signature", () => {
   const { privateKey, publicKey } = generateKeyPair({
     seed: Buffer.alloc(32, 7),

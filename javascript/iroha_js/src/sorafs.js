@@ -418,6 +418,9 @@ function parseOptionalString(chunk, label) {
   if (discriminant === 0) {
     return null;
   }
+  if (discriminant !== 1) {
+    throw new Error(`${label} has invalid discriminant`);
+  }
   if (chunk.length < 17) {
     throw new Error(`${label} is truncated`);
   }

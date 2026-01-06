@@ -65,6 +65,7 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.gpu.CudaAcceleratorsKotlinFacadeTests",
         "org.hyperledger.iroha.android.gpu.CudaAcceleratorsNativeSmokeTests",
         "org.hyperledger.iroha.android.gpu.CudaAcceleratorsTests",
+        "org.hyperledger.iroha.android.model.instructions.KaigiInstructionValidationTests",
         "org.hyperledger.iroha.android.model.instructions.InstructionSchemaManifestTests",
         "org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests",
         "org.hyperledger.iroha.android.nexus.SpaceDirectoryInstructionBuilderTests",

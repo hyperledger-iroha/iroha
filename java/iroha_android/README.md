@@ -875,6 +875,9 @@ directly to the Rust `sorafs_orchestrator` configuration. Use
 orchestrator expects. `TransportPolicy` and `AnonymityPolicy` mirror the CLI/SDK
 labels (`soranet-first`, `anon-guard-pq`, etc.), ensuring Android clients participate
 in the staged SoraNet anonymity rollout alongside the other SDKs.
+The builders validate SoraFS identifiers: `manifest_id_hex` and `provider_id_hex` must
+be 32-byte hex strings (an optional `0x` prefix is accepted), and base64 inputs must
+decode to non-empty bytes.
 
 `SorafsGatewayClient` wraps the HTTP transport so applications can submit orchestrator
 requests without reimplementing header/observer plumbing. Call

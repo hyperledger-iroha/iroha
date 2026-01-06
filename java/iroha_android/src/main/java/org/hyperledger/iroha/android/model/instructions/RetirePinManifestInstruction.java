@@ -113,6 +113,9 @@ public final class RetirePinManifestInstruction implements InstructionTemplate {
     }
 
     public Builder setRetiredEpoch(final long retiredEpoch) {
+      if (retiredEpoch < 0) {
+        throw new IllegalArgumentException("retiredEpoch must be non-negative");
+      }
       this.retiredEpoch = retiredEpoch;
       return this;
     }

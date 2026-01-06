@@ -45,3 +45,26 @@ test("connect retry delay bounded by cap", () => {
     }
   }
 });
+
+test("connect retry accepts array-like seeds", () => {
+  const policy = new ConnectRetryPolicy();
+  const buffer = ZERO_SEED.buffer.slice(0);
+  const view = new DataView(buffer);
+  const arraySeed = Array.from(ZERO_SEED);
+  const values = [
+    policy.delayMillis(0, buffer),
+    policy.delayMillis(0, view),
+    policy.delayMillis(0, arraySeed),
+  ];
+  for (const value of values) {
+    assert.ok(value >= 0);
+  }
+});
+
+test("connect retry rejects non-byte seeds", () => {
+  const policy = new ConnectRetryPolicy();
+  assert.throws(
+    () => policy.delayMillis(0, [256]),
+    (error) => error instanceof TypeError && /seed\[0\]/i.test(error.message),
+  );
+});

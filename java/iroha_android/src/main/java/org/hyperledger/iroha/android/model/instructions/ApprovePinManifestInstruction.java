@@ -85,6 +85,23 @@ public final class ApprovePinManifestInstruction implements InstructionTemplate 
     return value;
   }
 
+  private static String requireBase64(final String value, final String fieldName) {
+    final String trimmed = Objects.requireNonNull(value, fieldName).trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException(fieldName + " must not be blank");
+    }
+    final byte[] decoded;
+    try {
+      decoded = Base64.getDecoder().decode(trimmed);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException(fieldName + " must be base64", ex);
+    }
+    if (decoded.length == 0) {
+      throw new IllegalArgumentException(fieldName + " must decode to non-empty bytes");
+    }
+    return trimmed;
+  }
+
   private static long requireLong(final Map<String, String> arguments, final String key) {
     final String value = require(arguments, key);
     try {
@@ -128,13 +145,16 @@ public final class ApprovePinManifestInstruction implements InstructionTemplate 
     }
 
     public Builder setApprovedEpoch(final long approvedEpoch) {
+      if (approvedEpoch < 0) {
+        throw new IllegalArgumentException("approvedEpoch must be non-negative");
+      }
       this.approvedEpoch = approvedEpoch;
       return this;
     }
 
     public Builder setCouncilEnvelopeBase64(final String councilEnvelopeBase64) {
       this.councilEnvelopeBase64 =
-          Objects.requireNonNull(councilEnvelopeBase64, "councilEnvelopeBase64");
+          requireBase64(councilEnvelopeBase64, "councilEnvelopeBase64");
       return this;
     }
 

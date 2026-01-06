@@ -10,9 +10,11 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::{Execute, ivm::host::CoreHost},
     state::State,
+    zk::test_utils::halo2_fixture_envelope,
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
+    confidential::ConfidentialStatus,
     isi::verifying_keys,
     prelude::*,
     proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
@@ -42,6 +44,34 @@ fn store_tlv(vm: &mut IVM, cursor: &mut u64, tlv: &[u8]) -> u64 {
     vm.memory
         .input_write_aligned(cursor, tlv, 8)
         .expect("write TLV into INPUT")
+}
+
+fn derive_ballot_nullifier(
+    domain_tag: &str,
+    chain_id: &iroha_data_model::ChainId,
+    election_id: &str,
+    commit: &[u8; 32],
+) -> [u8; 32] {
+    use blake2::{Blake2b512, Digest as _};
+
+    let mut input = Vec::with_capacity(
+        domain_tag.len() + chain_id.as_str().len() + election_id.len() + commit.len() + 24,
+    );
+    let mut push_len = |len: usize| {
+        let len_u64 = len as u64;
+        input.extend_from_slice(&len_u64.to_le_bytes());
+    };
+    push_len(domain_tag.len());
+    input.extend_from_slice(domain_tag.as_bytes());
+    push_len(chain_id.as_str().len());
+    input.extend_from_slice(chain_id.as_str().as_bytes());
+    push_len(election_id.len());
+    input.extend_from_slice(election_id.as_bytes());
+    input.extend_from_slice(commit);
+    let digest = Blake2b512::digest(&input);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest[..32]);
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -127,12 +157,14 @@ fn verify_then_vendor_submit_ballot_applies() {
     let chain_id_bytes = state.chain_id.to_string().into_bytes();
     host.set_chain_id_bytes(chain_id_bytes.clone());
     let backend_label = "halo2/ipa";
-    let vk_bytes = vec![0x01, 0x02, 0x03];
+    let circuit_id = "halo2/ipa:tiny-add2inst-public-v1";
+    let fixture = halo2_fixture_envelope(circuit_id, [0u8; 32]);
+    let vk_bytes = fixture.vk_bytes.clone().expect("fixture vk bytes");
     let mut hasher = Sha256::new();
     hasher.update(backend_label.as_bytes());
     hasher.update(&vk_bytes);
     let vk_commitment: [u8; 32] = hasher.finalize().into();
-    let schema_hash: [u8; 32] = Hash::new(b"ballot-schema").into();
+    let schema_hash = fixture.schema_hash;
     let domain_tag = compute_domain_tag(
         &chain_id_bytes,
         backend_label,
@@ -145,7 +177,7 @@ fn verify_then_vendor_submit_ballot_applies() {
     );
     let mut vk_record = VerifyingKeyRecord::new_with_owner(
         1,
-        "zk_vote_ballot",
+        circuit_id,
         None,
         "ballot",
         BackendTag::Halo2IpaPasta,
@@ -232,10 +264,14 @@ fn verify_then_vendor_submit_ballot_applies() {
     );
 
     // Seed an election so SubmitBallot can record ciphertexts
+    let mut commit_bytes = [0u8; 32];
+    let mut root_bytes = [0u8; 32];
+    commit_bytes.copy_from_slice(&fixture.public_inputs[..32]);
+    root_bytes.copy_from_slice(&fixture.public_inputs[32..64]);
     let create = iroha_data_model::isi::zk::CreateElection {
         election_id: "e1".to_string(),
         options: 2,
-        eligible_root: [0u8; 32],
+        eligible_root: root_bytes,
         start_ts: 0,
         end_ts: 0,
         vk_ballot,
@@ -262,15 +298,23 @@ fn verify_then_vendor_submit_ballot_applies() {
     }
     .encode();
     prog2.extend_from_slice(&code2);
+    let nullifier = derive_ballot_nullifier(
+        "zkvote",
+        &state.chain_id,
+        "e1",
+        &commit_bytes,
+    );
     let sb = iroha_data_model::isi::zk::SubmitBallot {
         election_id: "e1".to_string(),
-        ciphertext: vec![0u8; 8],
+        ciphertext: commit_bytes.to_vec(),
         ballot_proof: iroha_data_model::proof::ProofAttachment::new_inline(
             "halo2/ipa".into(),
-            iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0xAA]),
-            iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".into(), vk_bytes.clone()),
+            fixture.proof_box("halo2/ipa"),
+            fixture
+                .vk_box("halo2/ipa")
+                .expect("fixture verifying key"),
         ),
-        nullifier: [7u8; 32],
+        nullifier,
     };
     let sb_box: iroha_data_model::isi::InstructionBox = sb.into();
     let sb_bytes = norito::to_bytes(&sb_box).expect("encode SubmitBallot InstructionBox to Norito");

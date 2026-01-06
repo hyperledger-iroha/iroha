@@ -930,6 +930,22 @@ test("buildCastZkBallotInstruction encodes proof and JSON inputs", () => {
   assert.deepEqual(decoded, expected);
 });
 
+test("buildCastZkBallotInstruction rejects empty proof bytes", () => {
+  assert.throws(
+    () =>
+      buildCastZkBallotInstruction({
+        electionId: "ref-1",
+        proof: Buffer.alloc(0),
+        publicInputs: { tally: "aye" },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_STRING);
+      assert.match(String(error?.message), /non-empty base64/i);
+      return true;
+    },
+  );
+});
+
 test("buildCastPlainBallotInstruction maps direction labels", () => {
   const instruction = buildCastPlainBallotInstruction({
     referendumId: "ref-2",
@@ -1204,6 +1220,21 @@ test("buildCreateElectionInstruction normalizes verifying keys", () => {
   assert.equal(payload.options, 3);
 });
 
+test("buildCreateElectionInstruction accepts byte-array eligibleRoot", () => {
+  const instruction = buildCreateElectionInstruction({
+    electionId: "election-2",
+    options: 2,
+    eligibleRoot: Array.from(Buffer.alloc(32, 0x44)),
+    startTs: 100,
+    endTs: 200,
+    ballotVerifyingKey: "halo2/ipa:vk_ballot",
+    tallyVerifyingKey: "halo2/ipa:vk_tally",
+    domainTag: "zk",
+  });
+  const payload = encodeAndDecode(instruction).zk.CreateElection;
+  assert.deepEqual(payload.eligible_root, toByteArray(Buffer.alloc(32, 0x44)));
+});
+
 test("buildCreateElectionInstruction rejects unsafe timestamps", () => {
   const tooLarge = (BigInt(Number.MAX_SAFE_INTEGER) + 1n).toString(10);
   assert.throws(
@@ -1241,6 +1272,48 @@ test("buildSubmitBallotInstruction encodes ciphertext and proof", () => {
   const ciphertext = Buffer.from(payload.ciphertext);
   assert.equal(ciphertext.toString("base64"), Buffer.from("encrypted").toString("base64"));
   assert.equal(payload.ballot_proof.backend, "halo2/ipa");
+});
+
+test("buildSubmitBallotInstruction rejects non-byte nullifier arrays", () => {
+  assert.throws(
+    () =>
+      buildSubmitBallotInstruction({
+        electionId: "ref-1",
+        ciphertext: Buffer.from("encrypted"),
+        ballotProof: {
+          backend: "halo2/ipa",
+          proof: Buffer.from("proof"),
+          verifyingKeyRef: "halo2/ipa:vk_ballot",
+        },
+        nullifier: [256],
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
+      assert.match(String(error?.message), /nullifier\[0\]/i);
+      return true;
+    },
+  );
+});
+
+test("buildSubmitBallotInstruction rejects empty ciphertext", () => {
+  assert.throws(
+    () =>
+      buildSubmitBallotInstruction({
+        electionId: "ref-1",
+        ciphertext: Buffer.alloc(0),
+        ballotProof: {
+          backend: "halo2/ipa",
+          proof: Buffer.from("proof"),
+          verifyingKeyRef: "halo2/ipa:vk_ballot",
+        },
+        nullifier: Buffer.alloc(32, 0x33),
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_STRING);
+      assert.match(String(error?.message), /non-empty byte array/i);
+      return true;
+    },
+  );
 });
 
 test("buildFinalizeElectionInstruction serializes tally entries", () => {

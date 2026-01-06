@@ -11,6 +11,17 @@ function ensureNative(methodName) {
   return native;
 }
 
+function normalizeByteArray(value, field) {
+  const bytes = value.map((entry, index) => {
+    const numeric = Number(entry);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 0xff) {
+      throw new TypeError(`${field}[${index}] must be a byte`);
+    }
+    return numeric;
+  });
+  return Buffer.from(bytes);
+}
+
 function normalizeBytes(input, field) {
   if (input instanceof Uint8Array && !Buffer.isBuffer(input)) {
     return Buffer.from(input);
@@ -18,17 +29,27 @@ function normalizeBytes(input, field) {
   if (Buffer.isBuffer(input)) {
     return input;
   }
+  if (ArrayBuffer.isView(input)) {
+    return Buffer.from(input.buffer, input.byteOffset, input.byteLength);
+  }
+  if (input instanceof ArrayBuffer) {
+    return Buffer.from(input);
+  }
   if (typeof input === "string") {
     try {
       return decodeBase64Strict(input);
     } catch {
-      throw new TypeError(`${field} must be Buffer | Uint8Array | base64 string`);
+      throw new TypeError(
+        `${field} must be Buffer | ArrayBufferView | ArrayBuffer | base64 string`,
+      );
     }
   }
   if (Array.isArray(input)) {
-    return Buffer.from(input);
+    return normalizeByteArray(input, field);
   }
-  throw new TypeError(`${field} must be Buffer | Uint8Array | base64 string`);
+  throw new TypeError(
+    `${field} must be Buffer | ArrayBufferView | ArrayBuffer | base64 string`,
+  );
 }
 
 function normalizeRelayInteger(value, label) {
@@ -134,13 +155,21 @@ export function verifyLaneRelayEnvelopes(envelopes) {
   for (let i = 0; i < envelopes.length; i += 1) {
     const envelope = envelopes[i];
     verifyLaneRelayEnvelopeJson(envelope);
-    const laneId = normalizeRelayInteger(envelope?.lane_id, `envelope ${i}.lane_id`);
+    let record = envelope;
+    if (typeof envelope === "string") {
+      try {
+        record = JSON.parse(envelope);
+      } catch {
+        throw new TypeError(`envelope ${i} must be valid JSON`);
+      }
+    }
+    const laneId = normalizeRelayInteger(record?.lane_id, `envelope ${i}.lane_id`);
     const dataspaceId = normalizeRelayInteger(
-      envelope?.dataspace_id,
+      record?.dataspace_id,
       `envelope ${i}.dataspace_id`,
     );
     const blockHeight = normalizeRelayInteger(
-      envelope?.block_height,
+      record?.block_height,
       `envelope ${i}.block_height`,
     );
     const key = `${laneId.toString()}:${dataspaceId.toString()}:${blockHeight.toString()}`;

@@ -419,15 +419,10 @@ fn validate_vrf_seed_usage(
 
 pub(crate) fn validate_consensus_mode_for_line(
     build_line: BuildLine,
-    consensus_mode: SumeragiConsensusMode,
+    _consensus_mode: SumeragiConsensusMode,
     next_consensus_mode: Option<SumeragiConsensusMode>,
 ) -> color_eyre::Result<()> {
     if build_line.is_iroha3() {
-        if !matches!(consensus_mode, SumeragiConsensusMode::Npos) {
-            return Err(color_eyre::eyre::eyre!(
-                "Iroha3 requires `--consensus-mode npos`"
-            ));
-        }
         if next_consensus_mode.is_some() {
             return Err(color_eyre::eyre::eyre!(
                 "Iroha3 does not support staged consensus cutovers; drop `--next-consensus-mode`"

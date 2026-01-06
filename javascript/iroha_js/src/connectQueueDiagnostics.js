@@ -8,7 +8,18 @@ const DEFAULT_CONNECT_QUEUE_ROOT = path.join(os.homedir(), ".iroha", "connect");
 
 function bufferFromSessionId(sessionId) {
   if (sessionId instanceof Uint8Array) {
-    return Buffer.from(sessionId);
+    return ensureNonEmptyBytes(Buffer.from(sessionId), "Connect session id");
+  }
+  if (ArrayBuffer.isView(sessionId)) {
+    const view = new Uint8Array(sessionId.buffer, sessionId.byteOffset, sessionId.byteLength);
+    return ensureNonEmptyBytes(Buffer.from(view), "Connect session id");
+  }
+  if (sessionId instanceof ArrayBuffer) {
+    const view = new Uint8Array(sessionId);
+    return ensureNonEmptyBytes(Buffer.from(view), "Connect session id");
+  }
+  if (Array.isArray(sessionId)) {
+    return normalizeByteArray(sessionId, "Connect session id");
   }
   if (typeof sessionId === "string") {
     const trimmed = sessionId.trim();
@@ -18,7 +29,32 @@ function bufferFromSessionId(sessionId) {
     const decoded = tryDecodeBase64Url(trimmed);
     return decoded ?? Buffer.from(trimmed, "utf8");
   }
-  throw new TypeError("Connect session id must be a string or Uint8Array");
+  if (sessionId && typeof sessionId.length === "number") {
+    return normalizeByteArray(sessionId, "Connect session id");
+  }
+  throw new TypeError("Connect session id must be a string or byte array");
+}
+
+function ensureNonEmptyBytes(bytes, context) {
+  if (bytes.length === 0) {
+    throw new TypeError(`${context} must be non-empty`);
+  }
+  return bytes;
+}
+
+function normalizeByteArray(value, context) {
+  const bytes = Array.from(value);
+  if (bytes.length === 0) {
+    throw new TypeError(`${context} must be non-empty`);
+  }
+  const normalized = bytes.map((entry, index) => {
+    const numeric = Number(entry);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 0xff) {
+      throw new TypeError(`${context}[${index}] must be a byte`);
+    }
+    return numeric;
+  });
+  return Buffer.from(normalized);
 }
 
 function tryDecodeBase64Url(value) {

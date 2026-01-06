@@ -42,6 +42,8 @@ Behavioural notes:
 
 - All profiles obey the global `timeoutMs` (30 s by default); long-lived
   callers should pass an `AbortSignal`.
+- `timeoutMs`, `maxRetries`, `backoffInitialMs`, `maxBackoffMs`, and retry status
+  lists must be non-negative integers.
 - SSE helpers and `openConnectWebSocket` pass `retryProfile: "streaming"` so
   relays reconnect without custom glue.
 - Transaction submissions and status polling use the pipeline profile so POST

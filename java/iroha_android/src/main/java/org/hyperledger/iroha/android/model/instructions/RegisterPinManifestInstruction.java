@@ -180,6 +180,9 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
     }
 
     public Builder setSubmittedEpoch(final long submittedEpoch) {
+      if (submittedEpoch < 0) {
+        throw new IllegalArgumentException("submittedEpoch must be non-negative");
+      }
       this.submittedEpoch = submittedEpoch;
       return this;
     }
@@ -459,6 +462,9 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       }
 
       public Builder setRetentionEpoch(final long retentionEpoch) {
+        if (retentionEpoch < 0) {
+          throw new IllegalArgumentException("retentionEpoch must be non-negative");
+        }
         this.retentionEpoch = retentionEpoch;
         return this;
       }
