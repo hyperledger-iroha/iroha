@@ -32,6 +32,7 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
         debug_output_new_blocks: false,
         blocks_in_memory: BLOCKS_IN_MEMORY,
         store_dir: WithOrigin::inline(dir.path().to_path_buf()),
+        max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
         merge_ledger_cache_capacity:
             iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: iroha_config::kura::FsyncMode::Batched,

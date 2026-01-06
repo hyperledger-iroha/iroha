@@ -3509,6 +3509,43 @@ test("fetchDaPayloadViaGateway attaches proof summary when requested", async (t)
   assert.equal(gatewayMock.mock.callCount(), 1);
 });
 
+test("submitDaBlob rejects invalid pdp_commitment payloads", async () => {
+  const digest = Array.from({ length: 32 }, (_, index) => index);
+  const receipt = {
+    client_blob_id: [digest],
+    lane_id: 1,
+    epoch: 2,
+    blob_hash: [digest],
+    chunk_root: [digest],
+    manifest_hash: [digest],
+    storage_ticket: [digest],
+    pdp_commitment: "AAAA====",
+    queued_at_unix: 1234,
+    operator_signature: "aa".repeat(64),
+    rent_quote: null,
+  };
+  const fetchImpl = async () =>
+    createResponse({
+      status: 202,
+      jsonData: { status: "accepted", duplicate: false, receipt },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () =>
+      client.submitDaBlob({
+        payload: Buffer.from("car-bytes"),
+        codec: "nexus_lane_sidecar",
+        laneId: 11,
+        epoch: 22,
+        sequence: 33,
+        privateKeyHex: "11".repeat(32),
+        clientBlobId: Buffer.alloc(32, 0x11),
+      }),
+    /pdp_commitment/,
+  );
+});
+
 nativeTest("submitDaBlob builds ingest payload and normalizes response", async () => {
   let captured = null;
   const digest = Array.from({ length: 32 }, (_, index) => index);
@@ -5628,15 +5665,15 @@ test("waitForTransactionStatus enforces numeric poll options", async () => {
   const hashHex = "bb".repeat(32);
   await assert.rejects(
     () => client.waitForTransactionStatus(hashHex, { intervalMs: -1 }),
-    /waitForTransactionStatus options\.intervalMs must be a non-negative number/,
+    /waitForTransactionStatus options\.intervalMs must be a non-negative integer/,
   );
   await assert.rejects(
     () => client.waitForTransactionStatus(hashHex, { timeoutMs: -5 }),
-    /waitForTransactionStatus options\.timeoutMs must be a non-negative number/,
+    /waitForTransactionStatus options\.timeoutMs must be a non-negative integer/,
   );
   await assert.rejects(
     () => client.waitForTransactionStatus(hashHex, { maxAttempts: 0 }),
-    /waitForTransactionStatus options\.maxAttempts must be a positive number/,
+    /waitForTransactionStatus options\.maxAttempts must be a positive integer/,
   );
 });
 
@@ -9568,7 +9605,7 @@ test("getBlock rejects invalid heights", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
     () => client.getBlock(-1),
-    /non-negative number/,
+    /non-negative integer/,
   );
 });
 
@@ -9590,11 +9627,11 @@ test("listBlocks validates pagination bounds", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
     () => client.listBlocks({ limit: 0 }),
-    /positive number/,
+    /positive integer/,
   );
   await assert.rejects(
     () => client.listBlocks({ offsetHeight: -5 }),
-    /non-negative number/,
+    /non-negative integer/,
   );
 });
 
@@ -12198,7 +12235,7 @@ test("prover filter validation rejects invalid entries", async () => {
   });
   await assert.rejects(
     () => client.listProverReports({ limit: "nope" }),
-    /limit must be a positive number/,
+    /limit must be a positive integer/,
   );
   await assert.rejects(
     () => client.countProverReports({ unknownFilter: true }),
@@ -13550,6 +13587,23 @@ test("registerTrigger normalizes base64 actions and metadata", async () => {
   assert.equal(payload.action, "AAECAwQ=");
   assert.deepEqual(payload.metadata, { window: "4", labels: ["demo"] });
   assert.equal(payload.namespace, "apps");
+});
+
+test("registerTrigger rejects invalid base64 actions", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("should not fetch");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.registerTrigger({
+        id: "apps::bad_action",
+        namespace: "apps",
+        action: "AAAA====",
+      }),
+    /registerTrigger\.action must be a valid base64 string/,
+  );
 });
 
 test("registerTrigger rejects invalid payloads", async () => {
@@ -16009,7 +16063,7 @@ test("exportSnsGovernanceCases enforces option validation", async () => {
   );
   await assert.rejects(
     () => client.exportSnsGovernanceCases({ limit: -1 }),
-    /exportSnsGovernanceCases\.limit must be a non-negative number/,
+    /exportSnsGovernanceCases\.limit must be a non-negative integer/,
   );
   await assert.rejects(
     () => client.exportSnsGovernanceCases({ since: "2026-01-01", unexpected: true }),
@@ -16266,6 +16320,31 @@ function createResponse({ status, jsonData = {}, arrayData, textBody, headers })
     },
   };
 }
+
+test("ToriiClient._normalizeUnsignedInteger enforces integer inputs", () => {
+  assert.equal(ToriiClient._normalizeUnsignedInteger("42", "value"), 42);
+  assert.equal(ToriiClient._normalizeUnsignedInteger(0, "value", { allowZero: true }), 0);
+  assert.equal(ToriiClient._normalizeUnsignedInteger(42n, "value"), 42);
+  assert.throws(
+    () => ToriiClient._normalizeUnsignedInteger(1.5, "value"),
+    /value must be a positive integer/,
+  );
+  assert.throws(
+    () => ToriiClient._normalizeUnsignedInteger("1.5", "value"),
+    /value must be a positive integer/,
+  );
+  assert.throws(
+    () => ToriiClient._normalizeUnsignedInteger(Number.MAX_SAFE_INTEGER + 1, "value"),
+    /value must be at most/,
+  );
+});
+
+test("ToriiClient._normalizeOffset rejects fractional offsets", () => {
+  assert.throws(
+    () => ToriiClient._normalizeOffset(1.25),
+    /offset must be a non-negative integer/,
+  );
+});
 
 async function fileExists(filePath) {
   try {

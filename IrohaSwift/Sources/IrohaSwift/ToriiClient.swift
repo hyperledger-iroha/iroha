@@ -4856,15 +4856,26 @@ public enum ToriiGovernanceProposalKind: Decodable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        if let dictionary = try? container.decode([String: ToriiGovernanceDeployContractKind].self),
-           let deploy = dictionary["DeployContract"] {
-            self = .deployContract(deploy)
-        } else if let raw = try? container.decode([String: ToriiJSONValue].self),
-                  let key = raw.keys.first {
-            self = .unknown(key)
-        } else {
-            self = .unknown("Unknown")
+        if let dictionary = try? container.decode([String: ToriiGovernanceDeployContractKind].self) {
+            guard dictionary.count == 1 else {
+                throw DecodingError.dataCorruptedError(in: container,
+                                                       debugDescription: "Governance proposal kind expects single-key object")
+            }
+            if let deploy = dictionary["DeployContract"] {
+                self = .deployContract(deploy)
+                return
+            }
         }
+        if let raw = try? container.decode([String: ToriiJSONValue].self) {
+            guard raw.count == 1, let key = raw.keys.first else {
+                throw DecodingError.dataCorruptedError(in: container,
+                                                       debugDescription: "Governance proposal kind expects single-key object")
+            }
+            self = .unknown(key)
+            return
+        }
+        throw DecodingError.dataCorruptedError(in: container,
+                                               debugDescription: "Unable to decode governance proposal kind")
     }
 }
 

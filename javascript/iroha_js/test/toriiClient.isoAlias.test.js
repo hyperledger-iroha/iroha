@@ -39,7 +39,7 @@ test("resolveAliasByIndex enforces non-negative indices before issuing requests"
     () => client.resolveAliasByIndex(-5),
     (error) => {
       assert(error instanceof TypeError);
-      assert.match(error.message, /index must be a non-negative number/);
+      assert.match(error.message, /index must be a non-negative integer/);
       return true;
     },
   );
@@ -59,7 +59,7 @@ test("resolveAliasByIndex rejects non-numeric indices early", async () => {
     () => client.resolveAliasByIndex("not-a-number"),
     (error) => {
       assert(error instanceof TypeError);
-      assert.match(error.message, /index must be a non-negative number/);
+      assert.match(error.message, /index must be a non-negative integer/);
       return true;
     },
   );

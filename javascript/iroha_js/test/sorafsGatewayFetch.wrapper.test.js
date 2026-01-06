@@ -241,6 +241,36 @@ test("sorafsGatewayFetch normalises native gateway bindings", (_t) => {
   assert.equal(optionArg.policy_override.anonymity_policy, "anon-strict-pq");
 });
 
+test("sorafsGatewayFetch rejects non-hex provider ids", () => {
+  let calls = 0;
+  const stubBinding = {
+    sorafsGatewayFetch: () => {
+      calls += 1;
+      return createStubResult();
+    },
+  };
+  const providers = [
+    {
+      name: "alpha",
+      providerIdHex: "zz".repeat(32),
+      baseUrl: "https://gateway.test/",
+      streamTokenB64: "dG9rZW4=",
+    },
+  ];
+  assert.throws(
+    () =>
+      sorafsGatewayFetch(
+        MANIFEST_HEX,
+        "sorafs.sf1@1.0.0",
+        "[]",
+        providers,
+        { allowSingleSourceFallback: true, __nativeBinding: stubBinding },
+      ),
+    /provider\.providerIdHex must be a 32-byte hex string/,
+  );
+  assert.equal(calls, 0);
+});
+
 test("sorafsGatewayFetch forwards retryBudget zero to disable cap", () => {
   const calls = [];
   const stubResult = createStubResult();

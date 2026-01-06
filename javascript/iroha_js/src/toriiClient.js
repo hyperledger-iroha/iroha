@@ -29,6 +29,8 @@ const DEFAULT_TX_STATUS_TIMEOUT_MS = 30_000;
 const DEFAULT_ISO_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_ISO_POLL_ATTEMPTS = 12;
 const MIN_ISO_POLL_INTERVAL_MS = 10;
+const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
 const DA_FETCH_ARTIFACT_PREFIX = "artifacts/da/fetch_";
 const DA_PROVE_ARTIFACT_PREFIX = "artifacts/da/prove_availability_";
 const TX_STATUS_POLL_OPTION_KEYS = new Set([
@@ -4742,14 +4744,11 @@ export class ToriiClient {
    * @returns {Promise<any>}
    */
   async getBlock(height, options = {}) {
-    const normalized = Number(height);
-    if (!Number.isFinite(normalized) || normalized < 0) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_NUMERIC,
-        "height must be a non-negative number",
-        "getBlock.height",
-      );
-    }
+    const normalized = ToriiClient._normalizeUnsignedInteger(
+      height,
+      "getBlock.height",
+      { allowZero: true },
+    );
     const { signal } = normalizeSignalOnlyOption(options, "getBlock");
     const response = await this._request("GET", `/v1/blocks/${normalized}`, {
       signal,
@@ -8916,27 +8915,88 @@ export class ToriiClient {
     if (value === undefined || value === null) {
       return 0;
     }
-    const offset = Number(value);
-    if (!Number.isFinite(offset) || offset < 0) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_NUMERIC,
-        "offset must be a non-negative number",
-        "offset",
-      );
-    }
-    return Math.floor(offset);
+    return ToriiClient._normalizeUnsignedInteger(value, "offset", { allowZero: true });
   }
 
   static _normalizeUnsignedInteger(value, name, options = {}) {
     const allowZero = Boolean(options.allowZero);
     const min = options.min;
     const max = options.max;
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric) || numeric < 0 || (!allowZero && numeric === 0)) {
+    let numeric;
+    if (typeof value === "number") {
+      if (!Number.isFinite(value) || !Number.isInteger(value)) {
+        const qualifier = allowZero ? "non-negative integer" : "positive integer";
+        throw createValidationError(
+          ValidationErrorCode.INVALID_NUMERIC,
+          `${name} must be a ${qualifier}`,
+          name,
+        );
+      }
+      if (value < 0 || (!allowZero && value === 0)) {
+        const qualifier = allowZero ? "non-negative integer" : "positive integer";
+        throw createValidationError(
+          ValidationErrorCode.INVALID_NUMERIC,
+          `${name} must be a ${qualifier}`,
+          name,
+        );
+      }
+      if (!Number.isSafeInteger(value)) {
+        throw createValidationError(
+          ValidationErrorCode.VALUE_OUT_OF_RANGE,
+          `${name} must be at most ${MAX_SAFE_INTEGER}`,
+          name,
+        );
+      }
+      numeric = value;
+    } else if (typeof value === "bigint") {
+      if (value < 0n || (!allowZero && value === 0n)) {
+        const qualifier = allowZero ? "non-negative integer" : "positive integer";
+        throw createValidationError(
+          ValidationErrorCode.INVALID_NUMERIC,
+          `${name} must be a ${qualifier}`,
+          name,
+        );
+      }
+      if (value > MAX_SAFE_INTEGER_BIGINT) {
+        throw createValidationError(
+          ValidationErrorCode.VALUE_OUT_OF_RANGE,
+          `${name} must be at most ${MAX_SAFE_INTEGER}`,
+          name,
+        );
+      }
+      numeric = Number(value);
+    } else if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!/^[0-9]+$/.test(trimmed)) {
+        const qualifier = allowZero ? "non-negative integer" : "positive integer";
+        throw createValidationError(
+          ValidationErrorCode.INVALID_NUMERIC,
+          `${name} must be a ${qualifier}`,
+          name,
+        );
+      }
+      const bigint = BigInt(trimmed);
+      if (bigint < 0n || (!allowZero && bigint === 0n)) {
+        const qualifier = allowZero ? "non-negative integer" : "positive integer";
+        throw createValidationError(
+          ValidationErrorCode.INVALID_NUMERIC,
+          `${name} must be a ${qualifier}`,
+          name,
+        );
+      }
+      if (bigint > MAX_SAFE_INTEGER_BIGINT) {
+        throw createValidationError(
+          ValidationErrorCode.VALUE_OUT_OF_RANGE,
+          `${name} must be at most ${MAX_SAFE_INTEGER}`,
+          name,
+        );
+      }
+      numeric = Number(bigint);
+    } else {
       const qualifier = allowZero ? "non-negative" : "positive";
       throw createValidationError(
         ValidationErrorCode.INVALID_NUMERIC,
-        `${name} must be a ${qualifier} number`,
+        `${name} must be a ${qualifier} integer`,
         name,
       );
     }
@@ -16853,11 +16913,19 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
   })();
   const pdpCommitment = record.pdp_commitment ?? null;
   let pdpCommitmentBytes = null;
+  let pdpCommitmentB64 = null;
   if (pdpCommitment !== null && pdpCommitment !== undefined) {
     if (typeof pdpCommitment !== "string") {
       throw new TypeError(`${context}.pdp_commitment must be a base64 string when present`);
     }
-    pdpCommitmentBytes = Buffer.from(pdpCommitment, "base64");
+    const trimmed = pdpCommitment.trim();
+    try {
+      const decoded = strictDecodeBase64(trimmed);
+      pdpCommitmentBytes = Buffer.from(decoded);
+      pdpCommitmentB64 = Buffer.from(decoded).toString("base64");
+    } catch {
+      throw new TypeError(`${context}.pdp_commitment must be a valid base64 string`);
+    }
   }
   return {
     client_blob_id_hex: bufferToUpperHex(clientBlobId),
@@ -16881,7 +16949,7 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
     storage_ticket_hex: bufferToUpperHex(storageTicket),
     storage_ticket_bytes: storageTicket,
     stripe_layout: stripeLayout,
-    pdp_commitment_b64: pdpCommitment ?? null,
+    pdp_commitment_b64: pdpCommitmentB64 ?? (pdpCommitment ?? null),
     pdp_commitment_bytes: pdpCommitmentBytes,
     queued_at_unix: ToriiClient._normalizeUnsignedInteger(
       record.queued_at_unix,
@@ -18691,7 +18759,12 @@ function normalizeTriggerUpsertPayload(input) {
         "registerTrigger.action must be a non-empty string when provided as base64",
       );
     }
-    payload.action = trimmed;
+    try {
+      const decoded = strictDecodeBase64(trimmed);
+      payload.action = Buffer.from(decoded).toString("base64");
+    } catch {
+      throw new TypeError("registerTrigger.action must be a valid base64 string");
+    }
   } else if (!Array.isArray(actionValue) && typeof actionValue === "object") {
     payload.action = cloneJsonValue(actionValue, "registerTrigger.action");
   } else {

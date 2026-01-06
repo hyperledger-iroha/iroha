@@ -560,14 +560,18 @@ function normaliseGatewayProvider(spec) {
   }
   const name = assertNonEmptyString(spec.name, "provider.name");
   const providerIdHex = assertNonEmptyString(spec.providerIdHex, "provider.providerIdHex");
-  if (providerIdHex.length !== 64) {
+  const normalizedProviderId =
+    providerIdHex.startsWith("0x") || providerIdHex.startsWith("0X")
+      ? providerIdHex.slice(2)
+      : providerIdHex;
+  if (normalizedProviderId.length !== 64 || !/^[0-9a-fA-F]+$/.test(normalizedProviderId)) {
     throw new TypeError("provider.providerIdHex must be a 32-byte hex string");
   }
   const baseUrl = assertNonEmptyString(spec.baseUrl, "provider.baseUrl");
   const streamTokenB64 = assertNonEmptyString(spec.streamTokenB64, "provider.streamTokenB64");
   const native = {
     name,
-    provider_id_hex: providerIdHex.toLowerCase(),
+    provider_id_hex: normalizedProviderId.toLowerCase(),
     base_url: baseUrl,
     stream_token_b64: streamTokenB64,
   };

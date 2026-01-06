@@ -31,6 +31,38 @@ function normalizeBytes(input, field) {
   throw new TypeError(`${field} must be Buffer | Uint8Array | base64 string`);
 }
 
+function normalizeRelayInteger(value, label) {
+  if (typeof value === "bigint") {
+    if (value < 0n) {
+      throw new TypeError(`${label} must be a non-negative integer`);
+    }
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || !Number.isInteger(value) || !Number.isSafeInteger(value)) {
+      throw new TypeError(`${label} must be a non-negative integer`);
+    }
+    if (value < 0) {
+      throw new TypeError(`${label} must be a non-negative integer`);
+    }
+    return BigInt(value);
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      throw new TypeError(`${label} must be a non-negative integer`);
+    }
+    if (/^0x[0-9a-fA-F]+$/.test(trimmed) || /^[0-9]+$/.test(trimmed)) {
+      const parsed = BigInt(trimmed);
+      if (parsed < 0n) {
+        throw new TypeError(`${label} must be a non-negative integer`);
+      }
+      return parsed;
+    }
+  }
+  throw new TypeError(`${label} must be a non-negative integer`);
+}
+
 function decodeBase64Strict(value) {
   const compact = value.replace(/\s+/g, "");
   if (compact.length === 0) {
@@ -102,19 +134,16 @@ export function verifyLaneRelayEnvelopes(envelopes) {
   for (let i = 0; i < envelopes.length; i += 1) {
     const envelope = envelopes[i];
     verifyLaneRelayEnvelopeJson(envelope);
-    const laneId = Number(envelope?.lane_id);
-    const dataspaceId = Number(envelope?.dataspace_id);
-    const blockHeight = Number(envelope?.block_height);
-    if (
-      Number.isNaN(laneId) ||
-      Number.isNaN(dataspaceId) ||
-      Number.isNaN(blockHeight)
-    ) {
-      throw new TypeError(
-        `envelope ${i} missing numeric lane_id, dataspace_id, or block_height`,
-      );
-    }
-    const key = `${laneId}:${dataspaceId}:${blockHeight}`;
+    const laneId = normalizeRelayInteger(envelope?.lane_id, `envelope ${i}.lane_id`);
+    const dataspaceId = normalizeRelayInteger(
+      envelope?.dataspace_id,
+      `envelope ${i}.dataspace_id`,
+    );
+    const blockHeight = normalizeRelayInteger(
+      envelope?.block_height,
+      `envelope ${i}.block_height`,
+    );
+    const key = `${laneId.toString()}:${dataspaceId.toString()}:${blockHeight.toString()}`;
     if (seen.has(key)) {
       throw new Error(
         `duplicate relay envelope for lane ${laneId}, dataspace ${dataspaceId}, height ${blockHeight}`,
