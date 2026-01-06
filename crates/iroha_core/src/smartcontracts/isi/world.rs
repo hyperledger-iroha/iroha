@@ -353,7 +353,6 @@ pub mod isi {
             InstructionExecutionError::InvariantViolation(
                 "failed to extract vote public inputs".into(),
             )
-            .into()
         })?;
         Ok(VotePublicInputs {
             columns,
@@ -9093,6 +9092,281 @@ pub mod isi {
             .commit(&topology)
             .unpack(|_| {})
             .unwrap()
+        }
+
+        #[test]
+        fn normalize_halo2_circuit_id_and_match_variants() {
+            assert_eq!(
+                normalize_halo2_circuit_id(" halo2/pasta/ipa-v1/foo "),
+                Some("halo2/pasta/ipa-v1/foo".to_string())
+            );
+            assert_eq!(
+                normalize_halo2_circuit_id("halo2/pasta/foo"),
+                Some("halo2/pasta/ipa-v1/foo".to_string())
+            );
+            assert_eq!(
+                normalize_halo2_circuit_id("halo2/ipa:foo"),
+                Some("halo2/pasta/ipa-v1/foo".to_string())
+            );
+            assert_eq!(normalize_halo2_circuit_id(""), None);
+
+            assert!(circuit_id_matches(
+                "halo2/ipa",
+                "halo2/pasta/ipa-v1/zk-vote",
+                "halo2/ipa:zk-vote"
+            ));
+            assert!(!circuit_id_matches(
+                "halo2/ipa",
+                "halo2/pasta/ipa-v1/zk-vote",
+                "halo2/ipa:other"
+            ));
+            assert!(circuit_id_matches("groth16", "plain", "plain"));
+            assert!(!circuit_id_matches("groth16", "plain", "plain "));
+        }
+
+        #[test]
+        fn validate_vote_envelope_metadata_checks_circuit_and_commitment() {
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3, 4]);
+            let commitment = hash_vk(&vk_box);
+            let mut vk_rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "halo2/pasta/ipa-v1/test-circuit",
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                [0u8; 32],
+                commitment,
+            );
+            vk_rec.status = ConfidentialStatus::Active;
+
+            let bad_circuit = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                "halo2/ipa:other-circuit",
+                commitment,
+                Vec::new(),
+                Vec::new(),
+            );
+            assert!(
+                validate_vote_envelope_metadata("ballot", "halo2/ipa", &bad_circuit, &vk_rec)
+                    .is_err()
+            );
+
+            let mut bad_hash = commitment;
+            bad_hash[0] ^= 0x01;
+            let bad_commitment = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                "halo2/ipa:test-circuit",
+                bad_hash,
+                Vec::new(),
+                Vec::new(),
+            );
+            assert!(
+                validate_vote_envelope_metadata("ballot", "halo2/ipa", &bad_commitment, &vk_rec)
+                    .is_err()
+            );
+
+            let ok = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                "halo2/ipa:test-circuit",
+                commitment,
+                Vec::new(),
+                Vec::new(),
+            );
+            assert!(validate_vote_envelope_metadata("ballot", "halo2/ipa", &ok, &vk_rec).is_ok());
+        }
+
+        #[test]
+        fn enforce_vk_max_proof_bytes_rejects_too_large() {
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "halo2/pasta/ipa-v1/max-proof",
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                [0u8; 32],
+                [0u8; 32],
+            );
+            rec.max_proof_bytes = 8;
+            assert!(enforce_vk_max_proof_bytes("ballot", &rec, 8).is_ok());
+            assert!(enforce_vk_max_proof_bytes("ballot", &rec, 9).is_err());
+            rec.max_proof_bytes = 0;
+            assert!(enforce_vk_max_proof_bytes("ballot", &rec, 64).is_ok());
+        }
+
+        #[test]
+        fn extract_vote_public_inputs_handles_halo2_envelope() {
+            use iroha_zkp_halo2::Halo2ProofEnvelope;
+
+            let inputs = vec![
+                [1u8; 32],
+                [2u8; 32],
+                [3u8; 32],
+                [4u8; 32],
+                [5u8; 32],
+            ];
+            let halo_env =
+                Halo2ProofEnvelope::new(18, 1, 1, 0, inputs.clone(), vec![0xaa])
+                    .expect("halo2 envelope");
+            let proof_bytes = halo_env.to_bytes();
+            let columns: Vec<Vec<[u8; 32]>> = inputs.iter().cloned().map(|v| vec![v]).collect();
+            let public_inputs = flatten_instance_columns(&columns);
+            let envelope = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                "halo2/ipa:vote-circuit",
+                [0u8; 32],
+                public_inputs.clone(),
+                proof_bytes.clone(),
+            );
+            let payload = norito::to_bytes(&envelope).expect("encode envelope");
+
+            let parsed = extract_vote_public_inputs("halo2/ipa", &payload)
+                .expect("extract inputs");
+            assert_eq!(parsed.columns, columns);
+            assert!(parsed.envelope.is_some());
+
+            let mut bad_inputs = public_inputs;
+            bad_inputs[0] ^= 0x01;
+            let bad_envelope = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                "halo2/ipa:vote-circuit",
+                [0u8; 32],
+                bad_inputs,
+                proof_bytes,
+            );
+            let bad_payload = norito::to_bytes(&bad_envelope).expect("encode envelope");
+            assert!(extract_vote_public_inputs("halo2/ipa", &bad_payload).is_err());
+        }
+
+        #[test]
+        fn resolve_vk_commitment_accepts_normalized_circuit_id() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_test");
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3, 4]);
+            let commitment = hash_vk(&vk_box);
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "halo2/pasta/ipa-v1/tiny-add2inst-public-v1",
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                [0u8; 32],
+                commitment,
+            );
+            rec.status = ConfidentialStatus::Active;
+            rec.gas_schedule_id = Some("halo2_default".to_string());
+            rec.key = Some(vk_box);
+            stx.world.verifying_keys.insert(vk_id.clone(), rec.clone());
+            stx.world
+                .verifying_keys_by_circuit
+                .insert((rec.circuit_id.clone(), rec.version), vk_id.clone());
+
+            let proof = ProofBox::new("halo2/ipa".into(), Vec::new());
+            let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id);
+            let envelope = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                "halo2/ipa:tiny-add2inst-public-v1",
+                commitment,
+                Vec::new(),
+                Vec::new(),
+            );
+            let resolved =
+                resolve_vk_commitment(&attachment, Some(&envelope), &stx)
+                    .expect("resolve vk commitment");
+            assert_eq!(resolved, Some(commitment));
+        }
+
+        #[test]
+        fn resolve_vk_requires_single_attachment() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let stx = state_block.transaction();
+            let st = crate::state::ElectionState::default();
+            let proof = ProofBox::new("halo2/ipa".into(), Vec::new());
+
+            let missing = ProofAttachment {
+                backend: "halo2/ipa".into(),
+                proof: proof.clone(),
+                vk_ref: None,
+                vk_inline: None,
+                vk_commitment: None,
+                envelope_hash: None,
+                lane_privacy: None,
+            };
+            assert!(resolve_ballot_vk(&st, &missing, &stx).is_err());
+            assert!(resolve_tally_vk(&st, &missing, &stx).is_err());
+
+            let mut mixed = ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                proof,
+                VerifyingKeyId::new("halo2/ipa", "vk_mixed"),
+            );
+            mixed.vk_inline = Some(VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2]));
+            assert!(resolve_ballot_vk(&st, &mixed, &stx).is_err());
+            assert!(resolve_tally_vk(&st, &mixed, &stx).is_err());
+        }
+
+        #[test]
+        fn resolve_ballot_and_tally_vk_accept_valid_attachments() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_ok");
+            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3, 4, 5]);
+            let commitment = hash_vk(&vk_box);
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "halo2/pasta/ipa-v1/vk-ok",
+                None,
+                "test",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                [0u8; 32],
+                commitment,
+            );
+            rec.status = ConfidentialStatus::Active;
+            rec.key = Some(vk_box.clone());
+            rec.vk_len = vk_box.bytes.len() as u32;
+            stx.world.verifying_keys.insert(vk_id.clone(), rec);
+
+            let mut st = crate::state::ElectionState::default();
+            st.vk_ballot = Some(vk_id.clone());
+            st.vk_tally = Some(vk_id.clone());
+
+            let proof = ProofBox::new("halo2/ipa".into(), vec![0xaa]);
+            let ballot_att =
+                ProofAttachment::new_inline("halo2/ipa".into(), proof.clone(), vk_box.clone());
+            let (ballot_id, ballot_vk, ballot_rec) =
+                resolve_ballot_vk(&st, &ballot_att, &stx).expect("resolve ballot vk");
+            assert_eq!(ballot_id, vk_id);
+            assert_eq!(ballot_vk, vk_box);
+            assert_eq!(ballot_rec.commitment, commitment);
+
+            let tally_att =
+                ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id.clone());
+            let (tally_id, tally_vk, tally_rec) =
+                resolve_tally_vk(&st, &tally_att, &stx).expect("resolve tally vk");
+            assert_eq!(tally_id, vk_id);
+            assert_eq!(tally_vk, ballot_vk);
+            assert_eq!(tally_rec.commitment, commitment);
         }
 
         fn bootstrap_alice_account(stx: &mut StateTransaction<'_, '_>) {
