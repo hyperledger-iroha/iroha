@@ -178,6 +178,9 @@ public final class AndroidProvisionedProof {
     if (!(value instanceof Number number)) {
       throw new IllegalStateException(path + " is not a number");
     }
+    if (number instanceof Float || number instanceof Double) {
+      throw new IllegalStateException(path + " must be an integer");
+    }
     return number.longValue();
   }
 
@@ -186,6 +189,9 @@ public final class AndroidProvisionedProof {
       return null;
     }
     if (value instanceof Number number) {
+      if (number instanceof Float || number instanceof Double) {
+        return null;
+      }
       return number.intValue();
     }
     final String normalized = asString(value);

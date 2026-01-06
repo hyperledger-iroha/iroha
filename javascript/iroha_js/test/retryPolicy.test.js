@@ -85,3 +85,13 @@ test("resolveToriiClientConfig applies retry profile overrides", () => {
   assert.deepEqual(Array.from(pipeline.retryMethods).sort(), ["GET", "POST"]);
   assert.deepEqual(Array.from(pipeline.retryStatuses).sort(), [502, 503]);
 });
+
+test("resolveToriiClientConfig rejects fractional retry integers", () => {
+  assert.throws(
+    () =>
+      resolveToriiClientConfig({
+        config: { toriiClient: { maxRetries: 1.5 } },
+      }),
+    /maxRetries/,
+  );
+});

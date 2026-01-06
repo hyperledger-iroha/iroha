@@ -29,6 +29,10 @@ const DEFAULT_TX_STATUS_TIMEOUT_MS = 30_000;
 const DEFAULT_ISO_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_ISO_POLL_ATTEMPTS = 12;
 const MIN_ISO_POLL_INTERVAL_MS = 10;
+const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
+const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
+const MAX_NUMERIC_SCALE = 28;
+const MAX_NUMERIC_BITS = 512;
 const DA_FETCH_ARTIFACT_PREFIX = "artifacts/da/fetch_";
 const DA_PROVE_ARTIFACT_PREFIX = "artifacts/da/prove_availability_";
 const TX_STATUS_POLL_OPTION_KEYS = new Set([
@@ -4742,14 +4746,11 @@ export class ToriiClient {
    * @returns {Promise<any>}
    */
   async getBlock(height, options = {}) {
-    const normalized = Number(height);
-    if (!Number.isFinite(normalized) || normalized < 0) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_NUMERIC,
-        "height must be a non-negative number",
-        "getBlock.height",
-      );
-    }
+    const normalized = ToriiClient._normalizeUnsignedInteger(
+      height,
+      "getBlock.height",
+      { allowZero: true },
+    );
     const { signal } = normalizeSignalOnlyOption(options, "getBlock");
     const response = await this._request("GET", `/v1/blocks/${normalized}`, {
       signal,
@@ -7843,11 +7844,11 @@ export class ToriiClient {
     } else if (value instanceof ArrayBuffer) {
       buffer = Buffer.from(value);
     } else if (Array.isArray(value)) {
-      buffer = Buffer.from(value);
+      buffer = normalizeByteArray(value, path);
     } else {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
-        `${path} must be a Buffer, byte array, ArrayBuffer view, or hex string`,
+        `${path} must be a Buffer, byte array, ArrayBuffer view, ArrayBuffer, or hex string`,
         path,
       );
     }
@@ -8916,27 +8917,88 @@ export class ToriiClient {
     if (value === undefined || value === null) {
       return 0;
     }
-    const offset = Number(value);
-    if (!Number.isFinite(offset) || offset < 0) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_NUMERIC,
-        "offset must be a non-negative number",
-        "offset",
-      );
-    }
-    return Math.floor(offset);
+    return ToriiClient._normalizeUnsignedInteger(value, "offset", { allowZero: true });
   }
 
   static _normalizeUnsignedInteger(value, name, options = {}) {
     const allowZero = Boolean(options.allowZero);
     const min = options.min;
     const max = options.max;
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric) || numeric < 0 || (!allowZero && numeric === 0)) {
+    let numeric;
+    if (typeof value === "number") {
+      if (!Number.isFinite(value) || !Number.isInteger(value)) {
+        const qualifier = allowZero ? "non-negative integer" : "positive integer";
+        throw createValidationError(
+          ValidationErrorCode.INVALID_NUMERIC,
+          `${name} must be a ${qualifier}`,
+          name,
+        );
+      }
+      if (value < 0 || (!allowZero && value === 0)) {
+        const qualifier = allowZero ? "non-negative integer" : "positive integer";
+        throw createValidationError(
+          ValidationErrorCode.INVALID_NUMERIC,
+          `${name} must be a ${qualifier}`,
+          name,
+        );
+      }
+      if (!Number.isSafeInteger(value)) {
+        throw createValidationError(
+          ValidationErrorCode.VALUE_OUT_OF_RANGE,
+          `${name} must be at most ${MAX_SAFE_INTEGER}`,
+          name,
+        );
+      }
+      numeric = value;
+    } else if (typeof value === "bigint") {
+      if (value < 0n || (!allowZero && value === 0n)) {
+        const qualifier = allowZero ? "non-negative integer" : "positive integer";
+        throw createValidationError(
+          ValidationErrorCode.INVALID_NUMERIC,
+          `${name} must be a ${qualifier}`,
+          name,
+        );
+      }
+      if (value > MAX_SAFE_INTEGER_BIGINT) {
+        throw createValidationError(
+          ValidationErrorCode.VALUE_OUT_OF_RANGE,
+          `${name} must be at most ${MAX_SAFE_INTEGER}`,
+          name,
+        );
+      }
+      numeric = Number(value);
+    } else if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!/^[0-9]+$/.test(trimmed)) {
+        const qualifier = allowZero ? "non-negative integer" : "positive integer";
+        throw createValidationError(
+          ValidationErrorCode.INVALID_NUMERIC,
+          `${name} must be a ${qualifier}`,
+          name,
+        );
+      }
+      const bigint = BigInt(trimmed);
+      if (bigint < 0n || (!allowZero && bigint === 0n)) {
+        const qualifier = allowZero ? "non-negative integer" : "positive integer";
+        throw createValidationError(
+          ValidationErrorCode.INVALID_NUMERIC,
+          `${name} must be a ${qualifier}`,
+          name,
+        );
+      }
+      if (bigint > MAX_SAFE_INTEGER_BIGINT) {
+        throw createValidationError(
+          ValidationErrorCode.VALUE_OUT_OF_RANGE,
+          `${name} must be at most ${MAX_SAFE_INTEGER}`,
+          name,
+        );
+      }
+      numeric = Number(bigint);
+    } else {
       const qualifier = allowZero ? "non-negative" : "positive";
       throw createValidationError(
         ValidationErrorCode.INVALID_NUMERIC,
-        `${name} must be a ${qualifier} number`,
+        `${name} must be a ${qualifier} integer`,
         name,
       );
     }
@@ -12842,27 +12904,23 @@ function parseIntegerArray(value, context) {
     throw new TypeError(`${context} must be an array`);
   }
   return value.map((entry, index) => {
-    const numeric = Number(entry);
-    if (!Number.isFinite(numeric)) {
-      throw new TypeError(`${context}[${index}] must be numeric`);
-    }
-    const normalized = Math.trunc(numeric);
-    if (normalized < 0) {
+    const numeric = coerceIntegerLike(entry, `${context}[${index}]`);
+    if (numeric < 0) {
       throw new RangeError(`${context}[${index}] must be non-negative`);
     }
-    return normalized;
+    return numeric;
   });
 }
 
 function coerceStatusInt(value, context) {
-  if (value === undefined || value === null || value === "") {
+  if (value === undefined || value === null) {
     return 0;
   }
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    throw new TypeError(`${context} must be numeric`);
+  const numeric = coerceIntegerLike(value, context);
+  if (numeric < 0) {
+    throw new RangeError(`${context} must be non-negative`);
   }
-  return Math.trunc(numeric);
+  return numeric;
 }
 
 function coerceNestedInt(mapping, key, context) {
@@ -12870,14 +12928,14 @@ function coerceNestedInt(mapping, key, context) {
     throw new TypeError(`${context} must be an object`);
   }
   const value = mapping[key];
-  if (value === undefined || value === null || value === "") {
+  if (value === undefined || value === null) {
     return 0;
   }
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    throw new TypeError(`${context}.${key} must be numeric`);
+  const numeric = coerceIntegerLike(value, `${context}.${key}`);
+  if (numeric < 0) {
+    throw new RangeError(`${context}.${key} must be non-negative`);
   }
-  return Math.trunc(numeric);
+  return numeric;
 }
 
 function ensureRecord(value, context) {
@@ -12901,11 +12959,7 @@ function coerceInteger(value, context) {
   if (value === undefined || value === null || value === "") {
     throw new TypeError(`${context} must be numeric`);
   }
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    throw new TypeError(`${context} must be numeric`);
-  }
-  return Math.trunc(numeric);
+  return coerceIntegerLike(value, context);
 }
 
 function coerceBoolean(value, context) {
@@ -12941,14 +12995,10 @@ function requireBooleanLike(value, context) {
 }
 
 function coerceOptionalInt(value, context) {
-  if (value === undefined || value === null || value === "") {
+  if (value === undefined || value === null) {
     return null;
   }
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    throw new TypeError(`${context} must be numeric when present`);
-  }
-  return Math.trunc(numeric);
+  return coerceIntegerLike(value, context);
 }
 
 function parseStringArray(value, context) {
@@ -12995,10 +13045,7 @@ function optionalNumber(value, context, { allowNegative = false } = {}) {
   if (value === undefined || value === null) {
     return null;
   }
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    throw new TypeError(`${context} must be numeric when present`);
-  }
+  const numeric = coerceIntegerLike(value, context);
   if (!allowNegative && numeric < 0) {
     throw new RangeError(`${context} must be non-negative`);
   }
@@ -13497,18 +13544,24 @@ function toBuffer(value) {
     if (value.length === 0) {
       return Buffer.alloc(0);
     }
-    const bytes = value.map((entry, index) => {
-      const numeric = Number(entry);
-      if (!Number.isInteger(numeric) || numeric < 0 || numeric > 255) {
-        throw new TypeError(
-          `payload array entries must be byte values (0-255); invalid entry at index ${index}`,
-        );
-      }
-      return numeric & 0xff;
-    });
-    return Buffer.from(bytes);
+    return normalizeByteArray(value, "payload");
   }
   throw new TypeError("payload must be a Buffer or ArrayBuffer view");
+}
+
+function normalizeByteArray(value, context) {
+  const bytes = value.map((entry, index) => {
+    const numeric = Number(entry);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 255) {
+      throw createValidationError(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${context}[${index}] must be an integer between 0 and 255`,
+        `${context}[${index}]`,
+      );
+    }
+    return numeric;
+  });
+  return Buffer.from(bytes);
 }
 
 function toXmlBuffer(value, name) {
@@ -14021,7 +14074,8 @@ function normalizeRequiredBase64Payload(value, name) {
       );
     }
     try {
-      return Buffer.from(trimmed, "base64").toString("base64");
+      const decoded = strictDecodeBase64(trimmed);
+      return Buffer.from(decoded).toString("base64");
     } catch (error) {
       throw createValidationError(
         ValidationErrorCode.INVALID_STRING,
@@ -14032,7 +14086,57 @@ function normalizeRequiredBase64Payload(value, name) {
     }
   }
   const buffer = toBuffer(value);
+  if (buffer.length === 0) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be a non-empty base64 string`,
+      name,
+    );
+  }
   return Buffer.from(buffer).toString("base64");
+}
+
+function normalizeBase64Token(value, name) {
+  if (typeof value !== "string") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be a string`,
+      name,
+    );
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be a non-empty base64 string`,
+      name,
+    );
+  }
+  const normalized = tryNormalizeBase64String(trimmed);
+  if (normalized) {
+    return normalized;
+  }
+  const base64UrlCandidate = trimmed.replace(/-/g, "+").replace(/_/g, "/");
+  if (base64UrlCandidate !== trimmed) {
+    const urlNormalized = tryNormalizeBase64String(base64UrlCandidate);
+    if (urlNormalized) {
+      return urlNormalized;
+    }
+  }
+  throw createValidationError(
+    ValidationErrorCode.INVALID_STRING,
+    `${name} must be a valid base64 or base64url string`,
+    name,
+  );
+}
+
+function tryNormalizeBase64String(value) {
+  try {
+    const decoded = strictDecodeBase64(value);
+    return Buffer.from(decoded).toString("base64");
+  } catch {
+    return null;
+  }
 }
 
 function normalizeOptionalHex32(value, name) {
@@ -14059,6 +14163,9 @@ function normalizeHex32String(value, name, options = {}) {
   }
   if (value instanceof ArrayBuffer) {
     return normalizeHex32String(Buffer.from(value).toString("hex"), name, options);
+  }
+  if (Array.isArray(value)) {
+    return normalizeHex32String(normalizeByteArray(value, name).toString("hex"), name, options);
   }
   const normalized = requireNonEmptyString(value, name);
   const hex =
@@ -14090,6 +14197,9 @@ function normalizeHashLike32(value, name, options = {}) {
   }
   if (value instanceof ArrayBuffer) {
     return normalizeHex32String(Buffer.from(value).toString("hex"), name, options);
+  }
+  if (Array.isArray(value)) {
+    return normalizeHex32String(normalizeByteArray(value, name).toString("hex"), name, options);
   }
   const normalized = requireNonEmptyString(value, name);
   const trimmed = normalized.trim();
@@ -14169,49 +14279,84 @@ function computeHashLiteralCrc(tag, body) {
   return (crc & 0xffff).toString(16).toUpperCase().padStart(4, "0");
 }
 
-function normalizeNumericString(value, name) {
-  if (typeof value === "bigint") {
-    if (value < 0n) {
+function normalizeNumericLiteral(value, name, { allowNegative = false } = {}) {
+  let raw;
+  if (typeof value === "string") {
+    raw = value.trim();
+  } else if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new TypeError(`${name} must be a finite number`);
+    }
+    raw = value.toString();
+  } else if (typeof value === "bigint") {
+    raw = value.toString();
+  } else {
+    throw new TypeError(`${name} must be a string, number, or bigint`);
+  }
+
+  if (!raw) {
+    throw new TypeError(`${name} must be a valid Numeric literal`);
+  }
+
+  let digits = raw;
+  const sign = digits[0];
+  if (sign === "-" || sign === "+") {
+    if (sign === "-" && !allowNegative) {
       throw new TypeError(`${name} must be non-negative`);
     }
-    return value.toString(10);
+    digits = digits.slice(1);
   }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
-      throw new TypeError(`${name} must be a non-negative integer`);
+  if (!digits) {
+    throw new TypeError(`${name} must be a valid Numeric literal`);
+  }
+
+  let seenDot = false;
+  let scale = 0;
+  let mantissa = "";
+  for (const ch of digits) {
+    if (ch === ".") {
+      if (seenDot) {
+        throw new TypeError(`${name} must be a valid Numeric literal`);
+      }
+      seenDot = true;
+      continue;
     }
-    return value.toString(10);
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!/^(?:0|[1-9]\d*)$/.test(trimmed)) {
-      throw new TypeError(`${name} must be a non-negative integer string`);
+    if (ch < "0" || ch > "9") {
+      throw new TypeError(`${name} must be a valid Numeric literal`);
     }
-    return trimmed;
+    mantissa += ch;
+    if (seenDot) {
+      scale += 1;
+    }
   }
-  throw new TypeError(`${name} must be a string, number, or bigint`);
+  if (!mantissa) {
+    throw new TypeError(`${name} must be a valid Numeric literal`);
+  }
+  if (scale > MAX_NUMERIC_SCALE) {
+    throw new TypeError(`${name} scale exceeds ${MAX_NUMERIC_SCALE} decimal places`);
+  }
+
+  let mantissaValue = BigInt(mantissa);
+  if (sign === "-") {
+    mantissaValue = -mantissaValue;
+  }
+  const absValue = mantissaValue < 0n ? -mantissaValue : mantissaValue;
+  if (absValue !== 0n && absValue.toString(2).length > MAX_NUMERIC_BITS) {
+    throw new TypeError(`${name} mantissa exceeds ${MAX_NUMERIC_BITS} bits`);
+  }
+
+  return raw;
+}
+
+function normalizeNumericString(value, name) {
+  return normalizeNumericLiteral(value, name, { allowNegative: false });
 }
 
 function normalizeAmountLike(value, name) {
   if (value === undefined || value === null) {
     throw new TypeError(`${name} is required`);
   }
-  if (typeof value === "string") {
-    return requireNonEmptyString(value, name);
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value) || value < 0) {
-      throw new TypeError(`${name} must be a non-negative finite number`);
-    }
-    return value.toString();
-  }
-  if (typeof value === "bigint") {
-    if (value < 0) {
-      throw new TypeError(`${name} must be non-negative`);
-    }
-    return value.toString();
-  }
-  throw new TypeError(`${name} must be a string, number, or bigint`);
+  return normalizeNumericLiteral(value, name, { allowNegative: false });
 }
 
 function normalizeOptionalHexString(value, name) {
@@ -14863,10 +15008,10 @@ function normalizeGovernanceZkBallotV1Payload(input) {
       "governanceSubmitZkBallotV1.owner",
     );
   }
-  if (record.salt_hex ?? record.saltHex) {
-    payload.salt_hex = normalizeHex32String(
-      record.salt_hex ?? record.saltHex,
-      "governanceSubmitZkBallotV1.saltHex",
+  if (record.nullifier_hex ?? record.nullifierHex) {
+    payload.nullifier_hex = normalizeHex32String(
+      record.nullifier_hex ?? record.nullifierHex,
+      "governanceSubmitZkBallotV1.nullifierHex",
     );
   }
   return payload;
@@ -16665,14 +16810,21 @@ function extractManifestBytesForProof(bundle, context) {
   if (direct) {
     return direct;
   }
-  const manifestB64 =
-    typeof bundle.manifest_b64 === "string" && bundle.manifest_b64.trim()
-      ? bundle.manifest_b64
-      : typeof bundle.manifestB64 === "string" && bundle.manifestB64.trim()
-      ? bundle.manifestB64
-      : null;
+  let manifestB64 = null;
+  let manifestField = null;
+  if (typeof bundle.manifest_b64 === "string" && bundle.manifest_b64.trim()) {
+    manifestB64 = bundle.manifest_b64;
+    manifestField = "manifest_b64";
+  } else if (typeof bundle.manifestB64 === "string" && bundle.manifestB64.trim()) {
+    manifestB64 = bundle.manifestB64;
+    manifestField = "manifestB64";
+  }
   if (manifestB64) {
-    return Buffer.from(manifestB64, "base64");
+    const normalized = normalizeRequiredBase64Payload(
+      manifestB64,
+      `${context}.${manifestField}`,
+    );
+    return Buffer.from(normalized, "base64");
   }
   return null;
 }
@@ -16767,7 +16919,7 @@ function normalizeDaGatewayProviders(value, context) {
       record.baseUrl,
       `${context}[${index}].baseUrl`,
     );
-    const streamTokenB64 = requireNonEmptyString(
+    const streamTokenB64 = normalizeBase64Token(
       record.streamTokenB64 ??
         record.stream_token_b64 ??
         record.streamToken ??
@@ -16852,11 +17004,19 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
   })();
   const pdpCommitment = record.pdp_commitment ?? null;
   let pdpCommitmentBytes = null;
+  let pdpCommitmentB64 = null;
   if (pdpCommitment !== null && pdpCommitment !== undefined) {
     if (typeof pdpCommitment !== "string") {
       throw new TypeError(`${context}.pdp_commitment must be a base64 string when present`);
     }
-    pdpCommitmentBytes = Buffer.from(pdpCommitment, "base64");
+    const trimmed = pdpCommitment.trim();
+    try {
+      const decoded = strictDecodeBase64(trimmed);
+      pdpCommitmentBytes = Buffer.from(decoded);
+      pdpCommitmentB64 = Buffer.from(decoded).toString("base64");
+    } catch {
+      throw new TypeError(`${context}.pdp_commitment must be a valid base64 string`);
+    }
   }
   return {
     client_blob_id_hex: bufferToUpperHex(clientBlobId),
@@ -16880,7 +17040,7 @@ function normalizeDaIngestReceipt(payload, context = "da ingest receipt") {
     storage_ticket_hex: bufferToUpperHex(storageTicket),
     storage_ticket_bytes: storageTicket,
     stripe_layout: stripeLayout,
-    pdp_commitment_b64: pdpCommitment ?? null,
+    pdp_commitment_b64: pdpCommitmentB64 ?? (pdpCommitment ?? null),
     pdp_commitment_bytes: pdpCommitmentBytes,
     queued_at_unix: ToriiClient._normalizeUnsignedInteger(
       record.queued_at_unix,
@@ -18223,14 +18383,23 @@ function assignVerifyingKeyOptionalFields(record, payload, context) {
       `${context}.vk_bytes`,
     );
     payload.vk_bytes = base64;
-    payload.vk_len =
-      lenValue !== undefined && lenValue !== null
-        ? ToriiClient._normalizeUnsignedInteger(
-            lenValue,
-            `${context}.vkLen`,
-            { allowZero: false },
-          )
-        : length;
+    if (lenValue !== undefined && lenValue !== null) {
+      const normalizedLen = ToriiClient._normalizeUnsignedInteger(
+        lenValue,
+        `${context}.vkLen`,
+        { allowZero: false },
+      );
+      if (normalizedLen !== length) {
+        throw createValidationError(
+          ValidationErrorCode.INVALID_OBJECT,
+          `${context}.vk_len must match vk_bytes length (${length})`,
+          `${context}.vkLen`,
+        );
+      }
+      payload.vk_len = normalizedLen;
+    } else {
+      payload.vk_len = length;
+    }
   } else if (lenValue !== undefined && lenValue !== null) {
     payload.vk_len = ToriiClient._normalizeUnsignedInteger(
       lenValue,
@@ -18690,7 +18859,12 @@ function normalizeTriggerUpsertPayload(input) {
         "registerTrigger.action must be a non-empty string when provided as base64",
       );
     }
-    payload.action = trimmed;
+    try {
+      const decoded = strictDecodeBase64(trimmed);
+      payload.action = Buffer.from(decoded).toString("base64");
+    } catch {
+      throw new TypeError("registerTrigger.action must be a valid base64 string");
+    }
   } else if (!Array.isArray(actionValue) && typeof actionValue === "object") {
     payload.action = cloneJsonValue(actionValue, "registerTrigger.action");
   } else {

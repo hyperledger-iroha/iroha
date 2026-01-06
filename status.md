@@ -1,6 +1,13 @@
 # Status
 
 ## Latest Updates
+- Tests: `cargo test -p iroha_core sumeragi:: -- --nocapture` (failed: 117 tests, mainly `sumeragi::evidence`, `sumeragi::main_loop`, and `sumeragi::status`; warning about unused `state_view` in `crates/iroha_core/src/queue.rs:1868`).
+- Core: fix `extract_vote_public_inputs` error construction, add invalid-payload regression test, and resolve mutable borrow in `ivm_corehost_halo2_enabled_vendor_ok.rs`.
+- Tests: `cargo test -p iroha_core --lib extract_vote_public_inputs_rejects_invalid_payload -- --nocapture` (pass; warning about unused `state_view` in `crates/iroha_core/src/queue.rs:1868`).
+- Sumeragi/RBC: allow READY emission once f+1 READY quorum is observed even without all chunks to unblock DA stalls; add unit coverage.
+- Integration tests: bound localnet smoke status polling with per-peer timeouts and improved error reporting to avoid indefinite hangs.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (failed: type annotations needed at `crates/iroha_core/src/smartcontracts/isi/world.rs:361`; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
 - Integration tests: refresh `last_non_empty_height` after the seed mint in `fail_if_dont_satisfy_spec` so later syncs wait for the correct non-empty block.
 - Tests: not run (not requested).
 - Sumeragi tests: make pacemaker NEW_VIEW tests resilient when committed QC is missing by falling back to a commit-phase sample QC.
@@ -27,6 +34,108 @@
 - Tests: not run (not requested).
 - Sumeragi/block sync: allow permissioned next-height block sync updates without QC/cert to use local roster fallback, avoiding localnet stalls; add regression coverage.
 - Tests: not run (not requested).
+- Core: enforce ZK voting proof attachments to carry exactly one VK, validate halo2/ipa envelope metadata (circuit_id/vk_hash), and apply per-VK max_proof_bytes limits; adjust vendor ballot test circuit_id.
+- Core: length-prefix ballot nullifier derivation inputs (domain tag, chain id, election id) to avoid delimiter collisions; added coverage.
+- Governance docs: clarify BallotProof `root_hint`/`nullifier` use Norito byte arrays (not hex) across portal/source governance API examples.
+- JS SDK: use `nullifier_hex` for ZK ballot v1 payloads in Torii client, typings, and tests; refresh dist output.
+- Tests: not run (not requested).
+- JS SDK: prioritize safe-integer validation over max-bound checks for oversized multisig BigInt inputs.
+- Tests: `npm run test:js` (from `javascript/iroha_js`; native binding disabled; 249 skipped).
+- Tests: `npm run test:js` (from `javascript/iroha_js`; 1 failure: `test/multisigSpecBuilder.test.js` expects a safe-integer error but got "exceeds the supported maximum (255)"; native-dependent tests skipped).
+- JS SDK: reject invalid discriminant values in SoraFS optional lane decoding; add regression coverage.
+- Tests: `node --test test/sorafsReplicationOrder.test.js` (from `javascript/iroha_js`).
+- JS SDK: accept array-like AXT descriptor inputs (dsids/touches/manifests) to match typings; add regression coverage.
+- Tests: `node --test test/axt_descriptor_builder.test.js` (from `javascript/iroha_js`; native binding missing; 1 skipped).
+- JS SDK: parse JSON string envelopes in Nexus batch verification so duplicate detection works for string inputs; add regression coverage.
+- Tests: `node --test test/nexus.test.js` (from `javascript/iroha_js`; skipped, native binding missing).
+- JS SDK: accept byte-array inputs for fixed-length instruction fields (e.g., election roots/nullifiers) with byte-range validation; add regression coverage.
+- Tests: `node --test test/instructionBuilders.test.js` (from `javascript/iroha_js`; skipped, native binding missing).
+- JS SDK: accept byte-array hash inputs for Torii governance deploy-contract requests and validate byte range; add regression coverage.
+- Tests: `node --test test/toriiClient.test.js` (from `javascript/iroha_js`).
+- JS SDK: validate Connect retry seed inputs (ArrayBuffer/view/array-like) to avoid silent wrapping; add regression coverage.
+- Tests: `node --test test/connectRetryPolicy.test.js` (from `javascript/iroha_js`).
+- JS SDK: validate canonical auth private key byte arrays to avoid silent wrapping; add regression coverage.
+- Tests: `node --test test/toriiCanonicalAuth.test.js` (from `javascript/iroha_js`).
+- Java/Android SDK: reject negative epoch/timestamp values in SoraFS manifest/replication builders and pin policies; add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: accept ArrayBuffer/ArrayBufferView relay envelope inputs in Nexus helpers to match typings; add regression coverage.
+- Tests: `node --test test/nexus.test.js` (from `javascript/iroha_js`; skipped, native binding missing).
+- Java/Android SDK: validate base64 payloads for SoraFS capacity/replication/manifest builders and offline allowance attestation reports; add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: accept array-like DA manifest/payload inputs with byte validation to match BinaryLike and avoid silent truncation; add regression coverage.
+- Tests: `node --test test/dataAvailability.test.js` (from `javascript/iroha_js`).
+- JS SDK: accept array-like Connect journal payloads (ciphertext/payloadHash/decoding) with byte-range validation to match typings; add regression coverage.
+- Tests: `node --test test/connectJournalRecord.test.js` (from `javascript/iroha_js`).
+- JS SDK: accept array-like session ids for Connect queue journal/diagnostics and reject empty/non-byte inputs to avoid colliding session roots; add regression coverage.
+- Tests: `node --test test/connectQueueJournal.test.js`; `node --test test/connectQueueDiagnostics.test.js` (from `javascript/iroha_js`).
+- Java/Android SDK: validate Kaigi proof base64 inputs and relay manifest HPKE keys in CreateKaigi; add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: validate byte arrays for Nexus relay envelope helpers to avoid silent wrapping of out-of-range values; add regression coverage.
+- Tests: `node --test test/nexus.test.js` (from `javascript/iroha_js`; skipped, native binding missing).
+- JS SDK: align canonical query-string encoding with form-urlencoded rules so special characters are percent-escaped and sorting matches server; add regression coverage.
+- Tests: `node --test test/canonicalRequest.test.js` (from `javascript/iroha_js`).
+- Java/Android SDK: reject out-of-range integer values in client config manifests and add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: enforce 32-byte hex for SoraFS gateway manifest/provider ids (request + summary), reject out-of-range chunk indices, and refresh Android test fixtures.
+- Tests: not run (not requested).
+- JS SDK: reject empty byte-array/base64 inputs for instruction builder payloads (proofs, ciphertexts, hpke keys) to avoid silent zero-length fields; add regression coverage.
+- Tests: `node --test test/instructionBuilders.test.js` (from `javascript/iroha_js`; skipped, native binding missing).
+- Core: derive governance ZK ballot nullifiers from the proof commitment (domain tag + chain id + election id), enforce commit/root binding, and align Torii/CLI hints + docs/tests.
+- Tests: not run (not requested).
+- JS SDK: validate connect session byte arrays to reject non-byte entries and avoid silent truncation; add regression coverage.
+- Tests: `node --test test/connectSession.test.js` (from `javascript/iroha_js`).
+- Java/Android SDK: validate SoraFS gateway request inputs (hex/base64 + option bounds) and add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: enforce safe integer parsing for Torii status/time/connect counters, retry config knobs, SoraNet puzzle timeouts, offline envelope/counter timestamps, AXT dsids, and Connect queue retention; update JS docs and add regression coverage.
+- Tests: `node --test test/toriiClient.test.js test/retryPolicy.test.js test/connectQueueJournal.test.js test/offlineCounterJournal.test.js test/offlineEnvelope.test.js test/axt.test.js test/soranetPuzzleClient.test.js` (from `javascript/iroha_js`; native binding missing; 7 skipped).
+- JS SDK: reject empty smart-contract bytecode in register instruction builders; add regression coverage.
+- Tests: `node --test test/instructionBuilders.test.js` (from `javascript/iroha_js`; skipped, native binding missing).
+- Java/Android SDK: reject fractional numeric fields when parsing SoraFS gateway summaries and client config manifests; add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: reject empty byte payloads when base64 fields are required (e.g., deployContract code_b64) and add regression coverage.
+- Tests: `node --test test/toriiClient.test.js` (from `javascript/iroha_js`).
+- JS SDK: reject mismatched verifying key lengths when vk_len contradicts inline vk_bytes; add regression coverage.
+- Tests: `node --test test/toriiClient.test.js` (from `javascript/iroha_js`).
+- Java/Android SDK: reject fractional counter journal values on load and add regression coverage.
+- Tests: not run (not requested).
+- Swift SDK: reject invalid proof event hex fields (proof hash, commitment, call/envelope hashes) and add regression coverage.
+- Tests: `swift test --filter ToriiClientTests.testStreamProofEventsRejectsInvalidProofHashHex`; `swift test --filter ToriiClientTests.testStreamProofEventsRejectsInvalidCommitmentHex` (from `IrohaSwift`).
+- JS SDK: enforce Numeric literal validation (scale/bit bounds) for instruction builders and Torii amount inputs, add safe-integer guards for u128 JSON and multisig weights, and harden SoraFS gateway options (manifest/base64 + integer-only knobs); add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: validate SoraFS gateway streamTokenB64 inputs (base64/base64url) for Torii provider normalization and native gateway wrappers; add regression coverage.
+- Tests: `node --test test/toriiClient.test.js`; `node --test test/sorafsGatewayFetch.wrapper.test.js` (from `javascript/iroha_js`).
+- Swift SDK: validate proof attachment verifying key fields (non-empty, no separators, non-empty inline bytes) and preflight commitment/envelope hash lengths; add regression coverage.
+- Tests: `swift test --filter ProofAttachmentNoritoTests` (from `IrohaSwift`).
+- Java/Android SDK: reject fractional numeric fields when parsing offline verdict metadata, audit logs, Android provisioned proofs, and Safety Detect OAuth expiry; add regression coverage.
+- Tests: not run (not requested).
+- Swift SDK: enforce single-key SSE event payloads for verifying key, trigger, and proof events; add regression coverage.
+- Tests: `swift test --filter ToriiClientTests.testStreamVerifyingKeyEventsRejectsMultiplePayloadKinds`; `swift test --filter ToriiClientTests.testStreamTriggerEventsRejectsMultiplePayloadKinds`; `swift test --filter ToriiClientTests.testStreamProofEventsRejectsMultiplePayloadKinds` (from `IrohaSwift`).
+- Java/Android SDK: ignore cancellation errors when SSE streams are closed before the response arrives, unwrap CompletionException failures, and reject fractional numeric fields in UAID/offline JSON parsers; add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: tighten ISO bridge positive-integer parsing and validate DA proof manifest base64 before decoding; add regression coverage.
+- Tests: `node --test test/isoBridge.test.js`; `node --test test/toriiClient.test.js` (from `javascript/iroha_js`).
+- Swift SDK: clamp Connect queue retention interval to avoid negative/overflow conversions and add regression coverage.
+- Tests: `swift test --filter ConnectQueueJournalTests` (from `IrohaSwift`).
+- Swift SDK: make Connect codec JSON decoding strict (reject unknown keys and non-string values) and add regression coverage.
+- Tests: `swift test --filter ConnectFramesTests` (from `IrohaSwift`).
+- Swift SDK: validate DA ingest receipt digest tuples (single entry, 32-byte length) and add regression coverage.
+- Tests: `swift test --filter ToriiDaIngestTests` (from `IrohaSwift`).
+- JS SDK: tighten Norito base64 heuristics, validate trigger-action and DA pdp_commitment base64, and enforce integer getBlock heights; add regression coverage.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Swift SDK: enforce single-key governance proposal kinds and require DA rent quote micro amounts to be unsigned integers; add regression coverage.
+- Tests: `swift test --filter ToriiDaIngestTests` (from `IrohaSwift`); `swift test --filter ToriiGovernanceDecodingTests` (from `IrohaSwift`).
+- Swift SDK: reject multi-kind Connect envelope/control payloads, and enforce strict sequence parsing in the fallback native bridge; add regression coverage.
+- Tests: `swift test --filter ConnectEnvelopeTests` (from `IrohaSwift`).
+- JS SDK: tighten base64 validation for offline envelopes, Torii payload normalization, and Nexus helpers; add regression coverage.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Swift SDK: tighten JSON numeric parsing for Connect envelopes/balance snapshots, compute simulator limits, governance lock/tally amounts, prover report count fallback, and account address bridge fields; add regression coverage.
+- Tests: `swift test --filter ConnectEnvelopeTests` (from `IrohaSwift`); `swift test --filter ConnectEventsTests` (from `IrohaSwift`); `swift test --filter ComputeSimulatorTests` (from `IrohaSwift`); `swift test --filter AccountAddressTests` (from `IrohaSwift`); `swift test --filter ToriiGovernanceDecodingTests` (from `IrohaSwift`); `swift test --filter ToriiClientTests.testCountProverReportsRejectsFractionalCount` (from `IrohaSwift`).
+- JS SDK: enforce strict base64url decoding for Connect session input/queue journals/diagnostics and add regression coverage.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Swift SDK: harden Torii numeric parsing to reject fractional values and out-of-range ints across Connect status, DA manifests/sampling plans, and verdict metadata; add regression coverage.
+- Tests: `swift test --filter ToriiJSONValueTests` (from `IrohaSwift`); `swift test --filter ToriiNumericParsingTests` (from `IrohaSwift`); `swift test --filter OfflineVerdictJournalTests` (from `IrohaSwift`).
+- JS SDK: validate base64 inputs strictly in instruction builders (fixed-length + payload fields) and add regression coverage.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
 - Tests: `cargo test -p iroha_core --lib active_topology_sorts_world_peers_when_commit_topology_empty -- --nocapture` (x10; all passes; periodic build-dir locks; warnings about unused `mut` in `crates/iroha_core/src/smartcontracts/isi/world.rs:9010` and `crates/iroha_core/src/smartcontracts/isi/world.rs:9071`).
 - Sumeragi: canonicalize world-peers ordering when commit topology is empty to keep leader selection deterministic across nodes; add regression coverage for initial roster sorting.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
@@ -49,6 +158,14 @@
 - Swift SDK: guard Torii JSON numeric normalization against Int overflow and reuse the safer path for allowance/proof parsing; add regression coverage.
 - Tests: `swift test --filter ToriiJSONValueTests` (from `IrohaSwift`).
 - Java/Android SDK: avoid duplicate WebSocket reconnection scheduling when both error and close fire; add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: ignore stale WebSocket events from prior sessions to prevent reconnects after a new session opens; add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: apply WebSocket connect timeout options to OkHttp connectors and add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: stream SSE responses without buffering full bodies by adding streaming transport support (OkHttp/JDK/URLConnection) and add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: ignore stale SSE subscription events and avoid duplicate reconnect scheduling; add regression coverage.
 - Tests: not run (not requested).
 - Swift SDK: restrict canonical query encoding to ASCII unreserved characters so non-ASCII is percent-escaped; add regression coverage.
 - Tests: `swift test --filter CanonicalRequestTests` (from `IrohaSwift`).

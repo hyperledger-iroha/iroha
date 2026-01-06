@@ -121,22 +121,25 @@ fn zk_ballot_rejected_on_plain_referendum() {
         .map_or_else(|| "rid-plain".to_string(), |(k, _)| k.clone());
     // Valid proof bundle reused from TinyAdd helper
     let proof_b64 = bundle.proof_b64.clone();
-    let public_inputs = norito::json::object([
-        (
-            "nullifier_hex",
-            norito::json::to_value(&"33".repeat(32)).expect("serialize nullifier"),
-        ),
-        (
-            "owner",
-            norito::json::to_value(&ALICE_ID.to_string()).expect("serialize owner"),
-        ),
-        (
-            "salt",
-            norito::json::to_value(&"44".repeat(32)).expect("serialize salt"),
-        ),
-    ])
-    .expect("serialize public inputs");
-    let public_inputs = norito::json::to_json(&public_inputs).expect("serialize public inputs");
+    stx.world.elections.insert(
+        rid.clone(),
+        iroha_core::state::ElectionState {
+            options: 1,
+            eligible_root: [0u8; 32],
+            start_ts: 0,
+            end_ts: 0,
+            finalized: false,
+            tally: vec![0],
+            ballot_nullifiers: std::collections::BTreeSet::default(),
+            ciphertexts: Vec::new(),
+            vk_ballot: Some(bundle.vk_id.clone()),
+            vk_ballot_commitment: None,
+            vk_tally: Some(bundle.vk_id.clone()),
+            vk_tally_commitment: None,
+            domain_tag: "gov:ballot:v1".to_string(),
+        },
+    );
+    let public_inputs = "{}".to_string();
     let instr = CastZkBallot {
         election_id: rid.clone(),
         proof_b64,

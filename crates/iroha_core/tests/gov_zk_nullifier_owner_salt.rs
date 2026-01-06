@@ -1,4 +1,4 @@
-#![doc = "ZK ballot nullifier derivation from (`chain_id`, `election_id`, owner, salt).\nVerifies duplicate detection when owner+salt are reused."]
+#![doc = "ZK ballot nullifier derivation from (`chain_id`, `election_id`, commit).\nVerifies duplicate detection when the same proof is reused."]
 #![cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
 #![cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #![allow(clippy::too_many_lines, clippy::collapsible_match)]
@@ -24,7 +24,7 @@ fn canonical_abi_hex() -> String {
 }
 
 #[test]
-fn zk_ballot_nullifier_owner_salt_duplicate_rejected() {
+fn zk_ballot_nullifier_commit_duplicate_rejected() {
     use core::num::NonZeroU64;
 
     use iroha_data_model::{
@@ -34,7 +34,7 @@ fn zk_ballot_nullifier_owner_salt_duplicate_rejected() {
         prelude::Grant,
     };
     use iroha_executor_data_model::permission::governance::{
-        CanProposeContractDeployment, CanSubmitGovernanceBallot,
+        CanManageParliament, CanProposeContractDeployment, CanSubmitGovernanceBallot,
     };
     // Generate accounts and build a minimal world with governance assets
     let (alice_id, _alice_kp) = iroha_test_samples::gen_account_in("wonderland");
@@ -70,7 +70,8 @@ fn zk_ballot_nullifier_owner_salt_duplicate_rejected() {
     );
     let mut state = State::new_for_testing(world, kura, query_handle);
     // Install Halo2 verifying key defaults for governance
-    let bundle = zk_testkit::tiny_add_bundle();
+    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let bundle_alt = zk_testkit::add2inst_public_bundle(6, 8);
     let mut cfg = state.gov.clone();
     let vk_name = bundle.vk_id.name.clone();
     cfg.vk_ballot = Some(iroha_config::parameters::actual::VerifyingKeyRef {
@@ -120,6 +121,10 @@ fn zk_ballot_nullifier_owner_salt_duplicate_rejected() {
     Grant::account_permission(manage_vk, alice_id.clone())
         .execute(&alice_id, &mut stx)
         .expect("grant manage vk");
+    let manage_parliament: Permission = CanManageParliament.into();
+    Grant::account_permission(manage_parliament, alice_id.clone())
+        .execute(&alice_id, &mut stx)
+        .expect("grant manage parliament");
     iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
         id: bundle.vk_id.clone(),
         record: bundle.vk_record.clone(),
@@ -148,18 +153,26 @@ fn zk_ballot_nullifier_owner_salt_duplicate_rejected() {
         .next()
         .map_or_else(|| "rid-zk".to_string(), |(k, _)| k.clone());
 
-    // Minimal dummy proof: base64 of 1 byte
+    let create = iroha_data_model::isi::zk::CreateElection {
+        election_id: rid.clone(),
+        options: 1,
+        eligible_root: bundle.root_bytes(),
+        start_ts: 0,
+        end_ts: 0,
+        vk_ballot: bundle.vk_id.clone(),
+        vk_tally: bundle.vk_id.clone(),
+        domain_tag: "gov:ballot:v1".to_string(),
+    };
+    create
+        .execute(&alice_id, &mut stx)
+        .expect("create election");
+
     let proof_b64 = bundle.proof_b64.clone();
-    // owner + salt derive the nullifier deterministically
-    // optional hints (ignored for nullifier) retained for coverage.
+    let root_hint = hex::encode(bundle.root_bytes());
     let public = norito::json::object([
         (
             "owner",
             norito::json::to_value(&alice_id.to_string()).expect("serialize owner"),
-        ),
-        (
-            "salt",
-            norito::json::to_value(&"11".repeat(32)).expect("serialize salt"),
         ),
         (
             "amount",
@@ -168,6 +181,10 @@ fn zk_ballot_nullifier_owner_salt_duplicate_rejected() {
         (
             "duration_blocks",
             norito::json::to_value(&50u64).expect("serialize duration"),
+        ),
+        (
+            "root_hint",
+            norito::json::to_value(&root_hint).expect("serialize root_hint"),
         ),
     ])
     .expect("serialize public inputs");
@@ -182,7 +199,7 @@ fn zk_ballot_nullifier_owner_salt_duplicate_rejected() {
         .expect("first ballot ok");
     stx1.apply();
 
-    // Re-submit with the same owner+salt → duplicate nullifier rejection
+    // Re-submit with the same commit → duplicate nullifier rejection
     let instr2 = CastZkBallot {
         election_id: rid.clone(),
         proof_b64: proof_b64.clone(),
@@ -233,21 +250,21 @@ fn zk_ballot_nullifier_owner_salt_duplicate_rejected() {
     assert_eq!(escrow_balance, Numeric::new(75, 0));
     assert_eq!(receiver_balance, Numeric::new(25, 0));
 
-    // Changing salt should allow a second distinct ballot
+    // Changing the proof (commit) allows a second distinct ballot.
     let public2 = norito::json::object([
         (
             "owner",
             norito::json::to_value(&alice_id.to_string()).expect("serialize owner"),
         ),
         (
-            "salt",
-            norito::json::to_value(&"22".repeat(32)).expect("serialize salt"),
+            "root_hint",
+            norito::json::to_value(&root_hint).expect("serialize root_hint"),
         ),
     ])
     .expect("serialize public inputs");
     let instr3 = CastZkBallot {
         election_id: rid.clone(),
-        proof_b64,
+        proof_b64: bundle_alt.proof_b64.clone(),
         public_inputs_json: norito::json::to_json(&public2).unwrap(),
     };
     let mut stx3 = sblock.transaction();

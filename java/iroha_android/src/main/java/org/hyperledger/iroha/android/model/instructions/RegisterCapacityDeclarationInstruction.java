@@ -107,6 +107,23 @@ public static final String ACTION = "RegisterCapacityDeclaration";
     return value;
   }
 
+  private static String requireBase64(final String value, final String fieldName) {
+    final String trimmed = Objects.requireNonNull(value, fieldName).trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException(fieldName + " must not be blank");
+    }
+    final byte[] decoded;
+    try {
+      decoded = java.util.Base64.getDecoder().decode(trimmed);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException(fieldName + " must be base64", ex);
+    }
+    if (decoded.length == 0) {
+      throw new IllegalArgumentException(fieldName + " must decode to non-empty bytes");
+    }
+    return trimmed;
+  }
+
   private static long requireLong(final Map<String, String> arguments, final String key) {
     final String raw = require(arguments, key);
     try {
@@ -180,12 +197,7 @@ public static final String ACTION = "RegisterCapacityDeclaration";
     }
 
     public Builder setDeclarationBase64(final String declarationBase64) {
-      final String normalized =
-          Objects.requireNonNull(declarationBase64, "declarationBase64").trim();
-      if (normalized.isEmpty()) {
-        throw new IllegalArgumentException("declarationBase64 must not be blank");
-      }
-      this.declarationBase64 = normalized;
+      this.declarationBase64 = requireBase64(declarationBase64, "declarationBase64");
       return this;
     }
 

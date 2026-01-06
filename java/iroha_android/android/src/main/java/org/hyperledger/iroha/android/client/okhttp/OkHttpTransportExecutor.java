@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.client.okhttp;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.io.ByteArrayInputStream;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -19,9 +20,12 @@ import okhttp3.Response;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.client.transport.TransportStreamResponse;
+import org.hyperledger.iroha.android.client.transport.StreamingTransportExecutor;
 
 /** OkHttp-backed {@link HttpTransportExecutor} for Android runtimes. */
-public final class OkHttpTransportExecutor implements HttpTransportExecutor {
+public final class OkHttpTransportExecutor
+    implements HttpTransportExecutor, StreamingTransportExecutor {
 
   private final OkHttpClient client;
 
@@ -59,6 +63,52 @@ public final class OkHttpTransportExecutor implements HttpTransportExecutor {
             } catch (final IOException e) {
               future.completeExceptionally(e);
             }
+          }
+        });
+    future.whenComplete(
+        (ignored, throwable) -> {
+          if (future.isCancelled()) {
+            call.cancel();
+          }
+        });
+    return future;
+  }
+
+  @Override
+  public CompletableFuture<TransportStreamResponse> openStream(final TransportRequest request) {
+    Objects.requireNonNull(request, "request");
+    final Request okRequest = buildRequest(request);
+    final Call call = client.newCall(okRequest);
+    final java.time.Duration timeout = request.timeout();
+    if (timeout != null && !timeout.isNegative()) {
+      call.timeout().timeout(Math.max(0L, timeout.toMillis()), TimeUnit.MILLISECONDS);
+    }
+
+    final CompletableFuture<TransportStreamResponse> future = new CompletableFuture<>();
+    call.enqueue(
+        new Callback() {
+          @Override
+          public void onFailure(final Call call, final IOException e) {
+            future.completeExceptionally(e);
+          }
+
+          @Override
+          public void onResponse(final Call call, final Response response) {
+            final java.io.InputStream bodyStream =
+                response.body() == null
+                    ? new ByteArrayInputStream(new byte[0])
+                    : response.body().byteStream();
+            final TransportStreamResponse transportResponse =
+                new TransportStreamResponse(
+                    response.code(),
+                    bodyStream,
+                    response.message(),
+                    response.headers().toMultimap(),
+                    () -> {
+                      response.close();
+                      call.cancel();
+                    });
+            future.complete(transportResponse);
           }
         });
     future.whenComplete(

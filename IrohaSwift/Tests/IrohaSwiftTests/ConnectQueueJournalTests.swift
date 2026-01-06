@@ -159,6 +159,22 @@ final class ConnectQueueJournalTests: XCTestCase {
         XCTAssertEqual(records.first?.expiresAtMs, UInt64.max)
     }
 
+    func testNegativeRetentionIntervalClampsToZero() throws {
+        try requireBlake3()
+        let tmp = makeTemporaryDirectory()
+        let journal = ConnectQueueJournal(sessionID: Data("session-negative-ttl".utf8),
+                                          configuration: .init(rootDirectory: tmp,
+                                                               maxRecordsPerQueue: 8,
+                                                               maxBytesPerQueue: 1 << 20,
+                                                               retentionInterval: -5))
+        try journal.append(direction: .appToWallet,
+                           sequence: 1,
+                           ciphertext: Data([0x01]),
+                           receivedAtMs: 100)
+        let records = try journal.records(direction: .appToWallet, nowMs: 0)
+        XCTAssertTrue(records.isEmpty)
+    }
+
     func testRejectsOversizedQueueFile() throws {
         let tmp = makeTemporaryDirectory()
         let sessionID = Data("oversized-queue".utf8)

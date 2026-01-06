@@ -68,6 +68,7 @@ import {
   normalizeAccountId as exportedNormalizeAccountId,
   normalizeAssetId as exportedNormalizeAssetId,
 } from "../src/index.js";
+import { ValidationErrorCode } from "../src/validationError.js";
 import {
   AccountAddress,
   AccountAddressError,
@@ -289,6 +290,43 @@ test("buildMintAssetInstruction produces Norito-compatible payload", () => {
   assert.deepEqual(decoded, canonicalizeClone(instruction));
 });
 
+test("buildMintAssetInstruction rejects invalid Numeric literals", () => {
+  assert.throws(
+    () => buildMintAssetInstruction({ assetId: ASSET_ID, quantity: "1e-3" }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_NUMERIC);
+      assert.match(String(error?.message), /Numeric literal/i);
+      return true;
+    },
+  );
+  const tooManyDecimals = `0.${"1".repeat(29)}`;
+  assert.throws(
+    () => buildMintAssetInstruction({ assetId: ASSET_ID, quantity: tooManyDecimals }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
+      assert.match(String(error?.message), /scale exceeds/i);
+      return true;
+    },
+  );
+  const tooLarge = 1n << 512n;
+  assert.throws(
+    () => buildMintAssetInstruction({ assetId: ASSET_ID, quantity: tooLarge }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
+      assert.match(String(error?.message), /mantissa exceeds/i);
+      return true;
+    },
+  );
+  assert.throws(
+    () => buildMintAssetInstruction({ assetId: ASSET_ID, quantity: "-1" }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_NUMERIC);
+      assert.match(String(error?.message), /non-negative/i);
+      return true;
+    },
+  );
+});
+
 test("buildBurnAssetInstruction produces Norito-compatible payload", () => {
   const instruction = buildBurnAssetInstruction({ assetId: ASSET_ID, quantity: "7" });
   assert.deepEqual(instruction, {
@@ -356,6 +394,22 @@ test("buildBurnTriggerRepetitionsInstruction validates repetitions", () => {
     () =>
       buildBurnTriggerRepetitionsInstruction({ triggerId: "notify-users", repetitions: 0 }),
     /positive integer/i,
+  );
+});
+
+test("buildMintTriggerRepetitionsInstruction rejects oversized integers", () => {
+  const tooLarge = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+  assert.throws(
+    () =>
+      buildMintTriggerRepetitionsInstruction({
+        triggerId: "notify-users",
+        repetitions: tooLarge,
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
+      assert.match(String(error?.message), /safe integer/i);
+      return true;
+    },
   );
 });
 
@@ -761,6 +815,21 @@ test("buildRegisterSmartContractBytesInstruction encodes bytes deterministically
   assert.deepEqual(decoded, expected);
 });
 
+test("buildRegisterSmartContractBytesInstruction rejects empty code bytes", () => {
+  assert.throws(
+    () =>
+      buildRegisterSmartContractBytesInstruction({
+        codeHash: Buffer.alloc(32, 0x11),
+        code: Buffer.alloc(0),
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_STRING);
+      assert.match(String(error?.message), /non-empty base64/i);
+      return true;
+    },
+  );
+});
+
 test("buildDeactivateContractInstanceInstruction normalizes reason text", () => {
   const instruction = buildDeactivateContractInstanceInstruction({
     namespace: "apps",
@@ -859,6 +928,22 @@ test("buildCastZkBallotInstruction encodes proof and JSON inputs", () => {
   assert.deepEqual(instruction, expected);
   const decoded = encodeAndDecode(instruction);
   assert.deepEqual(decoded, expected);
+});
+
+test("buildCastZkBallotInstruction rejects empty proof bytes", () => {
+  assert.throws(
+    () =>
+      buildCastZkBallotInstruction({
+        electionId: "ref-1",
+        proof: Buffer.alloc(0),
+        publicInputs: { tally: "aye" },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_STRING);
+      assert.match(String(error?.message), /non-empty base64/i);
+      return true;
+    },
+  );
 });
 
 test("buildCastPlainBallotInstruction maps direction labels", () => {
@@ -1060,6 +1145,29 @@ test("buildShieldInstruction encodes encrypted payload fields", () => {
   assert.equal(payload.enc_payload.ciphertext, Buffer.from("ciphertext").toString("base64"));
 });
 
+test("buildShieldInstruction rejects non-safe JSON numeric amounts", () => {
+  assert.throws(
+    () =>
+      buildShieldInstruction({
+        assetDefinitionId: "rose#wonderland",
+        fromAccountId: ACCOUNT_ID_INPUT,
+        amount: Number.MAX_SAFE_INTEGER + 1,
+        noteCommitment: Buffer.alloc(32, 0x01),
+        encryptedPayload: {
+          version: 1,
+          ephemeralPublicKey: Buffer.alloc(32, 0x02),
+          nonce: Buffer.alloc(24, 0x03),
+          ciphertext: Buffer.from("ciphertext"),
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
+      assert.match(String(error?.message), /between 0 and|deterministic/i);
+      return true;
+    },
+  );
+});
+
 test("buildZkTransferInstruction normalizes proof attachments", () => {
   const instruction = buildZkTransferInstruction({
     assetDefinitionId: "rose#wonderland",
@@ -1112,6 +1220,43 @@ test("buildCreateElectionInstruction normalizes verifying keys", () => {
   assert.equal(payload.options, 3);
 });
 
+test("buildCreateElectionInstruction accepts byte-array eligibleRoot", () => {
+  const instruction = buildCreateElectionInstruction({
+    electionId: "election-2",
+    options: 2,
+    eligibleRoot: Array.from(Buffer.alloc(32, 0x44)),
+    startTs: 100,
+    endTs: 200,
+    ballotVerifyingKey: "halo2/ipa:vk_ballot",
+    tallyVerifyingKey: "halo2/ipa:vk_tally",
+    domainTag: "zk",
+  });
+  const payload = encodeAndDecode(instruction).zk.CreateElection;
+  assert.deepEqual(payload.eligible_root, toByteArray(Buffer.alloc(32, 0x44)));
+});
+
+test("buildCreateElectionInstruction rejects unsafe timestamps", () => {
+  const tooLarge = (BigInt(Number.MAX_SAFE_INTEGER) + 1n).toString(10);
+  assert.throws(
+    () =>
+      buildCreateElectionInstruction({
+        electionId: "election-unsafe",
+        options: 1,
+        eligibleRoot: Buffer.alloc(32, 0x09),
+        startTs: tooLarge,
+        endTs: 100,
+        ballotVerifyingKey: "halo2/ipa:vk_ballot",
+        tallyVerifyingKey: "halo2/ipa:vk_tally",
+        domainTag: "zk",
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
+      assert.match(String(error?.message), /safe integer/i);
+      return true;
+    },
+  );
+});
+
 test("buildSubmitBallotInstruction encodes ciphertext and proof", () => {
   const instruction = buildSubmitBallotInstruction({
     electionId: "ref-1",
@@ -1127,6 +1272,48 @@ test("buildSubmitBallotInstruction encodes ciphertext and proof", () => {
   const ciphertext = Buffer.from(payload.ciphertext);
   assert.equal(ciphertext.toString("base64"), Buffer.from("encrypted").toString("base64"));
   assert.equal(payload.ballot_proof.backend, "halo2/ipa");
+});
+
+test("buildSubmitBallotInstruction rejects non-byte nullifier arrays", () => {
+  assert.throws(
+    () =>
+      buildSubmitBallotInstruction({
+        electionId: "ref-1",
+        ciphertext: Buffer.from("encrypted"),
+        ballotProof: {
+          backend: "halo2/ipa",
+          proof: Buffer.from("proof"),
+          verifyingKeyRef: "halo2/ipa:vk_ballot",
+        },
+        nullifier: [256],
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
+      assert.match(String(error?.message), /nullifier\[0\]/i);
+      return true;
+    },
+  );
+});
+
+test("buildSubmitBallotInstruction rejects empty ciphertext", () => {
+  assert.throws(
+    () =>
+      buildSubmitBallotInstruction({
+        electionId: "ref-1",
+        ciphertext: Buffer.alloc(0),
+        ballotProof: {
+          backend: "halo2/ipa",
+          proof: Buffer.from("proof"),
+          verifyingKeyRef: "halo2/ipa:vk_ballot",
+        },
+        nullifier: Buffer.alloc(32, 0x33),
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_STRING);
+      assert.match(String(error?.message), /non-empty byte array/i);
+      return true;
+    },
+  );
 });
 
 test("buildFinalizeElectionInstruction serializes tally entries", () => {

@@ -31,7 +31,9 @@ public final class SorafsCapacityMarketplaceInstructionTests {
 
   public static void main(final String[] args) {
     testRegisterCapacityDeclarationBuilder();
+    testDeclarationRejectsInvalidBase64();
     testRegisterCapacityDisputeBuilder();
+    testDisputeRejectsInvalidBase64();
     testDisputeValidationFailure();
     testSetPricingScheduleBuilder();
     testUpsertProviderCreditBuilder();
@@ -75,6 +77,23 @@ public final class SorafsCapacityMarketplaceInstructionTests {
     assert roundTrip.metadata().get("region").equals("ap-northeast-1") : "metadata mismatch";
   }
 
+  private static void testDeclarationRejectsInvalidBase64() {
+    boolean threw = false;
+    try {
+      RegisterCapacityDeclarationInstruction.builder()
+          .setProviderIdHex(PROVIDER_ID)
+          .setDeclarationBase64("not!base64")
+          .setCommittedCapacityGib(512L)
+          .setRegisteredEpoch(1_701_234L)
+          .setValidFromEpoch(1_701_300L)
+          .setValidUntilEpoch(1_801_300L)
+          .build();
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected invalid declaration base64 to throw";
+  }
+
   private static void testRegisterCapacityDisputeBuilder() {
     final byte[] payload = "capacity-dispute".getBytes(StandardCharsets.UTF_8);
     final RegisterCapacityDisputeInstruction instruction =
@@ -116,6 +135,18 @@ public final class SorafsCapacityMarketplaceInstructionTests {
     assert roundTrip.disputeKind() == RegisterCapacityDisputeInstruction.Kind.PROOF_FAILURE
         : "kind mismatch after decode";
     assert roundTrip.evidence().sizeBytes().equals(1_024L) : "evidence mismatch";
+  }
+
+  private static void testDisputeRejectsInvalidBase64() {
+    boolean threw = false;
+    try {
+      RegisterCapacityDisputeInstruction.builder()
+          .setDisputeIdHex(DISPUTE_ID)
+          .setDisputePayloadBase64("not!base64");
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected invalid dispute payload base64 to throw";
   }
 
   private static void testDisputeValidationFailure() {

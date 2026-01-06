@@ -21,6 +21,8 @@ public final class OfflineCounterJournalTest {
     persistsSummaries();
     rejectsSummaryMismatch();
     enforcesMonotonicCounters();
+    rejectsFractionalCounters();
+    rejectsFractionalRecordedAt();
     System.out.println("[IrohaAndroid] OfflineCounterJournalTest passed.");
   }
 
@@ -114,6 +116,58 @@ public final class OfflineCounterJournalTest {
     } finally {
       Files.deleteIfExists(tempFile);
     }
+  }
+
+  private static void rejectsFractionalCounters() throws IOException {
+    final Path tempFile = Files.createTempFile("offline-counter-journal-invalid", ".json");
+    final String json =
+        """
+        {
+          "deadbeef": {
+            "controller_id": "alice@wonderland",
+            "controller_display": "Alice",
+            "summary_hash_hex": "00",
+            "apple_key_counters": { "app.attest:k1": 1.5 },
+            "android_series_counters": {},
+            "recorded_at_ms": 1
+          }
+        }
+        """;
+    Files.writeString(tempFile, json, StandardCharsets.UTF_8);
+    boolean thrown = false;
+    try {
+      new OfflineCounterJournal(tempFile);
+    } catch (Exception ex) {
+      thrown = true;
+    }
+    assert thrown : "expected fractional counters to be rejected";
+    Files.deleteIfExists(tempFile);
+  }
+
+  private static void rejectsFractionalRecordedAt() throws IOException {
+    final Path tempFile = Files.createTempFile("offline-counter-journal-invalid", ".json");
+    final String json =
+        """
+        {
+          "deadbeef": {
+            "controller_id": "alice@wonderland",
+            "controller_display": "Alice",
+            "summary_hash_hex": "00",
+            "apple_key_counters": { "app.attest:k1": 1 },
+            "android_series_counters": {},
+            "recorded_at_ms": 1.5
+          }
+        }
+        """;
+    Files.writeString(tempFile, json, StandardCharsets.UTF_8);
+    boolean thrown = false;
+    try {
+      new OfflineCounterJournal(tempFile);
+    } catch (Exception ex) {
+      thrown = true;
+    }
+    assert thrown : "expected fractional recorded_at_ms to be rejected";
+    Files.deleteIfExists(tempFile);
   }
 
   private static String computeSummaryHashHex(

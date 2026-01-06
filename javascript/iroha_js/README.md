@@ -257,8 +257,8 @@ console.log(typedStatus?.status?.kind); // e.g. "Committed"
 await torii.waitForTransactionStatusTyped(sampleHashHex, { intervalMs: 500 });
 await torii.submitTransactionAndWaitTyped(encoded, { hashHex: sampleHashHex });
 // Note: the polling helpers require `options` to be a plain object. intervalMs/timeoutMs
-// must be non-negative (use timeoutMs: null to disable the deadline), maxAttempts must
-// be a positive integer when provided, and onStatus must be a function.
+// must be non-negative integers (use timeoutMs: null to disable the deadline), maxAttempts
+// must be a positive integer when provided, and onStatus must be a function.
 
 // Submit while re-signing with a fresh private key (mutating buffer supported)
 await submitSignedTransaction(torii, encoded, { privateKey });
@@ -782,7 +782,8 @@ pinned to the configured base.
   helpers. Pass the resulting objects directly to `buildTransaction`.
 - Use string quantities (`"10"`) for `Numeric` values whenever you want to avoid
   JavaScript floating-point pitfalls; the builders accept `string | number |
-  bigint` but always serialise through the canonical Norito string form.
+  bigint` but require plain decimal literals (no exponent), with up to 28
+  fractional digits and a 512-bit mantissa.
 - Keep asset IDs fully qualified (`rose#wonderland#ed0120…`) when chaining mint
   and transfer steps. The helpers do not guess missing suffixes, ensuring all
   peers derive the same destination.
@@ -2809,9 +2810,10 @@ to stick with the multihash default; any other value is rejected before the HTTP
 
 All pagination knobs (`limit`, `offset`, `pageSize`, `maxItems`, `fetchSize`) accept the
 `NumericLike` inputs used across the transaction builders (`number`, `string`, or `bigint`).
-They are normalised via the same unsigned-integer validators before any request fires, so
-passing `"25"` or `10n` behaves exactly like `25` while still surfacing a `TypeError` when
-the value is negative, NaN, or otherwise invalid.
+They are normalised via the same unsigned-integer validators before any request fires
+(integers only, up to `Number.MAX_SAFE_INTEGER`), so passing `"25"` or `10n` behaves
+exactly like `25` while still surfacing a `TypeError` when the value is negative,
+fractional, NaN, or otherwise invalid.
 
 Offline allowances and transfers reuse the same ergonomics. The helpers wrap the
 `/v1/offline/allowances` and `/v1/offline/transfers` list/query endpoints so

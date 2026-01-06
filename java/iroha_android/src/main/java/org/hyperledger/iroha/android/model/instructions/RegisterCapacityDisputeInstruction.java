@@ -144,6 +144,23 @@ public static final String ACTION = "RegisterCapacityDispute";
     return value;
   }
 
+  private static String requireBase64(final String value, final String fieldName) {
+    final String trimmed = Objects.requireNonNull(value, fieldName).trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException(fieldName + " must not be blank");
+    }
+    final byte[] decoded;
+    try {
+      decoded = java.util.Base64.getDecoder().decode(trimmed);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException(fieldName + " must be base64", ex);
+    }
+    if (decoded.length == 0) {
+      throw new IllegalArgumentException(fieldName + " must decode to non-empty bytes");
+    }
+    return trimmed;
+  }
+
   private static Long parseOptionalLong(final String value, final String label) {
     if (value == null || value.isBlank()) {
       return null;
@@ -365,12 +382,7 @@ public static final String ACTION = "RegisterCapacityDispute";
     }
 
     public Builder setDisputePayloadBase64(final String disputePayloadBase64) {
-      final String normalized =
-          Objects.requireNonNull(disputePayloadBase64, "disputePayloadBase64").trim();
-      if (normalized.isEmpty()) {
-        throw new IllegalArgumentException("disputePayloadBase64 must not be blank");
-      }
-      this.disputePayloadBase64 = normalized;
+      this.disputePayloadBase64 = requireBase64(disputePayloadBase64, "disputePayloadBase64");
       return this;
     }
 

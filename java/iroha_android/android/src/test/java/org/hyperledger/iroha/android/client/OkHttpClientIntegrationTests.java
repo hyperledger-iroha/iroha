@@ -98,13 +98,13 @@ public final class OkHttpClientIntegrationTests {
 
       final GatewayFetchRequest fetchRequest =
           GatewayFetchRequest.builder()
-              .setManifestIdHex("0123")
+              .setManifestIdHex("01".repeat(32))
               .setChunkerHandle("sorafs.sf1@1.0.0")
               .setOptions(GatewayFetchOptions.builder().build())
               .addProvider(
                   GatewayProvider.builder()
                       .setName("alpha")
-                      .setProviderIdHex("aa")
+                      .setProviderIdHex("aa".repeat(32))
                       .setBaseUrl("https://provider.example")
                       .setStreamTokenBase64("dG9rZW4=")
                       .build())

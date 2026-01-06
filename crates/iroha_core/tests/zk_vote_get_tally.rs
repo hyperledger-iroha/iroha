@@ -6,8 +6,10 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::ivm::host::CoreHost,
     state::{State, World, WorldReadOnly},
+    zk::test_utils::halo2_fixture_envelope,
 };
 use iroha_data_model::prelude::*;
+use iroha_primitives::json::Json;
 use ivm::{IVMHost, Memory, PointerType, syscalls, zk_verify};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -47,37 +49,64 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
+    let owner: AccountId = "alice@zkd".parse().unwrap();
 
-    // Create a simple election via ISIs and finalize it
+    // Register verifying key and create a simple election via ISIs
     let election_id = "e1".to_string();
+    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-public-v1", [0u8; 32]);
+    let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
+    let vk_commitment = iroha_core::zk::hash_vk(&vk_box);
+    let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_tally");
+    let mut vk_record = iroha_data_model::proof::VerifyingKeyRecord::new(
+        1,
+        "halo2/pasta/tiny-add-public-v1",
+        iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+        "pallas",
+        fixture.schema_hash,
+        vk_commitment,
+    );
+    vk_record.vk_len = vk_box.bytes.len() as u32;
+    vk_record.max_proof_bytes = fixture.proof_bytes.len() as u32;
+    vk_record.gas_schedule_id = Some("halo2_default".into());
+    vk_record.key = Some(vk_box);
+    vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+    let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
+    let perm_parliament: Permission =
+        iroha_executor_data_model::permission::governance::CanManageParliament.into();
+    iroha_data_model::prelude::Grant::account_permission(perm_vk, owner.clone())
+        .execute(&owner, &mut stx)
+        .expect("grant vk permission");
+    iroha_data_model::prelude::Grant::account_permission(perm_parliament, owner.clone())
+        .execute(&owner, &mut stx)
+        .expect("grant parliament permission");
+    iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
+        id: vk_id.clone(),
+        record: vk_record,
+    }
+    .execute(&owner, &mut stx)
+    .expect("register vk");
     let create = iroha_data_model::isi::zk::CreateElection {
         election_id: election_id.clone(),
-        options: 3,
+        options: 1,
         eligible_root: [0u8; 32],
         start_ts: 0,
         end_ts: 10,
-        vk_ballot: iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_ballot"),
-        vk_tally: iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_tally"),
+        vk_ballot: vk_id.clone(),
+        vk_tally: vk_id.clone(),
         domain_tag: "ballot-domain".to_string(),
     };
-    let owner: AccountId = "alice@zkd".parse().unwrap();
     stx.world
         .executor()
         .clone()
         .execute_instruction(&mut stx, &owner, InstructionBox::from(create))
         .expect("create election");
-    let finalize_fixture =
-        iroha_core::zk::test_utils::halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
-    let finalize_vk = finalize_fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
     let finalize = iroha_data_model::isi::zk::FinalizeElection {
         election_id: election_id.clone(),
-        tally: vec![5, 3, 1],
+        tally: vec![4],
         tally_proof: iroha_data_model::proof::ProofAttachment::new_inline(
             "halo2/ipa".into(),
-            finalize_fixture.proof_box("halo2/ipa"),
-            finalize_vk,
+            fixture.proof_box("halo2/ipa"),
+            fixture.vk_box("halo2/ipa").expect("fixture verifying key"),
         ),
     };
     stx.world
@@ -114,5 +143,5 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
     let resp: zk_verify::VoteGetTallyResponse =
         norito::decode_from_bytes(tlv_out.payload).expect("decode resp");
     assert!(resp.finalized);
-    assert_eq!(resp.tally, vec![5, 3, 1]);
+    assert_eq!(resp.tally, vec![4]);
 }

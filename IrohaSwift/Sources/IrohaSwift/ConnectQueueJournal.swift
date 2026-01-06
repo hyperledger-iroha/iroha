@@ -212,7 +212,7 @@ public final class ConnectQueueJournal {
                        ciphertext: Data,
                        receivedAtMs: UInt64 = ConnectQueueJournal.timestampNow(),
                        ttlOverrideMs: UInt64? = nil) throws {
-        let ttlMs = ttlOverrideMs ?? UInt64(configuration.retentionInterval * 1000)
+        let ttlMs = ttlOverrideMs ?? Self.clampedRetentionIntervalMs(configuration.retentionInterval)
         let (expiresAt, overflow) = receivedAtMs.addingReportingOverflow(ttlMs)
         let expiresAtMs = overflow ? UInt64.max : expiresAt
         let digest = try ConnectQueueJournal.payloadHash(ciphertext)
@@ -244,6 +244,23 @@ public final class ConnectQueueJournal {
 
     public static func timestampNow() -> UInt64 {
         UInt64(Date().timeIntervalSince1970 * 1000)
+    }
+
+    private static func clampedRetentionIntervalMs(_ interval: TimeInterval) -> UInt64 {
+        if interval.isNaN {
+            return 0
+        }
+        if interval.isInfinite {
+            return interval > 0 ? UInt64.max : 0
+        }
+        let millis = interval * 1000
+        if millis <= 0 {
+            return 0
+        }
+        if millis >= Double(UInt64.max) {
+            return UInt64.max
+        }
+        return UInt64(millis.rounded(.towardZero))
     }
 
     private func file(for direction: ConnectDirection) -> ConnectJournalFile {

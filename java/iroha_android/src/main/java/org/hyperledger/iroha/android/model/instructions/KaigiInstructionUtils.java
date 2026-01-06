@@ -133,6 +133,23 @@ final class KaigiInstructionUtils {
     return Base64.getEncoder().encodeToString(bytes);
   }
 
+  static String requireBase64(final String value, final String fieldName) {
+    if (value == null || value.isBlank()) {
+      throw new IllegalArgumentException(fieldName + " must not be blank");
+    }
+    final String trimmed = value.trim();
+    final byte[] decoded;
+    try {
+      decoded = Base64.getDecoder().decode(trimmed);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException(fieldName + " must be base64", ex);
+    }
+    if (decoded.length == 0) {
+      throw new IllegalArgumentException(fieldName + " must decode to non-empty bytes");
+    }
+    return trimmed;
+  }
+
   static PrivacyMode parsePrivacyMode(final Map<String, String> arguments, final String prefix) {
     final String modeKey = prefixKey(prefix, "mode");
     final String mode = arguments.getOrDefault(modeKey, "Transparent");
@@ -175,7 +192,7 @@ final class KaigiInstructionUtils {
               hop.relayId = value;
               break;
             case "hpke_public_key":
-              hop.hpkePublicKey = value;
+              hop.hpkePublicKey = requireBase64(value, key);
               break;
             case "weight":
               final int parsed = parseNonNegativeInt(value, "relay hop weight");

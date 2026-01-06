@@ -5638,7 +5638,8 @@ impl SumeragiWorker {
             }
         };
         let commit_worker_join = actor.attach_commit_worker();
-        let rbc_persist_worker_join = actor.attach_rbc_persist_worker();
+        let rbc_persist_worker_join: Option<std::thread::JoinHandle<()>> =
+            actor.attach_rbc_persist_worker();
         let vote_rx_drain_budget = vote_rx_drain_budget(
             block_time,
             commit_time,

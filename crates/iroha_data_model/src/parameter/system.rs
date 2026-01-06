@@ -1268,8 +1268,8 @@ mod defaults {
             nonzero!(4 * 2_u64.pow(20))
         }
         pub const fn max_tx_bytes() -> NonZeroU64 {
-            // Default total transaction wire-size cap set to 1 MiB.
-            nonzero!(1_048_576_u64)
+            // Default total transaction wire-size cap set to 10 MiB.
+            nonzero!(10_485_760_u64)
         }
         pub const fn max_decompressed_bytes() -> NonZeroU64 {
             // Default post-decompression budget aligns with max_tx_bytes until

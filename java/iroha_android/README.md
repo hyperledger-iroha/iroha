@@ -515,7 +515,9 @@ stream.close();
 
 Listeners receive retry hints (via `retry:` frames) so applications can reuse
 Torii’s back-off guidance, and telemetry observers attached to the transport
-emit the same hashed-authority metadata recorded for HTTP submissions.
+emit the same hashed-authority metadata recorded for HTTP submissions. When the
+transport supports streaming responses (OkHttp/JDK/URLConnection), frames are
+parsed as they arrive; other executors buffer the response before parsing.
 
 Use `ToriiEventStreamSubscription` when a long-lived component needs automatic
 reconnects:
@@ -873,6 +875,9 @@ directly to the Rust `sorafs_orchestrator` configuration. Use
 orchestrator expects. `TransportPolicy` and `AnonymityPolicy` mirror the CLI/SDK
 labels (`soranet-first`, `anon-guard-pq`, etc.), ensuring Android clients participate
 in the staged SoraNet anonymity rollout alongside the other SDKs.
+The builders validate SoraFS identifiers: `manifest_id_hex` and `provider_id_hex` must
+be 32-byte hex strings (an optional `0x` prefix is accepted), and base64 inputs must
+decode to non-empty bytes.
 
 `SorafsGatewayClient` wraps the HTTP transport so applications can submit orchestrator
 requests without reimplementing header/observer plumbing. Call

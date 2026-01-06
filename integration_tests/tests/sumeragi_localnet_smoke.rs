@@ -19,6 +19,7 @@ use tokio::time::sleep;
 
 static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
+const STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
@@ -61,7 +62,7 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
 
     let result: Result<()> = async {
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
-        let baseline_statuses = collect_statuses(&network).await?;
+        let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         let baseline_height = baseline_statuses
             .iter()
             .map(|status| status.blocks)
@@ -98,7 +99,7 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
             elapsed
         );
 
-        let after_statuses = collect_statuses(&network).await?;
+        let after_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         ensure!(
             after_statuses
                 .iter()
@@ -185,7 +186,7 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
 
     let result: Result<()> = async {
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
-        let baseline_statuses = collect_statuses(&network).await?;
+        let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         let baseline_height = baseline_statuses
             .iter()
             .map(|status| status.blocks)
@@ -219,7 +220,7 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
             elapsed
         );
 
-        let after_statuses = collect_statuses(&network).await?;
+        let after_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         ensure!(
             after_statuses
                 .iter()
@@ -240,25 +241,36 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
     Ok(())
 }
 
-async fn collect_statuses(network: &Network) -> Result<Vec<iroha::client::Status>> {
+async fn collect_statuses(
+    network: &Network,
+    status_timeout: Duration,
+) -> Result<Vec<iroha::client::Status>> {
     try_join_all(network.peers().iter().map(|peer| async move {
-        peer.status()
-            .await
-            .wrap_err_with(|| format!("status request failed for peer {}", peer.mnemonic()))
+        match tokio::time::timeout(status_timeout, peer.status()).await {
+            Ok(result) => result
+                .wrap_err_with(|| format!("status request failed for peer {}", peer.mnemonic())),
+            Err(_) => Err(eyre!(
+                "status request timed out after {:?} for peer {}",
+                status_timeout,
+                peer.mnemonic()
+            )),
+        }
     }))
     .await
 }
 
 async fn wait_for_status_responses(network: &Network, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
+    let mut last_error = None;
     loop {
-        if collect_statuses(network).await.is_ok() {
-            return Ok(());
+        match collect_statuses(network, STATUS_POLL_TIMEOUT).await {
+            Ok(_) => return Ok(()),
+            Err(err) => last_error = Some(format!("{err:?}")),
         }
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "status responses did not converge within {:?}",
-                timeout
+                "status responses did not converge within {:?}; last_error={last_error:?}",
+                timeout,
             ));
         }
         sleep(Duration::from_millis(200)).await;
@@ -272,23 +284,29 @@ async fn wait_for_converged_height(
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
     let mut last_snapshot: Vec<StatusSnapshot> = Vec::new();
+    let mut last_error = None;
     loop {
-        let statuses = collect_statuses(network).await?;
-        last_snapshot.clear();
-        last_snapshot.extend(statuses.iter().map(StatusSnapshot::from_status));
-        if statuses.iter().all(|status| status.blocks >= target_height) {
-            let first_height = statuses.first().map(|s| s.blocks);
-            if statuses
-                .iter()
-                .all(|status| Some(status.blocks) == first_height)
-            {
-                return Ok(());
+        match collect_statuses(network, STATUS_POLL_TIMEOUT).await {
+            Ok(statuses) => {
+                last_error = None;
+                last_snapshot.clear();
+                last_snapshot.extend(statuses.iter().map(StatusSnapshot::from_status));
+                if statuses.iter().all(|status| status.blocks >= target_height) {
+                    let first_height = statuses.first().map(|s| s.blocks);
+                    if statuses
+                        .iter()
+                        .all(|status| Some(status.blocks) == first_height)
+                    {
+                        return Ok(());
+                    }
+                }
             }
+            Err(err) => last_error = Some(format!("{err:?}")),
         }
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "heights failed to converge to {target_height} within {:?}: last_snapshot={last_snapshot:?}",
-                timeout,
+                "heights failed to converge to {target_height} within {:?}: last_snapshot={last_snapshot:?}, last_error={last_error:?}",
+                timeout
             ));
         }
         sleep(Duration::from_millis(200)).await;

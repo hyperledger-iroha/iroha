@@ -31,7 +31,7 @@ public final class OfflineJsonParser {
               asLongOrDefault(entry.get("expires_at_ms"), "items[" + i + "].expires_at_ms", 0L),
               asLongOrDefault(
                   entry.get("policy_expires_at_ms"), "items[" + i + "].policy_expires_at_ms", 0L),
-              asOptionalLong(entry.get("refresh_at_ms")),
+              asOptionalLong(entry.get("refresh_at_ms"), "items[" + i + "].refresh_at_ms"),
               asOptionalString(entry.get("verdict_id_hex")),
               asOptionalString(entry.get("attestation_nonce_hex")),
               asString(entry.get("remaining_amount"), "items[" + i + "].remaining_amount"),
@@ -178,6 +178,9 @@ public final class OfflineJsonParser {
     if (!(value instanceof Number number)) {
       throw new IllegalStateException(path + " is not a number");
     }
+    if (number instanceof Float || number instanceof Double) {
+      throw new IllegalStateException(path + " must be an integer");
+    }
     return number.longValue();
   }
 
@@ -189,11 +192,11 @@ public final class OfflineJsonParser {
     return asLong(value, path);
   }
 
-  private static Long asOptionalLong(final Object value) {
-    if (!(value instanceof Number number)) {
+  private static Long asOptionalLong(final Object value, final String path) {
+    if (value == null) {
       return null;
     }
-    return number.longValue();
+    return asLong(value, path);
   }
 
   private static Map<String, Long> asCounterMap(final Object value, final String path) {
@@ -238,7 +241,7 @@ public final class OfflineJsonParser {
         attestationNonceLiteral == null
             ? null
             : OfflineHashLiteral.parseHex(attestationNonceLiteral, path + ".attestation_nonce");
-    final Long refreshAtMs = asOptionalLong(entry.get("refresh_at_ms"));
+    final Long refreshAtMs = asOptionalLong(entry.get("refresh_at_ms"), path + ".refresh_at_ms");
     return new OfflineWalletCertificate(
         controller,
         allowance,
@@ -275,10 +278,7 @@ public final class OfflineJsonParser {
     final byte[] bytes = new byte[items.size()];
     for (int i = 0; i < items.size(); i++) {
       final Object entry = items.get(i);
-      if (!(entry instanceof Number number)) {
-        throw new IllegalStateException(path + "[" + i + "] is not a number");
-      }
-      final int numeric = number.intValue();
+      final long numeric = asLong(entry, path + "[" + i + "]");
       if (numeric < 0 || numeric > 255) {
         throw new IllegalStateException(path + "[" + i + "] is not a byte");
       }

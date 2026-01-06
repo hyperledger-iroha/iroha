@@ -194,12 +194,12 @@ public final class AndroidClientFactoryTests {
       final SorafsGatewayClient gateway = factory.createSorafsGatewayClient(config);
       final GatewayFetchRequest fetchRequest =
           GatewayFetchRequest.builder()
-              .setManifestIdHex("feed01")
+              .setManifestIdHex("feed".repeat(16))
               .setChunkerHandle("chunker-1")
               .addProvider(
                   GatewayProvider.builder()
                       .setName("provider-a")
-                      .setProviderIdHex("01")
+                      .setProviderIdHex("01".repeat(32))
                       .setBaseUrl(server.url("/storage").toString())
                       .setStreamTokenBase64("dG9rZW4=")
                       .build())

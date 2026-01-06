@@ -1177,23 +1177,19 @@ extension AccountAddressError {
     }
 
     private static func intField(_ name: String, fields: [String: Any]) -> Int? {
-        if let number = fields[name] as? NSNumber {
-            return number.intValue
-        }
-        if let string = fields[name] as? String, let value = Int(string) {
-            return value
-        }
-        return nil
+        StrictJSONNumber.int(from: fields[name])
     }
 
     private static func uInt8Field(_ name: String, fields: [String: Any]) -> UInt8? {
         guard let value = intField(name, fields: fields) else { return nil }
-        return UInt8(clamping: value)
+        guard value >= 0, value <= Int(UInt8.max) else { return nil }
+        return UInt8(value)
     }
 
     private static func uInt16Field(_ name: String, fields: [String: Any]) -> UInt16? {
         guard let value = intField(name, fields: fields) else { return nil }
-        return UInt16(clamping: value)
+        guard value >= 0, value <= Int(UInt16.max) else { return nil }
+        return UInt16(value)
     }
 }
 

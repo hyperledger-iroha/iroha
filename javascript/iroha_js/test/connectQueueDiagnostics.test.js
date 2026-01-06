@@ -97,3 +97,42 @@ test("connect queue root resolves config before env and gates env usage", () => 
     }
   }
 });
+
+test("connect queue diagnostics fallback encodes non-base64 session ids as utf8", () => {
+  const rootDir = path.join(os.tmpdir(), "iroha-js-connect-fallback");
+  const sid = "session*id";
+  const sessionDir = deriveConnectSessionDirectory({ sid, rootDir });
+  const expected = Buffer.from(sid, "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+  assert.equal(path.basename(sessionDir), expected);
+});
+
+test("connect queue diagnostics rejects empty binary session ids", () => {
+  const rootDir = path.join(os.tmpdir(), "iroha-js-connect-empty");
+  assert.throws(
+    () => deriveConnectSessionDirectory({ sid: new Uint8Array(), rootDir }),
+    (error) => error instanceof TypeError,
+  );
+});
+
+test("connect queue diagnostics rejects non-byte session ids", () => {
+  const rootDir = path.join(os.tmpdir(), "iroha-js-connect-invalid");
+  assert.throws(
+    () => deriveConnectSessionDirectory({ sid: [256], rootDir }),
+    (error) => error instanceof TypeError,
+  );
+});
+
+test("connect queue diagnostics accepts array-like session ids", () => {
+  const rootDir = path.join(os.tmpdir(), "iroha-js-connect-array");
+  const sessionDir = deriveConnectSessionDirectory({ sid: [1, 2, 3, 4], rootDir });
+  const expected = Buffer.from([1, 2, 3, 4])
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+  assert.equal(path.basename(sessionDir), expected);
+});

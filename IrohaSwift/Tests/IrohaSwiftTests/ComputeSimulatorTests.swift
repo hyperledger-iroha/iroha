@@ -53,4 +53,44 @@ final class ComputeSimulatorTests: XCTestCase {
             XCTAssertNotEqual(expected, actual)
         }
     }
+
+    func testSimulateRejectsFractionalGasLimit() throws {
+        let fixtures = try fixtures()
+        var call = fixtures.call
+        call["gas_limit"] = 1.5
+        call["max_response_bytes"] = 1024
+
+        XCTAssertThrowsError(
+            try ComputeSimulator.simulate(
+                manifest: fixtures.manifest,
+                call: call,
+                payload: fixtures.payload
+            )
+        ) { error in
+            guard case let ComputeSimulatorError.decodeFailure(message) = error else {
+                return XCTFail("expected decodeFailure, got \(error)")
+            }
+            XCTAssertTrue(message.contains("gas_limit"))
+        }
+    }
+
+    func testSimulateRejectsFractionalMaxResponseBytes() throws {
+        let fixtures = try fixtures()
+        var call = fixtures.call
+        call["gas_limit"] = 1000
+        call["max_response_bytes"] = 1.25
+
+        XCTAssertThrowsError(
+            try ComputeSimulator.simulate(
+                manifest: fixtures.manifest,
+                call: call,
+                payload: fixtures.payload
+            )
+        ) { error in
+            guard case let ComputeSimulatorError.decodeFailure(message) = error else {
+                return XCTFail("expected decodeFailure, got \(error)")
+            }
+            XCTAssertTrue(message.contains("max_response_bytes"))
+        }
+    }
 }

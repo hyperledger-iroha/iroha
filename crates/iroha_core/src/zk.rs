@@ -288,6 +288,7 @@ pub mod test_utils {
         match name {
             "tiny-add-v1" => Some(tiny_add_bundle),
             "tiny-add-public-v1" => Some(tiny_add_public_bundle),
+            "tiny-add2inst-public-v1" => Some(tiny_add2inst_public_bundle),
             "tiny-add-2rows-v1" => Some(tiny_add_2rows_bundle),
             _ => None,
         }
@@ -469,6 +470,68 @@ pub mod test_utils {
     }
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    fn tiny_add2inst_public_bundle() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        use ff::PrimeField as _;
+        use halo2_proofs::{
+            halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+            plonk::{create_proof, keygen_pk, keygen_vk},
+            poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
+            transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
+        };
+
+        static CACHE: OnceLock<(Vec<u8>, Vec<u8>, Vec<u8>)> = OnceLock::new();
+
+        CACHE
+            .get_or_init(|| {
+                let k = 6u32;
+                let params = pasta_params_new(k);
+                let circuit = super::pasta_tiny::AddTwoInstPublic;
+                let vk_h2 = keygen_vk(&params, &circuit).expect("vk");
+                let pk = keygen_pk(&params, vk_h2.clone(), &circuit).expect("pk");
+
+                let inst0 = vec![Scalar::from(5u64)];
+                let inst1 = vec![Scalar::from(8u64)];
+                let inst_cols: Vec<&[Scalar]> = vec![inst0.as_slice(), inst1.as_slice()];
+                let inst_refs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
+
+                let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+                let mut rng = fixture_rng(0x5EED_F1C7_1234_5681);
+                create_proof::<
+                    IPACommitmentScheme<Curve>,
+                    ProverIPA<'_, Curve>,
+                    Challenge255<Curve>,
+                    _,
+                    _,
+                    _,
+                >(
+                    &params,
+                    &pk,
+                    &[circuit],
+                    &inst_refs,
+                    &mut rng,
+                    &mut transcript,
+                )
+                .expect("create proof");
+                let proof_raw = transcript.finalize();
+
+                let mut proof_bytes = super::zk1::wrap_start();
+                super::zk1::wrap_append_proof(&mut proof_bytes, &proof_raw);
+                super::zk1::wrap_append_instances_pasta_fp_cols(&inst_cols, &mut proof_bytes);
+
+                let mut vk_bytes = super::zk1::wrap_start();
+                super::zk1::wrap_append_ipa_k(&mut vk_bytes, k);
+                super::zk1::wrap_append_vk_pasta(&mut vk_bytes, &vk_h2);
+
+                let mut public_inputs = Vec::with_capacity(inst_cols.len() * 32);
+                for value in inst0.iter().chain(inst1.iter()) {
+                    public_inputs.extend_from_slice(value.to_repr().as_ref());
+                }
+                (proof_bytes, public_inputs, vk_bytes)
+            })
+            .clone()
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     fn tiny_add_2rows_bundle() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         use halo2_proofs::{
             halo2curves::pasta::EqAffine as Curve,
@@ -542,6 +605,18 @@ pub mod test_utils {
         assert!(!first.proof_bytes.is_empty());
         assert!(first.vk_bytes.is_some());
         assert!(!first.public_inputs.is_empty());
+    }
+
+    #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+    #[test]
+    fn halo2_fixture_envelope_is_stable_for_tiny_add2inst_public() {
+        let first = halo2_fixture_envelope("halo2/ipa:tiny-add2inst-public-v1", [0u8; 32]);
+        let second = halo2_fixture_envelope("halo2/ipa:tiny-add2inst-public-v1", [0u8; 32]);
+        assert_eq!(first.proof_bytes, second.proof_bytes);
+        assert_eq!(first.vk_bytes, second.vk_bytes);
+        assert!(!first.proof_bytes.is_empty());
+        assert!(first.vk_bytes.is_some());
+        assert_eq!(first.public_inputs.len(), 64);
     }
 
     #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
@@ -3960,6 +4035,42 @@ pub(crate) fn extract_pasta_fp_instances(
     proof_bytes: &[u8],
 ) -> Option<Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>> {
     extract_pasta_fp_instances_impl(proof_bytes)
+}
+
+/// Extract instance columns as raw 32-byte little-endian field elements.
+pub(crate) fn extract_pasta_instance_columns_bytes(
+    proof_bytes: &[u8],
+) -> Option<Vec<Vec<[u8; 32]>>> {
+    use iroha_zkp_halo2::Halo2ProofEnvelope;
+
+    if let Ok(env) = Halo2ProofEnvelope::from_bytes(proof_bytes) {
+        let mut columns = Vec::with_capacity(env.public_inputs.len());
+        for input in env.public_inputs {
+            columns.push(vec![input]);
+        }
+        return Some(columns);
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    {
+        use halo2_proofs::halo2curves::ff::PrimeField as _;
+
+        if let Some((_, cols)) = zkparse::proof_and_instances(proof_bytes) {
+            let mut columns = Vec::with_capacity(cols.len());
+            for col in cols {
+                let mut out_col = Vec::with_capacity(col.len());
+                for value in col {
+                    let mut buf = [0u8; 32];
+                    buf.copy_from_slice(value.to_repr().as_ref());
+                    out_col.push(buf);
+                }
+                columns.push(out_col);
+            }
+            return Some(columns);
+        }
+    }
+
+    None
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]

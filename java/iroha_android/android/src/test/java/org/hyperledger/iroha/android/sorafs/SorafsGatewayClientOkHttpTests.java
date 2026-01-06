@@ -36,13 +36,13 @@ public final class SorafsGatewayClientOkHttpTests {
       final GatewayProvider provider =
           GatewayProvider.builder()
               .setName("p1")
-              .setProviderIdHex("aa11")
+              .setProviderIdHex("aa11".repeat(16))
               .setBaseUrl("https://provider.example")
               .setStreamTokenBase64("c3RyZWFt")
               .build();
       final GatewayFetchRequest request =
           GatewayFetchRequest.builder()
-              .setManifestIdHex("feedbeef")
+              .setManifestIdHex("feedbeef".repeat(8))
               .setChunkerHandle("chunker-1")
               .setOptions(
                   GatewayFetchOptions.builder()
@@ -53,7 +53,7 @@ public final class SorafsGatewayClientOkHttpTests {
               .build();
 
       final GatewayFetchSummary summary = client.fetchSummary(request).get(2, TimeUnit.SECONDS);
-      assertEquals("feedbeef", summary.manifestIdHex());
+      assertEquals("feedbeef".repeat(8), summary.manifestIdHex());
       assertEquals("chunker-1", summary.chunkerHandle());
       assertEquals("client-1", summary.clientId());
       assertEquals(2, summary.chunkCount());
@@ -73,7 +73,7 @@ public final class SorafsGatewayClientOkHttpTests {
 
   private static Map<String, Object> buildSummaryPayload() {
     final Map<String, Object> payload = new LinkedHashMap<>();
-    payload.put("manifest_id_hex", "feedbeef");
+    payload.put("manifest_id_hex", "feedbeef".repeat(8));
     payload.put("chunker_handle", "chunker-1");
     payload.put("client_id", "client-1");
     payload.put("chunk_count", 2L);

@@ -104,6 +104,9 @@ public final class CompleteReplicationOrderInstruction implements InstructionTem
     }
 
     public Builder setCompletionEpoch(final long completionEpoch) {
+      if (completionEpoch < 0) {
+        throw new IllegalArgumentException("completionEpoch must be non-negative");
+      }
       this.completionEpoch = completionEpoch;
       return this;
     }

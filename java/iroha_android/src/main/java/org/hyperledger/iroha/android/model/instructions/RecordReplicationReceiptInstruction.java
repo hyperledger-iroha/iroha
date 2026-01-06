@@ -174,6 +174,9 @@ public final class RecordReplicationReceiptInstruction implements InstructionTem
     }
 
     public Builder setTimestamp(final long timestamp) {
+      if (timestamp < 0) {
+        throw new IllegalArgumentException("timestamp must be non-negative");
+      }
       this.timestamp = timestamp;
       return this;
     }

@@ -219,14 +219,15 @@ CLI Helpers
   - Useful for auditing protected namespaces or verifying governance-controlled deploy workflows.
 - `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including optional `gov_manifest_approvers` for satisfying manifest quorum rules.
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --salt-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
-  - Validates canonical account ids, enforces non-zero 32-byte salts, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
+- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+  - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
+  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
   - The one-line summary now surfaces a deterministic `fingerprint=<hex>` derived from the encoded `CastZkBallot` along with any decoded hints (`owner`, `amount`, `duration_blocks`, `direction` when provided).
   - CLI responses annotate `tx_instructions[]` with `payload_fingerprint_hex` plus decoded fields so downstream tooling can verify the skeleton without reimplementing Norito decoding.
   - Supplying the lock hints allows the node to emit `LockCreated`/`LockExtended` events for ZK ballots once the circuit exposes the same values.
 - `iroha gov vote-plain --referendum-id <id> --owner <account>@<domain> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - Aliases `--lock-amount`/`--lock-duration-blocks` mirror the ZK flag names for scripting parity.
-  - Summary output mirrors `vote-zk` by including the encoded instruction fingerprint and human-readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`, `salt_hex` when present), providing quick confirmation before signing the skeleton.
+  - Summary output mirrors `vote-zk` by including the encoded instruction fingerprint and human-readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`), providing quick confirmation before signing the skeleton.
 
 Instances Listing
 - GET `/v1/gov/instances/{ns}` — lists active contract instances for a namespace.
@@ -253,7 +254,7 @@ Unlock Sweep (Operator/Audit)
       "envelope_b64": "AAECAwQ=",
       "root_hint_hex": "…64hex?",
       "owner": "alice@wonderland?",
-      "salt_hex": "…64hex?"
+      "nullifier_hex": "…64hex?"
     }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
 
@@ -268,9 +269,9 @@ Unlock Sweep (Operator/Audit)
       "ballot": {
         "backend": "halo2/ipa",
         "envelope_bytes": "AAECAwQ=",   // base64 of ZK1 or H2* container
-        "root_hint": null,                // optional 32-byte hex (eligibility root)
+        "root_hint": null,                // optional 32-byte array of bytes (eligibility root)
         "owner": null,                    // optional AccountId when circuit commits owner
-        "salt": null                      // optional 32-byte hex for nullifier derivation
+        "nullifier": null                 // optional 32-byte array of bytes (nullifier hint)
       }
     }
   - Response:
@@ -284,7 +285,7 @@ Unlock Sweep (Operator/Audit)
     }
   - Notes:
     - When `private_key` is provided, Torii submits the signed transaction and sets `reason` to `submitted transaction`.
-    - The server maps optional `root_hint`/`owner`/`salt` from the ballot to `public_inputs_json` for `CastZkBallot`.
+    - The server maps optional `root_hint`/`owner`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
     - The envelope bytes are re-encoded as base64 for the instruction payload.
     - This endpoint is only available when the `zk-ballot` feature is enabled.
 
@@ -293,6 +294,7 @@ CastZkBallot Verification Path
 - The host resolves the ballot verifying key from the referendum (`vk_ballot`) or governance defaults and requires the record to exist, be `Active`, and carry inline bytes.
 - Stored verifying-key bytes are re-hashed with `hash_vk`; any commitment mismatch aborts execution before verification to guard against tampered registry entries (`BallotRejected` with `verifying key commitment mismatch`).
 - Proof bytes are dispatched to the registered backend via `zk::verify_backend`; invalid transcripts surface as `BallotRejected` with `invalid proof` and the instruction fails deterministically.
+- The proof must expose a ballot commitment and eligibility root as public inputs; the root must match the election’s `eligible_root`, and the derived nullifier must match any provided hint.
 - Successful proofs emit `BallotAccepted`; duplicate nullifiers, stale eligibility roots, or lock regressions continue to produce the existing rejection reasons described earlier in this document.
 
 ## Validator Misbehaviour & Joint Consensus

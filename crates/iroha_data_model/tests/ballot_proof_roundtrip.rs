@@ -9,7 +9,7 @@ fn ballot_proof_roundtrip() {
         envelope_bytes: vec![1, 2, 3, 4],
         root_hint: Some([0xAA; 32]),
         owner: None,
-        salt: Some([0x55; 32]),
+        nullifier: Some([0x55; 32]),
     };
     let enc = norito::to_bytes(&v).expect("encode");
     let arch = norito::from_bytes::<BallotProof>(&enc).expect("archived");
@@ -17,5 +17,5 @@ fn ballot_proof_roundtrip() {
     assert_eq!(dec.backend, "halo2/ipa");
     assert_eq!(dec.envelope_bytes, vec![1, 2, 3, 4]);
     assert_eq!(dec.root_hint, Some([0xAA; 32]));
-    assert_eq!(dec.salt, Some([0x55; 32]));
+    assert_eq!(dec.nullifier, Some([0x55; 32]));
 }

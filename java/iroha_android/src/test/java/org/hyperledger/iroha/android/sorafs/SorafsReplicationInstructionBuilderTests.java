@@ -22,8 +22,12 @@ public final class SorafsReplicationInstructionBuilderTests {
 
   public static void main(final String[] args) {
     testIssueReplicationOrder();
+    testIssueReplicationOrderRejectsInvalidBase64();
+    testIssueReplicationOrderRejectsNegativeEpoch();
     testCompleteReplicationOrder();
+    testCompleteReplicationOrderRejectsNegativeEpoch();
     testRecordReplicationReceipt();
+    testRecordReplicationReceiptRejectsNegativeTimestamp();
     System.out.println(
         "[IrohaAndroid] SorafsReplicationInstructionBuilderTests passed (issue/complete/receipt).");
   }
@@ -58,6 +62,44 @@ public final class SorafsReplicationInstructionBuilderTests {
     assert rehydrated.deadlineEpoch() == 28 : "deadline epoch mismatch";
   }
 
+  private static void testIssueReplicationOrderRejectsInvalidBase64() {
+    boolean threw = false;
+    try {
+      IssueReplicationOrderInstruction.builder()
+          .setOrderIdHex(ORDER_ID)
+          .setOrderPayloadBase64("not!base64");
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected invalid order payload base64 to throw";
+  }
+
+  private static void testIssueReplicationOrderRejectsNegativeEpoch() {
+    boolean threw = false;
+    try {
+      IssueReplicationOrderInstruction.builder()
+          .setOrderIdHex(ORDER_ID)
+          .setOrderPayloadBase64("AAECAw==")
+          .setIssuedEpoch(-1)
+          .setDeadlineEpoch(10);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected negative issued epoch to throw";
+
+    threw = false;
+    try {
+      IssueReplicationOrderInstruction.builder()
+          .setOrderIdHex(ORDER_ID)
+          .setOrderPayloadBase64("AAECAw==")
+          .setIssuedEpoch(1)
+          .setDeadlineEpoch(-1);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected negative deadline epoch to throw";
+  }
+
   private static void testCompleteReplicationOrder() {
     final CompleteReplicationOrderInstruction instruction =
         CompleteReplicationOrderInstruction.builder()
@@ -77,6 +119,18 @@ public final class SorafsReplicationInstructionBuilderTests {
     final CompleteReplicationOrderInstruction payload =
         (CompleteReplicationOrderInstruction) decoded.payload();
     assert payload.completionEpoch() == 31 : "completion epoch mismatch";
+  }
+
+  private static void testCompleteReplicationOrderRejectsNegativeEpoch() {
+    boolean threw = false;
+    try {
+      CompleteReplicationOrderInstruction.builder()
+          .setOrderIdHex(ORDER_ID)
+          .setCompletionEpoch(-1);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected negative completion epoch to throw";
   }
 
   private static void testRecordReplicationReceipt() {
@@ -105,5 +159,19 @@ public final class SorafsReplicationInstructionBuilderTests {
     assert payload.timestamp() == 1_717_171_111L : "timestamp mismatch";
     assert payload.status() == RecordReplicationReceiptInstruction.Status.ACCEPTED
         : "status mismatch";
+  }
+
+  private static void testRecordReplicationReceiptRejectsNegativeTimestamp() {
+    boolean threw = false;
+    try {
+      RecordReplicationReceiptInstruction.builder()
+          .setOrderIdHex(ORDER_ID)
+          .setProviderIdHex(PROVIDER_ID)
+          .setStatus(RecordReplicationReceiptInstruction.Status.ACCEPTED)
+          .setTimestamp(-1);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected negative timestamp to throw";
   }
 }

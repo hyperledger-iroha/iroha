@@ -82,6 +82,7 @@ java/norito_java/build/*
 IrohaSwift/.clang-module-cache*
 IrohaSwift/.swift-cache*
 IrohaSwift/.build*
+IrohaSwift/build/
 IrohaSwift/.codex-build/
 docs/portal/node_modules/
 docs/portal/build/

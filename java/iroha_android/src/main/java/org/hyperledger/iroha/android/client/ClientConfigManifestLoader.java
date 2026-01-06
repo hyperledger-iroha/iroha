@@ -362,7 +362,14 @@ public final class ClientConfigManifestLoader {
       return null;
     }
     if (value instanceof Number number) {
-      return number.intValue();
+      if (number instanceof Float || number instanceof Double) {
+        throw new IllegalStateException("Fractional numbers are not supported: " + value);
+      }
+      final long longValue = number.longValue();
+      if (longValue < Integer.MIN_VALUE || longValue > Integer.MAX_VALUE) {
+        throw new IllegalStateException("Integer value out of range: " + value);
+      }
+      return (int) longValue;
     }
     final String normalized = optionalString(value);
     if (normalized == null) {
@@ -376,6 +383,9 @@ public final class ClientConfigManifestLoader {
       return null;
     }
     if (value instanceof Number number) {
+      if (number instanceof Float || number instanceof Double) {
+        throw new IllegalStateException("Fractional numbers are not supported: " + value);
+      }
       return number.longValue();
     }
     final String normalized = optionalString(value);

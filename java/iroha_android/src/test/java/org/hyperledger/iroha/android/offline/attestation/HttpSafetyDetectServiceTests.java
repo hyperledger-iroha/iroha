@@ -21,6 +21,7 @@ public final class HttpSafetyDetectServiceTests {
     runsAttestationFlow();
     cachesTokens();
     handlesErrors();
+    rejectsFractionalExpiry();
     System.out.println("[IrohaAndroid] HttpSafetyDetectServiceTests passed.");
   }
 
@@ -110,6 +111,34 @@ public final class HttpSafetyDetectServiceTests {
       thrown = true;
     }
     assert thrown : "expected exception when HTTP request fails";
+  }
+
+  private static void rejectsFractionalExpiry() {
+    final FakeExecutor executor = new FakeExecutor();
+    executor.enqueueJson(200, "{\"access_token\":\"token-123\",\"expires_in\":3600.5}");
+    final SafetyDetectOptions options =
+        SafetyDetectOptions.builder()
+            .setClientId("client")
+            .setClientSecret("secret")
+            .setPackageName("pkg")
+            .setSigningDigestSha256("abcd")
+            .build();
+    final HttpSafetyDetectService service = new HttpSafetyDetectService(executor, options);
+    final SafetyDetectRequest request =
+        SafetyDetectRequest.builder()
+            .setCertificateIdHex("deadbeef")
+            .setAppId("app")
+            .setNonceHex("00ff")
+            .setPackageName("pkg")
+            .setSigningDigestSha256("abcd")
+            .build();
+    boolean thrown = false;
+    try {
+      service.fetch(request).join();
+    } catch (Exception ex) {
+      thrown = true;
+    }
+    assert thrown : "expected fractional expiry to be rejected";
   }
 
   private static final class FakeExecutor implements HttpTransportExecutor {
