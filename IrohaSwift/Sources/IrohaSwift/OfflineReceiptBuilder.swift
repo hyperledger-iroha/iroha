@@ -26,6 +26,8 @@ public enum OfflineReceiptBuilderError: Error, LocalizedError, Equatable {
     case receiptSenderMismatch
     case receiptAssetMismatch
     case receiptCertificateMismatch
+    case receiptOrderInvalid
+    case mixedCounterScopes
     case balanceProofAssetMismatch
     case claimedDeltaMismatch(expected: String, actual: String)
     case invalidPlatformSnapshot(String)
@@ -98,6 +100,10 @@ public enum OfflineReceiptBuilderError: Error, LocalizedError, Equatable {
             return "Receipt asset must match the allowance asset."
         case .receiptCertificateMismatch:
             return "Receipts must share the same sender certificate."
+        case .receiptOrderInvalid:
+            return "Receipts must be ordered by (counter, tx_id)."
+        case .mixedCounterScopes:
+            return "Receipts must share a single counter scope."
         case .balanceProofAssetMismatch:
             return "Balance proof asset must match the allowance asset."
         case let .claimedDeltaMismatch(expected, actual):
@@ -420,7 +426,7 @@ public enum OfflineReceiptBuilder {
         aggregateProof: OfflineAggregateProofEnvelope? = nil,
         attachments: OfflineProofAttachmentList? = nil,
         platformSnapshot: OfflinePlatformTokenSnapshot? = nil,
-        sortReceipts: Bool = false
+        sortReceipts: Bool = true
     ) throws -> OfflineToOnlineTransfer {
         let finalBundleId: Data
         if let bundleId {
@@ -511,8 +517,12 @@ public enum OfflineReceiptBuilder {
         guard !transfer.receipts.isEmpty else {
             throw OfflineReceiptBuilderError.emptyReceipts
         }
+        guard receiptsAreCanonical(transfer.receipts) else {
+            throw OfflineReceiptBuilderError.receiptOrderInvalid
+        }
         let first = transfer.receipts[0]
         try validateSnapshot(transfer.platformSnapshot, metadata: first.senderCertificate.metadata)
+        let expectedScope = try counterScope(for: first)
         let expectedCertificateId = try first.senderCertificate.certificateId()
         let expectedAssetId = first.senderCertificate.allowance.assetId
         let expectedScale = try expectedScale(for: first.senderCertificate)
@@ -575,6 +585,10 @@ public enum OfflineReceiptBuilder {
             if amount.compare(to: policyMax) == .orderedDescending {
                 throw OfflineReceiptBuilderError.amountExceedsPolicy(amount: receipt.amount,
                                                                     max: first.senderCertificate.policy.maxTxValue)
+            }
+            let scope = try counterScope(for: receipt)
+            if scope != expectedScope {
+                throw OfflineReceiptBuilderError.mixedCounterScopes
             }
         }
         try validateAggregateProof(transfer)
@@ -924,6 +938,7 @@ public enum OfflineReceiptBuilder {
         }
         switch receipt.platformProof {
         case .appleAppAttest(let proof):
+            _ = try canonicalAppAttestKeyId(proof.keyId)
             try validateHash(proof.challengeHash, context: "apple_app_attest.challenge_hash")
             let expected = try receipt.challengeHash(chainId: chainId)
             guard proof.challengeHash == expected else {
@@ -938,8 +953,18 @@ public enum OfflineReceiptBuilder {
             guard challenge == expected else {
                 throw OfflineReceiptBuilderError.challengeHashMismatch
             }
-        case .androidMarkerKey:
-            break
+        case .androidMarkerKey(let proof):
+            let derivedSeries = try markerSeries(for: proof.markerPublicKey)
+            guard proof.series == derivedSeries else {
+                throw OfflineReceiptBuilderError.invalidPlatformProof(
+                    "marker series does not match marker_public_key"
+                )
+            }
+            if let signature = proof.markerSignature, signature.count != 64 {
+                throw OfflineReceiptBuilderError.invalidPlatformProof(
+                    "marker_signature must be 64 bytes"
+                )
+            }
         }
     }
 
@@ -1017,6 +1042,109 @@ public enum OfflineReceiptBuilder {
             return lhs.platformProof.counter < rhs.platformProof.counter
         }
         return lexicographicLess(lhs.txId, rhs.txId)
+    }
+
+    private enum CounterScopeKind: Equatable {
+        case apple
+        case androidMarker
+        case androidProvisioned
+    }
+
+    private struct CounterScope: Equatable {
+        let kind: CounterScopeKind
+        let scope: String
+    }
+
+    private static let markerSeriesPrefix = "marker::"
+    private static let provisionedSeriesPrefix = "provisioned::"
+
+    private static func canonicalAppAttestKeyId(_ value: String) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw OfflineReceiptBuilderError.invalidPlatformProof("apple_app_attest.key_id must be non-empty")
+        }
+        guard trimmed == value else {
+            throw OfflineReceiptBuilderError.invalidPlatformProof(
+                "apple_app_attest.key_id must not contain whitespace"
+            )
+        }
+        guard let decoded = Data(base64Encoded: value) else {
+            throw OfflineReceiptBuilderError.invalidPlatformProof(
+                "apple_app_attest.key_id must use standard base64 encoding"
+            )
+        }
+        let canonical = decoded.base64EncodedString()
+        guard canonical == value else {
+            throw OfflineReceiptBuilderError.invalidPlatformProof(
+                "apple_app_attest.key_id must use canonical base64 encoding"
+            )
+        }
+        return canonical
+    }
+
+    private static func markerSeries(for markerPublicKey: Data) throws -> String {
+        guard markerPublicKey.count == 65, markerPublicKey.first == 0x04 else {
+            throw OfflineReceiptBuilderError.invalidPlatformProof(
+                "marker_public_key must be a 65-byte SEC1 P-256 key"
+            )
+        }
+        let hash = IrohaHash.hash(markerPublicKey)
+        return markerSeriesPrefix + hash.hexLowercased()
+    }
+
+    private static func counterScope(for receipt: OfflineSpendReceipt) throws -> CounterScope {
+        switch receipt.platformProof {
+        case .appleAppAttest(let proof):
+            let keyId = try canonicalAppAttestKeyId(proof.keyId)
+            return CounterScope(kind: .apple, scope: keyId)
+        case .androidMarkerKey(let proof):
+            let series = try markerSeries(for: proof.markerPublicKey)
+            guard proof.series == series else {
+                throw OfflineReceiptBuilderError.invalidPlatformProof(
+                    "marker series does not match marker_public_key"
+                )
+            }
+            return CounterScope(kind: .androidMarker, scope: series)
+        case .provisioned(let proof):
+            let scope = try provisionedCounterScope(for: proof)
+            return CounterScope(kind: .androidProvisioned, scope: scope)
+        }
+    }
+
+    private static func provisionedCounterScope(for proof: AndroidProvisionedProof) throws -> String {
+        let schema = proof.manifestSchema.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !schema.isEmpty else {
+            throw OfflineReceiptBuilderError.invalidPlatformProof(
+                "provisioned manifest_schema must be non-empty"
+            )
+        }
+        let deviceId = try provisionedDeviceId(proof.deviceManifest)
+        return provisionedSeriesPrefix + "\(schema)::\(deviceId)"
+    }
+
+    private static func provisionedDeviceId(_ manifest: [String: ToriiJSONValue]) throws -> String {
+        guard let raw = normalizedMetadataString(manifest["android.provisioned.device_id"]) else {
+            throw OfflineReceiptBuilderError.invalidPlatformProof(
+                "android.provisioned.device_id is missing"
+            )
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw OfflineReceiptBuilderError.invalidPlatformProof(
+                "android.provisioned.device_id must be non-empty"
+            )
+        }
+        return trimmed
+    }
+
+    private static func receiptsAreCanonical(_ receipts: [OfflineSpendReceipt]) -> Bool {
+        guard receipts.count > 1 else { return true }
+        for idx in 1..<receipts.count {
+            if receiptSort(receipts[idx], receipts[idx - 1]) {
+                return false
+            }
+        }
+        return true
     }
 
     private static func lexicographicLess(_ lhs: Data, _ rhs: Data) -> Bool {

@@ -64,7 +64,7 @@ final class OfflineAuditLoggerTests: XCTestCase {
         let certificate = try OfflineWalletCertificate.load(from: fixtureURL("certificate.json"))
         let txId = IrohaHash.hash(Data("receipt-audit".utf8))
         let proof = OfflinePlatformProof.appleAppAttest(
-            AppleAppAttestProof(keyId: "swift-tests",
+            AppleAppAttestProof(keyId: Data("swift-tests".utf8).base64EncodedString(),
                                 counter: 1,
                                 assertion: Data([0xAA]),
                                 challengeHash: IrohaHash.hash(Data("challenge".utf8)))

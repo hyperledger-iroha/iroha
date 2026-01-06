@@ -146,8 +146,8 @@ extension AndroidMarkerKeyProof {
         .object([
             "series": .string(series),
             "counter": .number(Double(counter)),
-            "marker_public_key": .string(markerPublicKey),
-            "marker_signature": markerSignature.map { .string($0.hexUppercased()) } ?? .null,
+            "marker_public_key": OfflineToriiEncoding.bytesArray(markerPublicKey),
+            "marker_signature": OfflineToriiEncoding.optionalBytesArray(markerSignature),
             "attestation": OfflineToriiEncoding.bytesArray(attestation),
         ])
     }

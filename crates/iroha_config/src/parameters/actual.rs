@@ -201,6 +201,7 @@ impl Root {
         self.nexus.enabled = true;
         self.torii.sorafs_storage.enabled = true;
         self.torii.sorafs_discovery.discovery_enabled = true;
+        self.sumeragi.da_enabled = true;
 
         let catalog = &self.nexus.lane_catalog;
         let is_default_catalog = catalog.lane_count().get() == 1

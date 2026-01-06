@@ -20,7 +20,7 @@
       "invoice_id": "INV-1001",
       "platform_proof": {
         "kind": "apple_app_attest",
-        "key_id": "AAPLDEMO1",
+        "key_id": "QUFQTERFTU8x",
         "counter": 41,
         "assertion_b64": "AQIDBA==",
         "challenge_hash_hex": "6906767622B7F32217D5BDD3BE46705EB4B78C571C17ACDA43CFF8227FF213B7"
@@ -36,7 +36,7 @@
       "invoice_id": "INV-1002",
       "platform_proof": {
         "kind": "apple_app_attest",
-        "key_id": "AAPLDEMO1",
+        "key_id": "QUFQTERFTU8x",
         "counter": 42,
         "assertion_b64": "AgMEBQ==",
         "challenge_hash_hex": "7418E7679305C67E3891A996AFFD7FD66390C866537A9D26A1276D547B44BAE9"

@@ -16,7 +16,7 @@ use iroha_data_model::offline::{
     OFFLINE_FASTPQ_REPLAY_PROOF_DOMAIN, OFFLINE_FASTPQ_SUM_NONCE_DOMAIN,
     OFFLINE_FASTPQ_SUM_PROOF_DOMAIN, OfflineFastpqCounterProof, OfflineFastpqReplayProof,
     OfflineFastpqSumProof, OfflineProofBlindingSeed, OfflineSpendReceipt, OfflineToOnlineTransfer,
-    PoseidonDigest,
+    PoseidonDigest, canonical_receipts,
 };
 use iroha_primitives::numeric::Numeric;
 use norito::decode_from_bytes;
@@ -292,8 +292,8 @@ pub(super) fn verify_fastpq_counter_proof(
     if transfer.receipts.is_empty() {
         return Err("counter proof requires receipts".into());
     }
-    let counters: Vec<u64> = transfer
-        .receipts
+    let ordered_receipts = canonical_receipts(&transfer.receipts);
+    let counters: Vec<u64> = ordered_receipts
         .iter()
         .map(|receipt| receipt.platform_proof.counter())
         .collect();
@@ -340,8 +340,8 @@ pub(super) fn verify_fastpq_replay_proof(
     if transfer.receipts.is_empty() {
         return Err("replay proof requires receipts".into());
     }
-    let tx_ids: Vec<Hash> = transfer
-        .receipts
+    let ordered_receipts = canonical_receipts(&transfer.receipts);
+    let tx_ids: Vec<Hash> = ordered_receipts
         .iter()
         .map(|receipt| receipt.tx_id)
         .collect();

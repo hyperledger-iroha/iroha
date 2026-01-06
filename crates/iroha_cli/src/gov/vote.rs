@@ -813,10 +813,7 @@ fn annotate_vote_instructions(value: &mut json::Value) -> Result<Option<VoteInst
                     );
                     summary.direction.get_or_insert(direction);
                 }
-                if let Some(nullifier_val) = hints
-                    .get("nullifier_hex")
-                    .or_else(|| hints.get("nullifier"))
-                {
+                if let Some(nullifier_val) = hints.get("nullifier_hex") {
                     let nullifier = stringify_json_value(nullifier_val);
                     map.insert(
                         "nullifier_hex".to_owned(),

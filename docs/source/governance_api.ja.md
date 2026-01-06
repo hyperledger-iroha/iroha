@@ -21,6 +21,7 @@ translator: manual
   - `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
+  - When `min_bond_amount > 0`, ZK ballots must supply lock hints (`owner`, `amount`, `duration_blocks`); missing hints are rejected. Direction remains optional and is treated as a hint only.
   - `iroha gov vote-plain --referendum-id <id> --owner <account>@<domain> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
     - `--lock-amount` / `--lock-duration-blocks` の別名をサポートし、ZK コマンドと同様に fingerprint とヒントをサマリーと JSON へ出力します。
 
@@ -114,6 +115,9 @@ translator: manual
     "envelope_b64": "AAECAwQ=",
     "root_hint_hex": "…64hex?",
     "owner": "alice@wonderland?",
+    "amount": "100?",
+    "duration_blocks": 6000?,
+    "direction": "Aye|Nay|Abstain?",
     "nullifier_hex": "…64hex?"
   }
   ```
@@ -133,7 +137,10 @@ translator: manual
       "envelope_bytes": "AAECAwQ=",
       "root_hint": null,
       "owner": null,
-      "nullifier": null
+      "nullifier": null,
+      "amount": "100",
+      "duration_blocks": 6000,
+      "direction": "Aye"
     }
   }
   ```
@@ -147,13 +154,14 @@ translator: manual
   }
   ```
 - 備考:
-  - サーバーは `root_hint` / `owner` / `nullifier` の任意値を命令の `public_inputs_json` に写像します。
+  - サーバーは `root_hint` / `owner` / `amount` / `duration_blocks` / `direction` / `nullifier`（`nullifier_hex` として） の任意値を命令の `public_inputs_json` に写像します。
   - エンベロープバイト列は命令ペイロードで再度 base64 エンコードされます。
   - Torii が提出する場合、応答の `reason` は `submitted transaction` に変わります。
   - このエンドポイントは `zk-ballot` フィーチャが有効な場合のみ利用できます。
 
 #### CastZkBallot 検証フロー
 - `CastZkBallot` は渡された base64 証明をデコードし、空または不正形式のペイロードを `BallotRejected`（`invalid or empty proof`）で拒否します。
+- `public_inputs_json` が指定されている場合は JSON オブジェクトである必要があり、非オブジェクトは拒否されます。
 - ホストはレファレンダムまたはガバナンス既定値から投票用検証鍵（`vk_ballot`）を解決し、レコードが存在し `Active` であり、インラインバイトを保持していることを要求します。
 - 保管されている検証鍵バイト列を `hash_vk` で再ハッシュし、コミットメントが一致しない場合は検証前に中断して改ざんを防ぎます（`BallotRejected` with `verifying key commitment mismatch`）。
 - 証明バイト列は登録済みバックエンド経由で `zk::verify_backend` に渡されます。無効なトランスクリプトは `BallotRejected`（`invalid proof`）として決定論的に失敗します。

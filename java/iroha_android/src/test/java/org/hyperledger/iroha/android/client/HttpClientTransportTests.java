@@ -72,6 +72,7 @@ public final class HttpClientTransportTests {
     uaidRequestsRespectBasePath();
     uaidBindingsRequestParsesResponse();
     uaidManifestsRequestSupportsQuery();
+    invalidateAndCancelDelegatesToExecutor();
     System.out.println("[IrohaAndroid] HTTP client transport tests passed.");
   }
 
@@ -911,6 +912,15 @@ public final class HttpClientTransportTests {
         : "Manifest URI must include encoded query parameters";
   }
 
+  private static void invalidateAndCancelDelegatesToExecutor() {
+    final InvalidationTrackingExecutor executor = new InvalidationTrackingExecutor();
+    final ClientConfig config =
+        ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build();
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
+    transport.invalidateAndCancel();
+    assert executor.invalidated : "invalidateAndCancel should reach the executor";
+  }
+
   private static String readBody(final TransportRequest request) {
     return new String(request.body(), StandardCharsets.UTF_8);
   }
@@ -1083,6 +1093,21 @@ public final class HttpClientTransportTests {
 
     TransportRequest lastRequest() {
       return lastRequest;
+    }
+  }
+
+  private static final class InvalidationTrackingExecutor implements HttpTransportExecutor {
+    private boolean invalidated = false;
+
+    @Override
+    public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
+      return CompletableFuture.completedFuture(
+          new TransportResponse(200, new byte[0], "ok", Map.of()));
+    }
+
+    @Override
+    public void invalidateAndCancel() {
+      invalidated = true;
     }
   }
 

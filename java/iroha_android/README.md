@@ -263,6 +263,10 @@ bash ci/check_android_transport_guard.sh /path/to/classes.jar
 - Consumers can supply a custom `OkHttpClient` via `OkHttpTransportExecutorFactory` on Android (the
   default factory uses the shared client provider); JVM callers can opt into
   `JavaHttpExecutorFactory` when `java.net.http` is available on the module path.
+- When using a custom `OkHttpClient` (for example with certificate pinning) and you need to release
+  resources, call `HttpClientTransport.invalidateAndCancel()` (or
+  `HttpTransportExecutor.invalidateAndCancel()`) to cancel in-flight requests and clean up the
+  underlying dispatcher/connection pool.
 - For Android-first apps that want a single transport surface, `AndroidClientFactory` constructs
   HTTP/Norito RPC/SSE/WebSocket/Safety Detect/SoraFS clients around a shared `OkHttpClient`,
   threading through `ClientConfig` headers/observers (including telemetry).
@@ -985,6 +989,10 @@ offlineWallet.fetchTransfersWithAudit(params)
         System.out.println("Fetched " + list.items().size() + " transfers");
     });
 ```
+
+`OfflineTransferList.OfflineTransferItem.toJsonMap()` exposes a JSON-ready representation of the
+transfer item; encode it with `JsonEncoder.encode(...)` when caching transfer lists locally. The
+snapshot payload is included via `PlatformTokenSnapshot.toJsonMap()` when present.
 
 The Android logger mirrors the Swift implementation: logging can be toggled at runtime, entries
 use `{tx_id,sender_id,receiver_id,asset_id,amount,timestamp_ms}` fields, and

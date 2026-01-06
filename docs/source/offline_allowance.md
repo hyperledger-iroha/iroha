@@ -159,7 +159,22 @@ a deny list even when they only have intermittent connectivity.
 - `AndroidMarkerKey`: `{ series, counter, marker_public_key, marker_signature?, attestation }`
 - `AndroidProvisioned`: `{ manifest_schema, manifest_version?, manifest_issued_at_ms, challenge_hash, counter, device_manifest, inspector_signature }`
 
-Counters are tracked inside `OfflineCounterState` (per-`key_id` for iOS, per-`series` for Android).
+`AppleAppAttest.key_id` is the canonical standard-base64 encoding of the App Attest key id bytes
+(no whitespace, with padding as needed). Torii rejects non-canonical encodings to keep counter
+scopes stable.
+
+`AndroidMarkerKey.marker_public_key` is the 65-byte uncompressed SEC1 P-256 public key
+(`0x04 || X || Y`). `marker_signature` is an optional 64-byte raw signature (`r || s`) over the
+receipt challenge hash; when present it must verify against `marker_public_key`. The `series`
+value is derived as `marker::<hash>`, where `hash` is the lowercase hex BLAKE2b-256 digest of
+`marker_public_key`, and must match the derived value.
+
+`AndroidProvisioned` counters are scoped to `provisioned::<manifest_schema>::<device_id>`, where
+`device_id` is read from `device_manifest["android.provisioned.device_id"]`.
+
+Counters are tracked inside `OfflineCounterState` (per-`key_id` for iOS, per-`series`/provisioned
+scope for Android). Each bundle must keep receipts within a single counter scope; mixed scopes are
+rejected with `mixed_counter_scopes`.
 `SubmitOfflineToOnlineTransfer` clones the stored state, stages every receipt via
 `stage_receipt_counters`, and enforces strictly monotonic increments (no gaps and no rewinds).
 
@@ -215,6 +230,8 @@ canonical Norito encoding described above.
   Detect token (`{ policy, attestation_jws_b64 }`) used during settlement; validators prefer the
   receipt-level snapshot (`receipts[].platform_snapshot`) when present and fall back to the bundle
   snapshot or cached certificate token otherwise.
+- Receipts inside a bundle must be ordered by `(counter, tx_id)`; Torii rejects unsorted bundles
+  with `receipt_order_invalid`.
 - `OfflineAllowanceRecord` is the on-ledger mirror stored after registration; it tracks the latest
   commitment, `remaining_amount`, and the most recent counter checkpoints.
 
@@ -356,7 +373,7 @@ Conversion rules:
 - The final root is stored as a `PoseidonDigest` (32-byte big-endian field encoding) inside
   `AggregateProofEnvelope`.  
 - Deterministic builders must sort receipts by `(counter, tx_id)` before inserting them so wallets
-  and nodes derive identical trees.  
+  and nodes derive identical trees. Torii enforces the same ordering on submitted bundles.  
 - Golden vectors (leaf inputs, intermediate hashes, tree roots) live under
   `artifacts/offline_poseidon/vectors.json`. Each entry records the leaf hashes and the resulting root
   so SDKs can cross-check their Poseidon implementations without depending on Rust fixtures.
@@ -448,13 +465,15 @@ resource envelopes defined in OA14.1; SDKs call the host through the FFI/bridge 
 Ledger invariants enforced during `SubmitOfflineToOnlineTransfer`:
 
 1. All receipts share the same sender certificate, asset definition, receiver, and controller.
-2. Every receipt amount is positive, uses the allowance scale, and stays within
+2. Receipts share a single counter scope (canonical App Attest key id, marker series, or provisioned scope).
+3. Receipts are ordered by `(counter, tx_id)` to keep counter proofs and aggregates deterministic.
+4. Every receipt amount is positive, uses the allowance scale, and stays within
    `policy.max_tx_value`.
-3. Aggregate amount equals `balance_proof.claimed_delta`.
-4. `record.current_commitment == balance_proof.initial_commitment`.
-5. `record.remaining_amount >= claimed_delta`; remaining balance is decremented on success.
-6. Platform counters advance exactly by one per receipt and never rewind.
-7. If the bundle supplies `platform_snapshot` (either per receipt or at the bundle level), its
+5. Aggregate amount equals `balance_proof.claimed_delta`.
+6. `record.current_commitment == balance_proof.initial_commitment`.
+7. `record.remaining_amount >= claimed_delta`; remaining balance is decremented on success.
+8. Platform counters advance exactly by one per receipt and never rewind.
+9. If the bundle supplies `platform_snapshot` (either per receipt or at the bundle level), its
    `policy` must match the allowance metadata and `attestation_jws_b64` must be valid base64; those
    bytes are used to verify Play Integrity / HMS Safety Detect tokens instead of the certificate’s
    cached attestation report. Receipt-local snapshots take precedence so POS importers can attach

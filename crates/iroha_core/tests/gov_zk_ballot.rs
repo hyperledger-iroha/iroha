@@ -60,7 +60,8 @@ fn zk_ballot_records_and_dedupes() {
     // Build minimal state/transaction
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), kura, query_handle);
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    state.gov.min_bond_amount = 0;
     // Leader keypair not needed in this simplified setup
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
@@ -155,10 +156,87 @@ fn zk_ballot_records_and_dedupes() {
 }
 
 #[test]
-fn zk_ballot_accepts_commit_nullifier_hint() {
+fn zk_ballot_rejects_missing_lock_hints_when_bond_required() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query_handle);
+    assert!(state.gov.min_bond_amount > 0, "bond must be required by default");
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let mut sblock = state.block(header);
+    let mut stx = sblock.transaction();
+
+    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let vk_id = bundle.vk_id.clone();
+
+    let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
+    Grant::account_permission(perm, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant VK management");
+
+    iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
+        id: vk_id.clone(),
+        record: bundle.vk_record.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect("register verifying key");
+    let parliament_perm: Permission = CanManageParliament.into();
+    Grant::account_permission(parliament_perm, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant CanManageParliament");
+    let election_id = "referendum-bond-required".to_string();
+    let ballot_perm: Permission = CanSubmitGovernanceBallot {
+        referendum_id: election_id.clone(),
+    }
+    .into();
+    Grant::account_permission(ballot_perm, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant CanSubmitGovernanceBallot");
+
+    let create = CreateElection {
+        election_id: election_id.clone(),
+        options: 2,
+        eligible_root: bundle.root_bytes(),
+        start_ts: 0,
+        end_ts: 0,
+        vk_ballot: vk_id.clone(),
+        vk_tally: vk_id,
+        domain_tag: "gov:ballot:v1".to_string(),
+    };
+    create.execute(&ALICE_ID, &mut stx).expect("create ok");
+    stx.world.governance_referenda_mut().insert(
+        election_id.clone(),
+        iroha_core::state::GovernanceReferendumRecord {
+            h_start: 0,
+            h_end: 100,
+            status: iroha_core::state::GovernanceReferendumStatus::Proposed,
+            mode: iroha_core::state::GovernanceReferendumMode::Zk,
+        },
+    );
+
+    let err = CastZkBallot {
+        election_id,
+        proof_b64: bundle.proof_b64.clone(),
+        public_inputs_json: "{}".to_string(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .unwrap_err();
+    let s = format!("{err}");
+    assert!(s.contains("lock hints required"));
+
+    let events = stx.world.take_external_events();
+    assert!(events.iter().any(|event| matches!(
+        event.as_data_event(),
+        Some(DataEvent::Governance(GovernanceEvent::BallotRejected(rej)))
+            if rej.reason.contains("lock hints required")
+    )));
+}
+
+#[test]
+fn zk_ballot_accepts_commit_nullifier_hint() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    state.gov.min_bond_amount = 0;
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
@@ -250,7 +328,8 @@ fn zk_ballot_accepts_commit_nullifier_hint() {
 fn zk_ballot_rejects_invalid_proof() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), kura, query_handle);
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    state.gov.min_bond_amount = 0;
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
@@ -334,7 +413,8 @@ fn zk_ballot_rejects_invalid_proof() {
 fn zk_ballot_rejects_owner_mismatch_without_recording() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), kura, query_handle);
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    state.gov.min_bond_amount = 0;
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
@@ -428,7 +508,8 @@ fn zk_ballot_rejects_owner_mismatch_without_recording() {
 fn zk_ballot_rejects_malformed_public_inputs() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), kura, query_handle);
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    state.gov.min_bond_amount = 0;
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
@@ -492,10 +573,147 @@ fn zk_ballot_rejects_malformed_public_inputs() {
 }
 
 #[test]
+fn zk_ballot_rejects_non_object_public_inputs() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    state.gov.min_bond_amount = 0;
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let mut sblock = state.block(header);
+    let mut stx = sblock.transaction();
+
+    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let vk_id = bundle.vk_id.clone();
+
+    let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
+    Grant::account_permission(perm, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant VK management");
+
+    iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
+        id: vk_id.clone(),
+        record: bundle.vk_record.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect("register verifying key");
+
+    let election_id = "ref-public-inputs-object".to_string();
+    let create = CreateElection {
+        election_id: election_id.clone(),
+        options: 2,
+        eligible_root: bundle.root_bytes(),
+        start_ts: 0,
+        end_ts: 0,
+        vk_ballot: vk_id.clone(),
+        vk_tally: vk_id,
+        domain_tag: "gov:ballot:v1".to_string(),
+    };
+    create
+        .execute(&ALICE_ID, &mut stx)
+        .expect("create election");
+    stx.world.governance_referenda_mut().insert(
+        election_id.clone(),
+        iroha_core::state::GovernanceReferendumRecord {
+            h_start: 0,
+            h_end: 100,
+            status: iroha_core::state::GovernanceReferendumStatus::Proposed,
+            mode: iroha_core::state::GovernanceReferendumMode::Zk,
+        },
+    );
+
+    let non_object_public_inputs = "[1,2,3]".to_string();
+    let err = CastZkBallot {
+        election_id,
+        proof_b64: bundle.proof_b64.clone(),
+        public_inputs_json: non_object_public_inputs,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .unwrap_err();
+    let s = format!("{err}");
+    assert!(s.contains("public inputs must be a JSON object"));
+
+    let events = stx.world.take_external_events();
+    assert!(events.iter().any(|event| matches!(
+        event.as_data_event(),
+        Some(DataEvent::Governance(GovernanceEvent::BallotRejected(rej)))
+            if rej.reason.contains("public inputs must be a JSON object")
+    )));
+}
+
+#[test]
+fn zk_ballot_rejects_owner_non_string() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    state.gov.min_bond_amount = 0;
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let mut sblock = state.block(header);
+    let mut stx = sblock.transaction();
+
+    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let vk_id = bundle.vk_id.clone();
+
+    let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
+    Grant::account_permission(perm, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant VK management");
+
+    iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
+        id: vk_id.clone(),
+        record: bundle.vk_record.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect("register verifying key");
+
+    let election_id = "ref-owner-hint-type".to_string();
+    let create = CreateElection {
+        election_id: election_id.clone(),
+        options: 2,
+        eligible_root: bundle.root_bytes(),
+        start_ts: 0,
+        end_ts: 0,
+        vk_ballot: vk_id.clone(),
+        vk_tally: vk_id,
+        domain_tag: "gov:ballot:v1".to_string(),
+    };
+    create
+        .execute(&ALICE_ID, &mut stx)
+        .expect("create election");
+    stx.world.governance_referenda_mut().insert(
+        election_id.clone(),
+        iroha_core::state::GovernanceReferendumRecord {
+            h_start: 0,
+            h_end: 100,
+            status: iroha_core::state::GovernanceReferendumStatus::Proposed,
+            mode: iroha_core::state::GovernanceReferendumMode::Zk,
+        },
+    );
+
+    let owner_non_string = "{\"owner\": 5}".to_string();
+    let err = CastZkBallot {
+        election_id,
+        proof_b64: bundle.proof_b64.clone(),
+        public_inputs_json: owner_non_string,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .unwrap_err();
+    let s = format!("{err}");
+    assert!(s.contains("owner must be a canonical account id"));
+
+    let events = stx.world.take_external_events();
+    assert!(events.iter().any(|event| matches!(
+        event.as_data_event(),
+        Some(DataEvent::Governance(GovernanceEvent::BallotRejected(rej)))
+            if rej.reason.contains("owner must be a canonical account id")
+    )));
+}
+
+#[test]
 fn zk_ballot_rejects_when_vk_commitment_mismatched() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), kura, query_handle);
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    state.gov.min_bond_amount = 0;
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
