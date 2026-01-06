@@ -4222,7 +4222,7 @@ mod attestation {
                 )
             })?;
             marker_key
-                .verify_prehash(challenge.client_data_hash.as_slice(), &sig)
+                .verify_prehash(challenge.client_data_hash.as_ref(), &sig)
                 .map_err(|_| {
                     InstructionExecutionError::InvariantViolation(
                         "android marker signature does not match marker_public_key".into(),
