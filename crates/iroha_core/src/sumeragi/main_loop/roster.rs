@@ -144,61 +144,32 @@ fn filter_roster_bls(roster: impl IntoIterator<Item = PeerId>) -> Vec<PeerId> {
     dedup_preserving_order(roster.into_iter().filter(roster_member_allowed_bls))
 }
 
-fn guard_pop_quorum(
-    filtered: Vec<PeerId>,
-    baseline: Vec<PeerId>,
-    pops: &BTreeMap<iroha_crypto::PublicKey, Vec<u8>>,
-    me: &PeerId,
-) -> Vec<PeerId> {
-    if baseline.is_empty() {
-        return baseline;
+fn guard_pop_quorum(filtered: Vec<PeerId>, baseline_len: usize, pops_len: usize) -> Vec<PeerId> {
+    if baseline_len == 0 {
+        return Vec::new();
     }
-    let baseline_has_me = baseline.iter().any(|peer| peer == me);
-    let needed = if baseline.len() > 3 {
-        ((baseline.len().saturating_sub(1)) / 3) * 2 + 1
+    let needed = if baseline_len > 3 {
+        ((baseline_len.saturating_sub(1)) / 3) * 2 + 1
     } else {
-        baseline.len()
+        baseline_len
     };
-    if filtered.len() >= needed {
-        return filtered;
-    }
-    warn!(
-        filtered = filtered.len(),
-        baseline = baseline.len(),
-        needed,
-        pops = pops.len(),
-        "PoP filtering produced sub-quorum roster; falling back to BLS roster to preserve quorum"
-    );
-    let mut roster = dedup_preserving_order(
-        filtered.into_iter().chain(
-            baseline
-                .iter()
-                .filter(|peer| roster_member_allowed(peer, pops))
-                .cloned(),
-        ),
-    );
-    if roster.len() < needed {
-        iroha_logger::warn!(
-            baseline = baseline.len(),
-            filtered = roster.len(),
+    if filtered.len() < needed {
+        warn!(
+            filtered = filtered.len(),
+            baseline = baseline_len,
             needed,
-            pops = pops.len(),
-            "trusted PoP map incomplete; reintroducing BLS roster to preserve commit quorum"
+            pops = pops_len,
+            "PoP filtering produced sub-quorum roster; refusing fallback to preserve safety"
         );
-        roster = dedup_preserving_order(roster.into_iter().chain(baseline));
     }
-    if baseline_has_me && roster_member_allowed(me, pops) && !roster.iter().any(|p| p == me) {
-        roster.push(me.clone());
-        roster = dedup_preserving_order(roster);
-    }
-    roster
+    filtered
 }
 
 #[allow(clippy::if_not_else)]
 pub(super) fn derive_active_topology(
     view: &StateView<'_>,
     trusted: &iroha_config::parameters::actual::TrustedPeers,
-    me: &PeerId,
+    _me: &PeerId,
 ) -> Vec<PeerId> {
     let world_peers = view.world.peers();
     let commit_topology = view.commit_topology();
@@ -225,10 +196,10 @@ pub(super) fn derive_active_topology(
                 pops = trusted.pops.len(),
                 baseline = baseline.len(),
                 filtered = filtered.len(),
-                "PoP map incomplete for active topology; preserving quorum with trusted roster fallback"
+                "PoP map incomplete for active topology; excluding peers without PoP"
             );
         }
-        guard_pop_quorum(filtered, baseline, &trusted.pops, me)
+        guard_pop_quorum(filtered, baseline.len(), trusted.pops.len())
     };
 
     roster = canonicalize_roster(roster);
@@ -247,7 +218,15 @@ pub(super) fn derive_active_topology(
     } else {
         let baseline = filter_roster_bls(crate::sumeragi::filter_validators_from_trusted(trusted));
         let filtered = filter_roster_with_pops(baseline.clone(), &trusted.pops);
-        guard_pop_quorum(filtered, baseline, &trusted.pops, me)
+        if filtered.len() < baseline.len() {
+            iroha_logger::warn!(
+                pops = trusted.pops.len(),
+                baseline = baseline.len(),
+                filtered = filtered.len(),
+                "PoP map incomplete for trusted roster fallback; excluding peers without PoP"
+            );
+        }
+        guard_pop_quorum(filtered, baseline.len(), trusted.pops.len())
     };
     canonicalize_roster(fallback)
 }
@@ -308,7 +287,7 @@ pub(super) fn apply_roster_indices_to_manager(
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
 
     use super::*;
 
@@ -353,5 +332,27 @@ mod tests {
 
         let indices = compute_roster_indices_from_topology(&topology, Some(&provider));
         assert_eq!(indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn pop_filter_keeps_subquorum_without_fallback() {
+        let keypairs: Vec<KeyPair> = (0..4)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let peers: Vec<PeerId> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let mut pops = BTreeMap::new();
+        for kp in keypairs.iter().take(2) {
+            let pop = bls_normal_pop_prove(kp.private_key()).expect("pop");
+            pops.insert(kp.public_key().clone(), pop);
+        }
+
+        let filtered = filter_roster_with_pops(peers.clone(), &pops);
+        let guarded = guard_pop_quorum(filtered.clone(), peers.len(), pops.len());
+
+        assert_eq!(guarded, filtered);
+        assert_eq!(guarded.len(), 2);
     }
 }
