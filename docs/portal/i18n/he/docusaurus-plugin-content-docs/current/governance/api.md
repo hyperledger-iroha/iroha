@@ -199,14 +199,15 @@ Helpers ל-CLI
   - שימושי לאודיט של namespaces מוגנים או לאימות זרימות deploy נשלטות ממשל.
 - `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - מפיק שלד JSON של metadata המשמש בעת שליחת deployments ל-namespaces מוגנים, כולל `gov_manifest_approvers` אופציונלי כדי לעמוד בכללי quorum של ה-manifest.
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --salt-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
-  - מאמת account ids קנוניים, אוכף salts של 32 בתים שאינם אפס, וממזג hints לתוך `public_inputs_json` (עם `--public <path>` לעקיפות נוספות).
+- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+  - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
+  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
   - סיכום שורה אחת מציג כעת `fingerprint=<hex>` דטרמיניסטי שנגזר מ-`CastZkBallot` המוצפן יחד עם hints מפוענחים (`owner`, `amount`, `duration_blocks`, `direction` כאשר סופקו).
   - תשובות CLI מסמנות `tx_instructions[]` עם `payload_fingerprint_hex` ועוד שדות מפוענחים כדי שכלי downstream יוכלו לאמת את השלד בלי ליישם שוב Norito decoding.
   - מתן hints של lock מאפשר לצומת לשדר אירועים `LockCreated`/`LockExtended` עבור ballots של ZK כאשר המעגל יחשוף את אותם ערכים.
 - `iroha gov vote-plain --referendum-id <id> --owner <account>@<domain> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - ה-aliases `--lock-amount`/`--lock-duration-blocks` משקפים את שמות הדגלים של ZK לשם פריטיות בסקריפטים.
-  - פלט הסיכום משקף `vote-zk` בכך שהוא כולל את ה-fingerprint של ההוראה המקודדת ושדות ballot קריאים (`owner`, `amount`, `duration_blocks`, `direction`, `salt_hex` כשקיים), ומספק אישור מהיר לפני חתימת השלד.
+  - פלט הסיכום משקף `vote-zk` בכך שהוא כולל את ה-fingerprint של ההוראה המקודדת ושדות ballot קריאים (`owner`, `amount`, `duration_blocks`, `direction`), ומספק אישור מהיר לפני חתימת השלד.
 
 Listing של אינסטנסים
 - GET `/v1/gov/instances/{ns}` - מציג אינסטנסים פעילים של חוזים עבור namespace.
@@ -233,7 +234,7 @@ Unlock sweep (מפעיל/ביקורת)
       "envelope_b64": "AAECAwQ=",
       "root_hint_hex": "...64hex?",
       "owner": "alice@wonderland?",
-      "salt_hex": "...64hex?"
+      "nullifier_hex": "...64hex?"
     }
   - תשובה: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
 
@@ -248,9 +249,9 @@ Unlock sweep (מפעיל/ביקורת)
       "ballot": {
         "backend": "halo2/ipa",
         "envelope_bytes": "AAECAwQ=",   // base64 של מיכל ZK1 או H2*
-        "root_hint": null,                // hex אופציונלי 32 בתים (שורש זכאות)
+        "root_hint": null,                // optional 32-byte array of bytes (eligibility root)
         "owner": null,                    // AccountId אופציונלי כאשר המעגל מחייב owner
-        "salt": null                      // hex אופציונלי 32 בתים להפקת nullifier
+        "nullifier": null                 // optional 32-byte array of bytes (nullifier hint)
       }
     }
   - תשובה:
@@ -263,7 +264,7 @@ Unlock sweep (מפעיל/ביקורת)
       ]
     }
   - הערות:
-    - השרת ממפה `root_hint`/`owner`/`salt` אופציונליים מה-ballot אל `public_inputs_json` עבור `CastZkBallot`.
+    - השרת ממפה `root_hint`/`owner`/`nullifier` אופציונליים מה-ballot אל `public_inputs_json` עבור `CastZkBallot`.
     - bytes של ה-envelope מקודדים מחדש ב-base64 עבור payload ההוראה.
     - התשובה `reason` משתנה ל-`submitted transaction` כאשר Torii מגישה את ה-ballot.
     - endpoint זה זמין רק כאשר feature `zk-ballot` מופעל.
@@ -273,6 +274,7 @@ Unlock sweep (מפעיל/ביקורת)
 - ה-host פותר את מפתח האימות של ballot מתוך referendum (`vk_ballot`) או ברירות המחדל של הממשל ודורש שהרשומה תתקיים, תהיה `Active`, ותכיל bytes inline.
 - bytes של מפתח אימות מאוחסן עוברים hash מחדש עם `hash_vk`; כל אי התאמה ב-commitment עוצרת את הביצוע לפני אימות כדי להגן על רשומות registry משובשות (`BallotRejected` עם `verifying key commitment mismatch`).
 - bytes של proof נשלחים ל-backend הרשום דרך `zk::verify_backend`; תמלילים לא תקינים מופיעים כ-`BallotRejected` עם `invalid proof` וההוראה נכשלת דטרמיניסטית.
+- The proof must expose a ballot commitment and eligibility root as public inputs; the root must match the election’s `eligible_root`, and the derived nullifier must match any provided hint.
 - proofs מוצלחים פולטים `BallotAccepted`; nullifiers כפולים, שורשי זכאות מיושנים או רגרסיות lock ממשיכים להניב את סיבות הדחיה הקיימות שתוארו לעיל.
 
 ## התנהגות שגויה של מאמתים וקונצנזוס משותף

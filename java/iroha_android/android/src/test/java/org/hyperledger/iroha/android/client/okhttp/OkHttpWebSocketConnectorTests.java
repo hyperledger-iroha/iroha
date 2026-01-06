@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.client.okhttp;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -22,6 +23,7 @@ public final class OkHttpWebSocketConnectorTests {
 
   public static void main(final String[] args) throws Exception {
     connectsAndForwardsMessages();
+    connectTimeoutOverridesDefault();
     System.out.println("[IrohaAndroid] OkHttpWebSocketConnectorTests passed.");
   }
 
@@ -86,6 +88,31 @@ public final class OkHttpWebSocketConnectorTests {
       if (!events.contains("open") || !events.contains("text:hello") || !events.contains("close:1000")) {
         throw new AssertionError("Unexpected WebSocket events: " + events);
       }
+    }
+  }
+
+  private static void connectTimeoutOverridesDefault() {
+    final OkHttpClient base =
+        new OkHttpClient.Builder().connectTimeout(1, TimeUnit.SECONDS).build();
+    final OkHttpWebSocketConnector connector = new OkHttpWebSocketConnector(base);
+
+    final OkHttpClient nullTimeout = connector.resolveClient(null);
+    if (nullTimeout != base) {
+      throw new AssertionError("Expected null timeout to reuse the base client");
+    }
+
+    final OkHttpClient sameTimeout = connector.resolveClient(Duration.ofSeconds(1));
+    if (sameTimeout != base) {
+      throw new AssertionError("Expected matching timeout to reuse the base client");
+    }
+
+    final OkHttpClient adjusted = connector.resolveClient(Duration.ofSeconds(2));
+    if (adjusted == base) {
+      throw new AssertionError("Expected timeout override to clone the base client");
+    }
+    if (adjusted.connectTimeoutMillis() != 2_000) {
+      throw new AssertionError(
+          "Expected connectTimeoutMillis=2000, got " + adjusted.connectTimeoutMillis());
     }
   }
 }

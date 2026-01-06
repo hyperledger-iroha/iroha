@@ -88,6 +88,9 @@ public final class OfflineAuditEntry {
     if (!(value instanceof Number number)) {
       throw new IllegalStateException(field + " is not numeric");
     }
+    if (number instanceof Float || number instanceof Double) {
+      throw new IllegalStateException(field + " must be an integer");
+    }
     return number.longValue();
   }
 }

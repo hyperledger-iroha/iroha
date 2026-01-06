@@ -13,7 +13,18 @@ use iroha_core::{
     zk::test_utils::halo2_fixture_envelope,
 };
 use iroha_crypto::Hash;
-use iroha_data_model::{isi::BuiltInInstruction, prelude::*};
+use iroha_data_model::{
+    confidential::ConfidentialStatus,
+    isi::{BuiltInInstruction, verifying_keys, zk::CreateElection},
+    permission::Permission,
+    prelude::*,
+    proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
+    zk::BackendTag,
+};
+use iroha_executor_data_model::permission::governance::{
+    CanManageParliament, CanSubmitGovernanceBallot,
+};
+use iroha_primitives::json::Json;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, PointerType, encoding, instruction, syscalls as ivm_sys};
 use nonzero_ext::nonzero;
@@ -33,6 +44,34 @@ fn store_tlv(vm: &mut IVM, cursor: &mut u64, tlv: &[u8]) -> u64 {
     vm.memory
         .input_write_aligned(cursor, tlv, 8)
         .expect("write TLV into INPUT")
+}
+
+fn derive_ballot_nullifier(
+    domain_tag: &str,
+    chain_id: &iroha_data_model::ChainId,
+    election_id: &str,
+    commit: &[u8; 32],
+) -> [u8; 32] {
+    use blake2::{Blake2b512, Digest as _};
+
+    let mut input = Vec::with_capacity(
+        domain_tag.len() + chain_id.as_str().len() + election_id.len() + commit.len() + 24,
+    );
+    let mut push_len = |len: usize| {
+        let len_u64 = len as u64;
+        input.extend_from_slice(&len_u64.to_le_bytes());
+    };
+    push_len(domain_tag.len());
+    input.extend_from_slice(domain_tag.as_bytes());
+    push_len(chain_id.as_str().len());
+    input.extend_from_slice(chain_id.as_str().as_bytes());
+    push_len(election_id.len());
+    input.extend_from_slice(election_id.as_bytes());
+    input.extend_from_slice(commit);
+    let digest = Blake2b512::digest(&input);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest[..32]);
+    out
 }
 
 #[test]
@@ -60,20 +99,79 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
     let host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
     vm.set_host(host);
 
-    // Build a Norito-encoded SubmitBallot instruction (dummy payload)
-    let ballot_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let ballot_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add2inst-public-v1", [0u8; 32]);
     let ballot_vk = ballot_fixture
         .vk_box("halo2/ipa")
         .expect("fixture verifying key");
+    let vk_commitment = iroha_core::zk::hash_vk(&ballot_vk);
+    let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_ballot");
+    let mut vk_record = VerifyingKeyRecord::new(
+        1,
+        "halo2/pasta/tiny-add2inst-public-v1",
+        BackendTag::Halo2IpaPasta,
+        "pallas",
+        ballot_fixture.schema_hash,
+        vk_commitment,
+    );
+    vk_record.vk_len = ballot_vk.bytes.len() as u32;
+    vk_record.max_proof_bytes = ballot_fixture.proof_bytes.len() as u32;
+    vk_record.gas_schedule_id = Some("halo2_default".into());
+    vk_record.key = Some(VerifyingKeyBox::new(
+        "halo2/ipa".into(),
+        ballot_vk.bytes.clone(),
+    ));
+    vk_record.status = ConfidentialStatus::Active;
+
+    let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
+    let perm_parliament: Permission = CanManageParliament.into();
+    let perm_submit: Permission = CanSubmitGovernanceBallot {
+        referendum_id: "election1".to_string(),
+    }
+    .into();
+    Grant::account_permission(perm_vk, authority.clone())
+        .execute(&authority, &mut stx)
+        .expect("grant vk permission");
+    Grant::account_permission(perm_parliament, authority.clone())
+        .execute(&authority, &mut stx)
+        .expect("grant parliament permission");
+    Grant::account_permission(perm_submit, authority.clone())
+        .execute(&authority, &mut stx)
+        .expect("grant submit ballot permission");
+    verifying_keys::RegisterVerifyingKey {
+        id: vk_id.clone(),
+        record: vk_record,
+    }
+    .execute(&authority, &mut stx)
+    .expect("register vk");
+
+    let mut commit_bytes = [0u8; 32];
+    let mut root_bytes = [0u8; 32];
+    commit_bytes.copy_from_slice(&ballot_fixture.public_inputs[..32]);
+    root_bytes.copy_from_slice(&ballot_fixture.public_inputs[32..64]);
+    CreateElection {
+        election_id: "election1".to_string(),
+        options: 1,
+        eligible_root: root_bytes,
+        start_ts: 0,
+        end_ts: 0,
+        vk_ballot: vk_id.clone(),
+        vk_tally: vk_id,
+        domain_tag: "zkvote".to_string(),
+    }
+    .execute(&authority, &mut stx)
+    .expect("create election");
+
+    // Build a Norito-encoded SubmitBallot instruction (valid payload)
+    let nullifier = derive_ballot_nullifier("zkvote", &state.chain_id, "election1", &commit_bytes);
     let sb = iroha_data_model::isi::zk::SubmitBallot {
         election_id: "election1".to_string(),
-        ciphertext: vec![0u8; 8],
+        ciphertext: commit_bytes.to_vec(),
         ballot_proof: iroha_data_model::proof::ProofAttachment::new_inline(
             "halo2/ipa".into(),
             ballot_fixture.proof_box("halo2/ipa"),
             ballot_vk,
         ),
-        nullifier: [7u8; 32],
+        nullifier,
     };
     let sb_bytes = sb.encode_as_instruction_box();
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &sb_bytes);

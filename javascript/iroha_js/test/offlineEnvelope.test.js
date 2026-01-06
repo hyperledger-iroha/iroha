@@ -36,6 +36,19 @@ test("buildOfflineEnvelope computes hashes and preserves metadata", () => {
   assert.ok(envelope.signedTransaction.length > 0);
 });
 
+test("buildOfflineEnvelope rejects fractional issuedAtMs", () => {
+  const signedTransaction = Buffer.from("offline-transaction-fixture", "utf8");
+  assert.throws(
+    () =>
+      buildOfflineEnvelope({
+        signedTransaction,
+        keyAlias: "alice-key",
+        issuedAtMs: 1.5,
+      }),
+    /issuedAtMs/,
+  );
+});
+
 test("serialize/parse round-trips offline envelopes", () => {
   const { envelope } = buildSampleEnvelope();
   const serialized = serializeOfflineEnvelope(envelope);
@@ -45,6 +58,19 @@ test("serialize/parse round-trips offline envelopes", () => {
   assert.equal(parsed.hashHex, envelope.hashHex);
   assert.equal(parsed.keyAlias, envelope.keyAlias);
   assert.deepEqual(parsed.signedTransaction, envelope.signedTransaction);
+});
+
+test("parseOfflineEnvelope rejects invalid base64 payloads", () => {
+  const { envelope } = buildSampleEnvelope();
+  const serialized = serializeOfflineEnvelope(envelope);
+  const bad = { ...serialized, signed_transaction_b64: "not*base64" };
+  assert.throws(
+    () => parseOfflineEnvelope(bad),
+    (error) =>
+      error instanceof TypeError &&
+      /signed_transaction_b64/.test(error.message) &&
+      /base64/.test(error.message),
+  );
 });
 
 test("write/read offline envelope file round-trips payloads", async () => {

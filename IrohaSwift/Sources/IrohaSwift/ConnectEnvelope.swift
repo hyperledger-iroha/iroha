@@ -60,15 +60,16 @@ public struct ConnectEnvelope: Equatable, Sendable {
     static func decode(jsonData: Data) throws -> ConnectEnvelope {
         let object = try JSONSerialization.jsonObject(with: jsonData, options: [])
         guard let root = object as? [String: Any],
-              let seqValue = root["seq"] as? NSNumber,
+              let seqValue = StrictJSONNumber.uint64(from: root["seq"]),
               let payloadObject = root["payload"] as? [String: Any],
+              payloadObject.count == 1,
               let (kind, payloadValue) = payloadObject.first
         else {
             throw ConnectEnvelopeError.invalidEnvelope
         }
 
         let payload = try ConnectEnvelopePayload(kind: kind, payload: payloadValue)
-        return ConnectEnvelope(sequence: seqValue.uint64Value, payload: payload)
+        return ConnectEnvelope(sequence: seqValue, payload: payload)
     }
 }
 
@@ -124,6 +125,7 @@ public enum ConnectEnvelopePayload: Equatable, Sendable {
             self = .displayRequest(title: title, body: body)
         case "Control":
             guard let dict = payload as? [String: Any],
+                  dict.count == 1,
                   let (controlKind, controlPayload) = dict.first,
                   let controlDict = controlPayload as? [String: Any]
             else {
@@ -132,12 +134,11 @@ public enum ConnectEnvelopePayload: Equatable, Sendable {
             switch controlKind {
             case "Close":
                 guard let whoRaw = controlDict["who"] as? String,
-                      let codeNumber = controlDict["code"] as? NSNumber,
+                      let code = StrictJSONNumber.uint16(from: controlDict["code"]),
                       let retryable = controlDict["retryable"] as? Bool
                 else {
                     throw ConnectEnvelopeError.invalidPayload
                 }
-                let code = UInt16(truncating: codeNumber)
                 let role: ConnectRole
                 switch whoRaw.lowercased() {
                 case "app":
@@ -151,13 +152,13 @@ public enum ConnectEnvelopePayload: Equatable, Sendable {
                 let close = ConnectClose(role: role, code: code, reason: reason, retryable: retryable)
                 self = .controlClose(close)
             case "Reject":
-                guard let codeNumber = controlDict["code"] as? NSNumber,
+                guard let code = StrictJSONNumber.uint16(from: controlDict["code"]),
                       let codeId = controlDict["code_id"] as? String,
                       let reason = controlDict["reason"] as? String
                 else {
                     throw ConnectEnvelopeError.invalidPayload
                 }
-                let reject = ConnectReject(code: UInt16(truncating: codeNumber), codeID: codeId, reason: reason)
+                let reject = ConnectReject(code: code, codeID: codeId, reason: reason)
                 self = .controlReject(reject)
             default:
                 throw ConnectEnvelopeError.unknownPayloadKind(controlKind)

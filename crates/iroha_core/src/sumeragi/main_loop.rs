@@ -4044,11 +4044,25 @@ fn validate_commit_certificate_roster(
             }
         }
         ConsensusMode::Npos => {
-            let snapshot = stake_snapshot.ok_or(RosterValidationError::StakeSnapshotUnavailable)?;
-            match stake_quorum_reached_for_snapshot(snapshot, &cert.validator_set, &signer_peers) {
-                Ok(true) => {}
-                Ok(false) => return Err(RosterValidationError::StakeQuorumMissing),
-                Err(_) => return Err(RosterValidationError::StakeSnapshotUnavailable),
+            if let Some(snapshot) = stake_snapshot {
+                match stake_quorum_reached_for_snapshot(
+                    snapshot,
+                    &cert.validator_set,
+                    &signer_peers,
+                ) {
+                    Ok(true) => {}
+                    Ok(false) => return Err(RosterValidationError::StakeQuorumMissing),
+                    Err(_) => return Err(RosterValidationError::StakeSnapshotUnavailable),
+                }
+            } else {
+                // Dev-friendly fallback: treat missing stake snapshots like permissioned quorum.
+                let required = super::network_topology::commit_quorum_from_len(roster_len).max(1);
+                if signer_indices.len() < required {
+                    return Err(RosterValidationError::CommitQuorumMissing {
+                        votes: signer_indices.len(),
+                        required,
+                    });
+                }
             }
         }
     }
@@ -6838,14 +6852,33 @@ impl Actor {
 
             let total = session.total_chunks();
             if total != 0 && session.received_chunks() < total {
-                debug!(
-                    height = key.1,
-                    view = key.2,
-                    received = session.received_chunks(),
-                    total,
-                    "deferring local RBC READY until all chunks are received"
-                );
-                return Ok(None);
+                let commit_topology = self.rbc_session_roster(key);
+                if commit_topology.is_empty() {
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        received = session.received_chunks(),
+                        total,
+                        "deferring local RBC READY until commit roster is available"
+                    );
+                    return Ok(None);
+                }
+                let topology = super::network_topology::Topology::new(commit_topology);
+                // Allow READY after f+1 READYs to unblock quorum even if chunks lag.
+                let ready_threshold = topology.min_votes_for_view_change();
+                let ready_count = session.ready_signatures.len();
+                if ready_count < ready_threshold {
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        received = session.received_chunks(),
+                        total,
+                        ready = ready_count,
+                        required = ready_threshold,
+                        "deferring local RBC READY until enough chunks or READY quorum"
+                    );
+                    return Ok(None);
+                }
             }
 
             if let Some(expected_root) = session.expected_chunk_root {

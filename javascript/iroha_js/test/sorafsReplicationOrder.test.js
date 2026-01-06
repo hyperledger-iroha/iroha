@@ -72,3 +72,23 @@ test("decodeReplicationOrder rejects payloads without a Norito header", () => {
     /header|payload is too small/i,
   );
 });
+
+test("decodeReplicationOrder rejects invalid lane discriminants", () => {
+  const bytes = readFileSync(ORDER_FIXTURE);
+  const needle = Buffer.from("lane-primary", "utf8");
+  const laneOffset = bytes.indexOf(needle);
+  assert.notEqual(laneOffset, -1, "fixture lane-primary string missing");
+  const discriminantOffset = laneOffset - 17;
+  assert.ok(discriminantOffset >= 0, "lane discriminant offset is negative");
+  assert.equal(bytes[discriminantOffset], 1);
+  const payloadLen = Number(bytes.readBigUInt64LE(discriminantOffset + 1));
+  const stringLen = Number(bytes.readBigUInt64LE(discriminantOffset + 9));
+  assert.equal(stringLen, needle.length);
+  assert.equal(payloadLen, needle.length + 8);
+  const mutated = Buffer.from(bytes);
+  mutated[discriminantOffset] = 2;
+  assert.throws(
+    () => decodeReplicationOrder(mutated),
+    /lane.*discriminant/i,
+  );
+});

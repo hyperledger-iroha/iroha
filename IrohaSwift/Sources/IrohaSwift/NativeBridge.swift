@@ -5454,8 +5454,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 guard let json = decodeEnvelopeJSON(envelopePayload) else { return 0 }
                 let value = try? JSONSerialization.jsonObject(with: json, options: [])
                 let root = value as? [String: Any]
-                let seq = (root?["seq"] as? NSNumber)?.uint64Value
-                return seq ?? 0
+                return StrictJSONNumber.uint64(from: root?["seq"]) ?? 0
             }()
             let keyStream = connectFallbackKeystream(key: key,
                                                      sessionID: sessionID,
@@ -6327,7 +6326,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
         guard permsStatus == 0 else { return nil }
         let permissionsData = takeData(pointer: permissionsPtr, length: permissionsLen)
-        let permissions = permissionsData.flatMap { ConnectCodec.decodePermissionsJSON($0) }
+        let permissions: ConnectPermissions?
+        if let permissionsData {
+            do {
+                permissions = try ConnectCodec.decodePermissionsJSON(permissionsData)
+            } catch {
+                return nil
+            }
+        } else {
+            permissions = nil
+        }
 
         var appMetadata: ConnectAppMetadata?
         if let decodeControlOpenAppMetadataFn {
@@ -6339,7 +6347,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             }
             if metadataStatus == 0 {
                 let metadataData = takeData(pointer: metadataPtr, length: metadataLen)
-                appMetadata = metadataData.flatMap { ConnectCodec.decodeAppMetadataJSON($0) }
+                if let metadataData {
+                    do {
+                        appMetadata = try ConnectCodec.decodeAppMetadataJSON(metadataData)
+                    } catch {
+                        return nil
+                    }
+                } else {
+                    appMetadata = nil
+                }
             }
         }
 
@@ -6383,7 +6399,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
         guard permsStatus == 0 else { return nil }
         let permissionsData = takeData(pointer: permissionsPtr, length: permissionsLen)
-        let permissions = permissionsData.flatMap { ConnectCodec.decodePermissionsJSON($0) }
+        let permissions: ConnectPermissions?
+        if let permissionsData {
+            do {
+                permissions = try ConnectCodec.decodePermissionsJSON(permissionsData)
+            } catch {
+                return nil
+            }
+        } else {
+            permissions = nil
+        }
 
         var proofPtr: UnsafeMutablePointer<UInt8>? = nil
         var proofLen: UInt = 0
@@ -6393,7 +6418,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
         guard proofStatus == 0 else { return nil }
         let proofData = takeData(pointer: proofPtr, length: proofLen)
-        let proof = proofData.flatMap { ConnectCodec.decodeProofJSON($0) }
+        let proof: ConnectSignInProof?
+        if let proofData {
+            do {
+                proof = try ConnectCodec.decodeProofJSON(proofData)
+            } catch {
+                return nil
+            }
+        } else {
+            proof = nil
+        }
 
         var signatureBytes = [UInt8](repeating: 0, count: 64)
         let sigStatus = data.withUnsafeBytes { buffer -> Int32 in

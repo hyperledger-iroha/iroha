@@ -15,6 +15,7 @@ public final class OfflineAllowanceInstructionBuilderTests {
   private OfflineAllowanceInstructionBuilderTests() {}
 
   public static void main(final String[] args) {
+    rejectsInvalidAttestationReportBase64();
     final OfflineAllowance allowance =
         OfflineAllowance.builder()
             .setAssetId("xor#sora#ed0120EXAMPLE@sora")
@@ -70,5 +71,24 @@ public final class OfflineAllowanceInstructionBuilderTests {
         : "Decoded certificate mismatch";
 
     System.out.println("[IrohaAndroid] OfflineAllowanceInstructionBuilderTests passed.");
+  }
+
+  private static void rejectsInvalidAttestationReportBase64() {
+    boolean threw = false;
+    try {
+      OfflineWalletCertificate.builder()
+          .setController("ed0120ABCDEF@wonderland")
+          .setAllowance(
+              OfflineAllowance.builder()
+                  .setAssetId("xor#sora#ed0120EXAMPLE@sora")
+                  .setAmount("250.00")
+                  .setCommitmentHex("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                  .build())
+          .setSpendPublicKey("ed0120ABCDEF")
+          .setAttestationReportBase64("not!base64");
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected invalid attestation report base64 to throw";
   }
 }

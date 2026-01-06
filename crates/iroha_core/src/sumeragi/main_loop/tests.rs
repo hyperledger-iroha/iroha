@@ -8055,6 +8055,53 @@ async fn maybe_emit_rbc_ready_defers_until_roster_available() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn maybe_emit_rbc_ready_after_ready_quorum_without_all_chunks() {
+    let mut harness = test_actor_harness(4).await;
+    let key = session_key();
+    let payload_hash = Hash::prehashed([0x21; 32]);
+    let chunk_root = Hash::prehashed([0x22; 32]);
+    let mut session = RbcSession::test_new(2, Some(payload_hash), Some(chunk_root), 0);
+
+    session.test_note_chunk(0, b"chunk-a".to_vec(), 0);
+    session.record_ready(1, vec![0xA1]);
+    session.record_ready(2, vec![0xA2]);
+
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session);
+    let roster = harness.actor.effective_commit_topology();
+    assert!(!roster.is_empty());
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .session_rosters
+        .insert(key, roster);
+
+    harness
+        .actor
+        .maybe_emit_rbc_ready(key)
+        .expect("maybe emit ready");
+    let stored = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(stored.sent_ready);
+    assert_eq!(stored.ready_signatures.len(), 3);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_stalled_rbc_payloads_retries_ready_after_roster_arrives() {
     let mut harness = test_actor_harness(4).await;
     let key: SessionKey = (

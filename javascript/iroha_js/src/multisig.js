@@ -7,14 +7,20 @@ function normalizePositiveInteger(value, context, { allowZero = false, max = Num
     throw new TypeError(`${context} is required`);
   }
 
-  const numeric =
-    typeof value === "bigint"
-      ? Number(value)
-      : typeof value === "number"
-        ? value
-        : (() => {
-            throw new TypeError(`${context} must be a number or bigint`);
-          })();
+  let numeric;
+  if (typeof value === "bigint") {
+    if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new RangeError(`${context} exceeds JavaScript safe integer range`);
+    }
+    if (value > BigInt(max)) {
+      throw new RangeError(`${context} exceeds the supported maximum (${max})`);
+    }
+    numeric = Number(value);
+  } else if (typeof value === "number") {
+    numeric = value;
+  } else {
+    throw new TypeError(`${context} must be a number or bigint`);
+  }
 
   if (!Number.isFinite(numeric) || !Number.isInteger(numeric)) {
     throw new TypeError(`${context} must be a finite integer`);
@@ -24,6 +30,9 @@ function normalizePositiveInteger(value, context, { allowZero = false, max = Num
   }
   if (allowZero && numeric < 0) {
     throw new RangeError(`${context} must be non-negative`);
+  }
+  if (!Number.isSafeInteger(numeric)) {
+    throw new RangeError(`${context} exceeds JavaScript safe integer range`);
   }
   if (numeric > max) {
     throw new RangeError(`${context} exceeds the supported maximum (${max})`);

@@ -45,8 +45,8 @@ const envelope = buildOfflineEnvelope({
 await writeOfflineEnvelopeFile("./artifacts/js/offline/envelope.json", envelope);
 ```
 
-Replay envelopes against Torii with the built-in poller (override `intervalMs`/`timeoutMs` as
-needed):
+Replay envelopes against Torii with the built-in poller (override `intervalMs`/`timeoutMs` with
+non-negative integers as needed):
 
 ```js
 import { ToriiClient, readOfflineEnvelopeFile, replayOfflineEnvelope } from "@iroha/iroha-js";
@@ -70,6 +70,7 @@ hand envelopes between devices without losing deterministic hashes.
 
 Use `OfflineCounterJournal` to persist platform counters and enforce
 `summary_hash_hex` parity plus monotonic increments before submitting bundles.
+`recordedAtMs` must be a non-negative integer timestamp in milliseconds.
 The journal defaults to `~/.iroha/offline_counters/journal.json` and supports
 `storage: "memory"` for deterministic tests.
 

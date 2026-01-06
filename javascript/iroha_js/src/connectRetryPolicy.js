@@ -22,7 +22,7 @@ function splitmix64(x) {
 }
 
 function deterministicSample(bytes, attempt) {
-  const data = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes);
+  const data = normalizeSeedBytes(bytes);
   let state = SEED_INIT;
   let offset = 0;
   while (offset < data.length) {
@@ -37,6 +37,38 @@ function deterministicSample(bytes, attempt) {
   const attemptMix = BigInt(Math.max(0, attempt) >>> 0) * ATTEMPT_MIX;
   state ^= attemptMix & MASK64;
   return splitmix64(state);
+}
+
+function normalizeSeedBytes(seed) {
+  if (seed instanceof Uint8Array) {
+    return seed;
+  }
+  if (ArrayBuffer.isView(seed)) {
+    return new Uint8Array(seed.buffer, seed.byteOffset, seed.byteLength);
+  }
+  if (seed instanceof ArrayBuffer) {
+    return new Uint8Array(seed);
+  }
+  if (seed && typeof seed.length === "number" && typeof seed !== "string") {
+    const length = Math.max(0, seed.length >>> 0);
+    const bytes = new Uint8Array(length);
+    for (let i = 0; i < length; i += 1) {
+      let numeric;
+      try {
+        numeric = Number(seed[i]);
+      } catch {
+        throw new TypeError(`seed[${i}] must be a byte`);
+      }
+      if (!Number.isInteger(numeric) || numeric < 0 || numeric > 255) {
+        throw new TypeError(`seed[${i}] must be a byte`);
+      }
+      bytes[i] = numeric;
+    }
+    return bytes;
+  }
+  throw new TypeError(
+    "seed must be a Uint8Array, ArrayBuffer, ArrayBufferView, or byte array",
+  );
 }
 
 export class ConnectRetryPolicy {

@@ -48,12 +48,12 @@ public final class AndroidTransportTelemetryTests {
       final GatewayProvider provider =
           GatewayProvider.builder()
               .setName("provider-a")
-              .setProviderIdHex("01")
+              .setProviderIdHex("01".repeat(32))
               .setBaseUrl("http://example.com")
               .setStreamTokenBase64("c3R1Yg==")
               .build();
       final GatewayFetchRequest request =
-          GatewayFetchRequest.builder().setManifestIdHex("abcd").addProvider(provider).build();
+          GatewayFetchRequest.builder().setManifestIdHex("ab".repeat(32)).addProvider(provider).build();
 
       final SorafsGatewayClient client =
           SorafsGatewayClient.builder().setBaseUri(baseUri).addObserver(observer).build();

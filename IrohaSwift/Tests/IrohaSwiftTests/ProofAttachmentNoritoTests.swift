@@ -24,18 +24,75 @@ final class ProofAttachmentNoritoTests: XCTestCase {
     }
 
     func testProofAttachmentRejectsInvalidCommitmentLength() throws {
-        let attachment = try ProofAttachment(
-            backend: "test",
-            proof: Data([0x01]),
-            verifyingKey: .reference(.init(backend: "test", name: "vk")),
-            verifyingKeyCommitment: Data(repeating: 0xAA, count: 31)
-        )
-        XCTAssertThrowsError(try attachment.noritoPayload()) { error in
+        XCTAssertThrowsError(
+            try ProofAttachment(
+                backend: "test",
+                proof: Data([0x01]),
+                verifyingKey: .reference(.init(backend: "test", name: "vk")),
+                verifyingKeyCommitment: Data(repeating: 0xAA, count: 31)
+            )
+        ) { error in
             guard case let ProofAttachmentError.invalidVerifyingKeyCommitmentLength(expected, actual) = error else {
                 return XCTFail("expected invalidVerifyingKeyCommitmentLength error")
             }
             XCTAssertEqual(expected, 32)
             XCTAssertEqual(actual, 31)
+        }
+    }
+
+    func testProofAttachmentRejectsEmptyVerifyingKeyBackend() {
+        XCTAssertThrowsError(
+            try ProofAttachment(
+                backend: "test",
+                proof: Data([0x01]),
+                verifyingKey: .reference(.init(backend: "  ", name: "vk"))
+            )
+        ) { error in
+            guard case ProofAttachmentError.emptyVerifyingKeyBackend = error else {
+                return XCTFail("expected emptyVerifyingKeyBackend error")
+            }
+        }
+    }
+
+    func testProofAttachmentRejectsEmptyVerifyingKeyName() {
+        XCTAssertThrowsError(
+            try ProofAttachment(
+                backend: "test",
+                proof: Data([0x01]),
+                verifyingKey: .reference(.init(backend: "halo2/ipa", name: " "))
+            )
+        ) { error in
+            guard case ProofAttachmentError.emptyVerifyingKeyName = error else {
+                return XCTFail("expected emptyVerifyingKeyName error")
+            }
+        }
+    }
+
+    func testProofAttachmentRejectsVerifyingKeySeparator() {
+        XCTAssertThrowsError(
+            try ProofAttachment(
+                backend: "test",
+                proof: Data([0x01]),
+                verifyingKey: .reference(.init(backend: "halo2:ipa", name: "vk"))
+            )
+        ) { error in
+            guard case ProofAttachmentError.invalidVerifyingKeySeparator = error else {
+                return XCTFail("expected invalidVerifyingKeySeparator error")
+            }
+        }
+    }
+
+    func testProofAttachmentRejectsInlineVerifyingKeyBytes() {
+        XCTAssertThrowsError(
+            try ProofAttachment(
+                backend: "test",
+                proof: Data([0x01]),
+                verifyingKey: .inline(.init(backend: "halo2/ipa", bytes: Data()))
+            )
+        ) { error in
+            guard case ProofAttachmentError.emptyVerifyingKeyBytes = error else {
+                return XCTFail("expected emptyVerifyingKeyBytes error")
+            }
         }
     }
 

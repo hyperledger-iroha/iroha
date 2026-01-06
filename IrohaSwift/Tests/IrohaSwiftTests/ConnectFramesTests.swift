@@ -28,7 +28,7 @@ final class ConnectFramesTests: XCTestCase {
     func testPermissionsJSONRoundTrip() throws {
         let permissions = ConnectPermissions(methods: ["sign"], events: ["event"], resources: ["accounts"])
         let data = ConnectCodec.encodePermissionsJSON(permissions)
-        let decoded = data.flatMap { ConnectCodec.decodePermissionsJSON($0) }
+        let decoded = try data.flatMap { try ConnectCodec.decodePermissionsJSON($0) }
         XCTAssertEqual(decoded, permissions)
     }
 
@@ -39,7 +39,7 @@ final class ConnectFramesTests: XCTestCase {
                                        issuedAt: "now",
                                        nonce: "123")
         let data = ConnectCodec.encodeProofJSON(proof)
-        let decoded = data.flatMap { ConnectCodec.decodeProofJSON($0) }
+        let decoded = try data.flatMap { try ConnectCodec.decodeProofJSON($0) }
         XCTAssertEqual(decoded, proof)
     }
 
@@ -80,6 +80,43 @@ final class ConnectFramesTests: XCTestCase {
                                 kind: .control(.pong(ConnectPong(nonce: 56))))
         XCTAssertEqual(try ConnectCodec.decode(ConnectCodec.encode(ping)).kind, ping.kind)
         XCTAssertEqual(try ConnectCodec.decode(ConnectCodec.encode(pong)).kind, pong.kind)
+    }
+
+    func testPermissionsJSONRejectsUnknownKey() throws {
+        let json: [String: Any] = [
+            "methods": ["sign"],
+            "events": ["event"],
+            "extra": "nope"
+        ]
+        let data = try JSONSerialization.data(withJSONObject: json, options: [])
+        XCTAssertThrowsError(try ConnectCodec.decodePermissionsJSON(data))
+    }
+
+    func testPermissionsJSONRejectsNonStringValues() throws {
+        let json: [String: Any] = [
+            "methods": ["sign", 1],
+            "events": ["event"]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: json, options: [])
+        XCTAssertThrowsError(try ConnectCodec.decodePermissionsJSON(data))
+    }
+
+    func testAppMetadataJSONRejectsUnknownKey() throws {
+        let json: [String: Any] = [
+            "name": "Demo",
+            "url": "https://example.com",
+            "extra": "nope"
+        ]
+        let data = try JSONSerialization.data(withJSONObject: json, options: [])
+        XCTAssertThrowsError(try ConnectCodec.decodeAppMetadataJSON(data))
+    }
+
+    func testProofJSONRejectsNonStringValue() throws {
+        let json: [String: Any] = [
+            "domain": 1
+        ]
+        let data = try JSONSerialization.data(withJSONObject: json, options: [])
+        XCTAssertThrowsError(try ConnectCodec.decodeProofJSON(data))
     }
 }
 

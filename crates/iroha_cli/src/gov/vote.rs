@@ -96,9 +96,9 @@ pub struct VoteArgs {
     /// Ballot direction for plain voting mode: Aye, Nay, or Abstain.
     #[arg(long)]
     pub direction: Option<String>,
-    /// Optional 32-byte salt hint for ZK ballots (hex).
-    #[arg(long = "salt-hex")]
-    pub salt_hex: Option<String>,
+    /// Optional 32-byte nullifier hint for ZK ballots (hex).
+    #[arg(long = "nullifier-hex")]
+    pub nullifier_hex: Option<String>,
     /// Print only the compact summary line (suppresses raw JSON)
     #[arg(long, default_value_t = false)]
     pub summary_only: bool,
@@ -118,7 +118,7 @@ impl Run for VoteArgs {
             amount,
             duration_blocks,
             direction,
-            salt_hex,
+            nullifier_hex,
             summary_only,
             no_summary,
         } = self;
@@ -140,7 +140,7 @@ impl Run for VoteArgs {
                     amount,
                     duration_blocks,
                     direction,
-                    salt_hex,
+                    nullifier_hex,
                     summary_only,
                     no_summary,
                 };
@@ -203,9 +203,9 @@ pub struct VoteZkArgs {
     /// Optional direction hint mirrored into public inputs.
     #[arg(long)]
     pub direction: Option<String>,
-    /// Optional 32-byte salt hint for nullifier derivation.
-    #[arg(long = "salt-hex")]
-    pub salt_hex: Option<String>,
+    /// Optional 32-byte nullifier hint derived from the proof commitment.
+    #[arg(long = "nullifier-hex")]
+    pub nullifier_hex: Option<String>,
     /// Print only the compact summary line (suppresses raw JSON)
     #[arg(long, default_value_t = false)]
     pub summary_only: bool,
@@ -239,9 +239,9 @@ impl Run for VoteZkArgs {
         if let Some(direction) = self.direction {
             public_obj.insert("direction".to_owned(), json_value(&direction)?);
         }
-        if let Some(salt_hex) = self.salt_hex {
-            let canonical = canonicalize_hex32(&salt_hex)?;
-            public_obj.insert("salt_hex".to_owned(), json_value(&canonical)?);
+        if let Some(nullifier_hex) = self.nullifier_hex {
+            let canonical = canonicalize_hex32(&nullifier_hex)?;
+            public_obj.insert("nullifier_hex".to_owned(), json_value(&canonical)?);
         }
         let body = json_object(vec![
             ("election_id", json_value(&self.election_id)?),
@@ -493,12 +493,12 @@ mod tests {
 
     #[test]
     fn annotate_vote_zk_populates_hints() {
-        let salt = "aa".repeat(32);
+        let nullifier = "aa".repeat(32);
         let ballot = CastZkBallot {
             election_id: "ref-zk".to_string(),
             proof_b64: "AAA=".to_string(),
             public_inputs_json: format!(
-                r#"{{"owner":"bob@wonderland","amount":"100","duration_blocks":256,"direction":"Nay","salt_hex":"{salt}"}}"#
+                r#"{{"owner":"bob@wonderland","amount":"100","duration_blocks":256,"direction":"Nay","nullifier_hex":"{nullifier}"}}"#
             ),
         };
         let instruction: InstructionBox = InstructionBox::from(ballot);
@@ -527,7 +527,7 @@ mod tests {
         assert_eq!(summary.amount.as_deref(), Some("100"));
         assert_eq!(summary.duration_blocks.as_deref(), Some("256"));
         assert_eq!(summary.direction.as_deref(), Some("Nay"));
-        assert_eq!(summary.salt_hex.as_deref(), Some(salt.as_str()));
+        assert_eq!(summary.nullifier_hex.as_deref(), Some(nullifier.as_str()));
 
         let line = format_vote_summary(&VoteSummaryInput {
             prefix: "vote-zk",
@@ -541,7 +541,7 @@ mod tests {
         });
         assert!(line.contains("fingerprint="));
         assert!(line.contains("owner=bob@wonderland"));
-        assert!(line.contains("salt_hex="));
+        assert!(line.contains("nullifier_hex="));
 
         let instr = value
             .get("tx_instructions")
@@ -555,8 +555,8 @@ mod tests {
             Some("bob@wonderland")
         );
         assert_eq!(
-            instr.get("salt_hex").and_then(json::Value::as_str),
-            Some(salt.as_str())
+            instr.get("nullifier_hex").and_then(json::Value::as_str),
+            Some(nullifier.as_str())
         );
     }
 }
@@ -724,7 +724,7 @@ struct VoteInstructionSummary {
     amount: Option<String>,
     duration_blocks: Option<String>,
     direction: Option<String>,
-    salt_hex: Option<String>,
+    nullifier_hex: Option<String>,
 }
 
 fn annotate_vote_instructions(value: &mut json::Value) -> Result<Option<VoteInstructionSummary>> {
@@ -813,10 +813,16 @@ fn annotate_vote_instructions(value: &mut json::Value) -> Result<Option<VoteInst
                     );
                     summary.direction.get_or_insert(direction);
                 }
-                if let Some(salt_val) = hints.get("salt_hex") {
-                    let salt = stringify_json_value(salt_val);
-                    map.insert("salt_hex".to_owned(), json::Value::String(salt.clone()));
-                    summary.salt_hex.get_or_insert(salt);
+                if let Some(nullifier_val) = hints
+                    .get("nullifier_hex")
+                    .or_else(|| hints.get("nullifier"))
+                {
+                    let nullifier = stringify_json_value(nullifier_val);
+                    map.insert(
+                        "nullifier_hex".to_owned(),
+                        json::Value::String(nullifier.clone()),
+                    );
+                    summary.nullifier_hex.get_or_insert(nullifier);
                 }
             }
         }
@@ -920,8 +926,8 @@ fn format_vote_summary(input: &VoteSummaryInput<'_>) -> String {
         if let Some(direction) = &summary.direction {
             parts.push(format!("direction={direction}"));
         }
-        if let Some(salt) = &summary.salt_hex {
-            parts.push(format!("salt_hex={salt}"));
+        if let Some(nullifier) = &summary.nullifier_hex {
+            parts.push(format!("nullifier_hex={nullifier}"));
         }
     }
     if !input.reason.is_empty() {

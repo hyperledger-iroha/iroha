@@ -37,6 +37,8 @@ public final class ToriiEventStreamClientTests {
     sseStreamDeliversEvents();
     sseStreamEmitsRetryHints();
     sseStreamStopsAfterClose();
+    closingBeforeResponseDoesNotEmitError();
+    unwrapsCompletionExceptionFailures();
     observersReceiveLifecycleCallbacks();
     sseRequestPropagatesTimeout();
     System.out.println("[IrohaAndroid] Torii SSE client tests passed.");
@@ -123,6 +125,60 @@ public final class ToriiEventStreamClientTests {
       if (!listener.errors.isEmpty()) {
         throw new AssertionError("expected no errors when closing stream");
       }
+    }
+  }
+
+  private static void closingBeforeResponseDoesNotEmitError() throws Exception {
+    final CompletableFuture<TransportResponse> pending = new CompletableFuture<>();
+    final RecordingObserver observer = new RecordingObserver();
+    final TransportExecutor executor = request -> pending;
+    final RecordingListener listener = new RecordingListener(0);
+    final ToriiEventStreamClient client =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("http://example.com/base"))
+            .setTransportExecutor(executor)
+            .addObserver(observer)
+            .build();
+    final ToriiEventStream stream =
+        client.openSseStream("/events", ToriiEventStreamOptions.defaultOptions(), listener);
+    stream.close();
+    stream.completion().get(1, TimeUnit.SECONDS);
+    if (!pending.isCancelled()) {
+      throw new AssertionError("expected pending SSE request to be cancelled");
+    }
+    if (!listener.errors.isEmpty()) {
+      throw new AssertionError("unexpected errors after closing SSE stream");
+    }
+    if (observer.failureCount != 0) {
+      throw new AssertionError("observer should not record failures after cancel");
+    }
+  }
+
+  private static void unwrapsCompletionExceptionFailures() throws Exception {
+    final IOException boom = new IOException("boom");
+    final CompletableFuture<TransportResponse> failed = new CompletableFuture<>();
+    failed.completeExceptionally(new java.util.concurrent.CompletionException(boom));
+    final RecordingObserver observer = new RecordingObserver();
+    final TransportExecutor executor = request -> failed;
+    final RecordingListener listener = new RecordingListener(0);
+    final ToriiEventStreamClient client =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("http://example.com/base"))
+            .setTransportExecutor(executor)
+            .addObserver(observer)
+            .build();
+    final ToriiEventStream stream =
+        client.openSseStream("/events", ToriiEventStreamOptions.defaultOptions(), listener);
+    try {
+      stream.completion().get(1, TimeUnit.SECONDS);
+    } catch (Exception ignored) {
+      // Completion is expected to fail.
+    }
+    if (listener.errors.size() != 1 || listener.errors.get(0) != boom) {
+      throw new AssertionError("expected unwrapped error for listener");
+    }
+    if (observer.failureCount != 1 || observer.lastFailure.orElse(null) != boom) {
+      throw new AssertionError("expected unwrapped error for observer");
     }
   }
 

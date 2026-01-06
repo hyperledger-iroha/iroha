@@ -42,3 +42,53 @@ test("ToriiClient attaches canonical signing headers for app endpoints", async (
   const signature = Buffer.from(signatureB64, "base64");
   assert.ok(verifyEd25519(message, signature, publicKey));
 });
+
+test("ToriiClient canonical auth accepts byte-array private keys", async () => {
+  const captured = [];
+  const client = new ToriiClient("http://localhost:8080", {
+    fetchImpl: async (url, init) => {
+      captured.push({ url, init });
+      return new Response(JSON.stringify({ items: [], total: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 3) });
+
+  await client.listAccountAssets("alice@wonderland", {
+    canonicalAuth: { accountId: "alice@wonderland", privateKey: Array.from(privateKey) },
+    limit: 1,
+  });
+
+  assert.equal(captured.length, 1);
+  const { url, init } = captured[0];
+  const parsed = new URL(url);
+  const message = canonicalRequestMessage({
+    method: init.method,
+    path: parsed.pathname,
+    query: parsed.search ? parsed.search.slice(1) : "",
+    body: "",
+  });
+  const signature = Buffer.from(init.headers["X-Iroha-Signature"], "base64");
+  assert.ok(verifyEd25519(message, signature, publicKey));
+});
+
+test("ToriiClient canonical auth rejects non-byte private key arrays", async () => {
+  const client = new ToriiClient("http://localhost:8080", {
+    fetchImpl: async () =>
+      new Response(JSON.stringify({ items: [], total: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  await assert.rejects(
+    () =>
+      client.listAccountAssets("alice@wonderland", {
+        canonicalAuth: { accountId: "alice@wonderland", privateKey: [256] },
+        limit: 1,
+      }),
+    (error) => error?.name === "ValidationError" && /privateKey\[0\]/i.test(error.message),
+  );
+});

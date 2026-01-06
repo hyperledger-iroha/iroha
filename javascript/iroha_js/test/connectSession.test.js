@@ -53,3 +53,48 @@ test("createConnectSessionPreview generates keypair when omitted", () => {
   assert.equal(preview.nonce.length, 16);
   assert.equal(preview.sidBytes.length, 32);
 });
+
+test("generateConnectSid accepts base64url inputs", () => {
+  const chainId = "test-chain";
+  const toBase64Url = (buffer) =>
+    buffer
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+  const appPublicKey = Buffer.alloc(32, 0x01);
+  const nonce = Buffer.alloc(16, 0x02);
+
+  const result = generateConnectSid({
+    chainId,
+    appPublicKey: toBase64Url(appPublicKey),
+    nonce: toBase64Url(nonce),
+  });
+
+  assert.equal(result.sidBytes.length, 32);
+  assert.equal(result.nonce.length, 16);
+});
+
+test("generateConnectSid rejects invalid base64 inputs", () => {
+  const chainId = "test-chain";
+  const nonce = Buffer.alloc(16, 0x02);
+
+  assert.throws(
+    () => generateConnectSid({ chainId, appPublicKey: "not*base64", nonce }),
+    (error) =>
+      error instanceof TypeError && /hex or base64/.test(error.message),
+  );
+});
+
+test("generateConnectSid rejects invalid byte arrays", () => {
+  const chainId = "test-chain";
+  const appPublicKey = new Array(32).fill(0);
+  appPublicKey[0] = 256;
+  const nonce = new Array(16).fill(1);
+
+  assert.throws(
+    () => generateConnectSid({ chainId, appPublicKey, nonce }),
+    (error) =>
+      error instanceof TypeError && /appPublicKey\[0\] must be a byte/.test(error.message),
+  );
+});

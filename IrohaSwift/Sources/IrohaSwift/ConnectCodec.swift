@@ -54,14 +54,23 @@ extension ConnectCodec {
         return try? JSONSerialization.data(withJSONObject: json, options: [])
     }
 
-    static func decodePermissionsJSON(_ data: Data) -> ConnectPermissions? {
+    static func decodePermissionsJSON(_ data: Data) throws -> ConnectPermissions? {
         guard !data.isEmpty else { return nil }
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let json = try JSONSerialization.jsonObject(with: data)
+        guard let object = json as? [String: Any] else { throw ConnectCodecError.decodeFailed }
         if object.isEmpty { return nil }
-        let methods = (object["methods"] as? [Any])?.compactMap { $0 as? String } ?? []
-        let events = (object["events"] as? [Any])?.compactMap { $0 as? String } ?? []
-        let resourcesArray = (object["resources"] as? [Any])?.compactMap { $0 as? String }
-        return ConnectPermissions(methods: methods, events: events, resources: resourcesArray)
+        let allowedKeys: Set<String> = ["methods", "events", "resources"]
+        for key in object.keys where !allowedKeys.contains(key) {
+            throw ConnectCodecError.decodeFailed
+        }
+        guard let methodsRaw = object["methods"],
+              let eventsRaw = object["events"] else {
+            throw ConnectCodecError.decodeFailed
+        }
+        let methods = try decodeStringArray(methodsRaw)
+        let events = try decodeStringArray(eventsRaw)
+        let resources = try decodeOptionalStringArray(object["resources"])
+        return ConnectPermissions(methods: methods, events: events, resources: resources)
     }
 
     static func encodeAppMetadataJSON(_ metadata: ConnectAppMetadata?) -> Data? {
@@ -78,17 +87,18 @@ extension ConnectCodec {
         return try? JSONSerialization.data(withJSONObject: json, options: [])
     }
 
-    static func decodeAppMetadataJSON(_ data: Data) -> ConnectAppMetadata? {
+    static func decodeAppMetadataJSON(_ data: Data) throws -> ConnectAppMetadata? {
         guard !data.isEmpty else { return nil }
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let json = try JSONSerialization.jsonObject(with: data)
+        guard let object = json as? [String: Any] else { throw ConnectCodecError.decodeFailed }
         if object.isEmpty { return nil }
-        func value(for key: String) -> String? {
-            guard let raw = object[key] as? String else { return nil }
-            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
+        let allowedKeys: Set<String> = ["name", "url"]
+        for key in object.keys where !allowedKeys.contains(key) {
+            throw ConnectCodecError.decodeFailed
         }
-        let name = value(for: "name")
-        let iconURL = value(for: "url")
+        let name = try decodeOptionalString(object["name"])
+        let iconURL = try decodeOptionalString(object["url"])
+        guard name != nil || iconURL != nil else { return nil }
         return ConnectAppMetadata(name: name, iconURL: iconURL, description: nil)
     }
 
@@ -104,18 +114,50 @@ extension ConnectCodec {
         return try? JSONSerialization.data(withJSONObject: json, options: [])
     }
 
-    static func decodeProofJSON(_ data: Data) -> ConnectSignInProof? {
+    static func decodeProofJSON(_ data: Data) throws -> ConnectSignInProof? {
         guard !data.isEmpty else { return nil }
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let json = try JSONSerialization.jsonObject(with: data)
+        guard let object = json as? [String: Any] else { throw ConnectCodecError.decodeFailed }
         if object.isEmpty { return nil }
-        func value(for key: String) -> String? {
-            guard let raw = object[key] as? String, !raw.isEmpty else { return nil }
-            return raw
+        let allowedKeys: Set<String> = ["domain", "uri", "statement", "issued_at", "nonce"]
+        for key in object.keys where !allowedKeys.contains(key) {
+            throw ConnectCodecError.decodeFailed
         }
-        return ConnectSignInProof(domain: value(for: "domain"),
-                                  uri: value(for: "uri"),
-                                  statement: value(for: "statement"),
-                                  issuedAt: value(for: "issued_at"),
-                                  nonce: value(for: "nonce"))
+        let domain = try decodeOptionalString(object["domain"])
+        let uri = try decodeOptionalString(object["uri"])
+        let statement = try decodeOptionalString(object["statement"])
+        let issuedAt = try decodeOptionalString(object["issued_at"])
+        let nonce = try decodeOptionalString(object["nonce"])
+        guard domain != nil || uri != nil || statement != nil || issuedAt != nil || nonce != nil else { return nil }
+        return ConnectSignInProof(domain: domain,
+                                  uri: uri,
+                                  statement: statement,
+                                  issuedAt: issuedAt,
+                                  nonce: nonce)
+    }
+
+    private static func decodeStringArray(_ value: Any) throws -> [String] {
+        guard let array = value as? [Any] else { throw ConnectCodecError.decodeFailed }
+        var strings: [String] = []
+        strings.reserveCapacity(array.count)
+        for item in array {
+            guard let string = item as? String else { throw ConnectCodecError.decodeFailed }
+            strings.append(string)
+        }
+        return strings
+    }
+
+    private static func decodeOptionalStringArray(_ value: Any?) throws -> [String]? {
+        guard let value else { return nil }
+        if value is NSNull { return nil }
+        return try decodeStringArray(value)
+    }
+
+    private static func decodeOptionalString(_ value: Any?) throws -> String? {
+        guard let value else { return nil }
+        if value is NSNull { return nil }
+        guard let raw = value as? String else { throw ConnectCodecError.decodeFailed }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

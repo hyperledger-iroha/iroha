@@ -449,8 +449,7 @@ public final class OfflineCounterJournal {
           raw.get("android_series_counters") instanceof Map<?, ?> map
               ? asCounterMap(map)
               : Map.of();
-      final long recordedAtMs =
-          raw.get("recorded_at_ms") instanceof Number number ? number.longValue() : 0L;
+      final long recordedAtMs = optionalLong(raw.get("recorded_at_ms"), "recorded_at_ms");
       return new OfflineCounterCheckpoint(
           normalizeHex(certificateIdHex),
           controllerId,
@@ -468,13 +467,31 @@ public final class OfflineCounterJournal {
           continue;
         }
         final String key = String.valueOf(entry.getKey());
-        final long value =
-            entry.getValue() instanceof Number number
-                ? number.longValue()
-                : Long.parseLong(String.valueOf(entry.getValue()));
+        final long value = requireLong(entry.getValue(), "counter." + key);
         result.put(key, value);
       }
       return result;
+    }
+
+    private static long optionalLong(final Object value, final String path) {
+      if (value == null) {
+        return 0L;
+      }
+      return requireLong(value, path);
+    }
+
+    private static long requireLong(final Object value, final String path) {
+      if (value instanceof Number number) {
+        if (number instanceof Float || number instanceof Double) {
+          throw new IllegalStateException(path + " must be an integer");
+        }
+        return number.longValue();
+      }
+      try {
+        return Long.parseLong(String.valueOf(value));
+      } catch (final NumberFormatException ex) {
+        throw new IllegalStateException(path + " is not numeric", ex);
+      }
     }
   }
 }

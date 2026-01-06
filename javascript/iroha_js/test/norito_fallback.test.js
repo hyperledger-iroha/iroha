@@ -38,6 +38,24 @@ test("norito encode/decode falls back to JSON when native is disabled", async ()
   });
 });
 
+test("norito encode accepts base64 payloads in JS mode", async () => {
+  await withDisabledNative(async () => {
+    const mod = await import("../src/norito.js?js-fallback-base64");
+    const payload = Buffer.from(JSON.stringify(REGISTER_DOMAIN), "utf8");
+    const base64 = payload.toString("base64");
+    const encoded = mod.noritoEncodeInstruction(base64);
+    assert.ok(Buffer.isBuffer(encoded));
+    assert.equal(encoded.toString("base64"), base64);
+  });
+});
+
+test("norito encode rejects invalid base64 payloads in JS mode", async () => {
+  await withDisabledNative(async () => {
+    const mod = await import("../src/norito.js?js-fallback-bad-base64");
+    assert.throws(() => mod.noritoEncodeInstruction("AAAA===="));
+  });
+});
+
 test("norito decode surfaces hint when bytes are not JSON in JS mode", async () => {
   await withDisabledNative(async () => {
     const mod = await import("../src/norito.js?js-fallback-error");

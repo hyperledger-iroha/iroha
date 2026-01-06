@@ -104,3 +104,10 @@ test("buildAxtDescriptor canonicalises inputs without native binding", () => {
   assert.deepEqual(result.descriptor.dsids, [1, 7]);
   assert.equal(result.bindingHex, DESCRIPTOR_FIXTURE.binding_hex);
 });
+
+test("buildAxtDescriptor rejects non-integer dsids", () => {
+  assert.throws(
+    () => buildAxtDescriptor({ dsids: [1.5] }),
+    /dsids\[0\]/,
+  );
+});

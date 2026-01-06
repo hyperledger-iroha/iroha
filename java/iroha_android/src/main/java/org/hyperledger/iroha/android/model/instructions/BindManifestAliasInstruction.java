@@ -138,11 +138,17 @@ public final class BindManifestAliasInstruction implements InstructionTemplate {
     }
 
     public Builder setBoundEpoch(final long boundEpoch) {
+      if (boundEpoch < 0) {
+        throw new IllegalArgumentException("boundEpoch must be non-negative");
+      }
       this.boundEpoch = boundEpoch;
       return this;
     }
 
     public Builder setExpiryEpoch(final long expiryEpoch) {
+      if (expiryEpoch < 0) {
+        throw new IllegalArgumentException("expiryEpoch must be non-negative");
+      }
       this.expiryEpoch = expiryEpoch;
       return this;
     }

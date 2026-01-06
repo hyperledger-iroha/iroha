@@ -37,6 +37,11 @@ where
             continue_cursor,
         })
     }
+
+    /// Returns the cursor for the next batch, if available.
+    pub fn continue_cursor(&self) -> Option<&E::Cursor> {
+        self.continue_cursor.as_ref()
+    }
 }
 
 impl<E, T> Iterator for QueryIterator<E, T>

@@ -29,6 +29,12 @@ test("buildTouchManifest sorts and deduplicates keys", () => {
   });
 });
 
+test("buildTouchManifest accepts array-like inputs", () => {
+  const arrayLike = { 0: "alpha", 1: "beta", length: 2 };
+  const manifest = buildTouchManifest(arrayLike, { 0: "gamma", length: 1 });
+  assert.deepEqual(manifest, { read: ["alpha", "beta"], write: ["gamma"] });
+});
+
 maybeNativeTest("buildAxtDescriptor matches the golden fixture", () => {
   const fixture = JSON.parse(readFileSync(FIXTURE_PATH, "utf8"));
   const result = buildAxtDescriptor({
@@ -94,6 +100,45 @@ test("buildAxtDescriptor canonicalises without the native binding", () => {
   assert.equal(result.binding, null);
   assert.equal(result.descriptorBytes, null);
   assert.equal(result.native, false);
+
+  if (previous === undefined) {
+    delete process.env.IROHA_JS_DISABLE_NATIVE;
+  } else {
+    process.env.IROHA_JS_DISABLE_NATIVE = previous;
+  }
+});
+
+test("buildAxtDescriptor accepts array-like iterables", () => {
+  const previous = process.env.IROHA_JS_DISABLE_NATIVE;
+  process.env.IROHA_JS_DISABLE_NATIVE = "1";
+
+  const dsids = { 0: 5, length: 1 };
+  const touches = {
+    0: {
+      dsid: 5,
+      read: { 0: "alpha", length: 1 },
+      write: { 0: "beta", length: 1 },
+    },
+    length: 1,
+  };
+  const touchManifest = {
+    0: {
+      dsid: 5,
+      read: { 0: "alpha/x", length: 1 },
+      write: { 0: "beta/y", length: 1 },
+    },
+    length: 1,
+  };
+
+  const result = buildAxtDescriptor({ dsids, touches, touchManifest });
+
+  assert.deepEqual(result.descriptor, {
+    dsids: [5],
+    touches: [{ dsid: 5, read: ["alpha"], write: ["beta"] }],
+  });
+  assert.deepEqual(result.touchManifest, [
+    { dsid: 5, manifest: { read: ["alpha/x"], write: ["beta/y"] } },
+  ]);
 
   if (previous === undefined) {
     delete process.env.IROHA_JS_DISABLE_NATIVE;

@@ -64,6 +64,23 @@ public final class RegisterOfflineAllowanceInstruction implements InstructionTem
     return value;
   }
 
+  private static String requireBase64(final String value, final String fieldName) {
+    final String trimmed = Objects.requireNonNull(value, fieldName).trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException(fieldName + " must not be blank");
+    }
+    final byte[] decoded;
+    try {
+      decoded = java.util.Base64.getDecoder().decode(trimmed);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException(fieldName + " must be base64", ex);
+    }
+    if (decoded.length == 0) {
+      throw new IllegalArgumentException(fieldName + " must decode to non-empty bytes");
+    }
+    return trimmed;
+  }
+
   private static long requireLong(final Map<String, String> arguments, final String key) {
     final String value = require(arguments, key);
     try {
@@ -320,10 +337,8 @@ public final class RegisterOfflineAllowanceInstruction implements InstructionTem
       }
 
       public Builder setAttestationReportBase64(final String attestationReportBase64) {
-        if (attestationReportBase64 == null || attestationReportBase64.isBlank()) {
-          throw new IllegalArgumentException("attestationReportBase64 must not be blank");
-        }
-        this.attestationReportBase64 = attestationReportBase64;
+        this.attestationReportBase64 =
+            requireBase64(attestationReportBase64, "attestationReportBase64");
         return this;
       }
 

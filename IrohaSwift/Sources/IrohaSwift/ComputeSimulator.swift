@@ -52,8 +52,24 @@ public enum ComputeSimulator {
             throw ComputeSimulatorError.invalidPayloadHash(expected: expectedHash, actual: payloadHash)
         }
 
-        let gasLimit = (call["gas_limit"] as? NSNumber)?.uint64Value ?? 0
-        let maxResponseBytes = (call["max_response_bytes"] as? NSNumber)?.uint64Value ?? 0
+        let gasLimit: UInt64
+        if let raw = call["gas_limit"] {
+            guard let parsed = StrictJSONNumber.uint64(from: raw) else {
+                throw ComputeSimulatorError.decodeFailure("gas_limit must be an unsigned integer")
+            }
+            gasLimit = parsed
+        } else {
+            gasLimit = 0
+        }
+        let maxResponseBytes: UInt64
+        if let raw = call["max_response_bytes"] {
+            guard let parsed = StrictJSONNumber.uint64(from: raw) else {
+                throw ComputeSimulatorError.decodeFailure("max_response_bytes must be an unsigned integer")
+            }
+            maxResponseBytes = parsed
+        } else {
+            maxResponseBytes = 0
+        }
         let entrypoint = route["entrypoint"] as? String ?? "echo"
         let response = try runEntrypoint(
             name: entrypoint,

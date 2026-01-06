@@ -1,5 +1,8 @@
 package org.hyperledger.iroha.android.client;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -10,7 +13,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.io.IOException;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.Headers;
@@ -22,6 +24,7 @@ import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.client.transport.TransportStreamResponse;
 import org.junit.AfterClass;
 import org.junit.Test;
 
@@ -73,6 +76,26 @@ public final class TransportExecutorParityTests {
       } finally {
         okHttp.shutdown();
       }
+    }
+  }
+
+  @Test
+  public void openStreamReturnsResponseBody() throws Exception {
+    try (MockWebServer server = new MockWebServer()) {
+      server.enqueue(new MockResponse().setResponseCode(200).setBody("data: ok\n\n"));
+      server.start(InetAddress.getByName("127.0.0.1"), 0);
+
+      final URI uri = new URI(server.url("/stream").toString());
+      final TransportRequest request =
+          TransportRequest.builder().setMethod("GET").setUri(uri).setHeaders(Map.of()).build();
+      final JavaHttpExecutor executor = new JavaHttpExecutor(JDK_CLIENT);
+
+      final TransportStreamResponse response = executor.openStream(request).get(5, TimeUnit.SECONDS);
+      final String body = readBody(response.body());
+      response.close();
+
+      assert response.statusCode() == 200 : "expected 200";
+      assert body.contains("data: ok") : "expected streaming body";
     }
   }
 
@@ -148,6 +171,17 @@ public final class TransportExecutorParityTests {
           // Best-effort cleanup for test shutdown.
         }
       }
+    }
+  }
+
+  private static String readBody(final InputStream input) throws Exception {
+    try (InputStream stream = input; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+      final byte[] buffer = new byte[4096];
+      int read;
+      while ((read = stream.read(buffer)) != -1) {
+        output.write(buffer, 0, read);
+      }
+      return output.toString(StandardCharsets.UTF_8);
     }
   }
 }

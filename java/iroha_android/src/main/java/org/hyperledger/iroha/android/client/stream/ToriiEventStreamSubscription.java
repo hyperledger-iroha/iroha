@@ -34,6 +34,7 @@ public final class ToriiEventStreamSubscription implements AutoCloseable {
   private final AtomicBoolean closed = new AtomicBoolean(false);
   private final AtomicLong nextBackoffMs;
   private final AtomicLong lastRetryHintMs = new AtomicLong(-1);
+  private final AtomicLong streamGeneration = new AtomicLong(0);
   private final AtomicReference<ToriiEventStream> currentStream = new AtomicReference<>(null);
   private final AtomicReference<ScheduledFuture<?>> scheduledTask = new AtomicReference<>(null);
   private final List<ToriiEventStreamObserver> observers;
@@ -106,6 +107,10 @@ public final class ToriiEventStreamSubscription implements AutoCloseable {
     if (closed.get()) {
       return;
     }
+    final ScheduledFuture<?> existing = scheduledTask.get();
+    if (existing != null && !existing.isDone() && !existing.isCancelled()) {
+      return;
+    }
     final long clampedDelay = Math.max(0, delayMs);
     notifyReconnectScheduled(clampedDelay, reason);
     final ScheduledFuture<?> future =
@@ -146,19 +151,23 @@ public final class ToriiEventStreamSubscription implements AutoCloseable {
     if (closed.get()) {
       return;
     }
+    final long generation = streamGeneration.incrementAndGet();
+    final ManagedListener listener = new ManagedListener(generation);
     try {
-      final ToriiEventStream stream =
-          opener.open(new ManagedListener());
+      final ToriiEventStream stream = opener.open(listener);
       currentStream.set(stream);
       nextBackoffMs.set(initialBackoffMs);
       notifyStreamOpened();
     } catch (final RuntimeException ex) {
-      handleFailure(ex);
+      handleFailure(generation, ex);
     }
   }
 
-  private void handleFailure(final Throwable error) {
+  private void handleFailure(final long generation, final Throwable error) {
     if (closed.get()) {
+      return;
+    }
+    if (generation != streamGeneration.get()) {
       return;
     }
     delegate.onError(error);
@@ -175,18 +184,37 @@ public final class ToriiEventStreamSubscription implements AutoCloseable {
   }
 
   private final class ManagedListener implements ToriiEventStreamListener {
+    private final long generation;
+
+    private ManagedListener(final long generation) {
+      this.generation = generation;
+    }
+
+    private boolean isCurrent() {
+      return generation == streamGeneration.get();
+    }
+
     @Override
     public void onOpen() {
+      if (!isCurrent()) {
+        return;
+      }
       delegate.onOpen();
     }
 
     @Override
     public void onEvent(final ServerSentEvent event) {
+      if (!isCurrent()) {
+        return;
+      }
       delegate.onEvent(event);
     }
 
     @Override
     public void onRetryHint(final Duration duration) {
+      if (!isCurrent()) {
+        return;
+      }
       if (duration != null) {
         lastRetryHintMs.set(Math.max(0L, duration.toMillis()));
       }
@@ -195,6 +223,9 @@ public final class ToriiEventStreamSubscription implements AutoCloseable {
 
     @Override
     public void onClosed() {
+      if (!isCurrent()) {
+        return;
+      }
       delegate.onClosed();
       notifyStreamClosed();
       scheduleReconnect(
@@ -203,7 +234,7 @@ public final class ToriiEventStreamSubscription implements AutoCloseable {
 
     @Override
     public void onError(final Throwable error) {
-      handleFailure(error);
+      handleFailure(generation, error);
     }
   }
 

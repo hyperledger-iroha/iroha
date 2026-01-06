@@ -692,9 +692,9 @@ if #available(iOS 15, macOS 12, *) {
     let proposal = try await torii.proposeRuntimeUpgrade(manifest: manifest)
     let proposalInstructions = proposal.txInstructions
 
-    let activation = try await torii.activateRuntimeUpgrade(idHex: "deadbeef")
+    let activation = try await torii.activateRuntimeUpgrade(idHex: String(repeating: "a", count: 64))
     let activationInstructions = activation.txInstructions
-    let cancellation = try await torii.cancelRuntimeUpgrade(idHex: "deadbeef")
+    let cancellation = try await torii.cancelRuntimeUpgrade(idHex: String(repeating: "a", count: 64))
     let cancellationInstructions = cancellation.txInstructions
     // Feed the returned `txInstructions` into your transaction builder / submit pipeline.
 }

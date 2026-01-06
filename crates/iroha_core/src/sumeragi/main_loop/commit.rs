@@ -1848,6 +1848,16 @@ impl Actor {
                 Some(pending) => pending,
                 None => continue,
             };
+            if !pending.commit_certificate_seen {
+                if let Some(qc) = qc_cache_for_subject(&self.qc_cache, hash).find(|qc| {
+                    matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
+                        && qc.height == pending_height
+                        && qc.view == pending_view
+                }) {
+                    pending.commit_certificate_seen = true;
+                    pending.commit_certificate_epoch = Some(qc.epoch);
+                }
+            }
             self.pending.pending_processing.set(Some(hash));
             self.pending
                 .pending_processing_parent

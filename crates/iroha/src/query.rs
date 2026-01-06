@@ -309,6 +309,13 @@ pub struct QueryCursor {
     cursor: ForwardCursor,
 }
 
+impl QueryCursor {
+    /// Return the underlying Iroha forward cursor.
+    pub fn forward_cursor(&self) -> &ForwardCursor {
+        &self.cursor
+    }
+}
+
 /// Different errors as a result of query response handling
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum QueryError {

@@ -14795,10 +14795,10 @@ function normalizeGovernanceZkBallotV1Payload(input) {
       "governanceSubmitZkBallotV1.owner",
     );
   }
-  if (record.salt_hex) {
-    payload.salt_hex = normalizeHex32String(
-      record.salt_hex,
-      "governanceSubmitZkBallotV1.saltHex",
+  if (record.nullifier_hex ?? record.nullifierHex) {
+    payload.nullifier_hex = normalizeHex32String(
+      record.nullifier_hex ?? record.nullifierHex,
+      "governanceSubmitZkBallotV1.nullifierHex",
     );
   }
   return payload;

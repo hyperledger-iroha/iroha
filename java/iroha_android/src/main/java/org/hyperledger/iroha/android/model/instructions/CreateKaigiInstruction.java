@@ -344,16 +344,15 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
       if (relayId == null || relayId.isBlank()) {
         throw new IllegalArgumentException("relayId must not be blank");
       }
-      if (hpkePublicKeyBase64 == null || hpkePublicKeyBase64.isBlank()) {
-        throw new IllegalArgumentException("hpkePublicKey must not be blank");
-      }
+      final String normalizedKey =
+          KaigiInstructionUtils.requireBase64(hpkePublicKeyBase64, "hpkePublicKey");
       if (weight < 0 || weight > 0xFF) {
         throw new IllegalArgumentException("relay hop weight must fit in an unsigned byte");
       }
       final KaigiInstructionUtils.RelayManifestHop hop =
           new KaigiInstructionUtils.RelayManifestHop()
               .withRelayId(relayId)
-              .withHpkePublicKey(hpkePublicKeyBase64)
+              .withHpkePublicKey(normalizedKey)
               .withWeight(weight);
       relayManifestHops.add(hop);
       return this;

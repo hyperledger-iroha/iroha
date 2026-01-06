@@ -21,6 +21,8 @@ public final class SorafsRegisterPinManifestBuilderTests {
   private SorafsRegisterPinManifestBuilderTests() {}
 
   public static void main(final String[] args) throws Exception {
+    rejectsNegativeSubmittedEpoch();
+    rejectsNegativeRetentionEpoch();
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> instruction = asMap(fixture.get("instruction"), "instruction");
 
@@ -43,6 +45,32 @@ public final class SorafsRegisterPinManifestBuilderTests {
     System.out.println(
         "[IrohaAndroid] SorafsRegisterPinManifestBuilderTests passed (" + box.arguments().size()
             + " arguments).");
+  }
+
+  private static void rejectsNegativeSubmittedEpoch() {
+    boolean threw = false;
+    try {
+      RegisterPinManifestInstruction.builder()
+          .setDigestHex("a0".repeat(32))
+          .setChunkDigestSha3Hex("b0".repeat(32))
+          .setSubmittedEpoch(-1);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected negative submitted epoch to throw";
+  }
+
+  private static void rejectsNegativeRetentionEpoch() {
+    boolean threw = false;
+    try {
+      RegisterPinManifestInstruction.PinPolicy.builder()
+          .setMinReplicas(1)
+          .setStorageClass("hot")
+          .setRetentionEpoch(-1);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected negative retention epoch to throw";
   }
 
   private static RegisterPinManifestInstruction buildInstruction(

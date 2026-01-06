@@ -13,6 +13,8 @@ public final class AndroidProvisionedProofTest {
     loadsFixtureAndNormalisesFields();
     rejectsManifestsMissingDeviceId();
     rejectsInvalidHashLiteral();
+    rejectsFractionalIssuedAt();
+    dropsFractionalManifestVersion();
     System.out.println("[IrohaAndroid] AndroidProvisionedProofTest passed.");
   }
 
@@ -76,6 +78,41 @@ public final class AndroidProvisionedProofTest {
     } catch (final IllegalArgumentException expected) {
       // expected
     }
+  }
+
+  private static void rejectsFractionalIssuedAt() {
+    final String json =
+        "{"
+            + "\"manifest_schema\":\"offline_provisioning_v1\"," 
+            + "\"manifest_issued_at_ms\":1.5,"
+            + "\"challenge_hash\":\"hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#FFFF\"," 
+            + "\"counter\":1,"
+            + "\"device_manifest\":{\"android.provisioned.device_id\":\"demo\"},"
+            + "\"inspector_signature\":\""
+            + "A".repeat(128)
+            + "\"}";
+    try {
+      AndroidProvisionedProof.fromJson(json);
+      throw new AssertionError("expected IllegalStateException");
+    } catch (final IllegalStateException expected) {
+      // expected
+    }
+  }
+
+  private static void dropsFractionalManifestVersion() {
+    final String json =
+        "{"
+            + "\"manifest_schema\":\"offline_provisioning_v1\"," 
+            + "\"manifest_version\":1.5,"
+            + "\"manifest_issued_at_ms\":1,"
+            + "\"challenge_hash\":\"hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#FFFF\"," 
+            + "\"counter\":1,"
+            + "\"device_manifest\":{\"android.provisioned.device_id\":\"demo\"},"
+            + "\"inspector_signature\":\""
+            + "A".repeat(128)
+            + "\"}";
+    final AndroidProvisionedProof proof = AndroidProvisionedProof.fromJson(json);
+    assert proof.manifestVersion() == null : "expected fractional manifest_version to be dropped";
   }
 
   private static Path fixturePath() {

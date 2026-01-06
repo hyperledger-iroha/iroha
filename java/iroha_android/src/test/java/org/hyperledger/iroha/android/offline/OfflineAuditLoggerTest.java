@@ -12,6 +12,7 @@ public final class OfflineAuditLoggerTest {
 
   public static void main(final String[] args) throws Exception {
     recordsAndExportsEntries();
+    rejectsFractionalTimestamp();
     System.out.println("[IrohaAndroid] OfflineAuditLoggerTest passed.");
   }
 
@@ -36,6 +37,32 @@ public final class OfflineAuditLoggerTest {
     logger.clear();
     assert logger.entries().isEmpty() : "clear should remove entries";
 
+    Files.deleteIfExists(logFile);
+  }
+
+  private static void rejectsFractionalTimestamp() throws IOException {
+    final Path logFile = Files.createTempFile("offline_audit_invalid", ".json");
+    final String json =
+        """
+        [
+          {
+            "tx_id": "tx1",
+            "sender_id": "alice@wonderland",
+            "receiver_id": "bob@wonderland",
+            "asset_id": "usd#wonderland",
+            "amount": "10",
+            "timestamp_ms": 1.5
+          }
+        ]
+        """;
+    Files.writeString(logFile, json, StandardCharsets.UTF_8);
+    boolean thrown = false;
+    try {
+      new OfflineAuditLogger(logFile, true);
+    } catch (Exception ex) {
+      thrown = true;
+    }
+    assert thrown : "expected fractional timestamps to be rejected";
     Files.deleteIfExists(logFile);
   }
 }

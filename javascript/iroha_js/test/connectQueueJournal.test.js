@@ -268,3 +268,40 @@ test("indexeddb journal persists entries", async () => {
     [1, 2],
   );
 });
+
+test("connect journal rejects invalid session id strings", () => {
+  assert.throws(
+    () => new ConnectQueueJournal("AQIDB*"),
+    (error) => error?.name === "ConnectJournalError",
+  );
+});
+
+test("connect journal rejects empty binary session ids", () => {
+  assert.throws(
+    () => new ConnectQueueJournal(new Uint8Array()),
+    (error) => error?.name === "ConnectJournalError",
+  );
+});
+
+test("connect journal rejects non-byte session ids", () => {
+  assert.throws(
+    () => new ConnectQueueJournal([256]),
+    (error) => error?.name === "ConnectJournalError",
+  );
+});
+
+test("connect journal accepts array-like session ids", async () => {
+  const journal = new ConnectQueueJournal([1, 2, 3], { storage: "memory" });
+  const records = await journal.records(ConnectDirection.APP_TO_WALLET);
+  assert.equal(records.length, 0);
+});
+
+test("connect journal rejects fractional retention", () => {
+  assert.throws(
+    () =>
+      new ConnectQueueJournal("AQIDBA", {
+        retentionMs: 1.5,
+      }),
+    (error) => error?.name === "ConnectJournalError" && /retentionMs/.test(error.message),
+  );
+});

@@ -1,6 +1,8 @@
 package org.hyperledger.iroha.android.client.stream;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -18,12 +20,15 @@ import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.hyperledger.iroha.android.client.ClientObserver;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.PlatformHttpTransportExecutor;
+import org.hyperledger.iroha.android.client.transport.StreamingTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.client.transport.TransportStreamResponse;
 
 /**
  * Minimal streaming client used to consume Torii server-sent event (SSE) feeds. The implementation
@@ -56,6 +61,9 @@ public final class ToriiEventStreamClient {
     *
     * <p>Callers must close the returned {@link ToriiEventStream}; the listener is notified when the
     * stream receives frames, fails, or terminates.
+    *
+    * <p>When the configured transport supports streaming responses, frames are parsed as they
+    * arrive; otherwise, the response body is buffered before parsing.
     */
   public ToriiEventStream openSseStream(
       final String path,
@@ -66,52 +74,18 @@ public final class ToriiEventStreamClient {
         options != null ? options : ToriiEventStreamOptions.defaultOptions();
     final TransportRequest request = buildRequest(path, resolved);
     notifyRequest(request);
+    if (transport instanceof StreamingTransportExecutor streaming) {
+      final CompletableFuture<TransportStreamResponse> responseFuture = streaming.openStream(request);
+      final ActiveStream stream = new ActiveStream(request, responseFuture);
+      responseFuture.whenComplete((response, throwable) ->
+          handleStreamResponse(request, listener, stream, response, throwable));
+      return stream;
+    }
+
     final CompletableFuture<TransportResponse> responseFuture = transport.execute(request);
     final ActiveStream stream = new ActiveStream(request, responseFuture);
-    responseFuture.whenComplete((response, throwable) -> {
-      if (throwable != null) {
-        stream.signalFailure(throwable);
-        notifyFailure(request, throwable);
-        listener.onError(throwable);
-        return;
-      }
-      if (response.statusCode() < 200 || response.statusCode() >= 300) {
-        final String message =
-            response.body().length == 0 ? "" : new String(response.body(), StandardCharsets.UTF_8);
-        final IOException error =
-            new IOException(
-                "Torii SSE request failed with status "
-                    + response.statusCode()
-                    + (message.isEmpty() ? "" : ": " + message));
-        stream.signalFailure(error);
-        notifyFailure(request, error);
-        listener.onError(error);
-        return;
-      }
-
-      final ClientResponse clientResponse = new ClientResponse(response.statusCode(), new byte[0]);
-      notifyResponse(request, clientResponse);
-      listener.onOpen();
-
-      final CompletableFuture<Void> readerFuture =
-          CompletableFuture.runAsync(
-              () ->
-                  parseEventStream(
-                      new java.io.ByteArrayInputStream(response.body()), listener, stream));
-      stream.attach(readerFuture);
-      readerFuture.whenComplete((ignored, parseError) -> {
-        if (parseError != null && !(parseError instanceof CancellationException)) {
-          stream.signalFailure(parseError);
-          notifyFailure(request, parseError);
-          listener.onError(parseError);
-        } else if (!stream.closedByCaller()) {
-          listener.onClosed();
-          stream.signalSuccess();
-        } else {
-          stream.signalSuccess();
-        }
-      });
-    });
+    responseFuture.whenComplete((response, throwable) ->
+        handleBufferedResponse(request, listener, stream, response, throwable));
     return stream;
   }
 
@@ -238,6 +212,124 @@ public final class ToriiEventStreamClient {
     }
   }
 
+  private void handleBufferedResponse(
+      final TransportRequest request,
+      final ToriiEventStreamListener listener,
+      final ActiveStream stream,
+      final TransportResponse response,
+      final Throwable throwable) {
+    if (throwable != null) {
+      final Throwable cause = unwrapCompletion(throwable);
+      if (cause instanceof CancellationException && stream.closedByCaller()) {
+        stream.signalSuccess();
+        return;
+      }
+      stream.signalFailure(cause);
+      notifyFailure(request, cause);
+      listener.onError(cause);
+      return;
+    }
+    if (response.statusCode() < 200 || response.statusCode() >= 300) {
+      final String message =
+          response.body().length == 0 ? "" : new String(response.body(), StandardCharsets.UTF_8);
+      final IOException error =
+          new IOException(
+              "Torii SSE request failed with status "
+                  + response.statusCode()
+                  + (message.isEmpty() ? "" : ": " + message));
+      stream.signalFailure(error);
+      notifyFailure(request, error);
+      listener.onError(error);
+      return;
+    }
+
+    final ClientResponse clientResponse = new ClientResponse(response.statusCode(), new byte[0]);
+    notifyResponse(request, clientResponse);
+    listener.onOpen();
+
+    final CompletableFuture<Void> readerFuture =
+        CompletableFuture.runAsync(
+            () -> parseEventStream(new ByteArrayInputStream(response.body()), listener, stream));
+    stream.attach(readerFuture);
+    readerFuture.whenComplete((ignored, parseError) ->
+        handleParseCompletion(request, listener, stream, parseError));
+  }
+
+  private void handleStreamResponse(
+      final TransportRequest request,
+      final ToriiEventStreamListener listener,
+      final ActiveStream stream,
+      final TransportStreamResponse response,
+      final Throwable throwable) {
+    if (throwable != null) {
+      final Throwable cause = unwrapCompletion(throwable);
+      if (cause instanceof CancellationException && stream.closedByCaller()) {
+        stream.signalSuccess();
+        return;
+      }
+      stream.signalFailure(cause);
+      notifyFailure(request, cause);
+      listener.onError(cause);
+      return;
+    }
+    if (response.statusCode() < 200 || response.statusCode() >= 300) {
+      final String message = readBody(response);
+      final IOException error =
+          new IOException(
+              "Torii SSE request failed with status "
+                  + response.statusCode()
+                  + (message.isEmpty() ? "" : ": " + message));
+      stream.signalFailure(error);
+      notifyFailure(request, error);
+      listener.onError(error);
+      return;
+    }
+
+    final ClientResponse clientResponse = new ClientResponse(response.statusCode(), new byte[0]);
+    notifyResponse(request, clientResponse);
+    listener.onOpen();
+    stream.attachStream(response);
+
+    final CompletableFuture<Void> readerFuture =
+        CompletableFuture.runAsync(() -> parseEventStream(response.body(), listener, stream));
+    stream.attach(readerFuture);
+    readerFuture.whenComplete((ignored, parseError) ->
+        handleParseCompletion(request, listener, stream, parseError));
+  }
+
+  private void handleParseCompletion(
+      final TransportRequest request,
+      final ToriiEventStreamListener listener,
+      final ActiveStream stream,
+      final Throwable parseError) {
+    stream.closeStreamResponse();
+    if (parseError != null && !(parseError instanceof CancellationException)) {
+      stream.signalFailure(parseError);
+      notifyFailure(request, parseError);
+      listener.onError(parseError);
+    } else if (!stream.closedByCaller()) {
+      listener.onClosed();
+      stream.signalSuccess();
+    } else {
+      stream.signalSuccess();
+    }
+  }
+
+  private static String readBody(final TransportStreamResponse response) {
+    final byte[] data;
+    try (InputStream body = response.body(); ByteArrayOutputStream buffer = new ByteArrayOutputStream()) {
+      final byte[] chunk = new byte[4096];
+      int read;
+      while ((read = body.read(chunk)) != -1) {
+        buffer.write(chunk, 0, read);
+      }
+      data = buffer.toByteArray();
+    } catch (final IOException ignored) {
+      return "";
+    }
+    return data.length == 0 ? "" : new String(data, StandardCharsets.UTF_8);
+  }
+
   private static void dispatchEvent(
       final ToriiEventStreamListener listener,
       final StringBuilder data,
@@ -253,6 +345,14 @@ public final class ToriiEventStreamClient {
     data.setLength(0);
     final String name = eventName == null || eventName.isEmpty() ? DEFAULT_EVENT_NAME : eventName;
     listener.onEvent(new ServerSentEvent(name, payload, eventId));
+  }
+
+  private static Throwable unwrapCompletion(final Throwable error) {
+    if (error instanceof java.util.concurrent.CompletionException completion
+        && completion.getCause() != null) {
+      return completion.getCause();
+    }
+    return error;
   }
 
   private void notifyRequest(final TransportRequest request) {
@@ -328,20 +428,32 @@ public final class ToriiEventStreamClient {
 
   private static final class ActiveStream implements ToriiEventStream {
     private final TransportRequest request;
-    private final CompletableFuture<TransportResponse> responseFuture;
+    private final CompletableFuture<?> responseFuture;
     private final CompletableFuture<Void> completion = new CompletableFuture<>();
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean closedByCaller = new AtomicBoolean(false);
+    private final AtomicReference<TransportStreamResponse> streamResponse = new AtomicReference<>(null);
 
     private volatile CompletableFuture<Void> readerFuture;
 
-    ActiveStream(final TransportRequest request, final CompletableFuture<TransportResponse> responseFuture) {
+    ActiveStream(final TransportRequest request, final CompletableFuture<?> responseFuture) {
       this.request = request;
       this.responseFuture = responseFuture;
     }
 
     void attach(final CompletableFuture<Void> readerFuture) {
       this.readerFuture = readerFuture;
+    }
+
+    void attachStream(final TransportStreamResponse response) {
+      streamResponse.set(response);
+    }
+
+    void closeStreamResponse() {
+      final TransportStreamResponse response = streamResponse.getAndSet(null);
+      if (response != null) {
+        response.close();
+      }
     }
 
     void signalFailure(final Throwable error) {
@@ -376,6 +488,10 @@ public final class ToriiEventStreamClient {
         return;
       }
       closedByCaller.set(true);
+      final TransportStreamResponse response = streamResponse.getAndSet(null);
+      if (response != null) {
+        response.close();
+      }
       if (readerFuture != null) {
         readerFuture.cancel(true);
       }
