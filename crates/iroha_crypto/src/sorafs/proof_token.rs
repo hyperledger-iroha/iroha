@@ -231,7 +231,8 @@ impl ProofToken {
     ///
     /// Returns [`DecodeError`] when the payload is truncated, malformed, or
     /// uses an unsupported version. Also enforces mint invariants such as
-    /// non-empty entry lists and `expires_at` strictly after `issued_at`.
+    /// canonical flags, non-empty entry lists, and `expires_at` strictly after
+    /// `issued_at`.
     pub fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         if bytes.len() < FRAME_MAGIC.len() + 2 {
             return Err(DecodeError::Truncated);
@@ -247,6 +248,9 @@ impl ProofToken {
         }
 
         let flags = reader.take(1)?[0];
+        if flags & !FLAG_HAS_EXPIRY != 0 {
+            return Err(DecodeError::InvalidFlags(flags));
+        }
         let moderation = ModerationAction::from_u8(reader.take(1)?[0]);
         let issued_at = u64::from_be_bytes(reader.take(8)?.try_into().unwrap());
         let expires_at = if flags & FLAG_HAS_EXPIRY == FLAG_HAS_EXPIRY {
@@ -479,6 +483,9 @@ pub enum DecodeError {
     /// Frame did not begin with the expected `SFGT` magic.
     #[error("invalid frame magic")]
     BadMagic,
+    /// Frame flags contain unsupported bits.
+    #[error("invalid token flags {0:#04x}")]
+    InvalidFlags(u8),
     /// Entry list is empty.
     #[error("entry list must not be empty")]
     MissingEntries,
@@ -672,6 +679,23 @@ mod tests {
                 expires_at: 19
             }
         ));
+    }
+
+    #[test]
+    fn decode_rejects_unknown_flags() {
+        let token = ProofToken {
+            token_id: [0u8; 16],
+            moderation: ModerationAction::Block,
+            issued_at: 10,
+            expires_at: None,
+            entry_ids: vec!["denylist/entry".to_string()],
+            blinded_digest: [0u8; 32],
+            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+        };
+        let mut bytes = token.encode();
+        bytes[FRAME_MAGIC.len() + 1] = 0x80;
+        let err = ProofToken::decode(&bytes).expect_err("unknown flags should fail");
+        assert!(matches!(err, DecodeError::InvalidFlags(0x80)));
     }
 
     #[test]

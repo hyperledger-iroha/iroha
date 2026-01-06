@@ -1,13 +1,13 @@
 import { test as baseTest } from "node:test";
 import assert from "node:assert/strict";
 import { sm2FixtureFromSeed } from "../src/crypto.js";
-import { makeNativeTest } from "./helpers/native.js";
+import { makeNativeTest, sm2RequiredMethods } from "./helpers/native.js";
 
 const DISTID = "iroha-sdk-sm2-fixture";
 const SEED = Buffer.from("iroha-rust-sdk-sm2-deterministic-fixture");
 const MESSAGE = Buffer.from("Rust SDK SM2 signing fixture v1");
 
-const testNative = makeNativeTest(baseTest);
+const testNative = makeNativeTest(baseTest, { require: sm2RequiredMethods });
 
 testNative("sm2 fixture matches rust reference", () => {
   const fixture = sm2FixtureFromSeed(DISTID, SEED, MESSAGE);

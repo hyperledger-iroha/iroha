@@ -22,4 +22,15 @@ final class ConnectFlowControlTests: XCTestCase {
         try controller.consume(direction: .walletToApp)
         XCTAssertThrowsError(try controller.consume(direction: .walletToApp))
     }
+
+    func testGrantClampsOnOverflow() throws {
+        let controller = ConnectFlowController(
+            window: ConnectFlowControlWindow(appToWallet: UInt64.max - 1, walletToApp: 0)
+        )
+        controller.grant(direction: .appToWallet, tokens: 10)
+
+        for _ in 0..<9 {
+            try controller.consume(direction: .appToWallet)
+        }
+    }
 }

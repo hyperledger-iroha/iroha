@@ -31,10 +31,13 @@ const ISSUER_DOMAIN: &[u8] = b"soranet.token.issuer.v1";
 const BODY_LEN: usize = 1 + 1 + 8 + 8 + 32 + 32 + 16 + 32;
 /// Minimum envelope length (magic + version + body + signature length prefix).
 const MIN_FRAME_LEN: usize = TOKEN_MAGIC.len() + 1 + BODY_LEN + 2;
+/// Flags defined for v1 tokens (all bits reserved).
+const TOKEN_FLAG_MASK: u8 = 0;
 
 /// Admission token issued by a relay operator or delegated gateway.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdmissionToken {
+    /// Reserved flags (must be zero in v1).
     flags: u8,
     issued_at: u64,
     expires_at: u64,
@@ -71,6 +74,9 @@ impl AdmissionToken {
         let mut cursor = TOKEN_MAGIC.len() + 1;
         let flags = bytes[cursor];
         cursor += 1;
+        if flags & !TOKEN_FLAG_MASK != 0 {
+            return Err(DecodeError::InvalidFlags(flags));
+        }
 
         let issued_at = u64::from_be_bytes(bytes[cursor..cursor + 8].try_into().unwrap());
         cursor += 8;
@@ -107,7 +113,7 @@ impl AdmissionToken {
                 actual: bytes.len() - cursor,
             });
         }
-        if issued_at > expires_at {
+        if issued_at >= expires_at {
             return Err(DecodeError::InvalidTemporalBounds);
         }
 
@@ -144,6 +150,7 @@ impl AdmissionToken {
     }
 
     /// Flags embedded in the token body.
+    /// Reserved for future use (must be zero in v1).
     #[must_use]
     pub fn flags(&self) -> u8 {
         self.flags
@@ -851,8 +858,11 @@ pub enum DecodeError {
         /// Remaining payload length following the prefix.
         actual: usize,
     },
-    /// `issued_at` was later than `expires_at`.
-    #[error("token issued_at exceeds expires_at")]
+    /// Flags contained undefined bits.
+    #[error("token flags contain unknown bits ({0:#04x})")]
+    InvalidFlags(u8),
+    /// `issued_at` was not earlier than `expires_at`.
+    #[error("token issued_at must be earlier than expires_at")]
     InvalidTemporalBounds,
 }
 
@@ -1014,7 +1024,7 @@ mod tests {
             TRANSCRIPT,
             issued,
             expires,
-            1,
+            0,
             &mut rng,
         )
         .expect("mint");
@@ -1094,6 +1104,57 @@ mod tests {
         .expect("mint");
         let encoded = token.encode();
         assert!(frame_looks_like_token(&encoded));
+    }
+
+    #[test]
+    fn decode_rejects_non_zero_flags() {
+        let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
+            .expect("ML-DSA keypair generation should succeed");
+        let fingerprint = compute_issuer_fingerprint(keypair.public_key());
+        let mut rng = StdRng::seed_from_u64(123);
+        let token = AdmissionToken::mint(
+            MlDsaSuite::MlDsa44,
+            keypair.secret_key(),
+            fingerprint,
+            RELAY_ID,
+            TRANSCRIPT,
+            UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+            UNIX_EPOCH + Duration::from_secs(1_700_000_600),
+            0,
+            &mut rng,
+        )
+        .expect("mint");
+        let mut encoded = token.encode();
+        encoded[TOKEN_MAGIC.len() + 1] = 0x01;
+        let err = AdmissionToken::decode(&encoded).expect_err("flags must be zero");
+        assert!(matches!(err, DecodeError::InvalidFlags(0x01)));
+    }
+
+    #[test]
+    fn decode_rejects_zero_ttl() {
+        let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
+            .expect("ML-DSA keypair generation should succeed");
+        let fingerprint = compute_issuer_fingerprint(keypair.public_key());
+        let mut rng = StdRng::seed_from_u64(456);
+        let token = AdmissionToken::mint(
+            MlDsaSuite::MlDsa44,
+            keypair.secret_key(),
+            fingerprint,
+            RELAY_ID,
+            TRANSCRIPT,
+            UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+            UNIX_EPOCH + Duration::from_secs(1_700_000_600),
+            0,
+            &mut rng,
+        )
+        .expect("mint");
+        let mut encoded = token.encode();
+        let issued_range = TOKEN_MAGIC.len() + 2..TOKEN_MAGIC.len() + 10;
+        let expires_range = TOKEN_MAGIC.len() + 10..TOKEN_MAGIC.len() + 18;
+        let issued = encoded[issued_range.clone()].to_vec();
+        encoded[expires_range].copy_from_slice(&issued);
+        let err = AdmissionToken::decode(&encoded).expect_err("zero ttl must be rejected");
+        assert!(matches!(err, DecodeError::InvalidTemporalBounds));
     }
 
     #[test]

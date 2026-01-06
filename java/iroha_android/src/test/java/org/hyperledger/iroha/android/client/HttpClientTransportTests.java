@@ -67,7 +67,9 @@ public final class HttpClientTransportTests {
     submitEmitsDeviceProfileTelemetry();
     submitEmitsRetryTelemetry();
     waitForTransactionStatusEmitsTelemetrySignals();
+    pipelineStatusRedactionFailureUsesSignalId();
     uaidPortfolioRequestParsesResponse();
+    uaidRequestsRespectBasePath();
     uaidBindingsRequestParsesResponse();
     uaidManifestsRequestSupportsQuery();
     System.out.println("[IrohaAndroid] HTTP client transport tests passed.");
@@ -525,6 +527,45 @@ public final class HttpClientTransportTests {
         : "Success signal must reflect attempt count";
   }
 
+  private static void pipelineStatusRedactionFailureUsesSignalId() {
+    final RecordingTelemetrySink telemetrySink = new RecordingTelemetrySink();
+    final TelemetryOptions telemetryOptions =
+        TelemetryOptions.builder()
+            .setTelemetryRedaction(
+                TelemetryOptions.Redaction.builder()
+                    .setSaltHex("0e0f1011")
+                    .setSaltVersion("2026Q3")
+                    .build())
+            .build();
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            new ScriptedExecutor(
+                new TransportResponse(200, statusPayload("Committed"), "", Map.of())),
+            ClientConfig.builder()
+                .setBaseUri(URI.create("http:/")) // No authority -> redaction failure path.
+                .setTelemetryOptions(telemetryOptions)
+                .setTelemetrySink(telemetrySink)
+                .build());
+
+    transport
+        .waitForTransactionStatus(
+            "beadfeed", PipelineStatusOptions.builder().intervalMillis(0L).build())
+        .join();
+
+    final List<Map<String, Object>> failures =
+        telemetrySink.eventsBySignal("android.telemetry.redaction.failure");
+    boolean found = false;
+    for (final Map<String, Object> fields : failures) {
+      if ("android.torii.pipeline.status".equals(fields.get("signal_id"))) {
+        assert "blank_authority".equals(fields.get("reason"))
+            : "Redaction failure must report the blank authority reason";
+        found = true;
+        break;
+      }
+    }
+    assert found : "Pipeline status redaction failures must reference the pipeline status signal";
+  }
+
   private static void submitQueuesTransactionsWithExportedKey() throws Exception {
     final SoftwareKeyProvider provider = new SoftwareKeyProvider();
     final IrohaKeyManager keyManager = IrohaKeyManager.fromProviders(List.of(provider));
@@ -729,6 +770,29 @@ public final class HttpClientTransportTests {
         .toString()
         .equals("https://torii.example/v1/accounts/uaid%3A" + hex + "/portfolio")
         : "Request URI must percent-encode UAID literal";
+  }
+
+  private static void uaidRequestsRespectBasePath() {
+    final String hex =
+        "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    final String json = "{\"uaid\":\"uaid:" + hex + "\"}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final ClientConfig config =
+        ClientConfig.builder()
+            .setBaseUri(URI.create("https://torii.example/api"))
+            .build();
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
+
+    transport.getUaidPortfolio("uaid:" + hex).join();
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "UAID request should be captured";
+    assert request
+        .uri()
+        .toString()
+        .equals("https://torii.example/api/v1/accounts/uaid%3A" + hex + "/portfolio")
+        : "UAID endpoints must preserve baseUri path segments";
   }
 
   private static void uaidBindingsRequestParsesResponse() {

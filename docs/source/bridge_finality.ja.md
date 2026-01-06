@@ -51,6 +51,9 @@ commit certificate 内の hash と一致する必要があり、chain id が pro
 現状の placeholder: `mmr_root`/`mmr_peaks` は block-hash MMR をメモリ上で再計算して導出します。
 inclusion proofs はまだ返されません。現時点でも commitment payload で同じ hash を検証できます。
 
+MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
+from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+
 API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON)。
 
 検証は基本 proof と同様です: header から `block_hash` を再計算し、commit certificate の署名を検証し、

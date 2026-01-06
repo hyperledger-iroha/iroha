@@ -119,6 +119,9 @@ public final class ToriiEventStreamClient {
     final URI target = appendQueryParameters(resolvePath(path), options.queryParameters());
     final TransportRequest.Builder builder = TransportRequest.builder().setUri(target).setMethod("GET");
     Duration timeout = options.timeout();
+    if (timeout != null) {
+      builder.setTimeout(timeout);
+    }
     final Map<String, String> headers = new LinkedHashMap<>(defaultHeaders);
     headers.putIfAbsent("Accept", EVENT_STREAM_CONTENT_TYPE);
     headers.putIfAbsent("Cache-Control", "no-cache");

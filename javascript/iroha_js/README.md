@@ -66,7 +66,7 @@ import { Torii, Norito, Crypto, Offline } from "@iroha/iroha-js";
 const torii = new Torii.ToriiClient("https://torii.example");
 const encoded = Norito.noritoEncodeInstruction({ Register: { Domain: { id: "wonderland" } } });
 const keys = Crypto.generateKeyPair();
-const offline = Offline.buildOfflineEnvelope({ txBytes: encoded, metadata: {} });
+const offline = Offline.buildOfflineEnvelope({ signedTransaction: encoded, metadata: {} });
 ```
 
 > **Key storage:** Store Ed25519 seed material in dedicated key vaults or

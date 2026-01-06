@@ -1334,7 +1334,9 @@ ffi::ffi_item! {
     /// represented as a [multihash](https://www.multiformats.io/multihash/) string.
     /// [`FromStr`] also accepts an algorithm-prefixed form like
     /// `"ed25519:<multihash-hex>"` for clarity in JSON. [`Display`] returns
-    /// the bare multihash hex.
+    /// the bare multihash hex. Multihash hex is canonical: varint bytes are
+    /// lowercase hex and payload bytes are uppercase hex; parsing rejects
+    /// non-canonical casing and `0x` prefixes.
     /// For example:
     ///
     /// ```
@@ -2038,7 +2040,9 @@ impl norito::json::JsonSerialize for PrivateKey {
 ///
 /// [`FromStr`] accepts both a bare multihash hex string and an algorithm-prefixed
 /// variant such as `"ml-dsa:<multihash-hex>"`. The default [`Display`] formatting returns
-/// the bare multihash hex.
+/// the bare multihash hex. Multihash hex is canonical: varint bytes are lowercase hex
+/// and payload bytes are uppercase hex; parsing rejects non-canonical casing and
+/// `0x` prefixes.
 #[derive(Clone, Eq, PartialEq)]
 pub struct ExposedPrivateKey(pub PrivateKey);
 

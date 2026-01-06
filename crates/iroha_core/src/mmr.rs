@@ -17,7 +17,7 @@ pub struct MmrNode {
 /// Simple MMR accumulator keeping recent peaks in memory.
 #[derive(Clone, Debug, Default)]
 pub struct BlockMmr {
-    /// Peaking nodes (sorted by insertion).
+    /// Peaking nodes stored from left to right (in insertion order).
     pub peaks: VecDeque<MmrNode>,
     /// Current number of leaves.
     pub leaves: u64,
@@ -26,40 +26,34 @@ pub struct BlockMmr {
 impl BlockMmr {
     /// Append a new block hash leaf and update peaks.
     pub fn push(&mut self, leaf: HashOf<BlockHeader>) {
-        let node = MmrNode {
+        let mut carry = MmrNode {
             hash: *leaf.as_ref(),
             height: 0,
         };
         self.leaves = self.leaves.saturating_add(1);
 
-        let mut carry = node;
-        let mut next_peaks = VecDeque::new();
-        let iter = self.peaks.drain(..).collect::<Vec<_>>().into_iter();
-
-        for peak in iter {
-            if peak.height == carry.height {
-                carry = MmrNode {
-                    hash: hash_pair(peak.hash, carry.hash),
-                    height: carry.height.saturating_add(1),
-                };
-            } else {
-                next_peaks.push_back(peak);
+        while let Some(last) = self.peaks.back().copied() {
+            if last.height != carry.height {
+                break;
             }
+            let last = self.peaks.pop_back().expect("peak exists");
+            carry = MmrNode {
+                hash: hash_pair(last.hash, carry.hash),
+                height: carry.height.saturating_add(1),
+            };
         }
-        next_peaks.push_back(carry);
-        self.peaks = next_peaks;
+
+        self.peaks.push_back(carry);
     }
 
     /// Return the current MMR root (bagged peaks hash) if any leaves exist.
+    ///
+    /// Peaks are bagged from right to left using their left-to-right ordering:
+    /// `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
     #[must_use]
     pub fn root(&self) -> Option<[u8; 32]> {
-        let mut peaks: Vec<_> = self.peaks.iter().copied().collect();
-        if peaks.is_empty() {
-            return None;
-        }
-        peaks.sort_by_key(|n| n.height);
         let mut acc: Option<[u8; 32]> = None;
-        for peak in peaks {
+        for peak in &self.peaks {
             acc = Some(acc.map_or(peak.hash, |curr| hash_pair(peak.hash, curr)));
         }
         acc
@@ -82,7 +76,7 @@ fn hash_pair(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::HashOf;
+    use iroha_crypto::{Hash, HashOf};
 
     use super::*;
 
@@ -90,12 +84,52 @@ mod tests {
     fn computes_root_for_two_leaves() {
         let mut mmr = BlockMmr::default();
         mmr.push(HashOf::from_untyped_unchecked(
-            iroha_crypto::Hash::prehashed([0x01; 32]),
+            Hash::prehashed([0x01; 32]),
         ));
         mmr.push(HashOf::from_untyped_unchecked(
-            iroha_crypto::Hash::prehashed([0x02; 32]),
+            Hash::prehashed([0x02; 32]),
         ));
         let root = mmr.root().expect("root");
         assert_ne!(root, [0u8; 32]);
+    }
+
+    #[test]
+    fn merges_peaks_in_stack_order() {
+        let mut mmr = BlockMmr::default();
+        let leaves = [0x01, 0x02, 0x03, 0x04].map(|byte| {
+            HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32]))
+        });
+        for leaf in leaves {
+            mmr.push(leaf);
+        }
+
+        let peak = mmr.peaks.front().expect("single peak");
+        assert_eq!(mmr.peaks.len(), 1);
+        assert_eq!(peak.height, 2);
+
+        let h12 = hash_pair(*leaves[0].as_ref(), *leaves[1].as_ref());
+        let h34 = hash_pair(*leaves[2].as_ref(), *leaves[3].as_ref());
+        let expected = hash_pair(h12, h34);
+        assert_eq!(peak.hash, expected);
+        assert_eq!(mmr.root(), Some(expected));
+    }
+
+    #[test]
+    fn bags_peaks_right_to_left() {
+        let mut mmr = BlockMmr::default();
+        let leaves = [0x01, 0x02, 0x03].map(|byte| {
+            HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32]))
+        });
+        for leaf in leaves {
+            mmr.push(leaf);
+        }
+
+        assert_eq!(mmr.peaks.len(), 2);
+        assert_eq!(mmr.peaks[0].height, 1);
+        assert_eq!(mmr.peaks[1].height, 0);
+
+        let h12 = hash_pair(*leaves[0].as_ref(), *leaves[1].as_ref());
+        let expected = hash_pair(*leaves[2].as_ref(), h12);
+        assert_eq!(mmr.root(), Some(expected));
     }
 }

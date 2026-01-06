@@ -13,7 +13,7 @@ use iroha_core::sumeragi::consensus::{
 use iroha_core::{
     bridge::{
         BridgeFinalityError, BridgeFinalityVerificationError, FinalityProofVerificationConfig,
-        build_finality_proof, verify_finality_proof,
+        build_finality_bundle, build_finality_proof, verify_finality_proof,
     },
     kura::Kura,
     query::store::LiveQueryStore,
@@ -418,6 +418,90 @@ fn builds_finality_bundle_for_stored_block() {
     // MMR root reflects bag-of-peaks over blocks 1..=2; should not equal the leaf hash.
     assert!(bundle.commitment.mmr_root.is_some());
     assert_eq!(bundle.commitment.mmr_leaf_index, Some(1));
+}
+
+#[test]
+fn finality_bundle_rebuilds_mmr_after_top_block_replace() {
+    let _exclusive = lock_finality_tests();
+    let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
+    let kp = KeyPair::random();
+    let peer_id = PeerId::new(kp.public_key().clone());
+
+    let genesis = BlockHeader::new(
+        NonZeroU64::new(1).expect("non-zero"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let builder = iroha_data_model::block::builder::BlockBuilder::new(genesis);
+    let genesis_block = builder.build_with_signature(0, kp.private_key());
+
+    let header2 = BlockHeader::new(
+        NonZeroU64::new(2).expect("non-zero"),
+        Some(genesis_block.hash()),
+        None,
+        None,
+        0,
+        0,
+    );
+    let builder = iroha_data_model::block::builder::BlockBuilder::new(header2);
+    let block = builder.build_with_signature(0, kp.private_key());
+    let block_hash = block.hash();
+
+    let kura = Kura::blank_kura_for_testing();
+    kura.store_block(genesis_block.clone())
+        .expect("store genesis block");
+    kura.store_block(block.clone()).expect("store block");
+    let query_handle = LiveQueryStore::start_test();
+    let world = World::new();
+    let state = State::new_for_testing(world, kura.clone(), query_handle);
+
+    let validator_set = vec![peer_id.clone()];
+    let keypairs = vec![kp.clone()];
+    let cert = build_commit_certificate(
+        &state.view().chain_id().clone(),
+        block_hash,
+        2,
+        0,
+        0,
+        &validator_set,
+        &keypairs,
+    );
+    record_commit_certificate(cert);
+
+    let view = state.view();
+    let bundle = build_finality_bundle(&view, 2).expect("finality bundle");
+    let root_before = bundle.commitment.mmr_root;
+
+    let header2_replacement = BlockHeader::new(
+        NonZeroU64::new(2).expect("non-zero"),
+        Some(genesis_block.hash()),
+        None,
+        None,
+        1,
+        0,
+    );
+    let builder = iroha_data_model::block::builder::BlockBuilder::new(header2_replacement);
+    let replacement = builder.build_with_signature(0, kp.private_key());
+    let replacement_hash = replacement.hash();
+    kura.replace_top_block(replacement).expect("replace top block");
+
+    let cert_replacement = build_commit_certificate(
+        &state.view().chain_id().clone(),
+        replacement_hash,
+        2,
+        0,
+        0,
+        &validator_set,
+        &keypairs,
+    );
+    record_commit_certificate(cert_replacement);
+
+    let refreshed = build_finality_bundle(&view, 2).expect("refreshed bundle");
+    assert_eq!(refreshed.commitment.block_hash, replacement_hash);
+    assert_ne!(root_before, refreshed.commitment.mmr_root);
 }
 
 #[test]

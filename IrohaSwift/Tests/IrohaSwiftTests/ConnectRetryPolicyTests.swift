@@ -12,6 +12,15 @@ final class ConnectRetryPolicyTests: XCTestCase {
         XCTAssertEqual(policy.capMillis(forAttempt: 12), 60_000)
     }
 
+    func testDelayHandlesMaxCap() {
+        let policy = ConnectRetryPolicy(baseDelayMillis: 1, maxDelayMillis: UInt64.max)
+        let cap = policy.capMillis(forAttempt: 64)
+        XCTAssertEqual(cap, UInt64.max)
+
+        let delay = policy.delayMillis(forAttempt: 64, seed: Data(repeating: 0, count: 32))
+        XCTAssertLessThanOrEqual(delay, cap)
+    }
+
     func testDeterministicSeriesZeroSeed() {
         let policy = ConnectRetryPolicy()
         let seed = Data(repeating: 0, count: 32)

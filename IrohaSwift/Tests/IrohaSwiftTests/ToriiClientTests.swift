@@ -1111,6 +1111,21 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testGetAssetsEncodesPercentInAccountLiteral() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/accounts/alice%252Fbob%40wonderland/assets")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            [{"asset_id":"rose#wonderland##alice@wonderland","quantity":"10"}]
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let balances = try await makeClient().getAssets(accountId: "alice%2Fbob@wonderland")
+        XCTAssertEqual(balances.count, 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetTransactionsEncodesAccountLiteral() async throws {
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/accounts/alice%40wonderland/transactions")
