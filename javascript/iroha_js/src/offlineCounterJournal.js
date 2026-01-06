@@ -51,13 +51,21 @@ function normalizeRecordTimestamp(value) {
   if (value === undefined || value === null) {
     return Date.now();
   }
+  if (typeof value === "bigint") {
+    if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new OfflineCounterJournalError("recordedAtMs must be a non-negative integer", {
+        code: "invalid_recorded_at",
+      });
+    }
+    return Number(value);
+  }
   const asNumber = Number(value);
-  if (!Number.isFinite(asNumber) || asNumber < 0) {
-    throw new OfflineCounterJournalError("recordedAtMs must be a non-negative number", {
+  if (!Number.isFinite(asNumber) || !Number.isSafeInteger(asNumber) || asNumber < 0) {
+    throw new OfflineCounterJournalError("recordedAtMs must be a non-negative integer", {
       code: "invalid_recorded_at",
     });
   }
-  return Math.floor(asNumber);
+  return asNumber;
 }
 
 function normalizeNonEmptyString(value, context) {

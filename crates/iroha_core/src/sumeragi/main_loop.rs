@@ -3028,6 +3028,9 @@ struct RbcState {
     payload_rebroadcast_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
     ready_rebroadcast_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
     persisted_full_sessions: BTreeSet<super::rbc_store::SessionKey>,
+    persist_tx: Option<mpsc::SyncSender<rbc::RbcPersistWork>>,
+    persist_rx: Option<mpsc::Receiver<rbc::RbcPersistResult>>,
+    persist_inflight: BTreeSet<super::rbc_store::SessionKey>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -5441,6 +5444,9 @@ impl Actor {
             payload_rebroadcast_last_sent: BTreeMap::new(),
             ready_rebroadcast_last_sent: BTreeMap::new(),
             persisted_full_sessions: BTreeSet::new(),
+            persist_tx: None,
+            persist_rx: None,
+            persist_inflight: BTreeSet::new(),
         };
         let propose_state = ProposeState {
             backpressure_gate,
@@ -5967,6 +5973,7 @@ impl Actor {
             );
         }
         let mut progress = self.tick_mode_management();
+        let rbc_persist_progress = self.poll_rbc_persist_results();
         let now = tick_start;
         let queue_len = self.queue.tx_len();
         let queue_ready = queue_len > 0 && self.active_pending_blocks_len() == 0;
@@ -5997,7 +6004,8 @@ impl Actor {
         let rbc_rebroadcast_progress = self.rebroadcast_stalled_rbc_payloads(now);
         let mut commit_pipeline_cost = Duration::ZERO;
         let mut propose_cost = Duration::ZERO;
-        progress |= adaptive_progress
+        progress |= rbc_persist_progress
+            || adaptive_progress
             || refresh_progress
             || committed_progress
             || reschedule_progress
@@ -7570,6 +7578,7 @@ impl Actor {
             .rbc
             .persisted_full_sessions
             .remove(&key);
+        self.subsystems.da_rbc.rbc.persist_inflight.remove(&key);
         if self.ensure_rbc_chunk_store() {
             if let Some(store) = self.subsystems.da_rbc.rbc.chunk_store.as_ref() {
                 if let Err(err) = store.remove(&key) {

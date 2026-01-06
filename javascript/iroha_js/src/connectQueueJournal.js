@@ -377,10 +377,15 @@ function normalizeDirection(direction) {
 
 function normalizePositive(value, name) {
   const number = Number(value);
-  if (!Number.isFinite(number) || number <= 0) {
-    throw new ConnectJournalError(`${name} must be a positive number`);
+  if (
+    !Number.isFinite(number) ||
+    !Number.isInteger(number) ||
+    !Number.isSafeInteger(number) ||
+    number <= 0
+  ) {
+    throw new ConnectJournalError(`${name} must be a positive integer`);
   }
-  return Math.trunc(number);
+  return number;
 }
 
 function requestToPromise(request) {

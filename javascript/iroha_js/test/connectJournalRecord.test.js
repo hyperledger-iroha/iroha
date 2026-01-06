@@ -58,6 +58,64 @@ test("fromCiphertext applies retention automatically", () => {
   assert.equal(record.expiresAtMs, start + 5_000);
 });
 
+test("ConnectJournalRecord rejects non-integer inputs", () => {
+  assert.throws(
+    () =>
+      new ConnectJournalRecord({
+        direction: ConnectDirection.APP_TO_WALLET,
+        sequence: 1.25,
+        ciphertext: new Uint8Array([0x01]),
+        receivedAtMs: 10,
+        expiresAtMs: 20,
+      }),
+    (error) =>
+      error instanceof ConnectJournalError &&
+      /sequence must be a non-negative integer/i.test(error.message),
+  );
+  assert.throws(
+    () =>
+      new ConnectJournalRecord({
+        direction: ConnectDirection.APP_TO_WALLET,
+        sequence: 1n,
+        ciphertext: new Uint8Array([0x01]),
+        receivedAtMs: 10.5,
+        expiresAtMs: 20,
+      }),
+    (error) =>
+      error instanceof ConnectJournalError &&
+      /receivedAtMs must be a non-negative integer/i.test(error.message),
+  );
+  assert.throws(
+    () =>
+      new ConnectJournalRecord({
+        direction: ConnectDirection.APP_TO_WALLET,
+        sequence: 1n,
+        ciphertext: new Uint8Array([0x01]),
+        receivedAtMs: 10,
+        expiresAtMs: 20.5,
+      }),
+    (error) =>
+      error instanceof ConnectJournalError &&
+      /expiresAtMs must be a non-negative integer/i.test(error.message),
+  );
+});
+
+test("ConnectJournalRecord rejects uint64 overflow sequences", () => {
+  assert.throws(
+    () =>
+      new ConnectJournalRecord({
+        direction: ConnectDirection.APP_TO_WALLET,
+        sequence: 1n << 64n,
+        ciphertext: new Uint8Array([0x01]),
+        receivedAtMs: 10,
+        expiresAtMs: 20,
+      }),
+    (error) =>
+      error instanceof ConnectJournalError &&
+      /uint64/i.test(error.message),
+  );
+});
+
 test("decode rejects tampered payloads", () => {
   const ciphertext = new Uint8Array([0x01, 0x02]);
   const encoded = new ConnectJournalRecord({

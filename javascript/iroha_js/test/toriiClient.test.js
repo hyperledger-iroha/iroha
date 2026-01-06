@@ -1864,6 +1864,48 @@ test("getSorafsPinManifestTyped normalizes manifest, aliases, and orders", async
   assert.equal(detail.attestation?.block_height, 1);
 });
 
+test("getSorafsPinManifestTyped rejects non-integer status timestamps", async () => {
+  const manifestHex = "e".repeat(64);
+  const manifestRecord = {
+    digest_hex: manifestHex,
+    chunker: {
+      profile_id: 1,
+      namespace: "sorafs",
+      name: "sf1",
+      semver: "1.0.0",
+      multihash_code: 0,
+    },
+    chunk_digest_sha3_256_hex: "2".repeat(64),
+    pin_policy: { min_replicas: 3 },
+    submitted_by: "carol@wonderland",
+    submitted_epoch: 42,
+    status: { state: "approved", epoch: 45 },
+    metadata: {},
+    status_timestamp_unix: 123.5,
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          attestation: null,
+          manifest: manifestRecord,
+          aliases: [],
+          replication_orders: [],
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => client.getSorafsPinManifestTyped(manifestHex),
+    (error) => {
+      assert(error instanceof RangeError);
+      assert.match(error.message, /status_timestamp_unix/);
+      return true;
+    },
+  );
+});
+
 test("listSorafsAliases normalizes response and applies filters", async () => {
   let capturedUrl;
   const manifestHex = "a".repeat(64);
@@ -7239,6 +7281,80 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
   assert.equal(callCount, 2);
 });
 
+test("getStatusSnapshot rejects non-integer counters", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        peers: 1.5,
+        queue_size: 0,
+        commit_time_ms: 1,
+        da_reschedule_total: 0,
+        txs_approved: 0,
+        txs_rejected: 0,
+        view_changes: 0,
+        governance: null,
+        lane_commitments: [],
+        dataspace_commitments: [],
+        lane_governance: [],
+        lane_governance_sealed_total: 0,
+        lane_governance_sealed_aliases: [],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.getStatusSnapshot(),
+    (error) => {
+      assert(error instanceof RangeError);
+      assert.match(error.message, /status\.peers/);
+      return true;
+    },
+  );
+});
+
+test("getStatusSnapshot rejects non-integer lane commitment values", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        peers: 1,
+        queue_size: 0,
+        commit_time_ms: 1,
+        da_reschedule_total: 0,
+        txs_approved: 0,
+        txs_rejected: 0,
+        view_changes: 0,
+        governance: null,
+        lane_commitments: [
+          {
+            block_height: 1,
+            lane_id: 2,
+            tx_count: 1.5,
+            total_chunks: 0,
+            rbc_bytes_total: 0,
+            teu_total: 0,
+            block_hash: "deadbeef",
+          },
+        ],
+        dataspace_commitments: [],
+        lane_governance: [],
+        lane_governance_sealed_total: 0,
+        lane_governance_sealed_aliases: [],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.getStatusSnapshot(),
+    (error) => {
+      assert(error instanceof RangeError);
+      assert.match(error.message, /status\.lane_commitments\[0\]\.tx_count/);
+      return true;
+    },
+  );
+});
+
 test("getStatusSnapshot forwards AbortSignal", async () => {
   const controller = new AbortController();
   const fetchImpl = async (url, init) => {
@@ -7274,6 +7390,28 @@ test("getNetworkTimeNow normalizes timestamps", async () => {
     offsetMs: -12,
     confidenceMs: 25,
   });
+});
+
+test("getNetworkTimeNow rejects non-integer offsets", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        now: 1_000_000,
+        offset_ms: 1.5,
+        confidence_ms: 25,
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.getNetworkTimeNow(),
+    (error) => {
+      assert(error instanceof RangeError);
+      assert.match(error.message, /time now response\.offset_ms/);
+      return true;
+    },
+  );
 });
 
 test("getNetworkTimeStatus normalizes diagnostics payload", async () => {
@@ -7426,6 +7564,47 @@ test("getNodeCapabilities normalizes runtime advert", async () => {
       },
     },
   });
+});
+
+test("getNodeCapabilities rejects non-integer capability lists", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        supported_abi_versions: [1, 1.5],
+        default_compile_target: 4,
+        crypto: {
+          sm: {
+            enabled: true,
+            default_hash: "sm3",
+            allowed_signing: ["sm2"],
+            sm2_distid_default: "3132333435363738",
+            openssl_preview: false,
+            acceleration: {
+              scalar: true,
+              neon_sm3: true,
+              neon_sm4: false,
+              policy: "scalar",
+            },
+          },
+          curves: {
+            registry_version: 1,
+            allowed_curve_ids: [1, 15],
+            allowed_curve_bitmap: [32770],
+          },
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.getNodeCapabilities(),
+    (error) => {
+      assert(error instanceof RangeError);
+      assert.match(error.message, /supported_abi_versions/);
+      return true;
+    },
+  );
 });
 
 test("getNodeCapabilities rejects unsupported option fields", async () => {
@@ -12568,6 +12747,53 @@ test("getConnectStatus normalizes payload", async () => {
   assert.equal(status?.perIpSessions[0]?.ip, "127.0.0.1");
   assert.equal(status?.policy?.wsMaxSessions, 64);
   assert.equal(status?.policy?.relayEnabled, true);
+});
+
+test("getConnectStatus rejects non-integer policy values", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          enabled: true,
+          sessions_total: 1,
+          sessions_active: 1,
+          per_ip_sessions: [],
+          buffered_sessions: 0,
+          total_buffer_bytes: 0,
+          dedupe_size: 0,
+          policy: {
+            ws_max_sessions: 64,
+            ws_per_ip_max_sessions: 4,
+            ws_rate_per_ip_per_min: 60,
+            session_ttl_ms: 1000.5,
+            frame_max_bytes: 1024,
+            session_buffer_max_bytes: 2048,
+            relay_enabled: true,
+            heartbeat_interval_ms: 5000,
+            heartbeat_miss_tolerance: 2,
+            heartbeat_min_interval_ms: 1000,
+          },
+          frames_in_total: 0,
+          frames_out_total: 0,
+          ciphertext_total: 0,
+          dedupe_drops_total: 0,
+          buffer_drops_total: 0,
+          plaintext_control_drops_total: 0,
+          monotonic_drops_total: 0,
+          ping_miss_total: 0,
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => client.getConnectStatus(),
+    (error) => {
+      assert(error instanceof RangeError);
+      assert.match(error.message, /session_ttl_ms/);
+      return true;
+    },
+  );
 });
 
 test("createConnectSession validates sid and posts JSON", async () => {

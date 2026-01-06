@@ -39,6 +39,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Re-run `cargo test -p integration_tests sumeragi_rbc_da_large_payload_four_peers -- --nocapture` to confirm DA large-payload RBC flow completes after READY/DELIVER queue routing.
  - [x] Re-run `cargo test -p integration_tests sumeragi_rbc_da_large_payload_six_peers -- --nocapture` after wiring `sumeragi.debug.rbc.force_deliver_quorum_one` to confirm the 6-peer large-payload scenario stays within delivery budgets.
  - [x] Re-run `cargo test -p integration_tests --test address_canonicalisation -- --nocapture` to confirm the suite completes without timeouts.
+ - [x] Re-run `cargo test -p integration_tests --test asset client_add_asset_quantity_to_existing_asset_should_increase_asset_amount -- --nocapture` and `cargo test -p integration_tests --test asset find_rate_and_make_exchange_isi_should_succeed -- --nocapture` to confirm asset flows no longer time out on tx confirmation.
  - [x] Re-run `cargo test -p integration_tests --test sumeragi_da sumeragi_rbc_recovers_after_peer_restart -- --nocapture --test-threads=1` after replay-roster fixes to confirm restart recovery completes.
  - [x] Limit integration-test network concurrency in the sandbox harness (CPU-scaled default + `IROHA_TEST_NETWORK_PARALLELISM`) so `--test-threads=1` is no longer required.
  - [x] Add a restart regression that simulates a crash after persisting a finalized VRF epoch record but before writing the seed-only next-epoch snapshot.

@@ -21,6 +21,7 @@ const MAX_HEADER_PADDING = 64;
 const SCHEMA_NAME = "ConnectJournalRecordV1";
 const SCHEMA_HASH = computeSchemaHash(SCHEMA_NAME);
 const PAYLOAD_FIXED_LEN = 1 + 8 + 8 + 8 + 4 + 32;
+const MAX_UINT64 = (1n << 64n) - 1n;
 
 export class ConnectJournalError extends Error {
   constructor(message, options = {}) {
@@ -120,24 +121,50 @@ function normalizeDirection(direction) {
 
 function normalizeUint64(value, name) {
   if (typeof value === "bigint") {
+    if (value < 0n) {
+      throw new ConnectJournalError(`${name} must be non-negative`);
+    }
+    if (value > MAX_UINT64) {
+      throw new ConnectJournalError(`${name} must fit into a uint64`);
+    }
     return value;
   }
   if (typeof value === "number") {
-    if (!Number.isFinite(value) || value < 0) {
-      throw new ConnectJournalError(`${name} must be a non-negative finite number`);
+    if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+      throw new ConnectJournalError(`${name} must be a non-negative integer`);
     }
-    return BigInt(Math.trunc(value));
+    if (!Number.isSafeInteger(value)) {
+      throw new ConnectJournalError(`${name} must be a safe integer`);
+    }
+    return BigInt(value);
   }
   if (typeof value === "string" && value.trim().length > 0) {
-    const normalized = value.trim().startsWith("0x")
-      ? BigInt(value.trim())
-      : BigInt(value.trim());
-    if (normalized < 0) {
+    let normalized;
+    try {
+      normalized = BigInt(value.trim());
+    } catch {
+      throw new ConnectJournalError(`${name} must be a non-negative integer`);
+    }
+    if (normalized < 0n) {
       throw new ConnectJournalError(`${name} must be non-negative`);
+    }
+    if (normalized > MAX_UINT64) {
+      throw new ConnectJournalError(`${name} must fit into a uint64`);
     }
     return normalized;
   }
   throw new ConnectJournalError(`${name} must be a bigint, number, or numeric string`);
+}
+
+function normalizeTimestampMs(value, name) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || !Number.isInteger(numeric) || numeric < 0) {
+    throw new ConnectJournalError(`${name} must be a non-negative integer`);
+  }
+  if (!Number.isSafeInteger(numeric)) {
+    throw new ConnectJournalError(`${name} must be a safe integer`);
+  }
+  return numeric;
 }
 
 function ensurePayloadHash(bytes) {
@@ -166,12 +193,9 @@ export class ConnectJournalRecord {
       payloadHash !== undefined && payloadHash !== null
         ? ensurePayloadHash(payloadHash)
         : blake2b256(this.ciphertext);
-    this.receivedAtMs = Number(receivedAtMs ?? Date.now());
-    this.expiresAtMs = Number(expiresAtMs ?? this.receivedAtMs);
-    if (!Number.isFinite(this.receivedAtMs) || this.receivedAtMs < 0) {
-      throw new ConnectJournalError("receivedAtMs must be a positive number");
-    }
-    if (!Number.isFinite(this.expiresAtMs) || this.expiresAtMs < this.receivedAtMs) {
+    this.receivedAtMs = normalizeTimestampMs(receivedAtMs ?? Date.now(), "receivedAtMs");
+    this.expiresAtMs = normalizeTimestampMs(expiresAtMs ?? this.receivedAtMs, "expiresAtMs");
+    if (this.expiresAtMs < this.receivedAtMs) {
       throw new ConnectJournalError("expiresAtMs must be >= receivedAtMs");
     }
   }

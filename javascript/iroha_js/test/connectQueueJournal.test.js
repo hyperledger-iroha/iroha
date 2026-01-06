@@ -275,3 +275,13 @@ test("connect journal rejects invalid session id strings", () => {
     (error) => error?.name === "ConnectJournalError",
   );
 });
+
+test("connect journal rejects fractional retention", () => {
+  assert.throws(
+    () =>
+      new ConnectQueueJournal("AQIDBA", {
+        retentionMs: 1.5,
+      }),
+    (error) => error?.name === "ConnectJournalError" && /retentionMs/.test(error.message),
+  );
+});

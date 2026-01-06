@@ -12904,27 +12904,23 @@ function parseIntegerArray(value, context) {
     throw new TypeError(`${context} must be an array`);
   }
   return value.map((entry, index) => {
-    const numeric = Number(entry);
-    if (!Number.isFinite(numeric)) {
-      throw new TypeError(`${context}[${index}] must be numeric`);
-    }
-    const normalized = Math.trunc(numeric);
-    if (normalized < 0) {
+    const numeric = coerceIntegerLike(entry, `${context}[${index}]`);
+    if (numeric < 0) {
       throw new RangeError(`${context}[${index}] must be non-negative`);
     }
-    return normalized;
+    return numeric;
   });
 }
 
 function coerceStatusInt(value, context) {
-  if (value === undefined || value === null || value === "") {
+  if (value === undefined || value === null) {
     return 0;
   }
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    throw new TypeError(`${context} must be numeric`);
+  const numeric = coerceIntegerLike(value, context);
+  if (numeric < 0) {
+    throw new RangeError(`${context} must be non-negative`);
   }
-  return Math.trunc(numeric);
+  return numeric;
 }
 
 function coerceNestedInt(mapping, key, context) {
@@ -12932,14 +12928,14 @@ function coerceNestedInt(mapping, key, context) {
     throw new TypeError(`${context} must be an object`);
   }
   const value = mapping[key];
-  if (value === undefined || value === null || value === "") {
+  if (value === undefined || value === null) {
     return 0;
   }
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    throw new TypeError(`${context}.${key} must be numeric`);
+  const numeric = coerceIntegerLike(value, `${context}.${key}`);
+  if (numeric < 0) {
+    throw new RangeError(`${context}.${key} must be non-negative`);
   }
-  return Math.trunc(numeric);
+  return numeric;
 }
 
 function ensureRecord(value, context) {
@@ -12963,11 +12959,7 @@ function coerceInteger(value, context) {
   if (value === undefined || value === null || value === "") {
     throw new TypeError(`${context} must be numeric`);
   }
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    throw new TypeError(`${context} must be numeric`);
-  }
-  return Math.trunc(numeric);
+  return coerceIntegerLike(value, context);
 }
 
 function coerceBoolean(value, context) {
@@ -13003,14 +12995,10 @@ function requireBooleanLike(value, context) {
 }
 
 function coerceOptionalInt(value, context) {
-  if (value === undefined || value === null || value === "") {
+  if (value === undefined || value === null) {
     return null;
   }
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    throw new TypeError(`${context} must be numeric when present`);
-  }
-  return Math.trunc(numeric);
+  return coerceIntegerLike(value, context);
 }
 
 function parseStringArray(value, context) {
@@ -13057,10 +13045,7 @@ function optionalNumber(value, context, { allowNegative = false } = {}) {
   if (value === undefined || value === null) {
     return null;
   }
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    throw new TypeError(`${context} must be numeric when present`);
-  }
+  const numeric = coerceIntegerLike(value, context);
   if (!allowNegative && numeric < 0) {
     throw new RangeError(`${context} must be non-negative`);
   }

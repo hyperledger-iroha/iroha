@@ -2200,13 +2200,21 @@ export function buildRegisterSmartContractBytesInstruction(options) {
       "buildRegisterSmartContractBytesInstruction options must be an object",
     );
   }
+  const code = normalizeBase64(options.code, "registerSmartContractBytes.code");
+  if (code.length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      "registerSmartContractBytes.code must be a non-empty base64 string",
+      "registerSmartContractBytes.code",
+    );
+  }
   return {
     RegisterSmartContractBytes: {
       code_hash: normalizeHash(
         options.codeHash ?? options.code_hash,
         "registerSmartContractBytes.codeHash",
       ),
-      code: normalizeBase64(options.code, "registerSmartContractBytes.code"),
+      code,
     },
   };
 }
