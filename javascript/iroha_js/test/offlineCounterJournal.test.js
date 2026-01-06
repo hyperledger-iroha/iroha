@@ -74,6 +74,23 @@ test("offline counter journal rejects counter jumps", async () => {
   );
 });
 
+test("offline counter journal rejects fractional recordedAtMs", async () => {
+  const journal = new OfflineCounterJournal({ storage: "memory" });
+  await assert.rejects(
+    () =>
+      journal.updateCounter({
+        certificateIdHex: "deadbeef",
+        controllerId: "alice@sora",
+        platform: "apple_key",
+        scope: "key-1",
+        counter: 1,
+        recordedAtMs: 1.5,
+      }),
+    (err) =>
+      err instanceof OfflineCounterJournalError && err.code === "invalid_recorded_at",
+  );
+});
+
 test("offline counter journal validates summary hash parity", async () => {
   const journal = new OfflineCounterJournal({ storage: "memory" });
   const payload = {

@@ -3624,6 +3624,24 @@ public struct ToriiVerifyingKeyRecord: Decodable, Sendable {
         withdrawHeight = try container.decodeIfPresent(UInt64.self, forKey: .withdrawHeight)
         status = try container.decode(ToriiVerifyingKeyStatus.self, forKey: .status)
         inlineKey = try container.decodeIfPresent(ToriiVerifyingKeyInline.self, forKey: .inlineKey)
+        if let inlineKey {
+            if inlineKey.backend != backend {
+                throw DecodingError.dataCorrupted(
+                    DecodingError.Context(
+                        codingPath: container.codingPath + [CodingKeys.inlineKey],
+                        debugDescription: "inline key backend must match record backend"
+                    )
+                )
+            }
+            if verifyingKeyLength != inlineKey.bytes.count {
+                throw DecodingError.dataCorrupted(
+                    DecodingError.Context(
+                        codingPath: container.codingPath + [CodingKeys.verifyingKeyLength],
+                        debugDescription: "vk_len must match inline key byte length"
+                    )
+                )
+            }
+        }
     }
 }
 
@@ -3656,6 +3674,25 @@ public struct ToriiVerifyingKeyId: Decodable, Sendable {
         }
         name = normalizedName
     }
+
+    public init(backend: String, name: String) throws {
+        let trimmedBackend = backend.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedBackend.isEmpty else {
+            throw ToriiClientError.invalidPayload("backend must be a non-empty string.")
+        }
+        if trimmedBackend.contains(":") {
+            throw ToriiClientError.invalidPayload("backend must not contain ':' characters.")
+        }
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            throw ToriiClientError.invalidPayload("name must be a non-empty string.")
+        }
+        if trimmedName.contains(":") {
+            throw ToriiClientError.invalidPayload("name must not contain ':' characters.")
+        }
+        self.backend = trimmedBackend
+        self.name = trimmedName
+    }
 }
 
 public struct ToriiVerifyingKeyDetail: Decodable, Sendable {
@@ -3681,7 +3718,7 @@ public struct ToriiVerifyingKeyListItem: Decodable, Sendable {
         } else {
             let backend = try container.decode(String.self, forKey: .backend)
             let name = try container.decode(String.self, forKey: .name)
-            id = ToriiVerifyingKeyId(backend: backend, name: name)
+            id = try ToriiVerifyingKeyId(backend: backend, name: name)
         }
         record = try container.decodeIfPresent(ToriiVerifyingKeyRecord.self, forKey: .record)
     }
@@ -3820,32 +3857,60 @@ public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
+        let normalizedAuthority = try ToriiVerifyingKeyRequestValidation.normalizedNonEmpty(authority,
+                                                                                            field: "authority")
+        let normalizedPrivateKey = try ToriiVerifyingKeyRequestValidation.normalizedNonEmpty(privateKey,
+                                                                                              field: "private_key")
+        let normalizedBackend = try ToriiVerifyingKeyRequestValidation.normalizedBackend(backend, field: "backend")
+        let normalizedName = try ToriiVerifyingKeyRequestValidation.normalizedName(name, field: "name")
+        let normalizedCircuitId = try ToriiVerifyingKeyRequestValidation.normalizedNonEmpty(circuitId,
+                                                                                             field: "circuit_id")
+        let normalizedSchemaHash = try ToriiVerifyingKeyRequestValidation.normalized32ByteHex(
+            publicInputsSchemaHashHex,
+            field: "public_inputs_schema_hash_hex"
+        )
+        let normalizedCurve = try ToriiVerifyingKeyRequestValidation.normalizedOptionalNonEmpty(curve,
+                                                                                                field: "curve")
+        let normalizedGasSchedule = try ToriiVerifyingKeyRequestValidation.normalizedNonEmpty(gasScheduleId,
+                                                                                               field: "gas_schedule_id")
+        let normalizedCommitment = try ToriiVerifyingKeyRequestValidation.normalizedOptional32ByteHex(
+            commitmentHex,
+            field: "commitment_hex"
+        )
+        let normalizedMetadataCid = try ToriiVerifyingKeyRequestValidation.normalizedOptionalNonEmpty(
+            metadataUriCid,
+            field: "metadata_uri_cid"
+        )
+        let normalizedVkBytesCid = try ToriiVerifyingKeyRequestValidation.normalizedOptionalNonEmpty(
+            verifyingKeyBytesCid,
+            field: "vk_bytes_cid"
+        )
+        let vkPayload = try ToriiVerifyingKeyRequestValidation.verifyingKeyPayload(
+            bytes: verifyingKeyBytes,
+            explicitLength: verifyingKeyLength
+        )
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(authority, forKey: .authority)
-        try container.encode(privateKey, forKey: .privateKey)
-        try container.encode(backend, forKey: .backend)
-        try container.encode(name, forKey: .name)
+        try container.encode(normalizedAuthority, forKey: .authority)
+        try container.encode(normalizedPrivateKey, forKey: .privateKey)
+        try container.encode(normalizedBackend, forKey: .backend)
+        try container.encode(normalizedName, forKey: .name)
         try container.encode(version, forKey: .version)
-        try container.encode(circuitId, forKey: .circuitId)
-        try container.encode(publicInputsSchemaHashHex, forKey: .publicInputsSchemaHashHex)
-        try container.encodeIfPresent(curve, forKey: .curve)
-        try container.encode(gasScheduleId, forKey: .gasScheduleId)
-        if let bytes = verifyingKeyBytes {
-            try container.encode(bytes.base64EncodedString(), forKey: .verifyingKeyBytes)
-            if let explicitLen = verifyingKeyLength {
-                try container.encode(explicitLen, forKey: .verifyingKeyLength)
-            } else {
-                try container.encode(UInt32(bytes.count), forKey: .verifyingKeyLength)
-            }
+        try container.encode(normalizedCircuitId, forKey: .circuitId)
+        try container.encode(normalizedSchemaHash, forKey: .publicInputsSchemaHashHex)
+        try container.encodeIfPresent(normalizedCurve, forKey: .curve)
+        try container.encode(normalizedGasSchedule, forKey: .gasScheduleId)
+        if let vkPayload {
+            try container.encode(vkPayload.bytesBase64, forKey: .verifyingKeyBytes)
+            try container.encode(vkPayload.length, forKey: .verifyingKeyLength)
         } else if let len = verifyingKeyLength {
             try container.encode(len, forKey: .verifyingKeyLength)
         }
         try container.encodeIfPresent(maxProofBytes, forKey: .maxProofBytes)
-        try container.encodeIfPresent(metadataUriCid, forKey: .metadataUriCid)
-        try container.encodeIfPresent(verifyingKeyBytesCid, forKey: .verifyingKeyBytesCid)
+        try container.encodeIfPresent(normalizedMetadataCid, forKey: .metadataUriCid)
+        try container.encodeIfPresent(normalizedVkBytesCid, forKey: .verifyingKeyBytesCid)
         try container.encodeIfPresent(activationHeight, forKey: .activationHeight)
         try container.encodeIfPresent(withdrawHeight, forKey: .withdrawHeight)
-        try container.encodeIfPresent(commitmentHex, forKey: .commitmentHex)
+        try container.encodeIfPresent(normalizedCommitment, forKey: .commitmentHex)
         if let status {
             try container.encode(status.rawValue, forKey: .status)
         }

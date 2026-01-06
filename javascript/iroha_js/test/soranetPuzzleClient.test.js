@@ -24,6 +24,17 @@ function jsonResponse(status, body) {
   };
 }
 
+test("soranet puzzle client rejects fractional timeout", () => {
+  assert.throws(
+    () =>
+      new SoranetPuzzleClient(BASE_URL, {
+        fetchImpl: async () => jsonResponse(200, {}),
+        timeoutMs: 1.5,
+      }),
+    /timeoutMs/,
+  );
+});
+
 test("getPuzzleConfig normalises fields", async () => {
   const queue = [
     {

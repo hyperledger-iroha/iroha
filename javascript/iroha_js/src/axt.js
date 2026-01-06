@@ -9,7 +9,7 @@ function assertOptionalUnsigned(value, context) {
     if (value < 0n) {
       throw new TypeError(`${context} must be non-negative`);
     }
-    if (value > Number.MAX_SAFE_INTEGER) {
+    if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
       throw new TypeError(`${context} exceeds safe integer range`);
     }
     return Number(value);
@@ -18,7 +18,10 @@ function assertOptionalUnsigned(value, context) {
     if (!Number.isFinite(value) || value < 0) {
       throw new TypeError(`${context} must be a non-negative finite number`);
     }
-    return Math.trunc(value);
+    if (!Number.isInteger(value) || !Number.isSafeInteger(value)) {
+      throw new TypeError(`${context} must be a safe integer`);
+    }
+    return value;
   }
   throw new TypeError(`${context} must be a number`);
 }

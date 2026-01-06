@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- JS SDK: reject empty smart-contract bytecode in register instruction builders; add regression coverage.
+- Tests: `node --test test/instructionBuilders.test.js` (from `javascript/iroha_js`; skipped, native binding missing).
 - Java/Android SDK: reject fractional numeric fields when parsing SoraFS gateway summaries and client config manifests; add regression coverage.
 - Tests: not run (not requested).
 - JS SDK: reject empty byte payloads when base64 fields are required (e.g., deployContract code_b64) and add regression coverage.
@@ -47,6 +49,12 @@
 - Tests: `swift test --filter ToriiJSONValueTests` (from `IrohaSwift`); `swift test --filter ToriiNumericParsingTests` (from `IrohaSwift`); `swift test --filter OfflineVerdictJournalTests` (from `IrohaSwift`).
 - JS SDK: validate base64 inputs strictly in instruction builders (fixed-length + payload fields) and add regression coverage.
 - Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Tests: `cargo test -p iroha_core --lib active_topology_sorts_world_peers_when_commit_topology_empty -- --nocapture` (x10; all passes; periodic build-dir locks; warnings about unused `mut` in `crates/iroha_core/src/smartcontracts/isi/world.rs:9010` and `crates/iroha_core/src/smartcontracts/isi/world.rs:9071`).
+- Sumeragi: canonicalize world-peers ordering when commit topology is empty to keep leader selection deterministic across nodes; add regression coverage for initial roster sorting.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p iroha_core active_topology_sorts_world_peers_when_commit_topology_empty -- --nocapture` (timed out after 300s while finishing filtered test binaries; target test passed; warnings about unused `mut` in `crates/iroha_core/src/smartcontracts/isi/world.rs:9010` and `crates/iroha_core/src/smartcontracts/isi/world.rs:9071`).
+- Tests: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test asset client_add_asset_quantity_to_existing_asset_should_increase_asset_amount -- --nocapture`.
+- Tests: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test asset find_rate_and_make_exchange_isi_should_succeed -- --nocapture`.
 - SoraNet handshake: ignore unknown suite identifiers when parsing suite lists for negotiation; add unit coverage and update `docs/source/soranet_handshake.md`.
 - Tests: not run (not requested).
 - Integration tests: attempted 10x localnet smoke loop with `TEST_NETWORK_TMP_DIR=tmp/test_network_runs`; runs 1-4 passed, run 5 failed (`heights failed to converge to 2 within 15s`). Artifacts: `tmp/test_network_runs/irohad_test_network_{dHJSwc,pQlBYw,F6weXl,WkBXsw,b7tGbD}`.

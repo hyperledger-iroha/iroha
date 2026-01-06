@@ -815,6 +815,21 @@ test("buildRegisterSmartContractBytesInstruction encodes bytes deterministically
   assert.deepEqual(decoded, expected);
 });
 
+test("buildRegisterSmartContractBytesInstruction rejects empty code bytes", () => {
+  assert.throws(
+    () =>
+      buildRegisterSmartContractBytesInstruction({
+        codeHash: Buffer.alloc(32, 0x11),
+        code: Buffer.alloc(0),
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_STRING);
+      assert.match(String(error?.message), /non-empty base64/i);
+      return true;
+    },
+  );
+});
+
 test("buildDeactivateContractInstanceInstruction normalizes reason text", () => {
   const instruction = buildDeactivateContractInstanceInstruction({
     namespace: "apps",

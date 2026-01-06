@@ -36,6 +36,19 @@ test("buildOfflineEnvelope computes hashes and preserves metadata", () => {
   assert.ok(envelope.signedTransaction.length > 0);
 });
 
+test("buildOfflineEnvelope rejects fractional issuedAtMs", () => {
+  const signedTransaction = Buffer.from("offline-transaction-fixture", "utf8");
+  assert.throws(
+    () =>
+      buildOfflineEnvelope({
+        signedTransaction,
+        keyAlias: "alice-key",
+        issuedAtMs: 1.5,
+      }),
+    /issuedAtMs/,
+  );
+});
+
 test("serialize/parse round-trips offline envelopes", () => {
   const { envelope } = buildSampleEnvelope();
   const serialized = serializeOfflineEnvelope(envelope);

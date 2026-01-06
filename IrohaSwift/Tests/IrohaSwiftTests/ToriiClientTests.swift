@@ -2478,6 +2478,68 @@ data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testStreamVerifyingKeyEventsRejectsInlineKeyBackendMismatch() async throws {
+        let ssePayload = """
+id: 96
+data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":2,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active","key":{"backend":"halo2/ipa-alt","bytes_b64":"AQI="}}}}}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        let stream = makeClient().streamVerifyingKeyEvents()
+        var iterator = stream.makeAsyncIterator()
+        do {
+            _ = try await iterator.next()
+            XCTFail("Expected verifying key event decoding error")
+        } catch {
+            guard case ToriiClientError.decoding = error else {
+                return XCTFail("Expected ToriiClientError.decoding")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamVerifyingKeyEventsRejectsInlineKeyLengthMismatch() async throws {
+        let ssePayload = """
+id: 97
+data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main"},"record":{"version":2,"circuit_id":"halo2/ipa::transfer_v2","backend":"halo2/ipa","curve":"pallas","public_inputs_schema_hash":"fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3","commitment":"20574662a58708e02e0000000000000000000000000000000000000000000000","vk_len":3,"max_proof_bytes":8192,"gas_schedule_id":"halo2_default","status":"Active","key":{"backend":"halo2/ipa","bytes_b64":"AQI="}}}}}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        let stream = makeClient().streamVerifyingKeyEvents()
+        var iterator = stream.makeAsyncIterator()
+        do {
+            _ = try await iterator.next()
+            XCTFail("Expected verifying key event decoding error")
+        } catch {
+            guard case ToriiClientError.decoding = error else {
+                return XCTFail("Expected ToriiClientError.decoding")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testStreamVerifyingKeyEventsIncludesLastEventIdHeader() async throws {
         let ssePayload = """
 id: 21

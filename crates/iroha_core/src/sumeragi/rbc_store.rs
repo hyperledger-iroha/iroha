@@ -127,6 +127,7 @@ pub(super) struct LoadResult {
 }
 
 /// Result of persisting a session snapshot.
+#[derive(Debug)]
 pub(super) struct PersistOutcome {
     /// Session keys removed while enforcing limits after persist.
     #[cfg_attr(not(test), allow(dead_code))]
@@ -230,6 +231,33 @@ impl ChunkStore {
         let persisted = session.to_persisted(key, *chain_hash, manifest, session_roster);
         self.write_session(&persisted)?;
         let entries = self.scan_entries(Some(chain_hash), Some(manifest))?;
+        let outcome = self.enforce_limits(entries)?;
+        Ok(PersistOutcome {
+            removed: outcome.removed,
+            pressure: outcome.pressure,
+        })
+    }
+
+    pub(super) fn persist_snapshot(
+        &self,
+        persisted: &PersistedSession,
+    ) -> io::Result<PersistOutcome> {
+        let _suppressor = panic_hook::ScopedSuppressor::new();
+        if self.max_sessions == 0 || self.max_bytes == 0 {
+            let _ = self.remove(&persisted.key());
+            return Ok(PersistOutcome {
+                removed: Vec::new(),
+                pressure: StorePressure::Normal {
+                    sessions: 0,
+                    bytes: 0,
+                },
+            });
+        }
+        self.write_session(persisted)?;
+        let entries = self.scan_entries(
+            Some(&persisted.chain_hash),
+            Some(&persisted.software_manifest),
+        )?;
         let outcome = self.enforce_limits(entries)?;
         Ok(PersistOutcome {
             removed: outcome.removed,

@@ -63,11 +63,17 @@ function normalizeIssuedAt(issuedAtMs) {
   if (issuedAtMs === undefined || issuedAtMs === null) {
     return Date.now();
   }
-  const asNumber = Number(issuedAtMs);
-  if (!Number.isFinite(asNumber) || asNumber < 0) {
-    throw new TypeError("issuedAtMs must be a non-negative number");
+  if (typeof issuedAtMs === "bigint") {
+    if (issuedAtMs < 0n || issuedAtMs > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new TypeError("issuedAtMs must be a non-negative integer");
+    }
+    return Number(issuedAtMs);
   }
-  return Math.floor(asNumber);
+  const asNumber = Number(issuedAtMs);
+  if (!Number.isFinite(asNumber) || !Number.isSafeInteger(asNumber) || asNumber < 0) {
+    throw new TypeError("issuedAtMs must be a non-negative integer");
+  }
+  return asNumber;
 }
 
 function normalizeOptionalBuffer(value, context) {
