@@ -219,9 +219,14 @@ public final class ToriiEventStreamClient {
       final TransportResponse response,
       final Throwable throwable) {
     if (throwable != null) {
-      stream.signalFailure(throwable);
-      notifyFailure(request, throwable);
-      listener.onError(throwable);
+      final Throwable cause = unwrapCompletion(throwable);
+      if (cause instanceof CancellationException && stream.closedByCaller()) {
+        stream.signalSuccess();
+        return;
+      }
+      stream.signalFailure(cause);
+      notifyFailure(request, cause);
+      listener.onError(cause);
       return;
     }
     if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -257,9 +262,14 @@ public final class ToriiEventStreamClient {
       final TransportStreamResponse response,
       final Throwable throwable) {
     if (throwable != null) {
-      stream.signalFailure(throwable);
-      notifyFailure(request, throwable);
-      listener.onError(throwable);
+      final Throwable cause = unwrapCompletion(throwable);
+      if (cause instanceof CancellationException && stream.closedByCaller()) {
+        stream.signalSuccess();
+        return;
+      }
+      stream.signalFailure(cause);
+      notifyFailure(request, cause);
+      listener.onError(cause);
       return;
     }
     if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -335,6 +345,14 @@ public final class ToriiEventStreamClient {
     data.setLength(0);
     final String name = eventName == null || eventName.isEmpty() ? DEFAULT_EVENT_NAME : eventName;
     listener.onEvent(new ServerSentEvent(name, payload, eventId));
+  }
+
+  private static Throwable unwrapCompletion(final Throwable error) {
+    if (error instanceof java.util.concurrent.CompletionException completion
+        && completion.getCause() != null) {
+      return completion.getCause();
+    }
+    return error;
   }
 
   private void notifyRequest(final TransportRequest request) {

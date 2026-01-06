@@ -9,6 +9,8 @@ import {
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
+const MAX_NUMERIC_SCALE = 28;
+const MAX_NUMERIC_BITS = 512;
 
 function crc16(tag, body) {
   let crc = 0xffff;
@@ -82,33 +84,102 @@ function assertString(value, name) {
   return value;
 }
 
-function asNumericQuantity(value, name) {
-  if (typeof value === "bigint") {
-    return value.toString();
-  }
-  if (typeof value === "number") {
+function normalizeNumericLiteral(value, name, { allowNegative = false } = {}) {
+  let raw;
+  if (typeof value === "string") {
+    raw = value.trim();
+  } else if (typeof value === "number") {
     if (!Number.isFinite(value)) {
       fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a finite number`, name);
     }
-    return value.toString();
+    raw = value.toString();
+  } else if (typeof value === "bigint") {
+    raw = value.toString();
+  } else {
+    fail(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a string, number, or bigint representing a Numeric`,
+      name,
+    );
   }
-  if (typeof value === "string") {
-    if (value.length === 0) {
-      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+
+  if (!raw) {
+    fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a valid Numeric literal`, name);
+  }
+
+  let digits = raw;
+  const sign = digits[0];
+  if (sign === "-" || sign === "+") {
+    if (sign === "-" && !allowNegative) {
+      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be non-negative`, name);
     }
-    return value;
+    digits = digits.slice(1);
   }
-  fail(
-    ValidationErrorCode.INVALID_NUMERIC,
-    `${name} must be a string, number, or bigint representing a Numeric`,
-    name,
-  );
+  if (!digits) {
+    fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a valid Numeric literal`, name);
+  }
+
+  let seenDot = false;
+  let scale = 0;
+  let mantissa = "";
+  for (const ch of digits) {
+    if (ch === ".") {
+      if (seenDot) {
+        fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a valid Numeric literal`, name);
+      }
+      seenDot = true;
+      continue;
+    }
+    if (ch < "0" || ch > "9") {
+      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a valid Numeric literal`, name);
+    }
+    mantissa += ch;
+    if (seenDot) {
+      scale += 1;
+    }
+  }
+  if (!mantissa) {
+    fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a valid Numeric literal`, name);
+  }
+  if (scale > MAX_NUMERIC_SCALE) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} scale exceeds ${MAX_NUMERIC_SCALE} decimal places`,
+      name,
+    );
+  }
+
+  let mantissaValue = BigInt(mantissa);
+  if (sign === "-") {
+    mantissaValue = -mantissaValue;
+  }
+  const absValue = mantissaValue < 0n ? -mantissaValue : mantissaValue;
+  if (absValue !== 0n && absValue.toString(2).length > MAX_NUMERIC_BITS) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} mantissa exceeds ${MAX_NUMERIC_BITS} bits`,
+      name,
+    );
+  }
+
+  return raw;
+}
+
+function asNumericQuantity(value, name) {
+  return normalizeNumericLiteral(value, name, { allowNegative: false });
 }
 
 function asU128JsonNumber(value, name) {
   if (typeof value === "number") {
     if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
       fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
+    }
+    if (!Number.isSafeInteger(value)) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name} must be between 0 and ${MAX_SAFE_INTEGER} (inclusive) for deterministic JSON encoding`,
+        name,
+      );
     }
     return value;
   }
@@ -144,11 +215,25 @@ function asPositiveInteger(value, name) {
     if (value <= 0n) {
       fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must be greater than zero`, name);
     }
+    if (value > MAX_SAFE_INTEGER_BIGINT) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name} exceeds JavaScript safe integer range`,
+        name,
+      );
+    }
     return Number(value);
   }
   if (typeof value === "number") {
     if (!Number.isInteger(value) || value <= 0) {
       fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a positive integer`, name);
+    }
+    if (!Number.isSafeInteger(value)) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name} exceeds JavaScript safe integer range`,
+        name,
+      );
     }
     return value;
   }
@@ -156,7 +241,15 @@ function asPositiveInteger(value, name) {
     if (!/^[1-9]\d*$/.test(value)) {
       fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a positive integer`, name);
     }
-    return Number.parseInt(value, 10);
+    const numeric = BigInt(value);
+    if (numeric > MAX_SAFE_INTEGER_BIGINT) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name} exceeds JavaScript safe integer range`,
+        name,
+      );
+    }
+    return Number(numeric);
   }
   fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a positive integer`, name);
 }
@@ -283,19 +376,26 @@ function asNonNegativeInteger(value, name) {
     if (value < 0n) {
       fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must be greater than or equal to zero`, name);
     }
-    const asNumber = Number(value);
-    if (!Number.isSafeInteger(asNumber)) {
+    if (value > MAX_SAFE_INTEGER_BIGINT) {
       fail(
         ValidationErrorCode.VALUE_OUT_OF_RANGE,
         `${name} exceeds JavaScript safe integer range`,
         name,
       );
     }
+    const asNumber = Number(value);
     return asNumber;
   }
   if (typeof value === "number") {
     if (!Number.isInteger(value) || value < 0) {
       fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
+    }
+    if (!Number.isSafeInteger(value)) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name} exceeds JavaScript safe integer range`,
+        name,
+      );
     }
     return value;
   }
@@ -303,7 +403,15 @@ function asNonNegativeInteger(value, name) {
     if (!/^(?:0|[1-9]\d*)$/.test(value)) {
       fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
     }
-    return Number.parseInt(value, 10);
+    const numeric = BigInt(value);
+    if (numeric > MAX_SAFE_INTEGER_BIGINT) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name} exceeds JavaScript safe integer range`,
+        name,
+      );
+    }
+    return Number(numeric);
   }
   fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
 }

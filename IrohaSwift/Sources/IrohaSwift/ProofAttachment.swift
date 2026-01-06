@@ -4,6 +4,10 @@ public enum ProofAttachmentError: Error, LocalizedError, Sendable {
     case emptyBackend
     case emptyProof
     case missingVerifyingKey
+    case emptyVerifyingKeyBackend
+    case emptyVerifyingKeyName
+    case emptyVerifyingKeyBytes
+    case invalidVerifyingKeySeparator
     case invalidVerifyingKeyCommitmentLength(expected: Int, actual: Int)
     case invalidEnvelopeHashLength(expected: Int, actual: Int)
 
@@ -15,6 +19,14 @@ public enum ProofAttachmentError: Error, LocalizedError, Sendable {
             return "Proof bytes must not be empty."
         case .missingVerifyingKey:
             return "Proof attachment must include either verifyingKeyReference or verifyingKeyInline."
+        case .emptyVerifyingKeyBackend:
+            return "Verifying key backend must not be empty."
+        case .emptyVerifyingKeyName:
+            return "Verifying key name must not be empty."
+        case .emptyVerifyingKeyBytes:
+            return "Verifying key bytes must not be empty."
+        case .invalidVerifyingKeySeparator:
+            return "Verifying key backend and name must not contain ':' characters."
         case let .invalidVerifyingKeyCommitmentLength(expected, actual):
             return "Verifying key commitment must be \(expected) bytes (found \(actual))."
         case let .invalidEnvelopeHashLength(expected, actual):
@@ -60,17 +72,67 @@ public struct ProofAttachment: Sendable, Equatable {
                 verifyingKey: VerifyingKey,
                 verifyingKeyCommitment: Data? = nil,
                 envelopeHash: Data? = nil) throws {
-        guard !backend.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw ProofAttachmentError.emptyBackend
-        }
+        let normalizedBackend = try Self.normalizeNonEmpty(backend, error: .emptyBackend)
         guard !proof.isEmpty else {
             throw ProofAttachmentError.emptyProof
         }
-        self.backend = backend
+        let normalizedKey: VerifyingKey
+        switch verifyingKey {
+        case .reference(let ref):
+            let normalizedRefBackend = try Self.normalizeNonEmpty(ref.backend, error: .emptyVerifyingKeyBackend)
+            let normalizedName = try Self.normalizeNonEmpty(ref.name, error: .emptyVerifyingKeyName)
+            try Self.ensureNoSeparator(normalizedRefBackend)
+            try Self.ensureNoSeparator(normalizedName)
+            normalizedKey = .reference(.init(backend: normalizedRefBackend, name: normalizedName))
+        case .inline(let inline):
+            let normalizedInlineBackend = try Self.normalizeNonEmpty(inline.backend, error: .emptyVerifyingKeyBackend)
+            guard !inline.bytes.isEmpty else {
+                throw ProofAttachmentError.emptyVerifyingKeyBytes
+            }
+            try Self.ensureNoSeparator(normalizedInlineBackend)
+            normalizedKey = .inline(.init(backend: normalizedInlineBackend, bytes: inline.bytes))
+        }
+        if let commitment = verifyingKeyCommitment {
+            try Self.ensureFixedLength(commitment,
+                                       expectedLength: Self.hashLength,
+                                       makeError: ProofAttachmentError.invalidVerifyingKeyCommitmentLength)
+        }
+        if let envelope = envelopeHash {
+            try Self.ensureFixedLength(envelope,
+                                       expectedLength: Self.hashLength,
+                                       makeError: ProofAttachmentError.invalidEnvelopeHashLength)
+        }
+        self.backend = normalizedBackend
         self.proof = proof
-        self.verifyingKey = verifyingKey
+        self.verifyingKey = normalizedKey
         self.verifyingKeyCommitment = verifyingKeyCommitment
         self.envelopeHash = envelopeHash
+    }
+
+    private static func normalizeNonEmpty(_ value: String,
+                                          error: ProofAttachmentError) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw error
+        }
+        return trimmed
+    }
+
+    private static func ensureNoSeparator(_ value: String) throws {
+        if value.contains(":") {
+            throw ProofAttachmentError.invalidVerifyingKeySeparator
+        }
+    }
+
+    private static func ensureFixedLength(
+        _ bytes: Data,
+        expectedLength: Int,
+        makeError: (Int, Int) -> ProofAttachmentError
+    ) throws {
+        let actual = bytes.count
+        guard actual == expectedLength else {
+            throw makeError(expectedLength, actual)
+        }
     }
 
     func encodedJSON() throws -> Data {

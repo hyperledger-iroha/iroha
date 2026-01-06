@@ -68,3 +68,14 @@ test("enforceProposalTtl returns preview for shorter overrides", () => {
   assert.equal(preview.effectiveTtlMs, 2_000);
   assert.equal(preview.expiresAtMs, 2_100);
 });
+
+test("builder rejects oversized integer inputs", () => {
+  const builder = new MultisigSpecBuilder()
+    .setQuorum(1)
+    .setTransactionTtlMs(10_000);
+  const tooLarge = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+  assert.throws(
+    () => builder.addSignatory("alice@wonderland", tooLarge),
+    /safe integer/i,
+  );
+});

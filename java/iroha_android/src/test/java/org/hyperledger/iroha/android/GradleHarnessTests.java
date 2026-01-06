@@ -68,6 +68,7 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.model.instructions.InstructionSchemaManifestTests",
         "org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests",
         "org.hyperledger.iroha.android.nexus.SpaceDirectoryInstructionBuilderTests",
+        "org.hyperledger.iroha.android.nexus.UaidJsonParserTests",
         "org.hyperledger.iroha.android.norito.NoritoCodecAdapterTests",
         "org.hyperledger.iroha.android.offline.AndroidProvisionedProofTest",
         "org.hyperledger.iroha.android.offline.OfflineAllowanceInstructionBuilderTests",

@@ -26,6 +26,8 @@ public final class ClientConfigManifestLoaderTests {
       tests.supportsFilePendingQueueWithRelativePath();
       tests.parsesTelemetryRedaction();
       tests.customizerCanMutateBuilder();
+      tests.rejectsFractionalTimeoutMs();
+      tests.rejectsFractionalRetryAttempts();
       System.out.println("[IrohaAndroid] ClientConfigManifestLoaderTests passed.");
     } finally {
       tests.cleanup();
@@ -144,6 +146,54 @@ public final class ClientConfigManifestLoaderTests {
         loaded.context().digest(),
         config.defaultHeaders().get("X-Test-Header"),
         "customizer header mismatch");
+  }
+
+  private void rejectsFractionalTimeoutMs() throws Exception {
+    final Path manifest = tempDir.resolve("fractional_timeout.json");
+    final String json =
+        """
+        {
+          "torii": {
+            "base_uri": "https://fractional.example",
+            "timeout_ms": 12.5
+          },
+          "telemetry": { "enabled": false }
+        }
+        """;
+    Files.writeString(manifest, json, StandardCharsets.UTF_8);
+
+    try {
+      ClientConfigManifestLoader.load(manifest);
+      throw new AssertionError("expected fractional timeout to be rejected");
+    } catch (final IllegalStateException ex) {
+      assertTrue(
+          ex.getMessage() == null || ex.getMessage().contains("Fractional"),
+          "error should mention fractional value");
+    }
+  }
+
+  private void rejectsFractionalRetryAttempts() throws Exception {
+    final Path manifest = tempDir.resolve("fractional_retry.json");
+    final String json =
+        """
+        {
+          "torii": { "base_uri": "https://fractional.example" },
+          "retry": {
+            "max_attempts": 2.5
+          },
+          "telemetry": { "enabled": false }
+        }
+        """;
+    Files.writeString(manifest, json, StandardCharsets.UTF_8);
+
+    try {
+      ClientConfigManifestLoader.load(manifest);
+      throw new AssertionError("expected fractional retry attempt to be rejected");
+    } catch (final IllegalStateException ex) {
+      assertTrue(
+          ex.getMessage() == null || ex.getMessage().contains("Fractional"),
+          "error should mention fractional value");
+    }
   }
 
   private static String baseManifestJson(final String baseUri, final boolean includeTelemetry) {

@@ -1156,11 +1156,30 @@ function requireReportStatus(value, label) {
 }
 
 function requirePositiveInteger(value, label) {
-  const parsed = Number.parseInt(String(value), 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    fail(ValidationErrorCode.INVALID_NUMERIC, `${label} must be a positive integer`, label);
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
+      fail(ValidationErrorCode.INVALID_NUMERIC, `${label} must be a positive integer`, label);
+    }
+    return value;
   }
-  return parsed;
+  if (typeof value === "bigint") {
+    if (value <= 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+      fail(ValidationErrorCode.INVALID_NUMERIC, `${label} must be a positive integer`, label);
+    }
+    return Number(value);
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!/^[1-9]\d*$/.test(trimmed)) {
+      fail(ValidationErrorCode.INVALID_NUMERIC, `${label} must be a positive integer`, label);
+    }
+    const parsed = Number.parseInt(trimmed, 10);
+    if (!Number.isSafeInteger(parsed)) {
+      fail(ValidationErrorCode.INVALID_NUMERIC, `${label} must be a positive integer`, label);
+    }
+    return parsed;
+  }
+  fail(ValidationErrorCode.INVALID_NUMERIC, `${label} must be a positive integer`, label);
 }
 
 function requireBooleanLike(value, label) {

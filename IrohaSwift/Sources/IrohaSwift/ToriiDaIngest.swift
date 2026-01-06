@@ -348,14 +348,21 @@ public struct ToriiDaIngestReceipt: Decodable, Sendable, Equatable {
 
     private static func decodeDigest(from container: KeyedDecodingContainer<CodingKeys>,
                                      key: CodingKeys) throws -> Data {
-        if let wrapped = try? container.decode([[UInt8]].self, forKey: key),
-           let first = wrapped.first {
-            return Data(first)
+        let data: Data
+        if let wrapped = try? container.decode([[UInt8]].self, forKey: key) {
+            guard wrapped.count == 1, let first = wrapped.first else {
+                throw ToriiClientError.invalidPayload("receipt field \(key.stringValue) must be a single byte tuple")
+            }
+            data = Data(first)
+        } else if let flat = try? container.decode([UInt8].self, forKey: key) {
+            data = Data(flat)
+        } else {
+            throw ToriiClientError.invalidPayload("receipt field \(key.stringValue) must be a byte tuple")
         }
-        if let flat = try? container.decode([UInt8].self, forKey: key) {
-            return Data(flat)
+        guard data.count == 32 else {
+            throw ToriiClientError.invalidPayload("receipt field \(key.stringValue) must be 32 bytes")
         }
-        throw ToriiClientError.invalidPayload("receipt field \(key.stringValue) must be a byte tuple")
+        return data
     }
 }
 

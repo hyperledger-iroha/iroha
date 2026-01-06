@@ -230,6 +230,9 @@ public final class UaidJsonParser {
     if (!(value instanceof Number number)) {
       throw new IllegalStateException(path + " is not a number");
     }
+    if (number instanceof Float || number instanceof Double) {
+      throw new IllegalStateException(path + " must be an integer");
+    }
     return number.longValue();
   }
 
