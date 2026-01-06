@@ -535,6 +535,7 @@ impl Actor {
             vote.block_hash,
             vote.height,
             vote.view,
+            vote.epoch,
         );
         update
     }
@@ -1056,6 +1057,7 @@ mod tests {
             vote.block_hash,
             vote.height,
             vote.view,
+            vote.epoch,
         );
 
         assert_eq!(update.commit_votes.len(), 1);

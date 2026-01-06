@@ -5,8 +5,9 @@ use std::{
     sync::{Arc, mpsc},
 };
 
+use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest};
+use iroha_data_model::Encode as _;
 use iroha_logger::prelude::*;
-use rand::seq::SliceRandom;
 
 use super::pacing::{Pacemaker, PacemakerBackpressure, PacemakerBackpressureAction};
 use super::*;
@@ -180,6 +181,13 @@ pub(super) fn execute_commit_work(
     }
 }
 
+fn has_commit_quorum_signers(
+    qc_signers: Option<&BTreeSet<ValidatorIndex>>,
+    min_votes_for_commit: usize,
+) -> bool {
+    qc_signers.map_or(false, |signers| signers.len() >= min_votes_for_commit)
+}
+
 impl Actor {
     /// Attach cached commit certificates and votes for the given block to a `BlockSyncUpdate`.
     pub(super) fn apply_cached_qcs_to_block_sync_update(
@@ -198,6 +206,7 @@ impl Actor {
         block_hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
+        epoch: u64,
     ) {
         update.commit_certificate = cached_qc_for(
             qc_cache,
@@ -205,10 +214,11 @@ impl Actor {
             block_hash,
             height,
             view,
+            epoch,
         );
         if update.commit_certificate.is_none() {
             if let Some(record) = crate::sumeragi::status::precommit_signers_for(block_hash) {
-                if record.height == height && record.view == view {
+                if record.height == height && record.view == view && record.epoch == epoch {
                     if let Some(derived) = super::derive_block_sync_qc_from_signers(
                         block_hash,
                         height,
@@ -232,6 +242,7 @@ impl Actor {
                         && vote.block_hash == block_hash
                         && vote.height == height
                         && vote.view == view
+                        && vote.epoch == epoch
                 })
                 .cloned()
                 .collect();
@@ -495,7 +506,8 @@ impl Actor {
         let canonical_topology = super::network_topology::Topology::new(commit_topology.clone());
         let min_votes_for_commit = topology.min_votes_for_commit();
         let quorum_signer_count = qc_signers.as_ref().map(BTreeSet::len);
-        let has_quorum_signers = qc_signers.is_some();
+        let has_quorum_signers =
+            has_commit_quorum_signers(qc_signers.as_ref(), min_votes_for_commit);
         let view_signers = qc_signers.as_ref().and_then(|signers| {
             let mapped =
                 super::normalize_signer_indices_to_view(signers, &topology, &canonical_topology);
@@ -830,6 +842,7 @@ impl Actor {
                     self.common_config.trusted_peers.value(),
                     self.common_config.peer.id(),
                 );
+                let expected_epoch = self.epoch_for_height(pending_height);
                 Self::apply_cached_qcs_to_block_sync_update(
                     &mut sync_update,
                     &self.qc_cache,
@@ -837,6 +850,7 @@ impl Actor {
                     block_hash,
                     pending_height,
                     pending_view,
+                    expected_epoch,
                 );
                 let world_peers = {
                     let view = self.state.view();
@@ -1067,7 +1081,7 @@ impl Actor {
                             pending.payload_hash,
                             lock,
                             proposer_idx,
-                            pending_height,
+                            pending_view,
                         );
                         let reason = error.to_string();
                         let evidence = invalid_proposal_evidence(proposal, reason);
@@ -2909,13 +2923,13 @@ impl Actor {
         let online_peers = self
             .network
             .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
-        let mut rng = rand::rng();
-        let targets = Self::block_sync_update_targets_for_peers_with_rng(
+        let seed = update.block.hash();
+        let targets = Self::block_sync_update_targets_for_peers(
             self.common_config.peer.id(),
             self.block_sync_gossip_limit,
             peers,
             &online_peers,
-            &mut rng,
+            seed.as_ref(),
         );
         if targets.is_empty() {
             trace!(
@@ -2934,53 +2948,79 @@ impl Actor {
         }
     }
 
-    fn block_sync_update_targets_for_peers_with_rng(
+    fn block_sync_update_targets_for_peers(
         local_peer: &PeerId,
         gossip_limit: usize,
         peers: &[PeerId],
         online_peers: &[PeerId],
-        rng: &mut impl rand::Rng,
+        seed: &[u8],
     ) -> Vec<PeerId> {
         if gossip_limit == 0 || peers.is_empty() {
             return Vec::new();
         }
 
         let world_peers: BTreeSet<_> = peers.iter().cloned().collect();
-        let mut strays: Vec<PeerId> = online_peers
+        let strays: Vec<PeerId> = online_peers
             .iter()
             .filter(|peer| *peer != local_peer && !world_peers.contains(*peer))
             .cloned()
             .collect();
-        let mut world_online: Vec<PeerId> = online_peers
+        let world_online: Vec<PeerId> = online_peers
             .iter()
             .filter(|peer| *peer != local_peer && world_peers.contains(*peer))
             .cloned()
             .collect();
         let mut targets = Vec::new();
         if !strays.is_empty() {
-            strays.shuffle(rng);
-            let take = usize::min(gossip_limit, strays.len());
-            targets.extend(strays.into_iter().take(take));
+            let ordered = Self::order_gossip_targets(strays, seed, local_peer);
+            let take = usize::min(gossip_limit, ordered.len());
+            targets.extend(ordered.into_iter().take(take));
         }
 
         let remaining = gossip_limit.saturating_sub(targets.len());
         if remaining == 0 {
             return targets;
         }
-        if world_online.is_empty() {
-            world_online = peers
+        let world_candidates = if world_online.is_empty() {
+            peers
                 .iter()
                 .filter(|peer| *peer != local_peer)
                 .cloned()
-                .collect();
-        }
-        if world_online.is_empty() {
+                .collect::<Vec<_>>()
+        } else {
+            world_online
+        };
+        if world_candidates.is_empty() {
             return targets;
         }
-        world_online.shuffle(rng);
-        let take = usize::min(remaining, world_online.len());
-        targets.extend(world_online.into_iter().take(take));
+        let ordered = Self::order_gossip_targets(world_candidates, seed, local_peer);
+        let take = usize::min(remaining, ordered.len());
+        targets.extend(ordered.into_iter().take(take));
         targets
+    }
+
+    fn order_gossip_targets(
+        mut peers: Vec<PeerId>,
+        seed: &[u8],
+        local_peer: &PeerId,
+    ) -> Vec<PeerId> {
+        peers.sort_by(|lhs, rhs| {
+            let lhs_score = Self::gossip_target_score(seed, local_peer, lhs);
+            let rhs_score = Self::gossip_target_score(seed, local_peer, rhs);
+            lhs_score.cmp(&rhs_score).then_with(|| lhs.cmp(rhs))
+        });
+        peers
+    }
+
+    fn gossip_target_score(seed: &[u8], local_peer: &PeerId, peer: &PeerId) -> [u8; 32] {
+        let mut hasher = Blake2b512::new();
+        hasher.update(seed);
+        hasher.update(local_peer.encode());
+        hasher.update(peer.encode());
+        let digest = BlakeDigest::finalize(hasher);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest[..32]);
+        out
     }
 
     #[allow(dead_code)]
@@ -3017,6 +3057,7 @@ impl Actor {
                 self.common_config.trusted_peers.value(),
                 self.common_config.peer.id(),
             );
+            let expected_epoch = qc.epoch;
             Self::apply_cached_qcs_to_block_sync_update(
                 &mut update,
                 &self.qc_cache,
@@ -3024,6 +3065,7 @@ impl Actor {
                 block_hash,
                 block_height,
                 qc.view,
+                expected_epoch,
             );
             debug!(
                 height = block_height,
@@ -4191,6 +4233,12 @@ mod tests {
         sync::Arc,
     };
 
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, StateReadOnly, World},
+    };
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
         ChainId, Registrable,
@@ -4201,14 +4249,6 @@ mod tests {
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
     use iroha_primitives::unique_vec::UniqueVec;
-    use rand::{SeedableRng, rngs::StdRng};
-
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, StateReadOnly, World},
-    };
 
     fn signers_from_bitmap(signers_bitmap: &[u8], roster_len: usize) -> Vec<usize> {
         let mut signers = Vec::new();
@@ -4299,6 +4339,24 @@ mod tests {
     }
 
     #[test]
+    fn commit_quorum_signers_requires_min_votes() {
+        let min_votes_for_commit = 3;
+        assert!(!has_commit_quorum_signers(None, min_votes_for_commit));
+
+        let mut signers = BTreeSet::from([0_u32, 1_u32]);
+        assert!(!has_commit_quorum_signers(
+            Some(&signers),
+            min_votes_for_commit
+        ));
+
+        signers.insert(2_u32);
+        assert!(has_commit_quorum_signers(
+            Some(&signers),
+            min_votes_for_commit
+        ));
+    }
+
+    #[test]
     fn block_sync_update_targets_cap_and_excludes_local() {
         let local = PeerId::new(KeyPair::random().public_key().clone());
         let peers: Vec<_> = (0..6)
@@ -4307,18 +4365,10 @@ mod tests {
         let mut online = Vec::new();
         online.push(local.clone());
         online.extend(peers.clone());
-        let mut rng = StdRng::seed_from_u64(0xB10C_5EED);
-        let targets = Actor::block_sync_update_targets_for_peers_with_rng(
-            &local, 3, &online, &online, &mut rng,
-        );
-        let mut rng_repeat = StdRng::seed_from_u64(0xB10C_5EED);
-        let repeat = Actor::block_sync_update_targets_for_peers_with_rng(
-            &local,
-            3,
-            &online,
-            &online,
-            &mut rng_repeat,
-        );
+        let seed = [0xB1; 32];
+        let targets =
+            Actor::block_sync_update_targets_for_peers(&local, 3, &online, &online, &seed);
+        let repeat = Actor::block_sync_update_targets_for_peers(&local, 3, &online, &online, &seed);
 
         assert_eq!(targets, repeat);
         assert_eq!(targets.len(), 3);
@@ -4342,10 +4392,8 @@ mod tests {
         let mut world = Vec::with_capacity(world_peers.len() + 1);
         world.push(local.clone());
         world.extend(world_peers.clone());
-        let mut rng = StdRng::seed_from_u64(0xCAFE_BABE);
-        let targets = Actor::block_sync_update_targets_for_peers_with_rng(
-            &local, 2, &world, &online, &mut rng,
-        );
+        let seed = [0xCA; 32];
+        let targets = Actor::block_sync_update_targets_for_peers(&local, 2, &world, &online, &seed);
 
         assert_eq!(targets.len(), 2);
         assert!(!targets.contains(&local));
@@ -4360,10 +4408,8 @@ mod tests {
         let peer_c = PeerId::new(KeyPair::random().public_key().clone());
         let peers = vec![local.clone(), peer_a, peer_b.clone(), peer_c];
         let online = vec![local.clone(), peer_b.clone()];
-        let mut rng = StdRng::seed_from_u64(0x1234_5678);
-        let targets = Actor::block_sync_update_targets_for_peers_with_rng(
-            &local, 3, &peers, &online, &mut rng,
-        );
+        let seed = [0x12; 32];
+        let targets = Actor::block_sync_update_targets_for_peers(&local, 3, &peers, &online, &seed);
 
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0], peer_b);
@@ -4378,18 +4424,9 @@ mod tests {
         let peer_b = PeerId::new(KeyPair::random().public_key().clone());
         let peers = vec![local.clone(), peer_a.clone(), peer_b.clone()];
         let online = vec![local.clone()];
-        let mut rng = StdRng::seed_from_u64(0xDEAD_BEEF);
-        let targets = Actor::block_sync_update_targets_for_peers_with_rng(
-            &local, 1, &peers, &online, &mut rng,
-        );
-        let mut rng_repeat = StdRng::seed_from_u64(0xDEAD_BEEF);
-        let repeat = Actor::block_sync_update_targets_for_peers_with_rng(
-            &local,
-            1,
-            &peers,
-            &online,
-            &mut rng_repeat,
-        );
+        let seed = [0xDE; 32];
+        let targets = Actor::block_sync_update_targets_for_peers(&local, 1, &peers, &online, &seed);
+        let repeat = Actor::block_sync_update_targets_for_peers(&local, 1, &peers, &online, &seed);
 
         assert_eq!(targets, repeat);
         assert_eq!(targets.len(), 1);
@@ -4541,6 +4578,7 @@ mod tests {
             block_hash,
             4,
             0,
+            0,
         );
 
         assert_eq!(update.commit_certificate, Some(qc_precommit));
@@ -4606,6 +4644,7 @@ mod tests {
             block_hash,
             height,
             view,
+            epoch,
         );
 
         let qc = update
@@ -4800,6 +4839,7 @@ mod tests {
             &vote_log,
             block_hash,
             4,
+            0,
             0,
         );
 

@@ -2,7 +2,7 @@
 
 ## Latest Updates
 - Core: make block-sync Norito decode fallible for invalid GetBlocksAfter/ShareBlocks batches and add regression coverage.
-- Tests: not run (not requested).
+- Tests: `cargo test -p iroha_core decode_invalid_ -- --nocapture` (timed out after 300s; new tests passed; warnings about unused `mut` in `crates/iroha_core/src/smartcontracts/isi/world.rs:9010` and `crates/iroha_core/src/smartcontracts/isi/world.rs:9071`).
 - JS SDK: honor IROHA_JS_FORCE_NATIVE to fail fast when native binding is required; add verification tests and README note.
 - Tests: `npm run test:js` (from `javascript/iroha_js`).
 - Swift SDK: guard Torii JSON numeric normalization against Int overflow and reuse the safer path for allowance/proof parsing; add regression coverage.
@@ -11,6 +11,39 @@
 - Tests: not run (not requested).
 - Swift SDK: restrict canonical query encoding to ASCII unreserved characters so non-ASCII is percent-escaped; add regression coverage.
 - Tests: `swift test --filter CanonicalRequestTests` (from `IrohaSwift`).
+- Sumeragi penalties/status: seed staking config + escrow assets for censorship slashing tests; add reentrant test guards for view-change/validation-reject counters and commit-history snapshots to avoid cross-test interference.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core consensus_penalties_apply_censorship_evidence --lib -- --nocapture`.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core sumeragi::status::tests::view_change_cause --lib -- --nocapture`.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core sumeragi::status::tests::validation_reject_snapshot --lib -- --nocapture`.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core sumeragi::status::tests::commit_certificate --lib -- --nocapture`.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core` (timed out after 4h; no failures observed before timeout).
+- Integration tests: re-ran localnet smoke + Kagami localnet bootstrap; no failures observed.
+- Tests: `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture`.
+- Tests: `CARGO_TARGET_DIR=target-codex-localnet IROHA_TEST_SKIP_BUILD=1 KAGAMI_BIN=/Users/takemiyamakoto/dev/iroha/target/debug/kagami TEST_NETWORK_BIN_IROHAD=/Users/takemiyamakoto/dev/iroha/target/debug/iroha3d IROHA_KAGAMI_LOCALNET_KEEP=1 cargo test -p integration_tests --test sumeragi_kagami_localnet -- --nocapture`.
+- Sumeragi: deterministically order block-sync gossip targets (seeded by block hash + local peer), enforce strict PoP roster filtering without quorum fallback, and require actual quorum-sized signer sets; add unit coverage for gossip ordering, PoP subquorum behavior, and quorum signers.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 30m during test execution; warnings about unused variable `epoch` in `crates/iroha_core/src/block_sync.rs:401` and dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Sumeragi: reject early VRF reveals before the reveal window, anchor censorship evidence horizon to the newest receipt height, skip empty-roster penalty attribution, and evict future-timestamp RBC sessions; add regression coverage.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 20m; initial build-dir lock wait; warnings about dead-code `Align64` in `crates/norito/src/core.rs:6792` and unused `epoch` in `crates/iroha_core/src/block_sync.rs:401`; timeout during `integration_tests` `address_canonicalisation`).
+- Sumeragi: periodically rebroadcast stalled RBC payloads/READY sets during ticks to prevent DA availability stalls when peers miss INIT/chunk fan-out; add regression coverage.
+- Tests: `cargo test -p iroha_core tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown -- --nocapture` (timed out after 10s waiting on build directory lock); `CARGO_TARGET_DIR=target/codex cargo test -p iroha_core tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown -- --nocapture` (timed out after 120s during compile).
+- Sumeragi: drop mismatched commit votes from block-sync updates and add regression coverage for vote filtering.
+- Tests: not run (not requested).
+- Sumeragi: require cached QC lookups and block-sync vote/QC attachments to match the expected epoch, plus regression coverage for epoch-filtered cached QCs.
+- Tests: not run (not requested).
+- Sumeragi: reject non-commit-phase commit-certificate roster hints, enforce mode-tag and aggregate-signature validation, and add regression coverage for phase/tag/signature checks.
+- Tests: not run (not requested).
+- Sumeragi: reject QCs with mismatched mode tags during validation/aggregate salvage and add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi: validate commit-certificate roster hints with mode-tag and aggregate-signature checks, plus regression coverage for signature and tag validation alongside block-sync roster test updates.
+- Tests: not run (not requested).
+- Sumeragi: static production bug hunt; flagged empty-topology panic paths, QC/signature mismatch handling, and gossip target randomness as potential risks.
+- Tests: not run (analysis only).
+- Sumeragi: validate block-sync QC aggregate salvage against canonical topology to avoid view-rotation mismatches; add regression coverage.
+- Tests: not run (not requested).
+- Block sync: allow cached precommit QCs to reuse nonzero epochs from signer records and add regression coverage.
+- Tests: not run (not requested).
 - JS SDK: gate native-only tests by required native capabilities (Norito/SM2/SoraDNS) and add helper coverage.
 - Tests: `npm run test:js` (from `javascript/iroha_js`).
 - Java/Android SDK: preserve baseUri path segments when building UAID request URLs; add regression coverage.
@@ -1297,3 +1330,4 @@
 - Synced merge-ledger truncation and tiered snapshot pruning roots to harden crash consistency after pruning.
 - Aligned NPoS epoch manager initialization to the current height when no VRF record exists (mode flip + startup) and added epoch alignment tests.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options); `cargo test --workspace` (timed out after 600s; warnings about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450` and dead_code in `crates/norito/src/core.rs:6792`).
+- Fixed invalid-proposal evidence to carry the pending view when commit quorum failures occur, with coverage asserting the recorded proposal view.

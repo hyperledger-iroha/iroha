@@ -60,12 +60,14 @@ impl Actor {
             }
             let pending_age = pending.age();
             let key = (*hash, pending.height, pending.view);
+            let expected_epoch = self.epoch_for_height(pending.height);
             let qc_precommit = cached_qc_for(
                 &self.qc_cache,
                 crate::sumeragi::consensus::Phase::Commit,
                 *hash,
                 pending.height,
                 pending.view,
+                expected_epoch,
             );
             let qc_any = qc_precommit.clone().or_else(|| {
                 cached_qc_for(
@@ -74,6 +76,7 @@ impl Actor {
                     *hash,
                     pending.height,
                     pending.view,
+                    expected_epoch,
                 )
             });
             let qc_phase = qc_any.as_ref().map(|qc| qc.phase);
@@ -373,6 +376,7 @@ impl Actor {
                 self.common_config.trusted_peers.value(),
                 self.common_config.peer.id(),
             );
+            let expected_epoch = self.epoch_for_height(height);
             Self::apply_cached_qcs_to_block_sync_update(
                 &mut update,
                 &self.qc_cache,
@@ -380,6 +384,7 @@ impl Actor {
                 block_hash,
                 height,
                 view,
+                expected_epoch,
             );
             for peer in topology_peers {
                 self.schedule_background(BackgroundRequest::Post {

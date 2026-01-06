@@ -464,6 +464,8 @@ pub(crate) enum QcValidationError {
     MissingVotes { missing: usize },
     #[error("QC contains duplicate signer bits")]
     DuplicateSigners,
+    #[error("QC mode tag does not match active consensus mode")]
+    ModeTagMismatch,
     #[error("QC validator set does not match active roster")]
     ValidatorSetMismatch,
     #[error("QC aggregate does not match subject/bitmap")]
@@ -484,6 +486,7 @@ impl QcValidationError {
             Self::InsufficientSigners { .. } => "insufficient_signers",
             Self::MissingVotes { .. } => "missing_votes",
             Self::DuplicateSigners => "duplicate_signers",
+            Self::ModeTagMismatch => "mode_tag_mismatch",
             Self::ValidatorSetMismatch => "validator_set_mismatch",
             Self::AggregateMismatch => "aggregate_mismatch",
             Self::SubjectMismatch { .. } => "subject_mismatch",
@@ -628,6 +631,7 @@ fn qc_validation_error_to_evidence(
         | QcValidationError::SignerOutOfBounds { .. }
         | QcValidationError::InvalidSignature { .. }
         | QcValidationError::SignerMissingFromBlock { .. }
+        | QcValidationError::ModeTagMismatch
         | QcValidationError::ValidatorSetMismatch
         | QcValidationError::AggregateMismatch
         | QcValidationError::DuplicateSigners
@@ -848,6 +852,9 @@ fn qc_aggregate_consistent(
     chain_id: &ChainId,
     mode_tag: &str,
 ) -> bool {
+    if qc.mode_tag != mode_tag {
+        return false;
+    }
     if !qc_validator_set_matches_topology(qc, canonical_topology) {
         return false;
     }
@@ -1050,6 +1057,9 @@ pub(crate) fn validate_block_sync_qc(
     let roster_len = topology.as_ref().len();
     let required = signature_topology.min_votes_for_commit().max(1);
     let voting_len = roster_len;
+    if qc.mode_tag != mode_tag {
+        return Err(QcValidationError::ModeTagMismatch);
+    }
     if !qc_validator_set_matches_topology(qc, topology) {
         return Err(QcValidationError::ValidatorSetMismatch);
     }
@@ -1239,6 +1249,9 @@ fn validate_qc_against_votes(
     let roster_len = topology.as_ref().len();
     let required = signature_topology.min_votes_for_commit();
     let voting_len = roster_len;
+    if qc.mode_tag != mode_tag {
+        return Err(QcValidationError::ModeTagMismatch);
+    }
     if !qc_validator_set_matches_topology(qc, topology) {
         return Err(QcValidationError::ValidatorSetMismatch);
     }
@@ -2586,9 +2599,10 @@ fn cached_qc_for(
     hash: HashOf<BlockHeader>,
     height: u64,
     view: u64,
+    epoch: u64,
 ) -> Option<crate::sumeragi::consensus::Qc> {
     qc_cache_for_subject(qc_cache, hash)
-        .find(|qc| qc.phase == phase && qc.height == height && qc.view == view)
+        .find(|qc| qc.phase == phase && qc.height == height && qc.view == view && qc.epoch == epoch)
         .cloned()
 }
 
@@ -3288,6 +3302,8 @@ enum RosterValidationError {
         expected: u64,
         actual: u64,
     },
+    PhaseMismatch,
+    ModeTagMismatch,
     EmptyRoster,
     ValidatorSetHashVersionMismatch {
         expected: u16,
@@ -3595,6 +3611,8 @@ fn selection_from_roster_artifacts(
                 consensus_mode,
                 stake_snapshot,
                 expected_epoch,
+                &state.chain_id,
+                mode_tag,
             ) {
                 Ok(roster) => Some((roster, cert)),
                 Err(err) => {
@@ -3921,6 +3939,8 @@ fn validate_commit_certificate_roster(
     consensus_mode: ConsensusMode,
     stake_snapshot: Option<&CommitStakeSnapshot>,
     expected_epoch: u64,
+    chain_id: &ChainId,
+    mode_tag: &str,
 ) -> Result<Vec<PeerId>, RosterValidationError> {
     if cert.subject_block_hash != block_hash {
         return Err(RosterValidationError::BlockHashMismatch);
@@ -3945,6 +3965,12 @@ fn validate_commit_certificate_roster(
             actual: cert.epoch,
         });
     }
+    if cert.phase != crate::sumeragi::consensus::Phase::Commit {
+        return Err(RosterValidationError::PhaseMismatch);
+    }
+    if cert.mode_tag != mode_tag {
+        return Err(RosterValidationError::ModeTagMismatch);
+    }
     if cert.validator_set.is_empty() {
         return Err(RosterValidationError::EmptyRoster);
     }
@@ -3965,6 +3991,10 @@ fn validate_commit_certificate_roster(
             actual: cert.aggregate.signers_bitmap.len(),
         });
     }
+    if cert.aggregate.bls_aggregate_signature.is_empty() {
+        return Err(RosterValidationError::AggregateSignatureMissing);
+    }
+    let mut signer_indices = BTreeSet::new();
     let mut signer_peers = BTreeSet::new();
     for (byte_idx, byte) in cert.aggregate.signers_bitmap.iter().enumerate() {
         if *byte == 0 {
@@ -3982,6 +4012,9 @@ fn validate_commit_certificate_roster(
                     roster_len: roster_len.try_into().unwrap_or(u32::MAX),
                 });
             }
+            if !signer_indices.insert(idx) {
+                return Err(RosterValidationError::DuplicateSigner(idx_u32));
+            }
             let validator = cert.validator_set.get(idx).ok_or_else(|| {
                 RosterValidationError::SignerOutOfRange {
                     signer: idx_u32,
@@ -3994,9 +4027,9 @@ fn validate_commit_certificate_roster(
     match consensus_mode {
         ConsensusMode::Permissioned => {
             let required = super::network_topology::commit_quorum_from_len(roster_len).max(1);
-            if signer_peers.len() < required {
+            if signer_indices.len() < required {
                 return Err(RosterValidationError::CommitQuorumMissing {
-                    votes: signer_peers.len(),
+                    votes: signer_indices.len(),
                     required,
                 });
             }
@@ -4009,6 +4042,27 @@ fn validate_commit_certificate_roster(
                 Err(_) => return Err(RosterValidationError::StakeSnapshotUnavailable),
             }
         }
+    }
+    let preimage = qc_bls_preimage(cert, chain_id, mode_tag);
+    let mut public_keys: Vec<&[u8]> = Vec::with_capacity(signer_indices.len());
+    for idx in &signer_indices {
+        let Some(peer) = cert.validator_set.get(*idx) else {
+            return Err(RosterValidationError::SignerOutOfRange {
+                signer: u32::try_from(*idx).unwrap_or(u32::MAX),
+                roster_len: roster_len.try_into().unwrap_or(u32::MAX),
+            });
+        };
+        let (_, payload) = peer.public_key().to_bytes();
+        public_keys.push(payload);
+    }
+    if iroha_crypto::bls_normal_verify_preaggregated_same_message(
+        &preimage,
+        &cert.aggregate.bls_aggregate_signature,
+        &public_keys,
+    )
+    .is_err()
+    {
+        return Err(RosterValidationError::AggregateSignatureInvalid);
     }
     Ok(cert.validator_set.clone())
 }
@@ -5940,13 +5994,15 @@ impl Actor {
             let progress = self.force_view_change_if_idle(now);
             (progress, step_start.elapsed())
         };
+        let rbc_rebroadcast_progress = self.rebroadcast_stalled_rbc_payloads(now);
         let mut commit_pipeline_cost = Duration::ZERO;
         let mut propose_cost = Duration::ZERO;
         progress |= adaptive_progress
             || refresh_progress
             || committed_progress
             || reschedule_progress
-            || idle_view_progress;
+            || idle_view_progress
+            || rbc_rebroadcast_progress;
         if should_run_commit_pipeline_on_tick(self.active_pending_blocks_len())
             || self.subsystems.commit.inflight.is_some()
         {
@@ -7036,6 +7092,105 @@ impl Actor {
             return;
         };
         self.rebroadcast_rbc_payload_bundle(key, init, chunks, session.ready_signatures.len());
+    }
+
+    fn rbc_payload_rebroadcast_due(
+        &self,
+        key: &super::rbc_store::SessionKey,
+        now: Instant,
+        cooldown: Duration,
+    ) -> bool {
+        self.subsystems
+            .da_rbc
+            .rbc
+            .payload_rebroadcast_last_sent
+            .get(key)
+            .map_or(true, |last| {
+                now.saturating_duration_since(*last) >= cooldown
+            })
+    }
+
+    fn rbc_ready_rebroadcast_due(
+        &self,
+        key: &super::rbc_store::SessionKey,
+        now: Instant,
+        cooldown: Duration,
+    ) -> bool {
+        self.subsystems
+            .da_rbc
+            .rbc
+            .ready_rebroadcast_last_sent
+            .get(key)
+            .map_or(true, |last| {
+                now.saturating_duration_since(*last) >= cooldown
+            })
+    }
+
+    fn rebroadcast_stalled_rbc_payloads(&mut self, now: Instant) -> bool {
+        if !self.runtime_da_enabled() {
+            return false;
+        }
+        if self.subsystems.da_rbc.rbc.sessions.is_empty() {
+            return false;
+        }
+
+        let payload_cooldown = self.payload_rebroadcast_cooldown();
+        let ready_cooldown = self.rebroadcast_cooldown();
+        let keys: Vec<_> = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .keys()
+            .cloned()
+            .collect();
+        let mut progress = false;
+
+        for key in keys {
+            let Some((payload_bundle, ready_bundle, ready_count)) = (|| {
+                let session = self.subsystems.da_rbc.rbc.sessions.get(&key)?;
+                if session.delivered || session.is_invalid() {
+                    return None;
+                }
+                let topology_peers = self.rbc_session_roster(key);
+                if topology_peers.is_empty() {
+                    return None;
+                }
+                let topology = super::network_topology::Topology::new(topology_peers);
+                let required = self.rbc_deliver_quorum(&topology);
+                let ready_count = session.ready_signatures.len();
+                if ready_count >= required {
+                    return None;
+                }
+                let payload_bundle =
+                    if self.rbc_payload_rebroadcast_due(&key, now, payload_cooldown) {
+                        Self::rbc_payload_bundle(key, session)
+                    } else {
+                        None
+                    };
+                let ready_bundle = if !session.ready_signatures.is_empty()
+                    && self.rbc_ready_rebroadcast_due(&key, now, ready_cooldown)
+                {
+                    Self::rbc_ready_bundle(key, session)
+                } else {
+                    None
+                };
+                Some((payload_bundle, ready_bundle, ready_count))
+            })() else {
+                continue;
+            };
+
+            if let Some((init, chunks)) = payload_bundle {
+                self.rebroadcast_rbc_payload_bundle(key, init, chunks, ready_count);
+                progress = true;
+            }
+            if let Some(readies) = ready_bundle {
+                self.rebroadcast_rbc_ready_bundle(key, readies);
+                progress = true;
+            }
+        }
+
+        progress
     }
 
     fn maybe_emit_rbc_deliver(&mut self, key: super::rbc_store::SessionKey) -> Result<()> {
