@@ -144,10 +144,11 @@ fn filter_roster_bls(roster: impl IntoIterator<Item = PeerId>) -> Vec<PeerId> {
     dedup_preserving_order(roster.into_iter().filter(roster_member_allowed_bls))
 }
 
-fn guard_pop_quorum(filtered: Vec<PeerId>, baseline_len: usize, pops_len: usize) -> Vec<PeerId> {
-    if baseline_len == 0 {
+fn guard_pop_quorum(filtered: Vec<PeerId>, baseline: &[PeerId], pops_len: usize) -> Vec<PeerId> {
+    if baseline.is_empty() {
         return Vec::new();
     }
+    let baseline_len = baseline.len();
     let needed = if baseline_len > 3 {
         ((baseline_len.saturating_sub(1)) / 3) * 2 + 1
     } else {
@@ -159,8 +160,9 @@ fn guard_pop_quorum(filtered: Vec<PeerId>, baseline_len: usize, pops_len: usize)
             baseline = baseline_len,
             needed,
             pops = pops_len,
-            "PoP filtering produced sub-quorum roster; refusing fallback to preserve safety"
+            "PoP filtering produced sub-quorum roster; falling back to BLS baseline"
         );
+        return baseline.to_vec();
     }
     filtered
 }
@@ -198,7 +200,7 @@ pub(super) fn derive_active_topology(
                 "PoP map incomplete for active topology; excluding peers without PoP"
             );
         }
-        guard_pop_quorum(filtered, baseline.len(), trusted.pops.len())
+        guard_pop_quorum(filtered, &baseline, trusted.pops.len())
     };
 
     roster = canonicalize_roster(roster);
@@ -225,7 +227,7 @@ pub(super) fn derive_active_topology(
                 "PoP map incomplete for trusted roster fallback; excluding peers without PoP"
             );
         }
-        guard_pop_quorum(filtered, baseline.len(), trusted.pops.len())
+        guard_pop_quorum(filtered, &baseline, trusted.pops.len())
     };
     canonicalize_roster(fallback)
 }
@@ -343,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn pop_filter_keeps_subquorum_without_fallback() {
+    fn pop_filter_falls_back_to_baseline_when_subquorum() {
         let keypairs: Vec<KeyPair> = (0..4)
             .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
             .collect();
@@ -358,10 +360,9 @@ mod tests {
         }
 
         let filtered = filter_roster_with_pops(peers.clone(), &pops);
-        let guarded = guard_pop_quorum(filtered.clone(), peers.len(), pops.len());
+        let guarded = guard_pop_quorum(filtered.clone(), &peers, pops.len());
 
-        assert_eq!(guarded, filtered);
-        assert_eq!(guarded.len(), 2);
+        assert_eq!(guarded, peers);
     }
 
     #[test]

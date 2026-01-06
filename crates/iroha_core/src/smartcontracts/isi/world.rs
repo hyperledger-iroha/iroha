@@ -343,8 +343,7 @@ pub mod isi {
                 if env.public_inputs != flattened {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "public inputs do not match proof".into(),
-                    )
-                    .into());
+                    ));
                 }
             }
             return Ok(VotePublicInputs {

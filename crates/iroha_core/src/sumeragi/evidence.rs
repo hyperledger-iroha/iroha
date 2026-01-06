@@ -745,15 +745,27 @@ mod tests {
             }
         }
 
-        fn signer_keypair(&self, signer: u32) -> &KeyPair {
+        fn signer_keypair_for_view(&self, signer: u32, height: u64, view: u64) -> &KeyPair {
             let idx = usize::try_from(signer).expect("signer index fits usize");
-            self.keypairs
+            let rotated = super::super::main_loop::topology_for_view(
+                &self.topology,
+                height,
+                view,
+                self.mode_tag,
+                None,
+            );
+            let peer = rotated
+                .as_ref()
                 .get(idx)
-                .expect("signer index must be in range for test context")
+                .expect("signer index must be in range for view-aligned topology");
+            self.keypairs
+                .iter()
+                .find(|kp| kp.public_key() == peer.public_key())
+                .expect("signer keypair must exist for view-aligned topology")
         }
 
         fn sign_vote(&self, vote: &mut Vote) {
-            let keypair = self.signer_keypair(vote.signer);
+            let keypair = self.signer_keypair_for_view(vote.signer, vote.height, vote.view);
             let preimage =
                 super::super::consensus::vote_preimage(&self.chain_id, self.mode_tag, vote);
             let signature = Signature::new(keypair.private_key(), &preimage);
@@ -761,7 +773,7 @@ mod tests {
         }
 
         fn sign_exec_vote(&self, vote: &mut ExecVote) {
-            let keypair = self.signer_keypair(vote.signer);
+            let keypair = self.signer_keypair_for_view(vote.signer, vote.height, vote.view);
             let preimage = super::super::consensus::bls_preimage::exec_vote(
                 &self.chain_id,
                 self.mode_tag,

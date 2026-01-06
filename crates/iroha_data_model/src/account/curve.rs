@@ -12,6 +12,12 @@ impl CurveId {
     pub const ED25519: Self = Self(1);
     /// Identifier for secp256k1 controllers.
     pub const SECP256K1: Self = Self(4);
+    /// Identifier for BLS12-381 (normal) controllers.
+    #[cfg(feature = "bls")]
+    pub const BLS_NORMAL: Self = Self(3);
+    /// Identifier for BLS12-381 (small) controllers.
+    #[cfg(feature = "bls")]
+    pub const BLS_SMALL: Self = Self(5);
     /// Identifier for ML‑DSA controllers (Dilithium).
     pub const MLDSA: Self = Self(2);
     /// Identifier for GOST R 34.10-2012 256-bit curve, param set A.
@@ -38,6 +44,10 @@ impl CurveId {
         match algorithm {
             Algorithm::Ed25519 => Ok(Self::ED25519),
             Algorithm::Secp256k1 => Ok(Self::SECP256K1),
+            #[cfg(feature = "bls")]
+            Algorithm::BlsNormal => Ok(Self::BLS_NORMAL),
+            #[cfg(feature = "bls")]
+            Algorithm::BlsSmall => Ok(Self::BLS_SMALL),
             #[cfg(feature = "ml-dsa")]
             Algorithm::MlDsa => Ok(Self::MLDSA),
             #[cfg(feature = "gost")]
@@ -52,10 +62,6 @@ impl CurveId {
             Algorithm::Gost3410_2012_512ParamSetB => Ok(Self::GOST_512_B),
             #[cfg(feature = "sm")]
             Algorithm::Sm2 => Ok(Self::SM2),
-            #[cfg(feature = "bls")]
-            Algorithm::BlsNormal | Algorithm::BlsSmall => {
-                Err(CurveRegistryError::UnsupportedAlgorithm(algorithm))
-            }
             _ => Err(CurveRegistryError::UnsupportedAlgorithm(algorithm)),
         }
     }
@@ -70,6 +76,10 @@ impl CurveId {
         match self.0 {
             1 => Algorithm::Ed25519,
             4 => Algorithm::Secp256k1,
+            #[cfg(feature = "bls")]
+            3 => Algorithm::BlsNormal,
+            #[cfg(feature = "bls")]
+            5 => Algorithm::BlsSmall,
             #[cfg(feature = "ml-dsa")]
             2 => Algorithm::MlDsa,
             #[cfg(feature = "gost")]
@@ -96,6 +106,10 @@ impl TryFrom<u8> for CurveId {
         match value {
             1 => Ok(Self::ED25519),
             4 => Ok(Self::SECP256K1),
+            #[cfg(feature = "bls")]
+            3 => Ok(Self::BLS_NORMAL),
+            #[cfg(feature = "bls")]
+            5 => Ok(Self::BLS_SMALL),
             #[cfg(feature = "ml-dsa")]
             2 => Ok(Self::MLDSA),
             #[cfg(feature = "gost")]
@@ -130,4 +144,25 @@ pub enum CurveRegistryError {
     /// An unknown identifier was decoded from canonical bytes.
     #[error("unknown curve identifier: {0}")]
     UnknownCurveId(u8),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn bls_curve_ids_round_trip() {
+        let normal = CurveId::try_from_algorithm(Algorithm::BlsNormal)
+            .expect("BLS normal should map to a curve id");
+        let small = CurveId::try_from_algorithm(Algorithm::BlsSmall)
+            .expect("BLS small should map to a curve id");
+
+        assert_eq!(normal, CurveId::BLS_NORMAL);
+        assert_eq!(small, CurveId::BLS_SMALL);
+        assert_eq!(CurveId::try_from(u8::from(normal)).unwrap(), normal);
+        assert_eq!(CurveId::try_from(u8::from(small)).unwrap(), small);
+        assert_eq!(normal.algorithm(), Algorithm::BlsNormal);
+        assert_eq!(small.algorithm(), Algorithm::BlsSmall);
+    }
 }

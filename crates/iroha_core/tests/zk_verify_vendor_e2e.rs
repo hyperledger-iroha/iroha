@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use iroha_core::smartcontracts::Execute;
 use iroha_core::{
     kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::host::CoreHost, state::State,
     zk::test_utils::halo2_fixture_envelope,
@@ -54,18 +55,19 @@ fn derive_ballot_nullifier(
 ) -> [u8; 32] {
     use blake2::{Blake2b512, Digest as _};
 
+    fn push_len(buf: &mut Vec<u8>, len: usize) {
+        let len_u64 = len as u64;
+        buf.extend_from_slice(&len_u64.to_le_bytes());
+    }
+
     let mut input = Vec::with_capacity(
         domain_tag.len() + chain_id.as_str().len() + election_id.len() + commit.len() + 24,
     );
-    let mut push_len = |len: usize| {
-        let len_u64 = len as u64;
-        input.extend_from_slice(&len_u64.to_le_bytes());
-    };
-    push_len(domain_tag.len());
+    push_len(&mut input, domain_tag.len());
     input.extend_from_slice(domain_tag.as_bytes());
-    push_len(chain_id.as_str().len());
+    push_len(&mut input, chain_id.as_str().len());
     input.extend_from_slice(chain_id.as_str().as_bytes());
-    push_len(election_id.len());
+    push_len(&mut input, election_id.len());
     input.extend_from_slice(election_id.as_bytes());
     input.extend_from_slice(commit);
     let digest = Blake2b512::digest(&input);

@@ -1,6 +1,7 @@
 //! `CoreHost` test for `ZK_VOTE_GET_TALLY`: ensure it returns finalized and tally from snapshot.
 #![cfg(feature = "zk-tests")]
 
+use iroha_core::smartcontracts::Execute;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
