@@ -1,6 +1,16 @@
 # Status
 
 ## Latest Updates
+- Sumeragi: deterministically order block-sync gossip targets (seeded by block hash + local peer), enforce strict PoP roster filtering without quorum fallback, and require actual quorum-sized signer sets; add unit coverage for gossip ordering, PoP subquorum behavior, and quorum signers.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 30m during test execution; warnings about unused variable `epoch` in `crates/iroha_core/src/block_sync.rs:401` and dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Sumeragi: reject early VRF reveals before the reveal window, anchor censorship evidence horizon to the newest receipt height, skip empty-roster penalty attribution, and evict future-timestamp RBC sessions; add regression coverage.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 20m; initial build-dir lock wait; warnings about dead-code `Align64` in `crates/norito/src/core.rs:6792` and unused `epoch` in `crates/iroha_core/src/block_sync.rs:401`; timeout during `integration_tests` `address_canonicalisation`).
+- Sumeragi: periodically rebroadcast stalled RBC payloads/READY sets during ticks to prevent DA availability stalls when peers miss INIT/chunk fan-out; add regression coverage.
+- Tests: `cargo test -p iroha_core tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown -- --nocapture` (timed out after 10s waiting on build directory lock); `CARGO_TARGET_DIR=target/codex cargo test -p iroha_core tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown -- --nocapture` (timed out after 120s during compile).
+- Sumeragi: drop mismatched commit votes from block-sync updates and add regression coverage for vote filtering.
+- Tests: not run (not requested).
 - Sumeragi: require cached QC lookups and block-sync vote/QC attachments to match the expected epoch, plus regression coverage for epoch-filtered cached QCs.
 - Tests: not run (not requested).
 - Sumeragi: reject non-commit-phase commit-certificate roster hints, enforce mode-tag and aggregate-signature validation, and add regression coverage for phase/tag/signature checks.
@@ -1250,3 +1260,4 @@
 - Synced merge-ledger truncation and tiered snapshot pruning roots to harden crash consistency after pruning.
 - Aligned NPoS epoch manager initialization to the current height when no VRF record exists (mode flip + startup) and added epoch alignment tests.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options); `cargo test --workspace` (timed out after 600s; warnings about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450` and dead_code in `crates/norito/src/core.rs:6792`).
+- Fixed invalid-proposal evidence to carry the pending view when commit quorum failures occur, with coverage asserting the recorded proposal view.

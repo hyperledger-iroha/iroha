@@ -565,8 +565,27 @@ impl Actor {
                 );
             }
         }
+        let mut dropped_votes = 0usize;
         for vote in commit_votes {
+            if vote.phase != crate::sumeragi::consensus::Phase::Commit
+                || vote.block_hash != block_hash
+                || vote.height != block_height
+                || vote.view != block_view
+                || vote.epoch != expected_epoch
+            {
+                dropped_votes = dropped_votes.saturating_add(1);
+                continue;
+            }
             self.handle_vote(vote);
+        }
+        if dropped_votes > 0 {
+            debug!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                dropped_votes,
+                "dropping mismatched commit votes from block sync update"
+            );
         }
 
         let qc_to_apply = if ready_for_qc {

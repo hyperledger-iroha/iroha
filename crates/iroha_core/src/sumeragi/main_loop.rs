@@ -2602,9 +2602,7 @@ fn cached_qc_for(
     epoch: u64,
 ) -> Option<crate::sumeragi::consensus::Qc> {
     qc_cache_for_subject(qc_cache, hash)
-        .find(|qc| {
-            qc.phase == phase && qc.height == height && qc.view == view && qc.epoch == epoch
-        })
+        .find(|qc| qc.phase == phase && qc.height == height && qc.view == view && qc.epoch == epoch)
         .cloned()
 }
 
@@ -5996,13 +5994,15 @@ impl Actor {
             let progress = self.force_view_change_if_idle(now);
             (progress, step_start.elapsed())
         };
+        let rbc_rebroadcast_progress = self.rebroadcast_stalled_rbc_payloads(now);
         let mut commit_pipeline_cost = Duration::ZERO;
         let mut propose_cost = Duration::ZERO;
         progress |= adaptive_progress
             || refresh_progress
             || committed_progress
             || reschedule_progress
-            || idle_view_progress;
+            || idle_view_progress
+            || rbc_rebroadcast_progress;
         if should_run_commit_pipeline_on_tick(self.active_pending_blocks_len())
             || self.subsystems.commit.inflight.is_some()
         {
@@ -7092,6 +7092,105 @@ impl Actor {
             return;
         };
         self.rebroadcast_rbc_payload_bundle(key, init, chunks, session.ready_signatures.len());
+    }
+
+    fn rbc_payload_rebroadcast_due(
+        &self,
+        key: &super::rbc_store::SessionKey,
+        now: Instant,
+        cooldown: Duration,
+    ) -> bool {
+        self.subsystems
+            .da_rbc
+            .rbc
+            .payload_rebroadcast_last_sent
+            .get(key)
+            .map_or(true, |last| {
+                now.saturating_duration_since(*last) >= cooldown
+            })
+    }
+
+    fn rbc_ready_rebroadcast_due(
+        &self,
+        key: &super::rbc_store::SessionKey,
+        now: Instant,
+        cooldown: Duration,
+    ) -> bool {
+        self.subsystems
+            .da_rbc
+            .rbc
+            .ready_rebroadcast_last_sent
+            .get(key)
+            .map_or(true, |last| {
+                now.saturating_duration_since(*last) >= cooldown
+            })
+    }
+
+    fn rebroadcast_stalled_rbc_payloads(&mut self, now: Instant) -> bool {
+        if !self.runtime_da_enabled() {
+            return false;
+        }
+        if self.subsystems.da_rbc.rbc.sessions.is_empty() {
+            return false;
+        }
+
+        let payload_cooldown = self.payload_rebroadcast_cooldown();
+        let ready_cooldown = self.rebroadcast_cooldown();
+        let keys: Vec<_> = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .keys()
+            .cloned()
+            .collect();
+        let mut progress = false;
+
+        for key in keys {
+            let Some((payload_bundle, ready_bundle, ready_count)) = (|| {
+                let session = self.subsystems.da_rbc.rbc.sessions.get(&key)?;
+                if session.delivered || session.is_invalid() {
+                    return None;
+                }
+                let topology_peers = self.rbc_session_roster(key);
+                if topology_peers.is_empty() {
+                    return None;
+                }
+                let topology = super::network_topology::Topology::new(topology_peers);
+                let required = self.rbc_deliver_quorum(&topology);
+                let ready_count = session.ready_signatures.len();
+                if ready_count >= required {
+                    return None;
+                }
+                let payload_bundle =
+                    if self.rbc_payload_rebroadcast_due(&key, now, payload_cooldown) {
+                        Self::rbc_payload_bundle(key, session)
+                    } else {
+                        None
+                    };
+                let ready_bundle = if !session.ready_signatures.is_empty()
+                    && self.rbc_ready_rebroadcast_due(&key, now, ready_cooldown)
+                {
+                    Self::rbc_ready_bundle(key, session)
+                } else {
+                    None
+                };
+                Some((payload_bundle, ready_bundle, ready_count))
+            })() else {
+                continue;
+            };
+
+            if let Some((init, chunks)) = payload_bundle {
+                self.rebroadcast_rbc_payload_bundle(key, init, chunks, ready_count);
+                progress = true;
+            }
+            if let Some(readies) = ready_bundle {
+                self.rebroadcast_rbc_ready_bundle(key, readies);
+                progress = true;
+            }
+        }
+
+        progress
     }
 
     fn maybe_emit_rbc_deliver(&mut self, key: super::rbc_store::SessionKey) -> Result<()> {

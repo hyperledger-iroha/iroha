@@ -202,6 +202,9 @@ impl EpochManager {
             }
         }
         if !self.is_in_reveal_window(pos) {
+            if self.is_in_commit_window(pos) {
+                return VrfNoteResult::RejectedOutOfWindow;
+            }
             let Some(commit) = self.commits().get(&r.signer).copied() else {
                 return VrfNoteResult::RejectedOutOfWindow;
             };
@@ -247,15 +250,14 @@ impl EpochManager {
             let roster_set: BTreeSet<u32> = if let Some(r) = &self.validator_roster {
                 r.clone()
             } else {
-                // Fallback: derive contiguous set 0..=max_index from observed signers
+                // Fallback: derive contiguous set 0..=max_index from observed signers.
                 let max_idx = self
                     .commits
                     .keys()
                     .chain(self.reveals.keys())
                     .copied()
-                    .max()
-                    .unwrap_or(0);
-                (0..=max_idx).collect()
+                    .max();
+                max_idx.map_or_else(BTreeSet::new, |idx| (0..=idx).collect())
             };
             let mut participated: BTreeSet<u32> = BTreeSet::new();
             for k in self.commits.keys() {
@@ -713,6 +715,38 @@ mod tests {
     }
 
     #[test]
+    fn vrf_reveal_rejects_early_reveal() {
+        let chain = ChainId::from("iroha:test:epoch_early_reveal");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(10, 3, 6);
+
+        let reveal = [0x33; 32];
+        let commit: [u8; 32] = iroha_crypto::Hash::new(reveal).into();
+        assert_eq!(
+            em.try_note_commit_at_height(
+                2,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commit,
+                    signer: 0,
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+
+        let rr = em.try_note_reveal_at_height(
+            2,
+            VrfReveal {
+                epoch: 0,
+                reveal,
+                signer: 0,
+            },
+        );
+        assert_eq!(rr, VrfNoteResult::RejectedOutOfWindow);
+        assert_eq!(em.test_late_reveals_len(), 0);
+    }
+
+    #[test]
     fn late_reveal_clears_penalty_without_seed_change() {
         let chain = ChainId::from("iroha:test:epoch_late");
         let mut em = EpochManager::new_from_chain(&chain);
@@ -1001,5 +1035,21 @@ mod tests {
             "every validator should appear in no-participation list"
         );
         assert_eq!(roster_len, 4);
+    }
+
+    #[test]
+    fn empty_roster_without_participation_skips_penalties() {
+        let chain = ChainId::from("iroha:test:epoch_empty_roster");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(4, 1, 2);
+
+        em.on_block_commit(4);
+
+        let (_, committed_no_reveal, no_participation, roster_len) = em
+            .take_last_penalties_detailed()
+            .expect("penalties should be recorded");
+        assert!(committed_no_reveal.is_empty());
+        assert!(no_participation.is_empty());
+        assert_eq!(roster_len, 0);
     }
 }

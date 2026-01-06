@@ -564,11 +564,25 @@ impl ChunkStore {
             let mut retained = Vec::with_capacity(entries.len());
             for entry in std::mem::take(&mut entries) {
                 let updated = entry.persisted.updated_at();
-                if now.duration_since(updated).unwrap_or(Duration::ZERO) > self.ttl {
-                    removed.push(entry.persisted.key());
-                    Self::delete_path(&entry.path)?;
-                } else {
-                    retained.push(entry);
+                match now.duration_since(updated) {
+                    Ok(age) => {
+                        if age > self.ttl {
+                            removed.push(entry.persisted.key());
+                            Self::delete_path(&entry.path)?;
+                        } else {
+                            retained.push(entry);
+                        }
+                    }
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            ?entry.path,
+                            last_updated_ms = entry.persisted.last_updated_ms,
+                            "dropping RBC persisted session with future timestamp"
+                        );
+                        removed.push(entry.persisted.key());
+                        Self::delete_path(&entry.path)?;
+                    }
                 }
             }
             entries = retained;
@@ -961,7 +975,10 @@ fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, time::Duration};
+    use std::{
+        fs,
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
 
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_data_model::{block::BlockHeader, peer::PeerId};
@@ -1149,6 +1166,48 @@ mod tests {
         assert_eq!(load.sessions.len(), 1, "temp session should load");
         assert!(path.exists(), "temp session should be promoted");
         assert!(!tmp_path.exists(), "temp session should be removed");
+    }
+
+    #[test]
+    fn ttl_evicts_future_timestamp_sessions() {
+        let dir = tempdir().unwrap();
+        let key = session_key(11);
+        let store = ChunkStore::new(
+            dir.path().to_path_buf(),
+            Duration::from_secs(60),
+            4,
+            1024,
+            8,
+            4096,
+        )
+        .expect("chunk store init");
+
+        let chain_hash = test_chain_hash();
+        let manifest = SoftwareManifest {
+            version: "1.0.0".into(),
+            profile: "test".into(),
+            git_commit: Some("deadbeef".into()),
+        };
+        let mut persisted = sample_persisted_session(key, chain_hash, manifest.clone());
+        let future_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .saturating_add(120_000);
+        persisted.last_updated_ms = u64::try_from(future_ms).unwrap_or(u64::MAX);
+        let encoded = <PersistedSession as Encode>::encode(&persisted);
+
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+        fs::write(&path, &encoded).expect("write persisted session");
+
+        let load = store
+            .load(&chain_hash, &manifest)
+            .expect("load persisted sessions");
+        assert!(load.sessions.is_empty());
+        assert!(
+            !path.exists(),
+            "future timestamp sessions should be evicted"
+        );
     }
 
     #[test]
