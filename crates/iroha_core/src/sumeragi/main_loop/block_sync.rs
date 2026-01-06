@@ -93,7 +93,7 @@ impl Actor {
             );
             return Ok(());
         }
-        let (consensus_mode, mode_tag, prf_seed) = {
+        let (consensus_mode, mode_tag, prf_seed, local_height) = {
             let view = self.state.view();
             let consensus_mode = super::effective_consensus_mode_for_height(
                 &view,
@@ -106,7 +106,8 @@ impl Actor {
             };
             let prf_seed = matches!(consensus_mode, ConsensusMode::Npos)
                 .then(|| super::npos_seed_for_height(&view, block_height));
-            (consensus_mode, mode_tag, prf_seed)
+            let local_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+            (consensus_mode, mode_tag, prf_seed, local_height)
         };
         let expected_epoch = self.epoch_for_height(block_height);
         let persisted_roster = persisted_roster_for_block(
@@ -119,6 +120,9 @@ impl Actor {
         );
         let cert_hint = incoming_qc.as_ref();
         let checkpoint_hint = validator_checkpoint.as_ref();
+        let allow_uncertified = requested_missing_block
+            || (matches!(consensus_mode, ConsensusMode::Permissioned)
+                && block_height <= local_height.saturating_add(1));
         let Some(selection) = select_block_sync_roster(
             &block,
             block_hash,
@@ -132,7 +136,7 @@ impl Actor {
             self.common_config.peer.id(),
             consensus_mode,
             mode_tag,
-            requested_missing_block,
+            allow_uncertified,
         ) else {
             let roster_snapshot = self
                 .state

@@ -128,7 +128,11 @@ mod halo2_bundle {
                 let c = meta.query_advice(c, Rotation::cur());
                 let i0 = meta.query_instance(inst0, Rotation::cur());
                 let i1 = meta.query_instance(inst1, Rotation::cur());
-                vec![s.clone() * (a.clone() + b.clone() - c), s.clone() * (a - i0), s * (b - i1)]
+                vec![
+                    s.clone() * (a.clone() + b.clone() - c),
+                    s.clone() * (a - i0),
+                    s * (b - i1),
+                ]
             });
             (a, b, c, inst0, inst1, s)
         }
@@ -309,14 +313,7 @@ mod halo2_bundle {
             _,
             _,
             _,
-        >(
-            &params,
-            &pk,
-            &[circuit],
-            &inst_refs,
-            OsRng,
-            &mut transcript,
-        )
+        >(&params, &pk, &[circuit], &inst_refs, OsRng, &mut transcript)
         .expect("create proof");
         let proof_raw = transcript.finalize();
 

@@ -11267,6 +11267,9 @@ pub struct Torii {
     /// Optional Torii base URLs used to fetch peer telemetry metadata.
     #[config(default)]
     pub peer_telemetry_urls: Vec<Url>,
+    /// Peer telemetry geo lookup configuration (disabled by default).
+    #[config(nested)]
+    pub peer_geo: ToriiPeerGeo,
     /// SoraNet privacy ingestion guard rails (auth/rate/namespace).
     #[config(nested)]
     pub soranet_privacy_ingest: crate::parameters::user::ToriiSoranetPrivacyIngest,
@@ -11418,6 +11421,64 @@ pub struct Torii {
     pub onboarding: Option<ToriiOnboarding>,
     /// Optional offline certificate issuer configuration for app API endpoints.
     pub offline_issuer: Option<ToriiOfflineIssuer>,
+}
+
+/// Geo lookup configuration for peer telemetry.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiPeerGeo {
+    /// Enable geo lookups for peer telemetry.
+    #[config(default = "defaults::torii::peer_geo::ENABLED")]
+    pub enabled: bool,
+    /// Optional geo endpoint (ip-api compatible).
+    pub endpoint: Option<Url>,
+}
+
+impl Default for ToriiPeerGeo {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::torii::peer_geo::ENABLED,
+            endpoint: defaults::torii::peer_geo::endpoint(),
+        }
+    }
+}
+
+impl ToriiPeerGeo {
+    fn parse(self) -> actual::ToriiPeerGeo {
+        actual::ToriiPeerGeo {
+            enabled: self.enabled,
+            endpoint: self.endpoint.or(defaults::torii::peer_geo::endpoint()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod torii_peer_geo_tests {
+    use super::*;
+
+    #[test]
+    fn torii_peer_geo_parse_copies_enabled_and_endpoint() {
+        let endpoint = Url::parse("https://geo.example").expect("valid endpoint");
+        let parsed = ToriiPeerGeo {
+            enabled: true,
+            endpoint: Some(endpoint.clone()),
+        }
+        .parse();
+        assert!(parsed.enabled);
+        assert_eq!(
+            parsed.endpoint.as_ref().map(Url::as_str),
+            Some(endpoint.as_str())
+        );
+    }
+
+    #[test]
+    fn torii_peer_geo_parse_uses_default_endpoint_when_missing() {
+        let parsed = ToriiPeerGeo {
+            enabled: true,
+            endpoint: None,
+        }
+        .parse();
+        assert_eq!(parsed.endpoint, defaults::torii::peer_geo::endpoint());
+    }
 }
 
 /// Guard rails for SoraNet privacy ingestion endpoints.
@@ -11680,6 +11741,7 @@ impl Torii {
             api_fee_receiver: self.api_fee_receiver,
             api_allow_cidrs: self.api_allow_cidrs.unwrap_or_default(),
             peer_telemetry_urls: self.peer_telemetry_urls,
+            peer_geo: self.peer_geo.parse(),
             soranet_privacy_ingest: self.soranet_privacy_ingest.parse(),
             strict_addresses: self.strict_addresses,
             debug_match_filters: self.debug_match_filters,

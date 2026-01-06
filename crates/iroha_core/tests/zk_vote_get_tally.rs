@@ -9,8 +9,8 @@ use iroha_core::{
     zk::test_utils::halo2_fixture_envelope,
 };
 use iroha_data_model::prelude::*;
-use ivm::{IVMHost, Memory, PointerType, syscalls, zk_verify};
 use iroha_primitives::json::Json;
+use ivm::{IVMHost, Memory, PointerType, syscalls, zk_verify};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
@@ -54,9 +54,7 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
     // Register verifying key and create a simple election via ISIs
     let election_id = "e1".to_string();
     let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-public-v1", [0u8; 32]);
-    let vk_box = fixture
-        .vk_box("halo2/ipa")
-        .expect("fixture verifying key");
+    let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
     let vk_commitment = iroha_core::zk::hash_vk(&vk_box);
     let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_tally");
     let mut vk_record = iroha_data_model::proof::VerifyingKeyRecord::new(
@@ -73,7 +71,8 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
     vk_record.key = Some(vk_box);
     vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
     let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
-    let perm_parliament: Permission = iroha_executor_data_model::permission::governance::CanManageParliament.into();
+    let perm_parliament: Permission =
+        iroha_executor_data_model::permission::governance::CanManageParliament.into();
     iroha_data_model::prelude::Grant::account_permission(perm_vk, owner.clone())
         .execute(&owner, &mut stx)
         .expect("grant vk permission");
@@ -107,9 +106,7 @@ fn zk_vote_get_tally_roundtrip_from_snapshot() {
         tally_proof: iroha_data_model::proof::ProofAttachment::new_inline(
             "halo2/ipa".into(),
             fixture.proof_box("halo2/ipa"),
-            fixture
-                .vk_box("halo2/ipa")
-                .expect("fixture verifying key"),
+            fixture.vk_box("halo2/ipa").expect("fixture verifying key"),
         ),
     };
     stx.world

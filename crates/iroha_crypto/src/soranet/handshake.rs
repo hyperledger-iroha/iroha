@@ -4669,7 +4669,10 @@ mod tests {
         let list = parse_suite_list(&cap).expect("parse suite list");
         assert_eq!(
             list.suites,
-            vec![HandshakeSuite::Nk2Hybrid, HandshakeSuite::Nk3PqForwardSecure]
+            vec![
+                HandshakeSuite::Nk2Hybrid,
+                HandshakeSuite::Nk3PqForwardSecure
+            ]
         );
         assert!(!list.required);
     }

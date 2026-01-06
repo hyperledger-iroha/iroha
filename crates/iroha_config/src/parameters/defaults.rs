@@ -1164,6 +1164,19 @@ pub mod torii {
             Vec::new()
         }
     }
+
+    /// Peer-telemetry geo lookup defaults (disabled unless explicitly enabled).
+    pub mod peer_geo {
+        use url::Url;
+
+        /// Master enable switch for peer geo lookups.
+        pub const ENABLED: bool = false;
+
+        /// Optional geo endpoint (ip-api compatible). `None` uses the built-in default when enabled.
+        pub fn endpoint() -> Option<Url> {
+            None
+        }
+    }
     /// Offline certificate issuer defaults (only used when config is supplied).
     pub mod offline_issuer {
         /// Master enable switch for offline certificate issuer endpoints.

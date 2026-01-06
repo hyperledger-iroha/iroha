@@ -57,15 +57,15 @@ fn derive_ballot_nullifier(
     let mut input = Vec::with_capacity(
         domain_tag.len() + chain_id.as_str().len() + election_id.len() + commit.len() + 24,
     );
-    let mut push_len = |len: usize| {
+    fn push_len(buf: &mut Vec<u8>, len: usize) {
         let len_u64 = len as u64;
-        input.extend_from_slice(&len_u64.to_le_bytes());
-    };
-    push_len(domain_tag.len());
+        buf.extend_from_slice(&len_u64.to_le_bytes());
+    }
+    push_len(&mut input, domain_tag.len());
     input.extend_from_slice(domain_tag.as_bytes());
-    push_len(chain_id.as_str().len());
+    push_len(&mut input, chain_id.as_str().len());
     input.extend_from_slice(chain_id.as_str().as_bytes());
-    push_len(election_id.len());
+    push_len(&mut input, election_id.len());
     input.extend_from_slice(election_id.as_bytes());
     input.extend_from_slice(commit);
     let digest = Blake2b512::digest(&input);
@@ -298,21 +298,14 @@ fn verify_then_vendor_submit_ballot_applies() {
     }
     .encode();
     prog2.extend_from_slice(&code2);
-    let nullifier = derive_ballot_nullifier(
-        "zkvote",
-        &state.chain_id,
-        "e1",
-        &commit_bytes,
-    );
+    let nullifier = derive_ballot_nullifier("zkvote", &state.chain_id, "e1", &commit_bytes);
     let sb = iroha_data_model::isi::zk::SubmitBallot {
         election_id: "e1".to_string(),
         ciphertext: commit_bytes.to_vec(),
         ballot_proof: iroha_data_model::proof::ProofAttachment::new_inline(
             "halo2/ipa".into(),
             fixture.proof_box("halo2/ipa"),
-            fixture
-                .vk_box("halo2/ipa")
-                .expect("fixture verifying key"),
+            fixture.vk_box("halo2/ipa").expect("fixture verifying key"),
         ),
         nullifier,
     };

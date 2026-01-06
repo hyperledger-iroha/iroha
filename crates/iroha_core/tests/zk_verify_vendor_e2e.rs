@@ -116,7 +116,10 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
     vk_record.vk_len = ballot_vk.bytes.len() as u32;
     vk_record.max_proof_bytes = ballot_fixture.proof_bytes.len() as u32;
     vk_record.gas_schedule_id = Some("halo2_default".into());
-    vk_record.key = Some(VerifyingKeyBox::new("halo2/ipa".into(), ballot_vk.bytes.clone()));
+    vk_record.key = Some(VerifyingKeyBox::new(
+        "halo2/ipa".into(),
+        ballot_vk.bytes.clone(),
+    ));
     vk_record.status = ConfidentialStatus::Active;
 
     let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -159,12 +162,7 @@ fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
     .expect("create election");
 
     // Build a Norito-encoded SubmitBallot instruction (valid payload)
-    let nullifier = derive_ballot_nullifier(
-        "zkvote",
-        &state.chain_id,
-        "election1",
-        &commit_bytes,
-    );
+    let nullifier = derive_ballot_nullifier("zkvote", &state.chain_id, "election1", &commit_bytes);
     let sb = iroha_data_model::isi::zk::SubmitBallot {
         election_id: "election1".to_string(),
         ciphertext: commit_bytes.to_vec(),

@@ -89,7 +89,8 @@ fn zk_ballot_verifies_with_registered_vk_add2inst_public() {
         norito::json::to_value(&hex::encode(bundle.root_bytes())).expect("serialize root_hint"),
     )])
     .expect("serialize public inputs");
-    let public_inputs = norito::json::to_json(&public_inputs).expect("encode public inputs to JSON");
+    let public_inputs =
+        norito::json::to_json(&public_inputs).expect("encode public inputs to JSON");
     let cast = CastZkBallot {
         election_id: "ref-vk".to_string(),
         proof_b64,

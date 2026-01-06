@@ -1,7 +1,7 @@
 //! Integration tests for basic asset lifecycle operations.
 
 use std::{
-    sync::{Mutex, OnceLock},
+    sync::{Mutex, MutexGuard, OnceLock},
     thread::sleep,
     time::{Duration, Instant},
 };
@@ -29,6 +29,7 @@ use toml::Value as TomlValue;
 
 static GENESIS_STATUS: OnceLock<std::result::Result<(), ()>> = OnceLock::new();
 static START_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+static ASSET_TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 const QUERY_RETRIES: usize = 240;
 const QUERY_RETRY_DELAY: Duration = Duration::from_millis(500);
 const NON_EMPTY_BLOCK_TIMEOUT: Duration = Duration::from_secs(300);
@@ -115,11 +116,7 @@ fn wait_for_asset_value(
     }
 }
 
-fn wait_for_asset_absent(
-    client: &Client,
-    asset_id: &AssetId,
-    context: &'static str,
-) -> Result<()> {
+fn wait_for_asset_absent(client: &Client, asset_id: &AssetId, context: &'static str) -> Result<()> {
     let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
     loop {
         match client.query_single(FindAssetById::new(asset_id.clone())) {
@@ -136,6 +133,13 @@ fn wait_for_asset_absent(
         }
         sleep(QUERY_RETRY_DELAY);
     }
+}
+
+fn asset_test_guard() -> MutexGuard<'static, ()> {
+    ASSET_TEST_MUTEX
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
 }
 
 /// Ensure noisy tracing is silenced before any network is spawned.
@@ -323,6 +327,7 @@ fn start_test_network_with_builder(
 // This test is also covered at the UI level in the iroha_cli tests
 // in test_mint_assets.py
 fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() -> Result<()> {
+    let _guard = asset_test_guard();
     // Given
     let account_id = ALICE_ID.clone();
     let asset_definition_id = "xor#wonderland".parse::<AssetDefinitionId>()?;
@@ -375,6 +380,7 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() ->
 
 #[test]
 fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount() -> Result<()> {
+    let _guard = asset_test_guard();
     // Given
     let account_id = ALICE_ID.clone();
     let asset_definition_id = "xor#wonderland".parse::<AssetDefinitionId>()?;
@@ -427,6 +433,7 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
 
 #[test]
 fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
+    let _guard = asset_test_guard();
     // Given
     let account_id = ALICE_ID.clone();
     let asset_definition_id = "xor#wonderland".parse::<AssetDefinitionId>()?;
@@ -521,6 +528,7 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
 #[test]
 #[allow(clippy::unnecessary_wraps)]
 fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
+    let _guard = asset_test_guard();
     let result: Result<()> = (|| {
         let (dex_id, _dex_keypair) = gen_account_in("exchange");
         let (seller_id, seller_keypair) = gen_account_in("company");
@@ -647,8 +655,7 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             Transfer::asset_numeric(seller_btc.clone(), 10_u32, buyer_id.clone()).into(),
             Transfer::asset_numeric(buyer_eth.clone(), 10_u32 * rate, seller_id.clone()).into(),
         ];
-        let transfer_tx =
-            test_client.build_transaction(transfer_instructions, Metadata::default());
+        let transfer_tx = test_client.build_transaction(transfer_instructions, Metadata::default());
         if submit_tx_or_skip(&test_client, &transfer_tx, "exchange transfers")?.is_none() {
             return Ok(());
         }
@@ -675,7 +682,12 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
         // after: seller has $ETH200 and buyer has $BTC10
         wait_for_asset_absent(&test_client, &seller_btc, "seller BTC purge")?;
         wait_for_asset_absent(&test_client, &buyer_eth, "buyer ETH purge")?;
-        wait_for_asset_value(&test_client, &seller_eth, &numeric!(200), "seller ETH balance")?;
+        wait_for_asset_value(
+            &test_client,
+            &seller_eth,
+            &numeric!(200),
+            "seller ETH balance",
+        )?;
         wait_for_asset_value(&test_client, &buyer_btc, &numeric!(10), "buyer BTC balance")?;
 
         Ok(())
@@ -691,6 +703,7 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
 #[test]
 #[allow(clippy::unnecessary_wraps)]
 fn transfer_asset_definition() -> Result<()> {
+    let _guard = asset_test_guard();
     let alice_id = ALICE_ID.clone();
     // Create a destination account we can register (in a domain Alice can manage)
     let (new_owner_id, _kp) = gen_account_in("domain");
@@ -750,6 +763,7 @@ fn transfer_asset_definition() -> Result<()> {
 #[allow(clippy::unnecessary_wraps)]
 #[allow(clippy::too_many_lines)]
 fn fail_if_dont_satisfy_spec() -> Result<()> {
+    let _guard = asset_test_guard();
     let result: Result<()> = (|| {
         let alice_id = ALICE_ID.clone();
         // Prepare a transferable destination account under a manageable domain
@@ -829,7 +843,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         {
             return Ok(());
         }
-        if status_or_skip(
+        last_non_empty_height = match status_or_skip(
             sync_after_submission(
                 &network,
                 &rt,
@@ -844,11 +858,10 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
                 "sync after seed mint; torii={torii}, env_dir={}",
                 env_dir.display()
             ))
-        })?
-        .is_none()
-        {
-            return Ok(());
-        }
+        })? {
+            Some(status) => status.blocks_non_empty,
+            None => return Ok(()),
+        };
         let get_value = |id: &AssetId| -> Result<Numeric> {
             retry_query(|| {
                 test_client
@@ -941,7 +954,12 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         if sync_after("integer mint")?.is_none() {
             return Ok(());
         }
-        wait_for_asset_value(&test_client, &asset_id, &expected_after_mint, "integer mint")?;
+        wait_for_asset_value(
+            &test_client,
+            &asset_id,
+            &expected_after_mint,
+            "integer mint",
+        )?;
 
         if submit_or_tolerate_timeout(
             &test_client,

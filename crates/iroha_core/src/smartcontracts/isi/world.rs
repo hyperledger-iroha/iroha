@@ -261,7 +261,10 @@ pub mod isi {
 
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
         if backend == "halo2/ipa" {
-            match (normalize_halo2_circuit_id(record_id), normalize_halo2_circuit_id(env_id)) {
+            match (
+                normalize_halo2_circuit_id(record_id),
+                normalize_halo2_circuit_id(env_id),
+            ) {
                 (Some(rec), Some(env)) => rec == env,
                 _ => record_id == env_id,
             }
@@ -323,11 +326,12 @@ pub mod isi {
         proof_bytes: &[u8],
     ) -> Result<VotePublicInputs, Error> {
         if backend == "halo2/ipa" {
-            let env: ZkOpenVerifyEnvelope = norito::decode_from_bytes(proof_bytes).map_err(|_| {
-                InstructionExecutionError::InvariantViolation(
-                    "invalid OpenVerifyEnvelope payload".into(),
-                )
-            })?;
+            let env: ZkOpenVerifyEnvelope =
+                norito::decode_from_bytes(proof_bytes).map_err(|_| {
+                    InstructionExecutionError::InvariantViolation(
+                        "invalid OpenVerifyEnvelope payload".into(),
+                    )
+                })?;
             let columns = crate::zk::extract_pasta_instance_columns_bytes(&env.proof_bytes)
                 .ok_or_else(|| {
                     InstructionExecutionError::InvariantViolation(
@@ -376,7 +380,9 @@ pub mod isi {
         if value[8..].iter().any(|b| *b != 0) {
             return None;
         }
-        Some(u64::from_le_bytes(value[..8].try_into().expect("slice length")))
+        Some(u64::from_le_bytes(
+            value[..8].try_into().expect("slice length"),
+        ))
     }
 
     fn tally_from_columns(
@@ -432,11 +438,7 @@ pub mod isi {
         commit: &[u8; 32],
     ) -> [u8; 32] {
         let mut input = Vec::with_capacity(
-            domain_tag.len()
-                + chain_id.as_str().len()
-                + election_id.len()
-                + commit.len()
-                + 24,
+            domain_tag.len() + chain_id.as_str().len() + election_id.len() + commit.len() + 24,
         );
         // Length-prefix fields to avoid delimiter collisions in concatenated inputs.
         let push_len = |input: &mut Vec<u8>, len: usize| {
@@ -5315,8 +5317,11 @@ pub mod isi {
                 }
             }
             if let Some(env) = envelope {
-                if !circuit_id_matches(attachment.backend.as_str(), &rec.circuit_id, &env.circuit_id)
-                {
+                if !circuit_id_matches(
+                    attachment.backend.as_str(),
+                    &rec.circuit_id,
+                    &env.circuit_id,
+                ) {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "verifying key circuit mismatch".into(),
                     ));
@@ -9054,13 +9059,17 @@ pub mod isi {
         #[test]
         fn derive_ballot_nullifier_is_unambiguous_for_delimiters() {
             let commit = [0x42; 32];
-            let chain_left: iroha_data_model::ChainId =
-                "c".parse().expect("valid chain id");
-            let chain_right: iroha_data_model::ChainId =
-                "b|c".parse().expect("valid chain id");
+            let chain_left: iroha_data_model::ChainId = "c".parse().expect("valid chain id");
+            let chain_right: iroha_data_model::ChainId = "b|c".parse().expect("valid chain id");
             let first = derive_ballot_nullifier("a|b", &chain_left, "d", &commit);
             let second = derive_ballot_nullifier("a", &chain_right, "d", &commit);
             assert_ne!(first, second);
+        }
+
+        #[test]
+        fn extract_vote_public_inputs_rejects_invalid_payload() {
+            let result = super::extract_vote_public_inputs("halo2/kzg", &[]);
+            assert!(result.is_err());
         }
         use iroha_primitives::{json::Json, numeric::Numeric};
         #[allow(unused_imports)]
@@ -9541,7 +9550,7 @@ pub mod isi {
         fn unregister_domain_removes_assets_with_definitions_in_other_domains() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let state = State::new(World::default(), kura, query_handle);
 
             let domain_id: DomainId = "defs.world".parse().expect("domain id parses");
             let holder_domain: DomainId = "holder.world".parse().expect("domain id parses");
@@ -9602,7 +9611,7 @@ pub mod isi {
         fn unregister_domain_clears_endorsements_and_policy() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let state = State::new(World::default(), kura, query_handle);
 
             let domain_id: DomainId = "endorsed.world".parse().expect("domain id parses");
 
