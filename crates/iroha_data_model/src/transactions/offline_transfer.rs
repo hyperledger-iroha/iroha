@@ -289,6 +289,7 @@ fn resolve_platform_policy_label(
 mod tests {
     use std::str::FromStr;
 
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
     use iroha_primitives::{json::Json, numeric::Numeric};
     use norito::json::{self, Value};
@@ -416,7 +417,7 @@ mod tests {
             issued_at_ms: 1_700_000_250,
             invoice_id: "inv-001".into(),
             platform_proof: OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
-                key_id: "AA_KEY".into(),
+                key_id: BASE64_STANDARD.encode(b"AA_KEY"),
                 counter: 42,
                 assertion: vec![0xAA],
                 challenge_hash: Hash::new(b"challenge"),

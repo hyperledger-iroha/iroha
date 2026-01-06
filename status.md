@@ -1,6 +1,7 @@
 # Status
 
 ## Latest Updates
+- Core: ZK ballot flow now validates lock parameters before recording ballots, and slashing always targets the submitting authority (not JSON-provided owner hints).
 - Tests: `cargo test -p iroha_core sumeragi:: -- --nocapture` (failed: 117 tests, mainly `sumeragi::evidence`, `sumeragi::main_loop`, and `sumeragi::status`; warning about unused `state_view` in `crates/iroha_core/src/queue.rs:1868`).
 - Core: fix `extract_vote_public_inputs` error construction, add invalid-payload regression test, and resolve mutable borrow in `ivm_corehost_halo2_enabled_vendor_ok.rs`.
 - Tests: `cargo test -p iroha_core --lib extract_vote_public_inputs_rejects_invalid_payload -- --nocapture` (pass; warning about unused `state_view` in `crates/iroha_core/src/queue.rs:1868`).
