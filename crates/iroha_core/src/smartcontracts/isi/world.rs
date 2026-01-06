@@ -9007,7 +9007,7 @@ pub mod isi {
         fn unregister_domain_removes_assets_with_definitions_in_other_domains() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let state = State::new(World::default(), kura, query_handle);
 
             let domain_id: DomainId = "defs.world".parse().expect("domain id parses");
             let holder_domain: DomainId = "holder.world".parse().expect("domain id parses");
@@ -9068,7 +9068,7 @@ pub mod isi {
         fn unregister_domain_clears_endorsements_and_policy() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
+            let state = State::new(World::default(), kura, query_handle);
 
             let domain_id: DomainId = "endorsed.world".parse().expect("domain id parses");
 
