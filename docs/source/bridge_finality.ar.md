@@ -54,6 +54,9 @@ SPDX-License-Identifier: Apache-2.0
 Placeholder الحالي: يتم اشتقاق `mmr_root`/`mmr_peaks` عبر اعادة حساب MMR لِـ block-hash في الذاكرة؛
 اثباتات الادراج لم تعد بعد. ما زال بإمكان العملاء التحقق من نفس الـ hash عبر payload الـ commitment حاليا.
 
+MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
+from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+
 API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
 
 التحقق مماثل للاثبات الاساسي: اعادة حساب `block_hash` من الـ header، التحقق من تواقيع commit

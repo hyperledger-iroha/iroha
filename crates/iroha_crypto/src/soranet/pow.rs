@@ -46,6 +46,9 @@ pub struct Ticket {
 }
 
 impl Ticket {
+    /// Current ticket format version.
+    pub const VERSION: u8 = 1;
+
     /// Serialize the ticket to a fixed-length byte array.
     #[must_use]
     pub fn to_bytes(self) -> [u8; TICKET_LEN] {
@@ -77,6 +80,9 @@ impl Ticket {
             )));
         }
         let version = bytes[0];
+        if version != Self::VERSION {
+            return Err(Error::UnsupportedVersion(version));
+        }
         let difficulty = bytes[1];
         let mut expires_at_bytes = [0u8; 8];
         expires_at_bytes.copy_from_slice(&bytes[2..10]);
@@ -155,8 +161,12 @@ impl SignedTicket {
     ///
     /// Returns [`Error::Malformed`] when the payload fails to parse.
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        decode_adaptive(bytes)
-            .map_err(|err| Error::Malformed(format!("signed ticket decode failed: {err}")))
+        let decoded: Self = decode_adaptive(bytes)
+            .map_err(|err| Error::Malformed(format!("signed ticket decode failed: {err}")))?;
+        if decoded.ticket.version != Ticket::VERSION {
+            return Err(Error::UnsupportedVersion(decoded.ticket.version));
+        }
+        Ok(decoded)
     }
 
     /// Encode the signed ticket using the adaptive Norito codec.
@@ -775,7 +785,7 @@ pub fn verify_at(
     params: &Parameters,
     now: SystemTime,
 ) -> Result<(), Error> {
-    if ticket.version != 1 {
+    if ticket.version != Ticket::VERSION {
         return Err(Error::UnsupportedVersion(ticket.version));
     }
     if ticket.difficulty != params.difficulty {
@@ -1145,6 +1155,14 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unsupported_ticket_version() {
+        let mut bytes = [0u8; TICKET_LEN];
+        bytes[0] = Ticket::VERSION + 1;
+        let err = Ticket::parse(&bytes).expect_err("unsupported version should fail");
+        assert!(matches!(err, Error::UnsupportedVersion(_)));
+    }
+
+    #[test]
     fn rejects_bad_length() {
         let err = Ticket::parse(&[0u8; 10]).expect_err("should fail");
         matches!(err, Error::Malformed(_));
@@ -1285,6 +1303,26 @@ mod tests {
 
         let err = SignedTicket::decode(&[]).expect_err("empty payload should fail");
         assert!(matches!(err, Error::Malformed(_)));
+    }
+
+    #[test]
+    fn signed_ticket_decode_rejects_unsupported_version() {
+        let ticket = Ticket {
+            version: Ticket::VERSION + 1,
+            difficulty: 0,
+            expires_at: 123,
+            client_nonce: [0xAA; 32],
+            solution: [0xBB; 32],
+        };
+        let signed = SignedTicket {
+            ticket,
+            relay_id: RELAY_A,
+            transcript_hash: None,
+            signature: vec![0x11],
+        };
+        let encoded = signed.encode();
+        let err = SignedTicket::decode(&encoded).expect_err("unsupported version should fail");
+        assert!(matches!(err, Error::UnsupportedVersion(_)));
     }
 
     #[test]

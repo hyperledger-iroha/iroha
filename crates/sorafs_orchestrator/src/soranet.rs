@@ -695,8 +695,8 @@ impl RelayDirectory {
     /// Returns an error if the payload cannot be decoded, if certificate verification fails,
     /// or when issuer metadata is inconsistent.
     pub fn from_guard_directory_bytes(bytes: &[u8]) -> Result<Self, GuardDirectoryError> {
-        let snapshot: GuardDirectorySnapshotV2 =
-            decode_from_bytes(bytes).map_err(|source| GuardDirectoryError::Decode { source })?;
+        let snapshot = GuardDirectorySnapshotV2::from_bytes(bytes)
+            .map_err(|source| GuardDirectoryError::Decode { source })?;
         Self::from_guard_directory_snapshot(snapshot)
     }
 

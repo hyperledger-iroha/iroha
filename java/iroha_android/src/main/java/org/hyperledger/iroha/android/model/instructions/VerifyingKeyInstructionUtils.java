@@ -67,8 +67,15 @@ final class VerifyingKeyInstructionUtils {
     builder.setMetadataUriCid(optional(arguments, "record.metadata_uri_cid"));
     builder.setVkBytesCid(optional(arguments, "record.vk_bytes_cid"));
     builder.setActivationHeight(parseOptionalLong(arguments, "record.activation_height"));
-    builder.setDeprecationHeight(parseOptionalLong(arguments, "record.deprecation_height"));
-    builder.setWithdrawHeight(parseOptionalLong(arguments, "record.withdraw_height"));
+    final Long withdrawHeight = parseOptionalLong(arguments, "record.withdraw_height");
+    final Long deprecationHeight = parseOptionalLong(arguments, "record.deprecation_height");
+    if (withdrawHeight != null
+        && deprecationHeight != null
+        && !withdrawHeight.equals(deprecationHeight)) {
+      throw new IllegalArgumentException(
+          "record.deprecation_height must match record.withdraw_height when both are set");
+    }
+    builder.setWithdrawHeight(withdrawHeight != null ? withdrawHeight : deprecationHeight);
     final String statusValue = optional(arguments, "record.status");
     if (statusValue != null) {
       builder.setStatus(VerifyingKeyStatus.parse(statusValue));
@@ -76,4 +83,3 @@ final class VerifyingKeyInstructionUtils {
     return builder.build(backend);
   }
 }
-

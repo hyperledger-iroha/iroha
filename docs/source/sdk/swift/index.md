@@ -889,6 +889,9 @@ print("Compressed", formats.compressed)
 print("Warning", formats.compressedWarning)
 ```
 
+Account address domain labels are canonicalized to lowercase ASCII and must not contain whitespace
+or reserved characters (`@`, `#`, `$`). Use canonical ASCII/punycode labels when working with IDNs.
+
 Show IH58 as the default copy/share target (and QR payload), only expose the compressed `snx1…`
 form alongside the warning, and highlight when the implicit `default` domain is in use. This keeps
 Swift parity with the Android/JS samples and prevents IME corruption of half-width kana.

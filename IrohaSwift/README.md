@@ -144,6 +144,9 @@ print(try address.toIH58(networkPrefix: 753))
 print(try address.toCompressedSora())
 ```
 
+Account address domain labels are canonicalized to lowercase ASCII and must not contain whitespace
+or reserved characters (`@`, `#`, `$`). Use canonical ASCII/punycode labels when working with IDNs.
+
 ### Pipeline submission defaults
 
 `IrohaSDK` posts signed payloads to `/v1/pipeline/transactions` and polls

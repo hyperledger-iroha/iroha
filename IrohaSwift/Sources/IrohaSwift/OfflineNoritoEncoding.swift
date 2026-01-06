@@ -360,6 +360,10 @@ struct OfflineAssetIdParts: Equatable {
     let definitionName: String
     let definitionDomain: String
 
+    private static func containsReservedIdCharacters(_ value: String) -> Bool {
+        value.contains("@") || value.contains("#") || value.contains("$")
+    }
+
     static func parse(_ raw: String) throws -> OfflineAssetIdParts {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let hashIndex = trimmed.lastIndex(of: "#") else {
@@ -370,26 +374,43 @@ struct OfflineAssetIdParts: Equatable {
         guard !definitionCandidate.isEmpty, !accountId.isEmpty else {
             throw OfflineNoritoError.invalidAssetId(raw)
         }
-        guard let domainIndex = accountId.lastIndex(of: "@") else {
+        if definitionCandidate.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+            throw OfflineNoritoError.invalidAssetId(raw)
+        }
+        if accountId.rangeOfCharacter(from: .whitespacesAndNewlines) != nil || accountId.contains("#") {
             throw OfflineNoritoError.invalidAccountId(accountId)
         }
+        guard let domainIndex = accountId.firstIndex(of: "@") else {
+            throw OfflineNoritoError.invalidAccountId(accountId)
+        }
+        if accountId[accountId.index(after: domainIndex)...].contains("@") {
+            throw OfflineNoritoError.invalidAccountId(accountId)
+        }
+        let accountName = String(accountId[..<domainIndex])
         let accountDomain = String(accountId[accountId.index(after: domainIndex)...])
-        guard !accountDomain.isEmpty else {
+        guard !accountName.isEmpty,
+              !accountDomain.isEmpty,
+              !containsReservedIdCharacters(accountName),
+              !containsReservedIdCharacters(accountDomain) else {
             throw OfflineNoritoError.invalidAccountId(accountId)
         }
         if definitionCandidate.hasSuffix("#") {
             let name = String(definitionCandidate.dropLast())
-            guard !name.isEmpty else {
+            guard !name.isEmpty, !containsReservedIdCharacters(name) else {
                 throw OfflineNoritoError.invalidAssetId(raw)
             }
             return OfflineAssetIdParts(accountId: accountId, definitionName: name, definitionDomain: accountDomain)
         }
-        guard let defIndex = definitionCandidate.lastIndex(of: "#") else {
+        let parts = definitionCandidate.split(separator: "#", omittingEmptySubsequences: false)
+        guard parts.count == 2 else {
             throw OfflineNoritoError.invalidAssetId(raw)
         }
-        let name = String(definitionCandidate[..<defIndex])
-        let domain = String(definitionCandidate[definitionCandidate.index(after: defIndex)...])
-        guard !name.isEmpty, !domain.isEmpty else {
+        let name = String(parts[0])
+        let domain = String(parts[1])
+        guard !name.isEmpty,
+              !domain.isEmpty,
+              !containsReservedIdCharacters(name),
+              !containsReservedIdCharacters(domain) else {
             throw OfflineNoritoError.invalidAssetId(raw)
         }
         return OfflineAssetIdParts(accountId: accountId, definitionName: name, definitionDomain: domain)

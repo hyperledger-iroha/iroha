@@ -52,6 +52,9 @@ certificate указывает на другой block hash.
 inclusion proofs пока не возвращаются. Клиенты все еще могут проверить тот же hash через
 payload commitment сегодня.
 
+MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
+from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+
 API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
 
 Верификация аналогична базовому proof: пересчитать `block_hash` из header, проверить подписи

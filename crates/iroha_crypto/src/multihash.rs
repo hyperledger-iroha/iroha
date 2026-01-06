@@ -48,6 +48,10 @@ pub fn multihash_to_hex_string(bytes: &[u8]) -> Result<String, ParseError> {
     // Format as: <varint fn-code lower><varint len lower><payload upper>
     // Length may span multiple varint bytes for larger keys (e.g., ML‑DSA).
     let (digest_function, payload) = decode_multihash(bytes)?;
+    Ok(format_multihash_hex(digest_function, &payload))
+}
+
+fn format_multihash_hex(digest_function: DigestFunction, payload: &[u8]) -> String {
     let df_varint: varint::VarUint = digest_function.into();
     let df_bytes: Vec<u8> = df_varint.into();
     let len_varint: varint::VarUint = (payload.len() as u64).into();
@@ -57,7 +61,7 @@ pub fn multihash_to_hex_string(bytes: &[u8]) -> Result<String, ParseError> {
     let dig_size = hex::encode(len_bytes);
     let key = hex::encode_upper(payload);
 
-    Ok(format!("{fn_code}{dig_size}{key}"))
+    format!("{fn_code}{dig_size}{key}")
 }
 
 /// Encode a public key into an algorithm-prefixed multihash hex string, e.g. "ed25519:...".
@@ -90,13 +94,15 @@ pub fn encode_private_key_prefixed(
 
 /// Decode a public key from either a bare multihash hex string or an
 /// algorithm-prefixed form like "ed25519:<multihash-hex>".
+/// Input must be canonical multihash hex (varint bytes lowercase, payload uppercase);
+/// `0x` prefixes are rejected.
 #[cfg(not(feature = "ffi_import"))]
 pub fn decode_public_key_str(s: &str) -> Result<(Algorithm, Vec<u8>), ParseError> {
     if let Some((alg_str, rest)) = s.split_once(':') {
         let algorithm = alg_str
             .parse::<Algorithm>()
             .map_err(|_| ParseError(format!("Unknown algorithm prefix: {alg_str}")))?;
-        let bytes = hex_decode(rest)?;
+        let bytes = decode_multihash_hex_bytes(rest)?;
         let (alg_from_mh, payload) = decode_public_key(&bytes)?;
         if alg_from_mh != algorithm {
             return Err(ParseError(
@@ -105,20 +111,22 @@ pub fn decode_public_key_str(s: &str) -> Result<(Algorithm, Vec<u8>), ParseError
         }
         Ok((algorithm, payload))
     } else {
-        let bytes = hex_decode(s)?;
+        let bytes = decode_multihash_hex_bytes(s)?;
         decode_public_key(&bytes)
     }
 }
 
 /// Decode a private key from either a bare multihash hex string or an
 /// algorithm-prefixed form like "ml-dsa:<multihash-hex>".
+/// Input must be canonical multihash hex (varint bytes lowercase, payload uppercase);
+/// `0x` prefixes are rejected.
 #[cfg(not(feature = "ffi_import"))]
 pub fn decode_private_key_str(s: &str) -> Result<(Algorithm, Vec<u8>), ParseError> {
     if let Some((alg_str, rest)) = s.split_once(':') {
         let algorithm = alg_str
             .parse::<Algorithm>()
             .map_err(|_| ParseError(format!("Unknown algorithm prefix: {alg_str}")))?;
-        let bytes = hex_decode(rest)?;
+        let bytes = decode_multihash_hex_bytes(rest)?;
         let (alg_from_mh, payload) = decode_private_key(&bytes)?;
         if alg_from_mh != algorithm {
             return Err(ParseError(
@@ -127,9 +135,20 @@ pub fn decode_private_key_str(s: &str) -> Result<(Algorithm, Vec<u8>), ParseErro
         }
         Ok((algorithm, payload))
     } else {
-        let bytes = hex_decode(s)?;
+        let bytes = decode_multihash_hex_bytes(s)?;
         decode_private_key(&bytes)
     }
+}
+
+#[cfg(not(feature = "ffi_import"))]
+fn decode_multihash_hex_bytes(s: &str) -> Result<Vec<u8>, ParseError> {
+    let bytes = hex_decode(s)?;
+    let (digest_function, payload) = decode_multihash(&bytes)?;
+    let canonical = format_multihash_hex(digest_function, &payload);
+    if s != canonical {
+        return Err(ParseError("Non-canonical multihash hex".to_string()));
+    }
+    Ok(bytes)
 }
 
 /// Value of byte code corresponding to algorithm.
@@ -431,6 +450,39 @@ mod tests {
     fn multihash_to_hex_string_rejects_truncated_input() {
         assert!(multihash_to_hex_string(&[]).is_err());
         assert!(multihash_to_hex_string(&[0x01]).is_err());
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
+    fn decode_public_key_str_rejects_non_canonical_hex() {
+        let canonical =
+            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
+        let lower = canonical.to_lowercase();
+        assert!(decode_public_key_str(&lower).is_err());
+        let upper = canonical.to_uppercase();
+        assert!(decode_public_key_str(&upper).is_err());
+        let prefixed = format!("0x{canonical}");
+        assert!(decode_public_key_str(&prefixed).is_err());
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
+    fn decode_private_key_str_rejects_non_canonical_hex() {
+        let canonical =
+            "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F";
+        let lower = canonical.to_lowercase();
+        assert!(decode_private_key_str(&lower).is_err());
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
+    fn decode_public_key_str_rejects_non_canonical_varint() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&[0xed, 0x01]);
+        bytes.extend_from_slice(&[0xa0, 0x00]);
+        bytes.extend_from_slice(&[0u8; 32]);
+        let input = hex::encode(bytes);
+        assert!(decode_public_key_str(&input).is_err());
     }
 
     #[test]

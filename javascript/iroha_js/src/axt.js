@@ -167,6 +167,20 @@ function resolveAxtNative() {
  */
 export function normalizeAxtRejectContext(input, context = "axt reject context") {
   const record = ensureObject(input ?? {}, context);
+  const camelKeys = [
+    "dataspaceId",
+    "targetLane",
+    "snapshotVersion",
+    "nextMinHandleEra",
+    "nextMinSubNonce",
+  ];
+  for (const key of camelKeys) {
+    if (record[key] !== undefined) {
+      throw new TypeError(
+        `${context}.dataspace must use snake_case fields (dataspace, target_lane, snapshot_version, next_min_handle_era, next_min_sub_nonce)`,
+      );
+    }
+  }
   const reasonValue = record.reason ?? "unknown";
   const reason = typeof reasonValue === "string" ? reasonValue : String(reasonValue);
   const dataspaceRaw = record.dataspace ?? null;

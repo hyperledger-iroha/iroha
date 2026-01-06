@@ -9733,6 +9733,116 @@ pub mod isi {
         }
 
         #[test]
+        fn register_domain_duplicate_does_not_persist_endorsement() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.nexus.enabled = true;
+            stx.nexus.endorsement.quorum = 1;
+            let kp = KeyPair::random();
+            stx.nexus
+                .endorsement
+                .committee_keys
+                .push(kp.public_key().to_string());
+            let endorsement_key_id =
+                ConsensusKeyId::new(ConsensusKeyRole::Endorsement, "committee-key");
+            let endorsement_record = ConsensusKeyRecord {
+                id: endorsement_key_id.clone(),
+                public_key: kp.public_key().clone(),
+                activation_height: stx.block_height(),
+                expiry_height: None,
+                hsm: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            stx.world
+                .consensus_keys
+                .insert(endorsement_key_id.clone(), endorsement_record);
+            stx.world
+                .consensus_keys_by_pk
+                .insert(kp.public_key().to_string(), vec![endorsement_key_id]);
+
+            let domain_id: DomainId = "endorsed".parse().expect("domain id parses");
+            let canonical_label =
+                name::canonicalize_domain_label(domain_id.name.as_ref()).expect("canonical");
+            let canonical_id: DomainId = canonical_label.parse().expect("canonical domain");
+            let statement_hash = Hash::new(canonical_id.to_string().as_bytes());
+
+            let mut endorsement = DomainEndorsement {
+                version: iroha_data_model::nexus::DOMAIN_ENDORSEMENT_VERSION_V1,
+                domain_id: canonical_id.clone(),
+                committee_id: "default".into(),
+                statement_hash,
+                issued_at_height: stx.block_height(),
+                expires_at_height: stx.block_height() + 10,
+                scope: DomainEndorsementScope::default(),
+                signatures: Vec::new(),
+                metadata: Metadata::default(),
+            };
+            let msg_hash = endorsement.body_hash();
+            endorsement.signatures.push(DomainEndorsementSignature {
+                signer: kp.public_key().clone(),
+                signature: Signature::new(kp.private_key(), msg_hash.as_ref()),
+            });
+            let key: iroha_data_model::name::Name = "endorsement".parse().expect("name");
+            let mut domain = Domain::new(domain_id.clone());
+            domain.metadata.insert(key.clone(), Json::new(endorsement));
+
+            Register::domain(domain)
+                .execute(&ALICE_ID, &mut stx)
+                .expect("initial register should succeed");
+
+            let mut endorsement_dupe = DomainEndorsement {
+                version: iroha_data_model::nexus::DOMAIN_ENDORSEMENT_VERSION_V1,
+                domain_id: canonical_id.clone(),
+                committee_id: "default".into(),
+                statement_hash,
+                issued_at_height: stx.block_height(),
+                expires_at_height: stx.block_height() + 20,
+                scope: DomainEndorsementScope::default(),
+                signatures: Vec::new(),
+                metadata: Metadata::default(),
+            };
+            let msg_hash_dupe = endorsement_dupe.body_hash();
+            endorsement_dupe.signatures.push(DomainEndorsementSignature {
+                signer: kp.public_key().clone(),
+                signature: Signature::new(kp.private_key(), msg_hash_dupe.as_ref()),
+            });
+            let mut dup_domain = Domain::new(domain_id.clone());
+            dup_domain
+                .metadata
+                .insert(key, Json::new(endorsement_dupe));
+
+            let err = Register::domain(dup_domain)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("duplicate domain should be rejected");
+            assert!(matches!(err, InstructionExecutionError::Repetition(_)));
+
+            assert!(
+                stx.world.domain_endorsements.get(&msg_hash).is_some(),
+                "initial endorsement should remain recorded"
+            );
+            assert!(
+                stx.world.domain_endorsements.get(&msg_hash_dupe).is_none(),
+                "duplicate attempt must not persist endorsement"
+            );
+            let hashes = stx
+                .world
+                .domain_endorsements_by_domain
+                .get(&canonical_id)
+                .cloned()
+                .unwrap_or_default();
+            assert!(
+                !hashes.contains(&msg_hash_dupe),
+                "duplicate endorsement hash must not be indexed"
+            );
+        }
+
+        #[test]
         fn register_domain_rejects_expired_endorsement() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();

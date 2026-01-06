@@ -62,6 +62,8 @@ AccountId {
 }
 
 Display / Parse: "<signatory multihash>@<domain name>"
+Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
+and `0x` prefixes are not accepted.
 
 This text form is now treated as an **account alias**: a routing convenience
 that points to the canonical [`AccountAddress`](#2-canonical-address-codecs).

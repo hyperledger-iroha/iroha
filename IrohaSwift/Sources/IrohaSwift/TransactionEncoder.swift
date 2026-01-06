@@ -21,11 +21,11 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
         case let .emptyAccountId(field):
             return "Account id for \(field) must not be empty."
         case let .malformedAccountId(field, value):
-            return "Account id for \(field) must include a name and domain separated by '@' with no whitespace (received '\(value)')."
+            return "Account id for \(field) must include a name and domain separated by '@' with no whitespace or reserved characters (@, #, $) in either component (received '\(value)')."
         case .emptyAssetDefinitionId:
             return "Asset definition id must not be empty."
         case let .malformedAssetDefinitionId(value):
-            return "Asset definition id must follow 'asset#domain' with no whitespace (received '\(value)')."
+            return "Asset definition id must follow 'asset#domain' with no whitespace or reserved characters (@, #, $) in either component (received '\(value)')."
         case let .emptyDomainId(field):
             return "Domain id for \(field) must not be empty."
         case let .malformedDomainId(field, value):
@@ -33,7 +33,7 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
         case .emptyAssetId:
             return "Asset id must not be empty."
         case let .malformedAssetId(value):
-            return "Asset id must follow 'asset#domain#account@domain' (or 'asset##account@domain' when the asset and account domains match) with no whitespace (received '\(value)')."
+            return "Asset id must follow 'asset#domain#account@domain' (or 'asset##account@domain' when the asset and account domains match) with no whitespace or reserved characters (@, #, $) in the asset name/domain components (received '\(value)')."
         }
     }
 }
@@ -49,6 +49,10 @@ struct TransactionInputValidator {
         let authorityId: String
         let assetDefinitionId: String?
         let accountIds: [String: String]
+    }
+
+    private static func containsReservedIdCharacters(_ value: String) -> Bool {
+        value.contains("@") || value.contains("#") || value.contains("$")
     }
 
     static func validate(chainId: String,
@@ -93,6 +97,10 @@ struct TransactionInputValidator {
               !components[1].isEmpty else {
             throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
         }
+        if containsReservedIdCharacters(String(components[0]))
+            || containsReservedIdCharacters(String(components[1])) {
+            throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
+        }
         return trimmed
     }
 
@@ -108,6 +116,10 @@ struct TransactionInputValidator {
         guard components.count == 2,
               !components[0].isEmpty,
               !components[1].isEmpty else {
+            throw TransactionInputError.malformedAssetDefinitionId(trimmed)
+        }
+        if containsReservedIdCharacters(String(components[0]))
+            || containsReservedIdCharacters(String(components[1])) {
             throw TransactionInputError.malformedAssetDefinitionId(trimmed)
         }
         return trimmed
@@ -143,6 +155,9 @@ struct TransactionInputValidator {
         let definitionDomain = parts[1]
         let ownerAccount = String(parts[2])
         guard !assetName.isEmpty else {
+            throw TransactionInputError.malformedAssetId(trimmed)
+        }
+        if containsReservedIdCharacters(String(assetName)) {
             throw TransactionInputError.malformedAssetId(trimmed)
         }
         if !definitionDomain.isEmpty {

@@ -4,7 +4,7 @@ This roadmap enumerates the outstanding efforts required to ship the optional
 NPoS Sumeragi mode and keep the broader Nexus transition on track. For every task listed here we are preparing the first public release, so teams can design and implement with a clean slate. Completed
 items continue to live in `status.md`; only tasks that still need engineering
 work appear here.
-Latest sync: ignore non-extending pending blocks for proposal/view-change gating (localnet hang fix); reject zero-chunk RBC INITs and add empty-payload hydration guardrails; WSV mock unregister permission cleanup; WSV domain unregister cleanup for endorsement records/policies; merge QC view lane-tip wiring, VRF epoch snapshot persistence for NPoS scheduling/telemetry, and censorship evidence attribution; parallelize localnet status polling to avoid serial Torii stalls; SoraFS proof token decode invariants hardened (empty entries/expiry ordering); integration-test re-runs remain open (see `status.md`).
+Latest sync: tighten SoraNet multihash canonicalization and decoder invariants for tokens/tickets/directory snapshots; docs/tests updated (see `status.md` for details).
 
 The repository now serves two release lines:
 - **Iroha 2** — the self-hosted deployment track for organisations running

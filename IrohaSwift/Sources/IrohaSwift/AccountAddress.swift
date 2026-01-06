@@ -134,7 +134,7 @@ public struct AccountAddress {
 
     public static func fromAccount(domain: String, publicKey: Data, algorithm: String = "ed25519") throws -> AccountAddress {
         let header = try AddressHeader.new(version: 0, classId: .singleKey, normVersion: 1)
-        let selector = DomainSelector.from(domain: domain)
+        let selector = try DomainSelector.from(domain: domain)
         let controller = try ControllerPayload.singleKey(publicKey: publicKey, algorithm: algorithm)
         return AccountAddress(header: header, domain: selector, controller: controller)
     }
@@ -400,11 +400,37 @@ private enum DomainSelector {
     case local12(Data)
     case global(UInt32)
 
-    static func from(domain: String) -> DomainSelector {
-        if domain.lowercased() == AccountAddress.defaultDomainName {
+    private static func canonicalizeLabel(_ raw: String) throws -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw AccountAddressError.invalidDomainLabel(raw)
+        }
+        if trimmed != raw || trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+            throw AccountAddressError.invalidDomainLabel(raw)
+        }
+        if trimmed.contains("@") || trimmed.contains("#") || trimmed.contains("$") {
+            throw AccountAddressError.invalidDomainLabel(raw)
+        }
+        let lowered = trimmed.lowercased()
+        for scalar in lowered.unicodeScalars {
+            guard scalar.isASCII else {
+                throw AccountAddressError.invalidDomainLabel(raw)
+            }
+            let value = scalar.value
+            let isAlphaNum = (value >= 48 && value <= 57) || (value >= 97 && value <= 122)
+            if !isAlphaNum && value != 45 && value != 95 && value != 46 {
+                throw AccountAddressError.invalidDomainLabel(raw)
+            }
+        }
+        return lowered
+    }
+
+    static func from(domain: String) throws -> DomainSelector {
+        let canonical = try canonicalizeLabel(domain)
+        if canonical == AccountAddress.defaultDomainName {
             return .default
         }
-        return .local12(computeLocalDigest(label: domain))
+        return .local12(computeLocalDigest(label: canonical))
     }
 
     func encode(into buffer: inout Data) {

@@ -132,6 +132,21 @@ final class AccountAddressTests: XCTestCase {
         XCTAssertEqual(try parsedHex.canonicalBytes(), try address.canonicalBytes())
     }
 
+    func testAccountAddressCanonicalizesDomainCase() throws {
+        let key = Data(repeating: 0x11, count: 32)
+        let lower = try AccountAddress.fromAccount(domain: "wonderland", publicKey: key)
+        let upper = try AccountAddress.fromAccount(domain: "Wonderland", publicKey: key)
+        XCTAssertEqual(try lower.canonicalBytes(), try upper.canonicalBytes())
+    }
+
+    func testAccountAddressRejectsInvalidDomainLabel() {
+        XCTAssertThrowsError(
+            try AccountAddress.fromAccount(domain: "bad label", publicKey: Data(repeating: 0x22, count: 32))
+        ) { error in
+            XCTAssertEqual(error as? AccountAddressError, .invalidDomainLabel("bad label"))
+        }
+    }
+
     func testIh58PrefixMismatch() throws {
         let address = try AccountAddress.fromAccount(domain: "default", publicKey: Data(repeating: 1, count: 32))
         let ih58 = try address.toIH58(networkPrefix: 5)
