@@ -4,7 +4,7 @@ import { test as baseTest } from "node:test";
 import { deriveGatewayHosts } from "../src/soradns.js";
 import { makeNativeTest } from "./helpers/native.js";
 
-const test = makeNativeTest(baseTest);
+const test = makeNativeTest(baseTest, { require: "soradnsDeriveGatewayHosts" });
 
 test("deriveGatewayHosts returns deterministic gateway hosts", () => {
   const derived = deriveGatewayHosts("docs.sora");

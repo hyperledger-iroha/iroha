@@ -483,6 +483,12 @@ private enum ControllerPayload {
 
     static func singleKey(publicKey: Data, algorithm: String) throws -> ControllerPayload {
         let curve = try CurveId.from(algorithm: algorithm)
+        guard !publicKey.isEmpty else {
+            throw AccountAddressError.invalidPublicKey
+        }
+        if let expected = curve.expectedPublicKeyLength, publicKey.count != expected {
+            throw AccountAddressError.invalidPublicKey
+        }
         guard publicKey.count <= 0xFF else {
             throw AccountAddressError.keyPayloadTooLong(publicKey.count)
         }
@@ -756,6 +762,19 @@ private enum CurveId: UInt8 {
         #endif
         default:
             throw AccountAddressError.unsupportedAlgorithm(algorithm)
+        }
+    }
+
+    var expectedPublicKeyLength: Int? {
+        switch self {
+        case .ed25519:
+            return 32
+        #if IROHASWIFT_ENABLE_SECP256K1
+        case .secp256k1:
+            return 33
+        #endif
+        default:
+            return nil
         }
     }
 }

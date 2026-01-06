@@ -2,7 +2,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Debug,
-    num::{NonZeroU32, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU64},
     sync::Arc,
     time::Duration,
 };
@@ -118,14 +118,14 @@ mod handle_tests {
 
 #[cfg(test)]
 mod seen_blocks_tests {
-    use std::{collections::BTreeSet, num::NonZeroUsize};
+    use std::{collections::BTreeSet, num::NonZeroU64};
 
     use iroha_crypto::{Hash, HashOf};
 
     use super::*;
 
-    fn entry(height: usize, byte: u8) -> (NonZeroUsize, HashOf<BlockHeader>) {
-        let height = NonZeroUsize::new(height).expect("height must be non-zero");
+    fn entry(height: u64, byte: u8) -> (NonZeroU64, HashOf<BlockHeader>) {
+        let height = NonZeroU64::new(height).expect("height must be non-zero");
         let hash = HashOf::from_untyped_unchecked(Hash::prehashed([byte; Hash::LENGTH]));
         (height, hash)
     }
@@ -162,8 +162,8 @@ pub struct BlockSynchronizer {
     gossip_size: NonZeroU32,
     network: IrohaNetwork,
     state: Arc<State>,
-    seen_blocks: BTreeSet<(NonZeroUsize, HashOf<BlockHeader>)>,
-    latest_height: usize,
+    seen_blocks: BTreeSet<(NonZeroU64, HashOf<BlockHeader>)>,
+    latest_height: u64,
     fallback_consensus_mode: ConsensusMode,
 }
 
@@ -205,9 +205,9 @@ impl BlockSynchronizer {
     }
 
     fn prune_seen_blocks(
-        seen_blocks: &mut BTreeSet<(NonZeroUsize, HashOf<BlockHeader>)>,
-        now_height: usize,
-        previous_height: usize,
+        seen_blocks: &mut BTreeSet<(NonZeroU64, HashOf<BlockHeader>)>,
+        now_height: u64,
+        previous_height: u64,
     ) {
         if now_height < previous_height {
             // Height regression implies a rollback; drop seen blocks to allow refetch.
@@ -218,7 +218,13 @@ impl BlockSynchronizer {
 
     /// Sends requests for the latest blocks to a subset of online peers
     async fn request_block(&mut self) {
-        let now_height = self.state.view().height();
+        let now_height = match u64::try_from(self.state.view().height()) {
+            Ok(height) => height,
+            Err(_) => {
+                warn!("block sync: state height exceeds u64::MAX; saturating");
+                u64::MAX
+            }
+        };
 
         Self::prune_seen_blocks(&mut self.seen_blocks, now_height, self.latest_height);
         self.latest_height = now_height;
@@ -235,22 +241,8 @@ impl BlockSynchronizer {
                 self.state.view().world.peers().iter().cloned().collect();
             let mut rng = rand::rng();
             let gossip_size = usize::try_from(self.gossip_size.get()).unwrap_or(usize::MAX);
-            let stray_targets: Vec<_> = peers
-                .iter()
-                .filter(|peer| !world_peers.contains(*peer))
-                .cloned()
-                .collect();
-            let world_targets: Vec<_> = peers
-                .iter()
-                .filter(|peer| world_peers.contains(*peer))
-                .cloned()
-                .collect();
-            let mut targets = stray_targets.clone();
-            let remaining_budget = gossip_size.saturating_sub(targets.len());
-            if remaining_budget > 0 {
-                let sampled = sample_block_sync_targets(&world_targets, remaining_budget, &mut rng);
-                targets.extend(sampled);
-            }
+            let (targets, stray_targets) =
+                select_block_sync_targets(&peers, &world_peers, gossip_size, &mut rng);
             (targets, stray_targets, gossip_size, world_peers.len())
         };
         if targets.is_empty() {
@@ -508,6 +500,41 @@ fn sample_block_sync_targets(
     shuffled
 }
 
+fn select_block_sync_targets(
+    peers: &[PeerId],
+    world_peers: &BTreeSet<PeerId>,
+    gossip_size: usize,
+    rng: &mut impl rand::Rng,
+) -> (Vec<PeerId>, Vec<PeerId>) {
+    if peers.is_empty() || gossip_size == 0 {
+        return (Vec::new(), Vec::new());
+    }
+
+    let mut stray_targets: Vec<_> = peers
+        .iter()
+        .filter(|peer| !world_peers.contains(*peer))
+        .cloned()
+        .collect();
+    if stray_targets.len() > gossip_size {
+        stray_targets.shuffle(rng);
+        stray_targets.truncate(gossip_size);
+    }
+
+    let mut targets = stray_targets.clone();
+    let remaining_budget = gossip_size.saturating_sub(targets.len());
+    if remaining_budget > 0 {
+        let world_targets: Vec<_> = peers
+            .iter()
+            .filter(|peer| world_peers.contains(*peer))
+            .cloned()
+            .collect();
+        let sampled = sample_block_sync_targets(&world_targets, remaining_budget, rng);
+        targets.extend(sampled);
+    }
+
+    (targets, stray_targets)
+}
+
 #[cfg(test)]
 mod sample_targets_tests {
     use rand::{SeedableRng, rngs::StdRng};
@@ -545,6 +572,52 @@ mod sample_targets_tests {
         for peer in peers {
             assert!(sample.contains(&peer));
         }
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use rand::{SeedableRng, rngs::StdRng};
+
+    use super::*;
+
+    fn peers(count: usize) -> Vec<PeerId> {
+        (0..count)
+            .map(|_| {
+                let (pk, _) = iroha_crypto::KeyPair::random().into_parts();
+                PeerId::new(pk)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn caps_stray_targets_to_gossip_size() {
+        let all_peers = peers(5);
+        let world_peers = BTreeSet::new();
+        let mut rng = StdRng::seed_from_u64(0xDEAD_BEEF);
+
+        let (targets, stray) = select_block_sync_targets(&all_peers, &world_peers, 3, &mut rng);
+        assert_eq!(targets.len(), 3);
+        assert_eq!(stray.len(), 3);
+        for peer in &targets {
+            assert!(all_peers.contains(peer));
+        }
+    }
+
+    #[test]
+    fn fills_remaining_budget_from_world_peers() {
+        let all_peers = peers(4);
+        let world_peers: BTreeSet<_> = all_peers.iter().take(3).cloned().collect();
+        let mut rng = StdRng::seed_from_u64(0xC0FF_EE);
+
+        let (targets, stray) = select_block_sync_targets(&all_peers, &world_peers, 3, &mut rng);
+        assert_eq!(stray.len(), 1);
+        assert_eq!(targets.len(), 3);
+        assert!(targets.iter().any(|peer| !world_peers.contains(peer)));
+        assert_eq!(
+            targets.iter().filter(|peer| world_peers.contains(*peer)).count(),
+            2
+        );
     }
 }
 
@@ -1178,6 +1251,29 @@ pub mod message {
         pub rosters: Vec<RosterMetadata>,
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ShareBlocksLengthError {
+        /// Number of blocks does not match number of QCs.
+        QcLengthMismatch,
+        /// Number of blocks does not match number of roster entries.
+        RosterLengthMismatch,
+    }
+
+    /// Ensure the block, QC, and roster vectors are aligned for a block sync batch.
+    fn validate_share_blocks_lengths(
+        blocks_len: usize,
+        qcs_len: usize,
+        rosters_len: usize,
+    ) -> Result<(), ShareBlocksLengthError> {
+        if blocks_len != qcs_len {
+            return Err(ShareBlocksLengthError::QcLengthMismatch);
+        }
+        if blocks_len != rosters_len {
+            return Err(ShareBlocksLengthError::RosterLengthMismatch);
+        }
+        Ok(())
+    }
+
     impl ShareBlocks {
         /// Construct [`ShareBlocks`].
         pub const fn new(
@@ -1638,6 +1734,18 @@ pub mod message {
                         .zip(rosters.iter())
                         .map(|(block, roster)| (block.hash(), roster.clone()))
                         .collect();
+                    if let Err(err) =
+                        validate_share_blocks_lengths(blocks.len(), qcs.len(), rosters.len())
+                    {
+                        warn!(
+                            error = ?err,
+                            blocks = blocks.len(),
+                            qcs = qcs.len(),
+                            rosters = rosters.len(),
+                            "rejecting block sync batch: mismatched block/QC/roster lengths"
+                        );
+                        return;
+                    }
                     let paired: Vec<_> = blocks.iter().cloned().zip(qcs.iter().cloned()).collect();
                     let (filtered_blocks, dropped) = {
                         let state_view = block_sync.state.view();
@@ -1662,10 +1770,8 @@ pub mod message {
 
                     for (block, incoming_qc) in filtered_blocks {
                         let block_height = block.header().height().get();
-                        let height = usize::try_from(block_height)
-                            .expect("INTERNAL BUG: block height exceeds usize::MAX");
                         let block_hash = block.hash();
-                        if let Some(nz_height) = NonZeroUsize::new(height) {
+                        if let Some(nz_height) = NonZeroU64::new(block_height) {
                             block_sync.seen_blocks.insert((nz_height, block_hash));
                         } else {
                             warn!(
@@ -1844,17 +1950,24 @@ pub mod message {
             }
         }
 
+        impl From<ShareBlocksLengthError> for ShareBlocksError {
+            fn from(value: ShareBlocksLengthError) -> Self {
+                match value {
+                    ShareBlocksLengthError::QcLengthMismatch => ShareBlocksError::QcLengthMismatch,
+                    ShareBlocksLengthError::RosterLengthMismatch => {
+                        ShareBlocksError::RosterLengthMismatch
+                    }
+                }
+            }
+        }
+
         impl ShareBlocksCandidate {
             fn validate(self) -> Result<ShareBlocks, ShareBlocksError> {
                 if self.blocks.is_empty() {
                     return Err(ShareBlocksError::Empty);
                 }
-                if self.blocks.len() != self.qcs.len() {
-                    return Err(ShareBlocksError::QcLengthMismatch);
-                }
-                if self.blocks.len() != self.rosters.len() {
-                    return Err(ShareBlocksError::RosterLengthMismatch);
-                }
+                validate_share_blocks_lengths(self.blocks.len(), self.qcs.len(), self.rosters.len())
+                    .map_err(ShareBlocksError::from)?;
 
                 self.blocks.windows(2).try_for_each(|wnd| {
                     if wnd[1].header().height().get() != wnd[0].header().height().get() + 1 {
@@ -1988,6 +2101,27 @@ pub mod message {
                 assert!(matches!(
                     candidate.validate(),
                     Err(ShareBlocksError::RosterLengthMismatch)
+                ))
+            }
+
+            #[test]
+            fn candidate_qc_length_mismatch() {
+                let (leader_public_key, leader_private_key) = KeyPair::random().into_parts();
+                let leader_peer_id = PeerId::new(leader_public_key);
+                let block0: SignedBlock = ValidBlock::new_dummy(&leader_private_key).into();
+                let candidate = ShareBlocksCandidate {
+                    blocks: vec![block0],
+                    peer: leader_peer_id,
+                    qcs: Vec::new(),
+                    rosters: vec![RosterMetadata {
+                        commit_certificate: None,
+                        validator_checkpoint: None,
+                        stake_snapshot: None,
+                    }],
+                };
+                assert!(matches!(
+                    candidate.validate(),
+                    Err(ShareBlocksError::QcLengthMismatch)
                 ))
             }
 

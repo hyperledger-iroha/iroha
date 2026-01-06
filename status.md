@@ -1,10 +1,28 @@
 # Status
 
 ## Latest Updates
+- JS SDK: gate native-only tests by required native capabilities (Norito/SM2/SoraDNS) and add helper coverage.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Java/Android SDK: preserve baseUri path segments when building UAID request URLs; add regression coverage.
+- Tests: not run (not requested).
+- Swift SDK: avoid retry-delay modulo overflow when max backoff is UInt64.max and add regression coverage.
+- Tests: `swift test --filter ConnectRetryPolicyTests` (from `IrohaSwift`).
+- Swift SDK: clamp Connect flow-control token grants on overflow, reject offline counter wraparound, and add regression coverage.
+- Tests: `swift test --filter ConnectFlowControlTests` (from `IrohaSwift`); `swift test --filter OfflineCounterJournalTests` (from `IrohaSwift`).
+- Swift SDK: clamp Connect queue expiry timestamps on TTL overflow and add regression coverage.
+- Tests: `swift test --filter ConnectQueueJournalTests` (from `IrohaSwift`).
+- Core: harden block sync peer sampling (cap stray fanout, validate batch lengths, avoid height truncation), and invalidate bridge MMR cache on top-block rewrites; add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: ensure redaction failure telemetry records the originating signal id for pipeline-status emissions; add regression coverage.
+- Tests: not run (not requested).
 - Java/Android SDK: treat verifying key `record.deprecation_height` as an alias of `record.withdraw_height`, reject mismatches, and add regression coverage.
 - Tests: `JAVA_HOME=/Library/Java/JavaVirtualMachines/openjdk-21.jdk/Contents/Home GRADLE_USER_HOME=java/iroha_android/.gradle ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests,org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests java/iroha_android/gradlew -p java/iroha_android :core:test --stacktrace`.
 - JS SDK: accept hex Connect SIDs, restore camelCase request aliases across Torii helpers (connect admin, governance, SNS, SoraFS, DA, runtime upgrade, contracts), and normalize SoraFS pin-register responses; update Connect SID tests.
 - Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Swift SDK: validate non-empty/expected public key sizes when building account addresses, document the stricter key rules, and add regression tests for invalid keys.
+- Tests: `swift test --filter AccountAddressTests` (from `IrohaSwift`).
+- Swift SDK: avoid crashes on zero-count queue drains by surfacing a new ConnectQueueError; add regression coverage and error mapping tests.
+- Tests: `swift test --filter ConnectQueueJournalTests` (from `IrohaSwift`); `swift test --filter ConnectErrorTests` (from `IrohaSwift`).
 - Swift SDK: ensure account literal path encoding escapes `%` to prevent ambiguous path segments; add ToriiClient coverage for percent-escaped account literals.
 - Tests: `swift test --filter ToriiClientTests` (from `IrohaSwift`).
 - Swift SDK: canonicalize account-address domain labels to lowercase ASCII, reject invalid labels, and document the stricter domain rules; add regression coverage.

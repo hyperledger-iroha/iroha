@@ -146,6 +146,8 @@ print(try address.toCompressedSora())
 
 Account address domain labels are canonicalized to lowercase ASCII and must not contain whitespace
 or reserved characters (`@`, `#`, `$`). Use canonical ASCII/punycode labels when working with IDNs.
+Account addresses also validate public key lengths for known algorithms (ed25519 requires 32 bytes;
+secp256k1 requires 33 bytes when enabled), and reject empty keys.
 
 ### Pipeline submission defaults
 

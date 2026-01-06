@@ -213,14 +213,15 @@ public final class ConnectQueueJournal {
                        receivedAtMs: UInt64 = ConnectQueueJournal.timestampNow(),
                        ttlOverrideMs: UInt64? = nil) throws {
         let ttlMs = ttlOverrideMs ?? UInt64(configuration.retentionInterval * 1000)
-        let expiresAt = receivedAtMs &+ ttlMs
+        let (expiresAt, overflow) = receivedAtMs.addingReportingOverflow(ttlMs)
+        let expiresAtMs = overflow ? UInt64.max : expiresAt
         let digest = try ConnectQueueJournal.payloadHash(ciphertext)
         let record = try ConnectJournalRecord(direction: direction,
                                               sequence: sequence,
                                               payloadHash: digest,
                                               ciphertext: ciphertext,
                                               receivedAtMs: receivedAtMs,
-                                              expiresAtMs: expiresAt)
+                                              expiresAtMs: expiresAtMs)
         try file(for: direction).append(record: record, nowMs: receivedAtMs)
     }
 
@@ -235,7 +236,9 @@ public final class ConnectQueueJournal {
     public func popOldest(direction: ConnectDirection,
                           count: Int,
                           nowMs: UInt64 = ConnectQueueJournal.timestampNow()) throws -> [ConnectJournalRecord] {
-        precondition(count > 0, "count must be positive")
+        guard count > 0 else {
+            throw ConnectQueueError.invalidCount(count)
+        }
         return try file(for: direction).popOldest(count: count, nowMs: nowMs)
     }
 

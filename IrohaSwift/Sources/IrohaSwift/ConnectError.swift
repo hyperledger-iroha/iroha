@@ -228,6 +228,7 @@ extension ConnectCryptoError: ConnectErrorConvertible {
 
 /// Errors surfaced by the (upcoming) offline queue manager.
 public enum ConnectQueueError: Error, LocalizedError, Sendable {
+    case invalidCount(Int)
     case overflow(limit: Int)
     case expired
     case corrupted
@@ -236,6 +237,8 @@ public enum ConnectQueueError: Error, LocalizedError, Sendable {
 
     public var errorDescription: String? {
         switch self {
+        case let .invalidCount(count):
+            return "Connect queue pop count must be positive (got \(count))."
         case .overflow(let limit):
             return "Connect queue exceeded its limit (\(limit) frames)."
         case .expired:
@@ -255,6 +258,11 @@ public enum ConnectQueueError: Error, LocalizedError, Sendable {
 extension ConnectQueueError: ConnectErrorConvertible {
     public var connectError: ConnectError {
         switch self {
+        case .invalidCount:
+            return ConnectError(category: .internalError,
+                                code: "queue.invalid_count",
+                                message: errorDescription ?? "",
+                                underlying: self)
         case .overflow:
             return ConnectError(category: .queueOverflow,
                                 code: "queue.overflow",

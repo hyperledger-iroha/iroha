@@ -3,6 +3,7 @@ import Foundation
 public enum OfflineCounterError: Error, Equatable, Sendable {
     case summaryHashMismatch(certificateIdHex: String, expected: String, actual: String)
     case counterJump(certificateIdHex: String, scope: String, expected: UInt64, actual: UInt64)
+    case counterOverflow(certificateIdHex: String, scope: String)
     case invalidScope(String)
     case invalidSummaryHash(String)
 }
@@ -193,7 +194,11 @@ public final class OfflineCounterJournal {
                 previous = android[trimmedScope]
             }
             if let previous {
-                let expected = previous &+ 1
+                let (expected, overflow) = previous.addingReportingOverflow(1)
+                if overflow {
+                    throw OfflineCounterError.counterOverflow(certificateIdHex: normalizedCert,
+                                                              scope: trimmedScope)
+                }
                 if counter != expected {
                     throw OfflineCounterError.counterJump(certificateIdHex: normalizedCert,
                                                           scope: trimmedScope,

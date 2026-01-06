@@ -19,15 +19,17 @@ import {
   SM2_DEFAULT_DISTINGUISHED_ID,
   sm2FixtureFromSeed,
 } from "../src/crypto.js";
-import { hasNativeBinding, makeNativeTest } from "./helpers/native.js";
+import { hasSm2Binding, makeNativeTest, sm2RequiredMethods } from "./helpers/native.js";
 
 const SM2_DISTID = SM2_DEFAULT_DISTINGUISHED_ID;
 const SM2_SEED = Buffer.from("11".repeat(32), "hex");
 const SM2_MESSAGE = Buffer.from("iroha sm sdk fixture", "utf8");
-const SM2_FIXTURE = hasNativeBinding ? sm2FixtureFromSeed(SM2_DISTID, SM2_SEED, SM2_MESSAGE) : null;
+const SM2_FIXTURE = hasSm2Binding()
+  ? sm2FixtureFromSeed(SM2_DISTID, SM2_SEED, SM2_MESSAGE)
+  : null;
 
 const MESSAGE = Buffer.from("hyperledger iroha");
-const nativeTest = makeNativeTest(test);
+const nativeTest = makeNativeTest(test, { require: sm2RequiredMethods });
 
 test("generateKeyPair produces unique keys and valid lengths", () => {
   const kp1 = generateKeyPair();

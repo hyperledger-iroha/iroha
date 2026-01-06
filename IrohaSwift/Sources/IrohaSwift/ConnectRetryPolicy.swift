@@ -44,8 +44,11 @@ public struct ConnectRetryPolicy: Sendable {
     public func delayMillis(forAttempt attempt: UInt32, seed: Data) -> UInt64 {
         let cap = capMillis(forAttempt: attempt)
         guard cap > 0 else { return 0 }
-        let span = cap &+ 1
         let sample = ConnectRetryPolicy.deterministicSample(seed: seed, attempt: attempt)
+        if cap == UInt64.max {
+            return sample
+        }
+        let span = cap &+ 1
         return sample % span
     }
 
