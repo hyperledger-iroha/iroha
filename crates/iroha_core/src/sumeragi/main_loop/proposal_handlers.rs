@@ -211,10 +211,30 @@ impl Actor {
         if !self.ensure_highest_qc_extends_locked(&hint, highest_qc) {
             return Ok(());
         }
-        self.highest_qc = Some(highest_qc);
+        let should_update_highest = self.highest_qc.is_none_or(|current| {
+            let incoming = (highest_qc.height, highest_qc.view);
+            let existing = (current.height, current.view);
+            let promotes_phase = incoming == existing
+                && highest_qc.phase == crate::sumeragi::consensus::Phase::Commit
+                && current.phase != crate::sumeragi::consensus::Phase::Commit;
+            incoming > existing || promotes_phase
+        });
+        if should_update_highest {
+            self.highest_qc = Some(highest_qc);
+            super::status::set_highest_qc(highest_qc.height, highest_qc.view);
+            super::status::set_highest_qc_hash(highest_qc.subject_block_hash);
+        } else {
+            debug!(
+                height,
+                view,
+                highest_height = highest_qc.height,
+                highest_view = highest_qc.view,
+                current_height = self.highest_qc.map(|qc| qc.height),
+                current_view = self.highest_qc.map(|qc| qc.view),
+                "skipping highest QC update for stale proposal hint"
+            );
+        }
         self.record_phase_sample(PipelinePhase::Propose, hint.height, hint.view);
-        super::status::set_highest_qc(highest_qc.height, highest_qc.view);
-        super::status::set_highest_qc_hash(highest_qc.subject_block_hash);
         let hint_block = hint.block_hash;
         self.subsystems.propose.proposal_cache.insert_hint(hint);
         if self

@@ -249,6 +249,21 @@ fn client_status_timeout_env() -> Duration {
     )
 }
 
+fn client_request_timeout_env() -> Duration {
+    // Default 5s; override with IROHA_TEST_CLIENT_REQUEST_TIMEOUT_SECS or *_MS.
+    let secs = read_env_duration(
+        "IROHA_TEST_CLIENT_REQUEST_TIMEOUT_SECS",
+        Duration::from_secs(0),
+    );
+    if secs != Duration::from_secs(0) {
+        return secs;
+    }
+    read_env_duration(
+        "IROHA_TEST_CLIENT_REQUEST_TIMEOUT_MS",
+        Duration::from_secs(5),
+    )
+}
+
 fn client_ttl_env(status_timeout: Duration) -> Duration {
     let secs = read_env_duration("IROHA_TEST_CLIENT_TTL_SECS", Duration::ZERO);
     let ttl = if secs != Duration::ZERO {
@@ -4227,6 +4242,7 @@ impl NetworkPeer {
             self.mnemonic, self.port_api
         );
         let status_timeout = client_status_timeout_env();
+        let request_timeout = client_request_timeout_env();
         let ttl = client_ttl_env(status_timeout);
         let config = ConfigReader::new()
             .with_toml_source(TomlSource::inline(
@@ -4245,6 +4261,11 @@ impl NetworkPeer {
                         ["transaction", "status_timeout_ms"],
                         i64::try_from(status_timeout.as_millis())
                             .expect("status timeout fits in i64"),
+                    )
+                    .write(
+                        "torii_request_timeout_ms",
+                        i64::try_from(request_timeout.as_millis())
+                            .expect("request timeout fits in i64"),
                     )
                     .write(
                         ["transaction", "time_to_live_ms"],

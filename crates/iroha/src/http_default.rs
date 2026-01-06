@@ -30,6 +30,7 @@ struct PendingRequest {
     url: Url,
     headers: Vec<(HeaderName, HeaderValue)>,
     body: Option<Vec<u8>>,
+    timeout: Option<std::time::Duration>,
 }
 
 #[derive(Debug)]
@@ -38,6 +39,7 @@ struct PreparedRequest {
     url: Url,
     headers: Vec<(HeaderName, HeaderValue)>,
     body: Vec<u8>,
+    timeout: Option<std::time::Duration>,
 }
 
 /// Default request builder implemented on top of `reqwest`.
@@ -65,7 +67,17 @@ impl DefaultRequestBuilder {
                 url: pending.url,
                 headers: pending.headers,
                 body: pending.body.unwrap_or_default(),
+                timeout: pending.timeout,
             },
+        })
+    }
+
+    /// Apply per-request timeout (overrides the client default when set).
+    #[must_use]
+    pub fn timeout(self, timeout: std::time::Duration) -> Self {
+        self.and_then(|mut pending| {
+            pending.timeout = Some(timeout);
+            Ok(pending)
         })
     }
 }
@@ -83,6 +95,7 @@ pub struct RequestSnapshot {
     pub url: Url,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+    pub timeout: Option<std::time::Duration>,
 }
 
 #[cfg(test)]
@@ -147,6 +160,7 @@ impl DefaultRequest {
             url: self.prepared.url.clone(),
             headers: headers_vec,
             body: self.prepared.body.clone(),
+            timeout: self.prepared.timeout,
         }
     }
 }
@@ -190,6 +204,7 @@ impl DefaultRequest {
             url,
             headers,
             body,
+            timeout,
         } = self.prepared;
 
         let client = http_client();
@@ -199,6 +214,9 @@ impl DefaultRequest {
         }
         if !body.is_empty() {
             builder = builder.body(body);
+        }
+        if let Some(timeout) = timeout {
+            builder = builder.timeout(timeout);
         }
         let response = builder
             .send()
@@ -216,6 +234,7 @@ impl RequestBuilder for DefaultRequestBuilder {
                 url,
                 headers: Vec::new(),
                 body: None,
+                timeout: None,
             }),
         }
     }
@@ -410,6 +429,31 @@ mod tests {
         let result = with_send_hook(
             Arc::new(|snapshot| {
                 assert_eq!(snapshot.url.as_str(), "http://127.0.0.1/status");
+                Response::builder()
+                    .status(http::StatusCode::OK)
+                    .body(Vec::new())
+                    .map_err(Into::into)
+            }),
+            || rt.block_on(async { request.send() }),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn builder_timeout_is_forwarded() {
+        let timeout = std::time::Duration::from_secs(2);
+        let request = DefaultRequestBuilder::new(
+            crate::http::Method::GET,
+            Url::parse("http://127.0.0.1/status").expect("url"),
+        )
+        .timeout(timeout)
+        .build()
+        .expect("build request");
+
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let result = with_send_hook(
+            Arc::new(move |snapshot| {
+                assert_eq!(snapshot.timeout, Some(timeout));
                 Response::builder()
                     .status(http::StatusCode::OK)
                     .body(Vec::new())

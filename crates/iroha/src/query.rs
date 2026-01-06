@@ -44,6 +44,7 @@ struct ClientQueryRequestHead {
     headers: HashMap<String, String>,
     account_id: AccountId,
     key_pair: KeyPair,
+    request_timeout: Duration,
 }
 
 impl ClientQueryRequestHead {
@@ -63,6 +64,7 @@ impl ClientQueryRequestHead {
         // Prefer canonical Norito responses to avoid JSON decoding drift between
         // client/server versions.
         .header("Accept", APPLICATION_NORITO)
+        .timeout(self.request_timeout)
         .body(body)
     }
 
@@ -78,6 +80,7 @@ impl ClientQueryRequestHead {
         .headers(self.headers.clone())
         .header("Content-Type", APPLICATION_NORITO)
         .header("Accept", accept)
+        .timeout(self.request_timeout)
         .body(body)
     }
 
@@ -412,6 +415,7 @@ mod tests {
             headers: HashMap::new(),
             account_id: iroha_test_samples::ALICE_ID.clone(),
             key_pair: KeyPair::random(),
+            request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
         };
         let req = head
             .assemble(QueryRequest::Singular(
@@ -486,6 +490,7 @@ impl Client {
             .headers(self.headers.clone())
             .header("Content-Type", APPLICATION_NORITO)
             .header("Accept", APPLICATION_NORITO)
+            .timeout(self.torii_request_timeout)
             .body(body.to_owned()))
         };
         retry_decode_with_send(make_request, decode_query_response)
@@ -502,6 +507,7 @@ impl Client {
             headers: self.headers.clone(),
             account_id: self.account.clone(),
             key_pair: self.key_pair.clone(),
+            request_timeout: self.torii_request_timeout,
         }
     }
 
@@ -762,6 +768,7 @@ mod query_errors_handling {
             headers: HashMap::new(),
             account_id,
             key_pair,
+            request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
         };
         let cursor = ForwardCursor {
             query: "cursor".into(),
@@ -803,6 +810,7 @@ mod query_errors_handling {
             key_pair: key_pair.clone(),
             transaction_ttl: Some(Duration::from_secs(5)),
             transaction_status_timeout: Duration::from_secs(5),
+            torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             account: account_id,
             headers: HashMap::new(),
             add_transaction_nonce: false,

@@ -34,6 +34,8 @@ type ReportResult<T, E> = core::result::Result<T, Report<[E]>>;
 pub const DEFAULT_TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_secs(100);
 /// Default timeout for waiting on transaction status updates.
 pub const DEFAULT_TRANSACTION_STATUS_TIMEOUT: Duration = Duration::from_secs(15);
+/// Default timeout for Torii HTTP requests issued by the client.
+pub const DEFAULT_TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Whether to add a random transaction nonce by default.
 pub const DEFAULT_TRANSACTION_NONCE: bool = false;
 /// Default Torii API version header sent by the client.
@@ -169,6 +171,8 @@ pub struct Config {
     pub torii_api_version: String,
     /// Minimum Torii API version used for proof/staking/fee endpoints.
     pub torii_api_min_proof_version: String,
+    /// Timeout for Torii HTTP requests.
+    pub torii_request_timeout: Duration,
     /// Transaction time-to-live.
     pub transaction_ttl: Duration,
     /// Timeout for waiting on transaction status.

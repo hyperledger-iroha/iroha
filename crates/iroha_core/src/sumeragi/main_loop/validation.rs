@@ -21,6 +21,18 @@ impl Actor {
             Err(outcome) => return outcome,
         };
 
+        if commit_topology.is_empty() {
+            warn!(
+                height = pending.height,
+                view = pending.view,
+                block = %hash,
+                "deferring validation before voting: empty commit topology"
+            );
+            pending.validation_status = ValidationStatus::Pending;
+            self.pending.pending_blocks.insert(hash, pending);
+            return ValidationGateOutcome::Deferred;
+        }
+
         let mut topology = super::network_topology::Topology::new(commit_topology.to_vec());
         if let Err(err) = self.leader_index_for(&mut topology, pending.height, pending.view) {
             warn!(

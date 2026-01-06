@@ -73,8 +73,7 @@ fn ivm_paths_match_canonical_proofs_even_leaf_count() {
     let data: Vec<u8> = (0..100u32).map(|i| (i % 251) as u8).collect();
     let chunk = 32;
     let ivm_tree = ivm::ByteMerkleTree::from_bytes(&data, chunk);
-    let crypto_tree =
-        MerkleTree::<[u8; 32]>::from_byte_chunks(&data, chunk).expect("valid chunk");
+    let crypto_tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, chunk).expect("valid chunk");
 
     for &idx in &[0usize, 1, 3] {
         let path_ivm = ivm_tree.path(idx);
@@ -101,8 +100,7 @@ fn ivm_paths_match_canonical_proofs_odd_leaf_count() {
     let data: Vec<u8> = (0..80u32).map(|i| (i % 200) as u8).collect();
     let chunk = 32;
     let ivm_tree = ivm::ByteMerkleTree::from_bytes(&data, chunk);
-    let crypto_tree =
-        MerkleTree::<[u8; 32]>::from_byte_chunks(&data, chunk).expect("valid chunk");
+    let crypto_tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, chunk).expect("valid chunk");
 
     for &idx in &[0usize, 2] {
         let path_ivm = ivm_tree.path(idx);
@@ -129,8 +127,7 @@ fn tampering_leaf_or_sibling_breaks_root() {
     let data: Vec<u8> = (0..70u32).map(|i| (i % 239) as u8).collect();
     let chunk = 32;
     let ivm_tree = ivm::ByteMerkleTree::from_bytes(&data, chunk);
-    let crypto_tree =
-        MerkleTree::<[u8; 32]>::from_byte_chunks(&data, chunk).expect("valid chunk");
+    let crypto_tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, chunk).expect("valid chunk");
 
     let idx = 0usize;
     let path_ivm = ivm_tree.path(idx);

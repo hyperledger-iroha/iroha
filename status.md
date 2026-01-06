@@ -1,6 +1,35 @@
 # Status
 
 ## Latest Updates
+- Client: match committed transactions by entrypoint hash during confirmation fallback to avoid tx-status timeouts; extend unit coverage for entrypoint hash matching.
+- Tests: `cargo test -p integration_tests --test asset client_add_asset_quantity_to_existing_asset_should_increase_asset_amount -- --nocapture`; `cargo test -p integration_tests --test asset find_rate_and_make_exchange_isi_should_succeed -- --nocapture`; `cargo test -p iroha tx_hash_tests::committed_transaction_matches_signed_hash_for_external_entrypoint -- --nocapture`.
+- Integration tests: parallelize status polling in `sumeragi_localnet_smoke` to avoid serial Torii stalls while waiting for block convergence.
+- Tests: `IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture`.
+- Sumeragi: reject commit certificate roster hints with mismatched epochs and add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi: skip NEW_VIEW vote emission and QC rebuild/materialization when commit rosters are empty; add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi: compute NPoS epochs from on-chain parameters when consensus hasn't flipped yet (pre-activation catch-up), and add regression coverage for height-based epoch derivation.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p iroha_core epoch_for_height_uses_npos_params_before_activation -- --nocapture` (timed out after 120s during compile).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Sumeragi: validate checkpoint signatures using the commit certificate epoch when available (avoids NPoS epoch-length drift) and add regression coverage for mixed epoch-length roster selection.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p iroha_core selection_from_roster_artifacts_uses_commit_cert_epoch_for_checkpoint -- --nocapture` (timed out after 120s during compile).
+- Tests: `cargo test --workspace` (failed: missing crate docs in `crates/iroha_data_model/tests/merkle_roundtrip.rs`).
+- Sumeragi: prevent highest_qc regression from stale proposal hints, canonicalize payload hash without signatures, defer validation on empty commit rosters, and harden Kura retry overflow handling; add regression coverage and update docs.
+- Tests: not run (not requested).
+- Sumeragi: only treat pending blocks that extend the committed tip as active for proposal/view-change gating; add regression coverage.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (failed: missing crate docs in `crates/iroha_data_model/tests/merkle_roundtrip.rs`; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Sumeragi: ignore invalid block-signature indices in topology role filtering to avoid panics; add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi: compute epochs using the effective consensus mode for the target height so pre-activation permissioned QCs/votes keep epoch 0 after mode flips; add regression coverage for block sync QC acceptance.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p iroha_core block_sync_update_accepts_pre_activation_qc_epoch_after_mode_flip -- --nocapture` (timed out after 120s during compile).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warning about dead-code `Align64` in `crates/norito/src/core.rs`).
+- Sumeragi: guard quorum-reschedule against empty commit roster (avoid Topology::new panic) and add regression coverage for empty-roster reschedule.
+- Tests: not run (not requested).
 - Sumeragi: reject block-sync commit certificates with mismatched epochs (apply + cache paths) and add regression coverage for epoch-mismatch drops.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
 - Tests: `cargo test -p iroha_core block_sync_update_drops_qc_epoch_mismatch -- --nocapture` (timed out after 120s during compile).

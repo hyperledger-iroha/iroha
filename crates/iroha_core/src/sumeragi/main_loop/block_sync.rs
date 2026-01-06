@@ -471,6 +471,7 @@ impl Actor {
             }
         }
         let incoming_qc_signers = incoming_qc.as_ref().map(qc_signer_count);
+        let expected_cert_epoch = self.epoch_for_height(block_height);
         let allow_nonextending_qc = selection.commit_certificate.is_some()
             || incoming_qc.as_ref().is_some_and(|cert| {
                 super::validate_commit_certificate_roster(
@@ -480,6 +481,7 @@ impl Actor {
                     Some(block_view),
                     consensus_mode,
                     stake_snapshot.as_ref(),
+                    expected_cert_epoch,
                 )
                 .is_ok()
             })

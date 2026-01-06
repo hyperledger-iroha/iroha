@@ -700,6 +700,9 @@ impl Actor {
     }
 
     pub(super) fn rebuild_qcs_from_cached_votes(&mut self, commit_topology: &[PeerId]) {
+        if commit_topology.is_empty() {
+            return;
+        }
         let topology = super::network_topology::Topology::new(commit_topology.to_vec());
         let required = topology.min_votes_for_commit();
         if required == 0 {
