@@ -144,7 +144,15 @@ extension ConnectBalanceAsset {
             throw ConnectEnvelopeError.invalidPayload
         }
         let definition = json["asset_definition_id"] as? String
-        let precisionValue = (json["precision"] as? NSNumber)?.intValue
+        let precisionValue: Int?
+        if let precisionRaw = json["precision"] {
+            guard let parsed = StrictJSONNumber.int(from: precisionRaw), parsed >= 0 else {
+                throw ConnectEnvelopeError.invalidPayload
+            }
+            precisionValue = parsed
+        } else {
+            precisionValue = nil
+        }
         self.init(assetId: assetId,
                   assetDefinitionId: definition,
                   quantity: quantity,
@@ -162,7 +170,15 @@ extension ConnectBalanceSnapshot {
         }
         let assets = try assetsArray.map { try ConnectBalanceAsset(json: $0) }
         let metadata = try ConnectBalanceSnapshot.parseMetadata(json["metadata"])
-        let lastUpdated = (json["last_updated_ms"] as? NSNumber)?.uint64Value
+        let lastUpdated: UInt64?
+        if let raw = json["last_updated_ms"] {
+            guard let parsed = StrictJSONNumber.uint64(from: raw) else {
+                throw ConnectEnvelopeError.invalidPayload
+            }
+            lastUpdated = parsed
+        } else {
+            lastUpdated = nil
+        }
         self.init(accountID: accountID,
                   assets: assets,
                   lastUpdatedMs: lastUpdated,

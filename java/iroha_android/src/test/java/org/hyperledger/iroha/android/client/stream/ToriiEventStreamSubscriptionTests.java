@@ -15,6 +15,9 @@ public final class ToriiEventStreamSubscriptionTests {
 
   public static void main(final String[] args) throws Exception {
     reconnectsAfterClosure();
+    reconnectsOnceWhenErrorAndClose();
+    staleCloseDoesNotReconnect();
+    staleEventsAreIgnored();
     stopsWhenClosed();
     observerReceivesNotifications();
     System.out.println("[IrohaAndroid] ToriiEventStreamSubscriptionTests passed.");
@@ -38,6 +41,66 @@ public final class ToriiEventStreamSubscriptionTests {
     opener.emitEvent(1, "second");
     if (!events.await(1, TimeUnit.SECONDS)) {
       throw new AssertionError("Expected delegate events were not observed");
+    }
+    subscription.close();
+  }
+
+  private static void reconnectsOnceWhenErrorAndClose() throws Exception {
+    final RecordingStreamOpener opener = new RecordingStreamOpener();
+    final ToriiEventStreamSubscription subscription =
+        ToriiEventStreamSubscription.builder(opener, new ForwardingListener(null))
+            .setInitialBackoff(Duration.ofMillis(100))
+            .setMaxBackoff(Duration.ofMillis(100))
+            .build()
+            .start();
+    opener.awaitStreamCount(1);
+    opener.failStream(0, new RuntimeException("boom"));
+    opener.closeStream(0);
+    opener.awaitStreamCount(2);
+    Thread.sleep(200);
+    if (opener.streamCount.get() != 2) {
+      throw new AssertionError(
+          "Expected a single reconnection after error+close, saw " + opener.streamCount.get());
+    }
+    subscription.close();
+  }
+
+  private static void staleCloseDoesNotReconnect() throws Exception {
+    final RecordingStreamOpener opener = new RecordingStreamOpener();
+    final ToriiEventStreamSubscription subscription =
+        ToriiEventStreamSubscription.builder(opener, new ForwardingListener(null))
+            .setInitialBackoff(Duration.ofMillis(5))
+            .setMaxBackoff(Duration.ofMillis(5))
+            .build()
+            .start();
+    opener.awaitStreamCount(1);
+    opener.failStream(0, new RuntimeException("boom"));
+    opener.awaitStreamCount(2);
+    opener.closeStream(0);
+    Thread.sleep(50);
+    if (opener.streamCount.get() != 2) {
+      throw new AssertionError(
+          "Expected no reconnection after stale close, saw " + opener.streamCount.get());
+    }
+    subscription.close();
+  }
+
+  private static void staleEventsAreIgnored() throws Exception {
+    final RecordingStreamOpener opener = new RecordingStreamOpener();
+    final RecordingListener listener = new RecordingListener();
+    final ToriiEventStreamSubscription subscription =
+        ToriiEventStreamSubscription.builder(opener, listener)
+            .setInitialBackoff(Duration.ofMillis(5))
+            .setMaxBackoff(Duration.ofMillis(5))
+            .build()
+            .start();
+    opener.awaitStreamCount(1);
+    opener.failStream(0, new RuntimeException("boom"));
+    opener.awaitStreamCount(2);
+    opener.emitEvent(0, "stale");
+    if (listener.eventCount.get() != 0) {
+      throw new AssertionError(
+          "Expected stale events to be ignored, saw " + listener.eventCount.get());
     }
     subscription.close();
   }
@@ -213,6 +276,15 @@ public final class ToriiEventStreamSubscriptionTests {
       if (value == null || !value.startsWith(expectedPrefix)) {
         throw new AssertionError("Expected event prefix " + expectedPrefix + " but saw " + value);
       }
+    }
+  }
+
+  private static final class RecordingListener implements ToriiEventStreamListener {
+    private final AtomicInteger eventCount = new AtomicInteger();
+
+    @Override
+    public void onEvent(final ServerSentEvent event) {
+      eventCount.incrementAndGet();
     }
   }
 }

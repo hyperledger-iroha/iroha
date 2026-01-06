@@ -21,7 +21,8 @@ import org.hyperledger.iroha.android.client.HttpTransportExecutor;
  * and Android targets. Callers should prefer platform-optimised executors (OkHttp on Android, JDK
  * HTTP client on JVM) when available.
  */
-public final class UrlConnectionTransportExecutor implements HttpTransportExecutor {
+public final class UrlConnectionTransportExecutor
+    implements HttpTransportExecutor, StreamingTransportExecutor {
 
   private final Duration connectTimeout;
   private final Duration readTimeout;
@@ -48,6 +49,12 @@ public final class UrlConnectionTransportExecutor implements HttpTransportExecut
     return CompletableFuture.supplyAsync(() -> executeSync(request));
   }
 
+  @Override
+  public CompletableFuture<TransportStreamResponse> openStream(final TransportRequest request) {
+    Objects.requireNonNull(request, "request");
+    return CompletableFuture.supplyAsync(() -> openStreamSync(request));
+  }
+
   private TransportResponse executeSync(final TransportRequest request) {
     HttpURLConnection connection = null;
     try {
@@ -64,6 +71,30 @@ public final class UrlConnectionTransportExecutor implements HttpTransportExecut
       if (connection != null) {
         connection.disconnect();
       }
+    }
+  }
+
+  private TransportStreamResponse openStreamSync(final TransportRequest request) {
+    HttpURLConnection connection = null;
+    try {
+      connection = openConnection(request);
+      writeRequestBody(request, connection);
+      final int status = connection.getResponseCode();
+      final String message = emptyIfNull(connection.getResponseMessage());
+      final InputStream stream = responseStream(connection, status);
+      final Map<String, List<String>> headers = normalizeHeaders(connection.getHeaderFields());
+      final HttpURLConnection target = connection;
+      return new TransportStreamResponse(
+          status,
+          stream,
+          message,
+          headers,
+          target::disconnect);
+    } catch (final IOException ex) {
+      if (connection != null) {
+        connection.disconnect();
+      }
+      throw new RuntimeException("HTTP request failed", ex);
     }
   }
 
@@ -100,8 +131,7 @@ public final class UrlConnectionTransportExecutor implements HttpTransportExecut
 
   private static byte[] readBody(final HttpURLConnection connection, final int status)
       throws IOException {
-    final InputStream stream =
-        status >= 400 ? connection.getErrorStream() : connection.getInputStream();
+    final InputStream stream = responseStream(connection, status);
     if (stream == null) {
       return new byte[0];
     }
@@ -113,6 +143,15 @@ public final class UrlConnectionTransportExecutor implements HttpTransportExecut
       }
       return buffer.toByteArray();
     }
+  }
+
+  private static InputStream responseStream(final HttpURLConnection connection, final int status)
+      throws IOException {
+    if (status >= 400) {
+      final InputStream error = connection.getErrorStream();
+      return error != null ? error : connection.getInputStream();
+    }
+    return connection.getInputStream();
   }
 
   private static Map<String, List<String>> normalizeHeaders(final Map<String, List<String>> raw) {

@@ -5454,8 +5454,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 guard let json = decodeEnvelopeJSON(envelopePayload) else { return 0 }
                 let value = try? JSONSerialization.jsonObject(with: json, options: [])
                 let root = value as? [String: Any]
-                let seq = (root?["seq"] as? NSNumber)?.uint64Value
-                return seq ?? 0
+                return StrictJSONNumber.uint64(from: root?["seq"]) ?? 0
             }()
             let keyStream = connectFallbackKeystream(key: key,
                                                      sessionID: sessionID,

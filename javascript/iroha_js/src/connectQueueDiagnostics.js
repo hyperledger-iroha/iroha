@@ -15,15 +15,37 @@ function bufferFromSessionId(sessionId) {
     if (!trimmed) {
       throw new TypeError("Connect session id must be non-empty");
     }
-    const asBase64 = trimmed.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = asBase64.padEnd(Math.ceil(asBase64.length / 4) * 4, "=");
-    try {
-      return Buffer.from(padded, "base64");
-    } catch {
-      return Buffer.from(trimmed, "utf8");
-    }
+    const decoded = tryDecodeBase64Url(trimmed);
+    return decoded ?? Buffer.from(trimmed, "utf8");
   }
   throw new TypeError("Connect session id must be a string or Uint8Array");
+}
+
+function tryDecodeBase64Url(value) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  let padded = normalized;
+  const paddingIndex = normalized.indexOf("=");
+  if (paddingIndex !== -1) {
+    const head = normalized.slice(0, paddingIndex);
+    const padding = normalized.slice(paddingIndex);
+    if (!/^[0-9A-Za-z+/]*$/.test(head) || !/^={1,2}$/.test(padding)) {
+      return null;
+    }
+    if (normalized.length % 4 !== 0) {
+      return null;
+    }
+  } else {
+    if (!/^[0-9A-Za-z+/]+$/.test(normalized) || normalized.length % 4 === 1) {
+      return null;
+    }
+    const padLength = (4 - (normalized.length % 4)) % 4;
+    padded = normalized + "=".repeat(padLength);
+  }
+  const decoded = Buffer.from(padded, "base64");
+  if (decoded.toString("base64") !== padded) {
+    return null;
+  }
+  return decoded;
 }
 
 function toBase64Url(buffer) {

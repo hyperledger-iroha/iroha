@@ -268,3 +268,10 @@ test("indexeddb journal persists entries", async () => {
     [1, 2],
   );
 });
+
+test("connect journal rejects invalid session id strings", () => {
+  assert.throws(
+    () => new ConnectQueueJournal("AQIDB*"),
+    (error) => error?.name === "ConnectJournalError",
+  );
+});

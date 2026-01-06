@@ -4,6 +4,7 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import okhttp3.OkHttpClient;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
+import org.hyperledger.iroha.android.client.transport.StreamingTransportExecutor;
 
 /**
  * OkHttp-backed transport executor for Android.
@@ -12,7 +13,8 @@ import org.hyperledger.iroha.android.client.HttpTransportExecutor;
  * {@code org.hyperledger.iroha.android.client.okhttp.OkHttpTransportExecutor} so behaviour stays
  * consistent across the platform factories.
  */
-public final class OkHttpTransportExecutor implements HttpTransportExecutor {
+public final class OkHttpTransportExecutor
+    implements HttpTransportExecutor, StreamingTransportExecutor {
 
   private final org.hyperledger.iroha.android.client.okhttp.OkHttpTransportExecutor delegate;
 
@@ -25,6 +27,11 @@ public final class OkHttpTransportExecutor implements HttpTransportExecutor {
   @Override
   public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
     return delegate.execute(request);
+  }
+
+  @Override
+  public CompletableFuture<TransportStreamResponse> openStream(final TransportRequest request) {
+    return delegate.openStream(request);
   }
 
   @Override

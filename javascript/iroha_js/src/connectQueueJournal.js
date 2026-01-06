@@ -294,18 +294,34 @@ function decodeBase64Url(input) {
   if (!input) {
     throw new ConnectJournalError("sessionId must not be empty");
   }
-  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
-  const padding = normalized.length % 4 === 0 ? "" : "=".repeat(4 - (normalized.length % 4));
-  const body = normalized + padding;
-  if (typeof atob === "function") {
-    const binary = atob(body);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index);
-    }
-    return bytes;
+  const trimmed = input.trim();
+  if (!trimmed) {
+    throw new ConnectJournalError("sessionId must not be empty");
   }
-  return new Uint8Array(Buffer.from(body, "base64"));
+  const normalized = trimmed.replace(/-/g, "+").replace(/_/g, "/");
+  let padded = normalized;
+  const paddingIndex = normalized.indexOf("=");
+  if (paddingIndex !== -1) {
+    const head = normalized.slice(0, paddingIndex);
+    const padding = normalized.slice(paddingIndex);
+    if (!/^[0-9A-Za-z+/]*$/.test(head) || !/^={1,2}$/.test(padding)) {
+      throw new ConnectJournalError("sessionId must be a valid base64url string");
+    }
+    if (normalized.length % 4 !== 0) {
+      throw new ConnectJournalError("sessionId must be a valid base64url string");
+    }
+  } else {
+    if (!/^[0-9A-Za-z+/]+$/.test(normalized) || normalized.length % 4 === 1) {
+      throw new ConnectJournalError("sessionId must be a valid base64url string");
+    }
+    const padLength = (4 - (normalized.length % 4)) % 4;
+    padded = normalized + "=".repeat(padLength);
+  }
+  const decoded = Buffer.from(padded, "base64");
+  if (decoded.toString("base64") !== padded) {
+    throw new ConnectJournalError("sessionId must be a valid base64url string");
+  }
+  return new Uint8Array(decoded);
 }
 
 function hasIndexedDbSupport(factory) {

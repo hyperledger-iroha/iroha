@@ -4,6 +4,7 @@ import { test as baseTest } from "node:test";
 import {
   decodeLaneRelayEnvelope,
   laneRelayEnvelopeSample,
+  verifyLaneRelayEnvelope,
   verifyLaneRelayEnvelopes,
 } from "../src/nexus.js";
 import { makeNativeTest } from "./helpers/native.js";
@@ -22,5 +23,12 @@ test("verifyLaneRelayEnvelopes rejects duplicates", () => {
   assert.throws(
     () => verifyLaneRelayEnvelopes([decoded, decoded]),
     /duplicate relay envelope/,
+  );
+});
+
+test("verifyLaneRelayEnvelope rejects invalid base64 payloads", () => {
+  assert.throws(
+    () => verifyLaneRelayEnvelope("not*base64"),
+    /base64/,
   );
 });

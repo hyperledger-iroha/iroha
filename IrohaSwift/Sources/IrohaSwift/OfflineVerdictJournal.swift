@@ -584,46 +584,21 @@ public final class OfflineVerdictJournal {
 
     private static func normalizedString(_ value: ToriiJSONValue?) -> String? {
         guard let value else { return nil }
-        switch value {
-        case .string(let string):
-            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        case .number(let number):
-            guard number.isFinite else { return nil }
-            return String(number)
-        case .bool(let flag):
-            return flag ? "true" : "false"
-        default:
-            return nil
-        }
+        return value.normalizedString
     }
 
     private static func normalizedUInt64(_ value: ToriiJSONValue?) -> UInt64? {
         guard let value else { return nil }
-        switch value {
-        case .number(let number):
-            guard number.isFinite, number >= 0 else { return nil }
-            return UInt64(number.rounded())
-        case .string(let string):
-            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            return UInt64(trimmed)
-        default:
-            return nil
-        }
+        return value.normalizedUInt64
     }
 
     private static func normalizedInt(_ value: ToriiJSONValue?) -> Int? {
         guard let value else { return nil }
-        switch value {
-        case .number(let number):
-            guard number.isFinite else { return nil }
-            return Int(number.rounded())
-        case .string(let string):
-            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            return Int(trimmed)
-        default:
+        guard let parsed = value.normalizedInt64 else { return nil }
+        guard parsed >= Int64(Int.min), parsed <= Int64(Int.max) else {
             return nil
         }
+        return Int(parsed)
     }
 
     private static func normalizedStringArray(_ value: ToriiJSONValue?) -> [String] {

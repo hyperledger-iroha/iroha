@@ -13025,6 +13025,26 @@ test("deployContract submits base64 payload and returns response", async () => {
   assert.deepEqual(result, responsePayload);
 });
 
+test("deployContract rejects invalid base64 payloads", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("should not fetch");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.deployContract({
+        authority: "alice@wonderland",
+        privateKey: "ed25519:deadbeef",
+        codeB64: "YmFzZTY0*",
+      }),
+    (error) =>
+      error instanceof ValidationError &&
+      error.code === ValidationErrorCode.INVALID_STRING &&
+      /deployContract\.codeB64/.test(error.message),
+  );
+});
+
 test("deployContractInstance posts combined payload", async () => {
   let captured;
   const responsePayload = {

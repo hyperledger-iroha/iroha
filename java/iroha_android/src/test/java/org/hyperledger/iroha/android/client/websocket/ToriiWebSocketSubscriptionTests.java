@@ -18,6 +18,8 @@ public final class ToriiWebSocketSubscriptionTests {
   public static void main(final String[] args) throws Exception {
     reconnectsAfterClosure();
     reconnectsOnceWhenErrorAndClose();
+    staleCloseDoesNotReconnect();
+    staleMessagesAreIgnored();
     stopsWhenClosed();
     observerReceivesNotifications();
     System.out.println("[IrohaAndroid] ToriiWebSocketSubscriptionTests passed.");
@@ -65,6 +67,53 @@ public final class ToriiWebSocketSubscriptionTests {
     if (opener.sessionCount.get() != 2) {
       throw new AssertionError(
           "Expected a single reconnection after error+close, saw " + opener.sessionCount.get());
+    }
+    subscription.close();
+  }
+
+  private static void staleCloseDoesNotReconnect() throws Exception {
+    final RecordingSessionOpener opener = new RecordingSessionOpener();
+    final ToriiWebSocketSubscription subscription =
+        ToriiWebSocketSubscription.builder(opener, new ForwardingListener(null, null, null))
+            .setInitialBackoff(Duration.ofMillis(5))
+            .setMaxBackoff(Duration.ofMillis(5))
+            .build()
+            .start();
+    opener.awaitSessionCount(1);
+    opener.failSession(0, new RuntimeException("boom"));
+    opener.awaitSessionCount(2);
+    opener.closeSession(0);
+    Thread.sleep(50);
+    if (opener.sessionCount.get() != 2) {
+      throw new AssertionError(
+          "Expected no reconnection after stale close, saw " + opener.sessionCount.get());
+    }
+    subscription.close();
+  }
+
+  private static void staleMessagesAreIgnored() throws Exception {
+    final RecordingSessionOpener opener = new RecordingSessionOpener();
+    final RecordingListener listener = new RecordingListener();
+    final ToriiWebSocketSubscription subscription =
+        ToriiWebSocketSubscription.builder(opener, listener)
+            .setInitialBackoff(Duration.ofMillis(5))
+            .setMaxBackoff(Duration.ofMillis(5))
+            .build()
+            .start();
+    opener.awaitSessionCount(1);
+    opener.failSession(0, new RuntimeException("boom"));
+    opener.awaitSessionCount(2);
+    opener.emitText(0, "stale");
+    opener.emitBinary(0, ByteBuffer.wrap(new byte[] {1}));
+    opener.emitPing(0, ByteBuffer.wrap(new byte[] {2}));
+    opener.emitPong(0, ByteBuffer.wrap(new byte[] {3}));
+    if (listener.textCount.get() != 0
+        || listener.binaryCount.get() != 0
+        || listener.pingCount.get() != 0
+        || listener.pongCount.get() != 0) {
+      throw new AssertionError(
+          "Expected stale session messages to be ignored, saw "
+              + listener.summary());
     }
     subscription.close();
   }
@@ -142,6 +191,18 @@ public final class ToriiWebSocketSubscriptionTests {
       sessions.get(index).emitText(payload);
     }
 
+    void emitBinary(final int index, final ByteBuffer payload) {
+      sessions.get(index).emitBinary(payload);
+    }
+
+    void emitPing(final int index, final ByteBuffer payload) {
+      sessions.get(index).emitPing(payload);
+    }
+
+    void emitPong(final int index, final ByteBuffer payload) {
+      sessions.get(index).emitPong(payload);
+    }
+
     void closeSession(final int index) {
       sessions.get(index).close(1000, "test");
     }
@@ -163,6 +224,24 @@ public final class ToriiWebSocketSubscriptionTests {
     void emitText(final String payload) {
       if (!closed.get()) {
         listener.onText(this, payload, true);
+      }
+    }
+
+    void emitBinary(final ByteBuffer payload) {
+      if (!closed.get()) {
+        listener.onBinary(this, payload, true);
+      }
+    }
+
+    void emitPing(final ByteBuffer payload) {
+      if (!closed.get()) {
+        listener.onPing(this, payload);
+      }
+    }
+
+    void emitPong(final ByteBuffer payload) {
+      if (!closed.get()) {
+        listener.onPong(this, payload);
       }
     }
 
@@ -244,6 +323,50 @@ public final class ToriiWebSocketSubscriptionTests {
       if (onError != null) {
         onError.accept(error);
       }
+    }
+  }
+
+  private static final class RecordingListener implements ToriiWebSocketListener {
+    private final AtomicInteger textCount = new AtomicInteger();
+    private final AtomicInteger binaryCount = new AtomicInteger();
+    private final AtomicInteger pingCount = new AtomicInteger();
+    private final AtomicInteger pongCount = new AtomicInteger();
+
+    @Override
+    public void onText(
+        final ToriiWebSocketSession session,
+        final CharSequence data,
+        final boolean last) {
+      textCount.incrementAndGet();
+    }
+
+    @Override
+    public void onBinary(
+        final ToriiWebSocketSession session,
+        final ByteBuffer data,
+        final boolean last) {
+      binaryCount.incrementAndGet();
+    }
+
+    @Override
+    public void onPing(final ToriiWebSocketSession session, final ByteBuffer message) {
+      pingCount.incrementAndGet();
+    }
+
+    @Override
+    public void onPong(final ToriiWebSocketSession session, final ByteBuffer message) {
+      pongCount.incrementAndGet();
+    }
+
+    String summary() {
+      return "text="
+          + textCount.get()
+          + ", binary="
+          + binaryCount.get()
+          + ", ping="
+          + pingCount.get()
+          + ", pong="
+          + pongCount.get();
     }
   }
 

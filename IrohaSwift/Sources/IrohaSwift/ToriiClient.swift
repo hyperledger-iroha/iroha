@@ -450,16 +450,7 @@ fileprivate enum ToriiConnectJSON {
     static func optionalUInt64(_ record: [String: ToriiJSONValue],
                                key: String) -> UInt64? {
         guard let value = record[key] else { return nil }
-        switch value {
-        case .number(let number):
-            guard number.isFinite, number >= 0 else { return nil }
-            return UInt64(number)
-        case .string(let string):
-            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            return UInt64(trimmed)
-        default:
-            return nil
-        }
+        return value.normalizedUInt64
     }
 
     static func requireUInt64(_ record: [String: ToriiJSONValue],
@@ -485,16 +476,11 @@ fileprivate enum ToriiConnectJSON {
     static func optionalInt(_ record: [String: ToriiJSONValue],
                             key: String) -> Int? {
         guard let value = record[key] else { return nil }
-        switch value {
-        case .number(let number):
-            guard number.isFinite else { return nil }
-            return Int(number)
-        case .string(let string):
-            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            return Int(trimmed)
-        default:
+        guard let parsed = value.normalizedInt64 else { return nil }
+        guard parsed >= Int64(Int.min), parsed <= Int64(Int.max) else {
             return nil
         }
+        return Int(parsed)
     }
 
     static func objectsArray(_ record: [String: ToriiJSONValue],
@@ -1295,32 +1281,12 @@ public struct ToriiOfflineAllowanceItem: Decodable, Sendable {
 
     private static func normalizedUInt64(_ value: ToriiJSONValue?) -> UInt64? {
         guard let value else { return nil }
-        switch value {
-        case .number(let number):
-            guard number.isFinite, number >= 0 else { return nil }
-            let rounded = number.rounded(.towardZero)
-            guard rounded <= Double(UInt64.max) else { return nil }
-            return UInt64(rounded)
-        case .string(let string):
-            return UInt64(string.trimmingCharacters(in: .whitespacesAndNewlines))
-        default:
-            return nil
-        }
+        return value.normalizedUInt64
     }
 
     private static func normalizedInt64(_ value: ToriiJSONValue?) -> Int64? {
         guard let value else { return nil }
-        switch value {
-        case .number(let number):
-            guard number.isFinite else { return nil }
-            let rounded = number.rounded(.towardZero)
-            guard rounded >= Double(Int64.min), rounded <= Double(Int64.max) else { return nil }
-            return Int64(rounded)
-        case .string(let string):
-            return Int64(string.trimmingCharacters(in: .whitespacesAndNewlines))
-        default:
-            return nil
-        }
+        return value.normalizedInt64
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1914,6 +1880,9 @@ extension ToriiJSONValue {
                 return nil
             }
             let rounded = number.rounded(.towardZero)
+            guard rounded == number else {
+                return nil
+            }
             guard rounded <= Double(UInt64.max) else {
                 return nil
             }
@@ -1966,6 +1935,9 @@ extension ToriiJSONValue {
                 return nil
             }
             let rounded = number.rounded(.towardZero)
+            guard rounded == number else {
+                return nil
+            }
             guard rounded >= Double(Int64.min), rounded <= Double(Int64.max) else {
                 return nil
             }
@@ -2088,17 +2060,11 @@ public struct ToriiDaManifestBundle: Decodable, Sendable, Equatable {
 
     private static func optionalUInt64(_ record: [String: ToriiJSONValue],
                                        key: String,
-                                       field: String) -> UInt64? {
+                                       field _: String) -> UInt64? {
         guard let raw = record[key] else {
             return nil
         }
-        if let number = numberValue(raw), number >= 0 {
-            return UInt64(number)
-        }
-        if let string = trimmedString(raw), !string.isEmpty {
-            return UInt64(string)
-        }
-        return nil
+        return raw.normalizedUInt64
     }
 
     private static func requireString(_ record: [String: ToriiJSONValue],
@@ -2129,33 +2095,7 @@ public struct ToriiDaManifestBundle: Decodable, Sendable, Equatable {
 
     private static func trimmedString(_ value: ToriiJSONValue?) -> String? {
         guard let value else { return nil }
-        switch value {
-        case .string(let string):
-            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        case .number(let number):
-            guard number.isFinite else { return nil }
-            if number.rounded(.towardZero) == number {
-                return String(Int(number))
-            }
-            return String(number)
-        case .bool(let bool):
-            return bool ? "true" : "false"
-        default:
-            return nil
-        }
-    }
-
-    private static func numberValue(_ value: ToriiJSONValue?) -> Double? {
-        guard let value else { return nil }
-        switch value {
-        case .number(let number):
-            return number.isFinite ? number : nil
-        case .string(let string):
-            return Double(string.trimmingCharacters(in: .whitespacesAndNewlines))
-        default:
-            return nil
-        }
+        return value.normalizedString
     }
 }
 
@@ -2276,50 +2216,18 @@ public struct ToriiDaSamplingPlan: Sendable, Equatable {
         guard let raw = record[key] else {
             return nil
         }
-        if let number = numberValue(raw), number >= 0 {
-            if !allowZero && number == 0 {
-                return nil
-            }
-            return UInt64(number)
-        }
-        if let string = trimmedString(raw), !string.isEmpty, let parsed = UInt64(string) {
-            if !allowZero && parsed == 0 {
-                return nil
-            }
-            return parsed
-        }
-        return nil
-    }
-
-    private static func numberValue(_ value: ToriiJSONValue?) -> Double? {
-        guard let value else { return nil }
-        switch value {
-        case .number(let number):
-            return number.isFinite ? number : nil
-        case .string(let string):
-            return Double(string.trimmingCharacters(in: .whitespacesAndNewlines))
-        default:
+        guard let parsed = raw.normalizedUInt64 else {
             return nil
         }
+        if !allowZero && parsed == 0 {
+            return nil
+        }
+        return parsed
     }
 
     private static func trimmedString(_ value: ToriiJSONValue?) -> String? {
         guard let value else { return nil }
-        switch value {
-        case .string(let string):
-            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        case .number(let number):
-            guard number.isFinite else { return nil }
-            if number.rounded(.towardZero) == number {
-                return String(Int(number))
-            }
-            return String(number)
-        case .bool(let bool):
-            return bool ? "true" : "false"
-        default:
-            return nil
-        }
+        return value.normalizedString
     }
 
 }
@@ -4648,21 +4556,28 @@ public struct ToriiStatusPayload: Decodable, Sendable, Equatable {
     private static func decodeInt(_ value: ToriiJSONValue?, field: String) throws -> Int {
         guard let value else { return 0 }
         switch value {
-        case .number(let number):
-            guard number.isFinite else {
-                throw ToriiClientError.invalidPayload("status field `\(field)` must be finite")
-            }
-            guard number >= 0 else {
-                throw ToriiClientError.invalidPayload("status field `\(field)` must be non-negative")
-            }
-            return Int(number.rounded())
-        case .string(let string):
-            guard let parsed = Int(string) else {
-                throw ToriiClientError.invalidPayload("status field `\(field)` must be numeric")
-            }
-            return parsed
         case .bool(let bool):
             return bool ? 1 : 0
+        case .number:
+            guard let parsed = value.normalizedInt64 else {
+                throw ToriiClientError.invalidPayload("status field `\(field)` must be numeric")
+            }
+            guard parsed >= 0 else {
+                throw ToriiClientError.invalidPayload("status field `\(field)` must be non-negative")
+            }
+            guard parsed <= Int64(Int.max) else {
+                throw ToriiClientError.invalidPayload("status field `\(field)` must be numeric")
+            }
+            return Int(parsed)
+        case .string(let string):
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let parsed = Int(trimmed) else {
+                throw ToriiClientError.invalidPayload("status field `\(field)` must be numeric")
+            }
+            guard parsed >= 0 else {
+                throw ToriiClientError.invalidPayload("status field `\(field)` must be non-negative")
+            }
+            return parsed
         default:
             throw ToriiClientError.invalidPayload("status field `\(field)` must be numeric")
         }
@@ -5014,13 +4929,19 @@ public struct ToriiGovernanceLockRecord: Decodable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         owner = try container.decode(String.self, forKey: .owner)
         if let stringValue = try? container.decode(String.self, forKey: .amount) {
-            amount = stringValue
+            let trimmed = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw DecodingError.dataCorruptedError(forKey: .amount,
+                                                       in: container,
+                                                       debugDescription: "amount must be a non-empty string")
+            }
+            amount = trimmed
         } else if let intValue = try? container.decode(UInt64.self, forKey: .amount) {
             amount = String(intValue)
-        } else if let doubleValue = try? container.decode(Double.self, forKey: .amount) {
-            amount = String(doubleValue)
         } else {
-            amount = "0"
+            throw DecodingError.dataCorruptedError(forKey: .amount,
+                                                   in: container,
+                                                   debugDescription: "amount must be a string or unsigned integer")
         }
         expiryHeight = try container.decode(UInt64.self, forKey: .expiryHeight)
         direction = try container.decode(UInt8.self, forKey: .direction)
@@ -5086,22 +5007,27 @@ public struct ToriiGovernanceTallyResponse: Decodable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         referendumId = try container.decode(String.self, forKey: .referendumId)
-        approve = ToriiGovernanceTallyResponse.decodeBigInt(from: container, key: .approve)
-        reject = ToriiGovernanceTallyResponse.decodeBigInt(from: container, key: .reject)
-        abstain = ToriiGovernanceTallyResponse.decodeBigInt(from: container, key: .abstain)
+        approve = try ToriiGovernanceTallyResponse.decodeBigInt(from: container, key: .approve)
+        reject = try ToriiGovernanceTallyResponse.decodeBigInt(from: container, key: .reject)
+        abstain = try ToriiGovernanceTallyResponse.decodeBigInt(from: container, key: .abstain)
     }
 
-    private static func decodeBigInt(from container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> String {
+    private static func decodeBigInt(from container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) throws -> String {
         if let stringValue = try? container.decode(String.self, forKey: key) {
-            return stringValue
+            let trimmed = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw DecodingError.dataCorruptedError(forKey: key,
+                                                       in: container,
+                                                       debugDescription: "\(key.stringValue) must be a non-empty string")
+            }
+            return trimmed
         }
         if let intValue = try? container.decode(UInt64.self, forKey: key) {
             return String(intValue)
         }
-        if let doubleValue = try? container.decode(Double.self, forKey: key) {
-            return String(doubleValue)
-        }
-        return "0"
+        throw DecodingError.dataCorruptedError(forKey: key,
+                                               in: container,
+                                               debugDescription: "\(key.stringValue) must be a string or unsigned integer")
     }
 }
 
@@ -6924,8 +6850,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             return decoded.count
         }
         if let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let number = object["count"] as? NSNumber {
-            return number.uint64Value
+           let count = StrictJSONNumber.uint64(from: object["count"]) {
+            return count
         }
         throw ToriiClientError.invalidPayload("Expected \"count\" field in response.")
     }
@@ -7597,6 +7523,19 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
     private struct CountEnvelope: Decodable {
         let count: UInt64
+
+        private enum CodingKeys: String, CodingKey { case count }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let value = try container.decode(ToriiJSONValue.self, forKey: .count)
+            guard let normalized = value.normalizedUInt64 else {
+                throw DecodingError.dataCorruptedError(forKey: .count,
+                                                       in: container,
+                                                       debugDescription: "count must be an unsigned integer")
+            }
+            count = normalized
+        }
     }
 
     private func resolveDaManifestBundle(storageTicketHex: String?,

@@ -74,6 +74,29 @@ final class OfflineVerdictJournalTests: XCTestCase {
         XCTAssertEqual(provisioned.manifestDigestHex, "aa55")
     }
 
+    func testProvisionedMetadataSkipsFractionalManifestVersion() throws {
+        let metadata: [String: Any] = [
+            "android.integrity.policy": "provisioned",
+            "android.provisioned.inspector_public_key": "ed0120ABCDEF",
+            "android.provisioned.manifest_schema": "offline_provisioning_v1",
+            "android.provisioned.manifest_version": 1.5,
+            "android.provisioned.max_manifest_age_ms": 604_800_000
+        ]
+        let allowances = try decodeAllowances(
+            expiresAtMs: 4_000,
+            policyExpiresAtMs: 4_000,
+            refreshAtMs: 3_000,
+            remainingAmount: "5",
+            metadata: metadata
+        )
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: false)
+        let journal = try OfflineVerdictJournal(storageURL: tempURL)
+        try journal.upsert(allowances: allowances.items, recordedAtMs: 1_000)
+        let stored = try XCTUnwrap(journal.metadata(for: "deadbeef"))
+        XCTAssertNil(stored.provisionedMetadata?.manifestVersion)
+    }
+
     func testVerdictJournalCapturesPlayIntegrityMetadata() throws {
         let metadata: [String: Any] = [
             "android.integrity.policy": "play_integrity",
@@ -107,6 +130,33 @@ final class OfflineVerdictJournalTests: XCTestCase {
         XCTAssertEqual(playIntegrity.allowedAppVerdicts, ["play_recognized", "licensed"])
         XCTAssertEqual(playIntegrity.allowedDeviceVerdicts, ["strong", "device"])
         XCTAssertEqual(playIntegrity.maxTokenAgeMs, 30_000)
+    }
+
+    func testPlayIntegrityMetadataRejectsFractionalProjectNumber() throws {
+        let metadata: [String: Any] = [
+            "android.integrity.policy": "play_integrity",
+            "android.play_integrity.cloud_project_number": 1.5,
+            "android.play_integrity.environment": "production",
+            "android.play_integrity.package_names": ["tech.iroha.wallet"],
+            "android.play_integrity.signing_digests_sha256": [
+                "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+            ],
+            "android.play_integrity.allowed_app_verdicts": ["play_recognized"],
+            "android.play_integrity.allowed_device_verdicts": ["strong"]
+        ]
+        let allowances = try decodeAllowances(
+            expiresAtMs: 4_000,
+            policyExpiresAtMs: 4_000,
+            refreshAtMs: 3_000,
+            remainingAmount: "5",
+            metadata: metadata
+        )
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: false)
+        let journal = try OfflineVerdictJournal(storageURL: tempURL)
+        try journal.upsert(allowances: allowances.items, recordedAtMs: 1_000)
+        let stored = try XCTUnwrap(journal.metadata(for: "deadbeef"))
+        XCTAssertNil(stored.playIntegrityMetadata)
     }
 
     func testVerdictJournalCapturesHmsSafetyDetectMetadata() throws {

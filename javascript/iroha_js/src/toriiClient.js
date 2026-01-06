@@ -14021,7 +14021,8 @@ function normalizeRequiredBase64Payload(value, name) {
       );
     }
     try {
-      return Buffer.from(trimmed, "base64").toString("base64");
+      const decoded = strictDecodeBase64(trimmed);
+      return Buffer.from(decoded).toString("base64");
     } catch (error) {
       throw createValidationError(
         ValidationErrorCode.INVALID_STRING,

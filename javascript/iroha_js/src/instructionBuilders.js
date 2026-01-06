@@ -430,7 +430,7 @@ function normalizeFixedBytes(value, name, length = 32) {
     } else if (/^[0-9A-Fa-f]+$/.test(trimmed) && trimmed.length === length * 2) {
       buffer = Buffer.from(trimmed, "hex");
     } else {
-      buffer = Buffer.from(trimmed, "base64");
+      buffer = decodeBase64Strict(trimmed, name);
     }
   } else {
     buffer = toBinaryBuffer(value, name);
@@ -792,14 +792,45 @@ function normalizeAccessSetHints(value, context) {
   };
 }
 
+function decodeBase64Strict(value, name) {
+  const compact = value.replace(/\s+/g, "");
+  if (compact.length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be a non-empty base64 string`,
+      name,
+    );
+  }
+
+  let padded = compact;
+  const paddingIndex = compact.indexOf("=");
+  if (paddingIndex !== -1) {
+    const head = compact.slice(0, paddingIndex);
+    const padding = compact.slice(paddingIndex);
+    if (!/^[0-9A-Za-z+/]*$/.test(head) || !/^={1,2}$/.test(padding)) {
+      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a valid base64 string`, name);
+    }
+    if (compact.length % 4 !== 0) {
+      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a valid base64 string`, name);
+    }
+  } else {
+    if (!/^[0-9A-Za-z+/]+$/.test(compact) || compact.length % 4 === 1) {
+      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a valid base64 string`, name);
+    }
+    const padLength = (4 - (compact.length % 4)) % 4;
+    padded = compact + "=".repeat(padLength);
+  }
+
+  const decoded = Buffer.from(padded, "base64");
+  if (decoded.toString("base64") !== padded) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a valid base64 string`, name);
+  }
+  return decoded;
+}
+
 function normalizeBase64(value, name) {
   if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (trimmed.length === 0) {
-      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty base64 string`, name);
-    }
-    // Validate by attempting a decode/encode round trip.
-    return Buffer.from(trimmed, "base64").toString("base64");
+    return decodeBase64Strict(value.trim(), name).toString("base64");
   }
   const buffer = toBinaryBuffer(value, name);
   return buffer.toString("base64");
