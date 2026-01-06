@@ -455,8 +455,7 @@ mod tests {
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn decode_public_key_str_rejects_non_canonical_hex() {
-        let canonical =
-            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
+        let canonical = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
         let lower = canonical.to_lowercase();
         assert!(decode_public_key_str(&lower).is_err());
         let upper = canonical.to_uppercase();
@@ -468,8 +467,7 @@ mod tests {
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn decode_private_key_str_rejects_non_canonical_hex() {
-        let canonical =
-            "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F";
+        let canonical = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F";
         let lower = canonical.to_lowercase();
         assert!(decode_private_key_str(&lower).is_err());
     }

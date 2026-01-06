@@ -68,10 +68,7 @@ impl GuardDirectorySnapshotV2 {
                 self.validation_phase
             )));
         }
-        if self.published_at_unix < 0
-            || self.valid_after_unix < 0
-            || self.valid_until_unix < 0
-        {
+        if self.published_at_unix < 0 || self.valid_after_unix < 0 || self.valid_until_unix < 0 {
             return Err(norito::Error::Message(
                 "guard directory snapshot timestamps must be non-negative".to_string(),
             ));

@@ -69,7 +69,7 @@ description: `docs/source/nexus_transition_notes.md` کا آئینہ، جو Phas
 - `docs/source/runbooks/nexus_multilane_rehearsal.md` canary پلان، participant roster اور rollback steps کو محفوظ کرتا ہے؛ جب lane topology یا telemetry exporters بدلیں تو runbook اپ ڈیٹ کریں۔
 - `docs/source/project_tracker/nexus_rehearsal_2026q1.md` 9 اپریل کے rehearsal کے ہر artifact کو لسٹ کرتا ہے اور اب Q2 prep notes/agenda بھی رکھتا ہے۔ مستقبل کے rehearsals اسی tracker میں شامل کریں تاکہ evidence monotonic رہے۔
 - OTLP collector snippets اور Grafana exports (دیکھیں `docs/source/telemetry.md`) تب publish کریں جب exporter batching guidance بدلے؛ Q1 update نے headroom alerts سے بچنے کے لئے batch size کو 256 samples تک بڑھایا۔
-- multi-lane CI/test evidence اب `integration_tests/tests/nexus/multilane_pipeline.rs` میں ہے اور `Nexus Multilane Pipeline` workflow (`.github/workflows/integration_tests_multilane.yml`) کے تحت چلتا ہے، جس نے `pytests/nexus/test_multilane_pipeline.py` ریفرنس کو ریٹائر کیا؛ `defaults/nexus/config.toml` کے hash (`nexus.enabled = true`, blake2b `7adf4b54cfbe0e6a3d3fb407f020d78248654d4009e9458c1665f5a2f30ec50e`) کو tracker کے ساتھ sync رکھیں جب rehearsal bundles ریفریش ہوں۔
+- multi-lane CI/test evidence اب `integration_tests/tests/nexus/multilane_pipeline.rs` میں ہے اور `Nexus Multilane Pipeline` workflow (`.github/workflows/integration_tests_multilane.yml`) کے تحت چلتا ہے، جس نے `pytests/nexus/test_multilane_pipeline.py` ریفرنس کو ریٹائر کیا؛ `defaults/nexus/config.toml` کے hash (`nexus.enabled = true`, blake2b `d69eefa2abb8886b0f3e280e88fe307a907cfe88053b5d60a1d459a5cf8549e1`) کو tracker کے ساتھ sync رکھیں جب rehearsal bundles ریفریش ہوں۔
 
 ## Runtime lane lifecycle
 

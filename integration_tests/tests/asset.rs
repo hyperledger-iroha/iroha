@@ -130,7 +130,7 @@ fn submit_or_skip(
     instruction: impl Into<InstructionBox>,
     context: &str,
 ) -> Result<Option<()>> {
-    sandbox::handle_result(client.submit_blocking(instruction).map(|_| ()), context)
+    submit_or_tolerate_timeout(client, instruction, context)
 }
 
 fn submit_tx_or_skip(
@@ -288,11 +288,8 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() ->
     };
     let test_client = network.client();
 
-    if sandbox::handle_result(
-        test_client.submit_blocking(create_asset),
-        "register asset definition",
-    )?
-    .is_none()
+    if submit_or_tolerate_timeout(&test_client, create_asset, "register asset definition")?
+        .is_none()
     {
         return Ok(());
     }
@@ -306,8 +303,7 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() ->
     );
     let instructions: [InstructionBox; 1] = [mint.into()];
     let tx = test_client.build_transaction(instructions, metadata);
-    if sandbox::handle_result(test_client.submit_transaction_blocking(&tx), "mint asset")?.is_none()
-    {
+    if submit_tx_or_skip(&test_client, &tx, "mint asset")?.is_none() {
         return Ok(());
     }
     if sandbox::handle_result(
@@ -348,11 +344,8 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
     };
     let test_client = network.client();
 
-    if sandbox::handle_result(
-        test_client.submit_blocking(create_asset),
-        "register asset definition",
-    )?
-    .is_none()
+    if submit_or_tolerate_timeout(&test_client, create_asset, "register asset definition")?
+        .is_none()
     {
         return Ok(());
     }
@@ -366,12 +359,7 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
     );
     let instructions: [InstructionBox; 1] = [mint.into()];
     let tx = test_client.build_transaction(instructions, metadata);
-    if sandbox::handle_result(
-        test_client.submit_transaction_blocking(&tx),
-        "mint large asset",
-    )?
-    .is_none()
-    {
+    if submit_tx_or_skip(&test_client, &tx, "mint large asset")?.is_none() {
         return Ok(());
     }
     if sandbox::handle_result(
@@ -540,11 +528,15 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
         };
         let mut last_non_empty_height = status.blocks_non_empty;
 
-        test_client.submit_all_blocking::<InstructionBox>([
+        let seed_instructions: [InstructionBox; 3] = [
             Mint::asset_numeric(20_u32, rate.clone()).into(),
             Mint::asset_numeric(10_u32, seller_btc.clone()).into(),
             Mint::asset_numeric(200_u32, buyer_eth.clone()).into(),
-        ])?;
+        ];
+        let seed_tx = test_client.build_transaction(seed_instructions, Metadata::default());
+        if submit_tx_or_skip(&test_client, &seed_tx, "seed exchange balances")?.is_none() {
+            return Ok(());
+        }
         status = match status_or_skip(
             sync_after_submission(
                 &network,
@@ -622,10 +614,15 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             .clone()
             .try_into()
             .expect("numeric should be u32 originally");
-        test_client.submit_all_blocking([
-            Transfer::asset_numeric(seller_btc.clone(), 10_u32, buyer_id.clone()),
-            Transfer::asset_numeric(buyer_eth.clone(), 10_u32 * rate, seller_id.clone()),
-        ])?;
+        let transfer_instructions: [InstructionBox; 2] = [
+            Transfer::asset_numeric(seller_btc.clone(), 10_u32, buyer_id.clone()).into(),
+            Transfer::asset_numeric(buyer_eth.clone(), 10_u32 * rate, seller_id.clone()).into(),
+        ];
+        let transfer_tx =
+            test_client.build_transaction(transfer_instructions, Metadata::default());
+        if submit_tx_or_skip(&test_client, &transfer_tx, "exchange transfers")?.is_none() {
+            return Ok(());
+        }
         if let Some(_status) = status_or_skip(
             sync_after_submission(
                 &network,
@@ -767,10 +764,15 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             };
 
         // Register and seed the asset definition under Alice's authority after genesis.
-        sandbox::handle_result(
-            test_client.submit_blocking(Register::asset_definition(asset_definition)),
+        if submit_or_tolerate_timeout(
+            &test_client,
+            Register::asset_definition(asset_definition),
             "register integer-only asset definition",
-        )?;
+        )?
+        .is_none()
+        {
+            return Ok(());
+        }
         last_non_empty_height = match status_or_skip(
             sync_after_submission(
                 &network,

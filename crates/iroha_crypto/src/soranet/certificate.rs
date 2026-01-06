@@ -818,11 +818,7 @@ struct CertificateFieldAccumulator {
 }
 
 impl CertificateFieldAccumulator {
-    fn set_once<T>(
-        slot: &mut Option<T>,
-        value: T,
-        field: Field,
-    ) -> Result<(), CertificateError> {
+    fn set_once<T>(slot: &mut Option<T>, value: T, field: Field) -> Result<(), CertificateError> {
         if slot.is_some() {
             return Err(CertificateError::DuplicateField {
                 field: field_label(field),
@@ -899,7 +895,11 @@ impl CertificateFieldAccumulator {
                 )?;
             }
             Field::KemPolicy => {
-                Self::set_once(&mut self.kem_policy, KemRotationPolicyV1::decode(decoder)?, field)?;
+                Self::set_once(
+                    &mut self.kem_policy,
+                    KemRotationPolicyV1::decode(decoder)?,
+                    field,
+                )?;
             }
             Field::HandshakeSuites => {
                 Self::set_once(
@@ -921,11 +921,7 @@ impl CertificateFieldAccumulator {
                 Self::set_once(&mut self.directory_hash, decoder.read_array32()?, field)?;
             }
             Field::IssuerFingerprint => {
-                Self::set_once(
-                    &mut self.issuer_fingerprint,
-                    decoder.read_array32()?,
-                    field,
-                )?;
+                Self::set_once(&mut self.issuer_fingerprint, decoder.read_array32()?, field)?;
             }
             Field::PqKemPublic => {
                 Self::set_once(&mut self.pq_kem_public, decoder.read_bytes()?, field)?;

@@ -2600,7 +2600,7 @@ mod tests {
             KeyPair::new("ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
                 .parse()
                 .expect("Public key not in mulithash format"),
-                "8926201ca347641228c3b79aa43839dedc85fa51c0e8b9b6a00f6b0d6b0423e902973f"
+                "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
                 .parse()
                 .expect("Private key not in mulithash format")
             ).unwrap();
