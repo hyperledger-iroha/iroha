@@ -2854,6 +2854,79 @@ async fn cache_block_sync_qc_records_commit_certificate_history() {
     harness.shutdown.send();
 }
 
+#[test]
+fn cached_qc_for_filters_epoch() {
+    let chain: ChainId = "cached-qc-epoch".parse().expect("chain id parses");
+    let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer_id = PeerId::new(keypair.public_key().clone());
+    let topology = super::network_topology::Topology::new(vec![peer_id]);
+    let keypairs = vec![keypair];
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
+    let height = 5;
+    let view = 0;
+    let signers_bitmap = vec![0b0000_0001];
+    let qc_epoch0 = qc_with_bitmap(
+        &chain,
+        block_hash,
+        height,
+        view,
+        0,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &keypairs,
+    );
+    let qc_epoch1 = qc_with_bitmap(
+        &chain,
+        block_hash,
+        height,
+        view,
+        1,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &keypairs,
+    );
+    let mut qc_cache = BTreeMap::new();
+    qc_cache.insert((Phase::Commit, block_hash, height, view, 0), qc_epoch0.clone());
+    qc_cache.insert((Phase::Commit, block_hash, height, view, 1), qc_epoch1.clone());
+
+    let cached_epoch0 = super::cached_qc_for(
+        &qc_cache,
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        0,
+    )
+    .expect("epoch 0 qc cached");
+    assert_eq!(cached_epoch0.epoch, 0);
+    assert_eq!(
+        cached_epoch0.aggregate.bls_aggregate_signature,
+        qc_epoch0.aggregate.bls_aggregate_signature
+    );
+
+    let cached_epoch1 = super::cached_qc_for(
+        &qc_cache,
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        1,
+    )
+    .expect("epoch 1 qc cached");
+    assert_eq!(cached_epoch1.epoch, 1);
+    assert_eq!(
+        cached_epoch1.aggregate.bls_aggregate_signature,
+        qc_epoch1.aggregate.bls_aggregate_signature
+    );
+
+    assert!(
+        super::cached_qc_for(&qc_cache, Phase::Commit, block_hash, height, view, 2).is_none()
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_allows_nonextending_qc_without_commit_certificate() {
     let mut harness = test_actor_harness(4).await;
@@ -3242,6 +3315,126 @@ async fn block_sync_update_requests_pending_block_for_missing_qc() {
             .last_sent
             .contains_key(&block.hash()),
         "missing QC should trip fetch throttle"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_skips_fetch_when_qc_salvaged_by_aggregate_signature() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let height = 21_u64;
+    let view = 1_u64;
+    let signature_topology =
+        super::topology_for_view(&topology, height, view, PERMISSIONED_TAG, None);
+    let leader_peer = signature_topology.as_ref().first().expect("leader present");
+    let leader_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == leader_peer.public_key())
+        .expect("leader keypair exists in harness");
+    let block: SignedBlock =
+        super::ValidBlock::new_dummy_and_modify_header(leader_kp.private_key(), |header| {
+            header.set_height(NonZeroU64::new(height).expect("height"));
+            header.set_view_change_index(u32::try_from(view).expect("view"));
+        })
+        .into();
+    let block_hash = block.hash();
+
+    let state_view = actor.state.view();
+    let block_signers =
+        super::validated_block_signers(&block, &topology, &state_view, PERMISSIONED_TAG, None)
+            .expect("block signatures valid");
+    drop(state_view);
+
+    let commit_quorum = topology.min_votes_for_commit().max(1);
+    assert!(
+        block_signers.len() < commit_quorum,
+        "test requires sparse block signatures"
+    );
+
+    let qc_signers: BTreeSet<_> = [0_u32, 1_u32]
+        .into_iter()
+        .filter_map(|idx| ValidatorIndex::try_from(idx).ok())
+        .collect();
+    let qc_bitmap = super::build_signers_bitmap(&qc_signers, roster.len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        0,
+        qc_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    assert!(
+        super::qc_aggregate_consistent(&qc, &topology, &actor.common_config.chain, PERMISSIONED_TAG),
+        "aggregate signature should verify against canonical topology"
+    );
+    let qc_validation = super::validate_block_sync_qc(
+        &qc,
+        &topology,
+        &block_signers,
+        view,
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        None,
+    );
+    assert!(
+        matches!(
+            qc_validation,
+            Err(super::QcValidationError::InsufficientSigners { .. })
+        ),
+        "test requires QC validation to fail before aggregate fallback"
+    );
+
+    let checkpoint_signers: BTreeSet<_> = (0..commit_quorum)
+        .filter_map(|idx| ValidatorIndex::try_from(idx).ok())
+        .collect();
+    let checkpoint_bitmap = super::build_signers_bitmap(&checkpoint_signers, roster.len());
+    let checkpoint_signature = aggregate_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        0,
+        &checkpoint_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        block_hash,
+        roster.clone(),
+        checkpoint_bitmap,
+        checkpoint_signature,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.commit_certificate = Some(qc);
+    update.validator_checkpoint = Some(checkpoint);
+
+    let _ = harness.background_rx.try_iter().count();
+    actor
+        .handle_block_sync_update(update)
+        .expect("block sync update");
+
+    assert!(
+        !actor
+            .block_sync_fetch_log
+            .last_sent
+            .contains_key(&block_hash),
+        "aggregate QC salvage should suppress pending-block fetch"
     );
 
     harness.shutdown.send();
@@ -6215,7 +6408,20 @@ async fn handle_exec_vote_uses_roster_snapshot_after_topology_change() {
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::try_from(removed_idx).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
-    let bls_aggregate_signature = vec![0xAA; 96];
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let keypairs = vec![me_kp.clone()];
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &state.chain_id,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        block_header.height().get(),
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
     let commit_certificate = CommitCertificate {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
@@ -6431,7 +6637,20 @@ async fn handle_precommit_vote_uses_roster_snapshot_after_topology_change() {
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::try_from(removed_idx).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
-    let bls_aggregate_signature = vec![0xAC; 96];
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let keypairs = vec![me_kp.clone()];
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &state.chain_id,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        height,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
     let commit_certificate = CommitCertificate {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
@@ -9907,7 +10126,7 @@ fn block_sync_selection_prefers_matching_validator_checkpoint_history() {
     status::reset_commit_certs_for_tests();
     status::reset_validator_checkpoints_for_tests();
     let (me_peer, me_pop, me_kp) = bls_peer("127.0.0.1:7086");
-    let (other_peer, other_pop, _other_kp) = bls_peer("127.0.0.1:7087");
+    let (other_peer, other_pop, other_kp) = bls_peer("127.0.0.1:7087");
     let mut pops = BTreeMap::new();
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     pops.insert(other_peer.id().public_key().clone(), other_pop);
@@ -9918,13 +10137,28 @@ fn block_sync_selection_prefers_matching_validator_checkpoint_history() {
     let block_hash = block_header.hash();
     let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
     let block = SignedBlock::presigned(block_sig.clone(), block_header, Vec::new());
+    let chain = state.chain_id.clone();
+    let topology = super::network_topology::Topology::new(roster.clone());
     let signers_bitmap = vec![0b0000_0011];
+    let keypairs = vec![other_kp.clone(), me_kp.clone()];
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        block_header.height().get(),
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
     let checkpoint = ValidatorSetCheckpoint::new(
         7,
         block_hash,
         roster.clone(),
         signers_bitmap,
-        vec![0xAA; 96],
+        bls_aggregate_signature,
         VALIDATOR_SET_HASH_VERSION_V1,
         None,
     );
@@ -9976,22 +10210,19 @@ fn block_sync_selection_prefers_matching_commit_certificate_history() {
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::try_from(0).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, 1);
-    let cert = iroha_data_model::consensus::CommitCertificate {
-        phase: Phase::Commit,
-        subject_block_hash: block_hash,
-        height: 5,
-        view: 0,
-        epoch: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_cert: None,
-        validator_set_hash: HashOf::new(&vec![me_peer.id().clone()]),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: vec![me_peer.id().clone()],
-        aggregate: CommitAggregate {
-            signers_bitmap,
-            bls_aggregate_signature: vec![0xAA; 96],
-        },
-    };
+    let topology = super::network_topology::Topology::new(vec![me_peer.id().clone()]);
+    let keypairs = vec![me_kp.clone()];
+    let cert = qc_with_bitmap(
+        &state.chain_id,
+        block_hash,
+        5,
+        0,
+        0,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &keypairs,
+    );
     status::record_commit_certificate(cert.clone());
     let block_header = BlockHeader::new(NonZeroU64::new(5).unwrap(), None, None, None, 0, 0);
     let block = SignedBlock::presigned(block_sig.clone(), block_header, Vec::new());
@@ -10037,7 +10268,20 @@ fn block_sync_selection_prefers_paired_hints() {
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::try_from(0).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
-    let bls_aggregate_signature = vec![0xAA; 96];
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let keypairs = vec![me_kp.clone()];
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &state.chain_id,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        height,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
     let commit_certificate = iroha_data_model::consensus::CommitCertificate {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
@@ -10130,6 +10374,21 @@ fn block_sync_selection_uses_persisted_commit_roster_snapshot() {
     let block_signature =
         BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
     let block = SignedBlock::presigned(block_signature.clone(), header, Vec::new());
+    let signers_bitmap = vec![0b0000_0001];
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let keypairs = vec![me_kp.clone()];
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &state.chain_id,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        header.height.get(),
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
     let commit_certificate = iroha_data_model::consensus::CommitCertificate {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
@@ -10142,16 +10401,16 @@ fn block_sync_selection_uses_persisted_commit_roster_snapshot() {
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set: roster.clone(),
         aggregate: CommitAggregate {
-            signers_bitmap: vec![0b0000_0001],
-            bls_aggregate_signature: vec![0xAB; 96],
+            signers_bitmap: signers_bitmap.clone(),
+            bls_aggregate_signature: bls_aggregate_signature.clone(),
         },
     };
     let checkpoint = iroha_data_model::consensus::ValidatorSetCheckpoint::new(
         3,
         block_hash,
         roster.clone(),
-        vec![0b0000_0001],
-        vec![0xAB; 96],
+        signers_bitmap,
+        bls_aggregate_signature,
         VALIDATOR_SET_HASH_VERSION_V1,
         None,
     );
@@ -10224,7 +10483,20 @@ fn block_sync_update_uses_journal_roster() {
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::try_from(0).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
-    let bls_aggregate_signature = vec![0xAA; 96];
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let keypairs = vec![kp.clone()];
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &state.chain_id,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        4,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
     let commit_certificate = CommitCertificate {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
@@ -10331,6 +10603,20 @@ fn block_sync_update_includes_commit_certificate_from_history() {
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::try_from(0).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let keypairs = vec![me_kp.clone()];
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &state.chain_id,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        height,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
     let commit_certificate = CommitCertificate {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
@@ -10344,7 +10630,7 @@ fn block_sync_update_includes_commit_certificate_from_history() {
         validator_set: roster.clone(),
         aggregate: CommitAggregate {
             signers_bitmap,
-            bls_aggregate_signature: vec![0xAA; 96],
+            bls_aggregate_signature,
         },
     };
     status::record_commit_certificate(commit_certificate.clone());
@@ -11015,7 +11301,20 @@ fn block_sync_roster_selection_uses_persisted_journal() {
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::try_from(0).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
-    let bls_aggregate_signature = vec![0xAA; 96];
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let keypairs = vec![kp.clone()];
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &state.chain_id,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        6,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
     let commit_certificate = CommitCertificate {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
@@ -11302,8 +11601,24 @@ fn block_sync_update_omits_roster_artifacts_without_metadata() {
 fn validate_commit_certificate_roster_accepts_valid_cert() {
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
+    let chain: ChainId = "commit-cert-valid".parse().expect("chain id parses");
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC2; Hash::LENGTH]));
+    let topology = super::network_topology::Topology::new(vec![peer.clone()]);
+    let keypairs = vec![kp.clone()];
+    let signers_bitmap = vec![0b0000_0001];
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        1,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
     let cert = CommitCertificate {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
@@ -11316,8 +11631,8 @@ fn validate_commit_certificate_roster_accepts_valid_cert() {
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set: vec![peer.clone()],
         aggregate: CommitAggregate {
-            signers_bitmap: vec![0b0000_0001],
-            bls_aggregate_signature: vec![0xAA; 96],
+            signers_bitmap,
+            bls_aggregate_signature,
         },
     };
 
@@ -11329,6 +11644,8 @@ fn validate_commit_certificate_roster_accepts_valid_cert() {
         iroha_config::parameters::actual::ConsensusMode::Permissioned,
         None,
         cert.epoch,
+        &chain,
+        PERMISSIONED_TAG,
     )
     .expect("valid cert roster");
     assert_eq!(roster, vec![peer]);
@@ -11338,8 +11655,24 @@ fn validate_commit_certificate_roster_accepts_valid_cert() {
 fn validate_commit_certificate_roster_rejects_hash_version_mismatch() {
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
+    let chain: ChainId = "commit-cert-hash-version".parse().expect("chain id parses");
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC6; Hash::LENGTH]));
+    let topology = super::network_topology::Topology::new(vec![peer.clone()]);
+    let keypairs = vec![kp.clone()];
+    let signers_bitmap = vec![0b0000_0001];
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        2,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
     let cert = CommitCertificate {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
@@ -11352,8 +11685,8 @@ fn validate_commit_certificate_roster_rejects_hash_version_mismatch() {
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1.saturating_add(1),
         validator_set: vec![peer],
         aggregate: CommitAggregate {
-            signers_bitmap: vec![0b0000_0001],
-            bls_aggregate_signature: vec![0xAA; 96],
+            signers_bitmap,
+            bls_aggregate_signature,
         },
     };
 
@@ -11365,6 +11698,8 @@ fn validate_commit_certificate_roster_rejects_hash_version_mismatch() {
         iroha_config::parameters::actual::ConsensusMode::Permissioned,
         None,
         cert.epoch,
+        &chain,
+        PERMISSIONED_TAG,
     );
     assert!(
         matches!(
@@ -11379,8 +11714,24 @@ fn validate_commit_certificate_roster_rejects_hash_version_mismatch() {
 fn validate_commit_certificate_roster_rejects_height_mismatch() {
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
+    let chain: ChainId = "commit-cert-height".parse().expect("chain id parses");
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC7; Hash::LENGTH]));
+    let topology = super::network_topology::Topology::new(vec![peer.clone()]);
+    let keypairs = vec![kp.clone()];
+    let signers_bitmap = vec![0b0000_0001];
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        3,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
     let cert = CommitCertificate {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
@@ -11393,8 +11744,8 @@ fn validate_commit_certificate_roster_rejects_height_mismatch() {
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set: vec![peer],
         aggregate: CommitAggregate {
-            signers_bitmap: vec![0b0000_0001],
-            bls_aggregate_signature: vec![0xAA; 96],
+            signers_bitmap,
+            bls_aggregate_signature,
         },
     };
 
@@ -11406,6 +11757,8 @@ fn validate_commit_certificate_roster_rejects_height_mismatch() {
         iroha_config::parameters::actual::ConsensusMode::Permissioned,
         None,
         cert.epoch,
+        &chain,
+        PERMISSIONED_TAG,
     );
     assert!(
         matches!(
@@ -11420,8 +11773,24 @@ fn validate_commit_certificate_roster_rejects_height_mismatch() {
 fn validate_commit_certificate_roster_rejects_view_mismatch() {
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
+    let chain: ChainId = "commit-cert-view".parse().expect("chain id parses");
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC8; Hash::LENGTH]));
+    let topology = super::network_topology::Topology::new(vec![peer.clone()]);
+    let keypairs = vec![kp.clone()];
+    let signers_bitmap = vec![0b0000_0001];
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        4,
+        1,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
     let cert = CommitCertificate {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
@@ -11434,8 +11803,8 @@ fn validate_commit_certificate_roster_rejects_view_mismatch() {
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set: vec![peer],
         aggregate: CommitAggregate {
-            signers_bitmap: vec![0b0000_0001],
-            bls_aggregate_signature: vec![0xAA; 96],
+            signers_bitmap,
+            bls_aggregate_signature,
         },
     };
 
@@ -11447,6 +11816,8 @@ fn validate_commit_certificate_roster_rejects_view_mismatch() {
         iroha_config::parameters::actual::ConsensusMode::Permissioned,
         None,
         cert.epoch,
+        &chain,
+        PERMISSIONED_TAG,
     );
     assert!(
         matches!(
@@ -11461,8 +11832,24 @@ fn validate_commit_certificate_roster_rejects_view_mismatch() {
 fn validate_commit_certificate_roster_rejects_epoch_mismatch() {
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
+    let chain: ChainId = "commit-cert-epoch".parse().expect("chain id parses");
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC9; Hash::LENGTH]));
+    let topology = super::network_topology::Topology::new(vec![peer.clone()]);
+    let keypairs = vec![kp.clone()];
+    let signers_bitmap = vec![0b0000_0001];
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        5,
+        0,
+        1,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
     let cert = CommitCertificate {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
@@ -11475,8 +11862,8 @@ fn validate_commit_certificate_roster_rejects_epoch_mismatch() {
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set: vec![peer],
         aggregate: CommitAggregate {
-            signers_bitmap: vec![0b0000_0001],
-            bls_aggregate_signature: vec![0xAA; 96],
+            signers_bitmap,
+            bls_aggregate_signature,
         },
     };
 
@@ -11488,6 +11875,8 @@ fn validate_commit_certificate_roster_rejects_epoch_mismatch() {
         iroha_config::parameters::actual::ConsensusMode::Permissioned,
         None,
         0,
+        &chain,
+        PERMISSIONED_TAG,
     );
     assert!(
         matches!(
@@ -11495,6 +11884,180 @@ fn validate_commit_certificate_roster_rejects_epoch_mismatch() {
             Err(super::RosterValidationError::EpochMismatch { .. })
         ),
         "epoch mismatch should reject commit certificate"
+    );
+}
+
+#[test]
+fn validate_commit_certificate_roster_rejects_phase_mismatch() {
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer = PeerId::new(kp.public_key().clone());
+    let chain: ChainId = "commit-cert-phase".parse().expect("chain id parses");
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCC; Hash::LENGTH]));
+    let topology = super::network_topology::Topology::new(vec![peer.clone()]);
+    let keypairs = vec![kp.clone()];
+    let signers_bitmap = vec![0b0000_0001];
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &chain,
+        PERMISSIONED_TAG,
+        Phase::Prepare,
+        block_hash,
+        6,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
+    let cert = CommitCertificate {
+        phase: Phase::Prepare,
+        subject_block_hash: block_hash,
+        height: 6,
+        view: 0,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_cert: None,
+        validator_set_hash: HashOf::new(&vec![peer.clone()]),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: vec![peer],
+        aggregate: CommitAggregate {
+            signers_bitmap,
+            bls_aggregate_signature,
+        },
+    };
+
+    let result = super::validate_commit_certificate_roster(
+        &cert,
+        block_hash,
+        cert.height,
+        Some(cert.view),
+        ConsensusMode::Permissioned,
+        None,
+        cert.epoch,
+        &chain,
+        PERMISSIONED_TAG,
+    );
+    assert!(
+        matches!(result, Err(super::RosterValidationError::PhaseMismatch)),
+        "non-commit phase should reject commit certificate roster"
+    );
+}
+
+#[test]
+fn validate_commit_certificate_roster_rejects_mode_tag_mismatch() {
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer = PeerId::new(kp.public_key().clone());
+    let chain: ChainId = "commit-cert-mode-tag".parse().expect("chain id parses");
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCA; Hash::LENGTH]));
+    let topology = super::network_topology::Topology::new(vec![peer.clone()]);
+    let keypairs = vec![kp.clone()];
+    let signers_bitmap = vec![0b0000_0001];
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &chain,
+        super::NPOS_TAG,
+        Phase::Commit,
+        block_hash,
+        6,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
+    let cert = CommitCertificate {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        height: 6,
+        view: 0,
+        epoch: 0,
+        mode_tag: super::NPOS_TAG.to_string(),
+        highest_cert: None,
+        validator_set_hash: HashOf::new(&vec![peer.clone()]),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: vec![peer],
+        aggregate: CommitAggregate {
+            signers_bitmap,
+            bls_aggregate_signature,
+        },
+    };
+
+    let result = super::validate_commit_certificate_roster(
+        &cert,
+        block_hash,
+        cert.height,
+        Some(cert.view),
+        ConsensusMode::Permissioned,
+        None,
+        cert.epoch,
+        &chain,
+        PERMISSIONED_TAG,
+    );
+    assert!(
+        matches!(result, Err(super::RosterValidationError::ModeTagMismatch)),
+        "mode tag mismatch should reject commit certificate"
+    );
+}
+
+#[test]
+fn validate_commit_certificate_roster_rejects_invalid_signature() {
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer = PeerId::new(kp.public_key().clone());
+    let chain: ChainId = "commit-cert-bad-sig".parse().expect("chain id parses");
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCB; Hash::LENGTH]));
+    let topology = super::network_topology::Topology::new(vec![peer.clone()]);
+    let keypairs = vec![kp.clone()];
+    let signers_bitmap = vec![0b0000_0001];
+    let mut bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        7,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
+    if let Some(byte) = bls_aggregate_signature.first_mut() {
+        *byte ^= 0x01;
+    }
+    let cert = CommitCertificate {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        height: 7,
+        view: 0,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_cert: None,
+        validator_set_hash: HashOf::new(&vec![peer.clone()]),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: vec![peer],
+        aggregate: CommitAggregate {
+            signers_bitmap,
+            bls_aggregate_signature,
+        },
+    };
+
+    let result = super::validate_commit_certificate_roster(
+        &cert,
+        block_hash,
+        cert.height,
+        Some(cert.view),
+        ConsensusMode::Permissioned,
+        None,
+        cert.epoch,
+        &chain,
+        PERMISSIONED_TAG,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(super::RosterValidationError::AggregateSignatureInvalid)
+        ),
+        "invalid aggregate signature should reject commit certificate"
     );
 }
 
@@ -11653,20 +12216,35 @@ fn validate_commit_certificate_roster_requires_stake_quorum() {
 
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC4; Hash::LENGTH]));
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let signers_bitmap = vec![0b0000_0110];
+    let keypairs: Vec<_> = keypairs.iter().cloned().collect();
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &state.chain_id,
+        super::NPOS_TAG,
+        Phase::Commit,
+        block_hash,
+        1,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
     let cert = CommitCertificate {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
         height: 1,
         view: 0,
         epoch: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
+        mode_tag: super::NPOS_TAG.to_string(),
         highest_cert: None,
         validator_set_hash: HashOf::new(&roster),
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set: roster,
         aggregate: CommitAggregate {
-            signers_bitmap: vec![0b0000_0110],
-            bls_aggregate_signature: vec![0xAA; 96],
+            signers_bitmap,
+            bls_aggregate_signature,
         },
     };
     let view = state.view();
@@ -11682,6 +12260,8 @@ fn validate_commit_certificate_roster_requires_stake_quorum() {
         ConsensusMode::Npos,
         Some(&snapshot),
         cert.epoch,
+        &state.chain_id,
+        super::NPOS_TAG,
     );
     assert!(
         matches!(
@@ -16087,6 +16667,10 @@ fn qc_validation_error_reports_reason_labels() {
         "aggregate_mismatch"
     );
     assert_eq!(
+        super::QcValidationError::ModeTagMismatch.telemetry_reason(),
+        "mode_tag_mismatch"
+    );
+    assert_eq!(
         super::QcValidationError::DuplicateSigners.telemetry_reason(),
         "duplicate_signers"
     );
@@ -19944,6 +20528,30 @@ fn validate_qc_rejects_missing_votes_even_with_consistent_aggregate() {
 }
 
 #[test]
+fn qc_aggregate_consistent_rejects_mode_tag_mismatch() {
+    let chain: ChainId = "qc-aggregate-mode-tag".parse().expect("chain id parses");
+    let (keypairs, topology) = sample_bls_topology(1);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x76; Hash::LENGTH]));
+    let mut qc = qc_with_bitmap(
+        &chain,
+        block_hash,
+        3,
+        0,
+        0,
+        vec![0b0000_0001],
+        crate::sumeragi::consensus::Phase::Commit,
+        &topology,
+        &keypairs,
+    );
+    qc.mode_tag = super::NPOS_TAG.to_string();
+    assert!(
+        !super::qc_aggregate_consistent(&qc, &topology, &chain, super::PERMISSIONED_TAG),
+        "mode tag mismatch should fail aggregate validation"
+    );
+}
+
+#[test]
 fn validate_qc_rejects_aggregate_mismatch() {
     let chain: ChainId = "qc-aggregate-mismatch".parse().expect("chain id parses");
     let (keypairs, topology) = sample_bls_topology(2);
@@ -19989,6 +20597,36 @@ fn validate_qc_rejects_aggregate_mismatch() {
         None,
     );
     assert_eq!(result, Err(super::QcValidationError::AggregateMismatch));
+}
+
+#[test]
+fn validate_qc_rejects_mode_tag_mismatch() {
+    let chain: ChainId = "qc-mode-tag-mismatch".parse().expect("chain id parses");
+    let (keypairs, topology) = sample_bls_topology(2);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x7A; Hash::LENGTH]));
+    let mut qc = qc_with_bitmap(
+        &chain,
+        block_hash,
+        4,
+        0,
+        0,
+        vec![0b0000_0011],
+        crate::sumeragi::consensus::Phase::Commit,
+        &topology,
+        &keypairs,
+    );
+    qc.mode_tag = super::NPOS_TAG.to_string();
+    let vote_log = BTreeMap::new();
+    let result = super::validate_qc_against_votes(
+        &vote_log,
+        &qc,
+        &topology,
+        &chain,
+        super::PERMISSIONED_TAG,
+        None,
+    );
+    assert_eq!(result, Err(super::QcValidationError::ModeTagMismatch));
 }
 
 #[test]
@@ -20521,6 +21159,41 @@ fn validate_block_sync_qc_rejects_aggregate_mismatch() {
         result,
         Err(super::QcValidationError::AggregateMismatch)
     ));
+}
+
+#[test]
+fn validate_block_sync_qc_rejects_mode_tag_mismatch() {
+    let chain: ChainId = "block-sync-mode-tag-mismatch"
+        .parse()
+        .expect("chain id parses");
+    let (keypairs, topology) = sample_bls_topology(2);
+    let block_signers: BTreeSet<_> = [0_u32, 1_u32].into_iter().collect();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x72; Hash::LENGTH]));
+    let signers_bitmap = vec![0b0000_0011];
+    let mut qc = qc_with_bitmap(
+        &chain,
+        block_hash,
+        5,
+        0,
+        0,
+        signers_bitmap,
+        crate::sumeragi::consensus::Phase::Commit,
+        &topology,
+        &keypairs,
+    );
+    qc.mode_tag = super::NPOS_TAG.to_string();
+
+    let result = super::validate_block_sync_qc(
+        &qc,
+        &topology,
+        &block_signers,
+        0,
+        &chain,
+        super::PERMISSIONED_TAG,
+        None,
+    );
+    assert_eq!(result, Err(super::QcValidationError::ModeTagMismatch));
 }
 
 #[test]
