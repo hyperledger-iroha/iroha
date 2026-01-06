@@ -4,6 +4,16 @@
 - Sumeragi/localnet: canonicalized the Sora profile BLS private key to satisfy multihash parsing in profile detection defaults.
 - Tests: `CARGO_TARGET_DIR=target/codex cargo test -p iroha_test_network sora_profile_detection_defaults_parse_with_bls_keys -- --nocapture`.
 - Tests: `CARGO_TARGET_DIR=target/codex IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (passed; warning about unused variable `epoch` in `crates/iroha_core/src/block_sync.rs:393`).
+- Core: make block-sync Norito decode fallible for invalid GetBlocksAfter/ShareBlocks batches and add regression coverage.
+- Tests: `cargo test -p iroha_core decode_invalid_ -- --nocapture` (timed out after 300s; new tests passed; warnings about unused `mut` in `crates/iroha_core/src/smartcontracts/isi/world.rs:9010` and `crates/iroha_core/src/smartcontracts/isi/world.rs:9071`).
+- JS SDK: honor IROHA_JS_FORCE_NATIVE to fail fast when native binding is required; add verification tests and README note.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Swift SDK: guard Torii JSON numeric normalization against Int overflow and reuse the safer path for allowance/proof parsing; add regression coverage.
+- Tests: `swift test --filter ToriiJSONValueTests` (from `IrohaSwift`).
+- Java/Android SDK: avoid duplicate WebSocket reconnection scheduling when both error and close fire; add regression coverage.
+- Tests: not run (not requested).
+- Swift SDK: restrict canonical query encoding to ASCII unreserved characters so non-ASCII is percent-escaped; add regression coverage.
+- Tests: `swift test --filter CanonicalRequestTests` (from `IrohaSwift`).
 - Sumeragi penalties/status: seed staking config + escrow assets for censorship slashing tests; add reentrant test guards for view-change/validation-reject counters and commit-history snapshots to avoid cross-test interference.
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core consensus_penalties_apply_censorship_evidence --lib -- --nocapture`.
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core sumeragi::status::tests::view_change_cause --lib -- --nocapture`.

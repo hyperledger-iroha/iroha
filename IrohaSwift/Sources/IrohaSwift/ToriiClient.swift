@@ -1290,23 +1290,7 @@ public struct ToriiOfflineAllowanceItem: Decodable, Sendable {
 
     private static func normalizedString(_ value: ToriiJSONValue?) -> String? {
         guard let value else { return nil }
-        switch value {
-        case .string(let string):
-            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        case .number(let number):
-            guard number.isFinite else {
-                return nil
-            }
-            if number.rounded(.towardZero) == number {
-                return String(Int(number))
-            }
-            return String(number)
-        case .bool(let flag):
-            return flag ? "true" : "false"
-        default:
-            return nil
-        }
+        return value.normalizedString
     }
 
     private static func normalizedUInt64(_ value: ToriiJSONValue?) -> UInt64? {
@@ -1443,21 +1427,7 @@ public struct ToriiOfflineBundleProofStatus: Decodable, Sendable, Equatable {
 
     private static func normalizedString(_ value: ToriiJSONValue?) -> String? {
         guard let value else { return nil }
-        switch value {
-        case .string(let string):
-            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        case .number(let number):
-            guard number.isFinite else { return nil }
-            if number.rounded(.towardZero) == number {
-                return String(Int(number))
-            }
-            return String(number)
-        case .bool(let flag):
-            return flag ? "true" : "false"
-        default:
-            return nil
-        }
+        return value.normalizedString
     }
 
     private static func normalizedBool(_ value: ToriiJSONValue?) -> Bool? {
@@ -1911,6 +1881,9 @@ extension ToriiJSONValue {
                 return nil
             }
             if number.rounded(.towardZero) == number {
+                guard number >= Double(Int.min), number <= Double(Int.max) else {
+                    return nil
+                }
                 return String(Int(number))
             }
             return String(number)
