@@ -285,6 +285,7 @@ impl Actor {
                 stats_snapshot.height,
                 stats_snapshot.view,
                 stats_snapshot.phase,
+                stats_snapshot.priority,
                 &signers,
                 &topology,
                 now,
@@ -382,11 +383,7 @@ impl Actor {
                     attempts,
                     "missing block dwell exceeded view-change window; forcing view change"
                 );
-                self.trigger_view_change_with_cause(
-                    height,
-                    view,
-                    ViewChangeCause::MissingPayload,
-                );
+                self.trigger_view_change_with_cause(height, view, ViewChangeCause::MissingPayload);
                 progress = true;
             }
         }
@@ -1274,7 +1271,11 @@ impl Actor {
         &mut self,
         qc: &crate::sumeragi::consensus::Qc,
     ) -> bool {
-        if self.pending.pending_blocks.contains_key(&qc.subject_block_hash) {
+        if self
+            .pending
+            .pending_blocks
+            .contains_key(&qc.subject_block_hash)
+        {
             return true;
         }
         if self
@@ -1554,6 +1555,7 @@ impl Actor {
                 qc.height,
                 qc.view,
                 qc.phase,
+                super::MissingBlockPriority::Consensus,
                 &signer_set,
                 &topology,
                 now,

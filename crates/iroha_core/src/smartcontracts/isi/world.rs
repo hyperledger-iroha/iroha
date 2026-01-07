@@ -1592,12 +1592,12 @@ pub mod isi {
                             "owner must be a canonical account id".into(),
                         )
                     })?;
-                    let owner_parsed: iroha_data_model::account::AccountId = if let Ok(id) =
-                        owner_str.parse()
-                    {
-                        id
-                    } else {
-                        state_transaction.world.emit_events(Some(
+                        let owner_parsed: iroha_data_model::account::AccountId = if let Ok(id) =
+                            owner_str.parse()
+                        {
+                            id
+                        } else {
+                            state_transaction.world.emit_events(Some(
                             iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                 iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                     referendum_id: self.election_id.clone(),
@@ -1605,13 +1605,13 @@ pub mod isi {
                                 },
                             ),
                         ));
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "owner must be a canonical account id".into(),
-                        ));
-                    };
-                    let owner_canonical = owner_parsed.to_string();
-                    if owner_canonical != owner_str {
-                        state_transaction.world.emit_events(Some(
+                            return Err(InstructionExecutionError::InvariantViolation(
+                                "owner must be a canonical account id".into(),
+                            ));
+                        };
+                        let owner_canonical = owner_parsed.to_string();
+                        if owner_canonical != owner_str {
+                            state_transaction.world.emit_events(Some(
                             iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                 iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                     referendum_id: self.election_id.clone(),
@@ -1619,13 +1619,13 @@ pub mod isi {
                                 },
                             ),
                         ));
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "owner must use canonical account id form".into(),
-                        ));
-                    }
-                    if lock_owner.is_none() {
-                        lock_owner = Some(owner_parsed);
-                    }
+                            return Err(InstructionExecutionError::InvariantViolation(
+                                "owner must use canonical account id form".into(),
+                            ));
+                        }
+                        if lock_owner.is_none() {
+                            lock_owner = Some(owner_parsed);
+                        }
                     }
                 }
                 if let Some(amount_val) = val.get("amount") {

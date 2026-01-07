@@ -4465,6 +4465,13 @@ async fn handler_gov_ballot_zk_v1(
     #[cfg(feature = "zk-ballot")]
     {
         check_access_enforced(&app, &headers, None, "v1/gov/ballots/zk-v1", true).await?;
+        let raw = norito::json::to_vec(&value).map_err(|e| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "bad json: {e}"
+                )),
+            ))
+        })?;
         let dto: crate::gov::ZkBallotV1Dto = norito::json::from_value(value).map_err(|e| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
@@ -4478,7 +4485,10 @@ async fn handler_gov_ballot_zk_v1(
             app.state.clone(),
             app.telemetry.clone(),
             app.strict_addresses,
-            crate::utils::extractors::NoritoJson(dto),
+            crate::utils::extractors::NoritoJsonWithBytes {
+                value: dto,
+                raw: Bytes::from(raw),
+            },
         )
         .await
     }
@@ -4509,6 +4519,13 @@ async fn handler_gov_ballot_zk_v1_ballot_proof(
             true,
         )
         .await?;
+        let raw = norito::json::to_vec(&value).map_err(|e| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "bad json: {e}"
+                )),
+            ))
+        })?;
         let dto: crate::gov::ZkBallotV1BallotProofDto =
             norito::json::from_value(value).map_err(|e| {
                 Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -4523,7 +4540,10 @@ async fn handler_gov_ballot_zk_v1_ballot_proof(
             app.state.clone(),
             app.telemetry.clone(),
             app.strict_addresses,
-            crate::utils::extractors::NoritoJson(dto),
+            crate::utils::extractors::NoritoJsonWithBytes {
+                value: dto,
+                raw: Bytes::from(raw),
+            },
         )
         .await
     }

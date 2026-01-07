@@ -34,7 +34,7 @@ use norito::{
 };
 
 use crate::{
-    JsonBody, NoritoJson, NoritoQuery,
+    JsonBody, NoritoJson, NoritoJsonWithBytes, NoritoQuery,
     json_macros::{JsonDeserialize, JsonSerialize},
     routing::{MaybeTelemetry, parse_account_literal},
 };
@@ -317,27 +317,55 @@ fn hint_present(map: &json::Map, key: &str) -> bool {
 }
 
 fn normalize_zk_ballot_public_inputs(map: &mut json::Map) -> Result<(), String> {
+    reject_zk_public_input_aliases(map)?;
+    canonicalize_hex32_public_input(map, "root_hint", "root_hint")?;
+    canonicalize_hex32_public_input(map, "nullifier", "nullifier")?;
+    Ok(())
+}
+
+fn reject_zk_public_input_aliases(map: &json::Map) -> Result<(), String> {
     reject_zk_public_input_key(map, "durationBlocks", "duration_blocks")?;
     reject_zk_public_input_key(map, "root_hint_hex", "root_hint")?;
     reject_zk_public_input_key(map, "rootHintHex", "root_hint")?;
     reject_zk_public_input_key(map, "rootHint", "root_hint")?;
     reject_zk_public_input_key(map, "nullifier_hex", "nullifier")?;
     reject_zk_public_input_key(map, "nullifierHex", "nullifier")?;
-    canonicalize_hex32_public_input(map, "root_hint", "root_hint")?;
-    canonicalize_hex32_public_input(map, "nullifier", "nullifier")?;
     Ok(())
 }
 
-fn reject_zk_public_input_key(
-    map: &json::Map,
-    key: &str,
-    canonical: &str,
-) -> Result<(), String> {
+fn reject_zk_public_input_key(map: &json::Map, key: &str, canonical: &str) -> Result<(), String> {
     if map.contains_key(key) {
         return Err(format!(
             "public inputs must use {canonical} (unsupported key {key})"
         ));
     }
+    Ok(())
+}
+
+#[cfg(feature = "zk-ballot")]
+fn reject_zk_v1_aliases_from_raw(raw: &[u8]) -> Result<(), String> {
+    let Ok(value) = json::from_slice::<json::Value>(raw) else {
+        return Ok(());
+    };
+    let json::Value::Object(map) = value else {
+        return Ok(());
+    };
+    reject_zk_public_input_aliases(&map)?;
+    Ok(())
+}
+
+#[cfg(feature = "zk-ballot")]
+fn reject_zk_v1_ballotproof_aliases_from_raw(raw: &[u8]) -> Result<(), String> {
+    let Ok(value) = json::from_slice::<json::Value>(raw) else {
+        return Ok(());
+    };
+    let json::Value::Object(map) = value else {
+        return Ok(());
+    };
+    let Some(json::Value::Object(ballot)) = map.get("ballot") else {
+        return Ok(());
+    };
+    reject_zk_public_input_aliases(ballot)?;
     Ok(())
 }
 
@@ -447,8 +475,11 @@ pub async fn handle_gov_ballot_zk_v1(
     state: Arc<iroha_core::state::State>,
     telemetry: MaybeTelemetry,
     strict_addresses: bool,
-    NoritoJson(body): NoritoJson<ZkBallotV1Dto>,
+    NoritoJsonWithBytes { value: body, raw }: NoritoJsonWithBytes<ZkBallotV1Dto>,
 ) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
+    if let Err(reason) = reject_zk_v1_aliases_from_raw(raw.as_ref()) {
+        return Ok(ballot_rejection(&reason));
+    }
     // Minimal size check for b64
     if base64::engine::general_purpose::STANDARD
         .decode(body.envelope_b64.as_bytes())
@@ -560,8 +591,11 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
     state: Arc<iroha_core::state::State>,
     telemetry: MaybeTelemetry,
     strict_addresses: bool,
-    NoritoJson(body): NoritoJson<ZkBallotV1BallotProofDto>,
+    NoritoJsonWithBytes { value: body, raw }: NoritoJsonWithBytes<ZkBallotV1BallotProofDto>,
 ) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
+    if let Err(reason) = reject_zk_v1_ballotproof_aliases_from_raw(raw.as_ref()) {
+        return Ok(ballot_rejection(&reason));
+    }
     if body.ballot.envelope_bytes.is_empty() {
         return Ok(JsonBody(BallotSubmitResponse {
             ok: false,
@@ -2661,6 +2695,8 @@ pub async fn handle_gov_council_audit(
 mod tests {
     use std::sync::Arc;
 
+    #[cfg(feature = "zk-ballot")]
+    use bytes::Bytes;
     use iroha_config::parameters::actual::LaneConfig;
     use iroha_core::{
         block::BlockBuilder,
@@ -3288,7 +3324,10 @@ mod tests {
         let root_raw = format!("0x{}", "Aa".repeat(32));
         map.insert("root_hint".to_string(), norito::json::Value::from(root_raw));
         let nullifier_raw = format!("blake2b32:{}", "BB".repeat(32));
-        map.insert("nullifier".to_string(), norito::json::Value::from(nullifier_raw));
+        map.insert(
+            "nullifier".to_string(),
+            norito::json::Value::from(nullifier_raw),
+        );
         normalize_zk_ballot_public_inputs(&mut map).expect("normalize");
         let root_expected = "aa".repeat(32);
         let nullifier_expected = "bb".repeat(32);
@@ -3702,7 +3741,7 @@ mod tests {
                 let state = state.clone();
                 let queue = queue.clone();
                 let chain_id = chain_id.clone();
-                move |body: crate::NoritoJson<super::ZkBallotV1Dto>| {
+                move |body: crate::NoritoJsonWithBytes<super::ZkBallotV1Dto>| {
                     let telemetry = MaybeTelemetry::disabled();
                     async move {
                         super::handle_gov_ballot_zk_v1(
@@ -3780,13 +3819,15 @@ mod tests {
             nullifier: None,
             private_key: None,
         };
+        let raw =
+            Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
         let res = super::handle_gov_ballot_zk_v1(
             chain_id,
             queue,
             state,
             MaybeTelemetry::disabled(),
             false,
-            crate::NoritoJson(dto),
+            crate::NoritoJsonWithBytes { value: dto, raw },
         )
         .await
         .expect("handler ok");
@@ -3818,13 +3859,15 @@ mod tests {
             nullifier: None,
             private_key: None,
         };
+        let raw =
+            Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
         let res = super::handle_gov_ballot_zk_v1(
             chain_id,
             queue,
             state,
             MaybeTelemetry::disabled(),
             false,
-            crate::NoritoJson(dto),
+            crate::NoritoJsonWithBytes { value: dto, raw },
         )
         .await
         .expect("handler ok");
@@ -3834,6 +3877,58 @@ mod tests {
         assert_eq!(
             body.reason.as_deref(),
             Some("lock hints must include owner, amount, duration_blocks")
+        );
+    }
+
+    #[cfg(feature = "zk-ballot")]
+    #[tokio::test]
+    async fn ballot_zk_v1_rejects_alias_keys_in_raw_json() {
+        let (state, queue, chain_id) = mk_basic_context();
+        let chain_id_str = chain_id.as_str().to_string();
+        let envelope_b64 = base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]);
+        let root_hint = hex::encode([0u8; 32]);
+        let dto = super::ZkBallotV1Dto {
+            authority: ACCOUNT_AUTHORITY.to_string(),
+            chain_id: chain_id_str.clone(),
+            election_id: "ref-1".to_string(),
+            backend: "halo2/ipa".to_string(),
+            envelope_b64: envelope_b64.clone(),
+            root_hint: Some(root_hint.clone()),
+            owner: None,
+            amount: None,
+            duration_blocks: None,
+            direction: None,
+            nullifier: None,
+            private_key: None,
+        };
+        let raw = Bytes::from(
+            norito::json::to_vec(&norito::json!({
+                "authority": ACCOUNT_AUTHORITY,
+                "chain_id": chain_id_str,
+                "election_id": "ref-1",
+                "backend": "halo2/ipa",
+                "envelope_b64": envelope_b64,
+                "root_hint": root_hint.clone(),
+                "rootHintHex": root_hint,
+            }))
+            .unwrap(),
+        );
+        let res = super::handle_gov_ballot_zk_v1(
+            chain_id,
+            queue,
+            state,
+            MaybeTelemetry::disabled(),
+            false,
+            crate::NoritoJsonWithBytes { value: dto, raw },
+        )
+        .await
+        .expect("handler ok");
+        let body = res.0;
+        assert!(!body.ok);
+        assert!(!body.accepted);
+        assert_eq!(
+            body.reason.as_deref(),
+            Some("public inputs must use root_hint (unsupported key rootHintHex)")
         );
     }
 
@@ -3854,7 +3949,7 @@ mod tests {
                 let state = state.clone();
                 let queue = queue.clone();
                 let chain_id = chain_id.clone();
-                move |body: crate::NoritoJson<super::ZkBallotV1BallotProofDto>| {
+                move |body: crate::NoritoJsonWithBytes<super::ZkBallotV1BallotProofDto>| {
                     let telemetry = MaybeTelemetry::disabled();
                     async move {
                         super::handle_gov_ballot_zk_v1_ballotproof(
@@ -3915,6 +4010,65 @@ mod tests {
 
     #[cfg(feature = "zk-ballot")]
     #[tokio::test]
+    async fn ballot_zk_v1_ballotproof_rejects_alias_keys_in_raw_json() {
+        use iroha_data_model::isi::governance::BallotProof;
+
+        let (state, queue, chain_id) = mk_basic_context();
+        let chain_id_str = chain_id.as_str().to_string();
+        let envelope_b64 = base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]);
+        let root_hint = hex::encode([0xAAu8; 32]);
+        let ballot = BallotProof {
+            backend: "halo2/ipa".into(),
+            envelope_bytes: vec![1u8, 2, 3, 4],
+            root_hint: Some([0xAAu8; 32]),
+            owner: None,
+            nullifier: None,
+            amount: None,
+            duration_blocks: None,
+            direction: None,
+        };
+        let dto = super::ZkBallotV1BallotProofDto {
+            authority: ACCOUNT_AUTHORITY.to_string(),
+            chain_id: chain_id_str.clone(),
+            election_id: "ref-1".to_string(),
+            ballot,
+            private_key: None,
+        };
+        let raw = Bytes::from(
+            norito::json::to_vec(&norito::json!({
+                "authority": ACCOUNT_AUTHORITY,
+                "chain_id": chain_id_str,
+                "election_id": "ref-1",
+                "ballot": {
+                    "backend": "halo2/ipa",
+                    "envelope_bytes": envelope_b64,
+                    "root_hint": root_hint.clone(),
+                    "rootHintHex": root_hint,
+                },
+            }))
+            .unwrap(),
+        );
+        let res = super::handle_gov_ballot_zk_v1_ballotproof(
+            chain_id,
+            queue,
+            state,
+            MaybeTelemetry::disabled(),
+            false,
+            crate::NoritoJsonWithBytes { value: dto, raw },
+        )
+        .await
+        .expect("handler ok");
+        let body = res.0;
+        assert!(!body.ok);
+        assert!(!body.accepted);
+        assert_eq!(
+            body.reason.as_deref(),
+            Some("public inputs must use root_hint (unsupported key rootHintHex)")
+        );
+    }
+
+    #[cfg(feature = "zk-ballot")]
+    #[tokio::test]
     async fn ballot_zk_v1_ballotproof_rejects_partial_lock_hints() {
         use iroha_data_model::isi::governance::BallotProof;
 
@@ -3937,13 +4091,15 @@ mod tests {
             ballot,
             private_key: None,
         };
+        let raw =
+            Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
         let res = super::handle_gov_ballot_zk_v1_ballotproof(
             chain_id,
             queue,
             state,
             MaybeTelemetry::disabled(),
             false,
-            crate::NoritoJson(dto),
+            crate::NoritoJsonWithBytes { value: dto, raw },
         )
         .await
         .expect("handler ok");
