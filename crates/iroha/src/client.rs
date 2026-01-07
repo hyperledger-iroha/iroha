@@ -31,7 +31,7 @@ use iroha_data_model::{
         manifest::DaManifestV1,
         types::{BlobDigest, ExtraMetadata},
     },
-    nexus::AssetPermissionManifest,
+    nexus::{AssetPermissionManifest, UniversalAccountId},
 };
 use iroha_logger::prelude::*;
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
@@ -1202,16 +1202,10 @@ fn canonicalize_uaid_literal(literal: &str, context: &str) -> Result<String> {
     if trimmed.is_empty() {
         return Err(eyre!("{context} must be a non-empty UAID literal"));
     }
-    let hex_portion = trimmed
-        .strip_prefix("uaid:")
-        .or_else(|| trimmed.strip_prefix("UAID:"))
-        .unwrap_or(trimmed);
-    if hex_portion.len() != 64 || !hex_portion.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(eyre!(
-            "{context} must contain exactly 64 hexadecimal characters"
-        ));
-    }
-    Ok(format!("uaid:{}", hex_portion.to_ascii_lowercase()))
+    let uaid = UniversalAccountId::from_str(trimmed).wrap_err_with(|| {
+        format!("{context} must be `uaid:<hex>` or a 64-hex digest with LSB set to 1")
+    })?;
+    Ok(uaid.to_string())
 }
 
 fn canonicalize_hex32_literal(literal: &str, context: &str) -> Result<String> {
@@ -12349,11 +12343,22 @@ mod tests {
 
     #[test]
     fn canonicalize_uaid_literal_is_case_insensitive() {
-        let suffix = "ABCDEF00".repeat(8);
+        let suffix = "ABCDEF01".repeat(8);
         let literal = format!("UAID:{suffix}");
         let canonical =
             canonicalize_uaid_literal(&literal, "tests.uaid").expect("canonicalize literal");
         assert_eq!(canonical, format!("uaid:{}", suffix.to_ascii_lowercase()));
+    }
+
+    #[test]
+    fn canonicalize_uaid_literal_rejects_invalid_lsb() {
+        let literal = format!("uaid:{}", "10".repeat(32));
+        let err = canonicalize_uaid_literal(&literal, "tests.uaid")
+            .expect_err("invalid UAID should be rejected");
+        assert!(
+            err.to_string().contains("LSB set to 1"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

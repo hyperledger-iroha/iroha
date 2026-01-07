@@ -333,6 +333,28 @@ fn reject_zk_public_input_aliases(map: &json::Map) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_owner_canonical(owner: &str) -> Result<(), String> {
+    let canonical = iroha_data_model::account::AccountId::canonicalize(owner)
+        .map_err(|_| "owner must be a canonical account id".to_string())?;
+    if canonical != owner {
+        return Err("owner must use canonical account id form".to_string());
+    }
+    Ok(())
+}
+
+fn reject_zk_public_input_owner(map: &json::Map) -> Result<(), String> {
+    let Some(value) = map.get("owner") else {
+        return Ok(());
+    };
+    if matches!(value, json::Value::Null) {
+        return Ok(());
+    }
+    let owner = value
+        .as_str()
+        .ok_or_else(|| "owner must be a canonical account id".to_string())?;
+    ensure_owner_canonical(owner)
+}
+
 fn reject_zk_public_input_key(map: &json::Map, key: &str, canonical: &str) -> Result<(), String> {
     if map.contains_key(key) {
         return Err(format!(
@@ -366,6 +388,7 @@ fn reject_zk_v1_ballotproof_aliases_from_raw(raw: &[u8]) -> Result<(), String> {
         return Ok(());
     };
     reject_zk_public_input_aliases(ballot)?;
+    reject_zk_public_input_owner(ballot)?;
     Ok(())
 }
 
@@ -508,6 +531,11 @@ pub async fn handle_gov_ballot_zk_v1(
         return Ok(ballot_rejection(
             "lock hints must include owner, amount, duration_blocks",
         ));
+    }
+    if let Some(owner) = &body.owner {
+        if let Err(reason) = ensure_owner_canonical(owner) {
+            return Ok(ballot_rejection(&reason));
+        }
     }
     // Build public inputs JSON object with optional hints
     let mut pub_map = norito::json::Map::new();
@@ -1988,6 +2016,9 @@ pub async fn handle_gov_ballot_zk(
                     "lock hints must include owner, amount, duration_blocks",
                 ));
             }
+            if let Err(reason) = reject_zk_public_input_owner(&map) {
+                return Ok(ballot_rejection(&reason));
+            }
             norito::json::Value::Object(map)
         }
         Some(_) => {
@@ -2750,6 +2781,14 @@ mod tests {
             .to_string()
     }
 
+    fn noncanonical_literal(raw: &str) -> String {
+        let account_id = AccountId::parse(raw)
+            .expect("literal parses")
+            .into_account_id();
+        let hex = account_id.to_canonical_hex().expect("canonical hex");
+        format!("{hex}@{}", account_id.domain())
+    }
+
     fn mk_basic_context() -> (Arc<State>, Arc<Queue>, Arc<ChainId>) {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -3282,6 +3321,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ballot_zk_rejects_noncanonical_owner_hint() {
+        let (state, queue, chain_id) = mk_basic_context();
+        let chain_id_str = chain_id.as_str().to_string();
+        let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
+        let owner = noncanonical_literal(ACCOUNT_AUTHORITY);
+        let mut map = norito::json::Map::new();
+        map.insert("owner".to_string(), norito::json::Value::from(owner));
+        map.insert("amount".to_string(), norito::json::Value::from("100"));
+        map.insert(
+            "duration_blocks".to_string(),
+            norito::json::Value::from(64u64),
+        );
+        let dto = ZkBallotDto {
+            authority: ACCOUNT_AUTHORITY.to_string(),
+            chain_id: chain_id_str,
+            election_id: "e1".to_string(),
+            proof_b64,
+            public: Some(norito::json::Value::Object(map)),
+            private_key: None,
+        };
+        let res = handle_gov_ballot_zk(
+            chain_id,
+            queue,
+            state,
+            MaybeTelemetry::disabled(),
+            false,
+            NoritoJson(dto),
+        )
+        .await
+        .expect("handler ok");
+        let body = res.0;
+        assert!(!body.ok);
+        assert!(!body.accepted);
+        assert_eq!(
+            body.reason.as_deref(),
+            Some("owner must use canonical account id form")
+        );
+    }
+
+    #[tokio::test]
     async fn ballot_zk_rejects_deprecated_public_inputs() {
         let (state, queue, chain_id) = mk_basic_context();
         let chain_id_str = chain_id.as_str().to_string();
@@ -3754,6 +3833,7 @@ mod tests {
         );
 
         // Build DTO
+        let owner = canonical_literal(ACCOUNT_AUTHORITY);
         let dto = super::ZkBallotV1Dto {
             authority:
                 "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
@@ -3763,10 +3843,7 @@ mod tests {
             backend: "halo2/ipa".to_string(),
             envelope_b64: base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]),
             root_hint: Some(hex::encode([0u8; 32])),
-            owner: Some(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .to_string(),
-            ),
+            owner: Some(owner),
             amount: Some("100".to_string()),
             duration_blocks: Some(200),
             direction: Some("Aye".to_string()),
@@ -3934,6 +4011,47 @@ mod tests {
 
     #[cfg(feature = "zk-ballot")]
     #[tokio::test]
+    async fn ballot_zk_v1_rejects_noncanonical_owner_hint() {
+        let (state, queue, chain_id) = mk_basic_context();
+        let chain_id_str = chain_id.as_str().to_string();
+        let owner = noncanonical_literal(ACCOUNT_AUTHORITY);
+        let dto = super::ZkBallotV1Dto {
+            authority: ACCOUNT_AUTHORITY.to_string(),
+            chain_id: chain_id_str,
+            election_id: "ref-1".to_string(),
+            backend: "halo2/ipa".to_string(),
+            envelope_b64: base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]),
+            root_hint: None,
+            owner: Some(owner),
+            amount: Some("100".to_string()),
+            duration_blocks: Some(200),
+            direction: None,
+            nullifier: None,
+            private_key: None,
+        };
+        let raw =
+            Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
+        let res = super::handle_gov_ballot_zk_v1(
+            chain_id,
+            queue,
+            state,
+            MaybeTelemetry::disabled(),
+            false,
+            crate::NoritoJsonWithBytes { value: dto, raw },
+        )
+        .await
+        .expect("handler ok");
+        let body = res.0;
+        assert!(!body.ok);
+        assert!(!body.accepted);
+        assert_eq!(
+            body.reason.as_deref(),
+            Some("owner must use canonical account id form")
+        );
+    }
+
+    #[cfg(feature = "zk-ballot")]
+    #[tokio::test]
     async fn ballot_zk_v1_ballotproof_builds_instruction_skeleton() {
         use axum::{Router, routing::post};
         use http_body_util::BodyExt as _;
@@ -3962,11 +4080,12 @@ mod tests {
         );
 
         // Build DTO
+        let owner = canonical_literal(ACCOUNT_AUTHORITY);
         let ballot = BallotProof {
             backend: "halo2/ipa".into(),
             envelope_bytes: vec![1u8, 2, 3, 4],
             root_hint: Some([0xAA; 32]),
-            owner: None,
+            owner: Some(owner.parse().expect("valid account id")),
             nullifier: Some([0x11; 32]),
             amount: Some("200".to_string()),
             duration_blocks: Some(256),
@@ -4064,6 +4183,67 @@ mod tests {
         assert_eq!(
             body.reason.as_deref(),
             Some("public inputs must use root_hint (unsupported key rootHintHex)")
+        );
+    }
+
+    #[cfg(feature = "zk-ballot")]
+    #[tokio::test]
+    async fn ballot_zk_v1_ballotproof_rejects_noncanonical_owner_hint_in_raw_json() {
+        use iroha_data_model::isi::governance::BallotProof;
+
+        let (state, queue, chain_id) = mk_basic_context();
+        let chain_id_str = chain_id.as_str().to_string();
+        let envelope_b64 = base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]);
+        let owner_canonical = canonical_literal(ACCOUNT_AUTHORITY);
+        let owner_noncanonical = noncanonical_literal(ACCOUNT_AUTHORITY);
+        let ballot = BallotProof {
+            backend: "halo2/ipa".into(),
+            envelope_bytes: vec![1u8, 2, 3, 4],
+            root_hint: None,
+            owner: Some(owner_canonical.parse().expect("valid account id")),
+            nullifier: None,
+            amount: Some("200".to_string()),
+            duration_blocks: Some(256),
+            direction: None,
+        };
+        let dto = super::ZkBallotV1BallotProofDto {
+            authority: ACCOUNT_AUTHORITY.to_string(),
+            chain_id: chain_id_str.clone(),
+            election_id: "ref-1".to_string(),
+            ballot,
+            private_key: None,
+        };
+        let raw = Bytes::from(
+            norito::json::to_vec(&norito::json!({
+                "authority": ACCOUNT_AUTHORITY,
+                "chain_id": chain_id_str,
+                "election_id": "ref-1",
+                "ballot": {
+                    "backend": "halo2/ipa",
+                    "envelope_bytes": envelope_b64,
+                    "owner": owner_noncanonical,
+                    "amount": "200",
+                    "duration_blocks": 256,
+                },
+            }))
+            .unwrap(),
+        );
+        let res = super::handle_gov_ballot_zk_v1_ballotproof(
+            chain_id,
+            queue,
+            state,
+            MaybeTelemetry::disabled(),
+            false,
+            crate::NoritoJsonWithBytes { value: dto, raw },
+        )
+        .await
+        .expect("handler ok");
+        let body = res.0;
+        assert!(!body.ok);
+        assert!(!body.accepted);
+        assert_eq!(
+            body.reason.as_deref(),
+            Some("owner must use canonical account id form")
         );
     }
 

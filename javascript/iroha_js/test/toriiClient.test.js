@@ -2142,6 +2142,29 @@ test("getUaidPortfolio normalizes UAID literals and dataspace payloads", async (
   await assert.rejects(() => client.getUaidPortfolio("short"), /uaid/);
 });
 
+test("getUaidPortfolio accepts mixed-case UAID prefixes", async () => {
+  let capturedUrl;
+  const fixture = cloneFixture(toriiFixtures.uaid.portfolio);
+  const canonical = fixture.uaid;
+  const rawHex = canonical.slice("uaid:".length);
+  const mixed = `UaiD:  ${rawHex.toUpperCase()}  `;
+  const fetchImpl = async (url) => {
+    capturedUrl = url;
+    return createResponse({
+      status: 200,
+      jsonData: fixture,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getUaidPortfolio(` ${mixed} `);
+  assert.equal(
+    capturedUrl,
+    `${BASE_URL}/v1/accounts/${encodeURIComponent(canonical)}/portfolio`,
+  );
+  assert.equal(result.uaid, canonical);
+});
+
 test("getUaidPortfolio rejects unsupported option fields", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
@@ -2181,6 +2204,10 @@ test("getUaidBindings enforces UAID formats, address_format, and normalizes entr
   assert.equal(parsed.searchParams.get("address_format"), "compressed");
   assert.equal(result.dataspaces[0].accounts[0], "holder1@portfolio");
   await assert.rejects(() => client.getUaidBindings("uaid:xyz"), /64 hex characters/);
+  await assert.rejects(
+    () => client.getUaidBindings(`uaid:${"10".repeat(32)}`),
+    /least significant bit/i,
+  );
 });
 
 test("getUaidManifests validates lifecycle metadata and filters by dataspace", async () => {
@@ -8541,7 +8568,7 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
     electionId: "ref-zk",
     proof: [1, 2, 3],
     public: {
-      owner: "bob@wonderland",
+      owner: SAMPLE_ACCOUNT_FORMS.ih58,
       amount: "42",
       duration_blocks: 128,
       direction: "Aye",
@@ -8551,7 +8578,7 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
   });
   assert.equal(calls[0].body.proof_b64, "AQID");
   assert.deepEqual(calls[0].body.public, {
-    owner: "bob@wonderland",
+    owner: SAMPLE_ACCOUNT_FORMS.ih58,
     amount: "42",
     duration_blocks: 128,
     direction: "Aye",
@@ -8609,7 +8636,7 @@ test("governanceSubmitZk ballots reject partial lock hints", async () => {
         chainId: "chain-0",
         electionId: "ref-zk",
         proof: [1, 2, 3],
-        public: { owner: "bob@wonderland", amount: "42" },
+        public: { owner: SAMPLE_ACCOUNT_FORMS.ih58, amount: "42" },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
@@ -8633,7 +8660,7 @@ test("governanceSubmitZk ballots reject invalid hex hints", async () => {
         electionId: "ref-zk",
         proof: [1, 2, 3],
         public: {
-          owner: "bob@wonderland",
+          owner: SAMPLE_ACCOUNT_FORMS.ih58,
           amount: "42",
           duration_blocks: 128,
           root_hint: "not-hex",
@@ -8661,7 +8688,7 @@ test("governanceSubmitZk ballots reject deprecated public input keys", async () 
         electionId: "ref-zk",
         proof: [1, 2, 3],
         public: {
-          owner: "bob@wonderland",
+          owner: SAMPLE_ACCOUNT_FORMS.ih58,
           amount: "42",
           durationBlocks: 128,
         },
@@ -8669,6 +8696,33 @@ test("governanceSubmitZk ballots reject deprecated public input keys", async () 
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
       assert.match(String(error?.message), /durationBlocks/i);
+      return true;
+    },
+  );
+});
+
+test("governanceSubmitZk ballots reject noncanonical owners", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.governanceSubmitZkBallot({
+        authority: "bob@wonderland",
+        chainId: "chain-0",
+        electionId: "ref-zk",
+        proof: [1, 2, 3],
+        public: {
+          owner: SAMPLE_ACCOUNT_FORMS.compressed,
+          amount: "42",
+          duration_blocks: 128,
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
+      assert.match(String(error?.message), /canonical account id/i);
       return true;
     },
   );
@@ -8688,11 +8742,37 @@ test("governanceSubmitZkBallotV1 rejects partial lock hints", async () => {
         electionId: "ref-zk",
         backend: "halo2/ipa",
         envelope: [4, 5],
-        owner: "bob@wonderland",
+        owner: SAMPLE_ACCOUNT_FORMS.ih58,
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
       assert.match(String(error?.message), /owner, amount, and duration_blocks/i);
+      return true;
+    },
+  );
+});
+
+test("governanceSubmitZkBallotV1 rejects noncanonical owner", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.governanceSubmitZkBallotV1({
+        authority: "bob@wonderland",
+        chainId: "chain-0",
+        electionId: "ref-zk",
+        backend: "halo2/ipa",
+        envelope: [4, 5],
+        owner: SAMPLE_ACCOUNT_FORMS.compressed,
+        amount: "42",
+        duration_blocks: 128,
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
+      assert.match(String(error?.message), /canonical account id/i);
       return true;
     },
   );
@@ -8734,11 +8814,37 @@ test("governanceSubmitZkBallotProofV1 rejects partial lock hints", async () => {
         authority: "bob@wonderland",
         chainId: "chain-0",
         electionId: "ref-zk",
-        ballot: { owner: "bob@wonderland" },
+        ballot: { owner: SAMPLE_ACCOUNT_FORMS.ih58 },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
       assert.match(String(error?.message), /owner, amount, and duration_blocks/i);
+      return true;
+    },
+  );
+});
+
+test("governanceSubmitZkBallotProofV1 rejects noncanonical owner", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.governanceSubmitZkBallotProofV1({
+        authority: "bob@wonderland",
+        chainId: "chain-0",
+        electionId: "ref-zk",
+        ballot: {
+          owner: SAMPLE_ACCOUNT_FORMS.compressed,
+          amount: "42",
+          duration_blocks: 128,
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
+      assert.match(String(error?.message), /canonical account id/i);
       return true;
     },
   );

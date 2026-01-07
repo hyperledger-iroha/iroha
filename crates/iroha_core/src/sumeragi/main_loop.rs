@@ -7693,6 +7693,29 @@ impl Actor {
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
+        if let (Some(expected_root), Some(computed_root)) =
+            (session.expected_chunk_root, session.chunk_root())
+        {
+            if expected_root != computed_root {
+                session.invalid = true;
+                warn!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    ?expected_root,
+                    ?computed_root,
+                    "RBC chunk-root mismatch detected; refusing to emit DELIVER"
+                );
+                self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+                self.clear_pending_rbc(&key);
+                if let Some(updated) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
+                    self.update_rbc_status_entry(key, &updated, false);
+                    self.persist_rbc_session(key, &updated);
+                }
+                self.publish_rbc_backlog_snapshot();
+                return Ok(());
+            }
+        }
 
         let deliver = if let Some(deliver) = self.build_rbc_deliver(key, &session) {
             deliver

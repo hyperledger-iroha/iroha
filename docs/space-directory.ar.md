@@ -210,7 +210,7 @@ POST /v1/space-directory/manifests/revoke
 |-------|-------|--------|
 | `authority` | `AccountId` | الحساب الذي يوقّع معاملة السحب (revocation). |
 | `private_key` | `ExposedPrivateKey` | مفتاح خاص base64 يستخدمه Torii للتوقيع بالنيابة عن `authority`. |
-| `uaid` | `String` | قيمة UAID (`uaid:<hex>` أو digest hex مكون من 64 خانة). |
+| `uaid` | `String` | قيمة UAID (`uaid:<hex>` أو digest hex مكون من 64 خانة، LSB=1). |
 | `dataspace` | `u64` | معرف dataspace الذي يستضيف manifest. |
 | `revoked_epoch` | `u64` | الـ epoch (شاملاً) الذي ينبغي أن يبدأ عنده السحب. |
 | `reason` | `Option<String>` | رسالة تدقيق اختيارية تُخزَّن مع بيانات دورة الحياة. |
@@ -302,4 +302,3 @@ POST /v1/space-directory/manifests/revoke
 للمُنظِّمين حول كيفية منح وتقييد وسحب القدرات عبر جميع dataspaces في Nexus.
 
 </div>
-

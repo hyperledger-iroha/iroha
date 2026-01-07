@@ -21,7 +21,8 @@ publish` run (roadmap reference: `roadmap.md:2209`).
   to the dataspace accounts referenced by active manifests. Torii reuses that
   map for the `/portfolio` and `/uaids/*` APIs.
 - All SDKs expose helpers for canonicalising UAID literals (e.g.,
-  `UaidLiteral` in the Android SDK) and re-use the same Norito codecs so the
+  `UaidLiteral` in the Android SDK). The helpers accept raw 64-hex digests
+  (LSB=1) or `uaid:<hex>` literals and re-use the same Norito codecs so the
   digest cannot drift across languages.
 
 ## 2. Deriving and verifying UAIDs

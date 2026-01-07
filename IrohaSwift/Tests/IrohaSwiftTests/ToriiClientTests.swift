@@ -536,6 +536,20 @@ final class ToriiClientTests: XCTestCase {
         return ToriiClient(baseURL: URL(string: "https://example.test")!, session: session)
     }
 
+    private func canonicalOwnerLiteral(domain: String = "wonderland") throws -> String {
+        let keypair = try Keypair(privateKeyBytes: Data(repeating: 1, count: 32))
+        let address = try AccountAddress.fromAccount(domain: domain, publicKey: keypair.publicKey)
+        let ih58 = try address.toIH58(networkPrefix: 0x02F1)
+        return "\(ih58)@\(domain)"
+    }
+
+    private func noncanonicalOwnerLiteral(domain: String = "wonderland") throws -> String {
+        let keypair = try Keypair(privateKeyBytes: Data(repeating: 2, count: 32))
+        let address = try AccountAddress.fromAccount(domain: domain, publicKey: keypair.publicKey)
+        let canonicalHex = try address.canonicalHex()
+        return "\(canonicalHex)@\(domain)"
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testGetAssetsAsync() async throws {
         StubURLProtocol.handler = { request in
@@ -1369,7 +1383,7 @@ final class ToriiClientTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetUaidManifestsAppliesQueryItems() async throws {
-        let uaidHex = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+        let uaidHex = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543211"
         let payload = """
         {
           "uaid":"uaid:\(uaidHex)",
@@ -1465,6 +1479,19 @@ final class ToriiClientTests: XCTestCase {
     func testGetUaidPortfolioRejectsInvalidLiteral() async {
         do {
             _ = try await makeClient().getUaidPortfolio(uaid: "bad")
+            XCTFail("Expected invalid UAID error")
+        } catch {
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetUaidPortfolioRejectsInvalidLsb() async {
+        let uaidHex = String(repeating: "10", count: 32)
+        do {
+            _ = try await makeClient().getUaidPortfolio(uaid: "uaid:\(uaidHex)")
             XCTFail("Expected invalid UAID error")
         } catch {
             guard case ToriiClientError.invalidPayload = error else {
@@ -4164,12 +4191,13 @@ id: 88
         waitForExpectations(timeout: 1)
     }
 
-    func testSubmitGovernanceZkBallotRejectsIncompleteLockHints() {
+    func testSubmitGovernanceZkBallotRejectsIncompleteLockHints() throws {
+        let owner = try canonicalOwnerLiteral()
         let request = ToriiGovernanceZkBallotRequest(authority: "alice@wonderland",
                                                      chainId: "chain",
                                                      electionId: "election-1",
                                                      proofB64: "AAAA",
-                                                     publicInputs: ["owner": .string("alice@wonderland")])
+                                                     publicInputs: ["owner": .string(owner)])
         XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
             guard case let ToriiClientError.invalidPayload(message) = error else {
                 return XCTFail("unexpected error: \(error)")
@@ -4179,12 +4207,13 @@ id: 88
     }
 
     func testSubmitGovernanceZkBallotRejectsDeprecatedPublicInputs() throws {
+        let owner = try canonicalOwnerLiteral()
         let request = ToriiGovernanceZkBallotRequest(authority: "alice@wonderland",
                                                      chainId: "chain",
                                                      electionId: "election-1",
                                                      proofB64: "AAAA",
                                                      publicInputs: [
-                                                        "owner": .string("alice@wonderland"),
+                                                        "owner": .string(owner),
                                                         "amount": .string("250"),
                                                         "durationBlocks": .number(12),
                                                         "rootHintHex": .string("0x\(String(repeating: "Aa", count: 32))"),
@@ -4199,12 +4228,13 @@ id: 88
     }
 
     func testSubmitGovernanceZkBallotNormalizesPublicInputs() throws {
+        let owner = try canonicalOwnerLiteral()
         let request = ToriiGovernanceZkBallotRequest(authority: "alice@wonderland",
                                                      chainId: "chain",
                                                      electionId: "election-1",
                                                      proofB64: "AAAA",
                                                      publicInputs: [
-                                                        "owner": .string("alice@wonderland"),
+                                                        "owner": .string(owner),
                                                         "amount": .string("250"),
                                                         "duration_blocks": .number(12),
                                                         "root_hint": .string("0x\(String(repeating: "Cc", count: 32))"),
@@ -4219,13 +4249,14 @@ id: 88
         XCTAssertEqual(publicInputs["nullifier"] as? String, String(repeating: "dd", count: 32))
     }
 
-    func testSubmitGovernanceZkBallotRejectsInvalidHexHints() {
+    func testSubmitGovernanceZkBallotRejectsInvalidHexHints() throws {
+        let owner = try canonicalOwnerLiteral()
         let request = ToriiGovernanceZkBallotRequest(authority: "alice@wonderland",
                                                      chainId: "chain",
                                                      electionId: "election-1",
                                                      proofB64: "AAAA",
                                                      publicInputs: [
-                                                        "owner": .string("alice@wonderland"),
+                                                        "owner": .string(owner),
                                                         "amount": .string("250"),
                                                         "duration_blocks": .number(12),
                                                         "root_hint": .string("not-hex"),
@@ -4235,6 +4266,25 @@ id: 88
                 return XCTFail("unexpected error: \(error)")
             }
             XCTAssertTrue(message.contains("root_hint"))
+        }
+    }
+
+    func testSubmitGovernanceZkBallotRejectsNoncanonicalOwner() throws {
+        let owner = try noncanonicalOwnerLiteral()
+        let request = ToriiGovernanceZkBallotRequest(authority: "alice@wonderland",
+                                                     chainId: "chain",
+                                                     electionId: "election-1",
+                                                     proofB64: "AAAA",
+                                                     publicInputs: [
+                                                        "owner": .string(owner),
+                                                        "amount": .string("250"),
+                                                        "duration_blocks": .number(12),
+                                                     ])
+        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
+            guard case let ToriiClientError.invalidPayload(message) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("owner must use canonical account id form"))
         }
     }
 

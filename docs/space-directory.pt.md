@@ -211,7 +211,7 @@ POST /v1/space-directory/manifests/revoke
 |-------|------|-----------|
 | `authority` | `AccountId` | Conta que assina a transação de revogação. |
 | `private_key` | `ExposedPrivateKey` | Chave privada em base64 que o Torii usa para assinar em nome de `authority`. |
-| `uaid` | `String` | Literal UAID (`uaid:<hex>` ou digest hex de 64 caracteres). |
+| `uaid` | `String` | Literal UAID (`uaid:<hex>` ou digest hex de 64 caracteres, LSB=1). |
 | `dataspace` | `u64` | Identificador do dataspace que hospeda o manifest. |
 | `revoked_epoch` | `u64` | Epoch (inclusivo) em que a revogação deve surtir efeito. |
 | `reason` | `Option<String>` | Mensagem opcional de auditoria gravada junto aos dados de ciclo de vida. |
@@ -306,4 +306,3 @@ whitelist para apontar para os manifests de capacidade apropriados.
 Seguindo este playbook, o Space Directory fornece um registro canônico, verificável e
 orientado a reguladores sobre como capacidades são concedidas, limitadas e revogadas em
 todos os dataspaces Nexus.
-

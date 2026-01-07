@@ -1,6 +1,10 @@
 import { Buffer } from "node:buffer";
 import { noritoEncodeInstruction } from "./norito.js";
-import { normalizeAccountId, normalizeAssetId } from "./normalizers.js";
+import {
+  ensureCanonicalAccountId,
+  normalizeAccountId,
+  normalizeAssetId,
+} from "./normalizers.js";
 import { MultisigSpec, MultisigSpecBuilder } from "./multisig.js";
 import {
   createValidationError,
@@ -1558,6 +1562,9 @@ function normalizeZkBallotPublicInputs(value, name) {
       `${name} must include owner, amount, and duration_blocks when providing lock hints`,
       name,
     );
+  }
+  if (hasOwner) {
+    normalized.owner = ensureCanonicalAccountId(normalized.owner, `${name}.owner`);
   }
   return normalized;
 }

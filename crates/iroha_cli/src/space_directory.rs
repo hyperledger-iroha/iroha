@@ -242,7 +242,7 @@ impl Run for ManifestRevokeArgs {
         let uaid = self
             .uaid
             .parse()
-            .wrap_err("failed to parse UAID (expecting `uaid:…`)")?;
+            .wrap_err("failed to parse UAID (expecting `uaid:<hex>` or a 64-hex digest)")?;
         let dataspace = DataSpaceId::new(self.dataspace);
         let instruction = RevokeSpaceDirectoryManifest {
             uaid,
@@ -272,7 +272,7 @@ impl Run for ManifestExpireArgs {
         let uaid = self
             .uaid
             .parse()
-            .wrap_err("failed to parse UAID (expecting `uaid:…`)")?;
+            .wrap_err("failed to parse UAID (expecting `uaid:<hex>` or a 64-hex digest)")?;
         let dataspace = DataSpaceId::new(self.dataspace);
         let instruction = ExpireSpaceDirectoryManifest {
             uaid,
@@ -325,7 +325,7 @@ impl Run for ManifestFetchArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ManifestScaffoldArgs {
-    /// Universal account identifier (`uaid:<hex>`).
+    /// Universal account identifier (`uaid:<hex>` or raw 64-hex digest, LSB=1).
     #[arg(long = "uaid", value_name = "UAID", required = true)]
     pub uaid: String,
     /// Dataspace identifier the manifest targets.
@@ -1237,11 +1237,8 @@ fn update_scope_defaults(
 }
 
 fn parse_uaid_literal(raw: &str) -> Result<UniversalAccountId> {
-    let trimmed = raw.trim();
-    let hex_literal = trimmed.strip_prefix("uaid:").unwrap_or(trimmed);
-    let hash = Hash::from_str(hex_literal)
-        .wrap_err("UAID literal must follow `uaid:<hex>` with a Blake2b-256 digest")?;
-    Ok(UniversalAccountId::from_hash(hash))
+    UniversalAccountId::from_str(raw.trim())
+        .wrap_err("UAID literal must be `uaid:<hex>` or a 64-hex digest")
 }
 
 #[derive(Debug, JsonSerialize)]
@@ -1299,6 +1296,22 @@ mod tests {
     use std::path::Path;
     use tempfile::tempdir;
     use url::Url;
+
+    #[test]
+    fn parse_uaid_literal_accepts_prefixed_or_raw() {
+        let uaid = UniversalAccountId::from_hash(CryptoHash::new(b"cli-uaid"));
+        let hex = uaid.as_hash().to_string();
+        let variants = [
+            hex.clone(),
+            format!("uaid:{hex}"),
+            format!("UAID:{}", hex.to_uppercase()),
+        ];
+
+        for literal in variants {
+            let parsed = parse_uaid_literal(&literal).expect("parse UAID literal");
+            assert_eq!(parsed, uaid);
+        }
+    }
 
     #[test]
     fn manifest_encode_writes_payload_and_hash_with_defaults() {

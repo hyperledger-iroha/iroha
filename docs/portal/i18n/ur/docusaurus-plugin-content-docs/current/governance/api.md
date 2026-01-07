@@ -31,7 +31,7 @@ Endpoints
       "abi_hash": "blake2b32:..." | "...64hex",
       "abi_version": "1",
       "window": { "lower": 12345, "upper": 12400 },
-      "authority": "alice@wonderland?",
+      "authority": "ih58…@wonderland?",
       "private_key": "...?"
     }
   - Response (JSON):
@@ -87,7 +87,7 @@ Code Size Cap
   - Notes: re-votes extend-only ہیں - نیا ballot موجودہ lock کا amount یا expiry کم نہیں کر سکتا۔ `owner` کو transaction authority کے برابر ہونا چاہئے۔ کم از کم مدت `conviction_step_blocks` ہے۔
 
 - POST `/v1/gov/finalize`
-  - Request: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "alice@wonderland?", "private_key": "...?" }
+  - Request: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58…@wonderland?", "private_key": "...?" }
   - Response: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - On-chain effect (current scaffold): منظور شدہ deploy proposal کو enact کرنے سے `code_hash` keyed minimal `ContractManifest` شامل ہوتا ہے جس میں متوقع `abi_hash` ہوتا ہے اور proposal Enacted ہو جاتا ہے۔ اگر `code_hash` کے لئے مختلف `abi_hash` والا manifest پہلے سے ہو تو enactment reject ہوتا ہے۔
   - Notes:
@@ -96,7 +96,7 @@ Code Size Cap
     - Turnout checks صرف approve+reject استعمال کرتی ہیں؛ abstain turnout میں شمار نہیں ہوتا۔
 
 - POST `/v1/gov/enact`
-  - Request: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "alice@wonderland?", "private_key": "...?" }
+  - Request: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58…@wonderland?", "private_key": "...?" }
   - Response: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Notes: جب `authority`/`private_key` فراہم ہوں تو Torii signed transaction سبمٹ کرتا ہے؛ ورنہ وہ skeleton واپس کرتا ہے جسے کلائنٹ سائن اور سبمٹ کرے۔ preimage اختیاری اور فی الحال معلوماتی ہے۔
 
@@ -236,7 +236,7 @@ Unlock Sweep (Operator/Audit)
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x...64hex?",
-      "owner": "alice@wonderland?",
+      "owner": "ih58…@wonderland?",
       "nullifier": "blake2b32:...64hex?"
     }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{...}] }

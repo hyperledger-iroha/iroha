@@ -31,7 +31,7 @@ Endpoints
       "abi_hash": "blake2b32:..." | "...64hex",
       "abi_version": "1",
       "window": { "lower": 12345, "upper": 12400 },
-      "authority": "alice@wonderland?",
+      "authority": "ih58…@wonderland?",
       "private_key": "...?"
     }
   - Respuesta (JSON):
@@ -87,7 +87,7 @@ Tope de tamano de codigo
   - Notas: las revotaciones son de solo extension - un nuevo ballot no puede reducir el amount o expiry del bloqueo existente. El `owner` debe igualar la authority de la transaccion. La duracion minima es `conviction_step_blocks`.
 
 - POST `/v1/gov/finalize`
-  - Solicitud: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "alice@wonderland?", "private_key": "...?" }
+  - Solicitud: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58…@wonderland?", "private_key": "...?" }
   - Respuesta: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - Efecto on-chain (andamiaje actual): promulgar una propuesta de deploy aprobada inserta un `ContractManifest` minimo con clave `code_hash` con el `abi_hash` esperado y marca la propuesta como Enacted. Si ya existe un manifiesto para el `code_hash` con un `abi_hash` distinto, la promulgacion se rechaza.
   - Notas:
@@ -96,7 +96,7 @@ Tope de tamano de codigo
     - Las comprobaciones de turnout usan solo approve+reject; abstain no cuenta para el turnout.
 
 - POST `/v1/gov/enact`
-  - Solicitud: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "alice@wonderland?", "private_key": "...?" }
+  - Solicitud: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58…@wonderland?", "private_key": "...?" }
   - Respuesta: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Notas: Torii envia la transaccion firmada cuando se proporcionan `authority`/`private_key`; de lo contrario devuelve un esqueleto para que los clientes firmen y envien. La preimage es opcional y actualmente informativa.
 
@@ -236,7 +236,7 @@ Barrido de unlocks (Operador/Auditoria)
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x...64hex?",
-      "owner": "alice@wonderland?",
+      "owner": "ih58…@wonderland?",
       "nullifier": "blake2b32:...64hex?"
     }
   - Respuesta: { "ok": true, "accepted": true, "tx_instructions": [{...}] }

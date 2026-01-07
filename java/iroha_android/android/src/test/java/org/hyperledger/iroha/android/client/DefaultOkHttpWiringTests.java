@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -49,19 +50,25 @@ public final class DefaultOkHttpWiringTests {
   @Test
   public void httpClientTransportUsesOkHttpByDefault() throws Exception {
     try (MockWebServer server = new MockWebServer()) {
+      final String uaidHex = "11".repeat(32);
+      final String canonicalUaid = "uaid:" + uaidHex;
+      final String responseUaid = "UAID:" + uaidHex.toUpperCase(Locale.ROOT);
+      final String responseBody =
+          String.format(
+              """
+              {
+                "uaid": "%s",
+                "dataspaces": [
+                  {"dataspace_id": 1, "dataspace_alias": "alpha", "accounts": ["user@test"]}
+                ]
+              }
+              """,
+              responseUaid);
       server.enqueue(
           new MockResponse()
               .setResponseCode(200)
               .setHeader("Content-Type", "application/json")
-              .setBody(
-                  """
-                  {
-                    "uaid": "did:ua:abc",
-                    "dataspaces": [
-                      {"dataspace_id": 1, "dataspace_alias": "alpha", "accounts": ["user@test"]}
-                    ]
-                  }
-                  """));
+              .setBody(responseBody));
       server.start();
 
       final RecordingObserver observer = new RecordingObserver();
@@ -76,9 +83,9 @@ public final class DefaultOkHttpWiringTests {
 
       final HttpClientTransport transport = HttpClientTransport.createDefault(config);
       final UaidBindingsResponse response =
-          transport.getUaidBindings("did:ua:abc").get(2, TimeUnit.SECONDS);
+          transport.getUaidBindings(uaidHex).get(2, TimeUnit.SECONDS);
 
-      assertEquals("did:ua:abc", response.uaid());
+      assertEquals(canonicalUaid, response.uaid());
       assertEquals(1, response.dataspaces().size());
       assertEquals(1L, response.dataspaces().get(0).dataspaceId());
       assertTrue(observer.requestCount > 0);
@@ -87,7 +94,8 @@ public final class DefaultOkHttpWiringTests {
 
       final RecordedRequest recorded = server.takeRequest(1, TimeUnit.SECONDS);
       assertNotNull("request not received", recorded);
-      assertEquals("/v1/space-directory/uaids/did%3Aua%3Aabc", recorded.getPath());
+      assertEquals(
+          "/v1/space-directory/uaids/uaid%3A" + uaidHex, recorded.getPath());
       assertEquals("GET", recorded.getMethod());
     }
   }
