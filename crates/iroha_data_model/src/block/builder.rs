@@ -136,11 +136,8 @@ impl BlockBuilder {
         // Precompute roots and header hash
         self.header.merkle_root = self.entry_merkle.root();
         self.header.result_merkle_root = self.result_merkle.root();
-        self.header.set_da_proof_policies_hash(
-            self.da_proof_policies
-                .as_ref()
-                .map(|bundle| HashOf::from_untyped_unchecked(bundle.policy_hash)),
-        );
+        self.header
+            .set_da_proof_policies_hash(self.da_proof_policies.as_ref().map(HashOf::new));
         self.header.da_commitments_hash = self.da_commitments.as_ref().and_then(|bundle| {
             if bundle.is_empty() {
                 None
@@ -148,10 +145,6 @@ impl BlockBuilder {
                 Some(bundle.canonical_hash())
             }
         });
-        self.header.da_proof_policies_hash = self
-            .da_proof_policies
-            .as_ref()
-            .map(|bundle| HashOf::from_untyped_unchecked(bundle.policy_hash));
         self.header.da_pin_intents_hash = self.da_pin_intents.as_ref().and_then(|bundle| {
             bundle
                 .merkle_root()
@@ -166,17 +159,19 @@ impl BlockBuilder {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Hash, Signature};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use nonzero_ext::nonzero;
 
     use super::*;
     use crate::{
         da::{
-            commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment},
+            commitment::{
+                DaCommitmentBundle, DaCommitmentRecord, DaProofPolicy, DaProofScheme, KzgCommitment,
+            },
             prelude::RetentionPolicy,
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::LaneId,
+        nexus::{DataSpaceId, LaneId},
         prelude::*,
         sorafs::pin_registry::ManifestDigest,
         transaction::signed::TransactionBuilder,
@@ -273,6 +268,34 @@ mod tests {
         let block = builder.build(BTreeSet::new());
         assert_eq!(block.da_commitments().unwrap(), &bundle);
         assert!(block.header().da_commitments_hash().is_some());
+    }
+
+    #[test]
+    fn build_with_signature_keeps_da_policy_hash_consistent() {
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let policy = DaProofPolicy {
+            lane_id: LaneId::new(1),
+            dataspace_id: DataSpaceId::GLOBAL,
+            alias: "lane-1".to_string(),
+            proof_scheme: DaProofScheme::MerkleSha256,
+        };
+        let bundle = DaProofPolicyBundle::new(vec![policy]);
+        let mut builder = BlockBuilder::new(header);
+        builder.set_da_proof_policies(Some(bundle.clone()));
+        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let block = builder.build_with_signature(0, keypair.private_key());
+        let signature = block.signatures().next().expect("block signature exists");
+        assert!(
+            signature
+                .signature()
+                .verify_hash(keypair.public_key(), block.hash())
+                .is_ok(),
+            "block signature should verify after DA policy attachment"
+        );
+        assert_eq!(
+            block.header().da_proof_policies_hash,
+            Some(HashOf::new(&bundle))
+        );
     }
 
     fn sample_da_bundle() -> DaCommitmentBundle {

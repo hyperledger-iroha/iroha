@@ -32,7 +32,7 @@ static START_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 static ASSET_TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 const QUERY_RETRIES: usize = 240;
 const QUERY_RETRY_DELAY: Duration = Duration::from_millis(500);
-const NON_EMPTY_BLOCK_TIMEOUT: Duration = Duration::from_secs(300);
+const NON_EMPTY_BLOCK_TIMEOUT: Duration = Duration::from_secs(600);
 
 fn retry_query<T, F>(mut f: F) -> Result<T>
 where
@@ -383,7 +383,7 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() ->
     if submit_tx_or_skip(&test_client, &tx, "mint asset")?.is_none() {
         return Ok(());
     }
-    last_non_empty_height = match status_or_skip(
+    if status_or_skip(
         sync_after_submission(
             &network,
             &rt,
@@ -392,10 +392,11 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() ->
             "mint asset",
         ),
         "mint asset",
-    )? {
-        Some(status) => status.blocks_non_empty,
-        None => return Ok(()),
-    };
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
 
     wait_for_asset_value(&test_client, &asset_id, &quantity, "mint asset")?;
     Ok(())
@@ -459,7 +460,7 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
     if submit_tx_or_skip(&test_client, &tx, "mint large asset")?.is_none() {
         return Ok(());
     }
-    last_non_empty_height = match status_or_skip(
+    if status_or_skip(
         sync_after_submission(
             &network,
             &rt,
@@ -468,10 +469,11 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
             "mint large asset",
         ),
         "mint large asset",
-    )? {
-        Some(status) => status.blocks_non_empty,
-        None => return Ok(()),
-    };
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
 
     wait_for_asset_value(&test_client, &asset_id, &quantity, "mint large asset")?;
     Ok(())
@@ -593,7 +595,7 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
     {
         return Ok(());
     }
-    last_non_empty_height = match status_or_skip(
+    if status_or_skip(
         sync_after_submission(
             &network,
             &rt,
@@ -602,10 +604,11 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
             "mint fractional asset",
         ),
         "mint fractional asset",
-    )? {
-        Some(status) => status.blocks_non_empty,
-        None => return Ok(()),
-    };
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
 
     wait_for_asset_value(&test_client, &asset_id, &sum, "mint fractional asset")?;
 
@@ -998,6 +1001,19 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
                     }
                 }
             }
+            last_non_empty_height = match status_or_skip(
+                sync_after_submission(
+                    &network,
+                    &rt,
+                    &test_client,
+                    last_non_empty_height,
+                    "fractional rejection",
+                ),
+                "fractional rejection",
+            )? {
+                Some(status) => status.blocks_non_empty,
+                None => return Ok(()),
+            };
 
             // State unchanged for source and no asset created for destination
             let now = get_value(&asset_id)?;

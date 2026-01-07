@@ -9,10 +9,7 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{ElectionState, State, World},
 };
-use iroha_data_model::{
-    block::BlockHeader,
-    isi::governance::FinalizeReferendum,
-};
+use iroha_data_model::{block::BlockHeader, isi::governance::FinalizeReferendum};
 use iroha_test_samples::ALICE_ID;
 
 #[test]
@@ -25,7 +22,7 @@ fn finalize_referendum_rejects_unfinalized_zk_election() {
     let mut stx = sblock.transaction();
 
     let rid = "ref-finalize-zk".to_string();
-    stx.world.elections.insert(
+    stx.world.elections_mut().insert(
         rid.clone(),
         ElectionState {
             options: 2,

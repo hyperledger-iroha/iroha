@@ -1,6 +1,41 @@
 # Status
 
 ## Latest Updates
+- Data model: enable BLS feature in workspace `iroha_data_model` dependency so IH58 account parsing accepts BLS curve ids in integration tests/clients.
+- Asset tests: sync after fractional rejection operations in `fail_if_dont_satisfy_spec` to keep non-empty height tracking aligned under slow confirmations.
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p integration_tests --test address_canonicalisation account_transactions_query_supports_address_format -- --nocapture` (pass).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p integration_tests --test asset fail_if_dont_satisfy_spec -- --nocapture` (pass).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p integration_tests --test asset client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount -- --nocapture` (pass).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test --workspace` (failed: `client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount` timed out waiting for mint large asset; warnings about unused imports/assignments as noted below).
+- Tests: `cargo test -p integration_tests client_add_asset_quantity_to_existing_asset_should_increase_asset_amount -- --nocapture` (pass; warnings about unused `file_permit` in `crates/iroha_test_network/src/lib.rs:1212` and unused assignments in `integration_tests/tests/asset.rs`).
+- Tests: `cargo test -p integration_tests find_rate_and_make_exchange_isi_should_succeed -- --nocapture` (pass; warnings about unused `file_permit` in `crates/iroha_test_network/src/lib.rs:1212`, unused assignments in `integration_tests/tests/asset.rs`, and `ensure_blocks_with` timeout warning after grant transfer permission).
+- Sumeragi/DA: treat locally available block payloads as delivered for DA gating (payload hash match) to avoid commit stalls when RBC delivery lags; add unit coverage for payload hash matching.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p integration_tests client_add_asset_with_decimal_should_increase_asset_amount -- --nocapture` (pass; warnings about unused `file_permit` in `crates/iroha_test_network/src/lib.rs:1212` and unused assignments in `integration_tests/tests/asset.rs`).
+- Tests: `cargo test --workspace` (failed: `integration_tests` `iterable_queries_torii::burn_trigger_repetitions_removes_from_active_ids` with trigger not found).
+- Tests: `cargo test -p integration_tests --test iterable_queries_torii burn_trigger_repetitions_removes_from_active_ids -- --nocapture` (pass).
+- Block builder: compute DA proof policy bundle hash consistently when signing (use `HashOf::new(bundle)`), preventing invalid block signatures; add regression coverage.
+- Sumeragi: effective consensus mode now uses the pre-activation mode after a mode flip when the fallback matches the next mode; add unit coverage.
+- Sumeragi tests: fix local validator index helper return and use state view for latest block hash in vote emission coverage (compile fix).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core pacemaker_ignores_stale_new_view_entries -- --nocapture` (x10; all pass).
+- Sumeragi: canonicalize commit-topology ordering by sorting peer IDs before hash-keyed rotations to keep rosters deterministic across nodes; drop gap-height fallbacks to active rosters for vote/new-view derivation to prevent invalid signatures; update related tests and docs.
+- Tests: not run (not requested).
+- Sumeragi: fall back to the active commit topology when vote/new-view roster history is missing at gap heights, avoiding empty-roster drops; add roster fallback coverage for new-view and vote paths plus view-change vote validation.
+- Tests: `cargo test --workspace` (timed out after 30m during integration tests; warnings about unused `Align64` in `crates/norito/src/core.rs:6792`, unused `file_permit` in `crates/iroha_test_network/src/lib.rs:1212`, unused `required` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:6998`, unused imports in `crates/iroha_cli/src/offline.rs`, and unused assignments in `integration_tests/tests/asset.rs`).
+- Tests: `CARGO_TARGET_DIR=target_tmp cargo test -p iroha_core --lib roster_falls_back_to_active -- --nocapture`.
+- Tests: `CARGO_TARGET_DIR=target_tmp cargo test -p iroha_core --lib trigger_view_change_records_new_view_vote_with_active_roster -- --nocapture`.
+- Core tests: add `elections_mut` unit coverage and commit state blocks before view access to avoid view-lock hangs.
+- Tests: `CARGO_TARGET_DIR=target_tmp cargo test -p iroha_core --lib pacemaker_ignores_stale_new_view_entries -- --nocapture` (x10).
+- Tests: `CARGO_TARGET_DIR=target_tmp cargo test -p iroha_core --lib elections_mut_seeds_storage -- --nocapture`.
+- Test network harness: add global cross-process permit in `iroha_test_network` to cap concurrent test networks across binaries; add unit coverage and keep the integration-test guard in-process.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: not run (existing `cargo test` processes still running and holding the build directory).
+- Integration tests: add cross-process network permit files to bound concurrent test networks across binaries and reclaim stale permits; add unit coverage.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s; blocked waiting for build directory lock while other cargo test processes were running).
+- Tests: `CARGO_TARGET_DIR=target/codex-test cargo test --workspace` (timed out after 120s during compilation; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Integration tests: extend status retry budget to 30s and sync asset mint tests on non-empty blocks to reduce tx confirmation timeouts.
+- Tests: not run (existing cargo build/test processes held the build directory lock).
 - Swift SDK: refresh offline receipt poseidon platform-proof hash vectors for the sample receipts.
 - Tests: `swift test --disable-sandbox` (from `IrohaSwift`).
 - Java/Android SDK: add JSON-ready encoders for offline transfer items/platform snapshots plus `invalidateAndCancel()` on transports/OkHttp executors; document the cleanup hook and add regression coverage.

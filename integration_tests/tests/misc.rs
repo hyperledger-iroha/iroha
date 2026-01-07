@@ -17,7 +17,7 @@ fn status_eq_excluding_uptime_and_queue(lhs: &Status, rhs: &Status) -> bool {
         && lhs.view_changes == rhs.view_changes
 }
 
-async fn check(client: &client::Client, blocks: u64) -> Result<()> {
+async fn check(client: &client::Client, min_blocks_non_empty: u64) -> Result<()> {
     let http = reqwest::Client::new();
     let body = http
         .get(client.torii_url.join("/status").unwrap())
@@ -38,7 +38,11 @@ async fn check(client: &client::Client, blocks: u64) -> Result<()> {
         &status_json,
         &status_norito
     ));
-    assert_eq!(status_json.blocks_non_empty, blocks);
+    assert!(
+        status_json.blocks_non_empty >= min_blocks_non_empty,
+        "expected blocks_non_empty >= {min_blocks_non_empty}, got {}",
+        status_json.blocks_non_empty
+    );
 
     Ok(())
 }

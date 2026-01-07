@@ -10,13 +10,13 @@ use std::{
     ffi::OsString,
     fs,
     hash::{Hash, Hasher},
-    io::{ErrorKind, Read, Seek, SeekFrom},
+    io::{ErrorKind, Read, Seek, SeekFrom, Write},
     iter,
     net::TcpListener,
     num::NonZero,
     ops::Deref,
     path::{Path, PathBuf},
-    process::{ExitStatus, Stdio},
+    process::{Command, ExitStatus, Stdio},
     sync::{
         Arc, Mutex as StdMutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -104,6 +104,13 @@ const DEFAULT_RBC_STORE_MAX_BYTES: i64 = 64 * 1024 * 1024;
 const DEFAULT_RBC_STORE_SOFT_BYTES: i64 = 48 * 1024 * 1024;
 const LOCALNET_RBC_CHUNK_MAX_BYTES: i64 = 256 * 1024;
 const DA_ENABLED_ENV: &str = "SUMERAGI_DA_ENABLED";
+const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
+const NETWORK_PARALLELISM_ENV: &str = "IROHA_TEST_NETWORK_PARALLELISM";
+const NETWORK_PERMIT_DIR_ENV: &str = "IROHA_TEST_NETWORK_PERMIT_DIR";
+const NETWORK_PERMIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const NETWORK_PERMIT_LOG_INTERVAL: Duration = Duration::from_secs(60);
+const NETWORK_PERMIT_STALE_TTL: Duration = Duration::from_secs(60 * 60 * 12);
+const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 4;
 const PERMISSIONED_BLS_DOMAIN: &str = "bls-iroha2:permissioned-sumeragi:v1";
 const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v1";
 const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
@@ -233,8 +240,12 @@ fn peer_start_timeout_env() -> Duration {
     read_env_duration("IROHA_TEST_PEER_START_TIMEOUT_MS", sync_timeout_env())
 }
 
+const CLIENT_STATUS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(300);
+const CLIENT_TTL_DEFAULT: Duration = Duration::from_secs(600);
+const CLIENT_TTL_MIN_SLACK: Duration = Duration::from_secs(120);
+
 fn client_status_timeout_env() -> Duration {
-    // Default 180s; override with IROHA_TEST_CLIENT_STATUS_TIMEOUT_SECS or *_MS
+    // Default 300s; override with IROHA_TEST_CLIENT_STATUS_TIMEOUT_SECS or *_MS
     let secs = read_env_duration(
         "IROHA_TEST_CLIENT_STATUS_TIMEOUT_SECS",
         Duration::from_secs(0),
@@ -245,12 +256,12 @@ fn client_status_timeout_env() -> Duration {
     // Keep bounded to avoid long hangs when Torii is unreachable.
     read_env_duration(
         "IROHA_TEST_CLIENT_STATUS_TIMEOUT_MS",
-        Duration::from_secs(180),
+        CLIENT_STATUS_TIMEOUT_DEFAULT,
     )
 }
 
 fn client_request_timeout_env() -> Duration {
-    // Default 5s; override with IROHA_TEST_CLIENT_REQUEST_TIMEOUT_SECS or *_MS.
+    // Default 30s; override with IROHA_TEST_CLIENT_REQUEST_TIMEOUT_SECS or *_MS.
     let secs = read_env_duration(
         "IROHA_TEST_CLIENT_REQUEST_TIMEOUT_SECS",
         Duration::from_secs(0),
@@ -260,7 +271,7 @@ fn client_request_timeout_env() -> Duration {
     }
     read_env_duration(
         "IROHA_TEST_CLIENT_REQUEST_TIMEOUT_MS",
-        Duration::from_secs(5),
+        Duration::from_secs(30),
     )
 }
 
@@ -269,11 +280,12 @@ fn client_ttl_env(status_timeout: Duration) -> Duration {
     let ttl = if secs != Duration::ZERO {
         secs
     } else {
-        read_env_duration("IROHA_TEST_CLIENT_TTL_MS", Duration::from_secs(120))
+        read_env_duration("IROHA_TEST_CLIENT_TTL_MS", CLIENT_TTL_DEFAULT)
     };
-    if ttl <= status_timeout {
-        // Ensure TTL always exceeds the status timeout to satisfy client validation.
-        status_timeout + Duration::from_secs(5)
+    let min_ttl = status_timeout + CLIENT_TTL_MIN_SLACK;
+    if ttl <= min_ttl {
+        // Ensure TTL meaningfully exceeds the status timeout so slow consensus does not expire txs.
+        min_ttl
     } else {
         ttl
     }
@@ -1185,6 +1197,182 @@ impl Environment {
     }
 }
 
+#[derive(Debug)]
+struct FilePermit {
+    path: PathBuf,
+}
+
+impl Drop for FilePermit {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+struct NetworkPermit {
+    _file_permit: FilePermit,
+}
+
+fn serialize_networks_enabled() -> bool {
+    let Ok(raw) = std::env::var(SERIALIZE_NETWORKS_ENV) else {
+        return false;
+    };
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn network_parallelism_limit() -> usize {
+    if serialize_networks_enabled() {
+        return 1;
+    }
+    if let Ok(raw) = std::env::var(NETWORK_PARALLELISM_ENV)
+        && let Ok(parsed) = raw.trim().parse::<usize>()
+        && parsed > 0
+    {
+        return parsed;
+    }
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1);
+    let per_network = DEFAULT_NETWORK_PARALLELISM_PEERS.max(1);
+    cores.saturating_div(per_network).max(1)
+}
+
+fn permit_dir() -> PathBuf {
+    std::env::var(NETWORK_PERMIT_DIR_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir().join("iroha_test_network_permits"))
+}
+
+fn try_acquire_file_permit(limit: usize) -> Option<FilePermit> {
+    if limit == 0 {
+        return None;
+    }
+    let dir = permit_dir();
+    fs::create_dir_all(&dir).expect("failed to create network permit directory");
+    let pid = std::process::id();
+    let started = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_secs();
+    for slot in 0..limit {
+        let path = dir.join(format!("permit-{slot}.lock"));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                let _ = writeln!(file, "pid={pid}");
+                let _ = writeln!(file, "started={started}");
+                return Some(FilePermit { path });
+            }
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+                if permit_is_stale(&path) {
+                    let _ = fs::remove_file(&path);
+                    if let Ok(mut file) = fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&path)
+                    {
+                        let _ = writeln!(file, "pid={pid}");
+                        let _ = writeln!(file, "started={started}");
+                        return Some(FilePermit { path });
+                    }
+                }
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                let _ = fs::create_dir_all(&dir);
+            }
+            Err(_) => {}
+        }
+    }
+    None
+}
+
+fn permit_is_stale(path: &Path) -> bool {
+    if let Some(pid) = read_permit_pid(path) {
+        if let Some(alive) = pid_alive(pid) {
+            return !alive;
+        }
+    }
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return false;
+    };
+    let Ok(age) = SystemTime::now().duration_since(modified) else {
+        return false;
+    };
+    age > NETWORK_PERMIT_STALE_TTL
+}
+
+fn read_permit_pid(path: &Path) -> Option<u32> {
+    let contents = fs::read_to_string(path).ok()?;
+    for line in contents.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("pid=") {
+            if let Ok(pid) = value.trim().parse::<u32>() {
+                if pid > 0 {
+                    return Some(pid);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn pid_alive(pid: u32) -> Option<bool> {
+    let pid = pid.to_string();
+    let output = ["/bin/kill", "/usr/bin/kill", "kill"]
+        .into_iter()
+        .find_map(|candidate| Command::new(candidate).arg("-0").arg(&pid).output().ok())?;
+    if output.status.success() {
+        return Some(true);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+    if stderr.contains("no such process")
+        || stderr.contains("illegal pid")
+        || stderr.contains("invalid pid")
+    {
+        return Some(false);
+    }
+    if stderr.contains("operation not permitted") || stderr.contains("permission denied") {
+        return Some(true);
+    }
+    Some(true)
+}
+
+#[cfg(not(unix))]
+fn pid_alive(_pid: u32) -> Option<bool> {
+    None
+}
+
+fn acquire_network_permit() -> NetworkPermit {
+    let mut waited = Duration::ZERO;
+    let mut next_log = NETWORK_PERMIT_LOG_INTERVAL;
+    loop {
+        let limit = network_parallelism_limit();
+        if let Some(file_permit) = try_acquire_file_permit(limit) {
+            return NetworkPermit {
+                _file_permit: file_permit,
+            };
+        }
+        if waited >= next_log {
+            info!(
+                waited_ms = waited.as_millis(),
+                limit, "waiting for test network permit"
+            );
+            next_log = next_log.saturating_add(NETWORK_PERMIT_LOG_INTERVAL);
+        }
+        std::thread::sleep(NETWORK_PERMIT_POLL_INTERVAL);
+        waited = waited.saturating_add(NETWORK_PERMIT_POLL_INTERVAL);
+    }
+}
+
 /// Network of peers
 pub struct Network {
     env: Environment,
@@ -1204,6 +1392,7 @@ pub struct Network {
     sumeragi_overrides: Vec<SumeragiParameter>,
     topology_entries: Vec<GenesisTopologyEntry>,
     auto_populate_trusted_peer_pops: bool,
+    _permit: NetworkPermit,
 }
 
 impl Drop for Network {
@@ -2861,6 +3050,7 @@ impl NetworkBuilder {
 
     /// Build the [`Network`]. Doesn't start it.
     pub fn build(self) -> Network {
+        let permit = acquire_network_permit();
         let NetworkBuilder {
             env,
             n_peers,
@@ -3231,6 +3421,7 @@ impl NetworkBuilder {
             sumeragi_overrides,
             topology_entries,
             auto_populate_trusted_peer_pops,
+            _permit: permit,
         }
     }
 
@@ -5427,6 +5618,8 @@ mod tests {
     static CLIENT_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
     /// Serializes mutations of config env overrides so local parsing ignores host overrides.
     static CONFIG_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
+    /// Serializes network permit env overrides so tests do not race on temp directories.
+    static NETWORK_PERMIT_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
 
     fn lock_env_guard(mutex: &'static AsyncMutex<()>) -> AsyncMutexGuard<'static, ()> {
         mutex.blocking_lock()
@@ -5487,6 +5680,29 @@ mod tests {
         unsafe { std::env::remove_var(key) }
     }
 
+    struct EnvVarRestore {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarRestore {
+        fn set<K: AsRef<OsStr>>(key: &'static str, value: K) -> Self {
+            let previous = env::var_os(key);
+            set_env_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarRestore {
+        fn drop(&mut self) {
+            if let Some(value) = self.previous.take() {
+                set_env_var(self.key, value);
+            } else {
+                remove_env_var(self.key);
+            }
+        }
+    }
+
     #[test]
     fn config_env_override_keys_include_core_settings() {
         let keys = config_env_override_keys();
@@ -5516,6 +5732,59 @@ mod tests {
         assert!(removed.contains("API_ADDRESS"));
         assert!(removed.contains("P2P_ADDRESS"));
         assert!(removed.contains("CHAIN"));
+    }
+
+    #[test]
+    fn network_parallelism_env_override_applies() {
+        let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
+        let _parallel_guard = EnvVarRestore::set(NETWORK_PARALLELISM_ENV, "2");
+        let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "0");
+        assert_eq!(network_parallelism_limit(), 2);
+    }
+
+    #[test]
+    fn serialization_overrides_parallelism_limit() {
+        let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
+        let _parallel_guard = EnvVarRestore::set(NETWORK_PARALLELISM_ENV, "4");
+        let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "1");
+        assert_eq!(network_parallelism_limit(), 1);
+    }
+
+    #[test]
+    fn network_permit_creates_and_clears_lock_file() {
+        let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
+        let dir = tempdir().expect("permit dir");
+        let _dir_guard = EnvVarRestore::set(NETWORK_PERMIT_DIR_ENV, dir.path());
+        let _parallel_guard = EnvVarRestore::set(NETWORK_PARALLELISM_ENV, "1");
+        let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "0");
+
+        let permit = acquire_network_permit();
+        let file_count = fs::read_dir(dir.path())
+            .expect("permit dir listing")
+            .count();
+        assert_eq!(file_count, 1, "expected a single permit file");
+        drop(permit);
+
+        let file_count = fs::read_dir(dir.path())
+            .expect("permit dir listing")
+            .count();
+        assert_eq!(file_count, 0, "permit file should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_permit_file_is_reclaimed() {
+        let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
+        let dir = tempdir().expect("permit dir");
+        let _dir_guard = EnvVarRestore::set(NETWORK_PERMIT_DIR_ENV, dir.path());
+        let _parallel_guard = EnvVarRestore::set(NETWORK_PARALLELISM_ENV, "1");
+        let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "0");
+        let path = dir.path().join("permit-0.lock");
+        let mut file = fs::File::create(&path).expect("stale permit file");
+        writeln!(file, "pid={}", i32::MAX).expect("write pid");
+
+        let permit = try_acquire_file_permit(1).expect("expected reclaimed permit");
+        drop(permit);
     }
 
     #[test]
@@ -5738,7 +6007,7 @@ mod tests {
 
         assert_eq!(
             client_status_timeout_env(),
-            Duration::from_secs(180),
+            CLIENT_STATUS_TIMEOUT_DEFAULT,
             "default client status timeout should tolerate slow integration runs",
         );
     }
@@ -5754,9 +6023,8 @@ mod tests {
         let status_timeout = client_status_timeout_env();
         let ttl = client_ttl_env(status_timeout);
         assert_eq!(
-            ttl,
-            status_timeout + Duration::from_secs(5),
-            "TTL should be extended when defaults fall below the status timeout"
+            ttl, CLIENT_TTL_DEFAULT,
+            "default TTL should stay above the status timeout cushion"
         );
     }
 

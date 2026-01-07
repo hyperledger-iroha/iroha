@@ -648,6 +648,13 @@ impl Actor {
                     return Ok(());
                 }
                 let qc_signers = qc_signer_count(&qc);
+                let qc_ref = Self::qc_to_header_ref(&qc);
+                let extends_locked = qc_extends_locked_if_present(
+                    self.locked_qc,
+                    qc_ref,
+                    |hash, height| self.parent_hash_for(hash, height),
+                    |hash| self.block_known_locally(hash),
+                );
                 match tally_qc_against_block_signers(
                     &qc,
                     &topology,
@@ -709,14 +716,23 @@ impl Actor {
                             qc_signers,
                             "applied block sync QC after validation"
                         );
-                        self.apply_commit_certificate(
-                            &qc,
-                            topology.as_ref(),
-                            block_hash,
-                            block_height,
-                            block_view,
-                        );
-                        self.process_commit_candidates();
+                        if extends_locked {
+                            self.apply_commit_certificate(
+                                &qc,
+                                topology.as_ref(),
+                                block_hash,
+                                block_height,
+                                block_view,
+                            );
+                            self.process_commit_candidates();
+                        } else {
+                            debug!(
+                                incoming_hash = %block_hash,
+                                height = block_height,
+                                view = block_view,
+                                "skipping commit apply for non-extending block sync QC"
+                            );
+                        }
                     }
                     Err(err) => {
                         record_qc_validation_error(self.telemetry_handle(), &err);
