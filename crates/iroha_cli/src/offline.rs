@@ -1,6 +1,5 @@
 use super::*;
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::ValueEnum;
 use core::convert::TryFrom;
 use iroha::data_model::{
@@ -1379,6 +1378,7 @@ fn summary_export_envelope(
 #[cfg(test)]
 mod bundle_inspect_tests {
     use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use iroha::data_model::{
         account::AccountId,
         asset::AssetId,
@@ -1665,6 +1665,7 @@ pub struct OfflineRejectionStatsItem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use iroha::data_model::{
         asset::AssetDefinitionId,
         domain::DomainId,

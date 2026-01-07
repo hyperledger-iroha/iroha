@@ -4,7 +4,6 @@ use std::{
     ops::{Deref, DerefMut},
     panic::{self, AssertUnwindSafe},
     sync::{Arc, Condvar, Mutex, OnceLock},
-    thread,
     time::Duration,
 };
 
@@ -14,8 +13,8 @@ use tokio::runtime::{Handle, Runtime};
 
 /// Optional guard that limits concurrent integration tests which spin up a network.
 ///
-/// Set `IROHA_TEST_SERIALIZE_NETWORKS=1` to force serialization or
-/// `IROHA_TEST_NETWORK_PARALLELISM=<N>` to tune parallelism.
+/// Defaults to serial execution. Set `IROHA_TEST_NETWORK_PARALLELISM=<N>` to increase
+/// parallelism or `IROHA_TEST_SERIALIZE_NETWORKS=1` to force serialization explicitly.
 #[must_use]
 pub struct SerialGuard {
     _guard: Option<NetworkPermit>,
@@ -214,11 +213,9 @@ impl Drop for OverrideGuard {
 }
 
 fn default_network_parallelism() -> usize {
-    let cores = thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(1);
-    let per_network = MIN_NETWORK_PEERS.max(1);
-    cores.saturating_div(per_network).max(1)
+    // Integration networks are heavy enough to overwhelm local Torii under parallel load.
+    // Default to serialized runs; allow opt-in parallelism via env overrides.
+    1
 }
 
 fn network_parallelism_limit() -> usize {
@@ -596,10 +593,7 @@ mod tests {
         let (_, in_use_before) = network_permit_snapshot();
         let guard = serial_guard();
         let (limit, in_use) = network_permit_snapshot();
-        assert!(
-            limit >= 1,
-            "default network parallelism should be at least 1"
-        );
+        assert_eq!(limit, 1, "default network parallelism should be serialized");
         assert_eq!(in_use, in_use_before.saturating_add(1));
         drop(guard);
         let (_, in_use_after) = network_permit_snapshot();
@@ -635,6 +629,7 @@ mod tests {
         if skip_if_sandboxed("build_network_or_skip_returns_network") {
             return;
         }
+        let _env_guard = lock_env_guard();
         let result = build_network_or_skip(
             NetworkBuilder::new(),
             "build_network_or_skip_returns_network",
@@ -647,6 +642,7 @@ mod tests {
         if skip_if_sandboxed("build_network_blocking_or_skip_returns_network") {
             return;
         }
+        let _env_guard = lock_env_guard();
         let result = build_network_blocking_or_skip(
             NetworkBuilder::new(),
             "build_network_blocking_or_skip_returns_network",

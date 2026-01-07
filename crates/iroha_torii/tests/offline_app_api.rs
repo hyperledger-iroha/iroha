@@ -5,12 +5,12 @@ mod offline_balance_proof_utils;
 
 use std::{str::FromStr, sync::Arc};
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use axum::{
     Router,
     body::Body,
     http::{Request, StatusCode},
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use http_body_util::BodyExt as _;
 use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_core::{

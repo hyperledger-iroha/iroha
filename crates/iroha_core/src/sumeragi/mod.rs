@@ -98,10 +98,22 @@ pub fn effective_consensus_mode_for_height(
     let params = view.world.parameters();
     let sumeragi = params.sumeragi();
     match (sumeragi.next_mode, sumeragi.mode_activation_height) {
-        (Some(next), Some(activation_height)) if height >= activation_height => match next {
-            SumeragiConsensusMode::Permissioned => ConsensusMode::Permissioned,
-            SumeragiConsensusMode::Npos => ConsensusMode::Npos,
-        },
+        (Some(next), Some(activation_height)) => {
+            let next_mode = match next {
+                SumeragiConsensusMode::Permissioned => ConsensusMode::Permissioned,
+                SumeragiConsensusMode::Npos => ConsensusMode::Npos,
+            };
+            if height >= activation_height {
+                return next_mode;
+            }
+            if fallback == next_mode {
+                return match next_mode {
+                    ConsensusMode::Permissioned => ConsensusMode::Npos,
+                    ConsensusMode::Npos => ConsensusMode::Permissioned,
+                };
+            }
+            fallback
+        }
         _ => fallback,
     }
 }
@@ -773,6 +785,26 @@ mod tests {
         let view = state.view();
         assert_eq!(
             effective_consensus_mode_for_height(&view, 9, ConsensusMode::Permissioned),
+            ConsensusMode::Permissioned
+        );
+    }
+
+    #[test]
+    fn effective_consensus_mode_for_height_uses_pre_activation_mode_after_flip() {
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let params = block.parameters.get_mut();
+            params.sumeragi.next_mode = Some(SumeragiConsensusMode::Npos);
+            params.sumeragi.mode_activation_height = Some(10);
+            block.commit();
+        }
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        assert_eq!(
+            effective_consensus_mode_for_height(&view, 9, ConsensusMode::Npos),
             ConsensusMode::Permissioned
         );
     }

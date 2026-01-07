@@ -82,8 +82,8 @@ use iroha_data_model::{
     events::prelude::*,
     isi::{GrantBox, register::RegisterBox, transfer::TransferBox},
     nexus::{
-        AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtRejectReason, DataSpaceId,
-        LaneConfig, LaneId, LaneRelayEnvelope, ProofBlob, proof_matches_manifest,
+        AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtRejectReason, DataSpaceId, LaneConfig,
+        LaneId, LaneRelayEnvelope, ProofBlob, proof_matches_manifest,
     },
     peer::PeerId,
     permission::Permission,

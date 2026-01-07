@@ -39,12 +39,12 @@ use iroha_data_model::{
         AGGREGATE_PROOF_VERSION_V1, AndroidHmsSafetyDetectMetadata, AndroidIntegrityMetadata,
         AndroidIntegrityPolicy, AndroidMarkerKeyMetadata, AndroidPlayIntegrityMetadata,
         AndroidProvisionedMetadata, AndroidProvisionedProof, HmsSafetyDetectEvaluation,
-        OFFLINE_REJECTION_REASON_PREFIX, PROVISIONED_COUNTER_PREFIX,
-        OfflineAllowanceRecord, OfflineBalanceProof, OfflineCounterState, OfflineCounterSummary,
-        OfflinePlatformProof, OfflinePlatformTokenSnapshot, OfflineProofRequestError,
-        OfflineSpendReceipt, OfflineToOnlineTransfer, OfflineTransferRecord,
-        OfflineTransferRejectionPlatform, OfflineTransferRejectionReason, OfflineTransferStatus,
-        OfflineVerdictRevocation, OfflineVerdictSnapshot, OfflineWalletCertificate,
+        OFFLINE_REJECTION_REASON_PREFIX, OfflineAllowanceRecord, OfflineBalanceProof,
+        OfflineCounterState, OfflineCounterSummary, OfflinePlatformProof,
+        OfflinePlatformTokenSnapshot, OfflineProofRequestError, OfflineSpendReceipt,
+        OfflineToOnlineTransfer, OfflineTransferRecord, OfflineTransferRejectionPlatform,
+        OfflineTransferRejectionReason, OfflineTransferStatus, OfflineVerdictRevocation,
+        OfflineVerdictSnapshot, OfflineWalletCertificate, PROVISIONED_COUNTER_PREFIX,
         PlayIntegrityAppVerdict, PlayIntegrityDeviceVerdict, PlayIntegrityEnvironment,
         canonical_app_attest_key_id, chain_bound_receipt_hash, compute_receipts_root,
         ensure_single_counter_scope, marker_series_from_public_key, receipts_are_canonical,
@@ -2721,14 +2721,13 @@ mod attestation {
     #[cfg(test)]
     use once_cell::sync::OnceCell;
     use p256::ecdsa::{
-        Signature as P256Signature,
-        VerifyingKey,
+        Signature as P256Signature, VerifyingKey,
         signature::{DigestVerifier, hazmat::PrehashVerifier as _},
     };
     #[cfg(test)]
-    use p256::ecdsa::{SigningKey, signature::DigestSigner};
-    #[cfg(test)]
     use p256::ecdsa::signature::hazmat::PrehashSigner as _;
+    #[cfg(test)]
+    use p256::ecdsa::{SigningKey, signature::DigestSigner};
     #[cfg(test)]
     use p256::pkcs8::DecodePrivateKey;
     #[cfg(test)]
@@ -4216,8 +4215,8 @@ mod attestation {
         challenge: &ReceiptChallenge,
     ) -> Result<(), InstructionExecutionError> {
         if let Some(signature) = &proof.marker_signature {
-            let marker_key =
-                VerifyingKey::from_sec1_bytes(proof.marker_public_key.as_ref()).map_err(|_| {
+            let marker_key = VerifyingKey::from_sec1_bytes(proof.marker_public_key.as_ref())
+                .map_err(|_| {
                     InstructionExecutionError::InvariantViolation(
                         "android marker_public_key is not valid P-256 SEC1 bytes".into(),
                     )
@@ -5614,9 +5613,8 @@ mod attestation {
                 let operator_pair = operator_keypair();
                 let certificate = chain.build_certificate(&metadata, &spend_pair, &operator_pair);
                 let marker_leaf = RcgenKeyPair::generate().expect("marker key");
-                let marker_signing_key =
-                    SigningKey::from_pkcs8_der(&marker_leaf.serialize_der())
-                        .expect("marker signing key");
+                let marker_signing_key = SigningKey::from_pkcs8_der(&marker_leaf.serialize_der())
+                    .expect("marker signing key");
                 let marker_public_key = VerifyingKey::from(&marker_signing_key)
                     .to_encoded_point(false)
                     .as_bytes()
@@ -5626,11 +5624,10 @@ mod attestation {
                 let chain_id = sample_chain_id();
                 let challenge = derive_receipt_challenge(&receipt, &chain_id).expect("challenge");
                 let attestation = chain.issue_attestation(&challenge, &metadata, marker_leaf);
-                let marker_signature = marker_signing_key
+                let marker_signature: P256Signature = marker_signing_key
                     .sign_prehash(challenge.client_data_hash.as_ref())
-                    .expect("marker signature")
-                    .to_bytes()
-                    .to_vec();
+                    .expect("marker signature");
+                let marker_signature = marker_signature.to_bytes().to_vec();
                 receipt.platform_proof =
                     OfflinePlatformProof::AndroidMarkerKey(AndroidMarkerKeyProof {
                         series: marker_series_from_public_key(&marker_public_key)
@@ -6445,8 +6442,7 @@ mod attestation {
             spend_pair: &KeyPair,
             marker_public_key: &[u8],
         ) -> OfflineSpendReceipt {
-            let series = marker_series_from_public_key(marker_public_key)
-                .expect("marker series");
+            let series = marker_series_from_public_key(marker_public_key).expect("marker series");
             let mut receipt = OfflineSpendReceipt {
                 tx_id: Hash::new(b"android-offline"),
                 from: certificate.controller.clone(),

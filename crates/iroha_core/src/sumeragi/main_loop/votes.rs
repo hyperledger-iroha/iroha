@@ -767,10 +767,10 @@ impl Actor {
         {
             return roster;
         }
+        let active = self.effective_commit_topology();
         if height > committed_height.saturating_add(1) {
             return Vec::new();
         }
-        let active = self.effective_commit_topology();
         if !active.is_empty() {
             return active;
         }

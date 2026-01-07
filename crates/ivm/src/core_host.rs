@@ -367,7 +367,7 @@ impl CoreHost {
         let proof_ptr = vm.register(11);
         if proof_ptr == 0 {
             let state = self.axt_state.as_mut().expect("axt_state checked above");
-            state.record_proof(dsid, None, Some(policy.current_slot))?;
+            state.record_proof(dsid, None, None)?;
             self.axt_proof_cache.remove(&dsid);
             return Ok(0);
         }
@@ -392,7 +392,7 @@ impl CoreHost {
         {
             if entry.valid {
                 let state = self.axt_state.as_mut().expect("axt_state checked above");
-                state.record_proof(dsid, Some(proof.clone()), Some(policy.current_slot))?;
+                state.record_proof(dsid, Some(proof.clone()), None)?;
                 return Ok(0);
             }
             return Err(VMError::PermissionDenied);
@@ -404,7 +404,7 @@ impl CoreHost {
                     self.cache_proof_entry(
                         dsid,
                         digest,
-                        proof.expiry_slot,
+                        expiry_with_skew,
                         Some(policy.current_slot),
                         Some(envelope.manifest_root),
                         false,
@@ -454,7 +454,7 @@ impl CoreHost {
         }
 
         let state = self.axt_state.as_mut().expect("axt_state checked above");
-        state.record_proof(dsid, Some(proof.clone()), Some(policy.current_slot))?;
+        state.record_proof(dsid, Some(proof.clone()), None)?;
         self.cache_proof_entry(
             dsid,
             digest,
@@ -519,6 +519,9 @@ impl CoreHost {
             let policy = self
                 .policy_entry_for(intent.asset_dsid)
                 .ok_or(VMError::PermissionDenied)?;
+            if proof_blob.payload.is_empty() || proof_blob.expiry_slot == Some(0) {
+                return Err(VMError::NoritoInvalid);
+            }
             let expiry_with_skew = proof_blob
                 .expiry_slot
                 .map(|slot| self.axt_expiry_slot_with_skew(slot, None));
