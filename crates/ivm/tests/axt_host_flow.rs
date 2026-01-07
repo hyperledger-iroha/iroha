@@ -1,3 +1,5 @@
+//! AXT host flow coverage for DefaultHost and WsvHost.
+
 use std::{collections::HashMap, sync::Arc};
 
 use iroha_crypto::KeyPair;
@@ -1143,6 +1145,126 @@ fn wsv_host_policy_checks_root_and_expiry() {
         use_handle(&mut vm, &mut host, &ok_handle, &intent, Some(&proof)),
         Ok(0)
     );
+}
+
+#[test]
+fn wsv_host_uses_slot_length_and_skew_for_expiry() {
+    let mut vm = IVM::new(1_000_000);
+    let caller = sample_wsv_caller();
+    let dsid = DataSpaceId::new(140);
+    let manifest_root = [0x7A; 32];
+    let mut wsv = MockWorldStateView::new();
+    wsv.set_slot_length_ms(10);
+    wsv.set_max_clock_skew_ms(15);
+    wsv.set_current_time_ms(25); // current_slot = 2
+    wsv.set_axt_policy(
+        dsid,
+        DataspaceAxtPolicy {
+            manifest_root,
+            target_lane: LaneId::new(0),
+            min_handle_era: 1,
+            min_sub_nonce: 1,
+            current_slot: 0,
+        },
+    );
+    let mut host = WsvHost::new(wsv, caller, HashMap::new(), HashMap::new());
+
+    let descriptor = axt::AxtDescriptor {
+        dsids: vec![dsid],
+        touches: vec![axt::AxtTouchSpec {
+            dsid,
+            read: vec!["orders".into()],
+            write: vec!["ledger".into()],
+        }],
+    };
+    let manifest = TouchManifest {
+        read: vec!["orders/slot".into()],
+        write: vec!["ledger/slot".into()],
+    };
+    begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
+
+    let binding = axt::compute_binding(&descriptor).expect("binding");
+    let mut handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    handle.expiry_slot = 1;
+    handle.max_clock_skew_ms = Some(15);
+    handle.manifest_view_root = manifest_root.to_vec();
+    let intent = RemoteSpendIntent {
+        asset_dsid: dsid,
+        op: SpendOp {
+            kind: "transfer".into(),
+            from: "alice@wonderland".into(),
+            to: "merchant@wonderland".into(),
+            amount: "1".into(),
+        },
+    };
+    let proof = axt::ProofBlob {
+        payload: vec![1],
+        expiry_slot: None,
+    };
+    assert_eq!(
+        use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof)),
+        Ok(0)
+    );
+}
+
+#[test]
+fn wsv_host_rejects_handle_skew_above_config() {
+    let mut vm = IVM::new(1_000_000);
+    let caller = sample_wsv_caller();
+    let dsid = DataSpaceId::new(141);
+    let manifest_root = [0x8B; 32];
+    let mut wsv = MockWorldStateView::new();
+    wsv.set_slot_length_ms(10);
+    wsv.set_max_clock_skew_ms(5);
+    wsv.set_current_time_ms(20); // current_slot = 2
+    wsv.set_axt_policy(
+        dsid,
+        DataspaceAxtPolicy {
+            manifest_root,
+            target_lane: LaneId::new(0),
+            min_handle_era: 1,
+            min_sub_nonce: 1,
+            current_slot: 0,
+        },
+    );
+    let mut host = WsvHost::new(wsv, caller, HashMap::new(), HashMap::new());
+
+    let descriptor = axt::AxtDescriptor {
+        dsids: vec![dsid],
+        touches: vec![axt::AxtTouchSpec {
+            dsid,
+            read: vec!["orders".into()],
+            write: vec!["ledger".into()],
+        }],
+    };
+    let manifest = TouchManifest {
+        read: vec!["orders/skew".into()],
+        write: vec!["ledger/skew".into()],
+    };
+    begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
+
+    let binding = axt::compute_binding(&descriptor).expect("binding");
+    let mut handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    handle.expiry_slot = 10;
+    handle.max_clock_skew_ms = Some(10);
+    handle.manifest_view_root = manifest_root.to_vec();
+    let intent = RemoteSpendIntent {
+        asset_dsid: dsid,
+        op: SpendOp {
+            kind: "transfer".into(),
+            from: "alice@wonderland".into(),
+            to: "merchant@wonderland".into(),
+            amount: "1".into(),
+        },
+    };
+    let proof = axt::ProofBlob {
+        payload: vec![2],
+        expiry_slot: None,
+    };
+    assert!(matches!(
+        use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof)),
+        Err(VMError::PermissionDenied)
+    ));
 }
 
 #[test]

@@ -184,6 +184,11 @@ impl AxtPolicy for SpaceDirectoryAxtPolicy {
         {
             return Err(VMError::PermissionDenied);
         }
+        if let Some(requested) = usage.handle.max_clock_skew_ms
+            && u64::from(requested) > self.max_clock_skew_ms
+        {
+            return Err(VMError::PermissionDenied);
+        }
         let expiry_slot = axt::expiry_slot_with_skew(
             usage.handle.expiry_slot,
             self.slot_length_ms,
@@ -1626,9 +1631,15 @@ impl WsvHost {
     }
 
     fn build_wsv_axt_policy(wsv: &MockWorldStateView) -> Arc<SpaceDirectoryAxtPolicy> {
+        let slot_length_ms = wsv.slot_length_ms();
+        let max_clock_skew_ms = wsv.max_clock_skew_ms();
         Arc::new(
-            SpaceDirectoryAxtPolicy::from_snapshot(wsv.axt_policy_snapshot())
-                .with_current_slot(wsv.current_slot()),
+            SpaceDirectoryAxtPolicy::from_snapshot_with_timing(
+                wsv.axt_policy_snapshot(),
+                slot_length_ms,
+                max_clock_skew_ms,
+            )
+            .with_current_slot(wsv.current_slot()),
         )
     }
 

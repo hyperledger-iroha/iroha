@@ -418,7 +418,7 @@ private enum DomainSelector {
     case local12(Data)
     case global(UInt32)
 
-    private static func canonicalizeLabel(_ raw: String) throws -> String {
+    fileprivate static func canonicalizeLabel(_ raw: String) throws -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw AccountAddressError.invalidDomainLabel(raw)

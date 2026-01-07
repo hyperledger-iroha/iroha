@@ -1,6 +1,12 @@
 # Status
 
 ## Latest Updates
+- Torii telemetry: treat IPv4-mapped IPv6 Torii hosts as IPv4 when deciding geo lookup eligibility; add regression coverage.
+- Tests: `cargo test -p iroha_torii geo_host_publicity_checks -- --nocapture` (failed: `norito::json::Map` alias used with generics in `crates/iroha_torii/src/gov.rs:313`).
+- IVM: WsvHost AXT policy now honors configured slot length/clock skew and rejects handle skew overrides above the configured max; SnapshotAxtPolicy enforces the same bound; add regression tests.
+- Tests: not run (not requested).
+- Core: record raw AXT proof expiry in envelopes while keeping skew only for cache/slot checks; add regression test for raw expiry recording.
+- Tests: not run (not requested).
 - Swift SDK: canonicalize offline account-id Norito encoding (IH58 for encoded/raw keys, domain normalization) across receipts, challenges, and Poseidon leaf hashing; add regression coverage.
 - Tests: not run (not requested).
 - Core: align AXT proof/handle expiry comparison with commit rules, record handle binding/manifest length errors, tighten AXT reject context coverage (descriptor vs missing policy, touch/handle invariants), and add regression tests.
@@ -1522,3 +1528,7 @@
 - Fixed invalid-proposal evidence to carry the pending view when commit quorum failures occur, with coverage asserting the recorded proposal view.
 - Standardized ZK ballot public-input validation across Torii, CLI, and the JS SDK (Torii client + instruction builders) and refreshed the JS governance ballot examples.
 - Normalized Android CastZkBallot public inputs (canonical JSON, alias mapping, full lock hints) with new regression coverage, and clarified governance docs that partial lock hints are rejected.
+- Normalized CLI ZK public-input alias keys (`durationBlocks`, `rootHintHex`, `nullifierHex`) and added regression coverage for alias conflicts.
+- Canonicalized JavaScript `CastZkBallot` public-input JSON ordering (sorted keys) with a regression for nested ordering.
+- Hardened the Norito bridge CastZkBallot encoder to normalize alias keys and enforce complete lock hints, with regression coverage for invalid inputs.
+- Normalized JS host CastZkBallot parsing to canonicalize public inputs (alias mapping, complete lock hints) with regression tests for invalid payloads.
