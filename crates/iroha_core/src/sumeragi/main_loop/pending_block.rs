@@ -48,13 +48,17 @@ pub(super) struct PendingBlock {
     pub(super) payload_hash: Hash,
     pub(super) height: u64,
     pub(super) view: u64,
+    /// Execution roots captured during pre-vote validation (Commit phase only).
+    pub(super) parent_state_root: Option<Hash>,
+    /// Execution roots captured during pre-vote validation (Commit phase only).
+    pub(super) post_state_root: Option<Hash>,
     pub(super) tx_batch: Option<Vec<AcceptedTransaction<'static>>>,
     pub(super) last_gate: Option<da::GateReason>,
     pub(super) last_gate_satisfied: Option<da::GateSatisfaction>,
     pub(super) inserted_at: Instant,
     pub(super) precommit_vote_sent: bool,
-    pub(super) commit_certificate_seen: bool,
-    pub(super) commit_certificate_epoch: Option<u64>,
+    pub(super) commit_qc_seen: bool,
+    pub(super) commit_qc_epoch: Option<u64>,
     pub(super) validation_status: ValidationStatus,
     pub(super) kura_retry_attempts: u32,
     pub(super) next_kura_retry: Option<Instant>,
@@ -72,13 +76,15 @@ impl PendingBlock {
             payload_hash,
             height,
             view,
+            parent_state_root: None,
+            post_state_root: None,
             tx_batch: None,
             last_gate: None,
             last_gate_satisfied: None,
             inserted_at: Instant::now(),
             precommit_vote_sent: false,
-            commit_certificate_seen: false,
-            commit_certificate_epoch: None,
+            commit_qc_seen: false,
+            commit_qc_epoch: None,
             validation_status: ValidationStatus::Pending,
             kura_retry_attempts: 0,
             next_kura_retry: None,
@@ -124,8 +130,8 @@ impl PendingBlock {
         if !replacing_same_subject {
             self.inserted_at = Instant::now();
             self.precommit_vote_sent = false;
-            self.commit_certificate_seen = false;
-            self.commit_certificate_epoch = None;
+            self.commit_qc_seen = false;
+            self.commit_qc_epoch = None;
             self.last_gate = None;
             self.last_gate_satisfied = None;
             self.reset_kura_retry();
@@ -134,6 +140,8 @@ impl PendingBlock {
             self.last_precommit_rebroadcast = None;
             self.last_quorum_reschedule = None;
             self.aborted = false;
+            self.parent_state_root = None;
+            self.post_state_root = None;
         }
     }
 
@@ -187,9 +195,11 @@ impl PendingBlock {
         self.last_gate = None;
         self.last_gate_satisfied = None;
         self.precommit_vote_sent = false;
-        self.commit_certificate_seen = false;
-        self.commit_certificate_epoch = None;
+        self.commit_qc_seen = false;
+        self.commit_qc_epoch = None;
         self.last_precommit_rebroadcast = None;
+        self.parent_state_root = None;
+        self.post_state_root = None;
     }
 
     pub(super) fn note_kura_failure(
@@ -323,5 +333,58 @@ pub(super) fn record_da_gate_telemetry(
         if let Some(satisfaction) = gate.satisfaction {
             telemetry.note_da_gate_satisfaction(satisfaction);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_crypto::{KeyPair, SignatureOf};
+    use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
+    use std::num::NonZeroU64;
+
+    fn sample_block(height: u64) -> SignedBlock {
+        let header = BlockHeader {
+            height: NonZeroU64::new(height).expect("height > 0"),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            creation_time_ms: 0,
+            view_change_index: 0,
+            confidential_features: None,
+        };
+        let key_pair = KeyPair::random();
+        let signature = SignatureOf::from_hash(key_pair.private_key(), header.hash());
+        SignedBlock::presigned(BlockSignature::new(0, signature), header, Vec::new())
+    }
+
+    #[test]
+    fn pending_block_state_roots_reset_on_replace_and_abort() {
+        let mut pending = PendingBlock::new(
+            sample_block(1),
+            Hash::prehashed([0x11; Hash::LENGTH]),
+            1,
+            0,
+        );
+        pending.parent_state_root = Some(Hash::prehashed([0x22; Hash::LENGTH]));
+        pending.post_state_root = Some(Hash::prehashed([0x33; Hash::LENGTH]));
+
+        pending.replace_block(
+            sample_block(2),
+            Hash::prehashed([0x44; Hash::LENGTH]),
+            2,
+            0,
+        );
+        assert!(pending.parent_state_root.is_none());
+        assert!(pending.post_state_root.is_none());
+
+        pending.parent_state_root = Some(Hash::prehashed([0x55; Hash::LENGTH]));
+        pending.post_state_root = Some(Hash::prehashed([0x66; Hash::LENGTH]));
+        pending.mark_aborted();
+        assert!(pending.parent_state_root.is_none());
+        assert!(pending.post_state_root.is_none());
     }
 }

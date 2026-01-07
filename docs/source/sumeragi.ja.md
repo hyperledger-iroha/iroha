@@ -109,7 +109,6 @@ translator: manual
 
 ### テストカバレッジ
 - `crates/iroha_core/tests/sumeragi_negative_paths.rs`: 無効な提案・commit certificate・重複投票を投稿し、`invalid proposal` / `invalid consensus evidence` を検証します。
-- `crates/iroha_core/tests/sumeragi_exec_qc.rs`: ExecQC の厳格モードと各フェイルパスをテストします。
 - `integration_tests/tests/sumeragi_da.rs`: RBC/DA の大規模ペイロードを検証し、SLO 違反で失敗させます。
 - `docs/source/sumeragi_da.md` に RBC の運用手順と測定基準がまとまっています。
 
@@ -140,16 +139,9 @@ translator: manual
 - RBC は Gossip でブロック断片を流通させ、全ピアが復元できるようにすることで DA を実現します。
 - `sumeragi.da_enabled` を有効にすると、コミット前に `availability evidence` が必要になります。RBC は同じ設定で有効になり、ペイロード配布と欠落回復に使われます（コミットはローカルの `RbcDeliver` を待ちません）。
 
-### ExecQC と証跡
-- ExecQC は実行結果を証明する ExecutionQC で、SBV-AM シグネチャを含みます。
-- `require_execution_qc` を true にすると、Precommit phase commit certificate に加えて ExecQC がなければコミットできません。
-- `require_wsv_exec_qc` を有効にすると、WSV に ExecQC が永続化されたことを確認してからコミットします。
-- ExecQC ゲートが必要な場合でも、古いビューの ExecutionQC は受理されます。ペイロードが欠けている場合は欠落ブロック取得を起動し、厳格モードの停滞を避けます。
-
 ### `proof_policy` の設定
-- `proof_policy = "precommit_qc"`（既定）: Precommit phase commit certificate のみ要求。
-- `proof_policy = "exec_qc"`: ExecQC を必須化。
-- `proof_policy = "off"`: commit certificate を使用しない（検証・監査目的以外では推奨されません）。
+- `proof_policy = "off"`（既定）: commit QC のみ要求。
+- `proof_policy = "zk_parent"`: 親の ZK 証明を要求（`zk_finality_k` 深さ）。
 
 ### Telemetry & Backpressure
 - `pacemaker_backpressure_deferrals_total` が増加した場合、`scripts/sumeragi_backpressure_log_scraper.py` を使ってログと照合できます。
@@ -210,25 +202,6 @@ translator: manual
 5. **CI**: `integration_tests/tests/sumeragi_da.rs` が 4 ピア／6 ピアのシナリオで 10 MiB 以上のペイロードを送信し、RBC デリバリー ≤3.6 s、コミット ≤4.0 s、スループット ≥2.7 MiB/s を検証します。
 
 ---
-
-## ExecQC 厳格モード設定
-
-WSV に ExecutionQC レコードが存在するまで親ブロックのコミットを許可しないようにするには、設定で厳格モードを有効化します。この設定は ExecQC ゲート自体も有効化します。
-
-```toml
-[sumeragi]
-# 親ブロックコミット前に ExecQC (SBV-AM) を要求する
-proof_policy = "exec_qc"           # あるいは `require_execution_qc = true`
-require_execution_qc = true         # proof_policy != "off" のとき有効
-
-# 厳格モード: WSV に完全な ExecutionQC レコードを必須化
-require_wsv_exec_qc = true
-
-# commit certificate ゲート（precommit）は既定で有効。無効化する場合は以下をコメントアウト解除（非推奨）
-# require_precommit_qc = false
-```
-
-`require_wsv_exec_qc = true` を設定すると、ノードはインメモリ ExecutionQC が存在する場合に同じ更新処理で WSV に ExecutionQC レコードを永続化し、それが完了しない限りコミットを進めません。
 
 ### VRF ランダムネスパイプライン
 

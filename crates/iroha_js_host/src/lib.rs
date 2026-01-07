@@ -49,8 +49,11 @@ use iroha_data_model::{
         definition::{AssetDefinition, NewAssetDefinition},
         id::{AssetDefinitionId, AssetId},
     },
-    block::{BlockHeader, consensus::LaneBlockCommitment},
-    consensus::ExecutionQcRecord,
+    block::{
+        BlockHeader,
+        consensus::{LaneBlockCommitment, PERMISSIONED_TAG},
+    },
+    consensus::{CertPhase, Qc, QcAggregate},
     da::manifest::DaManifestV1,
     domain::{Domain, DomainId, NewDomain},
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
@@ -716,15 +719,24 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
     );
     let da_hash = HashOf::from_untyped_unchecked(Hash::new([0xAA; 4]));
     header.set_da_commitments_hash(Some(da_hash));
-    let qc = ExecutionQcRecord {
+    let validator_set = vec![PeerId::from(KeyPair::random().public_key().clone())];
+    let qc = Qc {
+        phase: CertPhase::Commit,
         subject_block_hash: header.hash(),
         parent_state_root: Hash::new([0xBA; 4]),
         post_state_root: Hash::new([0xBB; 4]),
         height: header.height().get(),
         view: 1,
         epoch: 0,
-        signers_bitmap: vec![0x01],
-        bls_aggregate_signature: vec![0xCC; 48],
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set_hash_version: 1,
+        validator_set,
+        aggregate: QcAggregate {
+            signers_bitmap: vec![0x01],
+            bls_aggregate_signature: vec![0xCC; 48],
+        },
     };
     let envelope = LaneRelayEnvelope::new(header, Some(qc), Some(da_hash), settlement, 64)
         .map_err(norito_to_napi)?;

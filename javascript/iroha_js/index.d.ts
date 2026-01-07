@@ -3518,8 +3518,6 @@ export interface ToriiConsensusCaps {
   collectors_k: number;
   redundant_send_r: number;
   da_enabled: boolean;
-  require_execution_qc: boolean;
-  require_wsv_exec_qc: boolean;
   rbc_chunk_max_bytes: number;
   rbc_session_ttl_ms: number;
   rbc_store_max_sessions: number;
@@ -3627,9 +3625,9 @@ export interface ToriiSumeragiParamsSnapshot {
 export type SumeragiEvidenceKind =
   | "DoublePrepare"
   | "DoubleCommit"
-  | "DoubleExecVote"
-  | "InvalidCommitCertificate"
-  | "InvalidProposal";
+  | "InvalidQc"
+  | "InvalidProposal"
+  | "Censorship";
 
 export interface SumeragiEvidenceListOptions {
   limit?: NumericLike;
@@ -3656,20 +3654,8 @@ export interface SumeragiDoubleVoteEvidenceRecord extends SumeragiEvidenceRecord
   block_hash_2: string;
 }
 
-export interface SumeragiDoubleExecVoteEvidenceRecord extends SumeragiEvidenceRecordBase {
-  kind: "DoubleExecVote";
-  height: number;
-  view: number;
-  epoch: number;
-  signer: string;
-  block_hash: string;
-  parent_state_root: string;
-  post_state_root_1: string;
-  post_state_root_2: string;
-}
-
-export interface SumeragiInvalidCommitCertificateEvidenceRecord extends SumeragiEvidenceRecordBase {
-  kind: "InvalidCommitCertificate";
+export interface SumeragiInvalidQcEvidenceRecord extends SumeragiEvidenceRecordBase {
+  kind: "InvalidQc";
   height: number;
   view: number;
   epoch: number;
@@ -3688,15 +3674,24 @@ export interface SumeragiInvalidProposalEvidenceRecord extends SumeragiEvidenceR
   reason: string;
 }
 
+export interface SumeragiCensorshipEvidenceRecord extends SumeragiEvidenceRecordBase {
+  kind: "Censorship";
+  tx_hash: string;
+  receipt_count: number;
+  min_height: number;
+  max_height: number;
+  signers: ReadonlyArray<string>;
+}
+
 export interface SumeragiUnknownEvidenceRecord extends SumeragiEvidenceRecordBase {
   detail?: string;
 }
 
 export type SumeragiEvidenceRecord =
   | SumeragiDoubleVoteEvidenceRecord
-  | SumeragiDoubleExecVoteEvidenceRecord
-  | SumeragiInvalidCommitCertificateEvidenceRecord
+  | SumeragiInvalidQcEvidenceRecord
   | SumeragiInvalidProposalEvidenceRecord
+  | SumeragiCensorshipEvidenceRecord
   | SumeragiUnknownEvidenceRecord;
 
 export interface SumeragiEvidenceListResponse {

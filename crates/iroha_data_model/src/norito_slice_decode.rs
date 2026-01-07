@@ -61,11 +61,6 @@ impl_decode_from_slice_via_archived! {
     crate::smart_contract::manifest::AccessSetHints,
 }
 
-// Consensus-related records
-impl_decode_from_slice_via_archived! {
-    crate::consensus::ExecutionQcRecord,
-}
-
 // Proof-related
 impl_decode_from_slice_via_archived! {
     crate::proof::ProofId,

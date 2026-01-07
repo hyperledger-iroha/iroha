@@ -8,43 +8,18 @@ use mv::json::JsonKeyCodec;
 use norito::codec::{Decode, Encode};
 
 pub use crate::block::consensus::{
-    CertPhase, CommitAggregate, CommitCertificate, CommitCertificateRef, CommitVote,
-    SumeragiBlockSyncRosterStatus, SumeragiCommitCertificateStatus, SumeragiCommitQuorumStatus,
-    SumeragiConsensusCapsStatus, SumeragiMembershipMismatchStatus, SumeragiPeerKeyPolicyStatus,
-    SumeragiQcEntry, SumeragiQcSnapshot, SumeragiStatusWire, SumeragiViewChangeCauseStatus,
-    SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
+    CertPhase, Qc, QcAggregate, QcRef, QcVote, SumeragiBlockSyncRosterStatus,
+    SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiMembershipMismatchStatus,
+    SumeragiPeerKeyPolicyStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus,
+    SumeragiStatusWire, SumeragiViewChangeCauseStatus, SumeragiWorkerLoopStatus,
+    SumeragiWorkerQueueDepths,
 };
 use crate::prelude::*;
-
-/// `ExecutionQC` record persisted in WSV for audit and recovery.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct ExecutionQcRecord {
-    /// Parent block hash certified by the `ExecutionQC`.
-    pub subject_block_hash: HashOf<crate::block::BlockHeader>,
-    /// Parent state root bound into the execution vote preimage.
-    pub parent_state_root: iroha_crypto::Hash,
-    /// Certified post-state root for the parent block.
-    pub post_state_root: iroha_crypto::Hash,
-    /// Parent block height.
-    pub height: u64,
-    /// View in which the QC was formed.
-    pub view: u64,
-    /// Epoch index (0 in permissioned mode).
-    pub epoch: u64,
-    /// Compact signer bitmap (LSB-first).
-    pub signers_bitmap: Vec<u8>,
-    /// Aggregate signature bytes (format depends on backend; opaque).
-    pub bls_aggregate_signature: Vec<u8>,
-}
 
 /// Hash-version constant for validator set checkpoints.
 pub const VALIDATOR_SET_HASH_VERSION_V1: u16 = 1;
 
-// CommitCertificate is now defined in `block::consensus` and re-exported above.
+// QC types are defined in `block::consensus` and re-exported above.
 
 /// Signed validator set checkpoint used for bootstrap and audit.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -495,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_certificate_roundtrip() {
+    fn commit_qc_roundtrip() {
         let kp_a = iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let kp_b = iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let validator_set = vec![
@@ -506,24 +481,26 @@ mod tests {
         let block_hash = HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
             iroha_crypto::Hash::prehashed([0xCC; 32]),
         );
-        let cert = CommitCertificate {
+        let cert = Qc {
             phase: CertPhase::Commit,
             subject_block_hash: block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 7,
             view: 3,
             epoch: 0,
             mode_tag: crate::block::consensus::PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash,
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: validator_set.clone(),
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: vec![0x03],
                 bls_aggregate_signature: vec![0x01, 0x02],
             },
         };
         let buf = cert.encode();
-        let decoded = CommitCertificate::decode(&mut &buf[..]).expect("decode commit cert");
+        let decoded = Qc::decode(&mut &buf[..]).expect("decode commit cert");
         assert_eq!(decoded.height, cert.height);
         assert_eq!(decoded.view, cert.view);
         assert_eq!(decoded.validator_set_hash, validator_set_hash);

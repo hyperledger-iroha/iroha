@@ -1,7 +1,7 @@
 //! Sumeragi core message types and helpers.
 //!
-//! This module defines canonical, Norito-encoded types for commit-certificate
-//! voting (prepare/commit/new-view), execution attestations, and evidence.
+//! This module defines canonical, Norito-encoded types for QC voting
+//! (prepare/commit/new-view), evidence, and consensus helpers.
 //! It is used by the actor and related tooling.
 //!
 //! Mode separation (permissioned vs `NPoS`) is runtime-selectable via config/WSV.
@@ -22,22 +22,19 @@ use iroha_config::parameters::actual::{
 #[cfg(test)]
 use iroha_crypto::HashOf;
 pub use iroha_data_model::block::consensus::{
-    CertPhase, CommitAggregate, CommitCertificate, CommitCertificateRef, CommitVote,
-    ConsensusBlockHeader, ConsensusGenesisParams, Evidence, EvidenceKind, EvidencePayload, ExecKv,
-    ExecVote, ExecWitness, ExecWitnessMsg, ExecutionQC, Height, NPOS_TAG, NposGenesisParams,
-    PERMISSIONED_TAG, PROTO_VERSION, Proposal, RbcChunk, RbcDeliver, RbcInit, RbcReady, Reconfig,
-    ValidatorIndex, View, VrfCommit, VrfReveal,
+    CertPhase, Qc, QcAggregate, QcRef, QcVote, ConsensusBlockHeader, ConsensusGenesisParams,
+    Evidence, EvidenceKind, EvidencePayload, ExecKv, ExecWitness, ExecWitnessMsg, Height, NPOS_TAG,
+    NposGenesisParams, PERMISSIONED_TAG, PROTO_VERSION, Proposal, RbcChunk, RbcDeliver, RbcInit,
+    RbcReady, Reconfig, ValidatorIndex, View, VrfCommit, VrfReveal,
 };
 
 // Transitional aliases to reduce churn while the QC terminology is removed.
 /// Commit-certificate phase (prepare/commit/new-view).
 pub type Phase = CertPhase;
-/// Commit vote used for certificate aggregation.
-pub type Vote = CommitVote;
-/// Commit certificate representing quorum-signed consensus.
-pub type Qc = CommitCertificate;
-/// Reference to a commit certificate header carried in hints.
-pub type QcHeaderRef = CommitCertificateRef;
+/// QC vote used for certificate aggregation.
+pub type Vote = QcVote;
+/// Reference to a QC header carried in hints.
+pub type QcHeaderRef = QcRef;
 use iroha_data_model::prelude::*;
 
 use crate::state::{StateView, WorldReadOnly};
@@ -54,12 +51,14 @@ pub fn qc_signer_count(qc: &Qc) -> usize {
 #[cfg(feature = "sumeragi-multiproof")]
 pub use iroha_data_model::block::consensus::{BlockMultiproof, ReadNode, TxReadSpan, WriteEntry};
 
-/// Build the canonical preimage for a commit-vote signature under the given chain and mode tag.
+/// Build the canonical preimage for a QC vote signature under the given chain and mode tag.
 pub fn vote_preimage(chain_id: &ChainId, mode_tag: &str, v: &Vote) -> Vec<u8> {
-    let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 1);
-    let domain = consensus_domain(chain_id, "Vote", b"v1", mode_tag);
+    let mut out = Vec::with_capacity(32 + 32 * 3 + 8 * 3 + 1);
+    let domain = consensus_domain(chain_id, "Vote", b"v2", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(v.block_hash.as_ref().as_ref());
+    out.extend_from_slice(v.parent_state_root.as_ref());
+    out.extend_from_slice(v.post_state_root.as_ref());
     out.extend_from_slice(&v.height.to_be_bytes());
     out.extend_from_slice(&v.view.to_be_bytes());
     out.extend_from_slice(&v.epoch.to_be_bytes());
@@ -72,28 +71,12 @@ pub fn vote_preimage(chain_id: &ChainId, mode_tag: &str, v: &Vote) -> Vec<u8> {
 pub mod bls_preimage {
     use super::*;
 
-    fn write_u64(buf: &mut Vec<u8>, v: u64) {
-        buf.extend_from_slice(&v.to_be_bytes());
-    }
-
     /// Build the canonical preimage for a Vote signature under the given chain and mode tag.
     pub fn vote(chain_id: &ChainId, mode_tag: &str, v: &Vote) -> Vec<u8> {
         super::vote_preimage(chain_id, mode_tag, v)
     }
 
-    /// Build the canonical preimage for an [`ExecVote`] signature.
-    pub fn exec_vote(chain_id: &ChainId, mode_tag: &str, v: &ExecVote) -> Vec<u8> {
-        let mut out = Vec::with_capacity(32 + 32 * 3 + 8 * 3);
-        let domain = consensus_domain(chain_id, "ExecVote", b"v1", mode_tag);
-        out.extend_from_slice(&domain);
-        out.extend_from_slice(v.block_hash.as_ref().as_ref());
-        out.extend_from_slice(v.parent_state_root.as_ref());
-        out.extend_from_slice(v.post_state_root.as_ref());
-        write_u64(&mut out, v.height);
-        write_u64(&mut out, v.view);
-        write_u64(&mut out, v.epoch);
-        out
-    }
+    // QC vote preimages reuse `vote_preimage`.
 }
 
 /// Domain separation helper for signable payloads.
@@ -408,15 +391,17 @@ mod tests {
             subject_block_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
                 [0u8; 32],
             )),
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 10,
             view: 7,
             epoch: 0,
             mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set,
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: vec![0xAA, 0x01],
                 bls_aggregate_signature: vec![1, 2, 3],
             },
@@ -434,15 +419,17 @@ mod tests {
             subject_block_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
                 [1u8; 32],
             )),
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 2,
             view: 0,
             epoch: 0,
             mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set,
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: vec![0b1010_0101, 0b0000_0011],
                 bls_aggregate_signature: vec![1, 2, 3],
             },
@@ -458,15 +445,17 @@ mod tests {
             subject_block_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
                 [2u8; 32],
             )),
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 2,
             view: 0,
             epoch: 0,
             mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set,
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: Vec::new(),
                 bls_aggregate_signature: vec![9],
             },

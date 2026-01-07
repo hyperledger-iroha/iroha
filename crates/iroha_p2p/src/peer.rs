@@ -2731,8 +2731,6 @@ mod state {
         check!(collectors_k);
         check!(redundant_send_r);
         check!(da_enabled);
-        check!(require_execution_qc);
-        check!(require_wsv_exec_qc);
         check!(rbc_chunk_max_bytes);
         check!(rbc_session_ttl_ms);
         check!(rbc_store_max_sessions);

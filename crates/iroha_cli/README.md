@@ -58,19 +58,12 @@ iroha sumeragi rbc sessions --summary
 # Example: active=1 first=[h:1234 v:7 chunks=12/12 delivered=true] items=1
 ```
 
-Fetch ExecutionQC record (if present) for a parent block hash:
+Fetch commit QC (if present) for a block hash:
 
 ```bash
-iroha sumeragi exec-qc-get --hash BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2
-# Prints JSON with fields: subject_block_hash, post_state_root (hex), height, view, epoch,
-# signers_bitmap (hex), bls_aggregate_signature (hex). If missing, exec_qc is null.
-```
-
-Fetch execution root (if present) for a parent block hash:
-
-```bash
-iroha sumeragi exec-root-get --hash BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2
-# Prints JSON with fields: block_hash, exec_root (hex or null when missing).
+iroha sumeragi commit-qc-get --hash BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2
+# Prints JSON with fields: subject_block_hash, parent_state_root, post_state_root (hex), height, view, epoch,
+# signers_bitmap (hex), bls_aggregate_signature (hex). If missing, commit_qc is null.
 ```
 
 Tip: You can combine these with `jq` for consistency checks.

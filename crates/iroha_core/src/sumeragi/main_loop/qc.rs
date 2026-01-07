@@ -1,5 +1,6 @@
 //! Vote/QC accumulation, validation, and processing helpers.
 
+use iroha_crypto::Hash;
 use iroha_logger::prelude::*;
 
 use super::*;
@@ -442,20 +443,49 @@ impl Actor {
             !aggregate_signature.is_empty(),
             "QC aggregate signature must be non-empty"
         );
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+        let (parent_state_root, post_state_root) =
+            if ctx.phase == crate::sumeragi::consensus::Phase::Commit {
+                signers
+                    .iter()
+                    .find_map(|signer| {
+                        let key = (ctx.phase, ctx.height, ctx.view, ctx.epoch, *signer);
+                        self.vote_log.get(&key).and_then(|vote| {
+                            if vote.block_hash == ctx.block_hash {
+                                Some((vote.parent_state_root, vote.post_state_root))
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .unwrap_or_else(|| {
+                        warn!(
+                            height = ctx.height,
+                            view = ctx.view,
+                            block = %ctx.block_hash,
+                            "missing execution roots while assembling commit QC"
+                        );
+                        (zero_root, zero_root)
+                    })
+            } else {
+                (zero_root, zero_root)
+            };
 
         let validator_set = canonical_topology.as_ref().to_vec();
         crate::sumeragi::consensus::Qc {
             phase: ctx.phase,
             subject_block_hash: ctx.block_hash,
+            parent_state_root,
+            post_state_root,
             height: ctx.height,
             view: ctx.view,
             epoch: ctx.epoch,
             mode_tag: ctx.mode_tag,
-            highest_cert: ctx.highest_cert,
+            highest_qc: ctx.highest_qc,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set,
-            aggregate: crate::sumeragi::consensus::CommitAggregate {
+            aggregate: crate::sumeragi::consensus::QcAggregate {
                 signers_bitmap,
                 bls_aggregate_signature: aggregate_signature,
             },
@@ -569,13 +599,13 @@ impl Actor {
                 return;
             }
         };
-        let highest_cert = if phase == crate::sumeragi::consensus::Phase::NewView {
-            let mut selected: Option<crate::sumeragi::consensus::CommitCertificateRef> = None;
+        let highest_qc = if phase == crate::sumeragi::consensus::Phase::NewView {
+            let mut selected: Option<crate::sumeragi::consensus::QcRef> = None;
             for signer in &snapshot.signers {
                 let Some(vote) = self.vote_log.get(&(phase, height, view, epoch, *signer)) else {
                     continue;
                 };
-                let Some(candidate) = vote.highest_cert else {
+                let Some(candidate) = vote.highest_qc else {
                     continue;
                 };
                 if candidate.phase != crate::sumeragi::consensus::Phase::Commit {
@@ -601,7 +631,7 @@ impl Actor {
         } else {
             None
         };
-        if phase == crate::sumeragi::consensus::Phase::NewView && highest_cert.is_none() {
+        if phase == crate::sumeragi::consensus::Phase::NewView && highest_qc.is_none() {
             warn!(
                 height,
                 view,
@@ -637,7 +667,7 @@ impl Actor {
                 view,
                 epoch,
                 mode_tag: mode_tag.to_string(),
-                highest_cert,
+                highest_qc,
             },
             &canonical_signers,
             &topology,
@@ -665,7 +695,7 @@ impl Actor {
             );
             return;
         }
-        let msg = BlockMessage::CommitCertificate(qc);
+        let msg = BlockMessage::Qc(qc);
         let topology_peers = self.effective_commit_topology();
         let local_peer_id = self.common_config.peer.id().clone();
         for peer in &topology_peers {
@@ -815,105 +845,6 @@ impl Actor {
             );
         }
         extends_locked
-    }
-
-    pub(super) fn try_form_exec_qc_from_votes(
-        &mut self,
-        block_hash: HashOf<BlockHeader>,
-        height: u64,
-        view: u64,
-        epoch: u64,
-        topology: super::network_topology::Topology,
-    ) {
-        if self.execution_qc_cache.contains_key(&block_hash) {
-            return;
-        }
-        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
-        let required = signature_topology.min_votes_for_commit();
-        let voting_len = signature_topology.as_ref().len();
-        if required == 0 {
-            return;
-        }
-        let groups =
-            super::exec_vote_groups_for_block(&self.exec_vote_log, block_hash, height, view, epoch);
-        let mut best: Option<((Hash, Hash), BTreeSet<ValidatorIndex>, usize)> = None;
-        for (roots, signers) in groups {
-            let voting_signers = voting_signer_count(&signers, voting_len);
-            if voting_signers < required {
-                continue;
-            }
-            let better = match best.as_ref() {
-                None => true,
-                Some((best_roots, _best_signers, best_voting)) => {
-                    voting_signers > *best_voting
-                        || (voting_signers == *best_voting && roots < *best_roots)
-                }
-            };
-            if better {
-                best = Some((roots, signers, voting_signers));
-            }
-        }
-        let Some(((parent_state_root, post_state_root), signers, _)) = best else {
-            return;
-        };
-        let aggregate_signature = match super::aggregate_exec_vote_signatures(
-            &self.exec_vote_log,
-            block_hash,
-            parent_state_root,
-            post_state_root,
-            height,
-            view,
-            epoch,
-            &signers,
-        ) {
-            Ok(signature) => signature,
-            Err(err) => {
-                warn!(
-                    height,
-                    view,
-                    block = %block_hash,
-                    ?err,
-                    "failed to aggregate ExecutionQC signatures from exec votes"
-                );
-                return;
-            }
-        };
-        let signers_bitmap = build_signers_bitmap(&signers, signature_topology.as_ref().len());
-        let qc = crate::sumeragi::consensus::ExecutionQC {
-            subject_block_hash: block_hash,
-            parent_state_root,
-            post_state_root,
-            height,
-            view,
-            epoch,
-            aggregate: crate::sumeragi::consensus::CommitAggregate {
-                signers_bitmap,
-                bls_aggregate_signature: aggregate_signature,
-            },
-        };
-        if let Err(err) = self.handle_execution_qc(qc.clone()) {
-            warn!(
-                ?err,
-                height,
-                view,
-                block = %block_hash,
-                "failed to persist ExecutionQC after aggregation"
-            );
-            return;
-        }
-        let msg = BlockMessage::ExecutionQC(qc);
-        let topology_peers = self.effective_commit_topology();
-        let local_peer_id = self.common_config.peer.id().clone();
-        for peer in &topology_peers {
-            if peer == &local_peer_id {
-                continue;
-            }
-            self.schedule_background(BackgroundRequest::Post {
-                peer: peer.clone(),
-                msg: msg.clone(),
-            });
-        }
     }
 
     pub(super) fn rebuild_qcs_from_cached_votes(&mut self, commit_topology: &[PeerId]) {
@@ -1233,7 +1164,7 @@ impl Actor {
         qc: &crate::sumeragi::consensus::Qc,
         signers: &[ValidatorIndex],
     ) {
-        let Some(highest) = qc.highest_cert else {
+        let Some(highest) = qc.highest_qc else {
             warn!(
                 height = qc.height,
                 view = qc.view,
@@ -1326,8 +1257,8 @@ impl Actor {
         let mut pending =
             PendingBlock::new(block.as_ref().clone(), payload_hash, qc.height, qc.view);
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
-            pending.commit_certificate_seen = true;
-            pending.commit_certificate_epoch = Some(qc.epoch);
+            pending.commit_qc_seen = true;
+            pending.commit_qc_epoch = Some(qc.epoch);
         }
         pending.mark_kura_persisted();
         self.pending
@@ -1489,6 +1420,8 @@ impl Actor {
                     height: qc.height,
                     view: qc.view,
                     epoch: qc.epoch,
+                    parent_state_root: qc.parent_state_root,
+                    post_state_root: qc.post_state_root,
                     signers: signer_set,
                     bls_aggregate_signature: qc.aggregate.bls_aggregate_signature.clone(),
                     roster_len: topology.as_ref().len(),
@@ -1637,7 +1570,7 @@ impl Actor {
             return Ok(());
         }
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
-            super::status::record_commit_certificate(qc.clone());
+            super::status::record_commit_qc(qc.clone());
         }
         self.qc_cache.insert(
             (
@@ -1660,7 +1593,7 @@ impl Actor {
         );
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) && block_known {
             let _ = self.rehydrate_pending_from_kura_for_qc(&qc);
-            self.apply_commit_certificate(
+            self.apply_commit_qc(
                 &qc,
                 &commit_topology,
                 qc.subject_block_hash,
@@ -1710,125 +1643,6 @@ impl Actor {
             missing_votes: 0,
             present_signers: parsed_signers.present.len(),
         })
-    }
-
-    #[allow(clippy::too_many_lines)]
-    pub(super) fn handle_execution_qc(
-        &mut self,
-        qc: crate::sumeragi::consensus::ExecutionQC,
-    ) -> Result<()> {
-        let require_exec_qc = self.config.require_execution_qc
-            || matches!(
-                self.config.proof_policy,
-                ProofPolicy::ExecQcOnly | ProofPolicy::Hybrid
-            )
-            || self.config.require_wsv_exec_qc;
-        if let Some(local_view) = self.stale_view(qc.height, qc.view) {
-            let block_known = self.block_known_locally(qc.subject_block_hash);
-            let missing_request = self
-                .pending
-                .missing_block_requests
-                .contains_key(&qc.subject_block_hash);
-            if block_known || missing_request || require_exec_qc {
-                debug!(
-                    height = qc.height,
-                    view = qc.view,
-                    local_view,
-                    block = %qc.subject_block_hash,
-                    block_known,
-                    missing_request,
-                    require_exec_qc,
-                    "accepting ExecutionQC for stale view"
-                );
-            } else {
-                debug!(
-                    height = qc.height,
-                    view = qc.view,
-                    local_view,
-                    kind = "ExecutionQC",
-                    "dropping consensus message for stale view"
-                );
-                return Ok(());
-            }
-        }
-        let expected_epoch = self.epoch_for_height(qc.height);
-        if qc.epoch != expected_epoch {
-            warn!(
-                height = qc.height,
-                view = qc.view,
-                epoch = qc.epoch,
-                expected_epoch,
-                block = %qc.subject_block_hash,
-                "dropping ExecutionQC with mismatched epoch"
-            );
-            return Ok(());
-        }
-        self.record_phase_sample(PipelinePhase::CollectExec, qc.height, qc.view);
-        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
-        let topology_peers = self.roster_for_vote_with_mode(
-            qc.subject_block_hash,
-            qc.height,
-            qc.view,
-            consensus_mode,
-        );
-        if topology_peers.is_empty() {
-            debug!(
-                height = qc.height,
-                view = qc.view,
-                block = %qc.subject_block_hash,
-                "dropping ExecutionQC: empty commit topology"
-            );
-            return Ok(());
-        }
-        let topology = super::network_topology::Topology::new(topology_peers);
-        if let Err(err) = super::validate_execution_qc(
-            &qc,
-            &topology,
-            &self.common_config.chain,
-            mode_tag,
-            prf_seed,
-        ) {
-            warn!(
-                height = qc.height,
-                view = qc.view,
-                block = %qc.subject_block_hash,
-                ?err,
-                "dropping invalid ExecutionQC"
-            );
-            return Ok(());
-        }
-        let topology_len = topology.as_ref().len();
-        let subject = qc.subject_block_hash;
-        let parsed_signers = match super::parse_signers_bitmap(
-            &qc.aggregate.signers_bitmap,
-            topology_len,
-            topology_len,
-        ) {
-            Ok(parsed) => parsed,
-            Err(err) => {
-                warn!(
-                    height = qc.height,
-                    view = qc.view,
-                    block = %subject,
-                    ?err,
-                    "dropping ExecutionQC: invalid signer bitmap"
-                );
-                return Ok(());
-            }
-        };
-        self.defer_qc_if_block_missing(
-            crate::sumeragi::consensus::Phase::Commit,
-            subject,
-            qc.height,
-            qc.view,
-            &parsed_signers.voting,
-            &topology,
-        );
-        if self.config.require_wsv_exec_qc {
-            self.persist_execution_qc(&qc)?;
-        }
-        self.execution_qc_cache.insert(subject, qc);
-        Ok(())
     }
 
     pub(super) fn handle_exec_witness(&self, witness: crate::sumeragi::consensus::ExecWitnessMsg) {

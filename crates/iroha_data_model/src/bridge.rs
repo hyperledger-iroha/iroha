@@ -227,7 +227,7 @@ pub struct BridgeFinalityProof {
     /// Hash of the block header.
     pub block_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
     /// Commit certificate collected for the block.
-    pub commit_certificate: crate::consensus::CommitCertificate,
+    pub commit_qc: crate::consensus::Qc,
 }
 
 /// Authority set snapshot used for bridge commitments.
@@ -307,7 +307,7 @@ pub struct BridgeFinalityBundle {
     /// Block header for the finalized block.
     pub block_header: crate::block::BlockHeader,
     /// Commit certificate for the block.
-    pub commit_certificate: crate::consensus::CommitCertificate,
+    pub commit_qc: crate::consensus::Qc,
 }
 
 /// Errors surfaced when verifying bridge finality proofs.
@@ -446,7 +446,7 @@ pub enum BridgeFinalityVerifyError {
 
 /// Stateful verifier for bridge finality proofs.
 ///
-/// The verifier enforces the canonical `(block_header, block_hash, commit_certificate)` tuple,
+/// The verifier enforces the canonical `(block_header, block_hash, commit_qc)` tuple,
 /// binds proofs to a chain id, and checks the commit-certificate aggregate signature against the
 /// advertised validator set with the production quorum rule. It tracks the latest verified height
 /// to reject stale or skipped proofs, can anchor to a trusted validator-set hash, and optionally
@@ -563,22 +563,22 @@ impl BridgeFinalityVerifier {
             }
         }
 
-        if proof.commit_certificate.height != proof.height {
+        if proof.commit_qc.height != proof.height {
             return Err(BridgeFinalityVerifyError::CertificateHeightMismatch {
                 proof_height: proof.height,
-                certificate_height: proof.commit_certificate.height,
+                certificate_height: proof.commit_qc.height,
             });
         }
-        if proof.commit_certificate.phase != crate::block::consensus::CertPhase::Commit {
+        if proof.commit_qc.phase != crate::block::consensus::CertPhase::Commit {
             return Err(BridgeFinalityVerifyError::CertificatePhaseMismatch {
                 expected: crate::block::consensus::CertPhase::Commit,
-                got: proof.commit_certificate.phase,
+                got: proof.commit_qc.phase,
             });
         }
 
         let header_hash = iroha_crypto::HashOf::new(&proof.block_header);
         let proof_hash = proof.block_hash;
-        let certificate_hash = proof.commit_certificate.subject_block_hash;
+        let certificate_hash = proof.commit_qc.subject_block_hash;
         if header_hash != proof_hash || header_hash != certificate_hash {
             return Err(BridgeFinalityVerifyError::BlockHashMismatch {
                 header_hash,
@@ -589,15 +589,15 @@ impl BridgeFinalityVerifier {
 
         if let Some(expected_epoch) = self
             .expected_epoch
-            .filter(|expected| proof.commit_certificate.epoch != *expected)
+            .filter(|expected| proof.commit_qc.epoch != *expected)
         {
             return Err(BridgeFinalityVerifyError::UnexpectedEpoch {
                 expected: expected_epoch,
-                got: proof.commit_certificate.epoch,
+                got: proof.commit_qc.epoch,
             });
         }
 
-        let recorded_version = proof.commit_certificate.validator_set_hash_version;
+        let recorded_version = proof.commit_qc.validator_set_hash_version;
         if recorded_version != self.validator_set_hash_version {
             return Err(
                 BridgeFinalityVerifyError::UnsupportedValidatorSetHashVersion {
@@ -606,8 +606,8 @@ impl BridgeFinalityVerifier {
             );
         }
 
-        let recorded_hash = proof.commit_certificate.validator_set_hash;
-        let computed_hash = iroha_crypto::HashOf::new(&proof.commit_certificate.validator_set);
+        let recorded_hash = proof.commit_qc.validator_set_hash;
+        let computed_hash = iroha_crypto::HashOf::new(&proof.commit_qc.validator_set);
         if computed_hash != recorded_hash {
             return Err(BridgeFinalityVerifyError::ValidatorSetHashMismatch {
                 recorded: recorded_hash,
@@ -629,23 +629,23 @@ impl BridgeFinalityVerifier {
             self.expected_validator_set_hash = Some(recorded_hash);
         }
 
-        let validator_set = &proof.commit_certificate.validator_set;
+        let validator_set = &proof.commit_qc.validator_set;
         if validator_set.is_empty() {
             return Err(BridgeFinalityVerifyError::EmptyValidatorSet);
         }
 
-        Self::validate_commit_certificate(&proof.chain_id, &proof.commit_certificate)?;
+        Self::validate_commit_qc(&proof.chain_id, &proof.commit_qc)?;
 
         self.latest_height = Some(proof.height);
         if self.expected_epoch.is_none() {
-            self.expected_epoch = Some(proof.commit_certificate.epoch);
+            self.expected_epoch = Some(proof.commit_qc.epoch);
         }
         Ok(())
     }
 
-    fn validate_commit_certificate(
+    fn validate_commit_qc(
         chain_id: &ChainId,
-        certificate: &crate::consensus::CommitCertificate,
+        certificate: &crate::consensus::Qc,
     ) -> Result<(), BridgeFinalityVerifyError> {
         let validator_set = &certificate.validator_set;
         let required = Self::min_signatures(validator_set.len());
@@ -724,7 +724,7 @@ fn consensus_domain(
 
 fn commit_vote_preimage(
     chain_id: &ChainId,
-    certificate: &crate::consensus::CommitCertificate,
+    certificate: &crate::consensus::Qc,
 ) -> Result<Vec<u8>, BridgeFinalityVerifyError> {
     let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 1);
     let domain = consensus_domain(chain_id, "Vote", b"v1", &certificate.mode_tag);
@@ -777,7 +777,7 @@ fn signer_indices_from_bitmap(
 mod tests {
     use std::num::NonZeroU64;
 
-    use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_version::DecodeAll;
 
     use super::*;
@@ -816,18 +816,20 @@ mod tests {
         let block_hash = HashOf::new(&header);
         let validator_set = validator_set_from_keys(keys);
         let validator_set_hash = HashOf::new(&validator_set);
-        let cert_template = crate::consensus::CommitCertificate {
+        let cert_template = crate::consensus::Qc {
             phase: crate::block::consensus::CertPhase::Commit,
             subject_block_hash: block_hash,
+            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
             height,
             view: 0,
             epoch,
             mode_tag: crate::block::consensus::PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash,
             validator_set_hash_version: crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: validator_set.clone(),
-            aggregate: crate::consensus::CommitAggregate {
+            aggregate: crate::consensus::QcAggregate {
                 signers_bitmap: Vec::new(),
                 bls_aggregate_signature: Vec::new(),
             },
@@ -843,8 +845,8 @@ mod tests {
         let aggregate =
             iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate signatures");
         let signers_bitmap = full_signer_bitmap(validator_set.len());
-        let commit_certificate = crate::consensus::CommitCertificate {
-            aggregate: crate::consensus::CommitAggregate {
+        let commit_qc = crate::consensus::Qc {
+            aggregate: crate::consensus::QcAggregate {
                 signers_bitmap,
                 bls_aggregate_signature: aggregate,
             },
@@ -856,7 +858,7 @@ mod tests {
             chain_id: chain_id.parse().expect("chain id"),
             block_header: header,
             block_hash,
-            commit_certificate,
+            commit_qc,
         }
     }
 
@@ -1022,7 +1024,7 @@ mod tests {
             .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
             .collect();
         let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
-        proof.commit_certificate.validator_set_hash = HashOf::new(&Vec::<PeerId>::new());
+        proof.commit_qc.validator_set_hash = HashOf::new(&Vec::<PeerId>::new());
 
         let mut verifier = BridgeFinalityVerifier::new("chain-a".parse().expect("chain id parses"));
         let err = verifier.verify(&proof).unwrap_err();

@@ -8,7 +8,7 @@ use iroha::data_model::{
     Level,
     account::Account,
     asset::{AssetDefinitionId, id::AssetId},
-    consensus::{CommitCertificate, HsmBinding},
+    consensus::{HsmBinding, Qc},
     domain::DomainId,
     isi::{
         Log, Mint, Register, register::RegisterPeerWithPop, staking::RegisterPublicLaneValidator,
@@ -32,6 +32,8 @@ const STAKE_ESCROW_ACCOUNT: &str = "alice@wonderland";
 const HIGH_STAKE: u64 = 70;
 const LOW_STAKE: u64 = 10;
 const STAKE_QUORUM_WAIT: Duration = Duration::from_secs(5);
+
+type CommitCertificate = Qc;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn permissioned_commit_certificates_reach_quorum() -> Result<()> {

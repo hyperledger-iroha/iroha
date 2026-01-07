@@ -23,7 +23,7 @@ translator: manual
 | NEW_VIEW gating ומעקב Highest commit certificate | ◉ | זרימת השליטה מעבירה NEW_VIEW/Evidence והמעקב אחר Highest commit certificate מונוטוני. | status.md:210 |
 | availability evidence gating | ○ | קיומי וגם availability evidence זמינות מגבילים קומיט כשה-DA נדרש. | status.md:190 |
 | שערי RBC (DA + Reliable Broadcast) | ◉ | הקומיט מחכה ל-`DELIVER` של RBC בצירוף availability evidence. | status.md:283-284 |
-| איסוף ExecutionQC ושערים | ○ | אספני Exec ו-witnessים פועלים; פריטי חתימה מצטברת עדיין בפיתוח. | status.md:177 |
+| קישור שורשי מצב ב-Commit QC | ◉ | Commit QC כולל parent/post state roots; אין שער execution QC נפרד. | status.md:latest |
 | הפצת Evidence ונקודות קצה לאודיט | ◉ | `ControlFlow::Evidence`, API ב-Torii ובדיקות שליליות. | status.md:176; status.md:760-761 |
 | טלמטריית RBC (מדדי מוכנות/מסירה) | ◉ | `/v1/sumeragi/rbc*` והיסטוגרמות למפעילים. | status.md:283-284; status.md:772 |
 | פרסום פרמטרי קונצנזוס ואימות טופולוגיה | ◉ | נודים מפרסמים `(collectors_k, redundant_send_r)` ומוודאים זהות. | status.md:255 |

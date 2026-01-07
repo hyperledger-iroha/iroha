@@ -210,7 +210,6 @@ async fn run_witness_corruption_scenario() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "da_enabled"], true)
-                .write(["sumeragi", "proof_policy"], "exec_qc")
                 .write(["sumeragi", "debug", "rbc", "corrupt_witness_ack"], true);
         });
     let Some(network) =

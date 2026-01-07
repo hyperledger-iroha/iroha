@@ -38,8 +38,8 @@ use iroha_data_model::{
     },
     confidential::ConfidentialFeatureDigest,
     consensus::{
-        CommitCertificate, ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole,
-        ConsensusKeyStatus, ExecutionQcRecord, ValidatorSetCheckpoint,
+        Qc, ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole,
+        ConsensusKeyStatus, ValidatorSetCheckpoint,
     },
     content::{ContentBundleId, ContentBundleRecord, ContentChunk},
     da::{
@@ -339,8 +339,7 @@ macro_rules! build_world_block {
             proofs: $state.proofs.$method(),
             proof_tags: $state.proof_tags.$method(),
             proofs_by_tag: $state.proofs_by_tag.$method(),
-            exec_roots: $state.exec_roots.$method(),
-            exec_qcs: $state.exec_qcs.$method(),
+            commit_qcs: $state.commit_qcs.$method(),
             consensus_evidence: $state.consensus_evidence.$method(),
             contract_manifests: $state.contract_manifests.$method(),
             contract_code: $state.contract_code.$method(),
@@ -456,8 +455,7 @@ macro_rules! build_world_transaction {
             proofs: $state.proofs.transaction(),
             proof_tags: $state.proof_tags.transaction(),
             proofs_by_tag: $state.proofs_by_tag.transaction(),
-            exec_roots: $state.exec_roots.transaction(),
-            exec_qcs: $state.exec_qcs.transaction(),
+            commit_qcs: $state.commit_qcs.transaction(),
             consensus_evidence: $state.consensus_evidence.transaction(),
             contract_manifests: $state.contract_manifests.transaction(),
             contract_code: $state.contract_code.transaction(),
@@ -915,10 +913,10 @@ impl LaneRelayStore {
                 return Err(LaneRelayError::ConflictingRelay { lane, height });
             }
 
-            if existing.execution_qc.is_some() && envelope.execution_qc.is_none() {
+            if existing.qc.is_some() && envelope.qc.is_none() {
                 return Ok(LaneRelayInsert::Duplicate);
             }
-            if existing.execution_qc.is_none() && envelope.execution_qc.is_some() {
+            if existing.qc.is_none() && envelope.qc.is_some() {
                 self.entries.insert(key, envelope);
                 return Ok(LaneRelayInsert::Replaced);
             }
@@ -1317,10 +1315,8 @@ pub struct World {
     pub(crate) proof_tags: Storage<iroha_data_model::proof::ProofId, Vec<[u8; 4]>>,
     /// Inverted index from ZK1 TLV tag to proof ids (sorted, unique) for efficient queries.
     pub(crate) proofs_by_tag: Storage<[u8; 4], Vec<iroha_data_model::proof::ProofId>>,
-    /// Execution post-state roots keyed by parent block hash (v3 `ExecQC` persistence).
-    pub(crate) exec_roots: Storage<HashOf<BlockHeader>, iroha_crypto::Hash>,
-    /// `ExecutionQCs` by subject block hash (v3 provenance).
-    pub(crate) exec_qcs: Storage<HashOf<BlockHeader>, ExecutionQcRecord>,
+    /// Commit QCs keyed by subject block hash.
+    pub(crate) commit_qcs: Storage<HashOf<BlockHeader>, Qc>,
     /// Latest lane merge-hint roots observed via the merge ledger.
     pub(crate) merge_hint_roots: Cell<Vec<Hash>>,
     /// Latest reduced global state root advertised by the merge ledger.
@@ -1611,10 +1607,8 @@ pub struct WorldBlock<'world> {
     pub(crate) proof_tags: StorageBlock<'world, iroha_data_model::proof::ProofId, Vec<[u8; 4]>>,
     /// Inverted index from TLV tag to proof ids.
     pub(crate) proofs_by_tag: StorageBlock<'world, [u8; 4], Vec<iroha_data_model::proof::ProofId>>,
-    /// Execution post-state roots keyed by parent block hash (v3 `ExecQC` persistence).
-    pub(crate) exec_roots: StorageBlock<'world, HashOf<BlockHeader>, iroha_crypto::Hash>,
-    /// `ExecutionQCs` by subject block hash (v3 provenance).
-    pub(crate) exec_qcs: StorageBlock<'world, HashOf<BlockHeader>, ExecutionQcRecord>,
+    /// Commit QCs keyed by subject block hash.
+    pub(crate) commit_qcs: StorageBlock<'world, HashOf<BlockHeader>, Qc>,
     /// Persisted consensus evidence records keyed by deterministic digest.
     pub(crate) consensus_evidence: StorageBlock<'world, Vec<u8>, EvidenceRecord>,
     /// Contract manifests
@@ -1943,11 +1937,8 @@ pub struct WorldTransaction<'block, 'world> {
     /// Inverted index from TLV tag to proof ids.
     pub(crate) proofs_by_tag:
         StorageTransaction<'block, 'world, [u8; 4], Vec<iroha_data_model::proof::ProofId>>,
-    /// Execution post-state roots keyed by parent block hash (v3 `ExecQC` persistence).
-    pub(crate) exec_roots:
-        StorageTransaction<'block, 'world, HashOf<BlockHeader>, iroha_crypto::Hash>,
-    /// `ExecutionQCs` by subject block hash (v3 provenance).
-    pub(crate) exec_qcs: StorageTransaction<'block, 'world, HashOf<BlockHeader>, ExecutionQcRecord>,
+    /// Commit QCs keyed by subject block hash.
+    pub(crate) commit_qcs: StorageTransaction<'block, 'world, HashOf<BlockHeader>, Qc>,
     /// Persisted consensus evidence records keyed by deterministic digest.
     pub(crate) consensus_evidence: StorageTransaction<'block, 'world, Vec<u8>, EvidenceRecord>,
     /// Contract manifests
@@ -2250,10 +2241,8 @@ pub struct WorldView<'world> {
     pub(crate) proof_tags: StorageView<'world, iroha_data_model::proof::ProofId, Vec<[u8; 4]>>,
     /// Inverted index from TLV tag to proof ids.
     pub(crate) proofs_by_tag: StorageView<'world, [u8; 4], Vec<iroha_data_model::proof::ProofId>>,
-    /// Execution post-state roots keyed by parent block hash (v3 `ExecQC` persistence).
-    pub(crate) exec_roots: StorageView<'world, HashOf<BlockHeader>, iroha_crypto::Hash>,
-    /// `ExecutionQCs` by subject block hash (v3 provenance).
-    pub(crate) exec_qcs: StorageView<'world, HashOf<BlockHeader>, ExecutionQcRecord>,
+    /// Commit QCs keyed by subject block hash.
+    pub(crate) commit_qcs: StorageView<'world, HashOf<BlockHeader>, Qc>,
     /// Latest lane merge-hint roots observed via the merge ledger.
     pub(crate) merge_hint_roots: CellView<'world, Vec<Hash>>,
     /// Latest reduced global state root advertised by the merge ledger.
@@ -7383,8 +7372,7 @@ impl World {
             proofs: self.proofs.view(),
             proof_tags: self.proof_tags.view(),
             proofs_by_tag: self.proofs_by_tag.view(),
-            exec_roots: self.exec_roots.view(),
-            exec_qcs: self.exec_qcs.view(),
+            commit_qcs: self.commit_qcs.view(),
             consensus_evidence: self.consensus_evidence.view(),
             contract_manifests: self.contract_manifests.view(),
             contract_code: self.contract_code.view(),
@@ -7600,10 +7588,8 @@ pub trait WorldReadOnly {
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >;
-    /// Execution post-state roots keyed by parent block hash (read-only).
-    fn exec_roots(&self) -> &impl StorageReadOnly<HashOf<BlockHeader>, iroha_crypto::Hash>;
-    /// `ExecutionQCs` by subject block hash (read-only).
-    fn exec_qcs(&self) -> &impl StorageReadOnly<HashOf<BlockHeader>, ExecutionQcRecord>;
+    /// Commit QCs keyed by subject block hash (read-only).
+    fn commit_qcs(&self) -> &impl StorageReadOnly<HashOf<BlockHeader>, Qc>;
     /// Latest lane merge-hint roots observed via the merge ledger.
     fn merge_hint_roots(&self) -> &Vec<Hash>;
     /// Latest reduced global state root advertised by the merge ledger.
@@ -8449,11 +8435,8 @@ macro_rules! impl_world_ro {
             fn soradns_history_len(&self) -> &u64 {
                 &self.soradns_history_len
             }
-            fn exec_roots(&self) -> &impl StorageReadOnly<HashOf<BlockHeader>, iroha_crypto::Hash> {
-                &self.exec_roots
-            }
-            fn exec_qcs(&self) -> &impl StorageReadOnly<HashOf<BlockHeader>, ExecutionQcRecord> {
-                &self.exec_qcs
+            fn commit_qcs(&self) -> &impl StorageReadOnly<HashOf<BlockHeader>, Qc> {
+                &self.commit_qcs
             }
             fn merge_hint_roots(&self) -> &Vec<Hash> {
                 &self.merge_hint_roots
@@ -8545,19 +8528,11 @@ impl<'world> WorldBlock<'world> {
     }
 
     #[cfg(any(test, feature = "telemetry"))]
-    /// Mutable execution-root storage accessor used by telemetry/router tests.
-    pub fn exec_roots_mut_for_testing(
+    /// Mutable commit-QC storage accessor used by telemetry/router tests.
+    pub fn commit_qcs_mut_for_testing(
         &mut self,
-    ) -> &mut StorageBlock<'world, HashOf<BlockHeader>, iroha_crypto::Hash> {
-        &mut self.exec_roots
-    }
-
-    #[cfg(any(test, feature = "telemetry"))]
-    /// Mutable execution-QC storage accessor used by telemetry/router tests.
-    pub fn exec_qcs_mut_for_testing(
-        &mut self,
-    ) -> &mut StorageBlock<'world, HashOf<BlockHeader>, ExecutionQcRecord> {
-        &mut self.exec_qcs
+    ) -> &mut StorageBlock<'world, HashOf<BlockHeader>, Qc> {
+        &mut self.commit_qcs
     }
 
     /// Create struct to apply transaction's changes
@@ -8623,8 +8598,7 @@ impl<'world> WorldBlock<'world> {
             proofs,
             proof_tags,
             proofs_by_tag,
-            exec_roots,
-            exec_qcs,
+            commit_qcs,
             consensus_evidence,
             contract_manifests,
             contract_code,
@@ -8693,8 +8667,7 @@ impl<'world> WorldBlock<'world> {
         proofs.commit();
         proof_tags.commit();
         proofs_by_tag.commit();
-        exec_roots.commit();
-        exec_qcs.commit();
+        commit_qcs.commit();
         consensus_evidence.commit();
         contract_manifests.commit();
         contract_code.commit();
@@ -9570,8 +9543,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             proofs,
             proof_tags,
             proofs_by_tag,
-            exec_roots,
-            exec_qcs,
+            commit_qcs,
             contract_manifests,
             contract_code,
             contract_instances,
@@ -9629,8 +9601,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         proofs.apply();
         proof_tags.apply();
         proofs_by_tag.apply();
-        exec_roots.apply();
-        exec_qcs.apply();
+        commit_qcs.apply();
         consensus_evidence.apply();
         merge_global_state_root.apply();
         merge_hint_roots.apply();
@@ -10255,7 +10226,7 @@ impl State {
 
     fn persist_commit_roster_journal(
         &self,
-        commit_certificate: &CommitCertificate,
+        commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) {
@@ -10265,7 +10236,7 @@ impl State {
         }
         let mut journal = self.commit_roster_journal.write();
         journal.upsert(
-            commit_certificate.clone(),
+            commit_qc.clone(),
             checkpoint.clone(),
             stake_snapshot,
         );
@@ -10289,25 +10260,25 @@ impl State {
         block_hash: HashOf<BlockHeader>,
     ) -> Option<CommitRosterSnapshot> {
         let snapshot = self.commit_roster_journal.read().get(height, block_hash)?;
-        status::record_commit_certificate(snapshot.commit_certificate.clone());
+        status::record_commit_qc(snapshot.commit_qc.clone());
         status::record_validator_checkpoint(snapshot.validator_checkpoint.clone());
         Some(snapshot)
     }
 
     fn record_commit_roster(
         &self,
-        commit_certificate: &CommitCertificate,
+        commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) {
-        status::record_commit_certificate(commit_certificate.clone());
+        status::record_commit_qc(commit_qc.clone());
         status::record_validator_checkpoint(checkpoint.clone());
         let sidecar_snapshot = stake_snapshot.clone();
-        self.persist_commit_roster_journal(commit_certificate, checkpoint, stake_snapshot);
+        self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot);
         let sidecar = crate::kura::RosterSidecar::new_v1(
-            commit_certificate.height,
-            commit_certificate.subject_block_hash,
-            Some(commit_certificate.clone()),
+            commit_qc.height,
+            commit_qc.subject_block_hash,
+            Some(commit_qc.clone()),
             Some(checkpoint.clone()),
             sidecar_snapshot,
         );
@@ -10321,7 +10292,7 @@ impl State {
         }
         let restored = snapshots.len();
         for snapshot in &snapshots {
-            status::record_commit_certificate(snapshot.commit_certificate.clone());
+            status::record_commit_qc(snapshot.commit_qc.clone());
             status::record_validator_checkpoint(snapshot.validator_checkpoint.clone());
         }
         debug!(restored, "restored commit rosters from journal");
@@ -10907,22 +10878,9 @@ impl State {
         let _ = self.refresh_axt_policies_from_directory();
     }
 
-    /// Insert an execution root for testing/telemetry scaffolding.
-    pub fn insert_exec_root_for_testing(
-        &mut self,
-        block_hash: HashOf<BlockHeader>,
-        root: iroha_crypto::Hash,
-    ) {
-        self.world.exec_roots.insert(block_hash, root);
-    }
-
-    /// Insert an execution QC for testing/telemetry scaffolding.
-    pub fn insert_exec_qc_for_testing(
-        &mut self,
-        block_hash: HashOf<BlockHeader>,
-        qc: ExecutionQcRecord,
-    ) {
-        self.world.exec_qcs.insert(block_hash, qc);
+    /// Insert a commit QC for testing/telemetry scaffolding.
+    pub fn insert_commit_qc_for_testing(&mut self, block_hash: HashOf<BlockHeader>, qc: Qc) {
+        self.world.commit_qcs.insert(block_hash, qc);
     }
 
     fn migrate_space_directory_bindings(&mut self) -> Option<usize> {
@@ -12246,16 +12204,14 @@ impl State {
         Ok(public_keys)
     }
 
-    fn verify_lane_relay_execution_qc(
+    fn verify_lane_relay_qc(
         &self,
         envelope: &LaneRelayEnvelope,
         committee: &[AccountId],
     ) -> Result<(), LaneRelayError> {
-        let qc = envelope
-            .execution_qc
-            .as_ref()
-            .ok_or(LaneRelayError::MissingExecutionQc)?;
-        let public_keys = Self::lane_relay_qc_public_keys(committee, &qc.signers_bitmap)?;
+        let qc = envelope.qc.as_ref().ok_or(LaneRelayError::MissingQc)?;
+        let public_keys =
+            Self::lane_relay_qc_public_keys(committee, &qc.aggregate.signers_bitmap)?;
         if public_keys.is_empty() {
             return Err(LaneRelayError::AggregateSignatureInvalid);
         }
@@ -12269,25 +12225,28 @@ impl State {
         } else {
             mode_tag.as_str()
         };
-        let vote = crate::sumeragi::consensus::ExecVote {
+        let mode_tag = if qc.mode_tag.is_empty() {
+            derived_mode_tag
+        } else {
+            qc.mode_tag.as_str()
+        };
+        let vote = crate::sumeragi::consensus::Vote {
+            phase: qc.phase,
             block_hash: qc.subject_block_hash,
             parent_state_root: qc.parent_state_root,
             post_state_root: qc.post_state_root,
             height: qc.height,
             view: qc.view,
             epoch: qc.epoch,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
-        let preimage = crate::sumeragi::consensus::bls_preimage::exec_vote(
-            &self.chain_id,
-            derived_mode_tag,
-            &vote,
-        );
+        let preimage = crate::sumeragi::consensus::vote_preimage(&self.chain_id, mode_tag, &vote);
         let key_refs: Vec<&[u8]> = public_keys.iter().map(Vec::as_slice).collect();
         iroha_crypto::bls_normal_verify_preaggregated_same_message(
             &preimage,
-            &qc.bls_aggregate_signature,
+            &qc.aggregate.bls_aggregate_signature,
             &key_refs,
         )
         .map_err(|_| LaneRelayError::AggregateSignatureInvalid)?;
@@ -12426,7 +12385,7 @@ impl State {
             u32::try_from(committee_quorum).unwrap_or(validator_count),
         )?;
         envelope.verify_with_quorum(quorum)?;
-        self.verify_lane_relay_execution_qc(envelope, &committee)?;
+        self.verify_lane_relay_qc(envelope, &committee)?;
 
         let inserted = {
             let mut guard = self.lane_relays.write();
@@ -12503,7 +12462,7 @@ impl State {
                         );
                         return candidates;
                     }
-                    if envelope.execution_qc.is_none() {
+                    if envelope.qc.is_none() {
                         return candidates;
                     }
                     lane_tips.push(envelope.block_header.hash());
@@ -14381,7 +14340,7 @@ impl<'state> StateBlock<'state> {
             let block_hash = block.as_ref().hash();
             let stake_snapshot =
                 CommitStakeSnapshot::from_roster(self.world(), &checkpoint_topology);
-            if let Some(commit_cert) = crate::sumeragi::status::commit_certificate_history()
+            if let Some(commit_cert) = crate::sumeragi::status::commit_qc_history()
                 .into_iter()
                 .find(|cert| {
                     cert.height == block_height
@@ -15012,10 +14971,10 @@ fn replay_roster_for_block(
     let block_hash = block.hash();
 
     if let Some(snapshot) = state.commit_roster_snapshot_for_block(height, block_hash) {
-        let roster = if snapshot.commit_certificate.validator_set.is_empty() {
+        let roster = if snapshot.commit_qc.validator_set.is_empty() {
             snapshot.validator_checkpoint.validator_set
         } else {
-            snapshot.commit_certificate.validator_set
+            snapshot.commit_qc.validator_set
         };
         if !roster.is_empty() {
             return roster;
@@ -15614,18 +15573,20 @@ mod replay_validation_tests {
         }
         let block_hash = signed_block.hash();
         let validator_set_hash = HashOf::new(&roster);
-        let commit_cert = CommitCertificate {
+        let commit_cert = Qc {
             phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 2,
             view: 0,
             epoch: 0,
             mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash,
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            aggregate: crate::sumeragi::consensus::CommitAggregate {
+            aggregate: crate::sumeragi::consensus::QcAggregate {
                 signers_bitmap: signers_bitmap.clone(),
                 bls_aggregate_signature: Vec::new(),
             },
@@ -18220,8 +18181,7 @@ pub(crate) mod deserialize {
         let proofs = take_optional_default(&mut map, "proofs")?;
         let proof_tags = take_optional_default(&mut map, "proof_tags")?;
         let proofs_by_tag = take_optional_default(&mut map, "proofs_by_tag")?;
-        let exec_roots = take_optional_default(&mut map, "exec_roots")?;
-        let exec_qcs = take_optional_default(&mut map, "exec_qcs")?;
+        let commit_qcs = take_optional_default(&mut map, "commit_qcs")?;
         let contract_manifests = take_optional_default(&mut map, "contract_manifests")?;
         let contract_code = take_optional_default(&mut map, "contract_code")?;
         let contract_instances = take_optional_default(&mut map, "contract_instances")?;
@@ -18305,8 +18265,7 @@ pub(crate) mod deserialize {
             proofs,
             proof_tags,
             proofs_by_tag,
-            exec_roots,
-            exec_qcs,
+            commit_qcs,
             contract_manifests,
             contract_code,
             contract_instances,
@@ -19675,24 +19634,48 @@ mod tests {
         (accounts, keypairs)
     }
 
-    fn execution_qc_with_signers(
+    fn commit_qc_with_signers(
         header: &BlockHeader,
         parent_state_root: Hash,
         post_state_root: Hash,
         signers: &[&KeyPair],
         signers_bitmap: Vec<u8>,
-    ) -> ExecutionQcRecord {
-        let vote = crate::sumeragi::consensus::ExecVote {
-            block_hash: header.hash(),
+    ) -> Qc {
+        let validator_set: Vec<_> = signers
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect();
+        let mut qc = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: header.hash(),
             parent_state_root,
             post_state_root,
             height: header.height().get(),
             view: 0,
             epoch: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: Vec::new(),
+                bls_aggregate_signature: Vec::new(),
+            },
+        };
+        let vote = crate::sumeragi::consensus::Vote {
+            phase: qc.phase,
+            block_hash: qc.subject_block_hash,
+            parent_state_root: qc.parent_state_root,
+            post_state_root: qc.post_state_root,
+            height: qc.height,
+            view: qc.view,
+            epoch: qc.epoch,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
-        let preimage = crate::sumeragi::consensus::bls_preimage::exec_vote(
+        let preimage = crate::sumeragi::consensus::vote_preimage(
             &super::DEFAULT_TEST_CHAIN_ID,
             crate::sumeragi::consensus::PERMISSIONED_TAG,
             &vote,
@@ -19707,17 +19690,12 @@ mod tests {
             .collect();
         let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
         let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&sig_refs)
-            .expect("aggregate execution QC signatures");
-        ExecutionQcRecord {
-            subject_block_hash: header.hash(),
-            parent_state_root,
-            post_state_root,
-            height: header.height().get(),
-            view: 0,
-            epoch: 0,
+            .expect("aggregate commit QC signatures");
+        qc.aggregate = crate::sumeragi::consensus::QcAggregate {
             signers_bitmap,
             bls_aggregate_signature: aggregate_signature,
-        }
+        };
+        qc
     }
 
     fn signer_bitmap(signers: &[usize], roster_len: usize) -> Vec<u8> {
@@ -19763,7 +19741,7 @@ mod tests {
         );
         let parent_state_root = Hash::new([0xBC; 4]);
         let post_state_root = Hash::new([0xAB; 4]);
-        let qc = execution_qc_with_signers(
+        let qc = commit_qc_with_signers(
             &header,
             parent_state_root,
             post_state_root,
@@ -19864,7 +19842,7 @@ mod tests {
     }
 
     #[test]
-    fn record_lane_relay_rejects_without_execution_qc() {
+    fn record_lane_relay_rejects_without_qc() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -19879,11 +19857,11 @@ mod tests {
         configure_commit_topology(&state, 1);
 
         let mut envelope = sample_lane_relay_envelope(3, LaneId::new(0), &signers, signers_bitmap);
-        envelope.execution_qc = None;
+        envelope.qc = None;
         let err = state
             .record_lane_relay(&envelope)
-            .expect_err("relay without execution QC should be rejected");
-        assert!(matches!(err, LaneRelayError::MissingExecutionQc));
+            .expect_err("relay without QC should be rejected");
+        assert!(matches!(err, LaneRelayError::MissingQc));
     }
 
     #[test]
@@ -19952,7 +19930,7 @@ mod tests {
         settlement.total_local_micro = settlement.total_local_micro.saturating_add(1);
         let conflicting = LaneRelayEnvelope::new(
             envelope.block_header,
-            envelope.execution_qc.clone(),
+            envelope.qc.clone(),
             envelope.da_commitment_hash,
             settlement,
             envelope.rbc_bytes_total,
@@ -20033,8 +20011,8 @@ mod tests {
         configure_commit_topology(&state, 1);
 
         let mut envelope = sample_lane_relay_envelope(1, LaneId::new(0), &signers, signers_bitmap);
-        if let Some(qc) = envelope.execution_qc.as_mut() {
-            if let Some(first) = qc.bls_aggregate_signature.first_mut() {
+        if let Some(qc) = envelope.qc.as_mut() {
+            if let Some(first) = qc.aggregate.bls_aggregate_signature.first_mut() {
                 *first ^= 0xFF;
             }
         }
@@ -20198,7 +20176,7 @@ mod tests {
             .map(|idx| keypairs.get(&committee[*idx]).expect("signer key"))
             .collect();
         let signers_bitmap = signer_bitmap(&signer_indices, committee.len());
-        let qc = execution_qc_with_signers(
+        let qc = commit_qc_with_signers(
             &header,
             parent_state_root,
             post_state_root,
@@ -20326,7 +20304,7 @@ mod tests {
             .map(|idx| keypairs.get(&committee[*idx]).expect("signer key"))
             .collect();
         let signers_bitmap = signer_bitmap(&signer_indices, committee.len());
-        let qc = execution_qc_with_signers(
+        let qc = commit_qc_with_signers(
             &header,
             parent_state_root,
             post_state_root,
@@ -22184,18 +22162,20 @@ mod tests {
         let block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
         let roster = vec![peer];
-        let commit_cert = CommitCertificate {
+        let commit_cert = Qc {
             phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 2,
             view: 1,
             epoch: 0,
             mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            aggregate: crate::sumeragi::consensus::CommitAggregate {
+            aggregate: crate::sumeragi::consensus::QcAggregate {
                 signers_bitmap: vec![0b0000_0001],
                 bls_aggregate_signature: Vec::new(),
             },
@@ -22215,7 +22195,7 @@ mod tests {
         }
 
         state.restore_commit_roster_history();
-        let certs = status::commit_certificate_history();
+        let certs = status::commit_qc_history();
         let checkpoints = status::validator_checkpoint_history();
         assert!(
             certs.iter().any(|cert| cert == &commit_cert),
@@ -22254,7 +22234,7 @@ mod tests {
         let _ = state_block.apply_without_execution(&committed, roster);
         state_block.commit().expect("commit");
 
-        let certs = status::commit_certificate_history();
+        let certs = status::commit_qc_history();
         let cert = certs.first().expect("commit certificate recorded");
         assert_eq!(cert.height, committed.as_ref().header().height().get());
         assert_eq!(cert.aggregate.signers_bitmap, vec![0b0000_0010]);
@@ -22304,18 +22284,20 @@ mod tests {
         let roster = vec![peer];
         let signers_bitmap = vec![0b0000_0001];
         let bls_aggregate_signature = vec![0xAA; 96];
-        let commit_cert = CommitCertificate {
+        let commit_cert = Qc {
             phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 2,
             view: 1,
             epoch: 0,
             mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            aggregate: crate::sumeragi::consensus::CommitAggregate {
+            aggregate: crate::sumeragi::consensus::QcAggregate {
                 signers_bitmap: signers_bitmap.clone(),
                 bls_aggregate_signature: bls_aggregate_signature.clone(),
             },
@@ -22337,7 +22319,7 @@ mod tests {
             .expect("roster sidecar persisted");
         assert_eq!(sidecar.block_hash, commit_cert.subject_block_hash);
         assert_eq!(
-            sidecar.commit_certificate.as_ref(),
+            sidecar.commit_qc.as_ref(),
             Some(&commit_cert),
             "commit certificate should be persisted"
         );

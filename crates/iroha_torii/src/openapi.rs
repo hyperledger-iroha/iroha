@@ -4646,7 +4646,7 @@ fn sumeragi_paths() -> Map {
     );
     paths.insert(
         "/v1/sumeragi/commit-certificates".to_owned(),
-        Value::Object(sumeragi_commit_certificates_operation()),
+        Value::Object(sumeragi_commit_qcs_operation()),
     );
     paths.insert(
         "/v1/sumeragi/rbc".to_owned(),
@@ -4742,23 +4742,13 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/exec_root/{hash}".to_owned(),
+        "/v1/sumeragi/commit_qc/{hash}".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
-            "Fetch execution root.",
-            "Fetch execution root by hash.",
+            "Fetch commit QC.",
+            "Fetch commit QC by block hash.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("hash", "Execution root hash (hex).")],
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/exec_qc/{hash}".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch execution QC.",
-            "Fetch execution QC by hash.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param("hash", "Execution QC hash (hex).")],
+            vec![string_path_param("hash", "Block hash (hex).")],
         )),
     );
     paths.insert(
@@ -4835,7 +4825,7 @@ fn sumeragi_paths() -> Map {
     paths
 }
 
-fn sumeragi_commit_certificates_operation() -> Map {
+fn sumeragi_commit_qcs_operation() -> Map {
     let mut operation = Map::new();
     operation.insert(
         "tags".into(),
@@ -4855,7 +4845,7 @@ fn sumeragi_commit_certificates_operation() -> Map {
     );
     operation.insert(
         "operationId".into(),
-        Value::String("sumeragiCommitCertificates".to_owned()),
+        Value::String("sumeragiQcs".to_owned()),
     );
     operation.insert("parameters".into(), Value::Array(history_window_params()));
     let mut responses = Map::new();
@@ -4863,7 +4853,7 @@ fn sumeragi_commit_certificates_operation() -> Map {
         "200".to_owned(),
         json_response(
             "Commit certificate history (newest first).",
-            schema_ref("CommitCertificateList"),
+            schema_ref("QcList"),
         ),
     );
     responses.insert("406".to_owned(), not_acceptable_response());
@@ -8204,19 +8194,19 @@ fn openapi_schemas() -> Map {
                 "block_hash": { "type": "string", "description": "Block hash at the requested height (hex)." },
                 "state_root": {
                     "type": "string",
-                    "description": "Execution post-state root (hex) derived from the execution QC or result Merkle root."
+                    "description": "Execution post-state root (hex) derived from the commit QC or result Merkle root."
                 },
                 "source": {
                     "type": "string",
-                    "enum": ["execution_qc", "result_merkle_root"],
-                    "description": "Indicates whether the state root came from the execution QC or the block result Merkle root."
+                    "enum": ["commit_qc", "result_merkle_root"],
+                    "description": "Indicates whether the state root came from the commit QC or the block result Merkle root."
                 },
-                "exec_qc": {
+                "commit_qc": {
                     "anyOf": [
-                        { "$ref": "#/components/schemas/ExecutionQcRecord" },
+                        { "$ref": "#/components/schemas/Qc" },
                         { "type": "null" }
                     ],
-                    "description": "Execution QC payload when available."
+                    "description": "Commit QC payload when available."
                 }
             }
         }),
@@ -8225,7 +8215,7 @@ fn openapi_schemas() -> Map {
         "StateProofResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["height", "block_hash", "state_root", "exec_qc"],
+            "required": ["height", "block_hash", "state_root", "commit_qc"],
             "additionalProperties": false,
             "properties": {
                 "height": { "type": "integer", "format": "uint64" },
@@ -8234,21 +8224,60 @@ fn openapi_schemas() -> Map {
                     "type": "string",
                     "description": "Execution post-state root (hex) attested by the QC."
                 },
-                "exec_qc": { "$ref": "#/components/schemas/ExecutionQcRecord" }
+                "commit_qc": { "$ref": "#/components/schemas/Qc" }
             }
         }),
     );
     schemas.insert(
-        "CommitCertificate".to_owned(),
+        "QcRef".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["height", "block_hash", "view", "epoch", "validator_set_hash", "validator_set_hash_version", "validator_set", "signatures"],
+            "required": ["height", "view", "epoch", "subject_block_hash", "phase"],
             "additionalProperties": false,
             "properties": {
                 "height": { "type": "integer", "format": "uint64" },
-                "block_hash": { "type": "string", "description": "Hash of the certified block (hex)." },
                 "view": { "type": "integer", "format": "uint64" },
                 "epoch": { "type": "integer", "format": "uint64" },
+                "subject_block_hash": { "type": "string", "description": "Hash of the certified block (hex)." },
+                "phase": { "type": "string", "description": "Certified phase." }
+            }
+        }),
+    );
+    schemas.insert(
+        "Qc".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "phase",
+                "subject_block_hash",
+                "parent_state_root",
+                "post_state_root",
+                "height",
+                "view",
+                "epoch",
+                "mode_tag",
+                "validator_set_hash",
+                "validator_set_hash_version",
+                "validator_set",
+                "aggregate"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "phase": { "type": "string", "description": "Certified phase." },
+                "subject_block_hash": { "type": "string", "description": "Hash of the certified block (hex)." },
+                "parent_state_root": { "type": "string", "description": "Parent state root bound into the QC (hex)." },
+                "post_state_root": { "type": "string", "description": "Post-state root bound into the QC (hex)." },
+                "height": { "type": "integer", "format": "uint64" },
+                "view": { "type": "integer", "format": "uint64" },
+                "epoch": { "type": "integer", "format": "uint64" },
+                "mode_tag": { "type": "string", "description": "Consensus mode tag used for domain separation." },
+                "highest_qc": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/QcRef" },
+                        { "type": "null" }
+                    ],
+                    "description": "Optional highest QC reference (advisory)."
+                },
                 "validator_set_hash": { "type": "string", "description": "Stable hash of the validator set." },
                 "validator_set_hash_version": { "type": "integer", "format": "uint16" },
                 "validator_set": {
@@ -8256,19 +8285,23 @@ fn openapi_schemas() -> Map {
                     "items": { "type": "string" },
                     "description": "Ordered validator set used to assemble the certificate."
                 },
-                "signatures": {
-                    "type": "array",
-                    "items": { "$ref": "#/components/schemas/BlockSignature" },
-                    "description": "Validator signatures covering the block header."
+                "aggregate": {
+                    "type": "object",
+                    "required": ["signers_bitmap", "bls_aggregate_signature"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "signers_bitmap": { "type": "string", "description": "Signer bitmap (hex, LSB-first)." },
+                        "bls_aggregate_signature": { "type": "string", "description": "BLS aggregate signature (hex)." }
+                    }
                 }
             }
         }),
     );
     schemas.insert(
-        "CommitCertificateList".to_owned(),
+        "QcList".to_owned(),
         norito::json!({
             "type": "array",
-            "items": { "$ref": "#/components/schemas/CommitCertificate" }
+            "items": { "$ref": "#/components/schemas/Qc" }
         }),
     );
     schemas.insert(

@@ -74,7 +74,7 @@ translation_last_reviewed: 2026-01-01
 ### `LaneRelayEnvelope`
 
 `LaneRelayEnvelope` (انظر `crates/iroha_data_model/src/nexus/relay.rs`) يجمع `BlockHeader` الخاص
-بالlane، و`ExecutionQcRecord` اختياري، وتجزيء `DaCommitmentBundle` اختياري، و`LaneBlockCommitment`
+بالlane، و`commit QC (`Qc`)` اختياري، وتجزيء `DaCommitmentBundle` اختياري، و`LaneBlockCommitment`
 الكامل، وعدد بايتات RBC لكل lane. يحفظ الـ envelope قيمة `settlement_hash` مشتقة من Norito
 (عبر `compute_settlement_hash`) كي يتمكن المستلمون من التحقق من حمولة settlement قبل تمريرها
 الى merge ledger. يجب رفض الـ envelope عند فشل `verify` (عدم تطابق QC subject او DA hash او

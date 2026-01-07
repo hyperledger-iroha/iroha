@@ -294,9 +294,9 @@ use iroha_data_model::block::consensus::EvidenceKind;
 let offences = [
     EvidenceKind::DoublePrepare,
     EvidenceKind::DoubleCommit,
-    EvidenceKind::InvalidCommitCertificate,
+    EvidenceKind::InvalidQc,
     EvidenceKind::InvalidProposal,
-    EvidenceKind::DoubleExecVote,
+    EvidenceKind::Censorship,
 ];
 
 for (expected, kind) in offences.iter().enumerate() {
@@ -305,9 +305,9 @@ for (expected, kind) in offences.iter().enumerate() {
 ```
 
 - **DoublePrepare/DoubleCommit** - validator نے اسی `(phase,height,view,epoch)` کے لئے متضاد hashes پر دستخط کئے۔
-- **DoubleExecVote** - متضاد execution votes مختلف post-state roots ظاہر کرتے ہیں۔
-- **InvalidCommitCertificate** - aggregator نے ایسا commit certificate gossip کیا جس کی شکل deterministic checks میں fail ہو (مثلا خالی signer bitmap)۔
+- **InvalidQc** - aggregator نے ایسا commit certificate gossip کیا جس کی شکل deterministic checks میں fail ہو (مثلا خالی signer bitmap)۔
 - **InvalidProposal** - leader نے ایسا بلاک propose کیا جو structural validation میں fail ہو (مثلا locked-chain rule توڑے)۔
+- **Censorship** — signed submission receipts show a transaction that was never proposed/committed.
 
 Operators اور tooling payloads کو inspect اور re-broadcast کر سکتے ہیں:
 

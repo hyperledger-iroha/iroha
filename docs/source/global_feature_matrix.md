@@ -11,7 +11,7 @@ Legend: `◉` fully implemented · `○` mostly implemented · `▲` partially i
 | NEW_VIEW gating & highest commit-certificate tracking | ◉ | Control flow carries NEW_VIEW/Evidence, the highest commit certificate adopts monotonically, handshake guards computed fingerprint. | status.md:210 |
 | availability evidence gating | ○ | Availability evidence emitted and gates commit when `da_enabled=true`; additional polish tracked. | status.md:190 |
 | Reliable Broadcast (DA payload transport) | ◉ | RBC message flow (Init/Chunk/Ready/Deliver) is enabled when `da_enabled=true` as a transport/recovery path; commit is gated on `availability evidence` (not on local `DELIVER`). | status.md:283-284 |
-| ExecutionQC collection & gating | ○ | Exec votes, witness envelopes, and gating live with real BLS aggregate signatures; strict WSV mode blocks on missing parent records (no placeholder backfill). | status.md:159; status.md:4504 |
+| Commit QC state-root binding | ◉ | Commit QCs carry `parent_state_root`/`post_state_root`; there is no separate execution-QC gate. | status.md:latest |
 | Evidence propagation & audit endpoints | ◉ | ControlFlow::Evidence, Torii evidence endpoints, and negative tests landed. | status.md:176; status.md:760-761 |
 | RBC telemetry, readiness/delivered metrics | ◉ | `/v1/sumeragi/rbc*` endpoints and telemetry counters/histogram available for operators. | status.md:283-284; status.md:772 |
 | Consensus parameter advert & topology verification | ◉ | Nodes broadcast `(collectors_k, redundant_send_r)` and validate equality across peers. | status.md:255 |

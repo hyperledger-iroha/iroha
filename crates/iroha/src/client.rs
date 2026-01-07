@@ -74,7 +74,7 @@ use crate::{
     data_model::{
         ChainId,
         block::{BlockHeader, SignedBlock},
-        consensus::ExecutionQcRecord,
+        consensus::Qc,
         events::pipeline::{
             BlockEventFilter, BlockStatus, PipelineEventBox, PipelineEventFilterBox,
             TransactionEventFilter, TransactionStatus,
@@ -1340,7 +1340,7 @@ pub struct SumeragiEvidenceListFilter<'a> {
     pub limit: Option<u32>,
     /// Offset into the persisted evidence list.
     pub offset: Option<u32>,
-    /// Optional filter by evidence kind (`DoublePrepare`, `InvalidCommitCertificate`, etc.).
+    /// Optional filter by evidence kind (`DoublePrepare`, `InvalidQc`, etc.).
     pub kind: Option<&'a str>,
 }
 
@@ -1439,42 +1439,56 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
     out
 }
 
-fn exec_qc_json_payload(
-    hash_hex: &str,
-    record_opt: Option<ExecutionQcRecord>,
-) -> norito::json::Value {
+fn commit_qc_json_payload(hash_hex: &str, qc_opt: Option<Qc>) -> norito::json::Value {
     use norito::json::{Map, Value};
-    if let Some(record) = record_opt {
-        let mut map = Map::new();
-        map.insert(
-            "subject_block_hash".into(),
-            Value::from(hash_hex.to_string()),
+    let mut map = Map::new();
+    map.insert(
+        "subject_block_hash".into(),
+        Value::from(hash_hex.to_string()),
+    );
+    if let Some(qc) = qc_opt {
+        let validator_set = Value::Array(
+            qc.validator_set
+                .iter()
+                .map(|peer| Value::from(peer.to_string()))
+                .collect(),
         );
-        map.insert(
+        let mut qc_map = Map::new();
+        qc_map.insert("phase".into(), Value::from(format!("{:?}", qc.phase)));
+        qc_map.insert(
+            "parent_state_root".into(),
+            Value::from(format!("{}", qc.parent_state_root)),
+        );
+        qc_map.insert(
             "post_state_root".into(),
-            Value::from(format!("{}", record.post_state_root)),
+            Value::from(format!("{}", qc.post_state_root)),
         );
-        map.insert("height".into(), Value::from(record.height));
-        map.insert("view".into(), Value::from(record.view));
-        map.insert("epoch".into(), Value::from(record.epoch));
-        map.insert(
+        qc_map.insert("height".into(), Value::from(qc.height));
+        qc_map.insert("view".into(), Value::from(qc.view));
+        qc_map.insert("epoch".into(), Value::from(qc.epoch));
+        qc_map.insert("mode_tag".into(), Value::from(qc.mode_tag));
+        qc_map.insert(
+            "validator_set_hash".into(),
+            Value::from(format!("{}", qc.validator_set_hash)),
+        );
+        qc_map.insert(
+            "validator_set_hash_version".into(),
+            Value::from(qc.validator_set_hash_version),
+        );
+        qc_map.insert("validator_set".into(), validator_set);
+        qc_map.insert(
             "signers_bitmap".into(),
-            Value::from(bytes_to_hex(&record.signers_bitmap)),
+            Value::from(bytes_to_hex(&qc.aggregate.signers_bitmap)),
         );
-        map.insert(
+        qc_map.insert(
             "bls_aggregate_signature".into(),
-            Value::from(bytes_to_hex(&record.bls_aggregate_signature)),
+            Value::from(bytes_to_hex(&qc.aggregate.bls_aggregate_signature)),
         );
-        Value::Object(map)
+        map.insert("commit_qc".into(), Value::Object(qc_map));
     } else {
-        let mut map = Map::new();
-        map.insert(
-            "subject_block_hash".into(),
-            Value::from(hash_hex.to_string()),
-        );
-        map.insert("exec_qc".into(), Value::Null);
-        Value::Object(map)
+        map.insert("commit_qc".into(), Value::Null);
     }
+    Value::Object(map)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -2238,12 +2252,6 @@ fn sumeragi_qc_json_payload(snapshot: SumeragiQcSnapshot) -> norito::json::Value
     Value::Object(root)
 }
 
-#[derive(Debug, Decode)]
-struct ExecRootWire {
-    block_hash: HashOf<BlockHeader>,
-    exec_root: Option<iroha_crypto::Hash>,
-}
-
 impl Client {
     fn parse_json_ok_response(
         response: &Response<Vec<u8>>,
@@ -2510,60 +2518,12 @@ impl Client {
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
 
-    /// GET `/v1/sumeragi/exec_root/:hash` — execution post-state root for a parent block hash.
+    /// GET `/v1/sumeragi/commit_qc/:hash` — full commit QC record for a parent block hash.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_exec_root_json(&self, hash_hex: &str) -> Result<norito::json::Value> {
-        let url = join_torii_url(
-            &self.torii_url,
-            &format!("v1/sumeragi/exec_root/{hash_hex}"),
-        );
-        let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_NORITO),
-        )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get sumeragi exec_root: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        let content_type = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default();
-        if content_type.starts_with(APPLICATION_NORITO) {
-            use norito::json::{Map, Value};
-
-            let wire = decode_from_bytes::<ExecRootWire>(resp.body())
-                .map_err(|err| eyre!("Failed to decode exec_root Norito payload: {err}"))?;
-            let mut map = Map::new();
-            map.insert(
-                "block_hash".into(),
-                Value::from(format!("{}", wire.block_hash)),
-            );
-            match wire.exec_root {
-                Some(root) => {
-                    map.insert("exec_root".into(), Value::from(format!("{root}")));
-                }
-                None => {
-                    map.insert("exec_root".into(), Value::Null);
-                }
-            }
-            return Ok(Value::Object(map));
-        }
-        norito::json::from_slice(resp.body()).map_err(Into::into)
-    }
-
-    /// GET `/v1/sumeragi/exec_qc/:hash` — full `ExecutionQC` record for a parent block hash.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_exec_qc_json(&self, hash_hex: &str) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, &format!("v1/sumeragi/exec_qc/{hash_hex}"));
+    pub fn get_sumeragi_commit_qc_json(&self, hash_hex: &str) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, &format!("v1/sumeragi/commit_qc/{hash_hex}"));
         let resp = self
             .default_request(HttpMethod::GET, url)
             .header("Accept", APPLICATION_NORITO)
@@ -2571,7 +2531,7 @@ impl Client {
             .send()?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to get sumeragi exec_qc: {} {}",
+                "Failed to get sumeragi commit_qc: {} {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
@@ -2582,9 +2542,9 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         if content_type.starts_with(APPLICATION_NORITO) {
-            let record_opt = decode_from_bytes::<Option<ExecutionQcRecord>>(resp.body())
-                .map_err(|err| eyre!("Failed to decode exec_qc Norito payload: {err}"))?;
-            return Ok(exec_qc_json_payload(hash_hex, record_opt));
+            let qc_opt = decode_from_bytes::<Option<Qc>>(resp.body())
+                .map_err(|err| eyre!("Failed to decode commit_qc Norito payload: {err}"))?;
+            return Ok(commit_qc_json_payload(hash_hex, qc_opt));
         }
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
@@ -2986,7 +2946,7 @@ mod evidence_filter_tests {
         let filter = SumeragiEvidenceListFilter {
             limit: Some(25),
             offset: Some(10),
-            kind: Some("InvalidCommitCertificate"),
+            kind: Some("InvalidQc"),
         };
         let params = filter.param_entries();
         assert_eq!(
@@ -2994,7 +2954,7 @@ mod evidence_filter_tests {
             vec![
                 ("limit", "25".to_string()),
                 ("offset", "10".to_string()),
-                ("kind", "InvalidCommitCertificate".to_string())
+                ("kind", "InvalidQc".to_string())
             ]
         );
     }
@@ -3129,7 +3089,7 @@ mod evidence_http_tests {
     use http::StatusCode;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature};
     use iroha_data_model::block::consensus::{
-        CertPhase as Phase, CommitVote as Vote, Evidence, EvidenceKind, EvidencePayload,
+        CertPhase as Phase, QcVote as Vote, Evidence, EvidenceKind, EvidencePayload,
         EvidenceRecord,
     };
     use iroha_test_samples::gen_account_in;
@@ -3789,7 +3749,7 @@ mod evidence_http_tests {
         let filter = SumeragiEvidenceListFilter {
             limit: Some(5),
             offset: Some(2),
-            kind: Some("InvalidCommitCertificate"),
+            kind: Some("InvalidQc"),
         };
 
         let json = with_mock_http(
@@ -3819,7 +3779,7 @@ mod evidence_http_tests {
         assert_eq!(params.get("offset"), Some(&"2".to_string()));
         assert_eq!(
             params.get("kind"),
-            Some(&"InvalidCommitCertificate".to_string())
+            Some(&"InvalidQc".to_string())
         );
     }
 
@@ -3846,10 +3806,12 @@ mod evidence_http_tests {
         Vote {
             phase: Phase::Prepare,
             block_hash: HashOf::from_untyped_unchecked(hash),
+            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
             height,
             view,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         }
@@ -9445,16 +9407,17 @@ mod tests {
         block::{
             BlockHeader,
             consensus::{
-                LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
-                LaneVolatilityClass, SumeragiBlockSyncRosterStatus, SumeragiDaGateReason,
-                SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiKuraStoreStatus,
-                SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+                CertPhase, LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt,
+                LaneSwapMetadata, LaneVolatilityClass, PERMISSIONED_TAG, SumeragiBlockSyncRosterStatus,
+                SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
+                SumeragiKuraStoreStatus, SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
                 SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus,
                 SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
                 SumeragiRbcStoreStatus, SumeragiStatusWire, SumeragiValidationRejectStatus,
                 SumeragiViewChangeCauseStatus,
             },
         },
+        consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
         da::{
             ingest::DaStripeLayout,
             manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
@@ -9464,6 +9427,7 @@ mod tests {
             },
         },
         nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
+        peer::PeerId,
     };
     use iroha_telemetry::metrics::GovernanceStatus;
     use iroha_test_samples::gen_account_in;
@@ -9491,6 +9455,28 @@ mod tests {
     const PASSWORD: &str = "ilovetea";
     // `mad_hatter:ilovetea` encoded with base64
     const ENCRYPTED_CREDENTIALS: &str = "bWFkX2hhdHRlcjppbG92ZXRlYQ==";
+
+    fn sample_commit_qc(block_header: &BlockHeader) -> Qc {
+        let validator_set: Vec<PeerId> = Vec::new();
+        Qc {
+            phase: CertPhase::Commit,
+            subject_block_hash: block_header.hash(),
+            parent_state_root: Hash::prehashed([0xEA; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([0xEE; Hash::LENGTH]),
+            height: block_header.height().get(),
+            view: 5,
+            epoch: 1,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: QcAggregate {
+                signers_bitmap: vec![0b1010_0001],
+                bls_aggregate_signature: vec![0xAB; 48],
+            },
+        }
+    }
 
     #[allow(clippy::too_many_lines)]
     fn sample_sumeragi_status_with_relay() -> (SumeragiStatusWire, LaneRelayEnvelope) {
@@ -9533,19 +9519,10 @@ mod tests {
             0,
         );
         block_header.set_da_commitments_hash(da_hash);
-        let execution_qc = iroha_data_model::consensus::ExecutionQcRecord {
-            subject_block_hash: block_header.hash(),
-            parent_state_root: Hash::prehashed([0xEA; Hash::LENGTH]),
-            post_state_root: Hash::prehashed([0xEE; Hash::LENGTH]),
-            height: block_header.height().get(),
-            view: 5,
-            epoch: 1,
-            signers_bitmap: vec![0b1010_0001],
-            bls_aggregate_signature: vec![0xAB; 48],
-        };
+        let commit_qc = sample_commit_qc(&block_header);
         let relay_envelope = LaneRelayEnvelope::new(
             block_header,
-            Some(execution_qc),
+            Some(commit_qc),
             da_hash,
             settlement.clone(),
             256,
@@ -9571,8 +9548,8 @@ mod tests {
             locked_qc_height: 11,
             locked_qc_view: 4,
             locked_qc_subject: None,
-            commit_certificate:
-                iroha_data_model::block::consensus::SumeragiCommitCertificateStatus::default(),
+            commit_qc:
+                iroha_data_model::block::consensus::SumeragiQcStatus::default(),
             commit_quorum: iroha_data_model::block::consensus::SumeragiCommitQuorumStatus::default(
             ),
             view_change_proof_accepted_total: 5,
@@ -11435,8 +11412,8 @@ mod tests {
             locked_qc_height: 0,
             locked_qc_view: 0,
             locked_qc_subject: None,
-            commit_certificate:
-                iroha_data_model::block::consensus::SumeragiCommitCertificateStatus::default(),
+            commit_qc:
+                iroha_data_model::block::consensus::SumeragiQcStatus::default(),
             commit_quorum: iroha_data_model::block::consensus::SumeragiCommitQuorumStatus::default(
             ),
             view_change_proof_accepted_total: 0,
@@ -11676,19 +11653,10 @@ mod tests {
             0,
         );
         block_header.set_da_commitments_hash(da_hash);
-        let execution_qc = iroha_data_model::consensus::ExecutionQcRecord {
-            subject_block_hash: block_header.hash(),
-            parent_state_root: Hash::prehashed([0xEA; Hash::LENGTH]),
-            post_state_root: Hash::prehashed([0xEE; Hash::LENGTH]),
-            height: block_header.height().get(),
-            view: 5,
-            epoch: 1,
-            signers_bitmap: vec![0b1010_0001],
-            bls_aggregate_signature: vec![0xAB; 48],
-        };
+        let commit_qc = sample_commit_qc(&block_header);
         let relay_envelope = LaneRelayEnvelope::new(
             block_header,
-            Some(execution_qc),
+            Some(commit_qc),
             da_hash,
             settlement.clone(),
             256,
@@ -11714,8 +11682,8 @@ mod tests {
             locked_qc_height: 11,
             locked_qc_view: 4,
             locked_qc_subject: None,
-            commit_certificate:
-                iroha_data_model::block::consensus::SumeragiCommitCertificateStatus::default(),
+            commit_qc:
+                iroha_data_model::block::consensus::SumeragiQcStatus::default(),
             commit_quorum: iroha_data_model::block::consensus::SumeragiCommitQuorumStatus::default(
             ),
             view_change_proof_accepted_total: 5,

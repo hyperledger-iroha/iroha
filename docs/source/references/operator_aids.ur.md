@@ -50,7 +50,7 @@ translation_last_reviewed: 2026-01-01
 ثبوت (آڈٹ؛ غیر‑کنسینسس)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
 - GET `/v1/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
-  - بنیادی فیلڈز (مثلاً DoublePrepare/Precommit، InvalidCommitCertificate، InvalidProposal) معائنہ کے لیے شامل ہیں۔
+  - بنیادی فیلڈز (مثلاً DoublePrepare/DoubleCommit، InvalidQc، InvalidProposal) معائنہ کے لیے شامل ہیں۔
   - مثالیں:
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence/count | jq .`
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`

@@ -65,7 +65,7 @@ use iroha_data_model::{
     self,
     account::AccountAddressErrorCode,
     block::{BlockHeader, consensus::EvidenceRecord},
-    consensus::{ConsensusKeyRecord, ExecutionQcRecord, ValidatorSetCheckpoint},
+    consensus::{ConsensusKeyRecord, ValidatorSetCheckpoint},
     nexus::{
         DataSpaceCatalog, DataSpaceId, LaneConfig, LaneId, LaneLifecyclePlan, LaneRelayEnvelope,
         PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneStakeShare,
@@ -309,7 +309,7 @@ use iroha_data_model as dm;
 use iroha_data_model::{
     account,
     block::consensus::{
-        SumeragiBlockSyncRosterStatus, SumeragiCommitCertificateStatus,
+        SumeragiBlockSyncRosterStatus, SumeragiQcStatus,
         SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
         SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
         SumeragiDataspaceCommitment, SumeragiKuraStoreStatus, SumeragiLaneCommitment,
@@ -406,12 +406,6 @@ pub async fn handler_openapi_spec(State(_state): State<crate::SharedAppState>) -
 struct EvidenceListWire {
     total: u64,
     items: Vec<EvidenceRecord>,
-}
-
-#[derive(Clone, Debug, Encode, Decode)]
-struct ExecRootWire {
-    block_hash: iroha_crypto::HashOf<BlockHeader>,
-    exec_root: Option<iroha_crypto::Hash>,
 }
 
 /// Validator-set snapshot derived from commit certificates.
@@ -3548,11 +3542,11 @@ const COMMIT_CERT_PAGE_CAP: u64 = 128;
 
 /// GET /v1/sumeragi/commit-certificates — Bounded history of commit certificates (newest first)
 #[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_commit_certificates(
+pub async fn handle_v1_sumeragi_commit_qcs(
     crate::NoritoQuery(window): crate::NoritoQuery<HistoryWindowQuery>,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let certificates = sumeragi::status::commit_certificate_history();
+    let certificates = sumeragi::status::commit_qc_history();
     let certificates = clamp_history_window(
         certificates,
         window.from,
@@ -3590,12 +3584,12 @@ pub async fn handle_v1_bridge_finality(
         iroha_core::bridge::build_finality_proof(&view, height).map_err(|err| match err {
             iroha_core::bridge::BridgeFinalityError::InvalidHeight(_)
             | iroha_core::bridge::BridgeFinalityError::BlockNotFound(_)
-            | iroha_core::bridge::BridgeFinalityError::CommitCertificateNotFound(_) => {
+            | iroha_core::bridge::BridgeFinalityError::QcNotFound(_) => {
                 Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                     iroha_data_model::query::error::QueryExecutionFail::NotFound,
                 ))
             }
-            iroha_core::bridge::BridgeFinalityError::CommitCertificateHashMismatch { .. } => {
+            iroha_core::bridge::BridgeFinalityError::QcHashMismatch { .. } => {
                 Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
                     "{err:?}"
                 )))
@@ -3632,12 +3626,12 @@ pub async fn handle_v1_bridge_finality_bundle(
         iroha_core::bridge::build_finality_bundle(&view, height).map_err(|err| match err {
             iroha_core::bridge::BridgeFinalityError::InvalidHeight(_)
             | iroha_core::bridge::BridgeFinalityError::BlockNotFound(_)
-            | iroha_core::bridge::BridgeFinalityError::CommitCertificateNotFound(_) => {
+            | iroha_core::bridge::BridgeFinalityError::QcNotFound(_) => {
                 Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                     iroha_data_model::query::error::QueryExecutionFail::NotFound,
                 ))
             }
-            iroha_core::bridge::BridgeFinalityError::CommitCertificateHashMismatch { .. } => {
+            iroha_core::bridge::BridgeFinalityError::QcHashMismatch { .. } => {
                 Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
                     "{err:?}"
                 )))
@@ -3727,7 +3721,7 @@ pub async fn handle_v1_sumeragi_validator_set_by_height(
 }
 
 fn collect_validator_snapshots() -> Vec<ValidatorSetSnapshot> {
-    let certificates = sumeragi::status::commit_certificate_history();
+    let certificates = sumeragi::status::commit_qc_history();
     certificates
         .into_iter()
         .map(|cert| ValidatorSetSnapshot {
@@ -4221,7 +4215,7 @@ pub struct EvidenceListQuery {
     pub limit: Option<usize>,
     /// Offset into the snapshot list. Default 0.
     pub offset: Option<usize>,
-    /// Optional filter by kind: one of DoublePrepare, DoubleCommit, DoubleExecVote, InvalidCommitCertificate, InvalidProposal, Censorship
+    /// Optional filter by kind: one of DoublePrepare, DoubleCommit, InvalidQc, InvalidProposal, Censorship
     pub kind: Option<String>,
 }
 
@@ -4240,9 +4234,8 @@ pub async fn handle_v1_sumeragi_evidence_list(
         let kind_opt = match kind_s {
             "DoublePrepare" | "DoublePrevote" => Some(EvidenceKind::DoublePrepare),
             "DoubleCommit" | "DoublePrecommit" => Some(EvidenceKind::DoubleCommit),
-            "DoubleExecVote" => Some(EvidenceKind::DoubleExecVote),
-            "InvalidCommitCertificate" | "InvalidQC" => {
-                Some(EvidenceKind::InvalidCommitCertificate)
+            "InvalidQc" | "InvalidQC" => {
+                Some(EvidenceKind::InvalidQc)
             }
             "InvalidProposal" => Some(EvidenceKind::InvalidProposal),
             "Censorship" => Some(EvidenceKind::Censorship),
@@ -4336,37 +4329,15 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Value {
             );
             map
         }
-        (EvidenceKind::DoubleExecVote, EvidencePayload::DoubleExecVote { v1, v2 }) => {
-            let mut map = json::Map::new();
-            map.insert("kind".into(), Value::from("DoubleExecVote"));
-            map.insert("height".into(), Value::from(v1.height));
-            map.insert("view".into(), Value::from(v1.view));
-            map.insert("epoch".into(), Value::from(v1.epoch));
-            map.insert("signer".into(), Value::from(v1.signer.clone()));
-            map.insert("block_hash".into(), Value::from(hash_to_hex(v1.block_hash)));
-            map.insert(
-                "parent_state_root".into(),
-                Value::from(hash_to_hex(v1.parent_state_root)),
-            );
-            map.insert(
-                "post_state_root_1".into(),
-                Value::from(hash_to_hex(v1.post_state_root)),
-            );
-            map.insert(
-                "post_state_root_2".into(),
-                Value::from(hash_to_hex(v2.post_state_root)),
-            );
-            map
-        }
         (
-            EvidenceKind::InvalidCommitCertificate,
-            EvidencePayload::InvalidCommitCertificate {
+            EvidenceKind::InvalidQc,
+            EvidencePayload::InvalidQc {
                 certificate,
                 reason,
             },
         ) => {
             let mut map = json::Map::new();
-            map.insert("kind".into(), Value::from("InvalidCommitCertificate"));
+            map.insert("kind".into(), Value::from("InvalidQc"));
             map.insert("height".into(), Value::from(certificate.height));
             map.insert("view".into(), Value::from(certificate.view));
             map.insert("epoch".into(), Value::from(certificate.epoch));
@@ -4389,7 +4360,7 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Value {
             map.insert("epoch".into(), Value::from(proposal.header.epoch));
             map.insert(
                 "subject_block_hash".into(),
-                Value::from(hash_to_hex(proposal.header.highest_cert.subject_block_hash)),
+                Value::from(hash_to_hex(proposal.header.highest_qc.subject_block_hash)),
             );
             map.insert(
                 "payload_hash".into(),
@@ -4629,10 +4600,12 @@ mod evidence_submit_tests {
         let mut vote = Vote {
             phase: Phase::Prepare,
             block_hash: HashOf::from_untyped_unchecked(hash),
+            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
             height,
             view,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
@@ -19331,29 +19304,29 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                 .unwrap_or(Value::Null),
         ),
     ]);
-    let commit_certificate = json_object(vec![
-        json_entry("height", snap.commit_certificate.height),
-        json_entry("view", snap.commit_certificate.view),
-        json_entry("epoch", snap.commit_certificate.epoch),
+    let commit_qc = json_object(vec![
+        json_entry("height", snap.commit_qc.height),
+        json_entry("view", snap.commit_qc.view),
+        json_entry("epoch", snap.commit_qc.epoch),
         json_entry(
             "block_hash",
-            snap.commit_certificate
+            snap.commit_qc
                 .block_hash
                 .map(|hash| Value::from(format!("{hash}")))
                 .unwrap_or(Value::Null),
         ),
         json_entry(
             "validator_set_hash",
-            snap.commit_certificate
+            snap.commit_qc
                 .validator_set_hash
                 .map(|hash| Value::from(format!("{hash}")))
                 .unwrap_or(Value::Null),
         ),
         json_entry(
             "validator_set_len",
-            snap.commit_certificate.validator_set_len,
+            snap.commit_qc.validator_set_len,
         ),
-        json_entry("signatures_total", snap.commit_certificate.signatures_total),
+        json_entry("signatures_total", snap.commit_qc.signatures_total),
     ]);
     let commit_quorum = json_object(vec![
         json_entry("height", snap.commit_quorum.height),
@@ -19665,16 +19638,16 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
     ]);
     let block_sync_roster = json_object(vec![
         json_entry(
-            "commit_certificate_hint_total",
-            snap.block_sync_roster.commit_certificate_hint_total,
+            "commit_qc_hint_total",
+            snap.block_sync_roster.commit_qc_hint_total,
         ),
         json_entry(
             "checkpoint_hint_total",
             snap.block_sync_roster.checkpoint_hint_total,
         ),
         json_entry(
-            "commit_certificate_history_total",
-            snap.block_sync_roster.commit_certificate_history_total,
+            "commit_qc_history_total",
+            snap.block_sync_roster.commit_qc_history_total,
         ),
         json_entry(
             "checkpoint_history_total",
@@ -19930,8 +19903,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         snap.lane_relay_envelopes
             .iter()
             .map(|entry| {
-                let execution_qc = entry
-                    .execution_qc
+                let commit_qc = entry
+                    .qc
                     .as_ref()
                     .map(|qc| {
                         json_object(vec![
@@ -19940,14 +19913,27 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                             json_entry("epoch", qc.epoch),
                             json_entry("subject_block_hash", format!("{}", qc.subject_block_hash)),
                             json_entry(
+                                "parent_state_root",
+                                format!("{}", qc.parent_state_root),
+                            ),
+                            json_entry(
+                                "post_state_root",
+                                format!("{}", qc.post_state_root),
+                            ),
+                            json_entry(
                                 "signers_bitmap",
                                 Value::Array(
-                                    qc.signers_bitmap.iter().copied().map(Value::from).collect(),
+                                    qc.aggregate
+                                        .signers_bitmap
+                                        .iter()
+                                        .copied()
+                                        .map(Value::from)
+                                        .collect(),
                                 ),
                             ),
                             json_entry(
                                 "bls_aggregate_signature",
-                                Value::from(hex::encode(&qc.bls_aggregate_signature)),
+                                Value::from(hex::encode(&qc.aggregate.bls_aggregate_signature)),
                             ),
                         ])
                     })
@@ -19964,7 +19950,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                             .map(|hash| Value::from(format!("{hash}")))
                             .unwrap_or(Value::Null),
                     ),
-                    json_entry("execution_qc", execution_qc),
+                    json_entry("commit_qc", commit_qc),
                     json_entry(
                         "settlement_commitment",
                         json::to_value(&entry.settlement_commitment)
@@ -20336,8 +20322,6 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                 json_entry("collectors_k", caps.collectors_k),
                 json_entry("redundant_send_r", caps.redundant_send_r),
                 json_entry("da_enabled", caps.da_enabled),
-                json_entry("require_execution_qc", caps.require_execution_qc),
-                json_entry("require_wsv_exec_qc", caps.require_wsv_exec_qc),
                 json_entry("rbc_chunk_max_bytes", caps.rbc_chunk_max_bytes),
                 json_entry("rbc_session_ttl_ms", caps.rbc_session_ttl_ms),
                 json_entry("rbc_store_max_sessions", caps.rbc_store_max_sessions),
@@ -20388,7 +20372,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("view_change_causes", view_change_causes),
         json_entry("highest_qc", highest_qc),
         json_entry("locked_qc", locked_qc),
-        json_entry("commit_certificate", commit_certificate),
+        json_entry("commit_qc", commit_qc),
         json_entry("commit_quorum", commit_quorum),
         json_entry("tx_queue", tx_queue),
         json_entry("worker_loop", worker_loop),
@@ -20715,13 +20699,13 @@ mod status_tests {
     }
 
     #[test]
-    fn status_snapshot_json_includes_commit_certificate_and_quorum() {
+    fn status_snapshot_json_includes_commit_qc_and_quorum() {
         let block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x44; Hash::LENGTH]));
         let validator_set = vec![PeerId::new(KeyPair::random().public_key().clone())];
         let validator_set_hash = HashOf::new(&validator_set);
         let snap = sumeragi::StatusSnapshot {
-            commit_certificate: sumeragi::status::CommitCertificateSnapshot {
+            commit_qc: sumeragi::status::QcSnapshot {
                 height: 7,
                 view: 2,
                 epoch: 1,
@@ -20744,22 +20728,22 @@ mod status_tests {
         };
 
         let payload = status_snapshot_json(&snap);
-        let commit_certificate = payload
-            .get("commit_certificate")
+        let commit_qc = payload
+            .get("commit_qc")
             .and_then(Value::as_object)
-            .expect("commit_certificate object");
+            .expect("commit_qc object");
         assert_eq!(
-            commit_certificate.get("block_hash").and_then(Value::as_str),
+            commit_qc.get("block_hash").and_then(Value::as_str),
             Some(format!("{block_hash}").as_str())
         );
         assert_eq!(
-            commit_certificate
+            commit_qc
                 .get("validator_set_hash")
                 .and_then(Value::as_str),
             Some(format!("{validator_set_hash}").as_str())
         );
         assert_eq!(
-            commit_certificate
+            commit_qc
                 .get("signatures_total")
                 .and_then(Value::as_u64),
             Some(3)
@@ -20984,8 +20968,6 @@ mod status_tests {
                 collectors_k: 4,
                 redundant_send_r: 2,
                 da_enabled: true,
-                require_execution_qc: true,
-                require_wsv_exec_qc: false,
                 rbc_chunk_max_bytes: 8_192,
                 rbc_session_ttl_ms: 10_000,
                 rbc_store_max_sessions: 64,
@@ -21006,10 +20988,6 @@ mod status_tests {
             Some(2)
         );
         assert_eq!(caps.get("da_enabled").and_then(Value::as_bool), Some(true));
-        assert_eq!(
-            caps.get("require_execution_qc").and_then(Value::as_bool),
-            Some(true)
-        );
         assert_eq!(
             caps.get("rbc_store_max_bytes").and_then(Value::as_u64),
             Some(65_536)
@@ -21298,19 +21276,28 @@ mod status_tests {
                 timestamp_ms: 1_700_000_000_456,
             }],
         };
-        let execution_qc = ExecutionQcRecord {
+        let validator_set: Vec<PeerId> = Vec::new();
+        let commit_qc = iroha_data_model::consensus::Qc {
+            phase: iroha_core::sumeragi::consensus::Phase::Commit,
             subject_block_hash: header.hash(),
             parent_state_root: Hash::prehashed([0x32; Hash::LENGTH]),
             post_state_root: Hash::prehashed([0x33; Hash::LENGTH]),
             height: header.height().get(),
             view: 3,
             epoch: 1,
-            signers_bitmap: vec![0b1010_0001],
-            bls_aggregate_signature: vec![0xEF; 48],
+            mode_tag: iroha_core::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: iroha_data_model::consensus::QcAggregate {
+                signers_bitmap: vec![0b1010_0001],
+                bls_aggregate_signature: vec![0xEF; 48],
+            },
         };
         let envelope = LaneRelayEnvelope::new(
             header.clone(),
-            Some(execution_qc.clone()),
+            Some(commit_qc.clone()),
             da_hash,
             settlement.clone(),
             1_024,
@@ -21361,16 +21348,16 @@ mod status_tests {
                 .expect("lane id"),
             u64::from(envelope.settlement_commitment.lane_id)
         );
-        let execution_qc_json = relay
-            .get("execution_qc")
+        let commit_qc_json = relay
+            .get("commit_qc")
             .and_then(Value::as_object)
-            .expect("execution qc object");
+            .expect("commit qc object");
         assert_eq!(
-            execution_qc_json
+            commit_qc_json
                 .get("height")
                 .and_then(Value::as_u64)
                 .expect("qc height"),
-            execution_qc.height
+            commit_qc.height
         );
     }
 
@@ -21611,8 +21598,6 @@ pub async fn handle_v1_sumeragi_status(
                     collectors_k: caps.collectors_k,
                     redundant_send_r: caps.redundant_send_r,
                     da_enabled: caps.da_enabled,
-                    require_execution_qc: caps.require_execution_qc,
-                    require_wsv_exec_qc: caps.require_wsv_exec_qc,
                     rbc_chunk_max_bytes: caps.rbc_chunk_max_bytes,
                     rbc_session_ttl_ms: caps.rbc_session_ttl_ms,
                     rbc_store_max_sessions: caps.rbc_store_max_sessions,
@@ -21627,14 +21612,14 @@ pub async fn handle_v1_sumeragi_status(
             locked_qc_height: snap.locked_qc_height,
             locked_qc_view: snap.locked_qc_view,
             locked_qc_subject: snap.locked_qc_subject,
-            commit_certificate: SumeragiCommitCertificateStatus {
-                height: snap.commit_certificate.height,
-                view: snap.commit_certificate.view,
-                epoch: snap.commit_certificate.epoch,
-                block_hash: snap.commit_certificate.block_hash,
-                validator_set_hash: snap.commit_certificate.validator_set_hash,
-                validator_set_len: snap.commit_certificate.validator_set_len,
-                signatures_total: snap.commit_certificate.signatures_total,
+            commit_qc: SumeragiQcStatus {
+                height: snap.commit_qc.height,
+                view: snap.commit_qc.view,
+                epoch: snap.commit_qc.epoch,
+                block_hash: snap.commit_qc.block_hash,
+                validator_set_hash: snap.commit_qc.validator_set_hash,
+                validator_set_len: snap.commit_qc.validator_set_len,
+                signatures_total: snap.commit_qc.signatures_total,
             },
             commit_quorum: SumeragiCommitQuorumStatus {
                 height: snap.commit_quorum.height,
@@ -21711,11 +21696,11 @@ pub async fn handle_v1_sumeragi_status(
                 last_timestamp_ms: snap.peer_key_policy.last_timestamp_ms,
             },
             block_sync_roster: SumeragiBlockSyncRosterStatus {
-                commit_certificate_hint_total: snap.block_sync_roster.commit_certificate_hint_total,
+                commit_qc_hint_total: snap.block_sync_roster.commit_qc_hint_total,
                 checkpoint_hint_total: snap.block_sync_roster.checkpoint_hint_total,
-                commit_certificate_history_total: snap
+                commit_qc_history_total: snap
                     .block_sync_roster
-                    .commit_certificate_history_total,
+                    .commit_qc_history_total,
                 checkpoint_history_total: snap.block_sync_roster.checkpoint_history_total,
                 roster_sidecar_total: snap.block_sync_roster.roster_sidecar_total,
                 commit_roster_journal_total: snap.block_sync_roster.commit_roster_journal_total,
@@ -22734,9 +22719,9 @@ pub async fn handle_v1_sumeragi_rbc_delivered_height_view(
     Ok(resp)
 }
 
-/// GET /v1/sumeragi/exec_root/{hash} — return execution post-state root for a block hash (if present)
+/// GET /v1/sumeragi/commit_qc/{hash} — return full commit QC record for a block hash (if present)
 #[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_exec_root(
+pub async fn handle_v1_sumeragi_commit_qc(
     State(state): State<std::sync::Arc<CoreState>>,
     axum::extract::Path(hash_hex): axum::extract::Path<String>,
     accept: Option<axum::http::HeaderValue>,
@@ -22750,85 +22735,48 @@ pub async fn handle_v1_sumeragi_exec_root(
     })?;
     let typed = iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(parsed);
     let view = state.view();
-    let root_opt = view.world.exec_roots().get(&typed);
-    let exec_root_opt = root_opt.copied();
+    let qc_opt = view.world.commit_qcs().get(&typed).cloned();
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
 
     if matches!(format, crate::utils::ResponseFormat::Norito) {
-        let wire = ExecRootWire {
-            block_hash: typed,
-            exec_root: exec_root_opt.clone(),
-        };
-        return Ok(crate::NoritoBody(wire).into_response());
+        return Ok(crate::NoritoBody(qc_opt).into_response());
     }
-    let payload = match exec_root_opt {
-        Some(r) => crate::json_object(vec![
-            json_entry("block_hash", hash_hex.clone()),
-            json_entry("exec_root", format!("{r}")),
-        ]),
-        None => crate::json_object(vec![
-            json_entry("block_hash", hash_hex.clone()),
-            json_entry("exec_root", Value::Null),
-        ]),
-    };
-    let body = norito::json::to_json_pretty(&payload).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-/// GET /v1/sumeragi/exec_qc/{hash} — return full ExecutionQC record for a block hash (if present)
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_exec_qc(
-    State(state): State<std::sync::Arc<CoreState>>,
-    axum::extract::Path(hash_hex): axum::extract::Path<String>,
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    use core::str::FromStr as _;
-    let parsed = iroha_crypto::Hash::from_str(&hash_hex).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "invalid hash: {}",
-            e
-        )))
-    })?;
-    let typed = iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(parsed);
-    let view = state.view();
-    let rec_opt = view.world.exec_qcs().get(&typed);
-    let record_opt = rec_opt.cloned();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-
-    if matches!(format, crate::utils::ResponseFormat::Norito) {
-        return Ok(crate::NoritoBody(record_opt).into_response());
-    }
-    let payload = match record_opt.as_ref() {
-        Some(r) => crate::json_object(vec![
-            json_entry("subject_block_hash", hash_hex.clone()),
-            json_entry("post_state_root", format!("{}", r.post_state_root)),
-            json_entry("height", r.height),
-            json_entry("view", r.view),
-            json_entry("epoch", r.epoch),
-            json_entry("signers_bitmap", hex::encode(&r.signers_bitmap)),
-            json_entry(
-                "bls_aggregate_signature",
-                hex::encode(&r.bls_aggregate_signature),
-            ),
-        ]),
+    let payload = match qc_opt.as_ref() {
+        Some(qc) => {
+            let validator_set = norito::json::Value::Array(
+                qc.validator_set
+                    .iter()
+                    .map(|peer| norito::json::Value::from(peer.to_string()))
+                    .collect(),
+            );
+            let commit_qc = crate::json_object(vec![
+                json_entry("phase", format!("{:?}", qc.phase)),
+                json_entry("parent_state_root", format!("{}", qc.parent_state_root)),
+                json_entry("post_state_root", format!("{}", qc.post_state_root)),
+                json_entry("height", qc.height),
+                json_entry("view", qc.view),
+                json_entry("epoch", qc.epoch),
+                json_entry("mode_tag", qc.mode_tag.clone()),
+                json_entry("validator_set_hash", format!("{}", qc.validator_set_hash)),
+                json_entry("validator_set_hash_version", qc.validator_set_hash_version),
+                json_entry("validator_set", validator_set),
+                json_entry("signers_bitmap", hex::encode(&qc.aggregate.signers_bitmap)),
+                json_entry(
+                    "bls_aggregate_signature",
+                    hex::encode(&qc.aggregate.bls_aggregate_signature),
+                ),
+            ]);
+            crate::json_object(vec![
+                json_entry("subject_block_hash", hash_hex.clone()),
+                json_entry("commit_qc", commit_qc),
+            ])
+        }
         None => crate::json_object(vec![
             json_entry("subject_block_hash", hash_hex.clone()),
-            json_entry("exec_qc", Value::Null),
+            json_entry("commit_qc", norito::json::Value::Null),
         ]),
     };
     let body = norito::json::to_json_pretty(&payload).map_err(|e| {

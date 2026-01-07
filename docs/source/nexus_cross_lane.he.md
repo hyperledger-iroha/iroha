@@ -74,7 +74,7 @@ Receipts יורשים את כללי התמחור הדטרמיניסטיים מ-`
 ### `LaneRelayEnvelope`
 
 `LaneRelayEnvelope` (ראו `crates/iroha_data_model/src/nexus/relay.rs`) אורז את ה-`BlockHeader` של
-ה-lane, `ExecutionQcRecord` אופציונלי, hash אופציונלי של `DaCommitmentBundle`, את
+ה-lane, `commit QC (`Qc`)` אופציונלי, hash אופציונלי של `DaCommitmentBundle`, את
 `LaneBlockCommitment` המלא, ואת מונה הבייטים של RBC לכל lane. המעטפה שומרת
 `settlement_hash` שמופק מ-Norito (דרך `compute_settlement_hash`) כדי שמקבלים יוכלו לאמת את
 payload ה-settlement לפני העברה ל-merge ledger. יש לדחות מעטפות כאשר `verify` נכשל

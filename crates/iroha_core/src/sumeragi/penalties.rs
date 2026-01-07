@@ -7,7 +7,7 @@ use iroha_config::parameters::actual::{ConsensusMode, Sumeragi as SumeragiConfig
 use iroha_crypto::Hash;
 use iroha_data_model::{
     block::consensus::{Evidence, EvidencePayload, EvidenceRecord},
-    consensus::{CommitCertificate, ValidatorSetCheckpoint, VrfEpochRecord},
+    consensus::{Qc, ValidatorSetCheckpoint, VrfEpochRecord},
     nexus::{LaneId, PublicLaneValidatorStatus},
     prelude::{AccountId, PeerId},
     transaction::TransactionSubmissionReceipt,
@@ -174,7 +174,7 @@ impl<'a> PenaltyApplier<'a> {
 
         let lane_config = self.state.nexus_snapshot().lane_config.clone();
 
-        let commit_certs = crate::sumeragi::status::commit_certificate_history();
+        let commit_certs = crate::sumeragi::status::commit_qc_history();
         let checkpoints = crate::sumeragi::status::validator_checkpoint_history();
         for (key, mut record) in pending {
             let consensus_mode = consensus_mode_for_evidence(
@@ -351,7 +351,7 @@ impl<'a> PenaltyApplier<'a> {
 fn roster_for_evidence(
     state: &State,
     evidence: &Evidence,
-    commit_certs: &[CommitCertificate],
+    commit_certs: &[Qc],
     checkpoints: &[ValidatorSetCheckpoint],
 ) -> Option<Vec<PeerId>> {
     let refs = super::evidence::evidence_block_refs(evidence);
@@ -496,9 +496,8 @@ fn censorship_anchor_height(
 fn evidence_epoch(evidence: &Evidence, recorded_at_height: u64, epoch_length_blocks: u64) -> u64 {
     match &evidence.payload {
         EvidencePayload::DoubleVote { v1, .. } => v1.epoch,
-        EvidencePayload::DoubleExecVote { v1, .. } => v1.epoch,
         EvidencePayload::InvalidProposal { proposal, .. } => proposal.header.epoch,
-        EvidencePayload::InvalidCommitCertificate { certificate, .. } => certificate.epoch,
+        EvidencePayload::InvalidQc { certificate, .. } => certificate.epoch,
         EvidencePayload::Censorship { receipts, .. } => {
             let Some(anchor) = censorship_anchor_height(receipts, recorded_at_height) else {
                 return 0;
@@ -524,14 +523,6 @@ fn offender_indices(
             consensus_mode,
             prf_seed,
         ),
-        EvidencePayload::DoubleExecVote { v1, .. } => canonicalize_indices_for_view(
-            [v1.signer],
-            v1.height,
-            v1.view,
-            topology_len,
-            consensus_mode,
-            prf_seed,
-        ),
         EvidencePayload::InvalidProposal { proposal, .. } => canonicalize_indices_for_view(
             [proposal.header.proposer],
             proposal.header.height,
@@ -540,7 +531,7 @@ fn offender_indices(
             consensus_mode,
             prf_seed,
         ),
-        EvidencePayload::InvalidCommitCertificate { certificate, .. } => {
+        EvidencePayload::InvalidQc { certificate, .. } => {
             canonicalize_indices_for_view(
                 bitmap_indices(&certificate.aggregate.signers_bitmap),
                 certificate.height,
@@ -561,12 +552,11 @@ fn offender_indices(
 
 fn evidence_has_legitimate_empty_offenders(evidence: &Evidence) -> bool {
     match &evidence.payload {
-        EvidencePayload::InvalidCommitCertificate { certificate, .. } => {
+        EvidencePayload::InvalidQc { certificate, .. } => {
             bitmap_indices(&certificate.aggregate.signers_bitmap).is_empty()
         }
         EvidencePayload::Censorship { .. }
         | EvidencePayload::DoubleVote { .. }
-        | EvidencePayload::DoubleExecVote { .. }
         | EvidencePayload::InvalidProposal { .. } => false,
     }
 }
@@ -653,7 +643,7 @@ mod tests {
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::consensus::{Evidence, EvidenceKind, EvidencePayload, EvidenceRecord},
         common::Owned,
-        consensus::{CommitCertificate, ValidatorSetCheckpoint, VrfEpochRecord},
+        consensus::{Qc, ValidatorSetCheckpoint, VrfEpochRecord},
         domain::Domain,
         nexus::{LaneCatalog, LaneConfig},
         parameter::system::SumeragiConsensusMode,
@@ -668,7 +658,7 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, World},
         sumeragi::{
-            consensus::{CommitAggregate, PERMISSIONED_TAG, Phase, Qc, Vote},
+            consensus::{QcAggregate, PERMISSIONED_TAG, Phase, Vote},
             evidence::evidence_key,
         },
         telemetry::StateTelemetry,
@@ -735,9 +725,7 @@ mod tests {
             proof_policy: ProofPolicy::Off,
             commit_cert_history_cap: 0,
             zk_finality_k: 0,
-            require_execution_qc: false,
             require_precommit_qc: false,
-            require_wsv_exec_qc: false,
             rbc_chunk_max_bytes: 0,
             rbc_pending_max_chunks: 0,
             rbc_pending_max_bytes: 0,
@@ -816,18 +804,20 @@ mod tests {
     }
 
     fn record_roster_history(height: u64, block_hash: HashOf<BlockHeader>, roster: Vec<PeerId>) {
-        let commit_cert = CommitCertificate {
+        let commit_cert = Qc {
             phase: Phase::Commit,
             subject_block_hash: block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height,
             view: 0,
             epoch: 0,
             mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: Vec::new(),
                 bls_aggregate_signature: Vec::new(),
             },
@@ -841,7 +831,7 @@ mod tests {
             iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             None,
         );
-        crate::sumeragi::status::record_commit_certificate(commit_cert);
+        crate::sumeragi::status::record_commit_qc(commit_cert);
         crate::sumeragi::status::record_validator_checkpoint(checkpoint);
     }
 
@@ -858,7 +848,7 @@ mod tests {
                 height: 2,
                 view: 1,
                 epoch: 0,
-                highest_cert: iroha_data_model::block::consensus::CommitCertificateRef {
+                highest_qc: iroha_data_model::block::consensus::QcRef {
                     height: 1,
                     view: 0,
                     epoch: 0,
@@ -1106,23 +1096,25 @@ mod tests {
             subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
                 [0x11; Hash::LENGTH],
             )),
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 1,
             epoch: 0,
             mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: Vec::new(),
                 bls_aggregate_signature: Vec::new(),
             },
         };
         record_roster_history(qc.height, qc.subject_block_hash, roster);
         let evidence = Evidence {
-            kind: EvidenceKind::InvalidCommitCertificate,
-            payload: EvidencePayload::InvalidCommitCertificate {
+            kind: EvidenceKind::InvalidQc,
+            payload: EvidencePayload::InvalidQc {
                 certificate: qc,
                 reason: "empty bitmap".to_owned(),
             },
@@ -1179,10 +1171,12 @@ mod tests {
         let v1 = Vote {
             phase: Phase::Prepare,
             block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 2,
             view: 1,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
@@ -1243,10 +1237,12 @@ mod tests {
         let v1 = Vote {
             phase: Phase::Prepare,
             block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 3,
             view: 1,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
@@ -1309,10 +1305,12 @@ mod tests {
         let v1 = Vote {
             phase: Phase::Prepare,
             block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 4,
             view: 1,
             epoch: 1,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
@@ -1503,10 +1501,12 @@ mod tests {
         let v1 = Vote {
             phase: Phase::Prepare,
             block_hash: block_hash_a,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 5,
             view: 0,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
@@ -1549,10 +1549,12 @@ mod tests {
         let v1 = Vote {
             phase: Phase::Prepare,
             block_hash: block_hash_a,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 0,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
@@ -1585,18 +1587,20 @@ mod tests {
         let block_hash_b =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB0; Hash::LENGTH]));
 
-        let commit_cert = CommitCertificate {
+        let commit_cert = Qc {
             phase: Phase::Commit,
             subject_block_hash: block_hash_b,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height,
             view: 0,
             epoch: 0,
             mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: Vec::new(),
                 bls_aggregate_signature: Vec::new(),
             },
@@ -1610,16 +1614,18 @@ mod tests {
             iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             None,
         );
-        crate::sumeragi::status::record_commit_certificate(commit_cert);
+        crate::sumeragi::status::record_commit_qc(commit_cert);
         crate::sumeragi::status::record_validator_checkpoint(checkpoint);
 
         let v1 = Vote {
             phase: Phase::Prepare,
             block_hash: block_hash_a,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height,
             view: 0,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
@@ -1630,7 +1636,7 @@ mod tests {
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
 
-        let commit_certs = crate::sumeragi::status::commit_certificate_history();
+        let commit_certs = crate::sumeragi::status::commit_qc_history();
         let checkpoints = crate::sumeragi::status::validator_checkpoint_history();
         let resolved = super::roster_for_evidence(&state, &evidence, &commit_certs, &checkpoints)
             .expect("roster resolved");

@@ -1,6 +1,20 @@
 # Status
 
 ## Latest Updates
+- Consensus fixtures: add parent/post state roots to Qc/QcVote test builders and align Torii consensus vote helpers with current vote fields.
+- Tests: not run (not requested).
+- Sumeragi: thread parent/post state roots through precommit signer records, derived QCs, and checkpoint verification; update block-sync/test helpers accordingly.
+- Tests: not run (not requested).
+- Torii tests: rename commit QC endpoint test file to match commit QC naming.
+- Tests: not run (not requested).
+- Data model: remove the duplicate `DecodeFromSlice` shim for `Qc` to resolve the conflicting impl with the consensus codec bridge.
+- Tests: not run (not requested).
+- Docs: label the transaction pipeline as Iroha v1 and remove prior-version wording about no-std support.
+- Tests: not run (not requested).
+- Sumeragi: remove ExecQC/exec-root surfaces, unify commit QC with state roots, update clients/tests/docs, and add the `/v1/sumeragi/commit_qc/{hash}` endpoint.
+- Tests: not run (not requested).
+- Sumeragi: capture exec roots during pre-vote validation, store them with pending blocks, and add coverage for root capture/reset.
+- Tests: not run (not requested).
 - Maintenance: resolve merge conflicts in `status.md` and `roadmap.md`.
 - Tests: not run (not requested).
 - Sumeragi: retry missing-block fetches on tick with backoff + view-change triggers, skip quorum reschedules when commit QCs are cached, and mark rehydrated pending blocks as commit-certified; add coverage.
@@ -988,7 +1002,7 @@
 - Tests: `cargo test -p iroha tx_confirmation_stream_tests::final_confirmation_errors_skip_fallback -- --nocapture` (timed out after 120s while compiling `iroha`).
 - Resolved merge conflict markers in `status.md`.
 - Tests: not run (merge resolution only).
-- Standardized IVM header major to v1 across parser/admission paths, compiler outputs, fixtures, and shipped `.to` artifacts; refreshed header/docs references to drop v2.
+- Standardized IVM header major to v1 across parser/admission paths, compiler outputs, fixtures, and shipped `.to` artifacts; refreshed header/docs references to remove prior-version mentions.
 - Tests: not run (not requested).
 - Hardened IVM DIV_CEIL/GCD against i64::MIN overflow for deterministic behavior and added regression coverage for the edge cases.
 - Tests: `cargo test --workspace` (timed out after 10m during compile; warnings about unused imports/assignments in several crates).

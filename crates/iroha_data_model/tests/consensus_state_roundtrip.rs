@@ -1,10 +1,14 @@
 //! Encode/decode roundtrip tests for consensus persistence records.
 use core::convert::TryFrom;
 
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    block::BlockHeader,
-    consensus::{ExecutionQcRecord, VrfEpochRecord, VrfLateRevealRecord, VrfParticipantRecord},
+    block::{
+        BlockHeader,
+        consensus::{CertPhase, Qc, QcAggregate, PERMISSIONED_TAG},
+    },
+    consensus::{VrfEpochRecord, VrfLateRevealRecord, VrfParticipantRecord},
+    peer::PeerId,
 };
 use norito::codec::{Decode, Encode};
 
@@ -33,18 +37,30 @@ where
 }
 
 #[test]
-fn execution_qc_record_roundtrip() {
-    let record = ExecutionQcRecord {
+fn qc_roundtrip() {
+    let validator_set = vec![
+        PeerId::from(KeyPair::random().public_key().clone()),
+        PeerId::from(KeyPair::random().public_key().clone()),
+    ];
+    let qc = Qc {
+        phase: CertPhase::Commit,
         subject_block_hash: sample_block_hash(0x10),
         parent_state_root: sample_hash(0x11),
         post_state_root: sample_hash(0x20),
         height: 42,
         view: 7,
         epoch: 3,
-        signers_bitmap: vec![0xAA, 0x55],
-        bls_aggregate_signature: vec![0x90, 0x91, 0x92, 0x93],
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set_hash_version: 1,
+        validator_set,
+        aggregate: QcAggregate {
+            signers_bitmap: vec![0xAA, 0x55],
+            bls_aggregate_signature: vec![0x90, 0x91, 0x92, 0x93],
+        },
     };
-    assert_roundtrip(&record);
+    assert_roundtrip(&qc);
 }
 
 #[test]

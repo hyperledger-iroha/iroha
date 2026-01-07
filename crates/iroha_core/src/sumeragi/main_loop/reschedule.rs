@@ -86,7 +86,7 @@ impl Actor {
                 continue;
             }
             let (vote_count, quorum_reached) =
-                if pending.commit_certificate_seen || commit_qc_cached {
+                if pending.commit_qc_seen || commit_qc_cached {
                 (0, true)
             } else {
                 self.commit_vote_quorum_status_for_block(*hash, pending.height, pending.view)
@@ -111,7 +111,6 @@ impl Actor {
                 .retain(|(_, qc_hash, _, _, _), _| qc_hash != &hash);
             self.qc_signer_tally
                 .retain(|(_, qc_hash, _, _, _), _| qc_hash != &hash);
-            self.execution_qc_cache.remove(&hash);
             stale_removed = stale_removed.saturating_add(1);
         }
 
@@ -157,7 +156,7 @@ impl Actor {
                     });
                 }
                 if let Some(qc) = qc {
-                    let msg = BlockMessage::CommitCertificate(qc.clone());
+                    let msg = BlockMessage::Qc(qc.clone());
                     for peer in commit_topology.as_ref() {
                         if peer == &local_peer_id {
                             continue;
@@ -176,7 +175,6 @@ impl Actor {
                     .retain(|(_, qc_hash, _, _, _), _| qc_hash != &key.0);
                 self.qc_signer_tally
                     .retain(|(_, qc_hash, _, _, _), _| qc_hash != &key.0);
-                self.execution_qc_cache.remove(&key.0);
                 if let Some(highest) = self.highest_qc {
                     if highest.subject_block_hash == key.0
                         && highest.height == key.1
@@ -340,9 +338,6 @@ impl Actor {
                         || (keep_commit_qc
                             && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
                 });
-            if !keep_commit_qc {
-                self.execution_qc_cache.remove(&block_hash);
-            }
         } else {
             // Keep the pending block and cached certificates so late commit certificates
             // can still finalize it.

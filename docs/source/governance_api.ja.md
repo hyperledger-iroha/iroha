@@ -185,9 +185,9 @@ use iroha_data_model::block::consensus::EvidenceKind;
 let offences = [
     EvidenceKind::DoublePrepare,
     EvidenceKind::DoubleCommit,
-    EvidenceKind::InvalidCommitCertificate,
+    EvidenceKind::InvalidQc,
     EvidenceKind::InvalidProposal,
-    EvidenceKind::DoubleExecVote,
+    EvidenceKind::Censorship,
 ];
 
 for (expected, kind) in offences.iter().enumerate() {

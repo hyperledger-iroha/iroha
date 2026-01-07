@@ -12,7 +12,7 @@ use thiserror::Error;
 use crate::{
     AccountId,
     block::{BlockHeader, consensus::LaneBlockCommitment},
-    consensus::ExecutionQcRecord,
+    consensus::Qc,
     da::commitment::DaCommitmentBundle,
     nexus::{DataSpaceId, LaneId},
     prelude::Metadata,
@@ -33,9 +33,9 @@ pub struct LaneRelayEnvelope {
     pub block_height: u64,
     /// Full lane block header being relayed.
     pub block_header: BlockHeader,
-    /// Execution QC attesting to the block header (when available).
+    /// QC attesting to the block header (when available).
     #[norito(default)]
-    pub execution_qc: Option<ExecutionQcRecord>,
+    pub qc: Option<Qc>,
     /// Optional hash of the DA commitment bundle for the block payload.
     #[norito(default)]
     pub da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
@@ -137,15 +137,15 @@ impl LaneRelayEnvelope {
     ///
     /// # Errors
     ///
-    /// Returns [`LaneRelayError::ExecutionQcSubjectMismatch`] if the optional execution QC
-    /// does not certify the provided block header, [`LaneRelayError::ExecutionQcHeightMismatch`]
+    /// Returns [`LaneRelayError::QcSubjectMismatch`] if the optional QC
+    /// does not certify the provided block header, [`LaneRelayError::QcHeightMismatch`]
     /// when the QC height diverges from the block, [`LaneRelayError::DaCommitmentHashMismatch`]
     /// when the DA commitment hash differs from the header, [`LaneRelayError::SettlementBlockHeightMismatch`]
     /// when the settlement commitment height does not match the header, or [`LaneRelayError::Encode`]
     /// if hashing the settlement commitment fails.
     pub fn new(
         block_header: BlockHeader,
-        execution_qc: Option<ExecutionQcRecord>,
+        qc: Option<Qc>,
         da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
         settlement_commitment: LaneBlockCommitment,
         rbc_bytes_total: u64,
@@ -157,15 +157,15 @@ impl LaneRelayEnvelope {
             return Err(LaneRelayError::SettlementBlockHeightMismatch);
         }
 
-        if let Some(qc) = execution_qc.as_ref()
+        if let Some(qc) = qc.as_ref()
             && qc.subject_block_hash != block_header.hash()
         {
-            return Err(LaneRelayError::ExecutionQcSubjectMismatch);
+            return Err(LaneRelayError::QcSubjectMismatch);
         }
-        if let Some(qc) = execution_qc.as_ref()
+        if let Some(qc) = qc.as_ref()
             && qc.height != block_height
         {
-            return Err(LaneRelayError::ExecutionQcHeightMismatch);
+            return Err(LaneRelayError::QcHeightMismatch);
         }
 
         if block_header.da_commitments_hash() != da_commitment_hash {
@@ -177,7 +177,7 @@ impl LaneRelayEnvelope {
             dataspace_id: settlement_commitment.dataspace_id,
             block_height,
             block_header,
-            execution_qc,
+            qc,
             da_commitment_hash,
             settlement_commitment,
             settlement_hash,
@@ -186,11 +186,11 @@ impl LaneRelayEnvelope {
         })
     }
 
-    /// Validate execution QC subject, DA commitment hash, and settlement hash.
+    /// Validate QC subject, DA commitment hash, and settlement hash.
     ///
     /// # Errors
     ///
-    /// Propagates [`LaneRelayError::ExecutionQcSubjectMismatch`], [`LaneRelayError::ExecutionQcHeightMismatch`],
+    /// Propagates [`LaneRelayError::QcSubjectMismatch`], [`LaneRelayError::QcHeightMismatch`],
     /// [`LaneRelayError::DaCommitmentHashMismatch`], [`LaneRelayError::SettlementBlockHeightMismatch`],
     /// [`LaneRelayError::BlockHeightMismatch`], [`LaneRelayError::SettlementLaneMismatch`],
     /// [`LaneRelayError::SettlementDataspaceMismatch`], or [`LaneRelayError::SettlementHashMismatch`]
@@ -208,15 +208,15 @@ impl LaneRelayEnvelope {
         if self.settlement_commitment.dataspace_id != self.dataspace_id {
             return Err(LaneRelayError::SettlementDataspaceMismatch);
         }
-        if let Some(qc) = self.execution_qc.as_ref()
+        if let Some(qc) = self.qc.as_ref()
             && qc.subject_block_hash != self.block_header.hash()
         {
-            return Err(LaneRelayError::ExecutionQcSubjectMismatch);
+            return Err(LaneRelayError::QcSubjectMismatch);
         }
-        if let Some(qc) = self.execution_qc.as_ref()
+        if let Some(qc) = self.qc.as_ref()
             && qc.height != self.block_height
         {
-            return Err(LaneRelayError::ExecutionQcHeightMismatch);
+            return Err(LaneRelayError::QcHeightMismatch);
         }
         if self.block_header.da_commitments_hash() != self.da_commitment_hash {
             return Err(LaneRelayError::DaCommitmentHashMismatch);
@@ -229,7 +229,7 @@ impl LaneRelayEnvelope {
     /// # Errors
     ///
     /// In addition to the checks performed by [`Self::verify`], this surfaces
-    /// [`LaneRelayError::MissingExecutionQc`] when the envelope lacks an execution QC,
+    /// [`LaneRelayError::MissingQc`] when the envelope lacks a QC,
     /// [`LaneRelayError::InvalidValidatorSet`] for malformed quorum parameters,
     /// [`LaneRelayError::SignerBitmapLengthMismatch`] when the signer bitmap length does not match the roster size,
     /// [`LaneRelayError::InvalidSignerIndex`] if the signer bitmap references out-of-range validators,
@@ -239,21 +239,18 @@ impl LaneRelayEnvelope {
         quorum.ensure_valid()?;
         self.verify()?;
 
-        let qc = self
-            .execution_qc
-            .as_ref()
-            .ok_or(LaneRelayError::MissingExecutionQc)?;
+        let qc = self.qc.as_ref().ok_or(LaneRelayError::MissingQc)?;
         let expected_len = usize::try_from(quorum.validator_count)
             .unwrap_or(usize::MAX)
             .div_ceil(8);
-        if qc.signers_bitmap.len() != expected_len {
+        if qc.aggregate.signers_bitmap.len() != expected_len {
             return Err(LaneRelayError::SignerBitmapLengthMismatch {
                 expected: expected_len,
-                actual: qc.signers_bitmap.len(),
+                actual: qc.aggregate.signers_bitmap.len(),
             });
         }
         let mut observed: u32 = 0;
-        for (byte_index, byte) in qc.signers_bitmap.iter().enumerate() {
+        for (byte_index, byte) in qc.aggregate.signers_bitmap.iter().enumerate() {
             if *byte == 0 {
                 continue;
             }
@@ -280,8 +277,12 @@ impl LaneRelayEnvelope {
             });
         }
 
-        if qc.bls_aggregate_signature.is_empty()
-            || qc.bls_aggregate_signature.iter().all(|byte| *byte == 0)
+        if qc.aggregate.bls_aggregate_signature.is_empty()
+            || qc
+                .aggregate
+                .bls_aggregate_signature
+                .iter()
+                .all(|byte| *byte == 0)
         {
             return Err(LaneRelayError::AggregateSignatureInvalid);
         }
@@ -374,12 +375,12 @@ pub enum LaneRelayError {
     /// Settlement commitment dataspace identifier differs from the envelope dataspace id.
     #[error("settlement commitment dataspace id does not match envelope dataspace id")]
     SettlementDataspaceMismatch,
-    /// Execution QC does not certify the relayed block header.
-    #[error("execution QC subject hash does not match block header hash")]
-    ExecutionQcSubjectMismatch,
-    /// Execution QC height does not match the relayed block height.
-    #[error("execution QC height does not match block header height")]
-    ExecutionQcHeightMismatch,
+    /// QC does not certify the relayed block header.
+    #[error("QC subject hash does not match block header hash")]
+    QcSubjectMismatch,
+    /// QC height does not match the relayed block height.
+    #[error("QC height does not match block header height")]
+    QcHeightMismatch,
     /// DA commitment hash in the envelope does not match the block header.
     #[error("DA commitment hash in envelope does not match block header")]
     DaCommitmentHashMismatch,
@@ -394,9 +395,9 @@ pub enum LaneRelayError {
         /// Required quorum size.
         min_quorum: u32,
     },
-    /// Execution QC is missing while quorum validation is requested.
-    #[error("execution QC missing for relay envelope")]
-    MissingExecutionQc,
+    /// QC is missing while quorum validation is requested.
+    #[error("QC missing for relay envelope")]
+    MissingQc,
     /// Signer bitmap length does not match expected roster size.
     #[error("signer bitmap length {actual} does not match expected {expected}")]
     SignerBitmapLengthMismatch {
@@ -422,7 +423,7 @@ pub enum LaneRelayError {
         expected: u32,
     },
     /// Aggregate signature bytes are missing, zeroed, or invalid.
-    #[error("aggregate signature missing or invalid for execution QC")]
+    #[error("aggregate signature missing or invalid for QC")]
     AggregateSignatureInvalid,
 }
 
@@ -436,10 +437,10 @@ impl PartialEq for LaneRelayError {
             | (BlockHeightMismatch, BlockHeightMismatch)
             | (SettlementLaneMismatch, SettlementLaneMismatch)
             | (SettlementDataspaceMismatch, SettlementDataspaceMismatch)
-            | (ExecutionQcSubjectMismatch, ExecutionQcSubjectMismatch)
-            | (ExecutionQcHeightMismatch, ExecutionQcHeightMismatch)
+            | (QcSubjectMismatch, QcSubjectMismatch)
+            | (QcHeightMismatch, QcHeightMismatch)
             | (DaCommitmentHashMismatch, DaCommitmentHashMismatch)
-            | (MissingExecutionQc, MissingExecutionQc)
+            | (MissingQc, MissingQc)
             | (AggregateSignatureInvalid, AggregateSignatureInvalid)
             | (Encode(_), Encode(_)) => true,
             (UnknownLane(a_lane), UnknownLane(b_lane)) => a_lane == b_lane,
@@ -537,11 +538,11 @@ impl LaneRelayError {
             LaneRelayError::BlockHeightMismatch => "block_height_mismatch",
             LaneRelayError::SettlementLaneMismatch => "settlement_lane_mismatch",
             LaneRelayError::SettlementDataspaceMismatch => "settlement_dataspace_mismatch",
-            LaneRelayError::ExecutionQcSubjectMismatch => "execution_qc_subject_mismatch",
-            LaneRelayError::ExecutionQcHeightMismatch => "execution_qc_height_mismatch",
+            LaneRelayError::QcSubjectMismatch => "qc_subject_mismatch",
+            LaneRelayError::QcHeightMismatch => "qc_height_mismatch",
             LaneRelayError::DaCommitmentHashMismatch => "da_commitment_hash_mismatch",
             LaneRelayError::InvalidValidatorSet { .. } => "invalid_validator_set",
-            LaneRelayError::MissingExecutionQc => "missing_execution_qc",
+            LaneRelayError::MissingQc => "missing_qc",
             LaneRelayError::SignerBitmapLengthMismatch { .. } => "signer_bitmap_length_mismatch",
             LaneRelayError::InvalidSignerIndex { .. } => "invalid_signer_index",
             LaneRelayError::InsufficientQuorum { .. } => "insufficient_quorum",
@@ -558,7 +559,11 @@ mod tests {
     use iroha_crypto::{Hash, HashOf};
 
     use super::*;
-    use crate::block::{BlockHeader, consensus::LaneBlockCommitment};
+    use crate::{
+        PeerId,
+        block::{BlockHeader, consensus::LaneBlockCommitment},
+        consensus::{CertPhase, QcAggregate},
+    };
 
     fn sample_commitment(height: u64, lane_id: u32, dataspace_id: u64) -> LaneBlockCommitment {
         LaneBlockCommitment {
@@ -588,22 +593,31 @@ mod tests {
         header
     }
 
-    fn build_envelope(height: u64, qc: Option<ExecutionQcRecord>) -> LaneRelayEnvelope {
+    fn build_envelope(height: u64, qc: Option<Qc>) -> LaneRelayEnvelope {
         let settlement = sample_commitment(height, 3, 2);
         let header = sample_header(height, None);
         LaneRelayEnvelope::new(header, qc, None, settlement, 0).expect("envelope")
     }
 
-    fn qc_with_bitmap(bitmap: Vec<u8>, height: u64, signature: Vec<u8>) -> ExecutionQcRecord {
-        ExecutionQcRecord {
+    fn qc_with_bitmap(bitmap: Vec<u8>, height: u64, signature: Vec<u8>) -> Qc {
+        let validator_set: Vec<PeerId> = Vec::new();
+        Qc {
+            phase: CertPhase::Commit,
             subject_block_hash: sample_header(height, None).hash(),
-            parent_state_root: Hash::new([0xCD; 4]),
-            post_state_root: Hash::new([0xAB; 4]),
+            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
             height,
             view: 1,
             epoch: 0,
-            signers_bitmap: bitmap,
-            bls_aggregate_signature: signature,
+            mode_tag: crate::block::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: 1,
+            validator_set,
+            aggregate: QcAggregate {
+                signers_bitmap: bitmap,
+                bls_aggregate_signature: signature,
+            },
         }
     }
 
@@ -624,7 +638,7 @@ mod tests {
         let quorum = LaneRelayQuorumContext::new(4, 2).expect("quorum");
 
         let err = envelope.verify_with_quorum(quorum).expect_err("qc missing");
-        assert_eq!(err, LaneRelayError::MissingExecutionQc);
+        assert_eq!(err, LaneRelayError::MissingQc);
     }
 
     #[test]

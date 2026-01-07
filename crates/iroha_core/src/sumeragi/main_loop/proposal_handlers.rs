@@ -87,7 +87,7 @@ impl Actor {
         &mut self,
         hint: super::message::ProposalHint,
     ) -> Result<()> {
-        let highest_qc = hint.highest_cert;
+        let highest_qc = hint.highest_qc;
         let height = hint.height;
         let view = hint.view;
         let state_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
@@ -119,22 +119,22 @@ impl Actor {
             let conflict = existing.block_hash != hint.block_hash
                 || existing.height != hint.height
                 || existing.view != hint.view
-                || existing.highest_cert != highest_qc;
+                || existing.highest_qc != highest_qc;
             if conflict {
-                let committed_conflict = usize::try_from(existing.highest_cert.height)
+                let committed_conflict = usize::try_from(existing.highest_qc.height)
                     .ok()
                     .and_then(NonZeroUsize::new)
                     .and_then(|nz| self.kura.get_block(nz))
                     .map(|block| block.hash())
-                    .is_some_and(|hash| hash != existing.highest_cert.subject_block_hash)
-                    && existing.highest_cert.height <= committed_height;
+                    .is_some_and(|hash| hash != existing.highest_qc.subject_block_hash)
+                    && existing.highest_qc.height <= committed_height;
                 if committed_conflict {
                     info!(
                         height,
                         view,
                         existing_block = %existing.block_hash,
                         incoming_block = %hint.block_hash,
-                        existing_highest = %existing.highest_cert.subject_block_hash,
+                        existing_highest = %existing.highest_qc.subject_block_hash,
                         incoming_highest = %highest_qc.subject_block_hash,
                         "replacing cached proposal hint that conflicts with committed tip"
                     );
@@ -144,7 +144,7 @@ impl Actor {
                         view,
                         existing_block = %existing.block_hash,
                         incoming_block = %hint.block_hash,
-                        existing_highest = %existing.highest_cert.subject_block_hash,
+                        existing_highest = %existing.highest_qc.subject_block_hash,
                         incoming_highest = %highest_qc.subject_block_hash,
                         "ignoring conflicting proposal hint for cached slot"
                     );
@@ -486,7 +486,6 @@ impl Actor {
                     .retain(|(_, hash, _, _, _), _| *hash != block_hash);
                 self.qc_signer_tally
                     .retain(|(_, hash, _, _, _), _| *hash != block_hash);
-                self.execution_qc_cache.remove(&block_hash);
             }
             return Ok(());
         }
@@ -621,7 +620,7 @@ impl Actor {
             }
         }
         if let Some(hint) = cached_hint {
-            if let Err(reason) = ensure_locked_qc_allows(self.locked_qc, hint.highest_cert) {
+            if let Err(reason) = ensure_locked_qc_allows(self.locked_qc, hint.highest_qc) {
                 let locked_hash = self.locked_qc.map(|qc| qc.subject_block_hash);
                 let locked_missing =
                     locked_hash.is_some_and(|hash| !self.block_known_locally(hash));
@@ -631,14 +630,14 @@ impl Actor {
                         locked_qc_height = self.locked_qc.map(|qc| qc.height),
                         locked_qc_view = self.locked_qc.map(|qc| qc.view),
                         locked_qc_hash = ?locked_hash,
-                        hint_highest_qc_height = hint.highest_cert.height,
-                        hint_highest_qc_view = hint.highest_cert.view,
-                        hint_highest_qc_hash = ?hint.highest_cert.subject_block_hash,
+                        hint_highest_qc_height = hint.highest_qc.height,
+                        hint_highest_qc_view = hint.highest_qc.view,
+                        hint_highest_qc_hash = ?hint.highest_qc.subject_block_hash,
                         height,
                         view,
                         "locked QC missing from kura; accepting BlockCreated and replacing lock"
                     );
-                    self.locked_qc = Some(hint.highest_cert);
+                    self.locked_qc = Some(hint.highest_qc);
                 } else {
                     super::status::inc_block_created_dropped_by_lock();
                     #[cfg(feature = "telemetry")]
@@ -648,9 +647,9 @@ impl Actor {
                         locked_qc_height = self.locked_qc.map(|qc| qc.height),
                         locked_qc_view = self.locked_qc.map(|qc| qc.view),
                         locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
-                        hint_highest_qc_height = hint.highest_cert.height,
-                        hint_highest_qc_view = hint.highest_cert.view,
-                        hint_highest_qc_hash = ?hint.highest_cert.subject_block_hash,
+                        hint_highest_qc_height = hint.highest_qc.height,
+                        hint_highest_qc_view = hint.highest_qc.view,
+                        hint_highest_qc_hash = ?hint.highest_qc.subject_block_hash,
                         height,
                         view,
                         "BlockCreated rejected by locked QC gate"
@@ -658,19 +657,19 @@ impl Actor {
                     return Ok(());
                 }
             }
-            if !self.highest_qc_extends_locked(hint.highest_cert) {
+            if !self.highest_qc_extends_locked(hint.highest_qc) {
                 if let Some(new_lock) = realign_locked_to_committed_if_extends(
                     self.locked_qc,
                     self.latest_committed_qc(),
-                    hint.highest_cert,
+                    hint.highest_qc,
                     |hash, height| self.parent_hash_for(hash, height),
                 ) {
                     if self.locked_qc != Some(new_lock) {
                         info!(
                             locked_qc_height = self.locked_qc.map(|qc| qc.height),
                             locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
-                            highest_qc_height = hint.highest_cert.height,
-                            highest_qc_hash = ?hint.highest_cert.subject_block_hash,
+                            highest_qc_height = hint.highest_qc.height,
+                            highest_qc_hash = ?hint.highest_qc.subject_block_hash,
                             height,
                             view,
                             "resetting locked QC to committed chain before accepting BlockCreated"
@@ -684,15 +683,15 @@ impl Actor {
                     }
                 }
             }
-            if !self.highest_qc_extends_locked(hint.highest_cert) {
+            if !self.highest_qc_extends_locked(hint.highest_qc) {
                 super::status::inc_block_created_dropped_by_lock();
                 #[cfg(feature = "telemetry")]
                 self.telemetry.inc_block_created_dropped_by_lock();
                 warn!(
                     locked_qc_height = self.locked_qc.map(|qc| qc.height),
                     locked_qc_hash = ?self.locked_qc.map(|qc| qc.subject_block_hash),
-                    highest_qc_height = hint.highest_cert.height,
-                    highest_qc_hash = ?hint.highest_cert.subject_block_hash,
+                    highest_qc_height = hint.highest_qc.height,
+                    highest_qc_hash = ?hint.highest_qc.subject_block_hash,
                     height,
                     view,
                     "BlockCreated rejected: highest QC does not extend locked chain"

@@ -6161,8 +6161,6 @@ public struct ToriiConsensusCaps: Decodable, Sendable {
     public let collectorsK: UInt64
     public let redundantSendR: UInt64
     public let daEnabled: Bool
-    public let requireExecutionQc: Bool
-    public let requireWsvExecQc: Bool
     public let rbcChunkMaxBytes: UInt64
     public let rbcSessionTtlMs: UInt64
     public let rbcStoreMaxSessions: UInt64
@@ -6174,8 +6172,6 @@ public struct ToriiConsensusCaps: Decodable, Sendable {
         case collectorsK = "collectors_k"
         case redundantSendR = "redundant_send_r"
         case daEnabled = "da_enabled"
-        case requireExecutionQc = "require_execution_qc"
-        case requireWsvExecQc = "require_wsv_exec_qc"
         case rbcChunkMaxBytes = "rbc_chunk_max_bytes"
         case rbcSessionTtlMs = "rbc_session_ttl_ms"
         case rbcStoreMaxSessions = "rbc_store_max_sessions"

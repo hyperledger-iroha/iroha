@@ -155,9 +155,8 @@ debug knobs added for chaos testing:
   `sumeragi.debug.rbc.shuffle_chunks = true` to demonstrate that chunk
   re-ordering does not impact delivery or commit.
 - `sumeragi_adversarial_witness_corruption` toggles
-  `sumeragi.debug.rbc.corrupt_witness_ack = true` under `proof_policy = exec_qc`
-  so the test can assert that corrupted acks block commit height while the RBC
-  session still completes.
+  `sumeragi.debug.rbc.corrupt_witness_ack = true` so the test can assert that
+  corrupted acks block commit height while the RBC session still completes.
 - `sumeragi_adversarial_duplicate_inits` uses
   `sumeragi.debug.rbc.duplicate_inits = true` to verify that duplicate proposal
   payloads in the next view remain deliverable and appear in the operator

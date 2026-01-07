@@ -16,15 +16,15 @@ use iroha_core::{
     state::{State, World},
     sumeragi::{
         consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage},
-        status::{record_commit_certificate, reset_commit_certs_for_tests},
+        status::{record_commit_qc, reset_commit_certs_for_tests},
     },
 };
-use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
     ChainId,
     block::BlockHeader,
     bridge::{BridgeFinalityVerifier, BridgeFinalityVerifyError},
-    consensus::{CommitAggregate, CommitCertificate, VALIDATOR_SET_HASH_VERSION_V1},
+    consensus::{QcAggregate, Qc, VALIDATOR_SET_HASH_VERSION_V1},
     peer::PeerId,
 };
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
@@ -81,32 +81,36 @@ async fn bridge_finality_endpoint_roundtrips_into_verifier() {
     let vote = Vote {
         phase: Phase::Commit,
         block_hash,
+        parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
         height: 1,
         view: 0,
         epoch: 0,
-        highest_cert: None,
+        highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
     };
     let preimage = vote_preimage(&chain_id, mode_tag, &vote);
     let signature = Signature::new(kp.private_key(), &preimage);
-    let cert = CommitCertificate {
+    let cert = Qc {
         phase: Phase::Commit,
         height: 1,
         subject_block_hash: block_hash,
+        parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
         view: 0,
         epoch: 0,
         mode_tag: mode_tag.to_string(),
-        highest_cert: None,
+        highest_qc: None,
         validator_set_hash,
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set,
-        aggregate: CommitAggregate {
+        aggregate: QcAggregate {
             signers_bitmap: vec![1],
             bls_aggregate_signature: signature.payload().to_vec(),
         },
     };
-    record_commit_certificate(cert);
+    record_commit_qc(cert);
 
     let queue_cfg = QueueConfig::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
@@ -160,7 +164,7 @@ async fn bridge_finality_endpoint_roundtrips_into_verifier() {
 
     let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
         proof.chain_id.clone(),
-        proof.commit_certificate.validator_set_hash,
+        proof.commit_qc.validator_set_hash,
         VALIDATOR_SET_HASH_VERSION_V1,
         1,
     );

@@ -294,9 +294,9 @@ use iroha_data_model::block::consensus::EvidenceKind;
 let offences = [
     EvidenceKind::DoublePrepare,
     EvidenceKind::DoubleCommit,
-    EvidenceKind::InvalidCommitCertificate,
+    EvidenceKind::InvalidQc,
     EvidenceKind::InvalidProposal,
-    EvidenceKind::DoubleExecVote,
+    EvidenceKind::Censorship,
 ];
 
 for (expected, kind) in offences.iter().enumerate() {
@@ -305,9 +305,9 @@ for (expected, kind) in offences.iter().enumerate() {
 ```
 
 - **DoublePrepare/DoubleCommit** - o validador assinou hashes conflitantes para o mesmo tuple `(phase,height,view,epoch)`.
-- **DoubleExecVote** - votos de execucao conflitantes anunciam roots de estado pos diferentes.
-- **InvalidCommitCertificate** - um agregador gossiped um commit certificate cuja forma falha em checagens deterministicas (ex., bitmap de signers vazio).
+- **InvalidQc** - um agregador gossiped um commit certificate cuja forma falha em checagens deterministicas (ex., bitmap de signers vazio).
 - **InvalidProposal** - um leader prop os um bloco que falha validacao estrutural (ex., viola a regra de locked-chain).
+- **Censorship** — signed submission receipts show a transaction that was never proposed/committed.
 
 Operadores e tooling podem inspecionar e re-broadcast payloads via:
 

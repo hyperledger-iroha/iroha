@@ -2278,12 +2278,8 @@ pub mod sumeragi {
     pub const PROOF_POLICY: &str = "off";
     /// Default zk parent-proving depth (0 disables zk finality gate).
     pub const ZK_FINALITY_K: u8 = 0;
-    /// Default: do not require ExecutionQC unless explicitly enabled by policy.
-    pub const REQUIRE_EXECUTION_QC: bool = false;
     /// Default: do not require PrecommitQC unless explicitly enabled.
     pub const REQUIRE_PRECOMMIT_QC: bool = true;
-    /// Default: do not require WSV ExecutionQC record before commit.
-    pub const REQUIRE_WSV_EXEC_QC_RECORD: bool = false;
     /// Enable adaptive observability/auto-mitigation hooks by default.
     pub const ADAPTIVE_OBSERVABILITY_ENABLED: bool = false;
     /// Threshold (ms) for observed QC latency before adaptive mitigation engages.

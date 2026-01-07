@@ -294,9 +294,9 @@ use iroha_data_model::block::consensus::EvidenceKind;
 let offences = [
     EvidenceKind::DoublePrepare,
     EvidenceKind::DoubleCommit,
-    EvidenceKind::InvalidCommitCertificate,
+    EvidenceKind::InvalidQc,
     EvidenceKind::InvalidProposal,
-    EvidenceKind::DoubleExecVote,
+    EvidenceKind::Censorship,
 ];
 
 for (expected, kind) in offences.iter().enumerate() {
@@ -305,9 +305,9 @@ for (expected, kind) in offences.iter().enumerate() {
 ```
 
 - **DoublePrepare/DoubleCommit** - המאמת חתם על hashes מתנגשים עבור אותו tuple `(phase,height,view,epoch)`.
-- **DoubleExecVote** - הצבעות ביצוע מתנגשות מפרסמות roots מצב שונים.
-- **InvalidCommitCertificate** - aggregate פרסם commit certificate שהמבנה שלו נכשל בבדיקות דטרמיניסטיות (למשל bitmap חתימות ריק).
+- **InvalidQc** - aggregate פרסם commit certificate שהמבנה שלו נכשל בבדיקות דטרמיניסטיות (למשל bitmap חתימות ריק).
 - **InvalidProposal** - מנהיג הציע בלוק שנכשל באימות מבני (למשל מפר את כלל locked-chain).
+- **Censorship** — signed submission receipts show a transaction that was never proposed/committed.
 
 מפעילים וכלים יכולים לבדוק ולשדר מחדש payloads דרך:
 

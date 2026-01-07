@@ -5,7 +5,7 @@ use eyre::Result;
 
 use crate::{Run, RunContext};
 
-use super::{evidence, exec, rbc, status, telemetry, vrf};
+use super::{commit_qc, evidence, rbc, status, telemetry, vrf};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -35,10 +35,8 @@ pub enum Command {
     VrfPenalties(VrfPenaltiesArgs),
     /// Show persisted VRF epoch snapshot (seed, participants, penalties)
     VrfEpoch(VrfEpochArgs),
-    /// Fetch full `ExecutionQC` record (if present) for a parent block hash
-    ExecQcGet(ExecQcGetArgs),
-    /// Fetch execution root (if present) for a parent block hash
-    ExecRootGet(ExecRootGetArgs),
+    /// Fetch commit QC (if present) for a block hash
+    CommitQcGet(CommitQcGetArgs),
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -129,9 +127,8 @@ pub struct EvidenceSubmitArgs {
 pub enum EvidenceKindArg {
     DoublePrepare,
     DoubleCommit,
-    DoubleExecVote,
     #[value(alias = "invalid-qc")]
-    InvalidCommitCertificate,
+    InvalidQc,
     InvalidProposal,
 }
 
@@ -140,8 +137,7 @@ impl EvidenceKindArg {
         match self {
             EvidenceKindArg::DoublePrepare => "DoublePrepare",
             EvidenceKindArg::DoubleCommit => "DoubleCommit",
-            EvidenceKindArg::DoubleExecVote => "DoubleExecVote",
-            EvidenceKindArg::InvalidCommitCertificate => "InvalidCommitCertificate",
+            EvidenceKindArg::InvalidQc => "InvalidQc",
             EvidenceKindArg::InvalidProposal => "InvalidProposal",
         }
     }
@@ -217,15 +213,8 @@ pub struct VrfEpochArgs {
 }
 
 #[derive(clap::Args, Debug)]
-pub struct ExecQcGetArgs {
-    /// Block hash for which the `ExecutionQC` should be fetched
-    #[arg(long)]
-    pub hash: String,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct ExecRootGetArgs {
-    /// Block hash for which the execution root should be fetched
+pub struct CommitQcGetArgs {
+    /// Block hash for which the commit QC should be fetched
     #[arg(long)]
     pub hash: String,
 }
@@ -245,8 +234,7 @@ impl Run for Command {
             Command::Rbc(cmd) => rbc::run(context, cmd),
             Command::VrfPenalties(args) => vrf::penalties(context, args),
             Command::VrfEpoch(args) => vrf::epoch(context, args),
-            Command::ExecQcGet(args) => exec::qc(context, args),
-            Command::ExecRootGet(args) => exec::root(context, args),
+            Command::CommitQcGet(args) => commit_qc::get(context, args),
         }
     }
 }

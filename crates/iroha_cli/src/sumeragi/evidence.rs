@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn format_evidence_summary_includes_core_fields() {
         let mut map = norito::json::Map::new();
-        map.insert("kind".to_owned(), Value::from("InvalidCommitCertificate"));
+        map.insert("kind".to_owned(), Value::from("InvalidQc"));
         map.insert("height".to_owned(), Value::from(42u64));
         map.insert("view".to_owned(), Value::from(7u64));
         map.insert("epoch".to_owned(), Value::from(1u64));
@@ -196,7 +196,7 @@ mod tests {
         map.insert("recorded_ms".to_owned(), Value::from(1234u64));
         map.insert("signer".to_owned(), Value::from(3u64));
         let summary = format_evidence_summary(0, &Value::from(map));
-        assert!(summary.contains("1: kind=InvalidCommitCertificate"));
+        assert!(summary.contains("1: kind=InvalidQc"));
         assert!(summary.contains("height=42"));
         assert!(summary.contains("view=7"));
         assert!(summary.contains("epoch=1"));

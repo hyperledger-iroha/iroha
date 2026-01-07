@@ -19,9 +19,7 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly;
 
-use super::consensus::{
-    Evidence, EvidenceKind, EvidencePayload, ExecVote, Phase, Proposal, Qc, Vote,
-};
+use super::consensus::{Evidence, EvidenceKind, EvidencePayload, Phase, Proposal, Qc, Vote};
 use crate::state::{State, WorldReadOnly};
 
 /// Minimum expected length for BLS signatures attached to consensus votes.
@@ -70,16 +68,6 @@ fn canonicalize_evidence(ev: &Evidence) -> Evidence {
                 },
             }
         }
-        EvidencePayload::DoubleExecVote { v1, v2 } => {
-            let (first, second) = canonical_exec_vote_pair(v1, v2);
-            Evidence {
-                kind: ev.kind,
-                payload: EvidencePayload::DoubleExecVote {
-                    v1: first,
-                    v2: second,
-                },
-            }
-        }
         EvidencePayload::Censorship { tx_hash, receipts } => Evidence {
             kind: ev.kind,
             payload: EvidencePayload::Censorship {
@@ -117,18 +105,18 @@ fn double_vote_kind_for_phases(first: Phase, second: Phase) -> Option<EvidenceKi
 }
 
 fn canonical_vote_pair(v1: &Vote, v2: &Vote) -> (Vote, Vote) {
-    let left = (v1.phase as u8, v1.block_hash.as_ref());
-    let right = (v2.phase as u8, v2.block_hash.as_ref());
-    if left <= right {
-        (v1.clone(), v2.clone())
-    } else {
-        (v2.clone(), v1.clone())
-    }
-}
-
-fn canonical_exec_vote_pair(v1: &ExecVote, v2: &ExecVote) -> (ExecVote, ExecVote) {
-    let left = v1.post_state_root;
-    let right = v2.post_state_root;
+    let left = (
+        v1.phase as u8,
+        v1.block_hash.as_ref(),
+        v1.parent_state_root,
+        v1.post_state_root,
+    );
+    let right = (
+        v2.phase as u8,
+        v2.block_hash.as_ref(),
+        v2.parent_state_root,
+        v2.post_state_root,
+    );
     if left <= right {
         (v1.clone(), v2.clone())
     } else {
@@ -142,38 +130,26 @@ pub fn check_double_vote(v1: &Vote, v2: &Vote) -> Option<Evidence> {
         && v1.view == v2.view
         && v1.epoch == v2.epoch
         && v1.signer == v2.signer
-        && v1.block_hash != v2.block_hash
     {
-        let (first, second) = canonical_vote_pair(v1, v2);
-        double_vote_kind_for_phases(first.phase, second.phase).map(|kind| Evidence {
-            kind,
-            payload: EvidencePayload::DoubleVote {
-                v1: first,
-                v2: second,
-            },
-        })
-    } else {
+        let conflicts = if v1.block_hash != v2.block_hash {
+            true
+        } else if v1.phase == Phase::Commit && v2.phase == Phase::Commit {
+            v1.parent_state_root != v2.parent_state_root
+                || v1.post_state_root != v2.post_state_root
+        } else {
+            false
+        };
+        if conflicts {
+            let (first, second) = canonical_vote_pair(v1, v2);
+            return double_vote_kind_for_phases(first.phase, second.phase).map(|kind| Evidence {
+                kind,
+                payload: EvidencePayload::DoubleVote {
+                    v1: first,
+                    v2: second,
+                },
+            });
+        }
         None
-    }
-}
-
-/// Check for a double execution vote: same (`height,view,epoch,signer,block_hash`) on different roots.
-pub fn check_double_exec_vote(v1: &ExecVote, v2: &ExecVote) -> Option<Evidence> {
-    if v1.block_hash == v2.block_hash
-        && v1.height == v2.height
-        && v1.view == v2.view
-        && v1.epoch == v2.epoch
-        && v1.signer == v2.signer
-        && v1.post_state_root != v2.post_state_root
-    {
-        let (first, second) = canonical_exec_vote_pair(v1, v2);
-        Some(Evidence {
-            kind: EvidenceKind::DoubleExecVote,
-            payload: EvidencePayload::DoubleExecVote {
-                v1: first,
-                v2: second,
-            },
-        })
     } else {
         None
     }
@@ -181,11 +157,11 @@ pub fn check_double_exec_vote(v1: &ExecVote, v2: &ExecVote) -> Option<Evidence> 
 
 /// Very basic commit-certificate invalidity check (shape only; cryptographic validity is not assessed here).
 #[allow(dead_code)] // used by future SBV‑AM integration; unit tests cover only vote helpers
-pub fn check_invalid_commit_certificate_shape(qc: &Qc) -> Option<Evidence> {
+pub fn check_invalid_commit_qc_shape(qc: &Qc) -> Option<Evidence> {
     if qc.aggregate.signers_bitmap.is_empty() || qc.view == 0 && qc.height == 0 {
         Some(Evidence {
-            kind: EvidenceKind::InvalidCommitCertificate,
-            payload: EvidencePayload::InvalidCommitCertificate {
+            kind: EvidenceKind::InvalidQc,
+            payload: EvidencePayload::InvalidQc {
                 certificate: qc.clone(),
                 reason: "empty signer bitmap or zero (view,height)".to_string(),
             },
@@ -300,35 +276,16 @@ pub fn record_double_vote(
     persist_record(state, &evidence, context)
 }
 
-/// Detect and persist a double execution vote if present, deduplicating via the in-memory store.
-pub fn record_double_exec_vote(
-    store: &mut EvidenceStore,
-    state: &State,
-    previous: &ExecVote,
-    current: &ExecVote,
-    context: &EvidenceValidationContext<'_>,
-) -> bool {
-    let Some(evidence) = check_double_exec_vote(previous, current) else {
-        return false;
-    };
-    if !store.insert(&evidence, context) {
-        return false;
-    }
-
-    persist_record(state, &evidence, context)
-}
-
 /// Extract the height/view referenced by consensus evidence, when present.
 pub fn evidence_subject_height_view(evidence: &Evidence) -> (Option<Height>, Option<View>) {
     match &evidence.payload {
         EvidencePayload::DoubleVote { v1, .. } => (Some(v1.height), Some(v1.view)),
-        EvidencePayload::InvalidCommitCertificate { certificate, .. } => {
+        EvidencePayload::InvalidQc { certificate, .. } => {
             (Some(certificate.height), Some(certificate.view))
         }
         EvidencePayload::InvalidProposal { proposal, .. } => {
             (Some(proposal.header.height), Some(proposal.header.view))
         }
-        EvidencePayload::DoubleExecVote { v1, .. } => (Some(v1.height), Some(v1.view)),
         EvidencePayload::Censorship { receipts, .. } => {
             let height = receipts
                 .iter()
@@ -348,10 +305,7 @@ pub(super) fn evidence_block_refs(evidence: &Evidence) -> Vec<(u64, HashOf<Block
                 refs.push((v2.height, v2.block_hash));
             }
         }
-        EvidencePayload::DoubleExecVote { v1, .. } => {
-            refs.push((v1.height, v1.block_hash));
-        }
-        EvidencePayload::InvalidCommitCertificate { certificate, .. } => {
+        EvidencePayload::InvalidQc { certificate, .. } => {
             refs.push((certificate.height, certificate.subject_block_hash));
         }
         EvidencePayload::InvalidProposal { .. } | EvidencePayload::Censorship { .. } => {}
@@ -485,8 +439,7 @@ impl std::error::Error for EvidenceValidationError {}
 /// # Errors
 ///
 /// Returns [`EvidenceValidationError`] when the provided evidence violates one of the
-/// invariants (kind/payload mismatch, inconsistent heights/views, invalid signatures, or
-/// malformed exec votes).
+/// invariants (kind/payload mismatch, inconsistent heights/views, or invalid signatures).
 pub fn validate_evidence(
     evidence: &Evidence,
     context: &EvidenceValidationContext<'_>,
@@ -496,12 +449,9 @@ pub fn validate_evidence(
             EvidenceKind::DoublePrepare | EvidenceKind::DoubleCommit,
             EvidencePayload::DoubleVote { v1, v2 },
         ) => validate_double_vote(evidence.kind, v1, v2, context),
-        (EvidenceKind::DoubleExecVote, EvidencePayload::DoubleExecVote { v1, v2 }) => {
-            validate_double_exec_vote(v1, v2, context)
-        }
         (
-            EvidenceKind::InvalidCommitCertificate,
-            EvidencePayload::InvalidCommitCertificate { .. },
+            EvidenceKind::InvalidQc,
+            EvidencePayload::InvalidQc { .. },
         ) => Ok(()),
         (EvidenceKind::InvalidProposal, EvidencePayload::InvalidProposal { proposal, .. }) => {
             validate_invalid_proposal(proposal)
@@ -542,35 +492,6 @@ fn validate_vote_signatures(
     Ok(())
 }
 
-fn validate_exec_vote_signatures(
-    v1: &ExecVote,
-    v2: &ExecVote,
-    context: &EvidenceValidationContext<'_>,
-) -> Result<(), EvidenceValidationError> {
-    let signature_topology = super::main_loop::topology_for_view(
-        context.topology,
-        v1.height,
-        v1.view,
-        context.mode_tag,
-        context.prf_seed,
-    );
-    super::main_loop::exec_vote_signature_check(
-        v1,
-        &signature_topology,
-        context.chain_id,
-        context.mode_tag,
-    )
-    .map_err(|_| EvidenceValidationError::SignatureInvalid)?;
-    super::main_loop::exec_vote_signature_check(
-        v2,
-        &signature_topology,
-        context.chain_id,
-        context.mode_tag,
-    )
-    .map_err(|_| EvidenceValidationError::SignatureInvalid)?;
-    Ok(())
-}
-
 fn validate_double_vote(
     kind: EvidenceKind,
     v1: &Vote,
@@ -598,7 +519,12 @@ fn validate_double_vote(
     if v1.signer != v2.signer {
         return Err(EvidenceValidationError::SignerMismatch);
     }
-    if v1.block_hash == v2.block_hash {
+    let block_hash_conflict = v1.block_hash != v2.block_hash;
+    let root_conflict = v1.phase == Phase::Commit
+        && v2.phase == Phase::Commit
+        && (v1.parent_state_root != v2.parent_state_root
+            || v1.post_state_root != v2.post_state_root);
+    if !block_hash_conflict && !root_conflict {
         return Err(EvidenceValidationError::BlockHashMatch);
     }
 
@@ -614,28 +540,6 @@ fn validate_double_vote(
         }
         _ => Err(EvidenceValidationError::KindPayloadMismatch),
     }
-}
-
-fn validate_double_exec_vote(
-    v1: &ExecVote,
-    v2: &ExecVote,
-    context: &EvidenceValidationContext<'_>,
-) -> Result<(), EvidenceValidationError> {
-    if v1.block_hash != v2.block_hash {
-        return Err(EvidenceValidationError::ExecBlockHashMismatch);
-    }
-    if v1.height != v2.height
-        || v1.view != v2.view
-        || v1.epoch != v2.epoch
-        || v1.signer != v2.signer
-    {
-        return Err(EvidenceValidationError::ExecMetadataMismatch);
-    }
-    if v1.post_state_root == v2.post_state_root {
-        return Err(EvidenceValidationError::ExecPostStateRootMatch);
-    }
-    validate_exec_vote_signatures(v1, v2, context)?;
-    Ok(())
 }
 
 fn validate_censorship(
@@ -667,7 +571,7 @@ fn validate_censorship(
 }
 
 fn validate_invalid_proposal(proposal: &Proposal) -> Result<(), EvidenceValidationError> {
-    let qc = &proposal.header.highest_cert;
+    let qc = &proposal.header.highest_qc;
     if proposal.header.height <= qc.height {
         return Err(EvidenceValidationError::InvalidProposalHeight);
     }
@@ -699,7 +603,7 @@ mod tests {
 
     use super::{
         super::consensus::{
-            CommitAggregate, ConsensusBlockHeader, ExecVote, Phase, Proposal, Qc, QcHeaderRef, Vote,
+            QcAggregate, ConsensusBlockHeader, Phase, Proposal, Qc, QcHeaderRef, Vote,
         },
         *,
     };
@@ -772,20 +676,14 @@ mod tests {
             vote.bls_sig = signature.payload().to_vec();
         }
 
-        fn sign_exec_vote(&self, vote: &mut ExecVote) {
-            let keypair = self.signer_keypair_for_view(vote.signer, vote.height, vote.view);
-            let preimage = super::super::consensus::bls_preimage::exec_vote(
-                &self.chain_id,
-                self.mode_tag,
-                vote,
-            );
-            let signature = Signature::new(keypair.private_key(), &preimage);
-            vote.bls_sig = signature.payload().to_vec();
-        }
     }
 
     fn test_context() -> EvidenceTestContext {
         EvidenceTestContext::new(12)
+    }
+
+    fn zero_state_root() -> Hash {
+        Hash::prehashed([0u8; 32])
     }
 
     fn sample_validator_set() -> Vec<PeerId> {
@@ -826,13 +724,16 @@ mod tests {
 
     fn sample_double_vote_pair(ctx: &EvidenceTestContext) -> (Vote, Vote) {
         let h1 = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x80; 32]));
+        let zero_root = zero_state_root();
         let mut v1 = Vote {
             phase: Phase::Prepare,
             block_hash: h1,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 11,
             view: 5,
             epoch: 3,
-            highest_cert: None,
+            highest_qc: None,
             signer: 2,
             bls_sig: Vec::new(),
         };
@@ -840,26 +741,6 @@ mod tests {
         v2.block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x81; 32]));
         ctx.sign_vote(&mut v1);
         ctx.sign_vote(&mut v2);
-        (v1, v2)
-    }
-
-    fn sample_double_exec_vote_pair(ctx: &EvidenceTestContext) -> (ExecVote, ExecVote) {
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x90; 32]));
-        let parent_state_root = Hash::prehashed([0x10; 32]);
-        let mut v1 = ExecVote {
-            block_hash,
-            parent_state_root,
-            post_state_root: Hash::prehashed([0x20; 32]),
-            height: 4,
-            view: 2,
-            epoch: 1,
-            signer: 3,
-            bls_sig: Vec::new(),
-        };
-        let mut v2 = v1.clone();
-        v2.post_state_root = Hash::prehashed([0x21; 32]);
-        ctx.sign_exec_vote(&mut v1);
-        ctx.sign_exec_vote(&mut v2);
         (v1, v2)
     }
 
@@ -962,7 +843,7 @@ mod tests {
     fn roundtrip_case_mixed_manifest_payload(ctx: &EvidenceTestContext) -> Evidence {
         let (v1, v2) = sample_double_vote_pair(ctx);
         Evidence {
-            kind: EvidenceKind::InvalidCommitCertificate,
+            kind: EvidenceKind::InvalidQc,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         }
     }
@@ -973,25 +854,28 @@ mod tests {
         let double_vote_payload = EvidencePayload::DoubleVote { v1, v2 };
 
         let validator_set = ctx.topology.as_ref().to_vec();
+        let zero_root = zero_state_root();
         let qc = Qc {
             phase: Phase::Prepare,
             subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
                 [0xC0; 32],
             )),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 21,
             view: 5,
             epoch: 2,
             mode_tag: ctx.mode_tag.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set,
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: vec![0x01],
                 bls_aggregate_signature: vec![0xC1; 96],
             },
         };
-        let invalid_qc_payload = EvidencePayload::InvalidCommitCertificate {
+        let invalid_qc_payload = EvidencePayload::InvalidQc {
             certificate: qc,
             reason: "forged QC payload variant".to_owned(),
         };
@@ -1007,7 +891,7 @@ mod tests {
                 height: 44,
                 view: 9,
                 epoch: 3,
-                highest_cert: QcHeaderRef {
+                highest_qc: QcHeaderRef {
                     height: 43,
                     view: 8,
                     epoch: 3,
@@ -1029,30 +913,11 @@ mod tests {
             receipts: Vec::new(),
         };
 
-        let mut exec_vote = ExecVote {
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC7; 32])),
-            parent_state_root: Hash::prehashed([0xC8; 32]),
-            post_state_root: Hash::prehashed([0xC9; 32]),
-            height: 31,
-            view: 6,
-            epoch: 2,
-            signer: 4,
-            bls_sig: Vec::new(),
-        };
-        let mut exec_conflict = exec_vote.clone();
-        exec_conflict.post_state_root = Hash::prehashed([0xCA; 32]);
-        ctx.sign_exec_vote(&mut exec_vote);
-        ctx.sign_exec_vote(&mut exec_conflict);
-        let double_exec_payload = EvidencePayload::DoubleExecVote {
-            v1: exec_vote,
-            v2: exec_conflict,
-        };
-
         let expected = EvidenceValidationError::KindPayloadMismatch;
 
         vec![
             (
-                EvidenceKind::InvalidCommitCertificate,
+                EvidenceKind::InvalidQc,
                 double_vote_payload.clone(),
                 expected,
             ),
@@ -1082,7 +947,7 @@ mod tests {
                 expected,
             ),
             (
-                EvidenceKind::InvalidCommitCertificate,
+                EvidenceKind::InvalidQc,
                 invalid_proposal_payload.clone(),
                 expected,
             ),
@@ -1097,38 +962,18 @@ mod tests {
                 expected,
             ),
             (
-                EvidenceKind::InvalidCommitCertificate,
+                EvidenceKind::InvalidQc,
                 censorship_payload.clone(),
                 expected,
             ),
             (
-                EvidenceKind::InvalidCommitCertificate,
-                double_exec_payload.clone(),
+                EvidenceKind::InvalidQc,
+                invalid_proposal_payload.clone(),
                 expected,
             ),
             (
                 EvidenceKind::InvalidProposal,
-                double_exec_payload.clone(),
-                expected,
-            ),
-            (
-                EvidenceKind::DoublePrepare,
-                double_exec_payload.clone(),
-                expected,
-            ),
-            (
-                EvidenceKind::DoubleCommit,
-                double_exec_payload.clone(),
-                expected,
-            ),
-            (
-                EvidenceKind::DoubleExecVote,
                 invalid_qc_payload.clone(),
-                expected,
-            ),
-            (
-                EvidenceKind::DoubleExecVote,
-                invalid_proposal_payload.clone(),
                 expected,
             ),
         ]
@@ -1171,13 +1016,16 @@ mod tests {
         let ctx = test_context();
         let h =
             HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([2; 32]));
+        let zero_root = iroha_crypto::Hash::prehashed([0u8; 32]);
         let mut v1 = Vote {
             phase: super::super::consensus::Phase::Prepare,
             block_hash: h,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 5,
             view: 7,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 1,
             bls_sig: Vec::new(),
         };
@@ -1196,9 +1044,43 @@ mod tests {
         let (mut v1, mut v2) = sample_double_vote_pair(&ctx);
         v1.phase = Phase::Commit;
         v2.phase = Phase::Commit;
+        let parent_root = iroha_crypto::Hash::prehashed([0xA1; 32]);
+        let post_root = iroha_crypto::Hash::prehashed([0xA2; 32]);
+        v1.parent_state_root = parent_root;
+        v1.post_state_root = post_root;
+        v2.parent_state_root = parent_root;
+        v2.post_state_root = post_root;
         ctx.sign_vote(&mut v1);
         ctx.sign_vote(&mut v2);
         let ev = check_double_vote(&v1, &v2).expect("should detect double vote");
+        assert!(matches!(ev.kind, EvidenceKind::DoubleCommit));
+    }
+
+    #[test]
+    fn double_vote_detects_commit_root_mismatch() {
+        let ctx = test_context();
+        let subject =
+            HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x22; 32]));
+        let parent_root = iroha_crypto::Hash::prehashed([0xA1; 32]);
+        let post_root = iroha_crypto::Hash::prehashed([0xA2; 32]);
+        let other_post_root = iroha_crypto::Hash::prehashed([0xA3; 32]);
+        let mut v1 = Vote {
+            phase: Phase::Commit,
+            block_hash: subject,
+            parent_state_root: parent_root,
+            post_state_root: post_root,
+            height: 9,
+            view: 2,
+            epoch: 1,
+            highest_qc: None,
+            signer: 1,
+            bls_sig: Vec::new(),
+        };
+        let mut v2 = v1.clone();
+        v2.post_state_root = other_post_root;
+        ctx.sign_vote(&mut v1);
+        ctx.sign_vote(&mut v2);
+        let ev = check_double_vote(&v1, &v2).expect("commit root mismatch must yield evidence");
         assert!(matches!(ev.kind, EvidenceKind::DoubleCommit));
     }
 
@@ -1208,13 +1090,16 @@ mod tests {
         let h = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
             [0x10; 32],
         ));
+        let zero_root = iroha_crypto::Hash::prehashed([0u8; 32]);
         let mut v1 = Vote {
             phase: super::super::consensus::Phase::Prepare,
             block_hash: h,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 11,
             view: 3,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 1,
             bls_sig: Vec::new(),
         };
@@ -1232,13 +1117,16 @@ mod tests {
         let h1 = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
             [0x20; 32],
         ));
+        let zero_root = zero_state_root();
         let mut v1 = Vote {
             phase: super::super::consensus::Phase::Commit,
             block_hash: h1,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 5,
             view: 2,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 7,
             bls_sig: Vec::new(),
         };
@@ -1272,13 +1160,16 @@ mod tests {
         let h1 = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
             [0x30; 32],
         ));
+        let zero_root = zero_state_root();
         let mut v1 = Vote {
             phase: super::super::consensus::Phase::Prepare,
             block_hash: h1,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 8,
             view: 4,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 3,
             bls_sig: Vec::new(),
         };
@@ -1301,13 +1192,16 @@ mod tests {
         let h1 = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
             [0x33; 32],
         ));
+        let zero_root = zero_state_root();
         let mut v1 = Vote {
             phase: super::super::consensus::Phase::Prepare,
             block_hash: h1,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 12,
             view: 6,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 1,
             bls_sig: Vec::new(),
         };
@@ -1331,13 +1225,16 @@ mod tests {
         let h1 = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
             [0x40; 32],
         ));
+        let zero_root = zero_state_root();
         let mut v1 = Vote {
             phase: Phase::Commit,
             block_hash: h1,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 6,
             view: 9,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 2,
             bls_sig: Vec::new(),
         };
@@ -1374,13 +1271,16 @@ mod tests {
         let h1 = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
             [0x43; 32],
         ));
+        let zero_root = zero_state_root();
         let mut v1 = Vote {
             phase: Phase::Prepare,
             block_hash: h1,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 14,
             view: 7,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 2,
             bls_sig: Vec::new(),
         };
@@ -1406,13 +1306,16 @@ mod tests {
         let hash = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
             [0x42; 32],
         ));
+        let zero_root = zero_state_root();
         let mut vote = Vote {
             phase: Phase::Prepare,
             block_hash: hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 9,
             view: 1,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 5,
             bls_sig: Vec::new(),
         };
@@ -1437,13 +1340,16 @@ mod tests {
         let h1 = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
             [0x43; 32],
         ));
+        let zero_root = zero_state_root();
         let mut v1 = Vote {
             phase: Phase::Prepare,
             block_hash: h1,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 4,
             view: 3,
             epoch: 1,
-            highest_cert: None,
+            highest_qc: None,
             signer: 6,
             bls_sig: Vec::new(),
         };
@@ -1471,13 +1377,16 @@ mod tests {
         let h1 = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
             [0x45; 32],
         ));
+        let zero_root = zero_state_root();
         let mut v1 = Vote {
             phase: Phase::Prepare,
             block_hash: h1,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 7,
             view: 5,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 3,
             bls_sig: Vec::new(),
         };
@@ -1502,15 +1411,18 @@ mod tests {
     fn kind_payload_mismatch_is_rejected() {
         let ctx = test_context();
         let context = ctx.validation_context();
+        let zero_root = zero_state_root();
         let mut v1 = Vote {
             phase: Phase::Prepare,
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(
                 iroha_crypto::Hash::prehashed([0x50; 32]),
             ),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 10,
             view: 1,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 1,
             bls_sig: Vec::new(),
         };
@@ -1519,17 +1431,19 @@ mod tests {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(
                 iroha_crypto::Hash::prehashed([0x51; 32]),
             ),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 10,
             view: 1,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 1,
             bls_sig: Vec::new(),
         };
         ctx.sign_vote(&mut v1);
         ctx.sign_vote(&mut v2);
         let ev = Evidence {
-            kind: EvidenceKind::InvalidCommitCertificate,
+            kind: EvidenceKind::InvalidQc,
             payload: EvidencePayload::DoubleVote { v1, v2 },
         };
         assert_eq!(
@@ -1539,85 +1453,21 @@ mod tests {
     }
 
     #[test]
-    fn double_exec_vote_requires_matching_metadata() {
-        let ctx = test_context();
-        let context = ctx.validation_context();
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(
-            iroha_crypto::Hash::prehashed([0x52; 32]),
-        );
-        let parent_root = iroha_crypto::Hash::prehashed([0x01; 32]);
-        let post_root_a = iroha_crypto::Hash::prehashed([0x02; 32]);
-        let post_root_b = iroha_crypto::Hash::prehashed([0x03; 32]);
-        let mut vote = ExecVote {
-            block_hash,
-            parent_state_root: parent_root,
-            post_state_root: post_root_a,
-            height: 12,
-            view: 2,
-            epoch: 4,
-            signer: 9,
-            bls_sig: Vec::new(),
-        };
-        let mut other = vote.clone();
-        other.post_state_root = post_root_b;
-        ctx.sign_exec_vote(&mut vote);
-        ctx.sign_exec_vote(&mut other);
-
-        let valid = Evidence {
-            kind: EvidenceKind::DoubleExecVote,
-            payload: EvidencePayload::DoubleExecVote {
-                v1: vote.clone(),
-                v2: other.clone(),
-            },
-        };
-        assert!(validate_evidence(&valid, &context).is_ok());
-
-        let mut mismatched = other.clone();
-        mismatched.block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(
-            iroha_crypto::Hash::prehashed([0x53; 32]),
-        );
-        ctx.sign_exec_vote(&mut mismatched);
-        let forged = Evidence {
-            kind: EvidenceKind::DoubleExecVote,
-            payload: EvidencePayload::DoubleExecVote {
-                v1: vote.clone(),
-                v2: mismatched,
-            },
-        };
-        assert_eq!(
-            validate_evidence(&forged, &context),
-            Err(EvidenceValidationError::ExecBlockHashMismatch)
-        );
-
-        let mut identical_roots = other.clone();
-        identical_roots.post_state_root = vote.post_state_root;
-        ctx.sign_exec_vote(&mut identical_roots);
-        let forged_roots = Evidence {
-            kind: EvidenceKind::DoubleExecVote,
-            payload: EvidencePayload::DoubleExecVote {
-                v1: vote,
-                v2: identical_roots,
-            },
-        };
-        assert_eq!(
-            validate_evidence(&forged_roots, &context),
-            Err(EvidenceValidationError::ExecPostStateRootMatch)
-        );
-    }
-
-    #[test]
     fn store_deduplicates() {
         let ctx = test_context();
         let context = ctx.validation_context();
         let h =
             HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([4; 32]));
+        let zero_root = zero_state_root();
         let mut v1 = Vote {
             phase: super::super::consensus::Phase::Commit,
             block_hash: h,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 1,
             view: 1,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
@@ -1641,13 +1491,16 @@ mod tests {
         let h = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
             [0x60; 32],
         ));
+        let zero_root = zero_state_root();
         let mut v = Vote {
             phase: Phase::Prepare,
             block_hash: h,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 3,
             view: 2,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 5,
             bls_sig: Vec::new(),
         };
@@ -1675,13 +1528,16 @@ mod tests {
         let h = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
             [0x70; 32],
         ));
+        let zero_root = zero_state_root();
         let mut v = Vote {
             phase: Phase::Prepare,
             block_hash: h,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 12,
             view: 4,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 6,
             bls_sig: Vec::new(),
         };
@@ -1748,27 +1604,6 @@ mod tests {
             &context,
             &evidence,
             EvidenceValidationError::SignatureInvalid,
-        );
-    }
-
-    #[test]
-    fn validate_double_exec_vote_rejects_invalid_signature() {
-        let ctx = test_context();
-        let context = ctx.validation_context();
-        let (mut v1, mut v2) = sample_double_exec_vote_pair(&ctx);
-        if let Some(byte) = v1.bls_sig.first_mut() {
-            *byte ^= 0x11;
-        }
-        if let Some(byte) = v2.bls_sig.first_mut() {
-            *byte ^= 0x22;
-        }
-        let evidence = Evidence {
-            kind: EvidenceKind::DoubleExecVote,
-            payload: EvidencePayload::DoubleExecVote { v1, v2 },
-        };
-        assert_eq!(
-            validate_evidence(&evidence, &context),
-            Err(EvidenceValidationError::SignatureInvalid)
         );
     }
 
@@ -1860,7 +1695,7 @@ mod tests {
                 height: 42,
                 view: 3,
                 epoch: 2,
-                highest_cert: QcHeaderRef {
+                highest_qc: QcHeaderRef {
                     height: 41,
                     view: 2,
                     epoch: 2,
@@ -1873,7 +1708,7 @@ mod tests {
             payload_hash: Hash::prehashed([0x94; 32]),
         };
         let evidence = Evidence {
-            kind: EvidenceKind::InvalidCommitCertificate,
+            kind: EvidenceKind::InvalidQc,
             payload: EvidencePayload::InvalidProposal {
                 proposal,
                 reason: "forged payload variant".to_owned(),
@@ -1901,7 +1736,7 @@ mod tests {
                 height: 40,
                 view: 5,
                 epoch: 1,
-                highest_cert: QcHeaderRef {
+                highest_qc: QcHeaderRef {
                     height: 40,
                     view: 4,
                     epoch: 1,
@@ -1917,7 +1752,7 @@ mod tests {
             kind: EvidenceKind::InvalidProposal,
             payload: EvidencePayload::InvalidProposal {
                 proposal,
-                reason: "stale highest_cert height".to_owned(),
+                reason: "stale highest_qc height".to_owned(),
             },
         };
         assert_invalid_evidence_rejected(
@@ -1942,7 +1777,7 @@ mod tests {
                 height: 41,
                 view: 6,
                 epoch: 1,
-                highest_cert: QcHeaderRef {
+                highest_qc: QcHeaderRef {
                     height: 40,
                     view: 6,
                     epoch: 1,
@@ -1983,7 +1818,7 @@ mod tests {
                 height: 60,
                 view: 8,
                 epoch: 2,
-                highest_cert: QcHeaderRef {
+                highest_qc: QcHeaderRef {
                     height: 59,
                     view: 7,
                     epoch: 2,
@@ -2104,33 +1939,6 @@ mod tests {
         assert!(
             !store.insert(&reordered, &context),
             "reordered votes should not create a new evidence entry"
-        );
-    }
-
-    #[test]
-    fn double_exec_vote_evidence_dedups_vote_order() {
-        let ctx = test_context();
-        let context = ctx.validation_context();
-        let (v1, v2) = sample_double_exec_vote_pair(&ctx);
-        let evidence = Evidence {
-            kind: EvidenceKind::DoubleExecVote,
-            payload: EvidencePayload::DoubleExecVote {
-                v1: v1.clone(),
-                v2: v2.clone(),
-            },
-        };
-        let reordered = Evidence {
-            kind: EvidenceKind::DoubleExecVote,
-            payload: EvidencePayload::DoubleExecVote { v1: v2, v2: v1 },
-        };
-
-        assert_eq!(evidence_key(&evidence), evidence_key(&reordered));
-
-        let mut store = EvidenceStore::new();
-        assert!(store.insert(&evidence, &context));
-        assert!(
-            !store.insert(&reordered, &context),
-            "reordered exec votes should not create a new evidence entry"
         );
     }
 
@@ -2462,13 +2270,16 @@ mod tests {
         let state = test_state();
         let h =
             HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([6; 32]));
+        let zero_root = zero_state_root();
         let mut v1 = Vote {
             phase: super::super::consensus::Phase::Prepare,
             block_hash: h,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 3,
             view: 2,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 4,
             bls_sig: Vec::new(),
         };
@@ -2540,46 +2351,6 @@ mod tests {
         let stored: Vec<_> = view.iter().collect();
         assert_eq!(stored.len(), 1);
         assert_eq!(store.entries.len(), 1);
-    }
-
-    #[test]
-    fn check_double_exec_vote_detects_conflict() {
-        let ctx = test_context();
-        let (v1, v2) = sample_double_exec_vote_pair(&ctx);
-        let evidence = check_double_exec_vote(&v1, &v2).expect("double exec vote expected");
-        assert_eq!(evidence.kind, EvidenceKind::DoubleExecVote);
-        if let EvidencePayload::DoubleExecVote {
-            v1: left,
-            v2: right,
-        } = evidence.payload
-        {
-            assert_ne!(left.post_state_root, right.post_state_root);
-            assert!(left.post_state_root <= right.post_state_root);
-        } else {
-            panic!("expected DoubleExecVote payload");
-        }
-    }
-
-    #[test]
-    fn record_double_exec_vote_persists_once() {
-        let ctx = test_context();
-        let context = ctx.validation_context();
-        let mut store = EvidenceStore::new();
-        let state = test_state();
-        let (v1, v2) = sample_double_exec_vote_pair(&ctx);
-
-        assert!(
-            record_double_exec_vote(&mut store, &state, &v1, &v2, &context),
-            "first exec equivocation must be recorded"
-        );
-        assert!(
-            !record_double_exec_vote(&mut store, &state, &v1, &v2, &context),
-            "duplicate exec equivocation should be deduplicated"
-        );
-
-        let evidence_view = state.world.consensus_evidence.view();
-        let stored: Vec<_> = evidence_view.iter().collect();
-        assert_eq!(stored.len(), 1);
     }
 
     #[test]
@@ -2759,13 +2530,16 @@ mod tests {
         let h = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
             [0xB3; 32],
         ));
+        let zero_root = zero_state_root();
         let mut v1 = Vote {
             phase: Phase::Prepare,
             block_hash: h,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 40,
             view: 2,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 7,
             bls_sig: Vec::new(),
         };
@@ -2793,25 +2567,28 @@ mod tests {
         let subject =
             HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([8; 32]));
         let validator_set = sample_validator_set();
+        let zero_root = zero_state_root();
         let qc = Qc {
             phase: Phase::Prepare,
             subject_block_hash: subject,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 3,
             view: 1,
             epoch: 0,
             mode_tag: super::super::consensus::PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set,
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: Vec::new(),
                 bls_aggregate_signature: Vec::new(),
             },
         };
-        let ev = check_invalid_commit_certificate_shape(&qc)
+        let ev = check_invalid_commit_qc_shape(&qc)
             .expect("empty bitmap must produce evidence");
-        assert!(matches!(ev.kind, EvidenceKind::InvalidCommitCertificate));
+        assert!(matches!(ev.kind, EvidenceKind::InvalidQc));
     }
 
     #[test]
@@ -2819,24 +2596,27 @@ mod tests {
         let subject =
             HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([9; 32]));
         let validator_set = sample_validator_set();
+        let zero_root = zero_state_root();
         let qc = Qc {
             phase: Phase::Commit,
             subject_block_hash: subject,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 2,
             view: 2,
             epoch: 0,
             mode_tag: super::super::consensus::PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set,
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: vec![0x01],
                 bls_aggregate_signature: Vec::new(),
             },
         };
         assert!(
-            check_invalid_commit_certificate_shape(&qc).is_none(),
+            check_invalid_commit_qc_shape(&qc).is_none(),
             "valid QC shape should not emit invalid evidence"
         );
     }

@@ -378,12 +378,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             commit_cert_history_cap:
                 iroha_config::parameters::defaults::sumeragi::COMMIT_CERT_HISTORY_CAP,
             zk_finality_k: iroha_config::parameters::defaults::sumeragi::ZK_FINALITY_K,
-            require_execution_qc:
-                iroha_config::parameters::defaults::sumeragi::REQUIRE_EXECUTION_QC,
             require_precommit_qc:
                 iroha_config::parameters::defaults::sumeragi::REQUIRE_PRECOMMIT_QC,
-            require_wsv_exec_qc:
-                iroha_config::parameters::defaults::sumeragi::REQUIRE_WSV_EXEC_QC_RECORD,
             rbc_chunk_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES,
             rbc_session_ttl: core::time::Duration::from_secs(
                 iroha_config::parameters::defaults::sumeragi::RBC_SESSION_TTL_SECS,

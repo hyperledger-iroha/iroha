@@ -130,10 +130,12 @@ fn sample_evidence_hex() -> String {
         Vote {
             phase: Phase::Prepare,
             block_hash: HashOf::from_untyped_unchecked(hash),
+            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
             height: 1,
             view: 0,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         }

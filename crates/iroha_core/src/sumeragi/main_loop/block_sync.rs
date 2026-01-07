@@ -32,7 +32,7 @@ impl Actor {
         let super::message::BlockSyncUpdate {
             block,
             commit_votes,
-            commit_certificate: incoming_qc,
+            commit_qc: incoming_qc,
             validator_checkpoint,
             stake_snapshot,
         } = update;
@@ -177,7 +177,7 @@ impl Actor {
             super::status::record_validator_checkpoint(checkpoint);
         }
         if let (Some(cert), Some(checkpoint)) = (
-            selection.commit_certificate.as_ref(),
+            selection.commit_qc.as_ref(),
             selection.checkpoint.as_ref(),
         ) {
             {
@@ -274,7 +274,7 @@ impl Actor {
         };
         let commit_quorum = topology.min_votes_for_commit().max(1);
         let mut candidate_qc = incoming_qc
-            .or_else(|| selection.commit_certificate.clone())
+            .or_else(|| selection.commit_qc.clone())
             .or_else(|| crate::block_sync::BlockSynchronizer::block_sync_qc_for(&block));
         candidate_qc = candidate_qc.and_then(|qc| {
             if qc.height != block_height {
@@ -311,7 +311,7 @@ impl Actor {
         });
         let original_candidate_qc = candidate_qc.clone();
 
-        let commit_cert_present = selection.commit_certificate.is_some();
+        let commit_cert_present = selection.commit_qc.is_some();
         let candidate_qc_present = candidate_qc.is_some();
         let candidate_qc_signers = candidate_qc.as_ref().map(qc_signer_count);
         let block_signer_count = block_signers.len();
@@ -477,9 +477,9 @@ impl Actor {
             }
         }
         let incoming_qc_signers = incoming_qc.as_ref().map(qc_signer_count);
-        let allow_nonextending_qc = selection.commit_certificate.is_some()
+        let allow_nonextending_qc = selection.commit_qc.is_some()
             || incoming_qc.as_ref().is_some_and(|cert| {
-                super::validate_commit_certificate_roster(
+                super::validate_commit_qc_roster(
                     cert,
                     block_hash,
                     block_height,
@@ -671,6 +671,8 @@ impl Actor {
                                 height: qc.height,
                                 view: qc.view,
                                 epoch: qc.epoch,
+                                parent_state_root: qc.parent_state_root,
+                                post_state_root: qc.post_state_root,
                                 signers: tally.voting_signers.clone(),
                                 bls_aggregate_signature: qc
                                     .aggregate
@@ -691,7 +693,7 @@ impl Actor {
                             );
                             return Ok(());
                         }
-                        super::status::record_commit_certificate(qc.clone());
+                        super::status::record_commit_qc(qc.clone());
                         self.qc_cache.insert(
                             (
                                 qc.phase,
@@ -717,7 +719,7 @@ impl Actor {
                             "applied block sync QC after validation"
                         );
                         if extends_locked {
-                            self.apply_commit_certificate(
+                            self.apply_commit_qc(
                                 &qc,
                                 topology.as_ref(),
                                 block_hash,
@@ -847,6 +849,8 @@ impl Actor {
                         height: qc.height,
                         view: qc.view,
                         epoch: qc.epoch,
+                        parent_state_root: qc.parent_state_root,
+                        post_state_root: qc.post_state_root,
                         signers: tally.voting_signers.clone(),
                         bls_aggregate_signature: qc.aggregate.bls_aggregate_signature.clone(),
                         roster_len: topology.as_ref().len(),
@@ -864,7 +868,7 @@ impl Actor {
                     );
                     return;
                 }
-                super::status::record_commit_certificate(qc.clone());
+                super::status::record_commit_qc(qc.clone());
                 self.qc_cache.insert(
                     (
                         qc.phase,
@@ -943,9 +947,9 @@ impl Actor {
                     expected_epoch,
                 );
                 let has_roster =
-                    update.commit_certificate.is_some() || update.validator_checkpoint.is_some();
+                    update.commit_qc.is_some() || update.validator_checkpoint.is_some();
                 let has_cached_qc =
-                    update.commit_certificate.is_some() || !update.commit_votes.is_empty();
+                    update.commit_qc.is_some() || !update.commit_votes.is_empty();
                 if !has_roster && !has_cached_qc {
                     let msg = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
                     self.send_fetch_pending_block_response(peer.clone(), msg);
@@ -990,9 +994,9 @@ impl Actor {
                     expected_epoch,
                 );
                 let has_roster =
-                    update.commit_certificate.is_some() || update.validator_checkpoint.is_some();
+                    update.commit_qc.is_some() || update.validator_checkpoint.is_some();
                 let has_cached_qc =
-                    update.commit_certificate.is_some() || !update.commit_votes.is_empty();
+                    update.commit_qc.is_some() || !update.commit_votes.is_empty();
                 if !has_roster && !has_cached_qc {
                     let msg = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
                     self.send_fetch_pending_block_response(peer.clone(), msg);
@@ -1032,9 +1036,9 @@ impl Actor {
                     expected_epoch,
                 );
                 let has_roster =
-                    update.commit_certificate.is_some() || update.validator_checkpoint.is_some();
+                    update.commit_qc.is_some() || update.validator_checkpoint.is_some();
                 let has_cached_qc =
-                    update.commit_certificate.is_some() || !update.commit_votes.is_empty();
+                    update.commit_qc.is_some() || !update.commit_votes.is_empty();
                 let msg = if !has_roster && !has_cached_qc {
                     BlockMessage::BlockCreated(super::message::BlockCreated::from(block))
                 } else {

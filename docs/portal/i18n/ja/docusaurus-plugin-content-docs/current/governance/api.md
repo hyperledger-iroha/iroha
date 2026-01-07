@@ -294,9 +294,9 @@ use iroha_data_model::block::consensus::EvidenceKind;
 let offences = [
     EvidenceKind::DoublePrepare,
     EvidenceKind::DoubleCommit,
-    EvidenceKind::InvalidCommitCertificate,
+    EvidenceKind::InvalidQc,
     EvidenceKind::InvalidProposal,
-    EvidenceKind::DoubleExecVote,
+    EvidenceKind::Censorship,
 ];
 
 for (expected, kind) in offences.iter().enumerate() {
@@ -305,9 +305,9 @@ for (expected, kind) in offences.iter().enumerate() {
 ```
 
 - **DoublePrepare/DoubleCommit** - 同じ `(phase,height,view,epoch)` で矛盾するハッシュに署名。
-- **DoubleExecVote** - 異なる post-state root を広告する実行投票の衝突。
-- **InvalidCommitCertificate** - 集約者が deterministic チェックに失敗するcommit certificateをゴシップ (例: 空の署名ビットマップ)。
+- **InvalidQc** - 集約者が deterministic チェックに失敗するcommit certificateをゴシップ (例: 空の署名ビットマップ)。
 - **InvalidProposal** - リーダが locked-chain ルールを破るなど、構造検証に失敗するブロックを提案。
+- **Censorship** — signed submission receipts show a transaction that was never proposed/committed.
 
 運用者とツールは次でペイロードを確認・再送できます:
 

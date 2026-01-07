@@ -63,9 +63,9 @@ const HEADER_SORA_PDP_COMMITMENT = "sora-pdp-commitment";
 const EVIDENCE_KIND_VALUES = new Set([
   "DoublePrepare",
   "DoubleCommit",
-  "DoubleExecVote",
-  "InvalidCommitCertificate",
+  "InvalidQc",
   "InvalidProposal",
+  "Censorship",
 ]);
 
 const EVIDENCE_PHASE_VALUES = new Set(["Prepare", "Commit", "NewView"]);
@@ -10102,14 +10102,6 @@ function parseConsensusCaps(value) {
       "sumeragi.consensus_caps.redundant_send_r",
     ),
     da_enabled: coerceBoolean(record.da_enabled, "sumeragi.consensus_caps.da_enabled"),
-    require_execution_qc: coerceBoolean(
-      record.require_execution_qc,
-      "sumeragi.consensus_caps.require_execution_qc",
-    ),
-    require_wsv_exec_qc: coerceBoolean(
-      record.require_wsv_exec_qc,
-      "sumeragi.consensus_caps.require_wsv_exec_qc",
-    ),
     rbc_chunk_max_bytes: coerceInteger(
       record.rbc_chunk_max_bytes,
       "sumeragi.consensus_caps.rbc_chunk_max_bytes",
@@ -18775,9 +18767,7 @@ function normalizeSumeragiEvidenceRecord(value, context) {
   };
   if (
     kind === "DoublePrepare" ||
-    kind === "DoubleCommit" ||
-    kind === "DoublePrevote" ||
-    kind === "DoublePrecommit"
+    kind === "DoubleCommit"
   ) {
     const phase = requireEvidencePhase(
       pickOverride(record, "phase", "phase"),
@@ -18812,44 +18802,7 @@ function normalizeSumeragiEvidenceRecord(value, context) {
       ),
     };
   }
-  if (kind === "DoubleExecVote") {
-    return {
-      ...base,
-      height: requireNonNegativeIntegerLike(
-        record.height,
-        `${context}.height`,
-      ),
-      view: requireNonNegativeIntegerLike(
-        record.view,
-        `${context}.view`,
-      ),
-      epoch: requireNonNegativeIntegerLike(
-        record.epoch,
-        `${context}.epoch`,
-      ),
-      signer: requireNonEmptyString(
-        record.signer,
-        `${context}.signer`,
-      ),
-      block_hash: requireHexString(
-        record.block_hash,
-        `${context}.block_hash`,
-      ),
-      parent_state_root: requireHexString(
-        record.parent_state_root,
-        `${context}.parent_state_root`,
-      ),
-      post_state_root_1: requireHexString(
-        record.post_state_root_1,
-        `${context}.post_state_root_1`,
-      ),
-      post_state_root_2: requireHexString(
-        record.post_state_root_2,
-        `${context}.post_state_root_2`,
-      ),
-    };
-  }
-  if (kind === "InvalidCommitCertificate") {
+  if (kind === "InvalidQc") {
     return {
       ...base,
       height: requireNonNegativeIntegerLike(
@@ -18904,6 +18857,31 @@ function normalizeSumeragiEvidenceRecord(value, context) {
       reason: requireNonEmptyString(
         record.reason,
         `${context}.reason`,
+      ),
+    };
+  }
+  if (kind === "Censorship") {
+    return {
+      ...base,
+      tx_hash: requireHexString(
+        record.tx_hash,
+        `${context}.tx_hash`,
+      ),
+      receipt_count: requireNonNegativeIntegerLike(
+        record.receipt_count,
+        `${context}.receipt_count`,
+      ),
+      min_height: requireNonNegativeIntegerLike(
+        record.min_height,
+        `${context}.min_height`,
+      ),
+      max_height: requireNonNegativeIntegerLike(
+        record.max_height,
+        `${context}.max_height`,
+      ),
+      signers: requireStringArray(
+        record.signers,
+        `${context}.signers`,
       ),
     };
   }

@@ -10,7 +10,7 @@ use iroha_core::{
     query::{insert_evidence_record_for_test, store::LiveQueryStore},
     state::{State as CoreState, World},
     sumeragi::consensus::{
-        CommitAggregate, CommitCertificate, Evidence, EvidenceKind, EvidencePayload, Phase, Vote,
+        QcAggregate, Qc, Evidence, EvidenceKind, EvidencePayload, Phase, Vote,
     },
     telemetry::StateTelemetry,
 };
@@ -21,27 +21,29 @@ use iroha_data_model::{
 };
 use iroha_torii::{EvidenceListQuery, NoritoQuery, handle_v1_sumeragi_evidence_list};
 
-fn make_invalid_commit_certificate_evidence(height: u64, seed: u8) -> Evidence {
+fn make_invalid_commit_qc_evidence(height: u64, seed: u8) -> Evidence {
     let subject = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([seed; 32]));
-    let certificate = CommitCertificate {
+    let certificate = Qc {
         phase: Phase::Prepare,
         subject_block_hash: subject,
+        parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
         height,
         view: 0,
         epoch: 0,
         mode_tag: "test-mode".to_string(),
-        highest_cert: None,
+        highest_qc: None,
         validator_set_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x11; 32])),
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set: Vec::new(),
-        aggregate: CommitAggregate {
+        aggregate: QcAggregate {
             signers_bitmap: vec![0x01],
             bls_aggregate_signature: Vec::new(),
         },
     };
     Evidence {
-        kind: EvidenceKind::InvalidCommitCertificate,
-        payload: EvidencePayload::InvalidCommitCertificate {
+        kind: EvidenceKind::InvalidQc,
+        payload: EvidencePayload::InvalidQc {
             certificate,
             reason: "test".to_string(),
         },
@@ -54,10 +56,12 @@ fn make_double_prevote_evidence(height: u64, seed: u8) -> Evidence {
         Vote {
             phase,
             block_hash: hash,
+            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
             height,
             view: 0,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer,
             bls_sig: Vec::new(),
         }
@@ -87,7 +91,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
 
     let records = [
         EvidenceRecord {
-            evidence: make_invalid_commit_certificate_evidence(10, 0xA1),
+            evidence: make_invalid_commit_qc_evidence(10, 0xA1),
             recorded_at_height: 1,
             recorded_at_view: 0,
             recorded_at_ms: 10,
@@ -103,7 +107,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             penalty_applied_at_height: None,
         },
         EvidenceRecord {
-            evidence: make_invalid_commit_certificate_evidence(30, 0xC3),
+            evidence: make_invalid_commit_qc_evidence(30, 0xC3),
             recorded_at_height: 3,
             recorded_at_view: 0,
             recorded_at_ms: 30,
@@ -145,7 +149,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
     assert_eq!(items.len(), 2);
     assert_eq!(
         items[0].get("kind").and_then(norito::json::Value::as_str),
-        Some("InvalidCommitCertificate")
+        Some("InvalidQc")
     );
     assert_eq!(
         items[1].get("kind").and_then(norito::json::Value::as_str),
@@ -155,7 +159,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
     let query_filtered = EvidenceListQuery {
         limit: Some(1),
         offset: Some(1),
-        kind: Some("InvalidCommitCertificate".to_string()),
+        kind: Some("InvalidQc".to_string()),
     };
     let response_filtered =
         handle_v1_sumeragi_evidence_list(State(state.clone()), NoritoQuery(query_filtered), None)

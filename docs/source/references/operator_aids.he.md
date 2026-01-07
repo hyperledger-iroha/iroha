@@ -51,7 +51,7 @@ translator: manual
 
 - `GET /v1/sumeragi/evidence/count` → ‏`{ "count": <u64> }`
 - `GET /v1/sumeragi/evidence` → ‏`{ "total": <u64>, "items": [...] }`
-  - כולל שדות בסיסיים (DoublePrepare/Precommit, ‏InvalidCommitCertificate, ‏InvalidProposal) לבחינה.
+  - כולל שדות בסיסיים (DoublePrepare/DoubleCommit, ‏InvalidQc, ‏InvalidProposal) לבחינה.
   - דוגמאות:
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence/count | jq .`
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`

@@ -43,7 +43,7 @@ parameters (`EvidenceListQuery`):
 |-----------|------|---------|-------|
 | `limit`   | `usize` | 50 | Clamped to `1..=1000`. |
 | `offset`  | `usize` | `0` | Offset into the ordered snapshot. |
-| `kind`    | `string` | _none_ | One of `DoublePrepare`, `DoubleCommit`, `DoubleExecVote`, `InvalidCommitCertificate`, `InvalidProposal`. |
+| `kind`    | `string` | _none_ | One of `DoublePrepare`, `DoubleCommit`, `InvalidQc`, `InvalidProposal`, `Censorship`. |
 
 Response JSON is a Norito JSON object:
 

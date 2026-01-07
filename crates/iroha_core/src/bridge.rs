@@ -42,12 +42,12 @@ pub enum BridgeFinalityError {
     BlockNotFound(u64),
     /// No commit certificate was found for the requested height.
     #[error("commit certificate for height {0} not found")]
-    CommitCertificateNotFound(u64),
+    QcNotFound(u64),
     /// The commit certificate references a different block hash than the stored block.
     #[error(
         "commit certificate hash {cert_hash:?} does not match block hash {block_hash:?} at height {height}"
     )]
-    CommitCertificateHashMismatch {
+    QcHashMismatch {
         /// Height being proven.
         height: u64,
         /// Hash recorded inside the commit certificate.
@@ -162,7 +162,7 @@ pub fn build_finality_proof(
     let block_header = block.header();
     let block_hash = block.hash();
 
-    let mut cert_candidates: Vec<_> = sumeragi::status::commit_certificate_history()
+    let mut cert_candidates: Vec<_> = sumeragi::status::commit_qc_history()
         .into_iter()
         .filter(|entry| entry.height == height)
         .collect();
@@ -172,13 +172,13 @@ pub fn build_finality_proof(
     {
         cert.clone()
     } else if let Some(cert) = cert_candidates.pop() {
-        return Err(BridgeFinalityError::CommitCertificateHashMismatch {
+        return Err(BridgeFinalityError::QcHashMismatch {
             height,
             cert_hash: cert.subject_block_hash,
             block_hash,
         });
     } else {
-        return Err(BridgeFinalityError::CommitCertificateNotFound(height));
+        return Err(BridgeFinalityError::QcNotFound(height));
     };
 
     Ok(BridgeFinalityProof {
@@ -186,7 +186,7 @@ pub fn build_finality_proof(
         chain_id: state.chain_id().clone(),
         block_header,
         block_hash,
-        commit_certificate: cert,
+        commit_qc: cert,
     })
 }
 
@@ -208,9 +208,9 @@ pub fn build_finality_bundle(
     let mmr_root = mmr.root();
     let authority_set = BridgeAuthoritySet {
         id: height, // simple monotonically increasing id derived from height; future revisions can carry explicit ids
-        validator_set: proof.commit_certificate.validator_set.clone(),
-        validator_set_hash: proof.commit_certificate.validator_set_hash,
-        validator_set_hash_version: proof.commit_certificate.validator_set_hash_version,
+        validator_set: proof.commit_qc.validator_set.clone(),
+        validator_set_hash: proof.commit_qc.validator_set_hash,
+        validator_set_hash_version: proof.commit_qc.validator_set_hash_version,
     };
     let commitment = BridgeCommitment {
         chain_id: proof.chain_id.clone(),
@@ -229,7 +229,7 @@ pub fn build_finality_bundle(
         commitment,
         justification,
         block_header: proof.block_header,
-        commit_certificate: proof.commit_certificate,
+        commit_qc: proof.commit_qc,
     })
 }
 
@@ -262,7 +262,7 @@ pub enum BridgeFinalityVerificationError {
     },
     /// The commit certificate height disagrees with the proof height.
     #[error("commit certificate height {cert_height} does not match proof height {proof_height}")]
-    CommitCertificateHeightMismatch {
+    QcHeightMismatch {
         /// Height in the proof.
         proof_height: u64,
         /// Height carried in the commit certificate.
@@ -405,10 +405,10 @@ pub fn verify_finality_proof(
         });
     }
 
-    let certificate = &proof.commit_certificate;
+    let certificate = &proof.commit_qc;
     if certificate.height != proof.height {
         return Err(
-            BridgeFinalityVerificationError::CommitCertificateHeightMismatch {
+            BridgeFinalityVerificationError::QcHeightMismatch {
                 proof_height: proof.height,
                 cert_height: certificate.height,
             },
@@ -511,10 +511,12 @@ pub fn verify_finality_proof(
     let vote = sumeragi::consensus::Vote {
         phase: certificate.phase,
         block_hash: certificate.subject_block_hash,
+        parent_state_root: certificate.parent_state_root,
+        post_state_root: certificate.post_state_root,
         height: certificate.height,
         view: certificate.view,
         epoch: certificate.epoch,
-        highest_cert: None,
+        highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
     };

@@ -3383,8 +3383,6 @@ id: 88
                 "collectors_k": 2,
                 "redundant_send_r": 1,
                 "da_enabled": true,
-                "require_execution_qc": false,
-                "require_wsv_exec_qc": false,
                 "rbc_chunk_max_bytes": 1024,
                 "rbc_session_ttl_ms": 5000,
                 "rbc_store_max_sessions": 64,
