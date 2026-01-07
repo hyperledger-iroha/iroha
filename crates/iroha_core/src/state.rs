@@ -10819,7 +10819,9 @@ impl State {
 
         for binding in &mut snap.entries {
             if let Some(prev) = existing.get(&binding.dsid) {
-                if prev.manifest_root == binding.policy.manifest_root {
+                if prev.manifest_root == binding.policy.manifest_root
+                    && prev.target_lane == binding.policy.target_lane
+                {
                     binding.policy.min_handle_era =
                         binding.policy.min_handle_era.max(prev.min_handle_era);
                     binding.policy.min_sub_nonce =
@@ -23396,7 +23398,10 @@ mod tests {
         state.set_axt_policy(dsid, policy);
 
         let snapshot = state.refresh_axt_policies_from_directory();
-        assert!(snapshot.is_none(), "no snapshot should be derived without manifests");
+        assert!(
+            snapshot.is_none(),
+            "no snapshot should be derived without manifests"
+        );
 
         let view = state.world.axt_policies.view();
         assert!(
@@ -24221,6 +24226,98 @@ mod tests {
 
         assert_eq!(entry.min_handle_era, 3);
         assert_eq!(entry.min_sub_nonce, 5);
+    }
+
+    #[test]
+    fn axt_policy_refresh_resets_minimums_on_lane_change() {
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::lane-change"));
+        let dataspace = DataSpaceId::new(21);
+        let old_lane = LaneId::new(4);
+        let new_lane = LaneId::new(7);
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(8_u32),
+            vec![LaneConfig {
+                id: new_lane,
+                dataspace_id: dataspace,
+                alias: "lane7".into(),
+                description: None,
+                visibility: iroha_data_model::nexus::LaneVisibility::Public,
+                lane_type: None,
+                governance: None,
+                settlement: None,
+                storage: iroha_data_model::nexus::LaneStorageProfile::FullReplica,
+                proof_scheme: DaProofScheme::default(),
+                metadata: BTreeMap::new(),
+            }],
+        )
+        .expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
+
+        let domain_id: DomainId = "lane-change".parse().expect("domain id");
+        let keypair = KeyPair::random();
+        let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
+        let account = Account::new(account_id.clone())
+            .with_uaid(Some(uaid))
+            .build(&account_id);
+        let domain = Domain::new(domain_id).build(&account_id);
+
+        let mut world = World::with([domain], [account], []);
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::V1,
+            uaid,
+            dataspace,
+            issued_ms: 0,
+            activation_epoch: 1,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let mut record = SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(1);
+        let mut set = SpaceDirectoryManifestSet::default();
+        set.upsert(record.clone());
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+
+        let mut manifest_root = [0u8; 32];
+        manifest_root.copy_from_slice(record.manifest_hash.as_ref());
+        {
+            let mut block = world.axt_policies.block();
+            let mut tx = block.transaction();
+            tx.insert(
+                dataspace,
+                AxtPolicyEntry {
+                    manifest_root,
+                    target_lane: old_lane,
+                    min_handle_era: 4,
+                    min_sub_nonce: 7,
+                    current_slot: 0,
+                },
+            );
+            tx.apply();
+            block.commit();
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(world, kura, query_handle);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.lane_config = lane_config;
+        }
+
+        let snapshot = state
+            .refresh_axt_policies_from_directory()
+            .expect("snapshot exists");
+        let entry = snapshot
+            .entries
+            .first()
+            .expect("policy entry should be present")
+            .policy;
+
+        assert_eq!(entry.target_lane, new_lane);
+        assert_eq!(entry.min_handle_era, 1);
+        assert_eq!(entry.min_sub_nonce, 0);
     }
 
     #[test]

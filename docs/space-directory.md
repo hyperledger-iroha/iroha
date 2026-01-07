@@ -436,7 +436,7 @@ POST /v1/space-directory/manifests/revoke
 |-------|------|-------------|
 | `authority` | `AccountId` | Account that signs the revocation transaction. |
 | `private_key` | `ExposedPrivateKey` | Base64-wrapped private key used by Torii to sign on behalf of `authority`. |
-| `uaid` | `String` | UAID literal (`uaid:<hex>` or raw 64-char hex digest). |
+| `uaid` | `String` | UAID literal (`uaid:<hex>` or raw 64-char hex digest, LSB=1). |
 | `dataspace` | `u64` | Dataspace identifier that hosts the manifest. |
 | `revoked_epoch` | `u64` | Epoch (inclusive) when the revocation should take effect. |
 | `reason` | `Option<String>` | Optional audit trail message stored alongside the lifecycle data. |

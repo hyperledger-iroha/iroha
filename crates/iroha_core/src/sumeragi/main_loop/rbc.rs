@@ -2104,21 +2104,6 @@ impl Actor {
                 defer_reason,
             );
         }
-        if let Some(expected) = session.expected_chunk_root {
-            if expected != deliver.chunk_root {
-                session.invalid = true;
-                invalidate = true;
-                ignored = true;
-                warn!(
-                    height = key.1,
-                    view = key.2,
-                    sender = deliver.sender,
-                    ?expected,
-                    observed = ?deliver.chunk_root,
-                    "ignoring RBC DELIVER due to chunk-root mismatch"
-                );
-            }
-        }
         if !session.is_invalid() {
             match evaluate_deliver_acceptance(session, deliver_quorum) {
                 DeliverAcceptance::DeferReady {
@@ -2431,6 +2416,26 @@ impl Actor {
                 );
             }
             return Ok(());
+        }
+        if let Some(expected) = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .and_then(|session| session.expected_chunk_root)
+        {
+            if expected != deliver.chunk_root {
+                warn!(
+                    height = deliver.height,
+                    view = deliver.view,
+                    sender = deliver.sender,
+                    ?expected,
+                    observed = ?deliver.chunk_root,
+                    "dropping RBC DELIVER with mismatched chunk root"
+                );
+                return Ok(());
+            }
         }
         let deliver_quorum = self.rbc_deliver_quorum(&topology);
         let (ignored, first_deliver, delivered_bytes, invalidate, defer_reason) = {
@@ -2845,7 +2850,12 @@ impl Actor {
         if ttl == Duration::ZERO || self.subsystems.da_rbc.rbc.sessions.is_empty() {
             return false;
         }
-        let stale_keys = self.subsystems.da_rbc.rbc.status_handle.stale_keys(ttl, now);
+        let stale_keys = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .status_handle
+            .stale_keys(ttl, now);
         if stale_keys.is_empty() {
             return false;
         }
@@ -2865,7 +2875,11 @@ impl Actor {
                 .rbc
                 .ready_rebroadcast_last_sent
                 .remove(key);
-            self.subsystems.da_rbc.rbc.persisted_full_sessions.remove(key);
+            self.subsystems
+                .da_rbc
+                .rbc
+                .persisted_full_sessions
+                .remove(key);
             self.subsystems.da_rbc.rbc.persist_inflight.remove(key);
         }
 

@@ -98,8 +98,8 @@ Capability manifests и UAID
    `--reason` заполняет `entries[*].notes` для записей, где не было заметок оператора.
 
 3. **Истечь** манифесты по достижении срока или **отозвать**
-   UAID по запросу. Оба команды принимают `--uaid uaid:<hex>` и числовой
-   dataspace id:
+   UAID по запросу. Оба команды принимают `--uaid uaid:<hex>` или 64-символьный
+   hex digest (LSB=1) и числовой dataspace id:
 
    ```bash
    iroha space-directory manifest expire \

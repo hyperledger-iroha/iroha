@@ -1223,8 +1223,8 @@ struct TestActorHarness {
     shutdown: iroha_futures::supervisor::ShutdownSignal,
     _network_child: iroha_futures::supervisor::Child,
     _gossiper_child: iroha_futures::supervisor::Child,
-    _commit_history_guard: super::status::TestLockGuard<'static>,
-    _rbc_status_guard: super::status::TestLockGuard<'static>,
+    _commit_history_guard: super::status::TestLockGuard,
+    _rbc_status_guard: super::status::TestLockGuard,
     key_pairs: Vec<KeyPair>,
 }
 
@@ -1285,6 +1285,11 @@ async fn test_actor_harness_with_config_and_height_and_kura(
     };
     use iroha_data_model::Registrable as _;
     use iroha_futures::supervisor::ShutdownSignal;
+
+    assert!(
+        consensus_cfg.da_enabled,
+        "DA must remain enabled in sumeragi tests; disabling it can deadlock consensus startup"
+    );
 
     let _commit_history_guard = super::status::commit_history_test_guard();
     let _rbc_status_guard = super::status::rbc_status_test_guard();
@@ -4926,7 +4931,6 @@ async fn commit_pipeline_uses_commit_certificate_roster_for_validation() {
     status::reset_commit_certs_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = false;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -10280,6 +10284,86 @@ async fn handle_rbc_ready_rejects_chunk_root_mismatch() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_deliver_rejects_chunk_root_mismatch() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let key = session_key();
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        1024,
+        actor.epoch_for_height(key.1),
+    )
+    .expect("session");
+
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+
+    let roster = actor.effective_commit_topology();
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
+    let local_peer = actor.common_config.peer.id().clone();
+    let signer_peer = roster
+        .iter()
+        .find(|peer| *peer != &local_peer)
+        .expect("signer peer")
+        .clone();
+    let signer_idx = roster
+        .iter()
+        .position(|peer| peer == &signer_peer)
+        .expect("signer index");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair");
+
+    let wrong_root = Hash::prehashed([0x98; 32]);
+    let mut deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch: actor.epoch_for_height(key.1),
+        roster_hash: roster_hash(&roster),
+        chunk_root: wrong_root,
+        sender: u32::try_from(signer_idx).expect("signer index fits u32"),
+        signature: Vec::new(),
+    };
+    let preimage =
+        super::rbc_deliver_preimage(&actor.common_config.chain, actor.mode_tag(), &deliver);
+    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    deliver.signature = signature.payload().to_vec();
+
+    actor.handle_rbc_deliver(deliver).expect("deliver handled");
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(!stored.delivered, "mismatched chunk root should be dropped");
+    assert!(
+        !stored.is_invalid(),
+        "mismatched chunk root should not invalidate the session"
+    );
+    assert!(stored.deliver_signature.is_none());
+    assert!(stored.deliver_sender.is_none());
+    assert!(
+        !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "mismatched chunk root should not be stashed"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rbc_ready_gossips_to_sampled_peers() {
     let mut harness = test_actor_harness(4).await;
     harness.actor.block_sync_gossip_limit = 1;
@@ -10790,6 +10874,68 @@ async fn maybe_emit_rbc_deliver_defers_until_chunks_complete() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn maybe_emit_rbc_deliver_rejects_chunk_root_mismatch() {
+    let mut harness = test_actor_harness(4).await;
+    let key = session_key();
+    let payload = vec![0xAB; 2048];
+    let payload_hash = Hash::new(&payload);
+    let mut session =
+        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0).expect("session");
+
+    let roster = harness.actor.effective_commit_topology();
+    assert!(!roster.is_empty());
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = harness.actor.rbc_deliver_quorum(&topology);
+    assert!(required > 0, "ready quorum should be non-zero");
+    for idx in 0..required {
+        session.record_ready(
+            u32::try_from(idx).expect("sender fits u32"),
+            vec![idx as u8],
+        );
+    }
+
+    session.expected_chunk_root = Some(Hash::prehashed([0xEE; 32]));
+    assert!(
+        session.chunk_root().is_some(),
+        "precondition: session should have a computed chunk root"
+    );
+    assert_ne!(
+        session.expected_chunk_root,
+        session.chunk_root(),
+        "precondition: chunk root mismatch should be present"
+    );
+
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session);
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+
+    harness
+        .actor
+        .maybe_emit_rbc_deliver(key)
+        .expect("maybe emit deliver");
+    let stored = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(stored.is_invalid());
+    assert!(!stored.delivered);
+    assert!(stored.deliver_signature.is_none());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rbc_session_ttl_prunes_stale_sessions() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.rbc_session_ttl = Duration::from_secs(1);
@@ -10826,21 +10972,25 @@ async fn rbc_session_ttl_prunes_stale_sessions() {
     );
 
     assert!(harness.actor.prune_stale_rbc_sessions(SystemTime::now()));
-    assert!(!harness
-        .actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .sessions
-        .contains_key(&key));
-    assert!(harness
-        .actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .status_handle
-        .get(&key)
-        .is_none());
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .contains_key(&key)
+    );
+    assert!(
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .status_handle
+            .get(&key)
+            .is_none()
+    );
 
     harness.shutdown.send();
 }
@@ -23589,7 +23739,6 @@ async fn block_created_skips_pending_insert_while_processing() {
 async fn block_created_requests_missing_parent_on_height_gap() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = false;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -30160,7 +30309,6 @@ async fn conflicting_vote_does_not_override_first() {
 async fn stale_view_accepts_precommit_vote_when_missing_block_requested() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = false;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
     let height = 5;
@@ -30220,7 +30368,6 @@ async fn stale_view_accepts_precommit_vote_when_missing_block_requested() {
 async fn stale_view_accepts_exec_vote_when_missing_block_requested() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = false;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
     let height = 5;
@@ -30292,7 +30439,6 @@ async fn stale_view_accepts_exec_vote_when_missing_block_requested() {
 async fn stale_view_accepts_execution_qc_when_missing_block_requested() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = false;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
     let height = 6;

@@ -459,7 +459,9 @@ for await (const event of torii.streamEvents({
 
 ## UAID portfolios & Space Directory
 
-The Space Directory APIs surface the Universal Account ID (UAID) lifecycle:
+The Space Directory APIs surface the Universal Account ID (UAID) lifecycle. The
+helpers accept `uaid:<hex>` literals or raw 64-hex digests (LSB=1) and
+canonicalise them before submitting requests:
 
 - `getUaidPortfolio(uaid)` aggregates balances per dataspace, grouping asset
   holdings by canonical account IDs.

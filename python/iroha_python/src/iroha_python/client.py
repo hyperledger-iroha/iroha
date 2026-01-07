@@ -66,6 +66,7 @@ from .sorafs import (
     SorafsAliasError,
     enforce_alias_policy as enforce_sorafs_alias_policy,
 )
+from .address import AccountAddress, AccountAddressError, AccountAddressFormat, DomainSelector
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .connect import _ConnectControlBase as ConnectControlBase  # noqa: F401
@@ -106,6 +107,8 @@ def _encode_sort_arg(sort_value: Optional[Any]) -> Optional[str]:
     if isinstance(sort_value, Sequence):
         return ",".join(str(entry).strip() for entry in sort_value if entry is not None)
     return str(sort_value)
+
+DEFAULT_IH58_PREFIX = 0x02F1
 
 
 def _reject_alias_keys(source: Mapping[str, Any],
@@ -331,7 +334,7 @@ def _normalize_hex_string(
 
 
 def _normalize_uaid_literal(value: Any, *, context: str = "uaid") -> str:
-    """Normalise raw UAID inputs to the canonical ``uaid:<hex>`` form."""
+    """Normalise raw UAID inputs to the canonical ``uaid:<hex>`` form (LSB=1)."""
 
     if not isinstance(value, str):
         raise TypeError(f"{context} must be a string")
@@ -347,6 +350,8 @@ def _normalize_uaid_literal(value: Any, *, context: str = "uaid") -> str:
         context,
         expected_length=64,
     )
+    if int(normalized[-1], 16) % 2 == 0:
+        raise ValueError(f"{context} must have least significant bit set to 1")
     return f"uaid:{normalized}"
 
 
@@ -699,6 +704,37 @@ def _ensure_governance_lock_hints_complete(
         )
 
 
+def _ensure_governance_owner_canonical(owner: Any, *, context: str) -> None:
+    if owner is None:
+        return
+    if not isinstance(owner, str):
+        raise ValueError(f"{context}.owner must be a canonical account id")
+    trimmed = owner.strip()
+    if not trimmed or trimmed != owner:
+        raise ValueError(f"{context}.owner must be a canonical account id")
+    if any(ch.isspace() for ch in trimmed):
+        raise ValueError(f"{context}.owner must be a canonical account id")
+    parts = trimmed.split("@")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise ValueError(f"{context}.owner must be a canonical account id")
+    address_part, domain_part = parts
+    if domain_part.isascii() and domain_part.lower() != domain_part:
+        raise ValueError(f"{context}.owner must be a canonical account id")
+    try:
+        address, fmt = AccountAddress.parse_any(
+            address_part, expected_prefix=DEFAULT_IH58_PREFIX
+        )
+    except AccountAddressError as exc:
+        raise ValueError(f"{context}.owner must be a canonical account id") from exc
+    if fmt is not AccountAddressFormat.IH58:
+        raise ValueError(f"{context}.owner must be a canonical account id")
+    if address.domain != DomainSelector.from_domain(domain_part):
+        raise ValueError(f"{context}.owner must be a canonical account id")
+    canonical = f"{address.to_ih58(DEFAULT_IH58_PREFIX)}@{domain_part}"
+    if canonical != owner:
+        raise ValueError(f"{context}.owner must use canonical account id form")
+
+
 def _normalize_governance_zk_public_inputs(value: Any, *, context: str) -> Dict[str, Any]:
     if not isinstance(value, Mapping):
         raise TypeError(f"{context} must be an object")
@@ -755,6 +791,7 @@ def _normalize_governance_zk_public_inputs(value: Any, *, context: str) -> Dict[
         normalized.get("duration_blocks"),
         context=context,
     )
+    _ensure_governance_owner_canonical(normalized.get("owner"), context=context)
     return normalized
 
 
@@ -834,6 +871,7 @@ def _normalize_governance_zk_ballot_v1_payload(
         record.get("duration_blocks"),
         context=context,
     )
+    _ensure_governance_owner_canonical(record.get("owner"), context=context)
     return record
 
 
@@ -896,6 +934,7 @@ def _normalize_governance_zk_ballot_proof_payload(
         ballot_record.get("duration_blocks"),
         context=ballot_context,
     )
+    _ensure_governance_owner_canonical(ballot_record.get("owner"), context=ballot_context)
     record["ballot"] = ballot_record
     return record
 

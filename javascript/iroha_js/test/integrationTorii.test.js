@@ -3173,7 +3173,7 @@ test(
   async (t) => {
     if (!UAID_LITERAL) {
       t.diagnostic(
-        "set IROHA_TORII_INTEGRATION_UAID=uaid:<hex> to exercise UAID portfolio coverage",
+        "set IROHA_TORII_INTEGRATION_UAID=uaid:<hex> (or raw 64-hex digest) to exercise UAID portfolio coverage",
       );
       return;
     }
@@ -3205,7 +3205,7 @@ test(
   async (t) => {
     if (!UAID_LITERAL) {
       t.diagnostic(
-        "set IROHA_TORII_INTEGRATION_UAID=uaid:<hex> to exercise UAID bindings coverage",
+        "set IROHA_TORII_INTEGRATION_UAID=uaid:<hex> (or raw 64-hex digest) to exercise UAID bindings coverage",
       );
       return;
     }
@@ -3237,7 +3237,7 @@ test(
   async (t) => {
     if (!UAID_LITERAL) {
       t.diagnostic(
-        "set IROHA_TORII_INTEGRATION_UAID=uaid:<hex> to exercise UAID manifest coverage",
+        "set IROHA_TORII_INTEGRATION_UAID=uaid:<hex> (or raw 64-hex digest) to exercise UAID manifest coverage",
       );
       return;
     }

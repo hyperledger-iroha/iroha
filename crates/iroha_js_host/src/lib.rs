@@ -4695,6 +4695,7 @@ fn normalize_zk_ballot_public_inputs(value: &mut json::Value, context: &str) -> 
             ),
         ));
     }
+    ensure_zk_public_input_owner_canonical(map, context)?;
     Ok(())
 }
 
@@ -4708,6 +4709,34 @@ fn reject_zk_public_input_key(
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
             format!("{context} must use {canonical} (unsupported key {key})"),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_zk_public_input_owner_canonical(map: &json::Map, context: &str) -> napi::Result<()> {
+    let Some(value) = map.get("owner") else {
+        return Ok(());
+    };
+    if matches!(value, json::Value::Null) {
+        return Ok(());
+    }
+    let owner = value.as_str().ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context}.owner must be a canonical account id"),
+        )
+    })?;
+    let canonical = AccountId::canonicalize(owner).map_err(|_| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context}.owner must be a canonical account id"),
+        )
+    })?;
+    if canonical != owner {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context}.owner must use canonical account id form"),
         ));
     }
     Ok(())
@@ -7054,6 +7083,16 @@ mod tests {
         AccountId::new(domain_id, keypair.public_key().clone())
     }
 
+    fn canonical_owner_literal(domain: &str) -> String {
+        sample_account(domain).to_string()
+    }
+
+    fn noncanonical_owner_literal(domain: &str) -> String {
+        let account = sample_account(domain);
+        let address_hex = account.to_canonical_hex().expect("canonical hex");
+        format!("{address_hex}@{}", account.domain())
+    }
+
     fn sample_kaigi_id(domain: &str, call_name: &str) -> KaigiId {
         let domain_id: DomainId = domain.parse().expect("valid domain id");
         let call = Name::from_str(call_name).expect("valid kaigi name");
@@ -8647,6 +8686,7 @@ mod tests {
     #[test]
     fn governance_cast_zk_ballot_public_inputs_rejects_deprecated_keys() {
         let mut inner = json::Map::new();
+        let owner = canonical_owner_literal("wonderland");
         inner.insert(
             "election_id".to_owned(),
             json::Value::String("ref-1".to_owned()),
@@ -8657,9 +8697,9 @@ mod tests {
         );
         inner.insert(
             "public_inputs_json".to_owned(),
-            json::Value::String(
-                r#"{"owner":"alice@wonderland","amount":"10","durationBlocks":64}"#.to_owned(),
-            ),
+            json::Value::String(format!(
+                r#"{{"owner":"{owner}","amount":"10","durationBlocks":64}}"#
+            )),
         );
         let mut outer = json::Map::new();
         outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
@@ -8670,6 +8710,7 @@ mod tests {
     #[test]
     fn governance_cast_zk_ballot_public_inputs_canonicalizes_hex_hints() {
         let mut inner = json::Map::new();
+        let owner = canonical_owner_literal("wonderland");
         inner.insert(
             "election_id".to_owned(),
             json::Value::String("ref-1".to_owned()),
@@ -8682,7 +8723,7 @@ mod tests {
             "public_inputs_json".to_owned(),
             json::Value::String(
                 format!(
-                    r#"{{"owner":"alice@wonderland","amount":"10","duration_blocks":64,"root_hint":"0x{}","nullifier":"blake2b32:{}"}}"#,
+                    r#"{{"owner":"{owner}","amount":"10","duration_blocks":64,"root_hint":"0x{}","nullifier":"blake2b32:{}"}}"#,
                     "Aa".repeat(32),
                     "BB".repeat(32)
                 ),
@@ -8712,8 +8753,9 @@ mod tests {
     }
 
     #[test]
-    fn governance_cast_zk_ballot_public_inputs_rejects_partial_hints() {
+    fn governance_cast_zk_ballot_public_inputs_rejects_noncanonical_owner() {
         let mut inner = json::Map::new();
+        let owner = noncanonical_owner_literal("wonderland");
         inner.insert(
             "election_id".to_owned(),
             json::Value::String("ref-1".to_owned()),
@@ -8724,7 +8766,31 @@ mod tests {
         );
         inner.insert(
             "public_inputs_json".to_owned(),
-            json::Value::String(r#"{"owner":"alice@wonderland"}"#.to_owned()),
+            json::Value::String(format!(
+                r#"{{"owner":"{owner}","amount":"10","duration_blocks":64}}"#
+            )),
+        );
+        let mut outer = json::Map::new();
+        outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
+
+        assert!(value_to_instruction(json::Value::Object(outer)).is_err());
+    }
+
+    #[test]
+    fn governance_cast_zk_ballot_public_inputs_rejects_partial_hints() {
+        let mut inner = json::Map::new();
+        let owner = canonical_owner_literal("wonderland");
+        inner.insert(
+            "election_id".to_owned(),
+            json::Value::String("ref-1".to_owned()),
+        );
+        inner.insert(
+            "proof_b64".to_owned(),
+            json::Value::String(BASE64.encode([0x01])),
+        );
+        inner.insert(
+            "public_inputs_json".to_owned(),
+            json::Value::String(format!(r#"{{"owner":"{owner}"}}"#)),
         );
         let mut outer = json::Map::new();
         outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
@@ -8735,6 +8801,7 @@ mod tests {
     #[test]
     fn governance_cast_zk_ballot_public_inputs_rejects_deprecated_aliases() {
         let mut inner = json::Map::new();
+        let owner = canonical_owner_literal("wonderland");
         inner.insert(
             "election_id".to_owned(),
             json::Value::String("ref-1".to_owned()),
@@ -8745,9 +8812,9 @@ mod tests {
         );
         inner.insert(
             "public_inputs_json".to_owned(),
-            json::Value::String(
-                r#"{"owner":"alice@wonderland","amount":"10","duration_blocks":64,"rootHint":"aa"}"#.to_owned(),
-            ),
+            json::Value::String(format!(
+                r#"{{"owner":"{owner}","amount":"10","duration_blocks":64,"rootHint":"aa"}}"#
+            )),
         );
         let mut outer = json::Map::new();
         outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
@@ -8758,6 +8825,7 @@ mod tests {
     #[test]
     fn governance_cast_zk_ballot_public_inputs_rejects_invalid_hex() {
         let mut inner = json::Map::new();
+        let owner = canonical_owner_literal("wonderland");
         inner.insert(
             "election_id".to_owned(),
             json::Value::String("ref-1".to_owned()),
@@ -8768,9 +8836,9 @@ mod tests {
         );
         inner.insert(
             "public_inputs_json".to_owned(),
-            json::Value::String(
-                r#"{"owner":"alice@wonderland","amount":"10","duration_blocks":64,"root_hint":"not-hex"}"#.to_owned(),
-            ),
+            json::Value::String(format!(
+                r#"{{"owner":"{owner}","amount":"10","duration_blocks":64,"root_hint":"not-hex"}}"#
+            )),
         );
         let mut outer = json::Map::new();
         outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));

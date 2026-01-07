@@ -1,6 +1,32 @@
 # Status
 
 ## Latest Updates
+- UAID: accept mixed-case/whitespace-trimmed prefixes in Torii/JS/data-model parsing, add regression coverage, and enforce LSB=1 in CBDC rollout checks.
+- Docs: refresh Nexus/UAID guidance to accept raw 64-hex inputs (LSB=1) alongside `uaid:<hex>` literals and align JS integration messages.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 120s during compilation; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Governance ZK voting: enforce canonical owner hints across CLI/JS SDK (torii client + builders)/JS host/bridges/Swift/Python clients and Torii mock, update governance portal examples + JS SDK examples to IH58, and add regression coverage.
+- Tests: not run (not requested).
+- Telemetry: count rejected txs using external transaction results only (ignore time-trigger failures) and add coverage.
+- Tests: not run (not requested).
+- Sumeragi tests: keep DA enabled in main-loop harnesses to avoid consensus startup deadlocks; remove DA-disabled configs in harnessed tests and assert DA stays on in the harness.
+- UAID: accept raw/prefixed UAID literals in CBDC whitelist integration parsing, refresh JS/Python UAID docs with LSB=1 guidance, and clarify CLI parse errors.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 120s during compilation; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- UAID: enforce LSB=1 across Rust/JS/Python/Android/Swift normalization, update Space Directory/Torii docs, and add regression tests.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 120s during compilation).
+- Sumeragi/RBC: refuse local DELIVER emission when the computed chunk root mismatches the expected root (mark invalid, clear pending); add coverage for local DELIVER chunk-root mismatch.
+- Tests: `cargo test -p iroha_core --lib maybe_emit_rbc_deliver_rejects_chunk_root_mismatch -- --nocapture` (pass).
+- UAID: align parsing across data model, CLI, Android SDK, and CBDC rollout checks; accept `uaid:<hex>` or raw 64-hex inputs and drop unsupported `did:ua` literals in Android.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 120s during compilation; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Telemetry: clamp commit-time deltas when block creation times are ahead of local time; add coverage.
+- Tests: not run (not requested).
+- Sumeragi/RBC: drop DELIVER messages with mismatched chunk roots without invalidating the session; add coverage for DELIVER chunk-root mismatch handling.
+- Tests: `cargo test --workspace` (timed out after 120s during compilation; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Governance ZK voting: enforce canonical owner hints in Torii for ZK public inputs (zk/zk-v1/ballot-proof), add regression coverage, align zk-v1 ballot-proof skeleton test with complete lock hints, and clarify canonical owner requirements in governance API docs.
+- Tests: not run (not requested).
+- Tests: make status test guards reentrant across Tokio tasks to avoid deadlocks in multi-threaded async tests; refresh guard reentrancy coverage.
+- Tests: not run (not requested).
+- Core/AXT: only preserve policy min era/sub-nonce when manifest root and target lane match during directory refresh, so lane changes reset replay minima; add regression coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p iroha_core --lib axt_policy_refresh_resets_minimums_on_lane_change -- --nocapture` (pass).
 - Sumeragi/RBC: enforce `rbc_session_ttl` by pruning stale RBC sessions from memory/status; add coverage.
 - Tests: `cargo test -p iroha_core rbc_session_ttl_prunes_stale_sessions -- --nocapture` (timed out after 120s during compilation).
 - Core/AXT: clear cached policy entries when the Space Directory snapshot can't be derived (no manifests/lane mapping), preventing stale policies from persisting; add regression coverage.

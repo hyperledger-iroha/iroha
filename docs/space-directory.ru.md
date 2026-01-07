@@ -208,7 +208,7 @@ POST /v1/space-directory/manifests/revoke
 |------|-----|----------|
 | `authority` | `AccountId` | Аккаунт, подписывающий транзакцию revoke. |
 | `private_key` | `ExposedPrivateKey` | Приватный ключ в base64, которым Torii подписывает от имени `authority`. |
-| `uaid` | `String` | Литерал UAID (`uaid:<hex>` или 64‑символьный hex‑digest). |
+| `uaid` | `String` | Литерал UAID (`uaid:<hex>` или 64‑символьный hex‑digest, LSB=1). |
 | `dataspace` | `u64` | Идентификатор dataspace, где размещён manifest. |
 | `revoked_epoch` | `u64` | Epoch (включительно), с которого revocation должен вступить в силу. |
 | `reason` | `Option<String>` | Необязательное аудиторское сообщение, сохраняемое вместе с данными жизненного цикла. |
@@ -301,4 +301,3 @@ whitelist под соответствующие manifests.
 При соблюдении этого плейбука Space Directory предоставляет каноничный, проверяемый и
 ориентированный на регуляторов реестр того, как права и возможности выдаются, ограничиваются
 и отзываются во всех dataspaces Nexus.
-

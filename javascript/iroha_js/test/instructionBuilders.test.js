@@ -947,7 +947,7 @@ test("buildCastZkBallotInstruction rejects deprecated public input keys", () => 
         electionId: "ref-3",
         proof: Buffer.from([0x04]),
         publicInputs: {
-          owner: ACCOUNT_ID,
+          owner: SAMPLE_ACCOUNT_IH58_LITERAL,
           amount: "250",
           durationBlocks: 12,
         },
@@ -965,7 +965,7 @@ test("buildCastZkBallotInstruction canonicalizes hex hint values", () => {
     electionId: "ref-3",
     proof: Buffer.from([0x04]),
     publicInputs: {
-      owner: ACCOUNT_ID,
+      owner: SAMPLE_ACCOUNT_IH58_LITERAL,
       amount: "250",
       duration_blocks: 12,
       root_hint: `0x${"Aa".repeat(32)}`,
@@ -1015,11 +1015,31 @@ test("buildCastZkBallotInstruction requires complete lock hints", () => {
       buildCastZkBallotInstruction({
         electionId: "ref-5",
         proof: Buffer.from([0x06]),
-        publicInputs: { owner: ACCOUNT_ID },
+        publicInputs: { owner: SAMPLE_ACCOUNT_IH58_LITERAL },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
       assert.match(String(error?.message), /owner, amount, and duration_blocks/i);
+      return true;
+    },
+  );
+});
+
+test("buildCastZkBallotInstruction rejects noncanonical owner", () => {
+  assert.throws(
+    () =>
+      buildCastZkBallotInstruction({
+        electionId: "ref-5",
+        proof: Buffer.from([0x06]),
+        publicInputs: {
+          owner: ACCOUNT_ID,
+          amount: "250",
+          duration_blocks: 12,
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
+      assert.match(String(error?.message), /canonical account id/i);
       return true;
     },
   );

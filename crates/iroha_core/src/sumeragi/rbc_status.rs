@@ -178,7 +178,9 @@ impl Handle {
             .map
             .iter()
             .filter_map(|(key, entry)| {
-                let age = now.duration_since(entry.updated_at).unwrap_or(Duration::ZERO);
+                let age = now
+                    .duration_since(entry.updated_at)
+                    .unwrap_or(Duration::ZERO);
                 (age > ttl).then_some(*key)
             })
             .collect()

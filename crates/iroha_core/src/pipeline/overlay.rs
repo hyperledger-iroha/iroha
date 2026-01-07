@@ -598,9 +598,7 @@ pub fn build_overlay_for_transaction_with_cache<R: StateReadOnly>(
             host.hydrate_axt_replay_ledger(state_ro);
             host.set_durable_state_snapshot_from_world(state_ro.world());
             let snapshot = state_ro.axt_policy_snapshot();
-            if !snapshot.entries.is_empty() {
-                host = host.with_axt_policy_snapshot(&snapshot);
-            }
+            host = host.with_axt_policy_snapshot(&snapshot);
             apply_streaming_metadata(&mut host, streaming_meta);
             #[cfg(feature = "telemetry")]
             host.set_telemetry(state_ro.metrics().clone());
@@ -803,9 +801,7 @@ pub(crate) fn build_overlay_for_transaction_with_accounts_zk<R: StateReadOnly>(
             host.hydrate_axt_replay_ledger(state_ro);
             host.set_durable_state_snapshot_from_world(state_ro.world());
             let snapshot = state_ro.axt_policy_snapshot();
-            if !snapshot.entries.is_empty() {
-                host = host.with_axt_policy_snapshot(&snapshot);
-            }
+            host = host.with_axt_policy_snapshot(&snapshot);
             apply_streaming_metadata(&mut host, streaming_meta);
             #[cfg(feature = "telemetry")]
             host.set_telemetry(state_ro.metrics().clone());
@@ -1130,6 +1126,38 @@ mod tests {
         (program, parsed.header_len, parsed.metadata)
     }
 
+    fn norito_blob<T: NoritoEncode>(value: &T) -> Vec<u8> {
+        value.encode()
+    }
+
+    fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
+        let mut v = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
+        v.extend_from_slice(&type_id.to_be_bytes());
+        v.push(1u8);
+        let payload_len =
+            u32::try_from(payload.len()).expect("payload length must fit into u32 for TLV");
+        v.extend_from_slice(&payload_len.to_be_bytes());
+        v.extend_from_slice(payload);
+        let hash = Hash::new(payload);
+        v.extend_from_slice(hash.as_ref());
+        v
+    }
+
+    fn program_with_literals(code: &[u8], literal_data: &[u8]) -> Vec<u8> {
+        let mut meta = ivm::ProgramMetadata::default();
+        meta.max_cycles = 10_000;
+        let mut program = meta.encode();
+        program.extend_from_slice(b"LTLB");
+        program.extend_from_slice(&0_u32.to_le_bytes());
+        program.extend_from_slice(&0_u32.to_le_bytes());
+        let data_len =
+            u32::try_from(literal_data.len()).expect("literal data length fits into u32");
+        program.extend_from_slice(&data_len.to_le_bytes());
+        program.extend_from_slice(literal_data);
+        program.extend_from_slice(code);
+        program
+    }
+
     #[test]
     fn overlay_rejects_manifest_abi_mismatch_before_execution() {
         use std::sync::Arc;
@@ -1203,6 +1231,272 @@ mod tests {
                 IvmAdmissionError::ManifestAbiHashMismatch(info)
             )) if info.expected == wrong_abi_hash && info.actual == abi_hash
         ));
+    }
+
+    #[test]
+    fn overlay_rejects_axt_without_policy_entries() {
+        use std::sync::Arc;
+
+        use iroha_crypto::KeyPair;
+        use iroha_data_model::{
+            nexus::{AxtRejectReason, DataSpaceId, LaneId},
+            prelude::{AccountId, IvmBytecode, TransactionBuilder},
+            transaction::Executable,
+        };
+        use ivm::{
+            axt::{
+                self, AssetHandle, GroupBinding, HandleBudget, HandleSubject, RemoteSpendIntent,
+            },
+            encoding, instruction,
+            pointer_abi::PointerType,
+            syscalls as ivm_sys,
+        };
+
+        const LITERAL_HEADER_LEN: usize = 16;
+        const POINTER_TABLE_LEN: usize = 32;
+
+        let dsid = DataSpaceId::new(7);
+        let descriptor = axt::AxtDescriptor {
+            dsids: vec![dsid],
+            touches: Vec::new(),
+        };
+        let binding = axt::compute_binding(&descriptor).expect("binding");
+        let kp = KeyPair::random();
+        let authority = AccountId::new(
+            "wonderland".parse().expect("domain"),
+            kp.public_key().clone(),
+        );
+        let authority_str = authority.to_string();
+        let handle = AssetHandle {
+            scope: vec!["transfer".into()],
+            subject: HandleSubject {
+                account: authority_str.clone(),
+                origin_dsid: Some(dsid),
+            },
+            budget: HandleBudget {
+                remaining: 10,
+                per_use: Some(10),
+            },
+            handle_era: 1,
+            sub_nonce: 1,
+            group_binding: GroupBinding {
+                composability_group_id: vec![0xAA; 32],
+                epoch_id: 1,
+            },
+            target_lane: LaneId::new(1),
+            axt_binding: binding.to_vec(),
+            manifest_view_root: vec![0x11; 32],
+            expiry_slot: 40,
+            max_clock_skew_ms: Some(0),
+        };
+        let intent = RemoteSpendIntent {
+            asset_dsid: dsid,
+            op: axt::SpendOp {
+                kind: "transfer".into(),
+                from: authority_str,
+                to: "bob@wonderland".into(),
+                amount: "5".into(),
+            },
+        };
+
+        let descriptor_tlv = make_tlv(PointerType::AxtDescriptor as u16, &norito_blob(&descriptor));
+        let dsid_tlv = make_tlv(PointerType::DataSpaceId as u16, &norito_blob(&dsid));
+        let handle_tlv = make_tlv(PointerType::AssetHandle as u16, &norito_blob(&handle));
+        let intent_tlv = make_tlv(PointerType::NoritoBytes as u16, &norito_blob(&intent));
+
+        let tlv_base = LITERAL_HEADER_LEN + POINTER_TABLE_LEN;
+        let desc_ptr = tlv_base;
+        let dsid_ptr = desc_ptr + descriptor_tlv.len();
+        let handle_ptr = dsid_ptr + dsid_tlv.len();
+        let intent_ptr = handle_ptr + handle_tlv.len();
+
+        let mut literal_data = Vec::new();
+        for ptr in [desc_ptr, dsid_ptr, handle_ptr, intent_ptr] {
+            literal_data.extend_from_slice(&(ptr as u64).to_le_bytes());
+        }
+        literal_data.extend_from_slice(&descriptor_tlv);
+        literal_data.extend_from_slice(&dsid_tlv);
+        literal_data.extend_from_slice(&handle_tlv);
+        literal_data.extend_from_slice(&intent_tlv);
+        let pad = (4 - (literal_data.len() % 4)) % 4;
+        if pad != 0 {
+            literal_data.resize(literal_data.len() + pad, 0);
+        }
+
+        let mut code = Vec::new();
+        let mut emit = |word: u32| code.extend_from_slice(&word.to_le_bytes());
+        let base_imm = i8::try_from(LITERAL_HEADER_LEN).expect("literal header fits i8");
+        emit(encoding::wide::encode_ri(
+            instruction::wide::arithmetic::ADDI,
+            1,
+            0,
+            base_imm,
+        ));
+        emit(encoding::wide::encode_load(
+            instruction::wide::memory::LOAD64,
+            20,
+            1,
+            0,
+        ));
+        emit(encoding::wide::encode_load(
+            instruction::wide::memory::LOAD64,
+            21,
+            1,
+            8,
+        ));
+        emit(encoding::wide::encode_load(
+            instruction::wide::memory::LOAD64,
+            22,
+            1,
+            16,
+        ));
+        emit(encoding::wide::encode_load(
+            instruction::wide::memory::LOAD64,
+            23,
+            1,
+            24,
+        ));
+        emit(encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ADD,
+            10,
+            20,
+            0,
+        ));
+        emit(encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV).expect("syscall fits in u8"),
+        ));
+        emit(encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ADD,
+            40,
+            10,
+            0,
+        ));
+        emit(encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ADD,
+            10,
+            21,
+            0,
+        ));
+        emit(encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV).expect("syscall fits in u8"),
+        ));
+        emit(encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ADD,
+            41,
+            10,
+            0,
+        ));
+        emit(encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ADD,
+            10,
+            22,
+            0,
+        ));
+        emit(encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV).expect("syscall fits in u8"),
+        ));
+        emit(encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ADD,
+            42,
+            10,
+            0,
+        ));
+        emit(encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ADD,
+            10,
+            23,
+            0,
+        ));
+        emit(encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_sys::SYSCALL_INPUT_PUBLISH_TLV).expect("syscall fits in u8"),
+        ));
+        emit(encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ADD,
+            43,
+            10,
+            0,
+        ));
+        emit(encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ADD,
+            10,
+            40,
+            0,
+        ));
+        emit(encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_sys::SYSCALL_AXT_BEGIN).expect("syscall fits in u8"),
+        ));
+        emit(encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ADD,
+            10,
+            41,
+            0,
+        ));
+        emit(encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ADD,
+            11,
+            0,
+            0,
+        ));
+        emit(encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_sys::SYSCALL_AXT_TOUCH).expect("syscall fits in u8"),
+        ));
+        emit(encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ADD,
+            10,
+            42,
+            0,
+        ));
+        emit(encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ADD,
+            11,
+            43,
+            0,
+        ));
+        emit(encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ADD,
+            12,
+            0,
+            0,
+        ));
+        emit(encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_sys::SYSCALL_USE_ASSET_HANDLE).expect("syscall fits in u8"),
+        ));
+        emit(encoding::wide::encode_halt());
+
+        let program = program_with_literals(&code, &literal_data);
+        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = crate::state::State::new_for_testing(
+            crate::state::World::default(),
+            Arc::clone(&kura),
+            query,
+        );
+        assert!(
+            state.view().axt_policy_snapshot().entries.is_empty(),
+            "expected empty AXT policy snapshot"
+        );
+
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+            .sign(kp.private_key());
+
+        let err = build_overlay_for_transaction(&tx, &state.view())
+            .expect_err("overlay should reject AXT handle without policy entry");
+        match err {
+            OverlayBuildError::AxtReject(ctx) => {
+                assert_eq!(ctx.reason, AxtRejectReason::MissingPolicy);
+                assert_eq!(ctx.dataspace, Some(dsid));
+                assert_eq!(ctx.lane, Some(LaneId::new(1)));
+            }
+            other => panic!("expected AxtReject, got {other:?}"),
+        }
     }
 
     #[test]

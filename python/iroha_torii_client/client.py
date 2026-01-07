@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import math
 import time
@@ -43,6 +44,127 @@ from typing import (
 
 import requests
 from urllib.parse import quote
+
+IH58_CHECKSUM_PREFIX = b"IH58PRE"
+IH58_CHECKSUM_BYTES = 2
+IH58_ALPHABET = (
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "J",
+    "K",
+    "L",
+    "M",
+    "N",
+    "P",
+    "Q",
+    "R",
+    "S",
+    "T",
+    "U",
+    "V",
+    "W",
+    "X",
+    "Y",
+    "Z",
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "f",
+    "g",
+    "h",
+    "i",
+    "j",
+    "k",
+    "m",
+    "n",
+    "o",
+    "p",
+    "q",
+    "r",
+    "s",
+    "t",
+    "u",
+    "v",
+    "w",
+    "x",
+    "y",
+    "z",
+)
+IH58_INDEX = {symbol: idx for idx, symbol in enumerate(IH58_ALPHABET)}
+
+
+def _decode_base_n(digits: Sequence[int], base: int) -> bytes:
+    value = 0
+    for digit in digits:
+        value = value * base + digit
+    if value == 0:
+        decoded = b""
+    else:
+        pieces = bytearray()
+        while value:
+            pieces.append(value & 0xFF)
+            value >>= 8
+        decoded = bytes(reversed(pieces))
+    pad = 0
+    for digit in digits:
+        if digit == 0:
+            pad += 1
+        else:
+            break
+    return b"\x00" * pad + decoded
+
+
+def _decode_ih58_prefix(buffer: bytes) -> Tuple[int, int]:
+    if not buffer:
+        raise ValueError("invalid length for IH58 payload")
+    first = buffer[0]
+    if first <= 63:
+        return first, 1
+    if first & 0b0100_0000:
+        if len(buffer) < 2:
+            raise ValueError("invalid length for IH58 payload")
+        second = buffer[1]
+        value = ((second & 0xFF) << 6) | (first & 0b0011_1111)
+        return value, 2
+    raise ValueError("invalid IH58 prefix encoding")
+
+
+def _decode_ih58_string(encoded: str) -> Tuple[int, bytes]:
+    digits: List[int] = []
+    for ch in encoded:
+        try:
+            digits.append(IH58_INDEX[ch])
+        except KeyError as exc:
+            raise ValueError("invalid IH58 base58 encoding") from exc
+    body = _decode_base_n(digits, 58)
+    if len(body) < 1 + IH58_CHECKSUM_BYTES:
+        raise ValueError("invalid length for IH58 payload")
+    payload = body[:-IH58_CHECKSUM_BYTES]
+    checksum_bytes = body[-IH58_CHECKSUM_BYTES:]
+    prefix, prefix_len = _decode_ih58_prefix(payload)
+    checksum_input = IH58_CHECKSUM_PREFIX + payload
+    expected = hashlib.blake2b(checksum_input, digest_size=64).digest()[:IH58_CHECKSUM_BYTES]
+    if checksum_bytes != expected:
+        raise ValueError("IH58 checksum mismatch")
+    canonical = payload[prefix_len:]
+    return prefix, canonical
 
 __all__ = [
     "ToriiClient",
@@ -3329,6 +3451,7 @@ class ToriiClient:
             duration_blocks,
             context="zk ballot v1",
         )
+        self._ensure_governance_owner_canonical(owner, context="zk ballot v1")
         if root_hint is not None:
             payload["root_hint"] = root_hint
         if owner is not None:
@@ -5476,6 +5599,8 @@ class ToriiClient:
             bytes.fromhex(normalized)
         except ValueError as exc:
             raise RuntimeError(f"{context} must contain valid hexadecimal characters") from exc
+        if int(normalized[-1], 16) % 2 == 0:
+            raise RuntimeError(f"{context} must have least significant bit set to 1")
         return f"uaid:{normalized.lower()}"
 
     @staticmethod
@@ -5624,6 +5749,30 @@ class ToriiClient:
                 f"{context} must include owner, amount, duration_blocks when providing lock hints"
             )
 
+    @staticmethod
+    def _ensure_governance_owner_canonical(owner: Any, *, context: str) -> None:
+        if owner is None:
+            return
+        if not isinstance(owner, str):
+            raise RuntimeError(f"{context}.owner must be a canonical account id")
+        trimmed = owner.strip()
+        if not trimmed or trimmed != owner:
+            raise RuntimeError(f"{context}.owner must be a canonical account id")
+        if any(ch.isspace() for ch in trimmed):
+            raise RuntimeError(f"{context}.owner must be a canonical account id")
+        parts = trimmed.split("@")
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise RuntimeError(f"{context}.owner must be a canonical account id")
+        address_part, domain_part = parts
+        if domain_part.isascii() and domain_part.lower() != domain_part:
+            raise RuntimeError(f"{context}.owner must be a canonical account id")
+        if address_part.lower().startswith(("0x", "snx1")):
+            raise RuntimeError(f"{context}.owner must be a canonical account id")
+        try:
+            _decode_ih58_string(address_part)
+        except ValueError as exc:
+            raise RuntimeError(f"{context}.owner must be a canonical account id") from exc
+
     @classmethod
     def _normalize_governance_zk_public_inputs(
         cls,
@@ -5686,6 +5835,10 @@ class ToriiClient:
             normalized.get("owner"),
             normalized.get("amount"),
             normalized.get("duration_blocks"),
+            context=context,
+        )
+        cls._ensure_governance_owner_canonical(
+            normalized.get("owner"),
             context=context,
         )
         return normalized
