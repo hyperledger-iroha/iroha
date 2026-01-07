@@ -265,7 +265,6 @@ fn find_active_trigger_ids_includes_registered() -> Result<()> {
 
 #[test]
 fn burn_trigger_repetitions_removes_from_active_ids() -> Result<()> {
-    use iroha::data_model::events::time::{ExecutionTime, TimeEventFilter};
     use iroha_test_samples::ALICE_ID;
 
     let Some((network, rt)) = start_network_or_skip(
@@ -277,7 +276,7 @@ fn burn_trigger_repetitions_removes_from_active_ids() -> Result<()> {
     };
     let client = network.client();
 
-    // Register a pre-commit time trigger with Exactly(1) repeat so it is active but can be depleted by burn.
+    // Register a by-call trigger with Exactly(1) repeat so it stays active until we burn it.
     let trig_id: TriggerId = "qtrig_disable_via_burn".parse()?;
     let trig = Trigger::new(
         trig_id.clone(),
@@ -285,7 +284,7 @@ fn burn_trigger_repetitions_removes_from_active_ids() -> Result<()> {
             Vec::<InstructionBox>::new(),
             Repeats::Exactly(1),
             ALICE_ID.clone(),
-            TimeEventFilter::new(ExecutionTime::PreCommit),
+            ExecuteTriggerEventFilter::new().for_trigger(trig_id.clone()),
         ),
     );
     client.submit_blocking(Register::trigger(trig))?;

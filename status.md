@@ -1,6 +1,13 @@
 # Status
 
 ## Latest Updates
+- Tests: `cargo test -p iroha_core --lib rbc_ -- --nocapture` (timed out after 360s; suite still running at timeout, no failures observed before abort).
+- Torii telemetry: treat /status 404/503 as telemetry unsupported to avoid noisy decode warnings; add regression coverage.
+- Tests: `cargo test -p iroha_torii --lib --features app_api,telemetry metrics_marks_telemetry_unsupported_on_service_unavailable -- --nocapture` (failed: `iroha_core` missing `RbcRosterSource` argument in `crates/iroha_core/src/sumeragi/main_loop/rbc.rs`).
+- IVM: scope AXT handle sub-nonce replay checks to target_lane so identical sub-nonces across lanes are allowed; add regression coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p ivm record_handle_allows_same_sub_nonce_across_lanes -- --nocapture` (timed out after 120s; test passed).
+- Maintenance: resolve merge conflict markers in `status.md`.
+- Tests: not run (not requested).
 - Sumeragi/RBC: clamp test config to default RBC caps/TTLs, ensure persistence uses roster snapshots even when none are cached, add roster-hash guard to READY rebroadcasts, and serialize RBC status tests; adjust RBC tests for local sender indexing, tip-aligned pending blocks, and chunk-cap expectations; add READY rebroadcast mismatch coverage.
 - Tests: `cargo test -p iroha_core --lib rbc_chunk_accepts_minimum_size_when_chunk_max_zero -- --nocapture` (pass); `cargo test -p iroha_core --lib rbc_chunk_commit_pipeline_runs_on_completion -- --nocapture` (pass); `cargo test -p iroha_core --lib rbc_ -- --nocapture` (timed out after 180s; remaining tests still running when aborted).
 - IVM/WsvHost: respect explicit AXT policy current_slot values while falling back to time when unset; align proof expiry checks with policy slots and AXT snapshot emission; add regression coverage for explicit slot handling and time-derived snapshots.
@@ -11,6 +18,24 @@
 - Tests: `cargo test -p iroha_core seed_rbc_session_from_block_records_roster_snapshot -- --nocapture` (failed: `WorldTransaction.elections` is private in `crates/iroha_core/tests/gov_auto_close_zk_requires_tally.rs:38`).
 - Torii telemetry: pace /status polling with an interval to avoid tight retry loops while still timing out and disconnecting on unresponsive peers; regression test already covers timeout exit.
 - Tests: not run (build locks/timeouts in prior attempts).
+- Client: clarify blocking submit waits for `Applied` and log applied block-event confirmations.
+- Integration tests: centralize env var mutation helpers in `integration_tests/src/sandbox.rs` and add EnvRestore roundtrip coverage.
+- Tests: `cargo test -p iroha_core pacemaker_ignores_stale_new_view_entries -- --nocapture` (x10; all pass).
+- Tests: `cargo test -p integration_tests --test iterable_queries_torii burn_trigger_repetitions_removes_from_active_ids -- --nocapture` (pass).
+- Tests: `cargo test -p integration_tests --lib env_restore_roundtrips_env_var -- --nocapture` (pass).
+- Integration tests: allow sandbox env var mutation helpers under `#[allow(unsafe_code)]` to satisfy `rust.unsafe_code = "deny"` while calling `std::env::set_var`/`remove_var`.
+- Tests: `cargo test -p integration_tests` (timed out after ~4m while running `address_canonicalisation`; compilation succeeded and unit tests completed).
+- Maintenance: resolve merge conflicts in `crates/iroha_core/src/sumeragi/main_loop/commit.rs` and `status.md`.
+- Tests: not run (not requested).
+- Integration tests: remove `unsafe` blocks around sandbox env var restore helpers in `integration_tests/src/sandbox.rs`, add env-restore roundtrip coverage to satisfy `-D unsafe-code`.
+- Tests: not run (not requested).
+- Integration tests: wrap env var mutation helpers in `unsafe` blocks and document the env-lock requirement for Rust's environment safety contract.
+- Tests: not run (not requested).
+- Maintenance: resolve merge conflict markers in `status.md`.
+- Tests: not run (not requested).
+- Test network harness: workspace fingerprint now honors simple `.gitignore` globs and ignores custom `CARGO_TARGET_DIR` paths to reduce unnecessary rebuilds; added unit coverage.
+- Tests: not run (not requested).
+- Integration tests: default sandbox network parallelism now scales with CPU/4 (matching the cross-process permit heuristic) and updated the serial-guard unit test to reflect the new default.
 - IVM/CoreHost: reject duplicate AXT touches, deny DS proofs when policy manifest roots are zero, and align fixture host timing with handle skew; add regression coverage.
 - Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p ivm --test core_host_policy -- --nocapture`.
 - Torii/Sumeragi build fixes: update RBC roster hashing for slice inputs, include roster snapshot/hash in duplicate RBC init, reuse cloned init for rebroadcast, avoid session-roster borrow conflicts, and fix governance JSON map signatures + state borrow in tests.

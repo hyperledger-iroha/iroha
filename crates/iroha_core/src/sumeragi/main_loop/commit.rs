@@ -1836,10 +1836,8 @@ impl Actor {
             let topology = super::network_topology::Topology::new(commit_topology.clone());
             let roster_len = topology.as_ref().len();
             let min_votes_for_commit = self.commit_min_votes(&topology);
-
             let missing_local_data = da_enabled && !payload_available;
             let delivered = payload_available;
-
             let mut emit_precommit = false;
             let mut abort_due_to_kura = false;
             let mut replay_msg: Option<BlockMessage> = None;
@@ -3486,6 +3484,7 @@ impl Actor {
             &mut self.subsystems.da_rbc.rbc.sessions,
             &mut self.subsystems.da_rbc.rbc.pending,
             &mut self.subsystems.da_rbc.rbc.session_rosters,
+            &mut self.subsystems.da_rbc.rbc.session_roster_sources,
             &self.subsystems.da_rbc.rbc.status_handle,
             chunk_store,
         );

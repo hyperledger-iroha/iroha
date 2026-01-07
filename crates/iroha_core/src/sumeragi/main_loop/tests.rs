@@ -8387,10 +8387,12 @@ async fn rbc_chunk_accepts_minimum_size_when_chunk_max_zero() {
     consensus_cfg.da_enabled = true;
     consensus_cfg.rbc_chunk_max_bytes = 0;
     let hard_chunk_cap = usize::try_from(super::RBC_MAX_TOTAL_CHUNKS).unwrap_or(usize::MAX);
+    let chunk_max_bytes = consensus_cfg.rbc_chunk_max_bytes.max(1);
+    let hard_byte_cap = chunk_max_bytes.saturating_mul(hard_chunk_cap);
     let expected_max_bytes = consensus_cfg
         .rbc_pending_max_bytes
-        .min(hard_chunk_cap)
-        .max(1);
+        .min(hard_byte_cap)
+        .max(chunk_max_bytes);
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
 
     let (_max_chunks, max_bytes) = harness.actor.pending_rbc_caps();
@@ -9248,7 +9250,7 @@ async fn record_rbc_session_roster_clears_persisted_full_session() {
         .rbc
         .persisted_full_sessions
         .insert(key);
-    actor.record_rbc_session_roster(key, roster);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
 
     assert!(
         actor
@@ -30294,6 +30296,7 @@ fn drain_rbc_state_for_block_retains_status_snapshot() {
         &mut sessions,
         &mut pending_rbc,
         &mut session_rosters,
+        &mut BTreeMap::new(),
         &status_handle,
         None,
     );

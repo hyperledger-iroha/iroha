@@ -3000,6 +3000,26 @@ struct MergeLaneState {
     committee: MergeCommitteeState,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RbcRosterSource {
+    Derived,
+    Network,
+}
+
+impl RbcRosterSource {
+    fn is_authoritative(self) -> bool {
+        matches!(self, Self::Network)
+    }
+
+    fn merge(self, other: Self) -> Self {
+        if other.is_authoritative() && !self.is_authoritative() {
+            other
+        } else {
+            self
+        }
+    }
+}
+
 #[derive(Debug)]
 struct DaState {
     /// Per-block DA bundles sealed by this node (in-memory index).
@@ -3030,6 +3050,7 @@ struct RbcState {
     sessions: BTreeMap<super::rbc_store::SessionKey, RbcSession>,
     pending: BTreeMap<super::rbc_store::SessionKey, PendingRbcMessages>,
     session_rosters: BTreeMap<super::rbc_store::SessionKey, Vec<PeerId>>,
+    session_roster_sources: BTreeMap<super::rbc_store::SessionKey, RbcRosterSource>,
     status_handle: rbc_status::Handle,
     payload_rebroadcast_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
     ready_rebroadcast_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
@@ -4536,13 +4557,25 @@ impl Actor {
             .unwrap_or_default()
     }
 
+    fn rbc_session_roster_source(
+        &self,
+        key: super::rbc_store::SessionKey,
+    ) -> Option<RbcRosterSource> {
+        self.subsystems
+            .da_rbc
+            .rbc
+            .session_roster_sources
+            .get(&key)
+            .copied()
+    }
+
     fn ensure_rbc_session_roster(&mut self, key: super::rbc_store::SessionKey) -> Vec<PeerId> {
         if let Some(roster) = self.subsystems.da_rbc.rbc.session_rosters.get(&key) {
             return roster.clone();
         }
         let roster = self.rbc_roster_for_session(key);
         if !roster.is_empty() {
-            self.record_rbc_session_roster(key, roster.clone());
+            self.record_rbc_session_roster(key, roster.clone(), RbcRosterSource::Derived);
         }
         roster
     }
@@ -4551,24 +4584,58 @@ impl Actor {
         &mut self,
         key: super::rbc_store::SessionKey,
         roster: Vec<PeerId>,
+        source: RbcRosterSource,
     ) {
         if roster.is_empty() {
             return;
         }
-        if let Entry::Vacant(entry) = self
+        match self
             .subsystems
             .da_rbc
             .rbc
             .session_rosters
             .entry(key)
         {
-            entry.insert(roster);
-            self.subsystems.da_rbc.rbc.persisted_full_sessions.remove(&key);
+            Entry::Vacant(entry) => {
+                entry.insert(roster);
+                self.subsystems
+                    .da_rbc
+                    .rbc
+                    .session_roster_sources
+                    .insert(key, source);
+                if source.is_authoritative() {
+                    self.subsystems.da_rbc.rbc.persisted_full_sessions.remove(&key);
+                }
+            }
+            Entry::Occupied(entry) => {
+                if entry.get() == &roster {
+                    let existing = self
+                        .subsystems
+                        .da_rbc
+                        .rbc
+                        .session_roster_sources
+                        .get(&key)
+                        .copied()
+                        .unwrap_or(RbcRosterSource::Derived);
+                    let merged = existing.merge(source);
+                    if merged != existing {
+                        self.subsystems
+                            .da_rbc
+                            .rbc
+                            .session_roster_sources
+                            .insert(key, merged);
+                        if merged.is_authoritative() && !existing.is_authoritative() {
+                            self.subsystems.da_rbc.rbc.persisted_full_sessions.remove(&key);
+                        }
+                    }
+                }
+            }
         }
     }
 
     fn clear_rbc_session_roster(&mut self, key: &super::rbc_store::SessionKey) {
         self.subsystems.da_rbc.rbc.session_rosters.remove(key);
+        self.subsystems.da_rbc.rbc.session_roster_sources.remove(key);
     }
 
     fn record_invalid_signature(
@@ -5321,6 +5388,7 @@ impl Actor {
 
         let mut rbc_sessions = BTreeMap::new();
         let mut rbc_session_rosters = BTreeMap::new();
+        let mut rbc_session_roster_sources = BTreeMap::new();
         let mut initial_rbc_store_pressure: Option<super::rbc_store::StorePressure> = None;
         if let Some(store) = chunk_store.as_ref() {
             match store.load(&chain_hash, &rbc_manifest) {
@@ -5364,6 +5432,8 @@ impl Actor {
                                 rbc_sessions.insert(key, session);
                                 if !roster.is_empty() {
                                     rbc_session_rosters.insert(key, roster);
+                                    rbc_session_roster_sources
+                                        .insert(key, RbcRosterSource::Network);
                                 }
                             }
                             Err(err) => {
@@ -5475,6 +5545,7 @@ impl Actor {
             sessions: rbc_sessions,
             pending: BTreeMap::new(),
             session_rosters: rbc_session_rosters,
+            session_roster_sources: rbc_session_roster_sources,
             status_handle: rbc_status_handle,
             payload_rebroadcast_last_sent: BTreeMap::new(),
             ready_rebroadcast_last_sent: BTreeMap::new(),
@@ -7952,6 +8023,7 @@ fn drain_rbc_state_for_block(
     rbc_sessions: &mut BTreeMap<super::rbc_store::SessionKey, RbcSession>,
     pending_rbc: &mut BTreeMap<super::rbc_store::SessionKey, PendingRbcMessages>,
     rbc_session_rosters: &mut BTreeMap<super::rbc_store::SessionKey, Vec<PeerId>>,
+    rbc_session_roster_sources: &mut BTreeMap<super::rbc_store::SessionKey, RbcRosterSource>,
     rbc_status_handle: &rbc_status::Handle,
     chunk_store: Option<&super::rbc_store::ChunkStore>,
 ) -> (RbcLaneTotals, RbcDataspaceTotals) {
@@ -7964,6 +8036,7 @@ fn drain_rbc_state_for_block(
     for key in &keys {
         pending_rbc.remove(key);
         rbc_session_rosters.remove(key);
+        rbc_session_roster_sources.remove(key);
         if let Some(store) = chunk_store {
             if let Err(err) = store.remove(key) {
                 warn!(
