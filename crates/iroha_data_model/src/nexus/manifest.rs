@@ -63,7 +63,12 @@ impl FromStr for UniversalAccountId {
     type Err = iroha_crypto::error::ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Hash::from_str(s).map(Self::from_hash)
+        let trimmed = s.trim();
+        let hex_literal = match trimmed.get(..5) {
+            Some(prefix) if prefix.eq_ignore_ascii_case("uaid:") => &trimmed[5..],
+            _ => trimmed,
+        };
+        Hash::from_str(hex_literal).map(Self::from_hash)
     }
 }
 
@@ -965,6 +970,27 @@ mod tests {
 
     fn sample_name(value: &str) -> Name {
         value.parse().expect("valid name")
+    }
+
+    #[test]
+    fn uaid_from_str_accepts_literal_and_hex() {
+        let uaid = sample_uaid();
+        let hex = uaid.as_hash().to_string();
+
+        let parsed_hex = UniversalAccountId::from_str(&hex).expect("hex uaid must parse");
+        let parsed_literal =
+            UniversalAccountId::from_str(&format!("uaid:{hex}")).expect("uaid literal must parse");
+        let parsed_upper =
+            UniversalAccountId::from_str(&format!("UAID:{hex}")).expect("upper literal must parse");
+        let parsed_display = uaid
+            .to_string()
+            .parse::<UniversalAccountId>()
+            .expect("display uaid must parse");
+
+        assert_eq!(parsed_hex, uaid);
+        assert_eq!(parsed_literal, uaid);
+        assert_eq!(parsed_upper, uaid);
+        assert_eq!(parsed_display, uaid);
     }
 
     fn manifest_with_entries(

@@ -708,7 +708,10 @@ impl CoreHost {
                 if !record.is_active() {
                     continue;
                 }
-                if record.manifest_hash.as_ref().iter().all(|byte| *byte == 0) {
+                let digest = record.manifest_hash.as_ref();
+                let is_zero_sentinel = digest[..Hash::LENGTH - 1].iter().all(|byte| *byte == 0)
+                    && digest[Hash::LENGTH - 1] == 1;
+                if is_zero_sentinel {
                     iroha_logger::warn!(
                         %uaid,
                         dataspace_id = dsid.as_u64(),

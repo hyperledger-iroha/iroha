@@ -1,6 +1,26 @@
 # Status
 
 ## Latest Updates
+- Sumeragi/RBC: enforce `rbc_session_ttl` by pruning stale RBC sessions from memory/status; add coverage.
+- Tests: `cargo test -p iroha_core rbc_session_ttl_prunes_stale_sessions -- --nocapture` (timed out after 120s during compilation).
+- Core/AXT: clear cached policy entries when the Space Directory snapshot can't be derived (no manifests/lane mapping), preventing stale policies from persisting; add regression coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p iroha_core --lib axt_policy_refresh_clears_stale_entries_when_snapshot_missing -- --nocapture` (pass).
+- State: skip missing Kura blocks in `all_blocks` to avoid panics and add coverage for missing entries.
+- Tests: not run (not requested).
+- UAID: accept `uaid:<hex>` (case-insensitive) literals in `UniversalAccountId::from_str` and add roundtrip coverage.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 120s: waiting for build directory lock; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Governance ZK voting: reject deprecated alias keys in ZK V1 JSON payloads by inspecting raw JSON for top-level and ballot-proof inputs; add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi/RBC: defer local DELIVER emission until all chunks are present; add coverage for missing-chunk deferral.
+- Tests: `cargo test --workspace` (timed out after 120s: blocked waiting for build directory lock; compilation in progress; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Sumeragi: prioritize missing-block requests (consensus vs background), arm view-change windows for RBC recovery and one-block parent gaps, and add priority/background coverage; update Sumeragi docs.
+- Tests: not run (not requested).
+- Core/AXT: skip zero-hash manifest sentinels during UAID binding migration so state-derived policy snapshots ignore placeholder manifests; add regression coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p iroha_core --lib axt_policy_snapshot_ignores_zero_manifest_hash_sentinel -- --nocapture` (failed: `MissingBlockPriority` arguments/fields missing in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`).
+- Assets: clear asset metadata when a transfer drains the balance to zero; add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi/DA: avoid deriving roster snapshots in the RBC rebroadcast loop, reset READY/DELIVER state when a derived roster mismatch is stashed, and only flush pending RBC when a roster snapshot is already cached; add coverage and document the background behavior.
+- Tests: `cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_does_not_derive_roster_for_pending_chunks -- --nocapture` (timed out: waiting for build directory lock).
 - Maintenance: resolve merge conflicts in `status.md` and `roadmap.md`.
 - Tests: not run (not requested).
 - Sumeragi: retry missing-block fetches on tick with backoff + view-change triggers, skip quorum reschedules when commit QCs are cached, and mark rehydrated pending blocks as commit-certified; add coverage.
@@ -1647,11 +1667,11 @@
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options); `cargo test --workspace` (timed out after 600s; warnings about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450` and dead_code in `crates/norito/src/core.rs:6792`).
 - Fixed invalid-proposal evidence to carry the pending view when commit quorum failures occur, with coverage asserting the recorded proposal view.
 - Standardized ZK ballot public-input validation across Torii, CLI, and the JS SDK (Torii client + instruction builders) and refreshed the JS governance ballot examples.
-- Normalized Android CastZkBallot public inputs (canonical JSON, alias mapping, full lock hints) with new regression coverage, and clarified governance docs that partial lock hints are rejected.
-- Normalized CLI ZK public-input alias keys (`durationBlocks`, `rootHintHex`, `nullifierHex`) and added regression coverage for alias conflicts.
+- Normalized Android CastZkBallot public inputs (canonical JSON, alias rejection, full lock hints) with new regression coverage, and clarified governance docs that partial lock hints are rejected.
+- CLI now rejects ZK public-input alias keys (`durationBlocks`, `rootHintHex`, `nullifierHex`) and added regression coverage for alias conflicts.
 - Canonicalized JavaScript `CastZkBallot` public-input JSON ordering (sorted keys) with a regression for nested ordering.
-- Hardened the Norito bridge CastZkBallot encoder to normalize alias keys and enforce complete lock hints, with regression coverage for invalid inputs.
-- Normalized JS host CastZkBallot parsing to canonicalize public inputs (alias mapping, complete lock hints) with regression tests for invalid payloads.
+- Hardened the Norito bridge CastZkBallot encoder to reject alias keys and enforce complete lock hints, with regression coverage for invalid inputs.
+- Normalized JS host CastZkBallot parsing to canonicalize public inputs (alias rejection, complete lock hints) with regression tests for invalid payloads.
 - Torii now rejects ZK ballot public-input aliases and canonicalizes `root_hint`/`nullifier` hints (including V1 endpoints), rejecting conflicts or invalid hex with new unit tests.
 - Retried trigger-failure submission in the notification integration test on transient Torii/consensus errors before asserting expected failure types.
 - Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 600s; compile finished; test `events::notification::trigger_completion_failure_reports_error` still running).

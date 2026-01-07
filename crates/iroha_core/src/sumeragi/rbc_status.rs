@@ -164,6 +164,26 @@ impl Handle {
         inner.map.get(key).map(|entry| entry.summary.clone())
     }
 
+    /// Return session keys whose summaries are older than `ttl`.
+    pub(super) fn stale_keys(
+        &self,
+        ttl: Duration,
+        now: SystemTime,
+    ) -> Vec<(HashOf<BlockHeader>, u64, u64)> {
+        if ttl == Duration::ZERO {
+            return Vec::new();
+        }
+        let inner = self.store.inner.lock().expect("rbc status lock poisoned");
+        inner
+            .map
+            .iter()
+            .filter_map(|(key, entry)| {
+                let age = now.duration_since(entry.updated_at).unwrap_or(Duration::ZERO);
+                (age > ttl).then_some(*key)
+            })
+            .collect()
+    }
+
     /// Remove a session summary by key.
     pub fn remove(&self, key: &(HashOf<BlockHeader>, u64, u64)) {
         let mut inner = self.store.inner.lock().expect("rbc status lock poisoned");

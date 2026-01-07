@@ -1669,6 +1669,7 @@ struct MissingBlockRequest {
     height: u64,
     view: u64,
     phase: crate::sumeragi::consensus::Phase,
+    priority: MissingBlockPriority,
     retry_window: Duration,
     view_change_window: Option<Duration>,
     first_seen: Instant,
@@ -1696,6 +1697,12 @@ impl MissingBlockRequest {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum MissingBlockPriority {
+    Background,
+    Consensus,
+}
+
 fn phase_rank(phase: crate::sumeragi::consensus::Phase) -> u8 {
     match phase {
         crate::sumeragi::consensus::Phase::Prepare => 0,
@@ -1710,6 +1717,7 @@ fn touch_missing_block_request(
     height: u64,
     view: u64,
     phase: crate::sumeragi::consensus::Phase,
+    priority: MissingBlockPriority,
     now: Instant,
     retry_window: Duration,
     view_change_window: Option<Duration>,
@@ -1720,6 +1728,7 @@ fn touch_missing_block_request(
                 height,
                 view,
                 phase,
+                priority,
                 retry_window,
                 view_change_window,
                 first_seen: now,
@@ -1731,6 +1740,7 @@ fn touch_missing_block_request(
         }
         Entry::Occupied(mut occupied) => {
             let stats = occupied.get_mut();
+            let priority_upgrade = priority > stats.priority;
             stats.height = stats.height.max(height);
             if stats.view != view {
                 warn!(
@@ -1745,18 +1755,30 @@ fn touch_missing_block_request(
             if phase_rank(phase) > phase_rank(stats.phase) {
                 stats.phase = phase;
             }
-            stats.retry_window = if stats.retry_window == Duration::ZERO {
-                retry_window
-            } else {
-                stats.retry_window.min(retry_window)
-            };
-            if let Some(window) = view_change_window {
-                stats.view_change_window = Some(match stats.view_change_window {
-                    Some(existing) => existing.min(window),
-                    None => window,
-                });
+            match priority.cmp(&stats.priority) {
+                std::cmp::Ordering::Greater => {
+                    stats.priority = priority;
+                    stats.retry_window = retry_window;
+                    stats.view_change_window = view_change_window;
+                }
+                std::cmp::Ordering::Equal => {
+                    stats.retry_window = if stats.retry_window == Duration::ZERO {
+                        retry_window
+                    } else {
+                        stats.retry_window.min(retry_window)
+                    };
+                    stats.view_change_window = match (stats.view_change_window, view_change_window)
+                    {
+                        (Some(existing), Some(window)) => Some(existing.min(window)),
+                        (Some(existing), None) => Some(existing),
+                        (None, Some(window)) => Some(window),
+                        (None, None) => None,
+                    };
+                }
+                std::cmp::Ordering::Less => {}
             }
-            let retry_due = now.saturating_duration_since(stats.last_requested) >= stats.retry_window;
+            let retry_due = priority_upgrade
+                || now.saturating_duration_since(stats.last_requested) >= stats.retry_window;
             if retry_due {
                 stats.last_requested = now;
             }
@@ -1784,6 +1806,7 @@ fn plan_missing_block_fetch(
     height: u64,
     view: u64,
     phase: crate::sumeragi::consensus::Phase,
+    priority: MissingBlockPriority,
     signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
     topology: &super::network_topology::Topology,
     now: Instant,
@@ -1797,6 +1820,7 @@ fn plan_missing_block_fetch(
         height,
         view,
         phase,
+        priority,
         now,
         retry_window,
         view_change_window,
@@ -1911,6 +1935,7 @@ where
         height,
         view,
         phase,
+        MissingBlockPriority::Consensus,
         signers,
         topology,
         now,
@@ -2102,6 +2127,7 @@ impl Actor {
         }
         let now = Instant::now();
         let signers = BTreeSet::new();
+        let view_change_window = if gap == 1 { Some(retry_window) } else { None };
         let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
         let decision = plan_missing_block_fetch(
             &mut requests,
@@ -2109,11 +2135,12 @@ impl Actor {
             parent_height,
             block_view,
             crate::sumeragi::consensus::Phase::Commit,
+            MissingBlockPriority::Background,
             &signers,
             &topology,
             now,
             retry_window,
-            None,
+            view_change_window,
             self.config.missing_block_signer_fallback_attempts,
         );
         self.pending.missing_block_requests = requests;
@@ -4654,13 +4681,7 @@ impl Actor {
         if roster.is_empty() {
             return;
         }
-        match self
-            .subsystems
-            .da_rbc
-            .rbc
-            .session_rosters
-            .entry(key)
-        {
+        match self.subsystems.da_rbc.rbc.session_rosters.entry(key) {
             Entry::Vacant(entry) => {
                 entry.insert(roster);
                 self.subsystems
@@ -4669,7 +4690,11 @@ impl Actor {
                     .session_roster_sources
                     .insert(key, source);
                 if source.is_authoritative() {
-                    self.subsystems.da_rbc.rbc.persisted_full_sessions.remove(&key);
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .persisted_full_sessions
+                        .remove(&key);
                 }
             }
             Entry::Occupied(mut entry) => {
@@ -4691,7 +4716,11 @@ impl Actor {
                             .session_roster_sources
                             .insert(key, merged);
                         if merged.is_authoritative() && !existing_source.is_authoritative() {
-                            self.subsystems.da_rbc.rbc.persisted_full_sessions.remove(&key);
+                            self.subsystems
+                                .da_rbc
+                                .rbc
+                                .persisted_full_sessions
+                                .remove(&key);
                         }
                     }
                     return;
@@ -4703,7 +4732,11 @@ impl Actor {
                         .rbc
                         .session_roster_sources
                         .insert(key, source);
-                    self.subsystems.da_rbc.rbc.persisted_full_sessions.remove(&key);
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .persisted_full_sessions
+                        .remove(&key);
                 } else if source.is_authoritative() && existing_source.is_authoritative() {
                     warn!(
                         block = %key.0,
@@ -4718,7 +4751,11 @@ impl Actor {
 
     fn clear_rbc_session_roster(&mut self, key: &super::rbc_store::SessionKey) {
         self.subsystems.da_rbc.rbc.session_rosters.remove(key);
-        self.subsystems.da_rbc.rbc.session_roster_sources.remove(key);
+        self.subsystems
+            .da_rbc
+            .rbc
+            .session_roster_sources
+            .remove(key);
     }
 
     fn record_invalid_signature(
@@ -6196,6 +6233,7 @@ impl Actor {
             (progress, step_start.elapsed())
         };
         let rbc_rebroadcast_progress = self.rebroadcast_stalled_rbc_payloads(now);
+        let rbc_session_ttl_progress = self.prune_stale_rbc_sessions(SystemTime::now());
         let mut commit_pipeline_cost = Duration::ZERO;
         let mut propose_cost = Duration::ZERO;
         progress |= rbc_persist_progress
@@ -6205,7 +6243,8 @@ impl Actor {
             || missing_block_progress
             || reschedule_progress
             || idle_view_progress
-            || rbc_rebroadcast_progress;
+            || rbc_rebroadcast_progress
+            || rbc_session_ttl_progress;
         if should_run_commit_pipeline_on_tick(self.active_pending_blocks_len())
             || self.subsystems.commit.inflight.is_some()
         {
@@ -7468,7 +7507,7 @@ impl Actor {
         if !self.subsystems.da_rbc.rbc.pending.contains_key(&key) {
             return false;
         }
-        let roster = self.ensure_rbc_session_roster(key);
+        let roster = self.rbc_session_roster(key);
         if roster.is_empty() {
             return false;
         }
@@ -7544,17 +7583,11 @@ impl Actor {
             if !self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
                 continue;
             }
-            let mut roster = self.rbc_session_roster(key);
-            let mut roster_source = self
+            let roster = self.rbc_session_roster(key);
+            let roster_source = self
                 .rbc_session_roster_source(key)
                 .unwrap_or(RbcRosterSource::Derived);
-            if roster.is_empty() {
-                roster = self.ensure_rbc_session_roster(key);
-                roster_source = self
-                    .rbc_session_roster_source(key)
-                    .unwrap_or(RbcRosterSource::Derived);
-            }
-            if roster.is_empty() {
+            if roster.is_empty() || !roster_source.is_authoritative() {
                 continue;
             }
             let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) else {
@@ -7570,15 +7603,12 @@ impl Actor {
             if ready_count >= required {
                 continue;
             }
-            let payload_bundle = if roster_source.is_authoritative()
-                && self.rbc_payload_rebroadcast_due(&key, now, payload_cooldown)
-            {
+            let payload_bundle = if self.rbc_payload_rebroadcast_due(&key, now, payload_cooldown) {
                 Self::rbc_payload_bundle(key, session, &roster)
             } else {
                 None
             };
             let ready_bundle = if !session.ready_signatures.is_empty()
-                && roster_source.is_authoritative()
                 && self.rbc_ready_rebroadcast_due(&key, now, ready_cooldown)
             {
                 Self::rbc_ready_bundle(key, session, roster_hash)
@@ -7646,6 +7676,20 @@ impl Actor {
             if !session.ready_signatures.is_empty() {
                 self.rebroadcast_rbc_ready_set(key, &session);
             }
+            self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+            return Ok(());
+        }
+        let total_chunks = session.total_chunks();
+        if total_chunks != 0 && session.received_chunks() < total_chunks {
+            debug!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                received = session.received_chunks(),
+                total = total_chunks,
+                "deferring RBC DELIVER: payload chunks not yet complete"
+            );
+            self.rebroadcast_rbc_payload(key, &session);
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }

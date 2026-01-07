@@ -2397,9 +2397,7 @@ fn gov_vote_zk_against_mock() {
         Some("Nay")
     );
     assert_eq!(
-        entry
-            .get("nullifier")
-            .and_then(norito::json::Value::as_str),
+        entry.get("nullifier").and_then(norito::json::Value::as_str),
         Some(nullifier.as_str())
     );
     assert!(
@@ -2593,9 +2591,7 @@ fn gov_vote_zk_subcommand_emits_summary_and_json() {
         Some(direction)
     );
     assert_eq!(
-        entry
-            .get("nullifier")
-            .and_then(norito::json::Value::as_str),
+        entry.get("nullifier").and_then(norito::json::Value::as_str),
         Some(nullifier.as_str())
     );
 }

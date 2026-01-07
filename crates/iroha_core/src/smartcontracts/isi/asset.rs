@@ -160,8 +160,7 @@ pub mod isi {
             assert!(
                 state_transaction
                     .world
-                    .assets
-                    .remove(source_id.clone())
+                    .remove_asset_and_metadata(source_id)
                     .is_some()
             );
         }
@@ -891,8 +890,9 @@ pub mod query {
     #[cfg(test)]
     mod tests {
         use iroha_data_model::query::json::{EqualsCondition, PredicateJson};
-        use iroha_primitives::numeric::Numeric;
-        use iroha_test_samples::ALICE_ID;
+        use iroha_primitives::{json::Json, numeric::Numeric};
+        use iroha_test_samples::{ALICE_ID, BOB_ID};
+        use nonzero_ext::nonzero;
         use norito::json::Value;
 
         use super::*;
@@ -971,6 +971,46 @@ pub mod query {
             assert_eq!(assets.len(), 1);
             assert_eq!(assets[0].id(), &alice_asset_id);
             assert_eq!(*assets[0].value(), Numeric::new(13, 0));
+        }
+
+        #[test]
+        fn transfer_removes_metadata_when_balance_zero() {
+            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain = Domain::new(domain_id).build(&ALICE_ID);
+            let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+            let bob_account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
+            let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
+            let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);
+            let alice_asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
+            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(1, 0));
+
+            let world = World::with_assets(
+                [domain],
+                [alice_account, bob_account],
+                [asset_def],
+                [alice_asset],
+                [],
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_store);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            let key: Name = "tag".parse().expect("metadata key");
+            let value = Json::from(norito::json!("seed"));
+            SetAssetKeyValue::new(alice_asset_id.clone(), key, value)
+                .execute(&ALICE_ID, &mut stx)
+                .expect("set metadata");
+
+            Transfer::asset_numeric(alice_asset_id.clone(), 1_u32, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("transfer succeeds");
+
+            assert!(stx.world.assets.get(&alice_asset_id).is_none());
+            assert!(stx.world.asset_metadata.get(&alice_asset_id).is_none());
         }
 
         #[test]
