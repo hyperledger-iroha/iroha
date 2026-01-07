@@ -991,6 +991,7 @@ impl Actor {
         };
 
         self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+        self.ensure_rbc_session_roster(key);
         self.flush_pending_rbc(key)?;
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &session, false);
@@ -2378,8 +2379,20 @@ impl Actor {
                         bytes: 0,
                     };
                     let mut removed_acc = Vec::new();
-                    for (&session_key, session) in &self.subsystems.da_rbc.rbc.sessions {
-                        let session_roster = self.rbc_session_roster(session_key);
+                    let session_keys: Vec<_> = self
+                        .subsystems
+                        .da_rbc
+                        .rbc
+                        .sessions
+                        .keys()
+                        .copied()
+                        .collect();
+                    for session_key in session_keys {
+                        let session_roster = self.ensure_rbc_session_roster(session_key);
+                        let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&session_key)
+                        else {
+                            continue;
+                        };
                         match store.persist_session(
                             session_key,
                             session,
@@ -2522,31 +2535,33 @@ impl Actor {
         if self.subsystems.da_rbc.rbc.persist_inflight.contains(&key) {
             return;
         }
-        if let Some(tx) = self.subsystems.da_rbc.rbc.persist_tx.as_ref() {
-            let session_roster = self.rbc_session_roster(key);
+        if self.subsystems.da_rbc.rbc.persist_tx.is_some() {
+            let session_roster = self.ensure_rbc_session_roster(key);
             let persisted = session.to_persisted(
                 key,
                 self.chain_hash,
                 &self.subsystems.da_rbc.rbc.manifest,
                 session_roster.as_slice(),
             );
-            match tx.try_send(RbcPersistWork { key, persisted }) {
-                Ok(()) => {
-                    self.subsystems.da_rbc.rbc.persist_inflight.insert(key);
-                }
-                Err(mpsc::TrySendError::Full(_work)) => {
-                    debug!(
-                        ?key,
-                        "RBC persist queue full; deferring session persistence"
-                    );
-                }
-                Err(mpsc::TrySendError::Disconnected(_work)) => {
-                    warn!(
-                        ?key,
-                        "RBC persist worker disconnected; falling back to sync persistence"
-                    );
-                    self.subsystems.da_rbc.rbc.persist_tx = None;
-                    self.subsystems.da_rbc.rbc.persist_inflight.clear();
+            if let Some(tx) = self.subsystems.da_rbc.rbc.persist_tx.as_ref() {
+                match tx.try_send(RbcPersistWork { key, persisted }) {
+                    Ok(()) => {
+                        self.subsystems.da_rbc.rbc.persist_inflight.insert(key);
+                    }
+                    Err(mpsc::TrySendError::Full(_work)) => {
+                        debug!(
+                            ?key,
+                            "RBC persist queue full; deferring session persistence"
+                        );
+                    }
+                    Err(mpsc::TrySendError::Disconnected(_work)) => {
+                        warn!(
+                            ?key,
+                            "RBC persist worker disconnected; falling back to sync persistence"
+                        );
+                        self.subsystems.da_rbc.rbc.persist_tx = None;
+                        self.subsystems.da_rbc.rbc.persist_inflight.clear();
+                    }
                 }
             }
             if self.subsystems.da_rbc.rbc.persist_tx.is_some() {
@@ -2561,6 +2576,7 @@ impl Actor {
             return;
         }
 
+        let session_roster = self.ensure_rbc_session_roster(key);
         let store = self
             .subsystems
             .da_rbc
@@ -2568,8 +2584,6 @@ impl Actor {
             .chunk_store
             .as_ref()
             .expect("chunk store should be initialised");
-
-        let session_roster = self.rbc_session_roster(key);
         match store.persist_session(
             key,
             session,

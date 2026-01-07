@@ -761,7 +761,7 @@ struct SwiftTransactionEncoder {
                     "\(field) must be 32-byte hex"
                 )
             }
-            trimmed = rest
+            trimmed = rest.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
             trimmed = String(trimmed.dropFirst(2))

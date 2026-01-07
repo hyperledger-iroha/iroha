@@ -415,6 +415,10 @@ impl MockWorldStateView {
 
     /// Install or update an AXT policy entry for a dataspace.
     pub fn set_axt_policy(&mut self, dsid: DataSpaceId, policy: DataspaceAxtPolicy) {
+        let mut policy = policy;
+        if policy.current_slot == 0 {
+            policy.current_slot = self.current_slot();
+        }
         self.axt_policies.insert(dsid, policy);
     }
 
@@ -425,12 +429,27 @@ impl MockWorldStateView {
 
     /// Emit a data-model AXT policy snapshot for block/replication plumbing.
     pub fn axt_policy_snapshot_model(&self) -> AxtPolicySnapshot {
+        let fallback_slot = if self
+            .axt_policies
+            .values()
+            .any(|policy| policy.current_slot != 0)
+        {
+            None
+        } else {
+            Some(self.current_slot())
+        };
         let mut entries: Vec<_> = self
             .axt_policies
             .iter()
-            .map(|(dsid, policy)| AxtPolicyBinding {
-                dsid: *dsid,
-                policy: policy.to_model_entry(),
+            .map(|(dsid, policy)| {
+                let mut entry = policy.to_model_entry();
+                if let Some(slot) = fallback_slot {
+                    entry.current_slot = slot;
+                }
+                AxtPolicyBinding {
+                    dsid: *dsid,
+                    policy: entry,
+                }
             })
             .collect();
         entries.sort_by_key(|binding| binding.dsid);
@@ -1633,14 +1652,19 @@ impl WsvHost {
     fn build_wsv_axt_policy(wsv: &MockWorldStateView) -> Arc<SpaceDirectoryAxtPolicy> {
         let slot_length_ms = wsv.slot_length_ms();
         let max_clock_skew_ms = wsv.max_clock_skew_ms();
-        Arc::new(
-            SpaceDirectoryAxtPolicy::from_snapshot_with_timing(
-                wsv.axt_policy_snapshot(),
-                slot_length_ms,
-                max_clock_skew_ms,
-            )
-            .with_current_slot(wsv.current_slot()),
-        )
+        let has_explicit_slot = wsv
+            .axt_policies
+            .values()
+            .any(|policy| policy.current_slot != 0);
+        let mut policy = SpaceDirectoryAxtPolicy::from_snapshot_with_timing(
+            wsv.axt_policy_snapshot(),
+            slot_length_ms,
+            max_clock_skew_ms,
+        );
+        if !has_explicit_slot {
+            policy = policy.with_current_slot(wsv.current_slot());
+        }
+        Arc::new(policy)
     }
 
     fn refresh_axt_policy(&mut self) {
@@ -2111,7 +2135,7 @@ impl WsvHost {
         }
         if let Some(expiry_slot) = proof.expiry_slot {
             let expiry_with_skew = self.axt_expiry_slot_with_skew(expiry_slot);
-            let current_slot = self.wsv.current_slot();
+            let current_slot = policy.current_slot;
             if current_slot > 0 && current_slot > expiry_with_skew {
                 return Err(VMError::PermissionDenied);
             }
@@ -4957,6 +4981,32 @@ mod tests_axt_policy_snapshot {
         assert_eq!(loaded.min_sub_nonce, 9);
         assert_eq!(loaded.current_slot, 42);
         assert_eq!(loaded.manifest_root, [0x11; 32]);
+    }
+
+    #[test]
+    fn axt_policy_snapshot_model_fills_slot_from_time() {
+        let mut wsv = MockWorldStateView::new();
+        wsv.set_slot_length_ms(10);
+        wsv.set_current_time_ms(25); // current_slot = 2
+        let dsid = DataSpaceId::new(8);
+        wsv.set_axt_policy(
+            dsid,
+            DataspaceAxtPolicy {
+                manifest_root: [0x22; 32],
+                target_lane: LaneId::new(1),
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 0,
+            },
+        );
+
+        let snapshot = wsv.axt_policy_snapshot_model();
+        let entry = snapshot
+            .entries
+            .iter()
+            .find(|binding| binding.dsid == dsid)
+            .expect("policy entry present");
+        assert_eq!(entry.policy.current_slot, 2);
     }
 }
 

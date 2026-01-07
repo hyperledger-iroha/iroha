@@ -745,6 +745,28 @@ fn core_host_wsv_policy_rejects_lane_and_expiry_mismatches() {
 }
 
 #[test]
+fn core_host_wsv_policy_respects_explicit_current_slot() {
+    let dsid = DataSpaceId::new(79);
+    let mut wsv = MockWorldStateView::new();
+    wsv.set_current_time_ms(100); // current_slot = 100
+    wsv.set_axt_policy(
+        dsid,
+        DataspaceAxtPolicy {
+            manifest_root: [0x33; 32],
+            target_lane: LaneId::new(2),
+            min_handle_era: 1,
+            min_sub_nonce: 1,
+            current_slot: 5,
+        },
+    );
+
+    let res = run_wsv_policy_case(wsv, dsid, |handle| {
+        handle.expiry_slot = 10;
+    });
+    assert_eq!(res, Ok(0));
+}
+
+#[test]
 fn core_host_enforces_policy_snapshot() {
     let mut vm = IVM::new(1_000_000);
     let dsid = DataSpaceId::new(21);

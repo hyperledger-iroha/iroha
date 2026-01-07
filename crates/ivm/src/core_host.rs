@@ -169,12 +169,16 @@ impl CoreHost {
         let max_clock_skew_ms = wsv.max_clock_skew_ms();
         self.slot_length_ms = slot_length_ms;
         self.max_clock_skew_ms = max_clock_skew_ms;
-        let policy = SpaceDirectoryAxtPolicy::from_snapshot_with_timing(
-            wsv.axt_policy_snapshot(),
+        let snapshot = wsv.axt_policy_snapshot();
+        let has_explicit_slot = snapshot.values().any(|policy| policy.current_slot != 0);
+        let mut policy = SpaceDirectoryAxtPolicy::from_snapshot_with_timing(
+            snapshot,
             slot_length_ms,
             max_clock_skew_ms,
-        )
-        .with_current_slot(wsv.current_slot());
+        );
+        if !has_explicit_slot {
+            policy = policy.with_current_slot(wsv.current_slot());
+        }
         self.axt_policy = Arc::new(policy);
         self.axt_policy_snapshot = Some(wsv.axt_policy_snapshot_model());
         self.axt_proof_cache.clear();

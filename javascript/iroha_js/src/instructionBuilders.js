@@ -1586,7 +1586,7 @@ function normalizeZkBallotPublicInputHex(target, key, name) {
         name,
       );
     }
-    body = rest;
+    body = rest.trim();
   }
   if (body.startsWith("0x") || body.startsWith("0X")) {
     body = body.slice(2);

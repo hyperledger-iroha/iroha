@@ -1617,6 +1617,63 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
 }
 
 #[test]
+fn wsv_host_respects_explicit_policy_slot_over_time() {
+    let mut vm = IVM::new(1_000_000);
+    let caller = sample_wsv_caller();
+    let dsid = DataSpaceId::new(150);
+    let manifest_root = [0xDD; 32];
+    let mut wsv = MockWorldStateView::new();
+    wsv.set_current_time_ms(100); // current_slot = 100 (slot_length default = 1)
+    wsv.set_axt_policy(
+        dsid,
+        DataspaceAxtPolicy {
+            manifest_root,
+            target_lane: LaneId::new(0),
+            min_handle_era: 1,
+            min_sub_nonce: 1,
+            current_slot: 5,
+        },
+    );
+    let mut host = WsvHost::new(wsv, caller, HashMap::new(), HashMap::new());
+
+    let descriptor = axt::AxtDescriptor {
+        dsids: vec![dsid],
+        touches: vec![axt::AxtTouchSpec {
+            dsid,
+            read: vec!["orders".into()],
+            write: vec!["ledger".into()],
+        }],
+    };
+    let manifest = TouchManifest {
+        read: vec!["orders/slot".into()],
+        write: vec!["ledger/slot".into()],
+    };
+    begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
+
+    let binding = axt::compute_binding(&descriptor).expect("binding");
+    let mut handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    handle.expiry_slot = 10;
+    handle.manifest_view_root = manifest_root.to_vec();
+    let intent = RemoteSpendIntent {
+        asset_dsid: dsid,
+        op: SpendOp {
+            kind: "transfer".into(),
+            from: "alice@wonderland".into(),
+            to: "merchant@wonderland".into(),
+            amount: "1".into(),
+        },
+    };
+    let proof = axt::ProofBlob {
+        payload: manifest_root.to_vec(),
+        expiry_slot: None,
+    };
+    assert_eq!(
+        use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof)),
+        Ok(0)
+    );
+}
+
+#[test]
 fn wsv_host_policy_checks_min_era_and_nonce() {
     let mut vm = IVM::new(1_000_000);
     let caller = sample_wsv_caller();

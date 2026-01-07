@@ -15017,7 +15017,7 @@ function normalizeGovernancePublicInputHex(target, key, name) {
         context,
       );
     }
-    body = rest;
+    body = rest.trim();
   }
   if (body.startsWith("0x") || body.startsWith("0X")) {
     body = body.slice(2);

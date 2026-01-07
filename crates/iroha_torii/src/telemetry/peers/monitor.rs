@@ -27,8 +27,14 @@ use super::{GeoLocation, GeoLookupConfig, ToriiUrl};
 
 const DEFAULT_GEO_ENDPOINT: &str = "http://ip-api.com/json";
 const GEO_QUERY_FIELDS: &str = "status,message,lat,lon,country,city";
+#[cfg(test)]
+const GET_STATUS_INTERVAL: Duration = Duration::from_millis(200);
+#[cfg(not(test))]
 const GET_STATUS_INTERVAL: Duration = Duration::from_secs(5);
 const GET_PEERS_INTERVAL: Duration = Duration::from_mins(1);
+#[cfg(test)]
+const TELEMETRY_UNSUPPORTED_CHECK_INTERVAL: Duration = Duration::from_millis(200);
+#[cfg(not(test))]
 const TELEMETRY_UNSUPPORTED_CHECK_INTERVAL: Duration = Duration::from_mins(5);
 const GET_GEO_RETRY_INTERVAL: Duration = Duration::from_mins(1);
 const GET_CONFIG_INIT_INTERVAL: Duration = Duration::from_secs(15);
@@ -469,8 +475,10 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
         Http(#[from] reqwest::Error),
         #[error("failed to decode telemetry status payload: {0}")]
         Decode(#[from] norito::json::Error),
-        #[error("telemetry is not available")]
-        NotImplemented,
+        #[error("telemetry is not available ({0})")]
+        TelemetryUnavailable(StatusCode),
+        #[error("unexpected status code: {0}")]
+        UnexpectedStatus(StatusCode),
     }
 
     let mut avg_commit_time = AverageCommitTime::<AVG_COMMIT_BLOCK_TIME_WINDOW>::new();
@@ -479,8 +487,15 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
 
     let get_status = || async {
         let resp = client.get(url.clone()).send().await?;
-        if resp.status() == StatusCode::NOT_IMPLEMENTED {
-            return Err(GetError::NotImplemented);
+        let status = resp.status();
+        if matches!(
+            status,
+            StatusCode::NOT_IMPLEMENTED | StatusCode::NOT_FOUND | StatusCode::SERVICE_UNAVAILABLE
+        ) {
+            return Err(GetError::TelemetryUnavailable(status));
+        }
+        if !status.is_success() {
+            return Err(GetError::UnexpectedStatus(status));
         }
         let bytes = resp.bytes().await?;
         let status: Status = json::from_slice(&bytes)?;
@@ -488,6 +503,8 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
     };
 
     let mut telemetry_unsupported_checked = Instant::now();
+    let mut interval = tokio::time::interval(GET_STATUS_INTERVAL);
+    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         match tokio::time::timeout(GET_STATUS_INTERVAL, get_status()).await {
             Ok(Ok(status)) => {
@@ -506,12 +523,15 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
                 };
                 let _ = tx.send(Update::Metrics(metrics)).await;
             }
-            Ok(Err(GetError::NotImplemented)) => {
+            Ok(Err(GetError::TelemetryUnavailable(_))) => {
                 if telemetry_unsupported_checked.elapsed() >= TELEMETRY_UNSUPPORTED_CHECK_INTERVAL {
                     telemetry_unsupported_checked = Instant::now();
                     let _ = tx.send(Update::TelemetryUnsupported).await;
                 }
                 tokio::time::sleep(TELEMETRY_UNSUPPORTED_CHECK_INTERVAL).await;
+            }
+            Ok(Err(GetError::UnexpectedStatus(status))) => {
+                iroha_logger::warn!(status = status.as_u16(), "unexpected /status response");
             }
             Ok(Err(GetError::Http(err))) => {
                 iroha_logger::warn!(?err, "failed to fetch peer status");
@@ -527,6 +547,7 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
                 return;
             }
         }
+        interval.tick().await;
     }
 }
 
@@ -588,6 +609,7 @@ impl<const N: usize> CircularBuffer<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
     #[test]
@@ -718,5 +740,38 @@ mod tests {
 
         accept_task.abort();
         assert!(result.is_ok(), "metrics loop should exit after timeout");
+    }
+
+    #[tokio::test]
+    async fn metrics_marks_telemetry_unsupported_on_service_unavailable() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.expect("accept socket");
+                let mut buf = [0u8; 1024];
+                let _ = socket.read(&mut buf).await;
+                let response = b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let _ = socket.write_all(response).await;
+            }
+        });
+
+        let url: ToriiUrl = format!("http://{addr}").parse().expect("valid torii url");
+        let (tx, mut rx) = mpsc::channel(4);
+        let metrics_task = tokio::spawn(async move {
+            get_metrics_periodic_timeout(&url, tx).await;
+        });
+
+        let timeout = TELEMETRY_UNSUPPORTED_CHECK_INTERVAL + GET_STATUS_INTERVAL + GET_STATUS_INTERVAL;
+        let update = tokio::time::timeout(timeout, rx.recv())
+            .await
+            .expect("telemetry update timeout")
+            .expect("telemetry update");
+        assert!(matches!(update, Update::TelemetryUnsupported));
+
+        metrics_task.abort();
+        server.abort();
     }
 }

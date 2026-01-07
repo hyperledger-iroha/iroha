@@ -334,10 +334,14 @@ fn normalize_zk_public_input_alias(
     let Some(value) = map.remove(alias) else {
         return Ok(());
     };
-    if map.contains_key(canonical) {
-        return Err(format!(
-            "public inputs cannot include both {alias} and {canonical}"
-        ));
+    if let Some(existing) = map.get(canonical) {
+        if matches!(existing, json::Value::Null) {
+            map.remove(canonical);
+        } else {
+            return Err(format!(
+                "public inputs cannot include both {alias} and {canonical}"
+            ));
+        }
     }
     map.insert(canonical.to_string(), value);
     Ok(())
@@ -3350,6 +3354,23 @@ mod tests {
         );
         let err = normalize_zk_ballot_public_inputs(&mut map).expect_err("invalid hex");
         assert_eq!(err, "root_hint must be 32-byte hex");
+    }
+
+    #[test]
+    fn normalize_zk_ballot_public_inputs_allows_alias_when_canonical_null() {
+        let mut map = norito::json::Map::new();
+        map.insert("root_hint".to_string(), norito::json::Value::Null);
+        map.insert(
+            "rootHintHex".to_string(),
+            norito::json::Value::from("aa".repeat(32)),
+        );
+        normalize_zk_ballot_public_inputs(&mut map).expect("normalize");
+        let expected = "aa".repeat(32);
+        assert!(map.get("rootHintHex").is_none());
+        assert_eq!(
+            map.get("root_hint").and_then(norito::json::Value::as_str),
+            Some(expected.as_str())
+        );
     }
 
     #[tokio::test]
