@@ -21,7 +21,7 @@ translator: manual
   - `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
-  - When `min_bond_amount > 0`, ZK ballots must supply lock hints (`owner`, `amount`, `duration_blocks`); missing hints are rejected. Direction remains optional and is treated as a hint only.
+  - When any lock hint is provided, ZK ballots must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required. Direction remains optional and is treated as a hint only.
   - `iroha gov vote-plain --referendum-id <id> --owner <account>@<domain> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
     - `--lock-amount` / `--lock-duration-blocks` の別名をサポートし、ZK コマンドと同様に fingerprint とヒントをサマリーと JSON へ出力します。
 
@@ -83,7 +83,10 @@ translator: manual
 - リクエスト: `{ "referendum_id": "r1", "proposal_id": "…64hex", "authority": "alice@wonderland?", "private_key": "…?" }`
 - レスポンス: `{ "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }`
 - オンチェーン効果（現時点のスケルトン）: 承認済みデプロイ提案を実行すると、`code_hash` をキーに期待される `abi_hash` を持つ最小限の `ContractManifest` を登録し、提案を Enacted に設定します。すでに同じ `code_hash` に別の `abi_hash` を持つマニフェストが存在する場合は enact を拒否します。
-- 備考: ZK 投票では、`FinalizeElection` を実行する前にコントラクト経路が `ZK_VOTE_VERIFY_TALLY` を呼び出す必要があります。ホストはワンショットラッチを強制します。
+- 備考:
+  - ZK 投票では、`FinalizeElection` を実行する前にコントラクト経路が `ZK_VOTE_VERIFY_TALLY` を呼び出す必要があります。ホストはワンショットラッチを強制します。`FinalizeReferendum` は選挙集計が確定するまで ZK レファレンダムを拒否します。
+  - `h_end` の自動クローズは Plain レファレンダムのみ Approved/Rejected を発行します。ZK は集計が確定して `FinalizeReferendum` が実行されるまで Closed のままです。
+  - ターンアウト判定は approve+reject のみを使用し、abstain はカウントしません。
 
 ### POST `/v1/gov/enact`
 - リクエスト: `{ "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "alice@wonderland?", "private_key": "…?" }`

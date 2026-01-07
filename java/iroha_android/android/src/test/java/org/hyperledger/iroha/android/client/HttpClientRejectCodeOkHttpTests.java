@@ -5,10 +5,13 @@ import static org.junit.Assert.assertNotNull;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
+import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.junit.Test;
 
@@ -35,12 +38,7 @@ public final class HttpClientRejectCodeOkHttpTests {
                   .setRequestTimeout(Duration.ofSeconds(5))
                   .build());
 
-      final SignedTransaction transaction =
-          new SignedTransaction(
-              new byte[] {0x01},
-              new byte[] {0x02},
-              new byte[] {0x03},
-              "iroha.android.transaction.Payload.v1");
+      final SignedTransaction transaction = sampleTransaction((byte) 0x01);
 
       final ClientResponse response = transport.submitTransaction(transaction).join();
 
@@ -51,5 +49,28 @@ public final class HttpClientRejectCodeOkHttpTests {
       assertNotNull("mock server must observe submission", recorded);
       assertEquals("/v1/pipeline/transactions", recorded.getPath());
     }
+  }
+
+  private static SignedTransaction sampleTransaction(final byte seed) {
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId(String.format("%08x", seed))
+            .setAuthority("reject@wonderland")
+            .setCreationTimeMs(1_700_000_000_000L + (seed & 0xFF))
+            .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
+            .setTimeToLiveMs(5_000L)
+            .setNonce((seed & 0xFF) + 1)
+            .setMetadata(Map.of("note", "tx-" + seed))
+            .build();
+    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
+    final byte[] encoded;
+    try {
+      encoded = codec.encodeTransaction(payload);
+    } catch (final Exception ex) {
+      throw new IllegalStateException("Failed to encode transaction payload", ex);
+    }
+    final byte[] signature = new byte[64];
+    final byte[] publicKey = new byte[32];
+    return new SignedTransaction(encoded, signature, publicKey, codec.schemaName());
   }
 }

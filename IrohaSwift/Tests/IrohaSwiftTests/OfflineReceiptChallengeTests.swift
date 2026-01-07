@@ -87,6 +87,37 @@ final class OfflineReceiptChallengeTests: XCTestCase {
         #endif
     }
 
+    func testChallengePreimageCanonicalizesReceiverAccountId() throws {
+        let publicKey = Data(repeating: 0x22, count: 32)
+        let domain = "wonderland"
+        let rawAccountId = AccountId.make(publicKey: publicKey, domain: domain)
+        let address = try AccountAddress.fromAccount(domain: domain, publicKey: publicKey, algorithm: "ed25519")
+        let ih58 = try address.toIH58(networkPrefix: 0x02F1)
+        let canonicalAccountId = "\(ih58)@\(domain)"
+        let rawAssetId = "xor##\(rawAccountId)"
+        let canonicalAssetId = "xor##\(canonicalAccountId)"
+        let nonceHex = IrohaHash.hash(Data("receipt-nonce".utf8)).hexUppercased()
+
+        let rawPreimage = OfflineReceiptChallengePreimage(
+            invoiceId: "inv-raw",
+            receiverAccountId: rawAccountId,
+            assetId: rawAssetId,
+            amount: "10",
+            issuedAtMs: 1_700_000_000_000,
+            nonceHex: nonceHex
+        )
+        let canonicalPreimage = OfflineReceiptChallengePreimage(
+            invoiceId: "inv-raw",
+            receiverAccountId: canonicalAccountId,
+            assetId: canonicalAssetId,
+            amount: "10",
+            issuedAtMs: 1_700_000_000_000,
+            nonceHex: nonceHex
+        )
+
+        XCTAssertEqual(try rawPreimage.noritoPayload(), try canonicalPreimage.noritoPayload())
+    }
+
     private func sampleNonceHex() -> String {
         IrohaHash.hash(Data("receipt-nonce".utf8)).hexUppercased()
     }

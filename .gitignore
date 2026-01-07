@@ -132,6 +132,7 @@ clean_copy/*
 test_*
 !python/iroha_torii_client/tests/test_client.py
 !python/iroha_python/tests/test_address_format.py
+!python/iroha_python/tests/test_governance_zk_ballot.py
 !crates/iroha_torii/src/test_utils.rs
 !scripts/tests/test_check_slot_duration.py
 !scripts/tests/test_iroha_monitor_screenshots.py

@@ -270,7 +270,7 @@ public struct OfflineWalletCertificate: Codable, Sendable, Equatable {
 
     public func noritoPayload() throws -> Data {
         var writer = OfflineNoritoWriter()
-        writer.writeField(OfflineNorito.encodeString(controller))
+        writer.writeField(try OfflineNorito.encodeAccountId(controller))
         writer.writeField(try allowance.noritoPayload())
         writer.writeField(OfflineNorito.encodeString(spendPublicKey))
         writer.writeField(OfflineNorito.encodeBytesVec(attestationReport))
@@ -490,8 +490,8 @@ public struct OfflineSpendReceipt: Sendable, Equatable {
     public func noritoPayload() throws -> Data {
         var writer = OfflineNoritoWriter()
         writer.writeField(try OfflineNorito.encodeHash(txId))
-        writer.writeField(OfflineNorito.encodeString(from))
-        writer.writeField(OfflineNorito.encodeString(to))
+        writer.writeField(try OfflineNorito.encodeAccountId(from))
+        writer.writeField(try OfflineNorito.encodeAccountId(to))
         writer.writeField(try OfflineNorito.encodeAssetId(assetId))
         writer.writeField(try OfflineNorito.encodeNumeric(amount))
         writer.writeField(OfflineNorito.encodeUInt64(issuedAtMs))
@@ -675,8 +675,8 @@ public struct OfflineToOnlineTransfer: Sendable, Equatable {
     func noritoPayload() throws -> Data {
         var writer = OfflineNoritoWriter()
         writer.writeField(try OfflineNorito.encodeHash(bundleId))
-        writer.writeField(OfflineNorito.encodeString(receiver))
-        writer.writeField(OfflineNorito.encodeString(depositAccount))
+        writer.writeField(try OfflineNorito.encodeAccountId(receiver))
+        writer.writeField(try OfflineNorito.encodeAccountId(depositAccount))
         writer.writeField(try OfflineNorito.encodeVec(receipts, encode: { try $0.noritoPayload() }))
         writer.writeField(try balanceProof.noritoPayload())
         writer.writeField(try OfflineNorito.encodeOption(aggregateProof, encode: { try $0.noritoPayload() }))
@@ -721,7 +721,7 @@ struct OfflineWalletCertificatePayload {
 
     func noritoPayload() throws -> Data {
         var writer = OfflineNoritoWriter()
-        writer.writeField(OfflineNorito.encodeString(controller))
+        writer.writeField(try OfflineNorito.encodeAccountId(controller))
         writer.writeField(try allowance.noritoPayload())
         writer.writeField(OfflineNorito.encodeString(spendPublicKey))
         writer.writeField(OfflineNorito.encodeBytesVec(attestationReport))
@@ -764,8 +764,8 @@ struct OfflineSpendReceiptPayload {
     func noritoPayload() throws -> Data {
         var writer = OfflineNoritoWriter()
         writer.writeField(try OfflineNorito.encodeHash(txId))
-        writer.writeField(OfflineNorito.encodeString(from))
-        writer.writeField(OfflineNorito.encodeString(to))
+        writer.writeField(try OfflineNorito.encodeAccountId(from))
+        writer.writeField(try OfflineNorito.encodeAccountId(to))
         writer.writeField(try OfflineNorito.encodeAssetId(assetId))
         writer.writeField(try OfflineNorito.encodeNumeric(amount))
         writer.writeField(OfflineNorito.encodeUInt64(issuedAtMs))
@@ -789,7 +789,7 @@ struct OfflineReceiptChallengePreimage {
     func noritoPayload() throws -> Data {
         var writer = OfflineNoritoWriter()
         writer.writeField(OfflineNorito.encodeString(invoiceId))
-        writer.writeField(OfflineNorito.encodeString(receiverAccountId))
+        writer.writeField(try OfflineNorito.encodeAccountId(receiverAccountId))
         writer.writeField(try OfflineNorito.encodeAssetId(assetId))
         writer.writeField(try OfflineNorito.encodeNumeric(amount))
         writer.writeField(OfflineNorito.encodeUInt64(issuedAtMs))

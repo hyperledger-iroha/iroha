@@ -320,6 +320,9 @@ let transfer = try OfflineReceiptBuilder.buildTransfer(
 )
 ```
 
+`OfflineReceiptBuilder` sorts receipts by `(counter, tx_id)` unless you set `sortReceipts: false`,
+and bundles must not mix counter scopes (App Attest key id vs. marker/provisioned).
+
 Balance proofs are mandatory for settlement; the builder emits the versioned 12,385-byte v1 proof
 blob (delta + range proofs) that Torii validates.
 

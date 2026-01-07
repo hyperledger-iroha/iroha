@@ -92,7 +92,10 @@ API العقود (deploy)
   - الطلب: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "alice@wonderland?", "private_key": "...?" }
   - الرد: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - الاثر على السلسلة (الهيكل الحالي): تنفيذ اقتراح deploy معتمد يدرج `ContractManifest` ادنى بمفتاح `code_hash` مع `abi_hash` المتوقع ويضع الاقتراح بحالة Enacted. اذا كان هناك manifest موجود لـ `code_hash` بقيمة `abi_hash` مختلفة، يتم رفض التنفيذ.
-  - ملاحظات: لانتخابات ZK، يجب على مسارات العقد استدعاء `ZK_VOTE_VERIFY_TALLY` قبل تنفيذ `FinalizeElection`; ويفرض المضيفون latch لمرة واحدة.
+  - ملاحظات:
+    - لانتخابات ZK، يجب على مسارات العقد استدعاء `ZK_VOTE_VERIFY_TALLY` قبل تنفيذ `FinalizeElection`; ويفرض المضيفون latch لمرة واحدة. يرفض `FinalizeReferendum` الاستفتاءات ZK حتى يتم انهاء tally للانتخابات.
+    - الاغلاق التلقائي عند `h_end` يصدر Approved/Rejected فقط للاستفتاءات Plain؛ تبقى استفتاءات ZK Closed حتى يتم ارسال tally منته ويجري تنفيذ `FinalizeReferendum`.
+    - فحوصات turnout تستخدم approve+reject فقط؛ abstain لا يحتسب ضمن turnout.
 
 - POST `/v1/gov/enact`
   - الطلب: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "alice@wonderland?", "private_key": "...?" }
@@ -201,7 +204,7 @@ Endpoint للراحة
   - مفيد لتدقيق namespaces المحمية او التحقق من تدفقات deploy الخاضعة للحوكمة.
 - `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - يصدر هيكل JSON للـ metadata المستخدم عند نشر deploy الى namespaces المحمية، بما في ذلك `gov_manifest_approvers` الاختيارية لتلبية قواعد quorum للmanifest.
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — تلميحات القفل مطلوبة عندما يكون `min_bond_amount > 0`، وأي مجموعة تلميحات مقدمة يجب أن تتضمن `owner` و`amount` و`duration_blocks`.
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
   - الملخص في سطر واحد يعرض الان `fingerprint=<hex>` حتميا مشتقا من `CastZkBallot` المشفر مع hints المفككة (`owner`, `amount`, `duration_blocks`, `direction` عند توفيرها).

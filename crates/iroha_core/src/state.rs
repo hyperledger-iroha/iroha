@@ -11762,7 +11762,9 @@ impl State {
                 })
                 .collect();
             for (rid, at_h) in to_close {
+                let mut mode = super::state::GovernanceReferendumMode::default();
                 if let Some(mut rec) = wtx.governance_referenda.get(&rid).copied() {
+                    mode = rec.mode;
                     rec.status = super::state::GovernanceReferendumStatus::Closed;
                     wtx.governance_referenda.insert(rid.clone(), rec);
                 }
@@ -11775,50 +11777,57 @@ impl State {
                     ),
                 ));
 
-                // Automatic decision at h_end: compute tally and emit Approved/Rejected
+                // Automatic decision at h_end: compute tally and emit Approved/Rejected.
                 let mut approve: u128 = 0;
                 let mut reject: u128 = 0;
-                let mut abstain: u128 = 0;
-                // Quadratic from plain locks (active only)
-                if let Some(locks) = wtx.governance_locks.get(&rid) {
-                    let isqrt = |n: u128| -> u128 {
-                        if n == 0 {
-                            return 0;
-                        }
-                        let mut x0 = n;
-                        let mut x1 = u128::midpoint(x0, n / x0);
-                        while x1 < x0 {
-                            x0 = x1;
-                            x1 = u128::midpoint(x0, n / x0);
-                        }
-                        x0
-                    };
-                    let step = sb.gov.conviction_step_blocks.max(1);
-                    let max_c = sb.gov.max_conviction;
-                    for rec in locks.locks.values() {
-                        if rec.expiry_height < now_h {
-                            continue;
-                        }
-                        let base = isqrt(rec.amount);
-                        let mut f = 1u64 + (rec.duration_blocks / step);
-                        if f > max_c {
-                            f = max_c;
-                        }
-                        let w = base.saturating_mul(u128::from(f));
-                        match rec.direction {
-                            0 => approve = approve.saturating_add(w),
-                            1 => reject = reject.saturating_add(w),
-                            _ => abstain = abstain.saturating_add(w),
+                let mut decision_ready = true;
+                match mode {
+                    super::state::GovernanceReferendumMode::Plain => {
+                        if let Some(locks) = wtx.governance_locks.get(&rid) {
+                            let isqrt = |n: u128| -> u128 {
+                                if n == 0 {
+                                    return 0;
+                                }
+                                let mut x0 = n;
+                                let mut x1 = u128::midpoint(x0, n / x0);
+                                while x1 < x0 {
+                                    x0 = x1;
+                                    x1 = u128::midpoint(x0, n / x0);
+                                }
+                                x0
+                            };
+                            let step = sb.gov.conviction_step_blocks.max(1);
+                            let max_c = sb.gov.max_conviction;
+                            for rec in locks.locks.values() {
+                                if rec.expiry_height < now_h {
+                                    continue;
+                                }
+                                let base = isqrt(rec.amount);
+                                let mut f = 1u64 + (rec.duration_blocks / step);
+                                if f > max_c {
+                                    f = max_c;
+                                }
+                                let w = base.saturating_mul(u128::from(f));
+                                match rec.direction {
+                                    0 => approve = approve.saturating_add(w),
+                                    1 => reject = reject.saturating_add(w),
+                                    _ => {}
+                                }
+                            }
                         }
                     }
-                }
-                // ZK tally fallback: if an election exists, prefer its tally (2 options)
-                if let Some(e) = wtx.elections.get(&rid)
-                    && e.tally.len() >= 2
-                {
-                    approve = u128::from(e.tally[0]);
-                    reject = u128::from(e.tally[1]);
-                    // abstain remains as computed from locks
+                    super::state::GovernanceReferendumMode::Zk => {
+                        if let Some(e) = wtx.elections.get(&rid) {
+                            if e.finalized && e.tally.len() >= 2 {
+                                approve = u128::from(e.tally[0]);
+                                reject = u128::from(e.tally[1]);
+                            } else {
+                                decision_ready = false;
+                            }
+                        } else {
+                            decision_ready = false;
+                        }
+                    }
                 }
                 // Map rid (hex) back to proposal id if possible and update proposal status
                 let prop_id_opt = if let Ok(bytes) = hex::decode(rid.trim_start_matches("0x"))
@@ -11830,42 +11839,48 @@ impl State {
                 } else {
                     None
                 };
-                // Threshold checks: turnout and approval ratio
-                let turnout = approve.saturating_add(reject).saturating_add(abstain);
-                let decision_approve = if turnout >= sb.gov.min_turnout {
-                    let num = sb.gov.approval_threshold_q_num;
-                    let den = sb.gov.approval_threshold_q_den.max(1);
-                    // approve/(approve+reject) >= num/den  => approve*den >= (approve+reject)*num
-                    let lhs = approve.saturating_mul(u128::from(den));
-                    let rhs = approve
-                        .saturating_add(reject)
-                        .saturating_mul(u128::from(num));
-                    lhs >= rhs
-                } else {
-                    false
-                };
-                if decision_approve {
-                    wtx.emit_events(Some(governance_events::GovernanceEvent::ProposalApproved(
-                        governance_events::GovernanceProposalApproved {
-                            id: prop_id_opt.unwrap_or([0u8; 32]),
-                        },
-                    )));
-                    if let Some(pid) = prop_id_opt {
-                        if let Some(mut rec) = wtx.governance_proposals.get(&pid).cloned() {
-                            rec.status = super::state::GovernanceProposalStatus::Approved;
-                            wtx.governance_proposals.insert(pid, rec);
+                if decision_ready {
+                    // Threshold checks: turnout and approval ratio
+                    let turnout = approve.saturating_add(reject);
+                    let decision_approve = if turnout >= sb.gov.min_turnout {
+                        let num = sb.gov.approval_threshold_q_num;
+                        let den = sb.gov.approval_threshold_q_den.max(1);
+                        // approve/(approve+reject) >= num/den  => approve*den >= (approve+reject)*num
+                        let lhs = approve.saturating_mul(u128::from(den));
+                        let rhs = approve
+                            .saturating_add(reject)
+                            .saturating_mul(u128::from(num));
+                        lhs >= rhs
+                    } else {
+                        false
+                    };
+                    if decision_approve {
+                        wtx.emit_events(Some(
+                            governance_events::GovernanceEvent::ProposalApproved(
+                                governance_events::GovernanceProposalApproved {
+                                    id: prop_id_opt.unwrap_or([0u8; 32]),
+                                },
+                            ),
+                        ));
+                        if let Some(pid) = prop_id_opt {
+                            if let Some(mut rec) = wtx.governance_proposals.get(&pid).cloned() {
+                                rec.status = super::state::GovernanceProposalStatus::Approved;
+                                wtx.governance_proposals.insert(pid, rec);
+                            }
                         }
-                    }
-                } else {
-                    wtx.emit_events(Some(governance_events::GovernanceEvent::ProposalRejected(
-                        governance_events::GovernanceProposalRejected {
-                            id: prop_id_opt.unwrap_or([0u8; 32]),
-                        },
-                    )));
-                    if let Some(pid) = prop_id_opt {
-                        if let Some(mut rec) = wtx.governance_proposals.get(&pid).cloned() {
-                            rec.status = super::state::GovernanceProposalStatus::Rejected;
-                            wtx.governance_proposals.insert(pid, rec);
+                    } else {
+                        wtx.emit_events(Some(
+                            governance_events::GovernanceEvent::ProposalRejected(
+                                governance_events::GovernanceProposalRejected {
+                                    id: prop_id_opt.unwrap_or([0u8; 32]),
+                                },
+                            ),
+                        ));
+                        if let Some(pid) = prop_id_opt {
+                            if let Some(mut rec) = wtx.governance_proposals.get(&pid).cloned() {
+                                rec.status = super::state::GovernanceProposalStatus::Rejected;
+                                wtx.governance_proposals.insert(pid, rec);
+                            }
                         }
                     }
                 }

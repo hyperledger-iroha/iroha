@@ -220,6 +220,24 @@ public struct AccountAddress {
         return (address, .ih58)
     }
 
+    static func canonicalizeDomainLabel(_ raw: String) throws -> String {
+        try DomainSelector.canonicalizeLabel(raw)
+    }
+
+    func matchesDomainLabel(_ raw: String) -> Bool {
+        guard let canonical = try? DomainSelector.canonicalizeLabel(raw) else {
+            return false
+        }
+        switch domain {
+        case .default:
+            return canonical == AccountAddress.defaultDomainName
+        case .local12(let digest):
+            return computeLocalDigest(label: canonical) == digest
+        case .global:
+            return true
+        }
+    }
+
     private static func containsCompressedAlphabetBeyondIh58(_ literal: String) -> Bool {
         for character in literal {
             let symbol = String(character)
@@ -400,7 +418,7 @@ private enum DomainSelector {
     case local12(Data)
     case global(UInt32)
 
-    private static func canonicalizeLabel(_ raw: String) throws -> String {
+    fileprivate static func canonicalizeLabel(_ raw: String) throws -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw AccountAddressError.invalidDomainLabel(raw)

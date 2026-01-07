@@ -258,7 +258,9 @@ Notes
 - Consensus thresholds and signature validation are unchanged by K/r; only the set of eligible aggregators expands. With K=1, behavior matches the single‑collector path.
 - All paths remain deterministic across hardware. BLS aggregation is over the same message and does not introduce non‑determinism; consensus accepts only certificates whose explicit signatures validate against the current topology.
 - RBC READY/DELIVER quorum uses the commit topology’s `min_votes_for_commit()`.
-- RBC sessions snapshot the commit topology at INIT and reuse it for READY/DELIVER validation and rebroadcasts so roster changes do not invalidate in-flight availability evidence.
+- RBC INIT carries the session roster snapshot and its `roster_hash`; READY/DELIVER include the same `roster_hash` so signatures are bound to a single roster.
+- RBC sessions cache the roster from INIT (or a fallback commit topology) and reuse it for READY/DELIVER validation and rebroadcasts so roster changes do not invalidate in-flight availability evidence. READY/DELIVER received before a roster is available are stashed and replayed once a roster is known, and mismatched `roster_hash` values are dropped.
+- RBC payload rebroadcasts always include INIT even when no chunks are cached, so peers can learn the roster snapshot and request missing chunks.
 - RBC INIT/READY/DELIVER must carry the epoch derived from the advertised height; mismatched epochs are rejected to prevent cross-epoch availability drift.
 - RBC READY must reference the expected chunk root for the session; mismatched roots are rejected so quorum only counts votes for the same payload.
 - Persisted RBC sessions include the roster snapshot so restarts validate READY/DELIVER against the original topology even if the live roster changes.
@@ -553,7 +555,10 @@ Operators can pull deterministic telemetry snapshots over Torii or via the CLI.
 Before INIT arrives, RBC frames are bounded by per-session caps
 (`sumeragi.rbc_pending_max_chunks`, `sumeragi.rbc_pending_max_bytes`) and the
 hard stash limit `PENDING_RBC_STASH_LIMIT = 256` sessions. Entries also expire
-after `sumeragi.rbc_pending_ttl_ms`, so the worst-case buffered payload is:
+after `sumeragi.rbc_pending_ttl_ms` when the session is not yet active; once a
+session exists, pending READY/DELIVER frames are retained until the session is
+cleared so roster delays do not drop availability evidence. The worst-case
+buffered payload before INIT is:
 
 ```
 session_cap * min(rbc_pending_max_bytes, rbc_chunk_max_bytes * RBC_MAX_TOTAL_CHUNKS)
@@ -762,6 +767,7 @@ Build-line policy: v3 uses `sumeragi.da_enabled` as the single DA/RBC switch. In
 - **DA/RBC enabled (`da_enabled=true`)** — availability evidence is tracked (advisory); commits proceed without waiting:
   - Missing availability evidence sets `status.da_gate.reason = missing_local_data`; `status.da_gate.missing_local_data_total` increments on every transition into this state (unless an RBC `READY` quorum is already present and records availability).
   - Manifest guard: when a block carries DA commitments but the corresponding manifest is missing or mismatched, `status.da_gate.reason` becomes one of `manifest_missing` / `manifest_hash_mismatch` / `manifest_read_failed` / `manifest_spool_scan` and `status.da_gate.manifest_guard_total` increments. Audit-only lanes still log the warning; strict lanes report the same reason but do not block commit.
+- **DA/RBC disabled (`da_enabled=false`)** — availability evidence and manifest guard checks are skipped; `status.da_gate.reason` remains `none` and the spool is not scanned.
 - `status.da_gate.last_satisfied` records `missing_data_recovered` when availability is observed (including when an RBC `READY` quorum is treated as availability). Commit does not depend on local RBC delivery; RBC is transport/recovery and is tracked separately via the RBC endpoints and metrics.
 - Implementation note: commit certificates are cached by `(phase, hash, height, view, epoch)` so availability evidence cannot overwrite prepare/commit certificates. When certificates arrive before the payload, the node replays cached certificates once the payload is available so message reordering cannot strand availability tracking.
 

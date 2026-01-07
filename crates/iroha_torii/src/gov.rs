@@ -296,6 +296,96 @@ pub struct BallotSubmitResponse {
     pub tx_instructions: Vec<TxInstr>,
 }
 
+fn ballot_rejection(reason: &str) -> JsonBody<BallotSubmitResponse> {
+    JsonBody(BallotSubmitResponse {
+        ok: false,
+        accepted: false,
+        reason: Some(reason.to_string()),
+        tx_instructions: Vec::new(),
+    })
+}
+
+fn lock_hints_incomplete(owner: bool, amount: bool, duration: bool) -> bool {
+    let any = owner || amount || duration;
+    any && !(owner && amount && duration)
+}
+
+fn hint_present(map: &json::Map, key: &str) -> bool {
+    map.get(key)
+        .map(|value| !matches!(value, json::Value::Null))
+        .unwrap_or(false)
+}
+
+fn normalize_zk_ballot_public_inputs(map: &mut json::Map) -> Result<(), String> {
+    normalize_zk_public_input_alias(map, "durationBlocks", "duration_blocks")?;
+    normalize_zk_public_input_alias(map, "nullifierHex", "nullifier_hex")?;
+    normalize_zk_public_input_alias(map, "rootHintHex", "root_hint")?;
+    normalize_zk_public_input_alias(map, "rootHint", "root_hint")?;
+    canonicalize_hex32_public_input(map, "root_hint", "root_hint")?;
+    canonicalize_hex32_public_input(map, "nullifier_hex", "nullifier")?;
+    Ok(())
+}
+
+fn normalize_zk_public_input_alias(
+    map: &mut json::Map,
+    alias: &str,
+    canonical: &str,
+) -> Result<(), String> {
+    let Some(value) = map.remove(alias) else {
+        return Ok(());
+    };
+    if map.contains_key(canonical) {
+        return Err(format!(
+            "public inputs cannot include both {alias} and {canonical}"
+        ));
+    }
+    map.insert(canonical.to_string(), value);
+    Ok(())
+}
+
+fn canonicalize_hex32_public_input(
+    map: &mut json::Map,
+    key: &str,
+    label: &str,
+) -> Result<(), String> {
+    let Some(value) = map.get_mut(key) else {
+        return Ok(());
+    };
+    if matches!(value, json::Value::Null) {
+        return Ok(());
+    }
+    let raw = value
+        .as_str()
+        .ok_or_else(|| format!("{label} must be 32-byte hex"))?;
+    let canonical =
+        canonicalize_hex32_value(raw).ok_or_else(|| format!("{label} must be 32-byte hex"))?;
+    *value = json::Value::String(canonical);
+    Ok(())
+}
+
+fn canonicalize_hex32_value(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let without_scheme = if let Some((scheme, rest)) = trimmed.split_once(':') {
+        if scheme.is_empty() || scheme.eq_ignore_ascii_case("blake2b32") {
+            rest
+        } else {
+            return None;
+        }
+    } else {
+        trimmed
+    };
+    let body = without_scheme.trim();
+    let body = body
+        .strip_prefix("0x")
+        .or_else(|| body.strip_prefix("0X"))
+        .unwrap_or(body)
+        .trim();
+    if body.len() != 64 || !body.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(body.to_ascii_lowercase())
+}
+
 // -------- ZK Ballot V1 DTO (feature-gated) --------
 #[cfg(feature = "zk-ballot")]
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -382,10 +472,21 @@ pub async fn handle_gov_ballot_zk_v1(
         CONTEXT_GOV_BALLOT_ZK_V1_AUTHORITY,
         strict_addresses,
     )?;
+    let has_owner = body.owner.is_some();
+    let has_amount = body.amount.is_some();
+    let has_duration = body.duration_blocks.is_some();
+    if lock_hints_incomplete(has_owner, has_amount, has_duration) {
+        return Ok(ballot_rejection(
+            "lock hints must include owner, amount, duration_blocks",
+        ));
+    }
     // Build public inputs JSON object with optional hints
     let mut pub_map = norito::json::Map::new();
     if let Some(rh) = &body.root_hint_hex {
-        pub_map.insert("root_hint".into(), norito::json::Value::from(rh.clone()));
+        let Some(canonical) = canonicalize_hex32_value(rh) else {
+            return Ok(ballot_rejection("root_hint must be 32-byte hex"));
+        };
+        pub_map.insert("root_hint".into(), norito::json::Value::from(canonical));
     }
     if let Some(owner) = &body.owner {
         pub_map.insert("owner".into(), norito::json::Value::from(owner.clone()));
@@ -406,10 +507,10 @@ pub async fn handle_gov_ballot_zk_v1(
         );
     }
     if let Some(nullifier_hex) = &body.nullifier_hex {
-        pub_map.insert(
-            "nullifier_hex".into(),
-            norito::json::Value::from(nullifier_hex.clone()),
-        );
+        let Some(canonical) = canonicalize_hex32_value(nullifier_hex) else {
+            return Ok(ballot_rejection("nullifier must be 32-byte hex"));
+        };
+        pub_map.insert("nullifier_hex".into(), norito::json::Value::from(canonical));
     }
     let public_inputs_json = norito::json::to_json(&norito::json::Value::Object(pub_map))
         .unwrap_or_else(|_| "{}".into());
@@ -478,6 +579,14 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
         CONTEXT_GOV_BALLOT_ZK_V1_BALLOT_PROOF_AUTHORITY,
         strict_addresses,
     )?;
+    let has_owner = body.ballot.owner.is_some();
+    let has_amount = body.ballot.amount.is_some();
+    let has_duration = body.ballot.duration_blocks.is_some();
+    if lock_hints_incomplete(has_owner, has_amount, has_duration) {
+        return Ok(ballot_rejection(
+            "lock hints must include owner, amount, duration_blocks",
+        ));
+    }
     // Build public inputs JSON from optional hints in BallotProof
     let mut pub_map = norito::json::Map::new();
     if let Some(rh) = &body.ballot.root_hint {
@@ -1137,29 +1246,47 @@ pub async fn handle_gov_get_tally(
 ) -> Result<JsonBody<TallyGetResponse>, crate::Error> {
     let rid = id.0;
     let v = state.view();
-    // Mirror FinalizeReferendum tally logic without mutating state
+    // Mirror FinalizeReferendum tally logic without mutating state.
     let now_h = v.height() as u64;
     let mut approve: u128 = 0;
     let mut reject: u128 = 0;
     let mut abstain: u128 = 0;
-    if let Some(locks) = v.world().governance_locks().get(&rid) {
-        for (_owner, rec) in locks.locks.iter() {
-            if rec.expiry_height < now_h {
-                continue;
-            }
-            let w = integer_sqrt_u128(rec.amount);
-            match rec.direction {
-                0 => approve = approve.saturating_add(w),
-                1 => reject = reject.saturating_add(w),
-                _ => abstain = abstain.saturating_add(w),
+    let mode = v
+        .world()
+        .governance_referenda()
+        .get(&rid)
+        .map(|rec| rec.mode)
+        .unwrap_or(iroha_core::state::GovernanceReferendumMode::Plain);
+    match mode {
+        iroha_core::state::GovernanceReferendumMode::Plain => {
+            if let Some(locks) = v.world().governance_locks().get(&rid) {
+                let step = v.gov.conviction_step_blocks.max(1);
+                let max_c = v.gov.max_conviction;
+                for (_owner, rec) in locks.locks.iter() {
+                    if rec.expiry_height < now_h {
+                        continue;
+                    }
+                    let base = integer_sqrt_u128(rec.amount);
+                    let mut f = 1u64 + (rec.duration_blocks / step);
+                    if f > max_c {
+                        f = max_c;
+                    }
+                    let w = base.saturating_mul(u128::from(f));
+                    match rec.direction {
+                        0 => approve = approve.saturating_add(w),
+                        1 => reject = reject.saturating_add(w),
+                        _ => abstain = abstain.saturating_add(w),
+                    }
+                }
             }
         }
-    }
-    if let Some(e) = v.world().elections().get(&rid) {
-        if e.tally.len() >= 2 {
-            approve = e.tally[0] as u128;
-            reject = e.tally[1] as u128;
-            // abstain remains as computed from locks
+        iroha_core::state::GovernanceReferendumMode::Zk => {
+            if let Some(e) = v.world().elections().get(&rid) {
+                if e.finalized && e.tally.len() >= 2 {
+                    approve = e.tally[0] as u128;
+                    reject = e.tally[1] as u128;
+                }
+            }
         }
     }
     Ok(JsonBody(TallyGetResponse {
@@ -1800,21 +1927,45 @@ pub async fn handle_gov_ballot_zk(
             tx_instructions: Vec::new(),
         }));
     }
-    ensure_chain_id_matches(chain_id.as_ref(), &body.chain_id)?;
+    let ZkBallotDto {
+        authority,
+        chain_id: body_chain_id,
+        election_id,
+        proof_b64,
+        public,
+        private_key,
+    } = body;
+    ensure_chain_id_matches(chain_id.as_ref(), &body_chain_id)?;
     let authority_id = parse_authority_literal(
-        body.authority.as_str(),
+        authority.as_str(),
         &telemetry,
         CONTEXT_GOV_BALLOT_ZK_AUTHORITY,
         strict_addresses,
     )?;
+    let public_inputs = match public {
+        None => norito::json::Value::Object(norito::json::Map::new()),
+        Some(norito::json::Value::Object(mut map)) => {
+            if let Err(reason) = normalize_zk_ballot_public_inputs(&mut map) {
+                return Ok(ballot_rejection(&reason));
+            }
+            let has_owner = hint_present(&map, "owner");
+            let has_amount = hint_present(&map, "amount");
+            let has_duration = hint_present(&map, "duration_blocks");
+            if lock_hints_incomplete(has_owner, has_amount, has_duration) {
+                return Ok(ballot_rejection(
+                    "lock hints must include owner, amount, duration_blocks",
+                ));
+            }
+            norito::json::Value::Object(map)
+        }
+        Some(_) => {
+            return Ok(ballot_rejection("public inputs must be a JSON object"));
+        }
+    };
     // Build instruction skeleton
-    let public_inputs = body
-        .public
-        .clone()
-        .unwrap_or_else(|| norito::json::Value::Object(norito::json::Map::new()));
     let instr = iroha_data_model::isi::governance::CastZkBallot {
-        election_id: body.election_id,
-        proof_b64: body.proof_b64,
+        election_id,
+        proof_b64,
         public_inputs_json: norito::json::to_json(&public_inputs).unwrap_or_else(|_| "{}".into()),
     };
     let boxed: iroha_data_model::isi::InstructionBox = instr.clone().into();
@@ -1825,7 +1976,7 @@ pub async fn handle_gov_ballot_zk(
         state,
         telemetry,
         &authority_id,
-        body.private_key.as_deref(),
+        private_key.as_deref(),
         core::iter::once(iroha_data_model::isi::InstructionBox::from(instr)),
         iroha_torii_shared::uri::GOV_BALLOT_ZK,
     )
@@ -2518,18 +2669,24 @@ mod tests {
         kura::Kura,
         query::store::LiveQueryStore,
         queue::{Queue, TransactionGuard},
-        state::{GovernanceProposalStatus, GovernanceReferendumMode, State, World},
+        state::{
+            GovernanceLockRecord, GovernanceLocksForReferendum, GovernanceProposalStatus,
+            GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
+            State, World,
+        },
     };
     use iroha_crypto::{ExposedPrivateKey, KeyPair};
     use iroha_data_model::{
         ChainId, Registrable,
         account::{Account, AccountId},
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
+        block::BlockHeader,
         domain::{Domain, DomainId},
         permission::Permission,
         smart_contract::manifest::ContractManifest,
     };
     use iroha_primitives::numeric::Numeric;
+    use iroha_test_samples::ALICE_ID;
 
     use super::*;
     use crate::routing::MaybeTelemetry;
@@ -2538,6 +2695,19 @@ mod tests {
         "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland";
     const ACCOUNT_OWNER_ALT: &str =
         "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland";
+
+    #[test]
+    fn hint_present_handles_nulls() {
+        let mut map = json::Map::new();
+        assert!(!hint_present(&map, "owner"));
+        map.insert("owner".to_string(), json::Value::Null);
+        assert!(!hint_present(&map, "owner"));
+        map.insert(
+            "owner".to_string(),
+            json::Value::String("alice".to_string()),
+        );
+        assert!(hint_present(&map, "owner"));
+    }
 
     fn canonical_literal(raw: &str) -> String {
         iroha_data_model::account::AccountId::parse(raw)
@@ -3009,6 +3179,233 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ballot_zk_rejects_non_object_public_inputs() {
+        let (state, queue, chain_id) = mk_basic_context();
+        let chain_id_str = chain_id.as_str().to_string();
+        let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
+        let dto = ZkBallotDto {
+            authority: ACCOUNT_AUTHORITY.to_string(),
+            chain_id: chain_id_str,
+            election_id: "e1".to_string(),
+            proof_b64,
+            public: Some(norito::json::Value::String("oops".to_string())),
+            private_key: None,
+        };
+        let res = handle_gov_ballot_zk(
+            chain_id,
+            queue,
+            state,
+            MaybeTelemetry::disabled(),
+            false,
+            NoritoJson(dto),
+        )
+        .await
+        .expect("handler ok");
+        let body = res.0;
+        assert!(!body.ok);
+        assert!(!body.accepted);
+        assert_eq!(
+            body.reason.as_deref(),
+            Some("public inputs must be a JSON object")
+        );
+    }
+
+    #[tokio::test]
+    async fn ballot_zk_rejects_partial_lock_hints() {
+        let (state, queue, chain_id) = mk_basic_context();
+        let chain_id_str = chain_id.as_str().to_string();
+        let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
+        let mut map = norito::json::Map::new();
+        map.insert(
+            "owner".to_string(),
+            norito::json::Value::from(ACCOUNT_AUTHORITY.to_string()),
+        );
+        let dto = ZkBallotDto {
+            authority: ACCOUNT_AUTHORITY.to_string(),
+            chain_id: chain_id_str,
+            election_id: "e1".to_string(),
+            proof_b64,
+            public: Some(norito::json::Value::Object(map)),
+            private_key: None,
+        };
+        let res = handle_gov_ballot_zk(
+            chain_id,
+            queue,
+            state,
+            MaybeTelemetry::disabled(),
+            false,
+            NoritoJson(dto),
+        )
+        .await
+        .expect("handler ok");
+        let body = res.0;
+        assert!(!body.ok);
+        assert!(!body.accepted);
+        assert_eq!(
+            body.reason.as_deref(),
+            Some("lock hints must include owner, amount, duration_blocks")
+        );
+    }
+
+    #[tokio::test]
+    async fn ballot_zk_rejects_alias_conflicts() {
+        let (state, queue, chain_id) = mk_basic_context();
+        let chain_id_str = chain_id.as_str().to_string();
+        let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
+        let mut map = norito::json::Map::new();
+        map.insert(
+            "rootHint".to_string(),
+            norito::json::Value::from("aa".repeat(32)),
+        );
+        map.insert(
+            "root_hint".to_string(),
+            norito::json::Value::from("bb".repeat(32)),
+        );
+        let dto = ZkBallotDto {
+            authority: ACCOUNT_AUTHORITY.to_string(),
+            chain_id: chain_id_str,
+            election_id: "e1".to_string(),
+            proof_b64,
+            public: Some(norito::json::Value::Object(map)),
+            private_key: None,
+        };
+        let res = handle_gov_ballot_zk(
+            chain_id,
+            queue,
+            state,
+            MaybeTelemetry::disabled(),
+            false,
+            NoritoJson(dto),
+        )
+        .await
+        .expect("handler ok");
+        let body = res.0;
+        assert!(!body.ok);
+        assert!(!body.accepted);
+        assert_eq!(
+            body.reason.as_deref(),
+            Some("public inputs cannot include both rootHint and root_hint")
+        );
+    }
+
+    #[test]
+    fn normalize_zk_ballot_public_inputs_maps_aliases_and_canonicalizes_hex() {
+        let mut map = norito::json::Map::new();
+        map.insert(
+            "durationBlocks".to_string(),
+            norito::json::Value::from(10u64),
+        );
+        let root_raw = format!("0x{}", "Aa".repeat(32));
+        map.insert(
+            "rootHintHex".to_string(),
+            norito::json::Value::from(root_raw),
+        );
+        let nullifier_raw = format!("blake2b32:{}", "BB".repeat(32));
+        map.insert(
+            "nullifierHex".to_string(),
+            norito::json::Value::from(nullifier_raw),
+        );
+        normalize_zk_ballot_public_inputs(&mut map).expect("normalize");
+        let root_expected = "aa".repeat(32);
+        let nullifier_expected = "bb".repeat(32);
+        assert!(map.contains_key("duration_blocks"));
+        assert!(map.contains_key("root_hint"));
+        assert!(map.contains_key("nullifier_hex"));
+        assert!(!map.contains_key("durationBlocks"));
+        assert!(!map.contains_key("rootHintHex"));
+        assert!(!map.contains_key("nullifierHex"));
+        assert_eq!(
+            map.get("root_hint").and_then(norito::json::Value::as_str),
+            Some(root_expected.as_str())
+        );
+        assert_eq!(
+            map.get("nullifier_hex")
+                .and_then(norito::json::Value::as_str),
+            Some(nullifier_expected.as_str())
+        );
+    }
+
+    #[test]
+    fn normalize_zk_ballot_public_inputs_rejects_alias_conflicts() {
+        let mut map = norito::json::Map::new();
+        map.insert(
+            "rootHint".to_string(),
+            norito::json::Value::from("aa".repeat(32)),
+        );
+        map.insert(
+            "root_hint".to_string(),
+            norito::json::Value::from("bb".repeat(32)),
+        );
+        let err = normalize_zk_ballot_public_inputs(&mut map).expect_err("conflict");
+        assert!(err.contains("rootHint"));
+        assert!(err.contains("root_hint"));
+    }
+
+    #[test]
+    fn normalize_zk_ballot_public_inputs_rejects_invalid_hex() {
+        let mut map = norito::json::Map::new();
+        map.insert(
+            "root_hint".to_string(),
+            norito::json::Value::from("not-hex"),
+        );
+        let err = normalize_zk_ballot_public_inputs(&mut map).expect_err("invalid hex");
+        assert_eq!(err, "root_hint must be 32-byte hex");
+    }
+
+    #[tokio::test]
+    async fn gov_get_tally_applies_conviction_factor() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query);
+        let mut cfg = state.gov.clone();
+        cfg.conviction_step_blocks = 2;
+        cfg.max_conviction = 4;
+        state.set_gov(cfg);
+
+        let rid = "rid-tally-conviction".to_string();
+        let header = BlockHeader::new(
+            core::num::NonZeroU64::new(1).unwrap(),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut sblock = state.block(header);
+        let mut stx = sblock.transaction();
+        stx.world.governance_referenda_mut().insert(
+            rid.clone(),
+            GovernanceReferendumRecord {
+                h_start: 1,
+                h_end: 10,
+                status: GovernanceReferendumStatus::Open,
+                mode: GovernanceReferendumMode::Plain,
+            },
+        );
+        let mut locks = GovernanceLocksForReferendum::default();
+        locks.locks.insert(
+            ALICE_ID.clone(),
+            GovernanceLockRecord {
+                owner: ALICE_ID.clone(),
+                amount: 9,
+                slashed: 0,
+                expiry_height: 100,
+                direction: 0,
+                duration_blocks: 4,
+            },
+        );
+        stx.world.governance_locks_mut().insert(rid.clone(), locks);
+        stx.apply();
+
+        let res = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))
+            .await
+            .expect("handler ok");
+        let body = res.0;
+        assert_eq!(body.approve, 9);
+        assert_eq!(body.reject, 0);
+    }
+
+    #[tokio::test]
     async fn enact_builds_instruction_skeleton() {
         let (state, queue, chain_id) = mk_basic_context();
         let dto = EnactDto {
@@ -3390,6 +3787,82 @@ mod tests {
 
     #[cfg(feature = "zk-ballot")]
     #[tokio::test]
+    async fn ballot_zk_v1_rejects_invalid_root_hint_hex() {
+        let (state, queue, chain_id) = mk_basic_context();
+        let chain_id_str = chain_id.as_str().to_string();
+        let dto = super::ZkBallotV1Dto {
+            authority: ACCOUNT_AUTHORITY.to_string(),
+            chain_id: chain_id_str,
+            election_id: "ref-1".to_string(),
+            backend: "halo2/ipa".to_string(),
+            envelope_b64: base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]),
+            root_hint_hex: Some("invalid".to_string()),
+            owner: None,
+            amount: None,
+            duration_blocks: None,
+            direction: None,
+            nullifier_hex: None,
+            private_key: None,
+        };
+        let res = super::handle_gov_ballot_zk_v1(
+            chain_id,
+            queue,
+            state,
+            MaybeTelemetry::disabled(),
+            false,
+            crate::NoritoJson(dto),
+        )
+        .await
+        .expect("handler ok");
+        let body = res.0;
+        assert!(!body.ok);
+        assert!(!body.accepted);
+        assert_eq!(
+            body.reason.as_deref(),
+            Some("root_hint must be 32-byte hex")
+        );
+    }
+
+    #[cfg(feature = "zk-ballot")]
+    #[tokio::test]
+    async fn ballot_zk_v1_rejects_partial_lock_hints() {
+        let (state, queue, chain_id) = mk_basic_context();
+        let chain_id_str = chain_id.as_str().to_string();
+        let dto = super::ZkBallotV1Dto {
+            authority: ACCOUNT_AUTHORITY.to_string(),
+            chain_id: chain_id_str,
+            election_id: "ref-1".to_string(),
+            backend: "halo2/ipa".to_string(),
+            envelope_b64: base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]),
+            root_hint_hex: None,
+            owner: Some(ACCOUNT_AUTHORITY.to_string()),
+            amount: None,
+            duration_blocks: None,
+            direction: None,
+            nullifier_hex: None,
+            private_key: None,
+        };
+        let res = super::handle_gov_ballot_zk_v1(
+            chain_id,
+            queue,
+            state,
+            MaybeTelemetry::disabled(),
+            false,
+            crate::NoritoJson(dto),
+        )
+        .await
+        .expect("handler ok");
+        let body = res.0;
+        assert!(!body.ok);
+        assert!(!body.accepted);
+        assert_eq!(
+            body.reason.as_deref(),
+            Some("lock hints must include owner, amount, duration_blocks")
+        );
+    }
+
+    #[cfg(feature = "zk-ballot")]
+    #[tokio::test]
     async fn ballot_zk_v1_ballotproof_builds_instruction_skeleton() {
         use axum::{Router, routing::post};
         use http_body_util::BodyExt as _;
@@ -3461,6 +3934,49 @@ mod tests {
             v.get("tx_instructions")
                 .and_then(|x| x.as_array())
                 .is_some()
+        );
+    }
+
+    #[cfg(feature = "zk-ballot")]
+    #[tokio::test]
+    async fn ballot_zk_v1_ballotproof_rejects_partial_lock_hints() {
+        use iroha_data_model::isi::governance::BallotProof;
+
+        let (state, queue, chain_id) = mk_basic_context();
+        let chain_id_str = chain_id.as_str().to_string();
+        let ballot = BallotProof {
+            backend: "halo2/ipa".into(),
+            envelope_bytes: vec![1u8, 2, 3, 4],
+            root_hint: None,
+            owner: Some(ACCOUNT_AUTHORITY.parse().expect("valid account id")),
+            nullifier: None,
+            amount: None,
+            duration_blocks: None,
+            direction: None,
+        };
+        let dto = super::ZkBallotV1BallotProofDto {
+            authority: ACCOUNT_AUTHORITY.to_string(),
+            chain_id: chain_id_str,
+            election_id: "ref-1".to_string(),
+            ballot,
+            private_key: None,
+        };
+        let res = super::handle_gov_ballot_zk_v1_ballotproof(
+            chain_id,
+            queue,
+            state,
+            MaybeTelemetry::disabled(),
+            false,
+            crate::NoritoJson(dto),
+        )
+        .await
+        .expect("handler ok");
+        let body = res.0;
+        assert!(!body.ok);
+        assert!(!body.accepted);
+        assert_eq!(
+            body.reason.as_deref(),
+            Some("lock hints must include owner, amount, duration_blocks")
         );
     }
 }

@@ -75,6 +75,7 @@ enum OfflineNorito {
     static let maxNumericScale: UInt32 = 28
     private static let maxBigIntBytes = 64
     private static let maxSafeInteger: Double = 9_007_199_254_740_992 // 2^53
+    private static let defaultNetworkPrefix: UInt16 = 0x02F1
 
     static func wrap(typeName: String, payload: Data) -> Data {
         noritoEncode(typeName: typeName, payload: payload, flags: 0)
@@ -86,6 +87,11 @@ enum OfflineNorito {
         writer.writeLength(UInt64(bytes.count))
         writer.writeBytes(bytes)
         return writer.data
+    }
+
+    static func encodeAccountId(_ value: String) throws -> Data {
+        let canonical = try canonicalizeAccountId(value)
+        return encodeString(canonical)
     }
 
     static func encodeBool(_ value: Bool) -> Data {
@@ -238,27 +244,272 @@ enum OfflineNorito {
     static func encodeAssetId(_ assetId: String) throws -> Data {
         let parts = try OfflineAssetIdParts.parse(assetId)
         var writer = OfflineNoritoWriter()
-        let accountPayload = encodeString(parts.accountId)
+        let accountPayload = try encodeAccountId(parts.accountId)
         writer.writeField(accountPayload)
-        let definitionPayload = encodeAssetDefinitionId(name: parts.definitionName, domain: parts.definitionDomain)
+        let definitionPayload = try encodeAssetDefinitionId(name: parts.definitionName, domain: parts.definitionDomain)
         writer.writeField(definitionPayload)
         return writer.data
     }
 
-    static func encodeAssetDefinitionId(name: String, domain: String) -> Data {
+    static func encodeAssetDefinitionId(name: String, domain: String) throws -> Data {
         var writer = OfflineNoritoWriter()
-        let domainPayload = encodeDomainId(domain)
+        let domainPayload = try encodeDomainId(domain)
         writer.writeField(domainPayload)
         let namePayload = encodeString(name)
         writer.writeField(namePayload)
         return writer.data
     }
 
-    static func encodeDomainId(_ value: String) -> Data {
+    static func encodeDomainId(_ value: String) throws -> Data {
         var writer = OfflineNoritoWriter()
-        let namePayload = encodeString(value)
+        let canonical = try canonicalizeAssetDomain(value)
+        let namePayload = encodeString(canonical)
         writer.writeField(namePayload)
         return writer.data
+    }
+
+    private static func canonicalizeAccountId(_ value: String) throws -> String {
+        let (addressPart, domainPart) = try parseAccountId(value)
+        let canonicalDomain: String
+        do {
+            canonicalDomain = try AccountAddress.canonicalizeDomainLabel(domainPart)
+        } catch {
+            throw OfflineNoritoError.invalidAccountId(value)
+        }
+        if let canonicalAddress = try canonicalizeEncodedAddress(addressPart,
+                                                                domain: canonicalDomain,
+                                                                raw: value) {
+            return "\(canonicalAddress)@\(canonicalDomain)"
+        }
+        if let canonicalAddress = try canonicalizeRawPublicKey(addressPart,
+                                                              domain: canonicalDomain,
+                                                              raw: value) {
+            return "\(canonicalAddress)@\(canonicalDomain)"
+        }
+        return "\(addressPart)@\(canonicalDomain)"
+    }
+
+    private static func parseAccountId(_ value: String) throws -> (String, String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw OfflineNoritoError.invalidAccountId(value)
+        }
+        if trimmed != value {
+            throw OfflineNoritoError.invalidAccountId(trimmed)
+        }
+        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+            throw OfflineNoritoError.invalidAccountId(trimmed)
+        }
+        if trimmed.contains("#") || trimmed.contains("$") {
+            throw OfflineNoritoError.invalidAccountId(trimmed)
+        }
+        let parts = trimmed.split(separator: "@", omittingEmptySubsequences: false)
+        guard parts.count == 2 else {
+            throw OfflineNoritoError.invalidAccountId(trimmed)
+        }
+        let addressPart = String(parts[0])
+        let domainPart = String(parts[1])
+        guard !addressPart.isEmpty, !domainPart.isEmpty else {
+            throw OfflineNoritoError.invalidAccountId(trimmed)
+        }
+        return (addressPart, domainPart)
+    }
+
+    private static func canonicalizeEncodedAddress(_ addressPart: String,
+                                                   domain: String,
+                                                   raw: String) throws -> String? {
+        do {
+            let (address, _) = try AccountAddress.parseAny(addressPart, expectedPrefix: defaultNetworkPrefix)
+            guard address.matchesDomainLabel(domain) else {
+                throw OfflineNoritoError.invalidAccountId(raw)
+            }
+            return try address.toIH58(networkPrefix: defaultNetworkPrefix)
+        } catch let error as AccountAddressError {
+            if shouldFallbackFromAddress(error) {
+                return nil
+            }
+            throw OfflineNoritoError.invalidAccountId(raw)
+        }
+    }
+
+    private static func canonicalizeRawPublicKey(_ addressPart: String,
+                                                 domain: String,
+                                                 raw: String) throws -> String? {
+        guard let parsed = try parsePublicKeyMultihash(addressPart, raw: raw) else {
+            return nil
+        }
+        let canonicalHex = formatPublicKeyMultihash(functionCode: parsed.functionCode,
+                                                    payload: parsed.publicKey)
+        if let address = try? AccountAddress.fromAccount(domain: domain,
+                                                         publicKey: parsed.publicKey,
+                                                         algorithm: algorithmIdentifier(parsed.algorithm)),
+           let ih58 = try? address.toIH58(networkPrefix: defaultNetworkPrefix) {
+            return ih58
+        }
+        return canonicalHex
+    }
+
+    private static func parsePublicKeyMultihash(_ value: String,
+                                                raw: String) throws -> (
+        functionCode: UInt64,
+        algorithm: SigningAlgorithm,
+        publicKey: Data
+    )? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        var rawHex = trimmed
+        var prefixedAlgorithm: SigningAlgorithm?
+        if let separator = trimmed.firstIndex(of: ":") {
+            let prefix = String(trimmed[..<separator])
+            guard let parsed = parseAlgorithmPrefix(prefix) else {
+                throw OfflineNoritoError.invalidAccountId(raw)
+            }
+            prefixedAlgorithm = parsed
+            rawHex = String(trimmed[trimmed.index(after: separator)...])
+            guard !rawHex.isEmpty else {
+                throw OfflineNoritoError.invalidAccountId(raw)
+            }
+        }
+        guard let bytes = Data(hexString: rawHex),
+              let decoded = decodePublicKeyMultihash(bytes) else {
+            if prefixedAlgorithm != nil {
+                throw OfflineNoritoError.invalidAccountId(raw)
+            }
+            return nil
+        }
+        if let prefixedAlgorithm, prefixedAlgorithm != decoded.algorithm {
+            throw OfflineNoritoError.invalidAccountId(raw)
+        }
+        return decoded
+    }
+
+    private static func decodePublicKeyMultihash(_ bytes: Data) -> (
+        functionCode: UInt64,
+        algorithm: SigningAlgorithm,
+        publicKey: Data
+    )? {
+        let raw = [UInt8](bytes)
+        guard let (functionCode, functionEnd) = decodeVarint(raw, startIndex: 0),
+              let (length, lengthEnd) = decodeVarint(raw, startIndex: functionEnd),
+              lengthEnd <= raw.count else {
+            return nil
+        }
+        let payload = Data(raw[lengthEnd...])
+        guard payload.count == Int(length),
+              let algorithm = signingAlgorithm(multihashCode: functionCode) else {
+            return nil
+        }
+        return (functionCode, algorithm, payload)
+    }
+
+    private static func decodeVarint(_ bytes: [UInt8], startIndex: Int) -> (UInt64, Int)? {
+        var value: UInt64 = 0
+        var shift: UInt64 = 0
+        var index = startIndex
+        while index < bytes.count {
+            let byte = bytes[index]
+            let chunk = UInt64(byte & 0x7F)
+            if shift >= 64 {
+                return nil
+            }
+            value |= chunk << shift
+            index += 1
+            if (byte & 0x80) == 0 {
+                return (value, index)
+            }
+            shift += 7
+        }
+        return nil
+    }
+
+    private static func encodeVarint(_ value: UInt64) -> [UInt8] {
+        var out: [UInt8] = []
+        var value = value
+        repeat {
+            var byte = UInt8(value & 0x7F)
+            value >>= 7
+            if value != 0 {
+                byte |= 0x80
+            }
+            out.append(byte)
+        } while value != 0
+        return out
+    }
+
+    private static func signingAlgorithm(multihashCode: UInt64) -> SigningAlgorithm? {
+        switch multihashCode {
+        case 0xed:
+            return .ed25519
+        case 0xe7:
+            return .secp256k1
+        case 0xee:
+            return .mlDsa
+        case 0x1306:
+            return .sm2
+        default:
+            return nil
+        }
+    }
+
+    private static func algorithmIdentifier(_ algorithm: SigningAlgorithm) -> String {
+        switch algorithm {
+        case .ed25519:
+            return "ed25519"
+        case .secp256k1:
+            return "secp256k1"
+        case .mlDsa:
+            return "ml-dsa"
+        case .sm2:
+            return "sm2"
+        }
+    }
+
+    private static func parseAlgorithmPrefix(_ value: String) -> SigningAlgorithm? {
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "ed25519", "ed":
+            return .ed25519
+        case "secp256k1", "secp":
+            return .secp256k1
+        case "ml-dsa", "mldsa", "ml_dsa":
+            return .mlDsa
+        case "sm2":
+            return .sm2
+        default:
+            return nil
+        }
+    }
+
+    private static func formatPublicKeyMultihash(functionCode: UInt64, payload: Data) -> String {
+        let functionHex = Data(encodeVarint(functionCode)).hexLowercased()
+        let lengthHex = Data(encodeVarint(UInt64(payload.count))).hexLowercased()
+        let payloadHex = payload.hexUppercased()
+        return functionHex + lengthHex + payloadHex
+    }
+
+    private static func canonicalizeAssetDomain(_ value: String) throws -> String {
+        do {
+            return try AccountAddress.canonicalizeDomainLabel(value)
+        } catch {
+            throw OfflineNoritoError.invalidAssetId(value)
+        }
+    }
+
+    private static func shouldFallbackFromAddress(_ error: AccountAddressError) -> Bool {
+        switch error {
+        case .unsupportedAddressFormat,
+             .invalidIh58Encoding,
+             .checksumMismatch,
+             .invalidLength,
+             .missingCompressedSentinel,
+             .compressedTooShort,
+             .invalidCompressedChar,
+             .invalidCompressedBase,
+             .invalidCompressedDigit,
+             .invalidIh58PrefixEncoding:
+            return true
+        default:
+            return false
+        }
     }
 
     static func encodePoseidonDigest(_ bytes: Data) throws -> Data {

@@ -1,9 +1,42 @@
 # Status
 
 ## Latest Updates
+- Maintenance: resolve merge conflict markers in `status.md`.
+- Tests: not run (not requested).
 - Test network harness: workspace fingerprint now honors simple `.gitignore` globs and ignores custom `CARGO_TARGET_DIR` paths to reduce unnecessary rebuilds; added unit coverage.
 - Tests: not run (not requested).
 - Integration tests: default sandbox network parallelism now scales with CPU/4 (matching the cross-process permit heuristic) and updated the serial-guard unit test to reflect the new default.
+- Governance ZK voting: canonicalize `root_hint`/`nullifier_hex` hex hints across SDKs/CLI/bridges, align core CastZkBallot parsing with case-insensitive `blake2b32:`/`0x` prefixes, and add regression coverage.
+- Tests: not run (not requested).
+- IVM CoreHost: record raw AXT proof expiry while applying skew only to cache/slot checks, reject inline proofs with zero expiry slots, and align cache expiry storage; add regression coverage for skewed proof acceptance and zero-expiry rejection.
+- Tests: not run (not requested).
+- Maintenance: resolve merge conflicts in `status.md`, `roadmap.md`, `crates/iroha_core/src/block.rs`, and `crates/iroha_core/src/smartcontracts/isi/offline.rs`.
+- Tests: not run (not requested).
+- Torii telemetry: treat IPv4-mapped IPv6 Torii hosts as IPv4 when deciding geo lookup eligibility; add regression coverage.
+- Tests: `cargo test -p iroha_torii geo_host_publicity_checks -- --nocapture` (failed: `norito::json::Map` alias used with generics in `crates/iroha_torii/src/gov.rs:313`).
+- IVM: WsvHost AXT policy now honors configured slot length/clock skew and rejects handle skew overrides above the configured max; SnapshotAxtPolicy enforces the same bound; add regression tests.
+- Tests: not run (not requested).
+- Core: record raw AXT proof expiry in envelopes while keeping skew only for cache/slot checks; add regression test for raw expiry recording.
+- Tests: not run (not requested).
+- Swift SDK: canonicalize offline account-id Norito encoding (IH58 for encoded/raw keys, domain normalization) across receipts, challenges, and Poseidon leaf hashing; add regression coverage.
+- Tests: not run (not requested).
+- Core: align AXT proof/handle expiry comparison with commit rules, record handle binding/manifest length errors, tighten AXT reject context coverage (descriptor vs missing policy, touch/handle invariants), and add regression tests.
+- Tests: not run (not requested).
+- Governance ZK voting: Python Torii clients now normalize ZK public-input aliases, enforce complete lock hints (zk/zk-v1/ballot-proof), and the Torii mock validates ZK public inputs; add regression tests.
+- Tests: not run (not requested).
+- Core: align CoreHost AXT replay retention with ledger semantics (retention floor + `is_expired` checks) and add regression tests.
+- Tests: not run (not requested).
+- Governance ZK voting: Swift SDK now normalizes ZK public-input aliases and enforces complete lock hints for Torii requests and CastZkBallot encoding; add regression tests.
+- Tests: not run (not requested).
+- Core: AXT block validation now checks descriptor binding and uses per-dataspace policy slots with global proof skew to align replay/expiry checks; add regression coverage.
+- Tests: not run (not requested).
+- Governance voting: auto-close now defers ZK decisions until a finalized tally, turnout uses approve+reject only (consistent with finalize), Torii tally applies conviction factors and respects finalized ZK tallies, and plain ReferendumOpened events emit real windows; added regression tests.
+- Tests: not run (not requested).
+- Offline transfers: canonicalize App Attest `key_id` (standard base64), enforce receipt ordering + single counter scope, validate Android marker key bytes/signatures, and refresh bundle fixtures/specs + docs for the standardized formats.
+- Tests: `target/debug/xtask offline-bundle --spec scripts/offline_bundle/spec.example.json --output target/offline_bundle_fixture`.
+- Core: AXT block validation now enforces descriptor/touch manifest invariants; add regression coverage and doc note.
+- Tests: not run (not requested).
+- Core: block-level AXT validation now enforces handle intent invariants (amount match/non-zero, scope/subject, non-zero era/sub-nonce/expiry); add regression coverage and docs note.
 - Tests: not run (not requested).
 - Data model: enable BLS feature in workspace `iroha_data_model` dependency so IH58 account parsing accepts BLS curve ids in integration tests/clients.
 - Asset tests: sync after fractional rejection operations in `fail_if_dont_satisfy_spec` to keep non-empty height tracking aligned under slow confirmations.
@@ -42,8 +75,8 @@
 - Tests: not run (existing cargo build/test processes held the build directory lock).
 - Swift SDK: refresh offline receipt poseidon platform-proof hash vectors for the sample receipts.
 - Tests: `swift test --disable-sandbox` (from `IrohaSwift`).
-- Java/Android SDK: add JSON-ready encoders for offline transfer items/platform snapshots plus `invalidateAndCancel()` on transports/OkHttp executors; document the cleanup hook and add regression coverage.
-- Tests: not run (not requested).
+- Java/Android SDK: add JSON-ready encoders for offline transfer items/platform snapshots plus `invalidateAndCancel()` on transports/OkHttp executors; update HTTP/OkHttp test fixtures to use Norito-encoded payloads, refresh gateway summary/Android provisioned proof fixtures for strict validation, and add regression coverage.
+- Tests: `JAVA_HOME=/Library/Java/JavaVirtualMachines/openjdk-21.jdk/Contents/Home ./gradlew :core:test` (from `java/iroha_android`); `ANDROID_HOME=/Users/mtakemiya/Library/Android/sdk ANDROID_SDK_ROOT=/Users/mtakemiya/Library/Android/sdk JAVA_HOME=/Library/Java/JavaVirtualMachines/openjdk-21.jdk/Contents/Home ./gradlew :android:testDebugUnitTest` (from `java/iroha_android`).
 - Governance ZK voting: require `public_inputs_json` to be an object, enforce owner type strictly, accept only `nullifier_hex` hints, and add regression coverage; updated JS/Python SDKs for v1 lock hints, refreshed JS dist, and synced governance API docs (source/portal + ja/he).
 - Tests: not run (not requested).
 - Core: AXT block validation now rejects duplicate handle sub-nonces across dataspaces to match replay-key semantics; add regression coverage.
@@ -1539,3 +1572,10 @@
 - Aligned NPoS epoch manager initialization to the current height when no VRF record exists (mode flip + startup) and added epoch alignment tests.
 - Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options); `cargo test --workspace` (timed out after 600s; warnings about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450` and dead_code in `crates/norito/src/core.rs:6792`).
 - Fixed invalid-proposal evidence to carry the pending view when commit quorum failures occur, with coverage asserting the recorded proposal view.
+- Standardized ZK ballot public-input validation across Torii, CLI, and the JS SDK (Torii client + instruction builders) and refreshed the JS governance ballot examples.
+- Normalized Android CastZkBallot public inputs (canonical JSON, alias mapping, full lock hints) with new regression coverage, and clarified governance docs that partial lock hints are rejected.
+- Normalized CLI ZK public-input alias keys (`durationBlocks`, `rootHintHex`, `nullifierHex`) and added regression coverage for alias conflicts.
+- Canonicalized JavaScript `CastZkBallot` public-input JSON ordering (sorted keys) with a regression for nested ordering.
+- Hardened the Norito bridge CastZkBallot encoder to normalize alias keys and enforce complete lock hints, with regression coverage for invalid inputs.
+- Normalized JS host CastZkBallot parsing to canonicalize public inputs (alias mapping, complete lock hints) with regression tests for invalid payloads.
+- Torii now normalizes ZK ballot public-input aliases and canonicalizes `root_hint`/`nullifier_hex` hints (including V1 endpoints), rejecting conflicts or invalid hex with new unit tests.

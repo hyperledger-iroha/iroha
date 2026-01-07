@@ -90,7 +90,10 @@ Code Size Cap
   - Request: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "alice@wonderland?", "private_key": "...?" }
   - Response: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - On-chain effect (current scaffold): enact утвержденного deploy proposal вставляет минимальный `ContractManifest`, привязанный к `code_hash`, с ожидаемым `abi_hash` и помечает proposal как Enacted. Если manifest уже существует для `code_hash` с другим `abi_hash`, enactment отклоняется.
-  - Notes: Для ZK elections контракты должны вызвать `ZK_VOTE_VERIFY_TALLY` до `FinalizeElection`; хосты enforce одноразовый latch.
+  - Notes:
+    - Для ZK elections контракты должны вызвать `ZK_VOTE_VERIFY_TALLY` до `FinalizeElection`; хосты enforce одноразовый latch. `FinalizeReferendum` отклоняет ZK-референдумы, пока tally выборов не финализирован.
+    - Автозакрытие на `h_end` эмитит Approved/Rejected только для Plain-референдумов; ZK-референдумы остаются Closed, пока не будет отправлен финализированный tally и выполнен `FinalizeReferendum`.
+    - Проверки turnout используют только approve+reject; abstain не учитывается в turnout.
 
 - POST `/v1/gov/enact`
   - Request: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "alice@wonderland?", "private_key": "...?" }
@@ -199,7 +202,7 @@ CLI Helpers
   - Полезно для аудита protected namespaces или проверки governance-controlled deploy workflows.
 - `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - Выдает JSON skeleton metadata для деплоя в protected namespaces, включая опциональные `gov_manifest_approvers` для соблюдения quorum правил манифеста.
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — lock hints обязательны при `min_bond_amount > 0`, и любой набор hints должен включать `owner`, `amount` и `duration_blocks`.
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
   - Однострочный summary теперь содержит детерминированный `fingerprint=<hex>` из кодированного `CastZkBallot` вместе с декодированными hints (`owner`, `amount`, `duration_blocks`, `direction` при наличии).

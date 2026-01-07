@@ -930,6 +930,98 @@ test("buildCastZkBallotInstruction encodes proof and JSON inputs", () => {
   assert.deepEqual(decoded, expected);
 });
 
+test("buildCastZkBallotInstruction defaults public inputs to empty object", () => {
+  const instruction = buildCastZkBallotInstruction({
+    electionId: "ref-2",
+    proof: Buffer.from([0x03]),
+  });
+  assert.equal(instruction.CastZkBallot.public_inputs_json, "{}");
+  const decoded = encodeAndDecode(instruction);
+  assert.deepEqual(decoded, instruction);
+});
+
+test("buildCastZkBallotInstruction normalizes lock hint aliases", () => {
+  const instruction = buildCastZkBallotInstruction({
+    electionId: "ref-3",
+    proof: Buffer.from([0x04]),
+    publicInputs: {
+      owner: ACCOUNT_ID,
+      amount: "250",
+      durationBlocks: 12,
+    },
+  });
+  const parsed = JSON.parse(instruction.CastZkBallot.public_inputs_json);
+  assert.equal(parsed.owner, ACCOUNT_ID);
+  assert.equal(parsed.amount, "250");
+  assert.equal(parsed.duration_blocks, 12);
+  assert.equal(parsed.durationBlocks, undefined);
+});
+
+test("buildCastZkBallotInstruction canonicalizes hex hint values", () => {
+  const instruction = buildCastZkBallotInstruction({
+    electionId: "ref-3",
+    proof: Buffer.from([0x04]),
+    publicInputs: {
+      owner: ACCOUNT_ID,
+      amount: "250",
+      durationBlocks: 12,
+      rootHintHex: `0x${"Aa".repeat(32)}`,
+      nullifierHex: `blake2b32:${"BB".repeat(32)}`,
+    },
+  });
+  const parsed = JSON.parse(instruction.CastZkBallot.public_inputs_json);
+  assert.equal(parsed.root_hint, "aa".repeat(32));
+  assert.equal(parsed.nullifier_hex, "bb".repeat(32));
+});
+
+test("buildCastZkBallotInstruction canonicalizes public input ordering", () => {
+  const instruction = buildCastZkBallotInstruction({
+    electionId: "ref-4",
+    proof: Buffer.from([0x05]),
+    publicInputs: {
+      tally: "aye",
+      meta: { z: 1, a: 2 },
+      badge: "voter",
+    },
+  });
+  assert.equal(
+    instruction.CastZkBallot.public_inputs_json,
+    '{"badge":"voter","meta":{"a":2,"z":1},"tally":"aye"}',
+  );
+});
+
+test("buildCastZkBallotInstruction rejects non-object public inputs", () => {
+  assert.throws(
+    () =>
+      buildCastZkBallotInstruction({
+        electionId: "ref-4",
+        proof: Buffer.from([0x05]),
+        publicInputs: "[1,2]",
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /publicInputs/i);
+      return true;
+    },
+  );
+});
+
+test("buildCastZkBallotInstruction requires complete lock hints", () => {
+  assert.throws(
+    () =>
+      buildCastZkBallotInstruction({
+        electionId: "ref-5",
+        proof: Buffer.from([0x06]),
+        publicInputs: { owner: ACCOUNT_ID },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /owner, amount, and duration_blocks/i);
+      return true;
+    },
+  );
+});
+
 test("buildCastZkBallotInstruction rejects empty proof bytes", () => {
   assert.throws(
     () =>

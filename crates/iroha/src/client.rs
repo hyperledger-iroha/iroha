@@ -8162,9 +8162,10 @@ where
                                 block_height = Some(height);
                             }
                         }
-                        TxConfirmationStatus::Committed | TxConfirmationStatus::Applied => {
-                            return Ok(hash)
+                        TxConfirmationStatus::Committed => {
+                            debug!(%hash, "transaction committed; awaiting applied");
                         }
+                        TxConfirmationStatus::Applied => return Ok(hash),
                         TxConfirmationStatus::Rejected(Some(reason)) => {
                             return Err(tx_confirmation_final_report(tx_rejection_to_report(
                                 &reason,
@@ -8232,10 +8233,7 @@ where
                             }
                             PipelineEventBox::Block(block_event) => {
                                 if Some(block_event.header().height()) == block_height
-                                    && matches!(
-                                        block_event.status(),
-                                        BlockStatus::Applied | BlockStatus::Committed
-                                    )
+                                    && *block_event.status() == BlockStatus::Applied
                                 {
                                     debug!(
                                         %hash,
@@ -8814,7 +8812,7 @@ mod tx_confirmation_stream_tests {
             || {
                 checks = checks.saturating_add(1);
                 if checks > 0 {
-                    Ok(Some(super::TxConfirmationStatus::Committed))
+                    Ok(Some(super::TxConfirmationStatus::Applied))
                 } else {
                     Ok(None)
                 }
@@ -8822,6 +8820,31 @@ mod tx_confirmation_stream_tests {
         )
         .await;
         assert_eq!(result.unwrap(), hash);
+    }
+
+    #[tokio::test]
+    async fn polling_committed_waits_for_applied() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([13_u8; Hash::LENGTH]));
+        let mut events = stream::empty::<Result<EventBox, eyre::Report>>();
+        let mut checks = 0u8;
+        let result = listen_for_tx_confirmation_stream_with_status_check(
+            &mut events,
+            hash,
+            Duration::from_secs(1),
+            Duration::from_millis(1),
+            || {
+                checks = checks.saturating_add(1);
+                if checks < 3 {
+                    Ok(Some(super::TxConfirmationStatus::Committed))
+                } else {
+                    Ok(Some(super::TxConfirmationStatus::Applied))
+                }
+            },
+        )
+        .await;
+        assert_eq!(result.unwrap(), hash);
+        assert!(checks >= 3);
     }
 
     #[tokio::test]
@@ -8842,7 +8865,7 @@ mod tx_confirmation_stream_tests {
                 view_change_index: 0,
                 confidential_features: None,
             },
-            status: BlockStatus::Committed,
+            status: BlockStatus::Applied,
         }));
         let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
         let mut events = UnboundedReceiverStream::new(rx);

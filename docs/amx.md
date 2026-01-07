@@ -16,7 +16,7 @@ Key guarantees:
 - IVM hosts derive per-dataspace AXT policy from the Space Directory: handles must target the lane advertised in the catalog, present the latest manifest root, satisfy expiry_slot, handle_era, and sub_nonce minima, and reject unknown dataspaces with `PermissionDenied` before execution.
 - Slot expiry uses `nexus.axt.slot_length_ms` (default `1` ms, validated between `1` ms and `600_000` ms) plus the bounded `nexus.axt.max_clock_skew_ms` (default `0` ms, capped by the slot length and `60_000` ms). Hosts compute `current_slot = block.creation_time_ms / slot_length_ms`, apply the skew allowance to proof and handle expiry checks, and reject handles that advertise a larger skew than the configured limit.
 - Proof cache TTL bounds reuse: `nexus.axt.proof_cache_ttl_slots` (default `1`, validated `1`–`64`) limits how long accepted or rejected proofs stay in the host cache; entries drop once the TTL window or the proof’s `expiry_slot` elapses so replay protection stays bounded.
-- Replay ledger retention: `nexus.axt.replay_retention_slots` (default `128`, validated `1`–`4_096`) caps how many slots of handle-usage history are retained for replay rejection across peers/restarts; align it with the longest handle-validity window you expect operators to issue. The ledger is persisted in WSV, hydrated on startup, and pruned deterministically once the retention window or handle expiry elapses so peer switches do not reopen replay gaps.
+- Replay ledger retention: `nexus.axt.replay_retention_slots` (default `128`, validated `1`–`4_096`) sets the minimum slot window of handle-usage history retained for replay rejection across peers/restarts; align it with the longest handle-validity window you expect operators to issue. The ledger is persisted in WSV, hydrated on startup, and pruned deterministically once both the retention window and handle expiry have elapsed (whichever is later) so peer switches do not reopen replay gaps.
 - Debugging cache status: Torii exposes `/v1/debug/axt/cache` (telemetry/developer gate) to return the current AXT policy snapshot version, the most recent reject (lane/reason/version), cached proofs (dataspace/status/manifest root/slots), and reject hints (`next_min_handle_era`/`next_min_sub_nonce`). Use this endpoint to confirm slot/manifest rotations are reflected in cache state and to refresh handles deterministically during troubleshooting.
 
 ## Slot Timing Model
@@ -87,7 +87,7 @@ Norito fixtures for the descriptor/handle/policy snapshot live at `crates/iroha_
 ### Lane catalog mapping and manifests
 
 - AXT policy snapshots are built from the Space Directory manifest set and lane catalog. Each dataspace is mapped to its configured lane; active manifests contribute the manifest hash, activation epoch (`min_handle_era`), and sub-nonce floor. UAID bindings without an active manifest still emit a policy entry with a zeroed manifest root so lane gating remains active until a real manifest lands.
-- `current_slot` in the snapshot is derived from the committed block height, so handles with an `expiry_slot` lower than the current height are rejected even before a dedicated slot clock is plumbed through.
+- `current_slot` in the snapshot is derived from the latest committed block timestamp (`creation_time_ms / slot_length_ms`), falling back to the block height only before a committed header is available.
 - Telemetry surfaces the hydrated snapshot as `iroha_axt_policy_snapshot_version` (lower 64 bits of the Norito-encoded snapshot hash) and cache events via `iroha_axt_policy_snapshot_cache_events_total{event=cache_hit|cache_miss}`. Reject counters use the labels `lane`, `manifest`, `era`, `sub_nonce`, and `expiry` so operators can immediately see which field blocked a handle.
 
 ### Cross-dataspace composability checklist
@@ -203,7 +203,7 @@ AXT handle verification now defaults to the Space Directory snapshot when the ho
 - membership: handles for dataspaces absent from the snapshot are denied.
 
 Failures map to `PermissionDenied`, and the CoreHost policy snapshot tests in `crates/ivm/tests/core_host_policy.rs` cover allow/deny cases for each field.
-Block validation also requires non-empty proofs per dataspace with `expiry_slot` covering both the policy/block slot and the handle’s expiry, aggregates handle budgets per dataspace, and advances `min_handle_era`/`min_sub_nonce` as envelopes commit so replayed sub-nonces are rejected even after Space Directory rebuilds.
+Block validation also requires non-empty proofs per dataspace with `expiry_slot` covering the policy slot (with the configured skew allowance) and not expiring before the handle, enforces descriptor binding plus touch manifests for declared specs (and rejects out-of-prefix entries), checks handle intent invariants (non-zero amounts, scope/subject alignment, and non-zero era/sub_nonce/expiry), aggregates handle budgets per dataspace, and advances `min_handle_era`/`min_sub_nonce` as envelopes commit so replayed sub-nonces are rejected even after Space Directory rebuilds.
 
 ## Error Catalog
 

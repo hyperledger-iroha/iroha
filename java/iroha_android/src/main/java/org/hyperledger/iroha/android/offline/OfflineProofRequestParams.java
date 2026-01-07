@@ -16,9 +16,10 @@ public final class OfflineProofRequestParams {
   private final String replayLogTailHex;
 
   private OfflineProofRequestParams(final Builder builder) {
-    this.transferPayload =
-        new LinkedHashMap<>(
-            Objects.requireNonNull(builder.transferPayload, "transferPayload must be provided"));
+    if (builder.transferPayload == null) {
+      throw new IllegalArgumentException("transferPayload must be provided");
+    }
+    this.transferPayload = new LinkedHashMap<>(builder.transferPayload);
     if (transferPayload.isEmpty()) {
       throw new IllegalArgumentException("transferPayload must not be empty");
     }

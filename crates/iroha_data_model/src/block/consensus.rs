@@ -1728,7 +1728,7 @@ pub struct Reconfig {
 }
 
 /// RBC init message for payload distribution scaffolding.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct RbcInit {
     /// Subject block hash.
     pub block_hash: HashOf<BlockHeader>,
@@ -1738,6 +1738,10 @@ pub struct RbcInit {
     pub view: View,
     /// Epoch.
     pub epoch: u64,
+    /// Commit roster snapshot for this RBC session.
+    pub roster: Vec<PeerId>,
+    /// Hash of the Norito-encoded roster snapshot.
+    pub roster_hash: Hash,
     /// Total chunk count for the payload.
     pub total_chunks: u32,
     /// Payload hash commitment (optional, when leader is also proposer).
@@ -1774,6 +1778,8 @@ pub struct RbcReady {
     pub view: View,
     /// Epoch.
     pub epoch: u64,
+    /// Hash of the roster snapshot used to validate READY signatures.
+    pub roster_hash: Hash,
     /// Merkle root of chunk digests for integrity proofs.
     pub chunk_root: Hash,
     /// Sender index within the active set.
@@ -1793,6 +1799,8 @@ pub struct RbcDeliver {
     pub view: View,
     /// Epoch.
     pub epoch: u64,
+    /// Hash of the roster snapshot used to validate DELIVER signatures.
+    pub roster_hash: Hash,
     /// Merkle root of chunk digests for integrity proofs.
     pub chunk_root: Hash,
     /// Sender index within the active set.
@@ -1946,6 +1954,10 @@ mod tests {
             .collect()
     }
 
+    fn roster_hash(roster: &[PeerId]) -> Hash {
+        Hash::new(&roster.encode())
+    }
+
     fn sample_commit_certificate_ref() -> CommitCertificateRef {
         CommitCertificateRef {
             height: 4,
@@ -2028,11 +2040,15 @@ mod tests {
     }
 
     fn sample_rbc_init() -> RbcInit {
+        let roster = sample_roster();
+        let roster_hash = roster_hash(&roster);
         RbcInit {
             block_hash: dummy_hash(),
             height: 6,
             view: 3,
             epoch: 1,
+            roster,
+            roster_hash,
             total_chunks: 3,
             payload_hash: Hash::new(b"payload_hash"),
             chunk_root: Hash::new(b"chunk_root"),
@@ -2051,11 +2067,13 @@ mod tests {
     }
 
     fn sample_rbc_ready() -> RbcReady {
+        let roster = sample_roster();
         RbcReady {
             block_hash: dummy_hash(),
             height: 6,
             view: 3,
             epoch: 1,
+            roster_hash: roster_hash(&roster),
             chunk_root: Hash::prehashed([0xAA; Hash::LENGTH]),
             sender: 2,
             signature: vec![0x10, 0x11],
@@ -2063,11 +2081,13 @@ mod tests {
     }
 
     fn sample_rbc_deliver() -> RbcDeliver {
+        let roster = sample_roster();
         RbcDeliver {
             block_hash: dummy_hash(),
             height: 6,
             view: 3,
             epoch: 1,
+            roster_hash: roster_hash(&roster),
             chunk_root: Hash::prehashed([0xAA; Hash::LENGTH]),
             sender: 2,
             signature: vec![0x21, 0x22],

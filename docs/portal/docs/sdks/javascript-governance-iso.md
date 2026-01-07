@@ -198,7 +198,12 @@ await torii.governanceSubmitZkBallot({
   chainId: "00000000-0000-0000-0000-000000000000",
   electionId: "ref-zk",
   proof: Buffer.alloc(96, 0xcd),
-  public: { owner: authority, amount: "5000" },
+  public: {
+    owner: authority,
+    amount: "5000",
+    duration_blocks: 7_200,
+    direction: "Aye",
+  },
 }, { signal: writeController.signal });
 ```
 

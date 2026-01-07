@@ -184,6 +184,11 @@ impl AxtPolicy for SpaceDirectoryAxtPolicy {
         {
             return Err(VMError::PermissionDenied);
         }
+        if let Some(requested) = usage.handle.max_clock_skew_ms
+            && u64::from(requested) > self.max_clock_skew_ms
+        {
+            return Err(VMError::PermissionDenied);
+        }
         let expiry_slot = axt::expiry_slot_with_skew(
             usage.handle.expiry_slot,
             self.slot_length_ms,
@@ -1626,9 +1631,15 @@ impl WsvHost {
     }
 
     fn build_wsv_axt_policy(wsv: &MockWorldStateView) -> Arc<SpaceDirectoryAxtPolicy> {
+        let slot_length_ms = wsv.slot_length_ms();
+        let max_clock_skew_ms = wsv.max_clock_skew_ms();
         Arc::new(
-            SpaceDirectoryAxtPolicy::from_snapshot(wsv.axt_policy_snapshot())
-                .with_current_slot(wsv.current_slot()),
+            SpaceDirectoryAxtPolicy::from_snapshot_with_timing(
+                wsv.axt_policy_snapshot(),
+                slot_length_ms,
+                max_clock_skew_ms,
+            )
+            .with_current_slot(wsv.current_slot()),
         )
     }
 
@@ -2076,6 +2087,50 @@ impl WsvHost {
         Ok(0)
     }
 
+    fn axt_expiry_slot_with_skew(&self, expiry_slot: u64) -> u64 {
+        axt::expiry_slot_with_skew(
+            expiry_slot,
+            self.wsv.slot_length_ms(),
+            self.wsv.max_clock_skew_ms(),
+            None,
+        )
+    }
+
+    fn validate_axt_proof(&self, dsid: DataSpaceId, proof: &ProofBlob) -> Result<(), VMError> {
+        let Some(policy) = self.wsv.axt_policies.get(&dsid) else {
+            return Err(VMError::PermissionDenied);
+        };
+        if policy.manifest_root.iter().all(|byte| *byte == 0) {
+            return Err(VMError::PermissionDenied);
+        }
+        if proof.payload.is_empty() {
+            return Err(VMError::NoritoInvalid);
+        }
+        if proof.expiry_slot == Some(0) {
+            return Err(VMError::NoritoInvalid);
+        }
+        if let Some(expiry_slot) = proof.expiry_slot {
+            let expiry_with_skew = self.axt_expiry_slot_with_skew(expiry_slot);
+            let current_slot = self.wsv.current_slot();
+            if current_slot > 0 && current_slot > expiry_with_skew {
+                return Err(VMError::PermissionDenied);
+            }
+        }
+        match decode_from_bytes::<axt::AxtProofEnvelope>(&proof.payload) {
+            Ok(envelope) => {
+                if envelope.dsid != dsid || envelope.manifest_root != policy.manifest_root {
+                    return Err(VMError::PermissionDenied);
+                }
+            }
+            Err(_) => {
+                if proof.payload.as_slice() != policy.manifest_root.as_slice() {
+                    return Err(VMError::PermissionDenied);
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn handle_axt_begin(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
         self.refresh_axt_policy();
         let tlv = vm.memory.validate_tlv(vm.register(10))?;
@@ -2120,19 +2175,23 @@ impl WsvHost {
     }
 
     fn handle_axt_verify_ds_proof(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
-        let state = self.axt_state.as_mut().ok_or(VMError::PermissionDenied)?;
+        let state_view = self.axt_state.as_ref().ok_or(VMError::PermissionDenied)?;
         let ds_tlv = vm.memory.validate_tlv(vm.register(10))?;
         if ds_tlv.type_id != PointerType::DataSpaceId {
             return Err(VMError::NoritoInvalid);
         }
         let dsid: DataSpaceId =
             norito::decode_from_bytes(ds_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-        if !state.expected_dsids().contains(&dsid) {
+        if !state_view.expected_dsids().contains(&dsid) {
             return Err(VMError::PermissionDenied);
         }
         let proof_ptr = vm.register(11);
         if proof_ptr == 0 {
-            state.record_proof(dsid, None, Some(self.wsv.current_slot()))?;
+            if !self.wsv.axt_policies.contains_key(&dsid) {
+                return Err(VMError::PermissionDenied);
+            }
+            let state = self.axt_state.as_mut().expect("axt_state checked above");
+            state.record_proof(dsid, None, None)?;
             return Ok(0);
         }
         let proof_tlv = vm.memory.validate_tlv(proof_ptr)?;
@@ -2141,12 +2200,13 @@ impl WsvHost {
         }
         let proof: ProofBlob =
             norito::decode_from_bytes(proof_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-        state.record_proof(dsid, Some(proof), Some(self.wsv.current_slot()))?;
+        self.validate_axt_proof(dsid, &proof)?;
+        let state = self.axt_state.as_mut().expect("axt_state checked above");
+        state.record_proof(dsid, Some(proof), None)?;
         Ok(0)
     }
 
     fn handle_axt_use_asset_handle(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
-        let state = self.axt_state.as_mut().ok_or(VMError::PermissionDenied)?;
         let handle_tlv = vm.memory.validate_tlv(vm.register(10))?;
         if handle_tlv.type_id != PointerType::AssetHandle {
             return Err(VMError::NoritoInvalid);
@@ -2156,9 +2216,6 @@ impl WsvHost {
         let Some(binding) = handle.binding_array() else {
             return Err(VMError::NoritoInvalid);
         };
-        if binding != state.binding() {
-            return Err(VMError::PermissionDenied);
-        }
 
         let op_tlv = vm.memory.validate_tlv(vm.register(11))?;
         if op_tlv.type_id != PointerType::NoritoBytes {
@@ -2166,11 +2223,17 @@ impl WsvHost {
         }
         let intent: RemoteSpendIntent =
             norito::decode_from_bytes(op_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-        if !state.expected_dsids().contains(&intent.asset_dsid) {
-            return Err(VMError::PermissionDenied);
-        }
-        if !state.has_touch(&intent.asset_dsid) {
-            return Err(VMError::PermissionDenied);
+        {
+            let state = self.axt_state.as_ref().ok_or(VMError::PermissionDenied)?;
+            if binding != state.binding() {
+                return Err(VMError::PermissionDenied);
+            }
+            if !state.expected_dsids().contains(&intent.asset_dsid) {
+                return Err(VMError::PermissionDenied);
+            }
+            if !state.has_touch(&intent.asset_dsid) {
+                return Err(VMError::PermissionDenied);
+            }
         }
 
         let amount = intent
@@ -2200,6 +2263,9 @@ impl WsvHost {
                 )
             }
         };
+        if let Some(proof_blob) = proof.as_ref() {
+            self.validate_axt_proof(intent.asset_dsid, proof_blob)?;
+        }
 
         let usage = axt::HandleUsage {
             handle,
@@ -2208,6 +2274,7 @@ impl WsvHost {
             amount,
         };
         self.axt_policy.allow_handle(&usage)?;
+        let state = self.axt_state.as_mut().expect("axt_state checked above");
         state.record_handle(usage)?;
         Ok(0)
     }

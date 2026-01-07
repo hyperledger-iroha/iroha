@@ -58,12 +58,11 @@ final class NoritoTests: XCTestCase {
                 return XCTFail("\(fileName): encoded_hex is not valid hex")
             }
 
-            if base64Bytes != hexBytes {
-                throw XCTSkip("\(fileName): fixture encodings diverge; update fixtures or Norito header")
-            }
-
             let header = try XCTUnwrap(NoritoFixtureHeader(data: base64Bytes),
                                        "\(fileName): missing or malformed Norito header")
+            if header.payload != hexBytes {
+                throw XCTSkip("\(fileName): fixture payload mismatch; update encoded_hex or instruction")
+            }
             XCTAssertEqual(header.magic, NoritoHeader.magic, "\(fileName): Norito magic mismatch")
             XCTAssertEqual(header.versionMajor, NoritoHeader.versionMajor, "\(fileName): major version mismatch")
             XCTAssertEqual(header.versionMinor, NoritoHeader.versionMinor, "\(fileName): minor version mismatch")

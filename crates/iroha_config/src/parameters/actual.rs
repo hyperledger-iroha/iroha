@@ -436,6 +436,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         root.apply_sora_profile();
 
         assert!(root.nexus.enabled, "Sora profile must enable Nexus runtime");
+        assert!(
+            root.sumeragi.da_enabled,
+            "Sora profile must enable data availability"
+        );
         assert_eq!(root.nexus.lane_catalog, sora_lane_catalog());
         assert_eq!(root.nexus.dataspace_catalog, sora_dataspace_catalog());
         assert_eq!(root.nexus.routing_policy, sora_routing_policy());
@@ -492,6 +496,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         root.apply_sora_profile();
 
         assert!(root.nexus.enabled, "Sora profile must enable Nexus runtime");
+        assert!(
+            root.sumeragi.da_enabled,
+            "Sora profile must enable data availability"
+        );
         assert_eq!(root.nexus.lane_catalog, custom_catalog);
         assert_eq!(
             root.nexus

@@ -3277,8 +3277,12 @@ class ToriiClient:
             "election_id": election_id,
             "proof_b64": proof_b64,
         }
-        if public is not None:
-            payload["public"] = public
+        public_inputs = self._normalize_governance_zk_public_inputs(
+            public,
+            context="zk ballot public inputs",
+        )
+        if public_inputs is not None:
+            payload["public"] = public_inputs
         body = self._post_json(
             "/v1/gov/ballots/zk",
             payload,
@@ -3319,9 +3323,15 @@ class ToriiClient:
             "backend": backend,
             "envelope_b64": envelope_b64,
         }
-        if root_hint_hex:
+        self._ensure_governance_lock_hints_complete(
+            owner,
+            amount,
+            duration_blocks,
+            context="zk ballot v1",
+        )
+        if root_hint_hex is not None:
             payload["root_hint_hex"] = root_hint_hex
-        if owner:
+        if owner is not None:
             payload["owner"] = owner
         if amount is not None:
             payload["amount"] = amount
@@ -3329,8 +3339,18 @@ class ToriiClient:
             payload["duration_blocks"] = duration_blocks
         if direction:
             payload["direction"] = direction
-        if nullifier_hex:
+        if nullifier_hex is not None:
             payload["nullifier_hex"] = nullifier_hex
+        self._normalize_governance_public_hex_hint(
+            payload,
+            "root_hint_hex",
+            context="zk ballot v1",
+        )
+        self._normalize_governance_public_hex_hint(
+            payload,
+            "nullifier_hex",
+            context="zk ballot v1",
+        )
         body = self._post_json(
             "/v1/gov/ballots/zk-v1",
             payload,
@@ -5527,6 +5547,119 @@ class ToriiClient:
         if isinstance(value, Mapping):
             return dict(value)
         raise RuntimeError(f"{context} must be an object")
+
+    @staticmethod
+    def _apply_governance_public_input_alias(
+        target: MutableMapping[str, Any],
+        alias_key: str,
+        canonical_key: str,
+        *,
+        context: str,
+    ) -> None:
+        if alias_key not in target:
+            return
+        if canonical_key in target:
+            raise RuntimeError(
+                f"{context} cannot include both {alias_key} and {canonical_key}"
+            )
+        target[canonical_key] = target.pop(alias_key)
+
+    @staticmethod
+    def _normalize_governance_public_hex_hint(
+        target: MutableMapping[str, Any],
+        key: str,
+        *,
+        context: str,
+    ) -> None:
+        if key not in target:
+            return
+        value = target[key]
+        if value is None:
+            return
+        if not isinstance(value, str):
+            raise RuntimeError(f"{context}.{key} must be a 32-byte hex string")
+        raw = value.strip()
+        if ":" in raw:
+            scheme, rest = raw.split(":", 1)
+            if scheme and scheme.lower() != "blake2b32":
+                raise RuntimeError(f"{context}.{key} must be a 32-byte hex string")
+            raw = rest
+        if raw.startswith(("0x", "0X")):
+            raw = raw[2:]
+        if len(raw) != 64 or any(ch not in "0123456789abcdefABCDEF" for ch in raw):
+            raise RuntimeError(f"{context}.{key} must be a 32-byte hex string")
+        target[key] = raw.lower()
+
+    @staticmethod
+    def _ensure_governance_lock_hints_complete(
+        owner: Any,
+        amount: Any,
+        duration_blocks: Any,
+        *,
+        context: str,
+    ) -> None:
+        has_owner = owner is not None
+        has_amount = amount is not None
+        has_duration = duration_blocks is not None
+        has_any = has_owner or has_amount or has_duration
+        if has_any and not (has_owner and has_amount and has_duration):
+            raise RuntimeError(
+                f"{context} must include owner, amount, duration_blocks when providing lock hints"
+            )
+
+    @classmethod
+    def _normalize_governance_zk_public_inputs(
+        cls,
+        value: Optional[Mapping[str, Any]],
+        *,
+        context: str,
+    ) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return None
+        if not isinstance(value, Mapping):
+            raise RuntimeError(f"{context} must be an object")
+        normalized = dict(value)
+        cls._apply_governance_public_input_alias(
+            normalized,
+            "durationBlocks",
+            "duration_blocks",
+            context=context,
+        )
+        cls._apply_governance_public_input_alias(
+            normalized,
+            "nullifierHex",
+            "nullifier_hex",
+            context=context,
+        )
+        cls._apply_governance_public_input_alias(
+            normalized,
+            "rootHintHex",
+            "root_hint",
+            context=context,
+        )
+        cls._apply_governance_public_input_alias(
+            normalized,
+            "rootHint",
+            "root_hint",
+            context=context,
+        )
+        cls._normalize_governance_public_hex_hint(
+            normalized,
+            "root_hint",
+            context=context,
+        )
+        cls._normalize_governance_public_hex_hint(
+            normalized,
+            "nullifier_hex",
+            context=context,
+        )
+        cls._ensure_governance_lock_hints_complete(
+            normalized.get("owner"),
+            normalized.get("amount"),
+            normalized.get("duration_blocks"),
+            context=context,
+        )
+        return normalized
 
     @staticmethod
     def _parse_string_list(value: Any, *, context: str) -> List[str]:

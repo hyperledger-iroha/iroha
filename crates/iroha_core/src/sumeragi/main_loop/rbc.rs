@@ -1,7 +1,7 @@
 //! RBC planning, chunking, and hydration helpers.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io,
     sync::mpsc,
     time::{Duration, Instant, SystemTime},
@@ -13,6 +13,7 @@ use iroha_data_model::{
     ChainId, Encode as _,
     block::{BlockHeader, SignedBlock},
     nexus::{DataSpaceId, LaneId},
+    peer::PeerId,
 };
 use iroha_logger::prelude::*;
 use iroha_version::codec::DecodeVersioned;
@@ -48,6 +49,7 @@ pub(super) struct RbcSessionPlan {
     pub(super) session: RbcSession,
     pub(super) init: RbcInit,
     pub(super) chunks: Vec<RbcChunk>,
+    pub(super) roster: Vec<PeerId>,
 }
 
 #[derive(Clone, Debug)]
@@ -58,6 +60,20 @@ pub(super) struct RbcPlan {
 
 const RBC_PERSIST_WORK_QUEUE_CAP: usize = 8;
 const RBC_PERSIST_RESULT_QUEUE_CAP: usize = 8;
+
+pub(super) fn rbc_roster_hash(roster: &[PeerId]) -> Hash {
+    Hash::new(&roster.to_vec().encode())
+}
+
+fn roster_has_duplicates(roster: &[PeerId]) -> bool {
+    let mut seen = BTreeSet::new();
+    for peer in roster {
+        if !seen.insert(peer.clone()) {
+            return true;
+        }
+    }
+    false
+}
 
 #[derive(Debug)]
 pub(super) struct RbcPersistWork {
@@ -459,6 +475,17 @@ impl Actor {
 
         session.set_allocations(lane_allocations, dataspace_allocations);
 
+        let primary_key = Self::session_key(&block_hash, height, view);
+        let roster = self.rbc_roster_for_session(primary_key);
+        if roster.is_empty() {
+            warn!(
+                height,
+                view, "skipping RBC plan: empty commit roster snapshot"
+            );
+            return Ok(None);
+        }
+        let roster_hash = rbc_roster_hash(&roster);
+
         let drop_every = self
             .config
             .debug_rbc_drop_every_nth_chunk
@@ -500,16 +527,19 @@ impl Actor {
             height,
             view,
             epoch,
+            roster: roster.clone(),
+            roster_hash,
             total_chunks,
             payload_hash,
             chunk_root,
         };
 
         let primary_plan = RbcSessionPlan {
-            key: Self::session_key(&block_hash, height, view),
+            key: primary_key,
             session,
             init,
             chunks,
+            roster,
         };
 
         let duplicate_plan = if self.config.debug_rbc_duplicate_inits {
@@ -518,6 +548,20 @@ impl Actor {
             } else {
                 let dup_view = view + 1;
                 let dup_session = primary_plan.session.clone();
+                let dup_key = Self::session_key(&block_hash, height, dup_view);
+                let dup_roster = self.rbc_roster_for_session(dup_key);
+                if dup_roster.is_empty() {
+                    warn!(
+                        height,
+                        view = dup_view,
+                        "skipping duplicate RBC init: empty commit roster snapshot"
+                    );
+                    return Ok(Some(RbcPlan {
+                        primary: primary_plan,
+                        duplicate: None,
+                    }));
+                }
+                let dup_roster_hash = rbc_roster_hash(&dup_roster);
                 let (dup_order, dup_dropped) = compute_chunk_broadcast_order(
                     chunk_bytes.len(),
                     self.config.debug_rbc_shuffle_chunks,
@@ -568,11 +612,14 @@ impl Actor {
                         height,
                         view: dup_view,
                         epoch,
+                        roster: dup_roster.clone(),
+                        roster_hash: dup_roster_hash,
                         total_chunks,
                         payload_hash,
                         chunk_root,
                     },
                     chunks: dup_chunks,
+                    roster: dup_roster.clone(),
                 })
             }
         } else {
@@ -841,14 +888,13 @@ impl Actor {
         self.update_rbc_status_entry(key, &plan.session, false);
         self.persist_rbc_session(key, &plan.session);
 
-        let roster = self.rbc_roster_for_session(key);
-        self.record_rbc_session_roster(key, roster);
+        self.record_rbc_session_roster(key, plan.roster.clone());
         Ok(())
     }
 
     pub(super) fn broadcast_rbc_session_plan(&mut self, plan: RbcSessionPlan) -> Result<()> {
         let key = plan.key;
-        let topology_peers = self.rbc_session_roster(key);
+        let topology_peers = plan.roster;
         if topology_peers.is_empty() {
             return Ok(());
         }
@@ -859,7 +905,7 @@ impl Actor {
             }
             self.schedule_background(BackgroundRequest::Post {
                 peer: peer.clone(),
-                msg: BlockMessage::RbcInit(plan.init),
+                msg: BlockMessage::RbcInit(plan.init.clone()),
             });
         }
         for chunk in plan.chunks {
@@ -946,8 +992,6 @@ impl Actor {
         };
 
         self.subsystems.da_rbc.rbc.sessions.insert(key, session);
-        let roster = self.rbc_roster_for_session(key);
-        self.record_rbc_session_roster(key, roster);
         self.flush_pending_rbc(key)?;
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &session, false);
@@ -1245,8 +1289,52 @@ impl Actor {
             );
             return Ok(());
         }
-        let roster = self.rbc_roster_for_session(key);
-        self.record_rbc_session_roster(key, roster);
+        if init.roster.is_empty() {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                "rejecting RBC init with empty roster snapshot"
+            );
+            return Ok(());
+        }
+        if roster_has_duplicates(&init.roster) {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                "rejecting RBC init with duplicate roster entries"
+            );
+            return Ok(());
+        }
+        let roster_hash = rbc_roster_hash(&init.roster);
+        if roster_hash != init.roster_hash {
+            warn!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                expected = ?roster_hash,
+                observed = ?init.roster_hash,
+                "rejecting RBC init with mismatched roster hash"
+            );
+            return Ok(());
+        }
+        if let Some(existing_roster) = self.subsystems.da_rbc.rbc.session_rosters.get(&key) {
+            let existing_hash = rbc_roster_hash(existing_roster);
+            if existing_hash != init.roster_hash {
+                warn!(
+                    height = init.height,
+                    view = init.view,
+                    block = %init.block_hash,
+                    expected = ?existing_hash,
+                    observed = ?init.roster_hash,
+                    "rejecting RBC init with conflicting roster snapshot"
+                );
+                return Ok(());
+            }
+        } else {
+            self.record_rbc_session_roster(key, init.roster.clone());
+        }
         if let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) {
             if let Some(expected_hash) = session.payload_hash() {
                 if expected_hash != init.payload_hash {
@@ -1545,13 +1633,95 @@ impl Actor {
             self.publish_rbc_backlog_snapshot();
             return Ok(());
         }
-        let topology_peers = self.rbc_session_roster(key);
+        let mut topology_peers = self.rbc_session_roster(key);
         if topology_peers.is_empty() {
-            debug!(
+            let fallback = self.rbc_roster_for_session(key);
+            if fallback.is_empty() {
+                let max_bytes = self.pending_rbc_caps().1;
+                let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
+                    let pending = self.pending_rbc_slot(key);
+                    let (accepted, dropped_bytes) =
+                        pending.push_ready_capped(ready, max_bytes, Instant::now());
+                    (
+                        accepted,
+                        dropped_bytes,
+                        pending.pending_chunks(),
+                        pending.pending_bytes(),
+                    )
+                };
+                if accepted {
+                    info!(
+                        ?key,
+                        pending_chunks,
+                        pending_bytes,
+                        ready_sender,
+                        ready_view,
+                        "stashed RBC READY until commit roster is available"
+                    );
+                } else {
+                    warn!(
+                        ?key,
+                        max_bytes,
+                        "dropping pending RBC READY: stash limits exceeded while roster missing"
+                    );
+                    Self::record_pending_drop_counts(
+                        self.telemetry_handle(),
+                        PendingRbcDropReason::Cap,
+                        1,
+                        u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
+                    );
+                }
+                self.publish_rbc_backlog_snapshot();
+                return Ok(());
+            }
+            if rbc_roster_hash(&fallback) != ready.roster_hash {
+                let max_bytes = self.pending_rbc_caps().1;
+                let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
+                    let pending = self.pending_rbc_slot(key);
+                    let (accepted, dropped_bytes) =
+                        pending.push_ready_capped(ready, max_bytes, Instant::now());
+                    (
+                        accepted,
+                        dropped_bytes,
+                        pending.pending_chunks(),
+                        pending.pending_bytes(),
+                    )
+                };
+                if accepted {
+                    info!(
+                        ?key,
+                        pending_chunks,
+                        pending_bytes,
+                        ready_sender,
+                        ready_view,
+                        "stashed RBC READY: roster hash mismatch"
+                    );
+                } else {
+                    warn!(
+                        ?key,
+                        max_bytes,
+                        "dropping pending RBC READY: roster mismatch and stash limits exceeded"
+                    );
+                    Self::record_pending_drop_counts(
+                        self.telemetry_handle(),
+                        PendingRbcDropReason::Cap,
+                        1,
+                        u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
+                    );
+                }
+                self.publish_rbc_backlog_snapshot();
+                return Ok(());
+            }
+            topology_peers = fallback;
+            self.record_rbc_session_roster(key, topology_peers.clone());
+        } else if rbc_roster_hash(&topology_peers) != ready.roster_hash {
+            warn!(
                 height = ready.height,
                 view = ready.view,
                 sender = ready.sender,
-                "dropping RBC READY: empty commit topology"
+                expected = ?rbc_roster_hash(&topology_peers),
+                observed = ?ready.roster_hash,
+                "dropping RBC READY: roster hash mismatch"
             );
             return Ok(());
         }
@@ -1939,13 +2109,89 @@ impl Actor {
             self.publish_rbc_backlog_snapshot();
             return Ok(());
         }
-        let topology_peers = self.rbc_session_roster(key);
+        let mut topology_peers = self.rbc_session_roster(key);
         if topology_peers.is_empty() {
-            debug!(
+            let fallback = self.rbc_roster_for_session(key);
+            if fallback.is_empty() {
+                let max_bytes = self.pending_rbc_caps().1;
+                let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
+                    let pending = self.pending_rbc_slot(key);
+                    let (accepted, dropped_bytes) =
+                        pending.push_deliver_capped(deliver, max_bytes, Instant::now());
+                    (
+                        accepted,
+                        dropped_bytes,
+                        pending.pending_chunks(),
+                        pending.pending_bytes(),
+                    )
+                };
+                if accepted {
+                    debug!(
+                        ?key,
+                        pending_chunks,
+                        pending_bytes,
+                        "stashed RBC DELIVER until commit roster is available"
+                    );
+                } else {
+                    warn!(
+                        ?key,
+                        max_bytes,
+                        "dropping pending RBC DELIVER: stash limits exceeded while roster missing"
+                    );
+                    Self::record_pending_drop_counts(
+                        self.telemetry_handle(),
+                        PendingRbcDropReason::Cap,
+                        1,
+                        u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
+                    );
+                }
+                self.publish_rbc_backlog_snapshot();
+                return Ok(());
+            }
+            if rbc_roster_hash(&fallback) != deliver.roster_hash {
+                let max_bytes = self.pending_rbc_caps().1;
+                let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
+                    let pending = self.pending_rbc_slot(key);
+                    let (accepted, dropped_bytes) =
+                        pending.push_deliver_capped(deliver, max_bytes, Instant::now());
+                    (
+                        accepted,
+                        dropped_bytes,
+                        pending.pending_chunks(),
+                        pending.pending_bytes(),
+                    )
+                };
+                if accepted {
+                    debug!(
+                        ?key,
+                        pending_chunks, pending_bytes, "stashed RBC DELIVER: roster hash mismatch"
+                    );
+                } else {
+                    warn!(
+                        ?key,
+                        max_bytes,
+                        "dropping pending RBC DELIVER: roster mismatch and stash limits exceeded"
+                    );
+                    Self::record_pending_drop_counts(
+                        self.telemetry_handle(),
+                        PendingRbcDropReason::Cap,
+                        1,
+                        u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
+                    );
+                }
+                self.publish_rbc_backlog_snapshot();
+                return Ok(());
+            }
+            topology_peers = fallback;
+            self.record_rbc_session_roster(key, topology_peers.clone());
+        } else if rbc_roster_hash(&topology_peers) != deliver.roster_hash {
+            warn!(
                 height = deliver.height,
                 view = deliver.view,
                 sender = deliver.sender,
-                "dropping RBC DELIVER: empty commit topology"
+                expected = ?rbc_roster_hash(&topology_peers),
+                observed = ?deliver.roster_hash,
+                "dropping RBC DELIVER: roster hash mismatch"
             );
             return Ok(());
         }

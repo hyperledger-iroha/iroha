@@ -2150,12 +2150,13 @@ pub(crate) mod valid {
             .iter()
             .map(|binding| (binding.dsid, binding.policy))
             .collect();
-        let current_slot = snapshot
+        let snapshot_slot = snapshot
             .entries
             .iter()
             .map(|entry| entry.policy.current_slot)
+            .filter(|slot| *slot > 0)
             .max()
-            .unwrap_or_else(|| block.header().height().get());
+            .unwrap_or(0);
         let retention_slots = state_block.nexus.axt.replay_retention_slots.get();
         let mut seen: BTreeSet<AxtHandleReplayKey> = BTreeSet::new();
 
@@ -2216,9 +2217,8 @@ pub(crate) mod valid {
             let validate_proof = |proof: &ProofBlob,
                                   dsid: DataSpaceId,
                                   policy: &AxtPolicyEntry,
-                                  block_slot: u64,
-                                  min_expiry_slot: Option<u64>,
-                                  override_skew_ms: Option<u32>|
+                                  policy_slot: u64,
+                                  min_expiry_slot: Option<u64>|
              -> Result<(), BlockValidationError> {
                 if proof.payload.is_empty() {
                     return Err(make_axt_error_with(
@@ -2253,7 +2253,7 @@ pub(crate) mod valid {
                 if let Some(expiry_slot) = proof.expiry_slot {
                     if expiry_slot == 0 {
                         return Err(make_axt_error_with(
-                            AxtRejectReason::Expiry,
+                            AxtRejectReason::Proof,
                             "proof expiry slot is zero",
                             Some(dsid),
                             Some(policy.target_lane),
@@ -2265,10 +2265,10 @@ pub(crate) mod valid {
                         expiry_slot,
                         axt_timing.slot_length_ms,
                         axt_timing.max_clock_skew_ms,
-                        override_skew_ms,
+                        None,
                     );
                     if let Some(min_expiry) = min_expiry_slot {
-                        if min_expiry > expiry_deadline {
+                        if min_expiry > expiry_slot {
                             return Err(make_axt_error_with(
                                 AxtRejectReason::Expiry,
                                 "proof expires before handle",
@@ -2279,20 +2279,10 @@ pub(crate) mod valid {
                             ));
                         }
                     }
-                    if policy.current_slot > 0 && policy.current_slot > expiry_deadline {
+                    if policy_slot > 0 && policy_slot > expiry_deadline {
                         return Err(make_axt_error_with(
                             AxtRejectReason::Expiry,
                             "proof expired relative to policy slot",
-                            Some(dsid),
-                            Some(policy.target_lane),
-                            None,
-                            None,
-                        ));
-                    }
-                    if block_slot > expiry_deadline {
-                        return Err(make_axt_error_with(
-                            AxtRejectReason::Expiry,
-                            "proof expired for current block slot",
                             Some(dsid),
                             Some(policy.target_lane),
                             None,
@@ -2350,8 +2340,120 @@ pub(crate) mod valid {
 
             for envelope in envelopes {
                 let envelope_lane = envelope.lane;
+                if let Err(err) = iroha_data_model::nexus::validate_descriptor(&envelope.descriptor)
+                {
+                    return Err(make_env_error(
+                        envelope_lane,
+                        AxtRejectReason::Descriptor,
+                        &format!("invalid descriptor: {err}"),
+                        None,
+                        None,
+                        None,
+                    ));
+                }
+                let expected_binding = envelope.descriptor.binding().map_err(|err| {
+                    make_env_error(
+                        envelope_lane,
+                        AxtRejectReason::Descriptor,
+                        &format!("failed to compute descriptor binding: {err}"),
+                        None,
+                        None,
+                        None,
+                    )
+                })?;
+                if expected_binding != envelope.binding {
+                    return Err(make_env_error(
+                        envelope_lane,
+                        AxtRejectReason::Descriptor,
+                        "descriptor binding does not match envelope binding",
+                        None,
+                        None,
+                        None,
+                    ));
+                }
                 let expected_dsids: BTreeSet<_> =
                     envelope.descriptor.dsids.iter().copied().collect();
+                let mut touch_specs: BTreeMap<DataSpaceId, &iroha_data_model::nexus::AxtTouchSpec> =
+                    BTreeMap::new();
+                for spec in &envelope.descriptor.touches {
+                    touch_specs.insert(spec.dsid, spec);
+                }
+                let mut touch_dsids: BTreeSet<DataSpaceId> = BTreeSet::new();
+                for touch in &envelope.touches {
+                    if !expected_dsids.contains(&touch.dsid) {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::Descriptor,
+                            "touch references undeclared dataspace",
+                            Some(touch.dsid),
+                            None,
+                            None,
+                        ));
+                    }
+                    if !touch_dsids.insert(touch.dsid) {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::Descriptor,
+                            "duplicate touch manifest for dataspace",
+                            Some(touch.dsid),
+                            None,
+                            None,
+                        ));
+                    }
+                    if let Some(spec) = touch_specs.get(&touch.dsid) {
+                        if !touch
+                            .manifest
+                            .read
+                            .iter()
+                            .all(|entry| spec.read.iter().any(|prefix| entry.starts_with(prefix)))
+                        {
+                            return Err(make_env_error(
+                                envelope_lane,
+                                AxtRejectReason::Descriptor,
+                                "touch manifest read entry outside descriptor",
+                                Some(touch.dsid),
+                                None,
+                                None,
+                            ));
+                        }
+                        if !touch
+                            .manifest
+                            .write
+                            .iter()
+                            .all(|entry| spec.write.iter().any(|prefix| entry.starts_with(prefix)))
+                        {
+                            return Err(make_env_error(
+                                envelope_lane,
+                                AxtRejectReason::Descriptor,
+                                "touch manifest write entry outside descriptor",
+                                Some(touch.dsid),
+                                None,
+                                None,
+                            ));
+                        }
+                    } else if !touch.manifest.read.is_empty() || !touch.manifest.write.is_empty() {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::Descriptor,
+                            "touch manifest provided without descriptor spec",
+                            Some(touch.dsid),
+                            None,
+                            None,
+                        ));
+                    }
+                }
+                for spec in &envelope.descriptor.touches {
+                    if !touch_dsids.contains(&spec.dsid) {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::Descriptor,
+                            "missing touch manifest for dataspace",
+                            Some(spec.dsid),
+                            None,
+                            None,
+                        ));
+                    }
+                }
                 let mut proofs_by_ds: BTreeMap<DataSpaceId, ProofBlob> = BTreeMap::new();
                 for proof in &envelope.proofs {
                     if !expected_dsids.contains(&proof.dsid) {
@@ -2374,7 +2476,7 @@ pub(crate) mod valid {
                             None,
                         )
                     })?;
-                    validate_proof(&proof.proof, proof.dsid, policy, current_slot, None, None)?;
+                    validate_proof(&proof.proof, proof.dsid, policy, policy.current_slot, None)?;
                     if proofs_by_ds
                         .insert(proof.dsid, proof.proof.clone())
                         .is_some()
@@ -2432,6 +2534,123 @@ pub(crate) mod valid {
                             envelope_lane,
                             AxtRejectReason::Descriptor,
                             "handle references undeclared dataspace",
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        ));
+                    }
+                    let policy_slot = policy.current_slot;
+                    let record_slot = if policy_slot > 0 {
+                        policy_slot
+                    } else {
+                        snapshot_slot
+                    };
+                    if fragment.handle.handle_era == 0 {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::HandleEra,
+                            "handle era is zero",
+                            Some(fragment.intent.asset_dsid),
+                            Some(policy.min_handle_era),
+                            Some(policy.min_sub_nonce),
+                        ));
+                    }
+                    if fragment.handle.sub_nonce == 0 {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::SubNonce,
+                            "handle sub-nonce is zero",
+                            Some(fragment.intent.asset_dsid),
+                            Some(policy.min_handle_era),
+                            Some(policy.min_sub_nonce),
+                        ));
+                    }
+                    if fragment.handle.expiry_slot == 0 {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::Expiry,
+                            "handle expiry slot is zero",
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        ));
+                    }
+                    if fragment.handle.scope.is_empty() {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::PolicyDenied,
+                            "handle scope is empty",
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        ));
+                    }
+                    if fragment
+                        .handle
+                        .scope
+                        .iter()
+                        .all(|scope| scope != &fragment.intent.op.kind)
+                    {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::PolicyDenied,
+                            "handle scope does not permit intent kind",
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        ));
+                    }
+                    if fragment.handle.subject.account != fragment.intent.op.from {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::PolicyDenied,
+                            "handle subject does not match intent sender",
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        ));
+                    }
+                    if fragment
+                        .handle
+                        .group_binding
+                        .composability_group_id
+                        .is_empty()
+                    {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::PolicyDenied,
+                            "handle composability group id is empty",
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        ));
+                    }
+                    let intent_amount =
+                        fragment.intent.op.amount.parse::<u128>().map_err(|_| {
+                            make_env_error(
+                                envelope_lane,
+                                AxtRejectReason::Budget,
+                                "intent amount is not a valid u128",
+                                Some(fragment.intent.asset_dsid),
+                                None,
+                                None,
+                            )
+                        })?;
+                    if intent_amount == 0 || fragment.amount == 0 {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::Budget,
+                            "handle amount must be non-zero",
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        ));
+                    }
+                    if intent_amount != fragment.amount {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::Budget,
+                            "handle amount does not match intent amount",
                             Some(fragment.intent.asset_dsid),
                             None,
                             None,
@@ -2522,7 +2741,7 @@ pub(crate) mod valid {
                         axt_timing.max_clock_skew_ms,
                         fragment.handle.max_clock_skew_ms,
                     );
-                    if policy.current_slot > 0 && policy.current_slot > expiry_slot {
+                    if policy_slot > 0 && policy_slot > expiry_slot {
                         return Err(make_env_error(
                             envelope_lane,
                             AxtRejectReason::Expiry,
@@ -2532,20 +2751,10 @@ pub(crate) mod valid {
                             None,
                         ));
                     }
-                    if current_slot > expiry_slot {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Expiry,
-                            "handle expired for current block slot",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
 
                     let replay_key = AxtHandleReplayKey::from_handle(&fragment.handle);
                     if let Some(entry) = state_block.world.axt_replay_ledger().get(&replay_key)
-                        && !entry.is_expired(current_slot, retention_slots)
+                        && !entry.is_expired(record_slot, retention_slots)
                     {
                         return Err(make_env_error(
                             envelope_lane,
@@ -2575,9 +2784,8 @@ pub(crate) mod valid {
                         &proof,
                         fragment.intent.asset_dsid,
                         policy,
-                        current_slot,
-                        Some(expiry_slot),
-                        fragment.handle.max_clock_skew_ms,
+                        policy_slot,
+                        Some(fragment.handle.expiry_slot),
                     )?;
                     dataspace_proofs_present.insert(fragment.intent.asset_dsid);
 
@@ -8612,12 +8820,13 @@ mod commit {
 
     #[cfg(all(test, feature = "app_api"))]
     mod axt_validation_tests {
-        use std::collections::BTreeMap;
+        use std::{collections::BTreeMap, time::Duration};
 
         use iroha_data_model::nexus::{
             AssetHandle, AxtBinding, AxtDescriptor, AxtEnvelopeRecord, AxtHandleFragment,
-            AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtProofFragment, GroupBinding,
-            HandleBudget, HandleSubject, ProofBlob, RemoteSpendIntent, SpendOp,
+            AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtProofFragment,
+            AxtTouchFragment, AxtTouchSpec, GroupBinding, HandleBudget, HandleSubject, ProofBlob,
+            RemoteSpendIntent, SpendOp, TouchManifest,
         };
 
         use super::*;
@@ -8627,6 +8836,10 @@ mod commit {
             query::store::LiveQueryStore,
             state::{State, World},
         };
+
+        fn binding_for_descriptor(descriptor: &AxtDescriptor) -> AxtBinding {
+            descriptor.binding().expect("descriptor binding")
+        }
 
         fn sample_handle(
             binding: AxtBinding,
@@ -8676,7 +8889,8 @@ mod commit {
             envelope: AxtEnvelopeRecord,
             snapshot: AxtPolicySnapshot,
         ) -> SignedBlock {
-            let builder = BlockBuilder::new(Vec::new());
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(0));
+            let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source);
             let signer = KeyPair::random();
             let mut block: SignedBlock = builder
                 .chain(0, None)
@@ -8732,11 +8946,11 @@ mod commit {
             };
             state.set_axt_policy(dsid, policy);
 
-            let binding = AxtBinding::new([0xAA; 32]);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
+            let binding = binding_for_descriptor(&descriptor);
             let handle = AxtHandleFragment {
                 handle: AssetHandle {
                     scope: vec!["transfer".to_owned()],
@@ -8812,11 +9026,11 @@ mod commit {
             };
             state.set_axt_policy(dsid, policy);
 
-            let binding = AxtBinding::new([0xAA; 32]);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
+            let binding = binding_for_descriptor(&descriptor);
             let handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
             let envelope = AxtEnvelopeRecord {
                 binding,
@@ -8846,6 +9060,216 @@ mod commit {
         }
 
         #[test]
+        fn axt_validation_rejects_handle_amount_mismatch() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            let dsid = DataSpaceId::new(7);
+            let lane = LaneId::new(1);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x11; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 0,
+            };
+            state.set_axt_policy(dsid, policy);
+
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: Vec::new(),
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let mut handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
+            handle.amount = 4;
+
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: Vec::new(),
+                proofs: vec![AxtProofFragment {
+                    dsid,
+                    proof: ProofBlob {
+                        payload: policy.manifest_root.to_vec(),
+                        expiry_slot: Some(12),
+                    },
+                }],
+                handles: vec![handle],
+                commit_height: Some(1),
+            };
+            let snapshot = state.axt_policy_snapshot();
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+
+            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
+            expect_axt_error(err, AxtRejectReason::Budget, "amount");
+        }
+
+        #[test]
+        fn axt_validation_rejects_missing_touch_manifest() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            let dsid = DataSpaceId::new(7);
+            let lane = LaneId::new(1);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x11; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 0,
+            };
+            state.set_axt_policy(dsid, policy);
+
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: vec![AxtTouchSpec {
+                    dsid,
+                    read: vec!["orders/".to_owned()],
+                    write: vec!["ledger/".to_owned()],
+                }],
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
+
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: Vec::new(),
+                proofs: vec![AxtProofFragment {
+                    dsid,
+                    proof: ProofBlob {
+                        payload: policy.manifest_root.to_vec(),
+                        expiry_slot: Some(12),
+                    },
+                }],
+                handles: vec![handle],
+                commit_height: Some(1),
+            };
+            let snapshot = state.axt_policy_snapshot();
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+
+            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
+            expect_axt_error(err, AxtRejectReason::Descriptor, "missing touch manifest");
+        }
+
+        #[test]
+        fn axt_validation_rejects_touch_manifest_prefix_violation() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            let dsid = DataSpaceId::new(7);
+            let lane = LaneId::new(1);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x11; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 0,
+            };
+            state.set_axt_policy(dsid, policy);
+
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: vec![AxtTouchSpec {
+                    dsid,
+                    read: vec!["orders/".to_owned()],
+                    write: vec!["ledger/".to_owned()],
+                }],
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
+
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: vec![AxtTouchFragment {
+                    dsid,
+                    manifest: TouchManifest {
+                        read: vec!["payments/123".to_owned()],
+                        write: Vec::new(),
+                    },
+                }],
+                proofs: vec![AxtProofFragment {
+                    dsid,
+                    proof: ProofBlob {
+                        payload: policy.manifest_root.to_vec(),
+                        expiry_slot: Some(12),
+                    },
+                }],
+                handles: vec![handle],
+                commit_height: Some(1),
+            };
+            let snapshot = state.axt_policy_snapshot();
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+
+            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
+            expect_axt_error(
+                err,
+                AxtRejectReason::Descriptor,
+                "touch manifest read entry",
+            );
+        }
+
+        #[test]
+        fn axt_validation_rejects_descriptor_binding_mismatch() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            let dsid = DataSpaceId::new(7);
+            let lane = LaneId::new(1);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x11; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 0,
+            };
+            state.set_axt_policy(dsid, policy);
+
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: Vec::new(),
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let mut wrong_bytes = *binding.as_bytes();
+            wrong_bytes[0] ^= 0xFF;
+            let wrong_binding = AxtBinding::new(wrong_bytes);
+            let handle = sample_handle(wrong_binding, lane, dsid, 5, policy.manifest_root);
+
+            let envelope = AxtEnvelopeRecord {
+                binding: wrong_binding,
+                lane,
+                descriptor,
+                touches: Vec::new(),
+                proofs: vec![AxtProofFragment {
+                    dsid,
+                    proof: ProofBlob {
+                        payload: policy.manifest_root.to_vec(),
+                        expiry_slot: Some(12),
+                    },
+                }],
+                handles: vec![handle],
+                commit_height: Some(1),
+            };
+            let snapshot = state.axt_policy_snapshot();
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+
+            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
+            expect_axt_error(
+                err,
+                AxtRejectReason::Descriptor,
+                "descriptor binding does not match envelope binding",
+            );
+        }
+
+        #[test]
         fn axt_validation_rejects_duplicate_handle_use_across_dataspaces() {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -8863,11 +9287,11 @@ mod commit {
             state.set_axt_policy(dsid_a, policy);
             state.set_axt_policy(dsid_b, policy);
 
-            let binding = AxtBinding::new([0xAA; 32]);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid_a, dsid_b],
                 touches: Vec::new(),
             };
+            let binding = binding_for_descriptor(&descriptor);
             let handle = sample_handle(binding, lane, dsid_a, 5, policy.manifest_root);
             let mut other = handle.clone();
             other.intent.asset_dsid = dsid_b;
@@ -8926,11 +9350,11 @@ mod commit {
             };
             state.set_axt_policy(dsid, policy);
 
-            let binding = AxtBinding::new([0xBA; 32]);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
+            let binding = binding_for_descriptor(&descriptor);
             let mut first = sample_handle(binding, lane, dsid, 10, policy.manifest_root);
             first.handle.sub_nonce = 3;
             first.handle.budget.remaining = 10;
@@ -8981,11 +9405,11 @@ mod commit {
             };
             state.set_axt_policy(dsid, policy);
 
-            let binding = AxtBinding::new([0xAB; 32]);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
+            let binding = binding_for_descriptor(&descriptor);
             let handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
             let envelope = AxtEnvelopeRecord {
                 binding,
@@ -9020,11 +9444,11 @@ mod commit {
             };
             state.set_axt_policy(dsid, policy);
 
-            let binding = AxtBinding::new([0xAC; 32]);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
+            let binding = binding_for_descriptor(&descriptor);
             let mut handle = sample_handle(binding, lane, dsid, 6, policy.manifest_root);
             handle.proof = Some(ProofBlob {
                 payload: policy.manifest_root.to_vec(),
@@ -9048,6 +9472,95 @@ mod commit {
         }
 
         #[test]
+        fn axt_validation_rejects_zero_proof_expiry_slot() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            let dsid = DataSpaceId::new(23);
+            let lane = LaneId::new(10);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x46; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 1,
+            };
+            state.set_axt_policy(dsid, policy);
+
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: Vec::new(),
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: Vec::new(),
+                proofs: vec![AxtProofFragment {
+                    dsid,
+                    proof: ProofBlob {
+                        payload: policy.manifest_root.to_vec(),
+                        expiry_slot: Some(0),
+                    },
+                }],
+                handles: vec![handle],
+                commit_height: Some(1),
+            };
+            let snapshot = state.axt_policy_snapshot();
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+
+            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
+            expect_axt_error(err, AxtRejectReason::Proof, "proof expiry slot is zero");
+        }
+
+        #[test]
+        fn axt_validation_rejects_proof_expiry_before_handle_with_skew() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            state.nexus.get_mut().axt.max_clock_skew_ms = 1;
+            let dsid = DataSpaceId::new(23);
+            let lane = LaneId::new(10);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x55; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 1,
+            };
+            state.set_axt_policy(dsid, policy);
+
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: Vec::new(),
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let mut handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
+            handle.proof = Some(ProofBlob {
+                payload: policy.manifest_root.to_vec(),
+                expiry_slot: Some(8),
+            });
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: Vec::new(),
+                proofs: Vec::new(),
+                handles: vec![handle],
+                commit_height: Some(1),
+            };
+            let snapshot = state.axt_policy_snapshot();
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+
+            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
+            expect_axt_error(err, AxtRejectReason::Expiry, "proof expires before handle");
+        }
+
+        #[test]
         fn axt_validation_rejects_manifest_mismatch_in_proof() {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -9063,11 +9576,11 @@ mod commit {
             };
             state.set_axt_policy(dsid, policy);
 
-            let binding = AxtBinding::new([0xF1; 32]);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
+            let binding = binding_for_descriptor(&descriptor);
             let handle = sample_handle(binding, lane, dsid, 8, policy.manifest_root);
             let envelope = AxtEnvelopeRecord {
                 binding,
@@ -9108,11 +9621,11 @@ mod commit {
             };
             state.set_axt_policy(dsid, policy);
 
-            let binding = AxtBinding::new([0xF2; 32]);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
+            let binding = binding_for_descriptor(&descriptor);
             let handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
             let wrong_envelope = iroha_data_model::nexus::AxtProofEnvelope {
                 dsid: DataSpaceId::new(dsid.as_u64() + 1),
@@ -9160,11 +9673,11 @@ mod commit {
             };
             state.set_axt_policy(dsid, policy);
 
-            let binding = AxtBinding::new([0xAD; 32]);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
+            let binding = binding_for_descriptor(&descriptor);
             let mut handle_one = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
             handle_one.amount = 7;
             let mut handle_two = handle_one.clone();
@@ -9194,7 +9707,7 @@ mod commit {
         }
 
         #[test]
-        fn axt_validation_rejects_expired_handle() {
+        fn axt_validation_rejects_handle_era_below_policy() {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let mut state = State::new_for_testing(World::new(), kura, query);
@@ -9203,18 +9716,18 @@ mod commit {
             let policy = AxtPolicyEntry {
                 manifest_root: [0x22; 32],
                 target_lane: lane,
-                min_handle_era: 1,
+                min_handle_era: 2,
                 min_sub_nonce: 1,
                 current_slot: 0,
             };
             state.set_axt_policy(dsid, policy);
 
-            let binding = AxtBinding::new([0xBB; 32]);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
-            let handle = sample_handle(binding, lane, dsid, 0, policy.manifest_root);
+            let binding = binding_for_descriptor(&descriptor);
+            let handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
             let envelope = AxtEnvelopeRecord {
                 binding,
                 lane,
@@ -9243,6 +9756,51 @@ mod commit {
         }
 
         #[test]
+        fn axt_validation_rejects_zero_handle_expiry_slot() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            let dsid = DataSpaceId::new(9);
+            let lane = LaneId::new(2);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x22; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 0,
+            };
+            state.set_axt_policy(dsid, policy);
+
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: Vec::new(),
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let handle = sample_handle(binding, lane, dsid, 0, policy.manifest_root);
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: Vec::new(),
+                proofs: vec![AxtProofFragment {
+                    dsid,
+                    proof: ProofBlob {
+                        payload: policy.manifest_root.to_vec(),
+                        expiry_slot: Some(10),
+                    },
+                }],
+                handles: vec![handle],
+                commit_height: Some(1),
+            };
+            let snapshot = state.axt_policy_snapshot();
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+
+            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
+            expect_axt_error(err, AxtRejectReason::Expiry, "expiry slot is zero");
+        }
+
+        #[test]
         fn axt_validation_rejects_zero_manifest_root() {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -9258,11 +9816,11 @@ mod commit {
             };
             state.set_axt_policy(dsid, policy);
 
-            let binding = AxtBinding::new([0xCC; 32]);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
+            let binding = binding_for_descriptor(&descriptor);
             let mut handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
             handle.handle.manifest_view_root = [0; 32];
             let envelope = AxtEnvelopeRecord {
@@ -9304,11 +9862,11 @@ mod commit {
             };
             state.set_axt_policy(dsid, policy);
 
-            let binding = AxtBinding::new([0xCC; 32]);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
+            let binding = binding_for_descriptor(&descriptor);
             let mut handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
             handle.handle.manifest_view_root = [0x55; 32];
             let envelope = AxtEnvelopeRecord {
@@ -9350,11 +9908,11 @@ mod commit {
             };
             state.set_axt_policy(dsid, policy);
 
-            let binding = AxtBinding::new([0xDD; 32]);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
+            let binding = binding_for_descriptor(&descriptor);
             let mut handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
             handle.handle.manifest_view_root = [0; 32];
             let envelope = AxtEnvelopeRecord {
@@ -9401,11 +9959,11 @@ mod commit {
                 entries,
             };
 
-            let binding = AxtBinding::new([0xEE; 32]);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
+            let binding = binding_for_descriptor(&descriptor);
             let handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
             let envelope = AxtEnvelopeRecord {
                 binding,
@@ -9431,6 +9989,60 @@ mod commit {
         }
 
         #[test]
+        fn axt_validation_uses_policy_slot_per_dataspace() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            let dsid_a = DataSpaceId::new(50);
+            let dsid_b = DataSpaceId::new(51);
+            let lane = LaneId::new(6);
+            let policy_a = AxtPolicyEntry {
+                manifest_root: [0x21; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 100,
+            };
+            let policy_b = AxtPolicyEntry {
+                manifest_root: [0x22; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 5,
+            };
+            state.set_axt_policy(dsid_a, policy_a);
+            state.set_axt_policy(dsid_b, policy_b);
+
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid_b],
+                touches: Vec::new(),
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let handle = sample_handle(binding, lane, dsid_b, 10, policy_b.manifest_root);
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: Vec::new(),
+                proofs: vec![AxtProofFragment {
+                    dsid: dsid_b,
+                    proof: ProofBlob {
+                        payload: policy_b.manifest_root.to_vec(),
+                        expiry_slot: Some(10),
+                    },
+                }],
+                handles: vec![handle],
+                commit_height: Some(1),
+            };
+
+            let snapshot = state.axt_policy_snapshot();
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+
+            assert!(validate_axt_envelopes(&block, &state_block).is_ok());
+        }
+
+        #[test]
         fn axt_validation_rejects_missing_policy_snapshot() {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -9439,11 +10051,11 @@ mod commit {
             let lane = LaneId::new(6);
             let manifest_root = [0x12; 32];
 
-            let binding = AxtBinding::new([0xEF; 32]);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
+            let binding = binding_for_descriptor(&descriptor);
             let handle = sample_handle(binding, lane, dsid, 9, manifest_root);
             let envelope = AxtEnvelopeRecord {
                 binding,
@@ -9461,7 +10073,8 @@ mod commit {
                 commit_height: Some(3),
             };
 
-            let builder = BlockBuilder::new(Vec::new());
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(0));
+            let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source);
             let signer = KeyPair::random();
             let mut block: SignedBlock = builder
                 .chain(0, None)
@@ -9503,11 +10116,11 @@ mod commit {
                 current_slot: 2,
             };
 
-            let binding = AxtBinding::new([0xF0; 32]);
             let descriptor = AxtDescriptor {
                 dsids: vec![dsid],
                 touches: Vec::new(),
             };
+            let binding = binding_for_descriptor(&descriptor);
             let mut handle = sample_handle(binding, lane, dsid, 11, policy.manifest_root);
             handle.handle.manifest_view_root = [0xFF; 32];
             let envelope = AxtEnvelopeRecord {

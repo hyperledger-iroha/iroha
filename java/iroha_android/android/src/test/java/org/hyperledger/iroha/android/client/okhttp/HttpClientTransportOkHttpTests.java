@@ -20,6 +20,8 @@ import org.hyperledger.iroha.android.client.ClientObserver;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
+import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.junit.Test;
@@ -46,15 +48,31 @@ public final class HttpClientTransportOkHttpTests {
       final org.hyperledger.iroha.android.client.HttpClientTransport transport =
           new org.hyperledger.iroha.android.client.HttpClientTransport(executor, config);
 
-      final byte[] payload = "payload".getBytes(StandardCharsets.UTF_8);
+      final TransactionPayload payload =
+          TransactionPayload.builder()
+              .setChainId("00000001")
+              .setAuthority("okhttp@wonderland")
+              .setCreationTimeMs(1_700_000_000_000L)
+              .setInstructionBytes("payload".getBytes(StandardCharsets.UTF_8))
+              .setTimeToLiveMs(5_000L)
+              .setNonce(1)
+              .setMetadata(java.util.Map.of("note", "okhttp"))
+              .build();
+      final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
+      final byte[] encodedPayload;
+      try {
+        encodedPayload = codec.encodeTransaction(payload);
+      } catch (final Exception ex) {
+        throw new IllegalStateException("Failed to encode transaction payload", ex);
+      }
       final byte[] signature = "signature".getBytes(StandardCharsets.UTF_8);
       final byte[] publicKey = "public-key".getBytes(StandardCharsets.UTF_8);
       final SignedTransaction tx =
           SignedTransaction.builder()
-              .setEncodedPayload(payload)
+              .setEncodedPayload(encodedPayload)
               .setSignature(signature)
               .setPublicKey(publicKey)
-              .setSchemaName("schema")
+              .setSchemaName(codec.schemaName())
               .build();
 
       final ClientResponse response = transport.submitTransaction(tx).get(2, TimeUnit.SECONDS);
@@ -76,10 +94,10 @@ public final class HttpClientTransportOkHttpTests {
       assertTrue(parsed instanceof Map);
       @SuppressWarnings("unchecked")
       final Map<String, Object> map = (Map<String, Object>) parsed;
-      assertEquals(Base64.getEncoder().encodeToString(payload), map.get("payload"));
+      assertEquals(Base64.getEncoder().encodeToString(encodedPayload), map.get("payload"));
       assertEquals(Base64.getEncoder().encodeToString(signature), map.get("signature"));
       assertEquals(Base64.getEncoder().encodeToString(publicKey), map.get("public_key"));
-      assertEquals("schema", map.get("schema"));
+      assertEquals(tx.schemaName(), map.get("schema"));
     }
   }
 
