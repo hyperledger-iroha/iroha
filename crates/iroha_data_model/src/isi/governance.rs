@@ -150,17 +150,19 @@ pub struct BallotProof {
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
     pub envelope_bytes: Vec<u8>,
     /// Optional eligibility root hint (32-byte) to bind verification to a known root.
+    /// JSON uses a lowercase hex string (optional 0x or blake2b32: prefix).
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(with = "crate::json_helpers::fixed_bytes_hex::option")
     )]
     pub root_hint: Option<[u8; 32]>,
     /// Optional owner account id (when the circuit commits to it in public inputs).
     pub owner: Option<crate::account::AccountId>,
     /// Optional nullifier hint (32-byte) derived from the proof's commitment.
+    /// JSON uses a lowercase hex string (optional 0x or blake2b32: prefix).
     #[cfg_attr(
         feature = "json",
-        norito(with = "crate::json_helpers::fixed_bytes::option")
+        norito(with = "crate::json_helpers::fixed_bytes_hex::option")
     )]
     pub nullifier: Option<[u8; 32]>,
     /// Optional lock amount hint (decimal string).

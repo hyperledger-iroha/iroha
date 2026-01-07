@@ -14972,27 +14972,19 @@ function normalizeGovernancePublicInputs(value, name) {
     );
   }
   const normalized = { ...cloned };
-  normalizeGovernancePublicInputAlias(
+  rejectGovernancePublicInputKey(
     normalized,
     "durationBlocks",
     "duration_blocks",
     name,
   );
-  normalizeGovernancePublicInputAlias(
-    normalized,
-    "nullifierHex",
-    "nullifier_hex",
-    name,
-  );
-  normalizeGovernancePublicInputAlias(
-    normalized,
-    "rootHintHex",
-    "root_hint",
-    name,
-  );
-  normalizeGovernancePublicInputAlias(normalized, "rootHint", "root_hint", name);
+  rejectGovernancePublicInputKey(normalized, "root_hint_hex", "root_hint", name);
+  rejectGovernancePublicInputKey(normalized, "rootHintHex", "root_hint", name);
+  rejectGovernancePublicInputKey(normalized, "rootHint", "root_hint", name);
+  rejectGovernancePublicInputKey(normalized, "nullifier_hex", "nullifier", name);
+  rejectGovernancePublicInputKey(normalized, "nullifierHex", "nullifier", name);
   normalizeGovernancePublicInputHex(normalized, "root_hint", name);
-  normalizeGovernancePublicInputHex(normalized, "nullifier_hex", name);
+  normalizeGovernancePublicInputHex(normalized, "nullifier", name);
   ensureGovernanceLockHintsComplete(normalized, name);
   return normalized;
 }
@@ -15032,19 +15024,15 @@ function normalizeGovernancePublicInputHex(target, key, name) {
   target[key] = body.toLowerCase();
 }
 
-function normalizeGovernancePublicInputAlias(target, aliasKey, canonicalKey, name) {
-  if (!Object.prototype.hasOwnProperty.call(target, aliasKey)) {
+function rejectGovernancePublicInputKey(target, key, canonicalKey, name) {
+  if (!Object.prototype.hasOwnProperty.call(target, key)) {
     return;
   }
-  if (Object.prototype.hasOwnProperty.call(target, canonicalKey)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${name} cannot include both ${aliasKey} and ${canonicalKey}`,
-      name,
-    );
-  }
-  target[canonicalKey] = target[aliasKey];
-  delete target[aliasKey];
+  throw createValidationError(
+    ValidationErrorCode.INVALID_OBJECT,
+    `${name} must use ${canonicalKey} (unsupported key ${key})`,
+    name,
+  );
 }
 
 function ensureGovernanceLockHintsComplete(source, name) {
@@ -15115,11 +15103,41 @@ function normalizeGovernanceZkBallotV1Payload(input) {
       "governanceSubmitZkBallotV1.envelopeB64",
     ),
   };
-  const rootHintHex = record.root_hint_hex ?? record.rootHintHex;
-  if (rootHintHex !== undefined && rootHintHex !== null) {
-    payload.root_hint_hex = normalizeHex32String(
-      rootHintHex,
-      "governanceSubmitZkBallotV1.rootHintHex",
+  rejectGovernancePublicInputKey(
+    record,
+    "root_hint_hex",
+    "root_hint",
+    "governanceSubmitZkBallotV1",
+  );
+  rejectGovernancePublicInputKey(
+    record,
+    "rootHintHex",
+    "root_hint",
+    "governanceSubmitZkBallotV1",
+  );
+  rejectGovernancePublicInputKey(
+    record,
+    "rootHint",
+    "root_hint",
+    "governanceSubmitZkBallotV1",
+  );
+  rejectGovernancePublicInputKey(
+    record,
+    "nullifier_hex",
+    "nullifier",
+    "governanceSubmitZkBallotV1",
+  );
+  rejectGovernancePublicInputKey(
+    record,
+    "nullifierHex",
+    "nullifier",
+    "governanceSubmitZkBallotV1",
+  );
+  const rootHint = record.root_hint;
+  if (rootHint !== undefined && rootHint !== null) {
+    payload.root_hint = normalizeHex32String(
+      rootHint,
+      "governanceSubmitZkBallotV1.root_hint",
       { allowScheme: true, scheme: "blake2b32" },
     );
   }
@@ -15149,11 +15167,11 @@ function normalizeGovernanceZkBallotV1Payload(input) {
       "governanceSubmitZkBallotV1.direction",
     );
   }
-  const nullifierHex = record.nullifier_hex ?? record.nullifierHex;
-  if (nullifierHex !== undefined && nullifierHex !== null) {
-    payload.nullifier_hex = normalizeHex32String(
-      nullifierHex,
-      "governanceSubmitZkBallotV1.nullifierHex",
+  const nullifier = record.nullifier;
+  if (nullifier !== undefined && nullifier !== null) {
+    payload.nullifier = normalizeHex32String(
+      nullifier,
+      "governanceSubmitZkBallotV1.nullifier",
       { allowScheme: true, scheme: "blake2b32" },
     );
   }
@@ -15167,10 +15185,59 @@ function normalizeGovernanceZkBallotProofPayload(input) {
     record.ballot,
     "governanceSubmitZkBallotProofV1.ballot",
   );
-  ensureGovernanceLockHintsComplete(
-    ballot,
-    "governanceSubmitZkBallotProofV1.ballot",
+  const ballotContext = "governanceSubmitZkBallotProofV1.ballot";
+  const normalizedBallot = { ...ballot };
+  rejectGovernancePublicInputKey(
+    normalizedBallot,
+    "rootHintHex",
+    "root_hint",
+    ballotContext,
   );
+  rejectGovernancePublicInputKey(
+    normalizedBallot,
+    "root_hint_hex",
+    "root_hint",
+    ballotContext,
+  );
+  rejectGovernancePublicInputKey(
+    normalizedBallot,
+    "rootHint",
+    "root_hint",
+    ballotContext,
+  );
+  rejectGovernancePublicInputKey(
+    normalizedBallot,
+    "nullifierHex",
+    "nullifier",
+    ballotContext,
+  );
+  rejectGovernancePublicInputKey(
+    normalizedBallot,
+    "nullifier_hex",
+    "nullifier",
+    ballotContext,
+  );
+  if (Object.prototype.hasOwnProperty.call(normalizedBallot, "root_hint")) {
+    const rootHint = normalizedBallot.root_hint;
+    if (rootHint !== null) {
+      normalizedBallot.root_hint = normalizeHex32String(
+        rootHint,
+        `${ballotContext}.root_hint`,
+        { allowScheme: true, scheme: "blake2b32" },
+      );
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(normalizedBallot, "nullifier")) {
+    const nullifier = normalizedBallot.nullifier;
+    if (nullifier !== null) {
+      normalizedBallot.nullifier = normalizeHex32String(
+        nullifier,
+        `${ballotContext}.nullifier`,
+        { allowScheme: true, scheme: "blake2b32" },
+      );
+    }
+  }
+  ensureGovernanceLockHintsComplete(normalizedBallot, ballotContext);
   const payload = {
     authority: requireNonEmptyString(
       record.authority,
@@ -15184,7 +15251,7 @@ function normalizeGovernanceZkBallotProofPayload(input) {
       record.election_id ?? record.electionId,
       "governanceSubmitZkBallotProofV1.electionId",
     ),
-    ballot,
+    ballot: normalizedBallot,
   };
   return payload;
 }

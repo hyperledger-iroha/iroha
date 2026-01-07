@@ -1,6 +1,29 @@
 # Status
 
 ## Latest Updates
+- Sumeragi: retry missing-block fetches on tick with backoff + view-change triggers, skip quorum reschedules when commit QCs are cached, and mark rehydrated pending blocks as commit-certified; add coverage.
+- Tests: not run (not requested).
+- Sumeragi/DA: require authoritative RBC rosters before emitting READY/DELIVER or rebroadcasting READYs; add derived-roster deferral coverage and update docs.
+- Tests: `cargo test -p iroha_core --lib build_rbc_messages_skip_derived_roster -- --nocapture` (failed: `rehydrate_pending_from_kura_for_qc` is private in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:11802`).
+- Governance ZK voting: standardize hints to `root_hint`/`nullifier` across BallotProof + public inputs, reject deprecated aliases in core/Torii/SDKs/CLI/bridges, treat explicit null public-input hints as absent in core, refresh JS typings/dist, and update docs; added regression coverage.
+- Tests: not run (not requested).
+- Sumeragi: retain cached commit QCs/signers when dropping pending after quorum reschedule, and rehydrate pending from Kura on commit QC to avoid losing progress; add coverage.
+- Tests: not run (not requested).
+- Core/AXT: block validation now rejects handle fragments without a touch manifest (even when the descriptor omits touch specs); add regression coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p iroha_core --lib --features app_api axt_validation_rejects_handle_without_touch_manifest -- --nocapture` (pass).
+- Sumeragi/DA: when an INIT overrides a derived roster snapshot, clear cached READY/DELIVER state and rebroadcast cooldowns so invalid signatures do not linger; extend coverage.
+- Tests: `cargo test -p iroha_core --lib handle_rbc_init_overrides_derived_roster_mismatch -- --nocapture` (pass).
+- Sumeragi/DA: skip RBC INIT/payload rebroadcasts when only a derived roster is cached, so nodes do not spread mismatched snapshots; add coverage for derived-roster rebroadcast suppression.
+- Tests: `cargo test -p iroha_core --lib rbc_payload_rebroadcast_skips_derived_roster -- --nocapture` (pass).
+- Tests: `cargo test -p iroha_core --lib rbc_ -- --nocapture` (timed out after 300s; suite still running at timeout).
+- IVM/AXT: allow non-monotonic handle sub-nonces within an envelope by rejecting duplicates only; add regression coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p ivm record_handle_allows_out_of_order_sub_nonce -- --nocapture` (timed out after 300s; test passed but cargo kept running remaining binaries).
+- Sumeragi/DA: treat derived RBC roster snapshots as non-authoritative (stash mismatched READY/DELIVER, allow INIT to override derived rosters), persist sessions only once an authoritative roster is known, and avoid persisting derived roster snapshots; add coverage for derived mismatch handling and authoritative overrides; reorder session-plan persistence to record the roster first.
+- Tests: not run (full `cargo test -p iroha_core` not rerun after roster-source updates).
+- Governance ZK voting: BallotProof JSON hints now use canonical 32-byte hex strings (optional `0x`/`blake2b32:` prefixes); public inputs standardized to `root_hint`/`nullifier` and deprecated aliases are rejected; SDKs/CLI/bridges updated, JS dist rebuilt, and docs/examples refreshed; added regression coverage.
+- Tests: `cargo test --workspace` (timed out after 120s during compilation; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Core/AXT: block validation now allows handles to target their policy lanes even when they differ from the envelope lane; add regression coverage for cross-lane handles.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p iroha_core --lib --features app_api axt_validation_accepts_cross_lane_handles -- --nocapture` (timed out after 120s during compilation).
 - Tests: `cargo test -p iroha_core --lib rbc_ -- --nocapture` (timed out after 360s; suite still running at timeout, no failures observed before abort).
 - Torii telemetry: treat /status 404/503 as telemetry unsupported to avoid noisy decode warnings; add regression coverage.
 - Tests: `cargo test -p iroha_torii --lib --features app_api,telemetry metrics_marks_telemetry_unsupported_on_service_unavailable -- --nocapture` (failed: `iroha_core` missing `RbcRosterSource` argument in `crates/iroha_core/src/sumeragi/main_loop/rbc.rs`).
@@ -46,7 +69,7 @@
 - Tests: `cargo test -p iroha_core payload_available_for_da_accepts_local_payload_without_rbc -- --nocapture` (timed out after 120s: waiting for package cache/build directory locks).
 - Sumeragi/DA: request missing `BlockCreated` after RBC payload delivery when the signed header is absent; add recovery coverage.
 - Tests: `cargo test -p iroha_core recover_block_from_rbc_session_requests_missing_block_created -- --nocapture` (timed out after 120s: waiting for build directory lock).
-- Governance ZK voting: canonicalize `root_hint`/`nullifier_hex` hex hints across SDKs/CLI/bridges, align core CastZkBallot parsing with case-insensitive `blake2b32:`/`0x` prefixes, refresh JS dist output, and update governance API examples; add regression coverage.
+- Governance ZK voting: canonicalize `root_hint`/`nullifier` hex hints across SDKs/CLI/bridges, align core CastZkBallot parsing with case-insensitive `blake2b32:`/`0x` prefixes, refresh JS dist output, and update governance API examples; add regression coverage.
 - Tests: not run (not requested).
 - IVM CoreHost: record raw AXT proof expiry while applying skew only to cache/slot checks, reject inline proofs with zero expiry slots, and align cache expiry storage; add regression coverage for skewed proof acceptance and zero-expiry rejection.
 - Tests: not run (not requested).
@@ -117,7 +140,7 @@
 - Tests: `swift test --disable-sandbox` (from `IrohaSwift`).
 - Java/Android SDK: add JSON-ready encoders for offline transfer items/platform snapshots plus `invalidateAndCancel()` on transports/OkHttp executors; update HTTP/OkHttp test fixtures to use Norito-encoded payloads, refresh gateway summary/Android provisioned proof fixtures for strict validation, and add regression coverage.
 - Tests: `JAVA_HOME=/Library/Java/JavaVirtualMachines/openjdk-21.jdk/Contents/Home ./gradlew :core:test` (from `java/iroha_android`); `ANDROID_HOME=/Users/mtakemiya/Library/Android/sdk ANDROID_SDK_ROOT=/Users/mtakemiya/Library/Android/sdk JAVA_HOME=/Library/Java/JavaVirtualMachines/openjdk-21.jdk/Contents/Home ./gradlew :android:testDebugUnitTest` (from `java/iroha_android`).
-- Governance ZK voting: require `public_inputs_json` to be an object, enforce owner type strictly, accept only `nullifier_hex` hints, and add regression coverage; updated JS/Python SDKs for v1 lock hints, refreshed JS dist, and synced governance API docs (source/portal + ja/he).
+- Governance ZK voting: require `public_inputs_json` to be an object, enforce owner type strictly, accept only canonical `root_hint`/`nullifier` hints, and add regression coverage; updated JS/Python SDKs for v1 lock hints, refreshed JS dist, and synced governance API docs (source/portal + ja/he).
 - Tests: not run (not requested).
 - Core: AXT block validation now rejects duplicate handle sub-nonces across dataspaces to match replay-key semantics; add regression coverage.
 - Tests: not run (not requested).
@@ -159,8 +182,8 @@
 - Tests: not run (not requested).
 - Core: enforce ZK voting proof attachments to carry exactly one VK, validate halo2/ipa envelope metadata (circuit_id/vk_hash), and apply per-VK max_proof_bytes limits; adjust vendor ballot test circuit_id.
 - Core: length-prefix ballot nullifier derivation inputs (domain tag, chain id, election id) to avoid delimiter collisions; added coverage.
-- Governance docs: clarify BallotProof `root_hint`/`nullifier` use Norito byte arrays (not hex) across portal/source governance API examples.
-- JS SDK: use `nullifier_hex` for ZK ballot v1 payloads in Torii client, typings, and tests; refresh dist output.
+- Governance docs: align BallotProof `root_hint`/`nullifier` examples with canonical 32-byte hex-string hints across portal/source governance API docs.
+- JS SDK: use `root_hint`/`nullifier` for ZK ballot v1 payloads in Torii client, typings, and tests; refresh dist output.
 - Tests: not run (not requested).
 - JS SDK: prioritize safe-integer validation over max-bound checks for oversized multisig BigInt inputs.
 - Tests: `npm run test:js` (from `javascript/iroha_js`; native binding disabled; 249 skipped).
@@ -1618,4 +1641,4 @@
 - Canonicalized JavaScript `CastZkBallot` public-input JSON ordering (sorted keys) with a regression for nested ordering.
 - Hardened the Norito bridge CastZkBallot encoder to normalize alias keys and enforce complete lock hints, with regression coverage for invalid inputs.
 - Normalized JS host CastZkBallot parsing to canonicalize public inputs (alias mapping, complete lock hints) with regression tests for invalid payloads.
-- Torii now normalizes ZK ballot public-input aliases and canonicalizes `root_hint`/`nullifier_hex` hints (including V1 endpoints), rejecting conflicts or invalid hex with new unit tests.
+- Torii now rejects ZK ballot public-input aliases and canonicalizes `root_hint`/`nullifier` hints (including V1 endpoints), rejecting conflicts or invalid hex with new unit tests.

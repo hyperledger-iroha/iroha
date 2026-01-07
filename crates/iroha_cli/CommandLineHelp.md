@@ -3085,7 +3085,7 @@ Submit a governance ballot; auto-detects referendum mode unless overridden
 * `--amount <AMOUNT>` — Locked amount for plain voting mode (string to preserve large integers)
 * `--duration-blocks <DURATION_BLOCKS>` — Lock duration (in blocks) for plain voting mode
 * `--direction <DIRECTION>` — Ballot direction for plain voting mode: Aye, Nay, or Abstain
-* `--nullifier-hex <NULLIFIER_HEX>` — Optional 32-byte nullifier hint for ZK ballots (hex)
+* `--nullifier <NULLIFIER>` — Optional 32-byte nullifier hint for ZK ballots (hex)
 * `--summary-only` — Print only the compact summary line (suppresses raw JSON)
 
   Default value: `false`
@@ -3110,7 +3110,7 @@ Submit a ZK ballot (server returns instruction skeleton)
 * `--amount <AMOUNT>` — Optional lock amount hint mirrored into public inputs
 * `--duration-blocks <DURATION_BLOCKS>` — Optional lock duration hint mirrored into public inputs
 * `--direction <DIRECTION>` — Optional direction hint mirrored into public inputs
-* `--nullifier-hex <NULLIFIER_HEX>` — Optional 32-byte nullifier hint derived from proof commitment
+* `--nullifier <NULLIFIER>` — Optional 32-byte nullifier hint derived from proof commitment
 * `--summary-only` — Print only the compact summary line (suppresses raw JSON)
 
   Default value: `false`

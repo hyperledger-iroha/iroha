@@ -10,8 +10,8 @@ import org.hyperledger.iroha.android.client.JsonParser;
 /**
  * Typed builder for {@code CastZkBallot} instructions.
  *
- * <p>Public inputs must be provided as a JSON object. The builder normalizes common alias keys
- * (camelCase to snake_case) and emits canonical JSON ordering so ballot fingerprints remain stable.
+ * <p>Public inputs must be provided as a JSON object. The builder rejects deprecated alias keys
+ * and emits canonical JSON ordering so ballot fingerprints remain stable.
  * When any lock hint is supplied, all of {@code owner}, {@code amount}, and {@code duration_blocks}
  * are required.
  */
@@ -173,26 +173,25 @@ public final class CastZkBallotInstruction implements InstructionTemplate {
     }
     @SuppressWarnings("unchecked")
     final Map<String, Object> normalized = new LinkedHashMap<>((Map<String, Object>) parsed);
-    normalizePublicInputsAlias(normalized, "durationBlocks", "duration_blocks");
-    normalizePublicInputsAlias(normalized, "nullifierHex", "nullifier_hex");
-    normalizePublicInputsAlias(normalized, "rootHintHex", "root_hint");
-    normalizePublicInputsAlias(normalized, "rootHint", "root_hint");
+    rejectPublicInputsKey(normalized, "durationBlocks", "duration_blocks");
+    rejectPublicInputsKey(normalized, "root_hint_hex", "root_hint");
+    rejectPublicInputsKey(normalized, "rootHintHex", "root_hint");
+    rejectPublicInputsKey(normalized, "rootHint", "root_hint");
+    rejectPublicInputsKey(normalized, "nullifier_hex", "nullifier");
+    rejectPublicInputsKey(normalized, "nullifierHex", "nullifier");
     normalizePublicInputsHex(normalized, "root_hint");
-    normalizePublicInputsHex(normalized, "nullifier_hex");
+    normalizePublicInputsHex(normalized, "nullifier");
     ensureLockHintsComplete(normalized);
     return JsonEncoder.encode(normalized);
   }
 
-  private static void normalizePublicInputsAlias(
-      final Map<String, Object> target, final String aliasKey, final String canonicalKey) {
-    if (!target.containsKey(aliasKey)) {
+  private static void rejectPublicInputsKey(
+      final Map<String, Object> target, final String key, final String canonicalKey) {
+    if (!target.containsKey(key)) {
       return;
     }
-    if (target.containsKey(canonicalKey)) {
-      throw new IllegalArgumentException(
-          "publicInputsJson cannot include both " + aliasKey + " and " + canonicalKey);
-    }
-    target.put(canonicalKey, target.remove(aliasKey));
+    throw new IllegalArgumentException(
+        "publicInputsJson must use " + canonicalKey + " (unsupported key " + key + ")");
   }
 
   private static void normalizePublicInputsHex(

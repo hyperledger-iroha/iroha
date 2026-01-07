@@ -3303,17 +3303,17 @@ class ToriiClient:
         election_id: str,
         backend: str,
         envelope_b64: str,
-        root_hint_hex: Optional[str] = None,
+        root_hint: Optional[str] = None,
         owner: Optional[str] = None,
         amount: Optional[str] = None,
         duration_blocks: Optional[int] = None,
         direction: Optional[str] = None,
-        nullifier_hex: Optional[str] = None,
+        nullifier: Optional[str] = None,
     ) -> BallotSubmitResult:
         """Submit a BallotProof-style payload via ``POST /v1/gov/ballots/zk-v1``.
 
-        Optional hints mirror BallotProof fields: root_hint_hex, owner, amount,
-        duration_blocks, direction, and nullifier_hex.
+        Optional hints mirror BallotProof fields: root_hint, owner, amount,
+        duration_blocks, direction, and nullifier.
         """
 
         payload: Dict[str, Any] = {
@@ -3329,8 +3329,8 @@ class ToriiClient:
             duration_blocks,
             context="zk ballot v1",
         )
-        if root_hint_hex is not None:
-            payload["root_hint_hex"] = root_hint_hex
+        if root_hint is not None:
+            payload["root_hint"] = root_hint
         if owner is not None:
             payload["owner"] = owner
         if amount is not None:
@@ -3339,16 +3339,16 @@ class ToriiClient:
             payload["duration_blocks"] = duration_blocks
         if direction:
             payload["direction"] = direction
-        if nullifier_hex is not None:
-            payload["nullifier_hex"] = nullifier_hex
+        if nullifier is not None:
+            payload["nullifier"] = nullifier
         self._normalize_governance_public_hex_hint(
             payload,
-            "root_hint_hex",
+            "root_hint",
             context="zk ballot v1",
         )
         self._normalize_governance_public_hex_hint(
             payload,
-            "nullifier_hex",
+            "nullifier",
             context="zk ballot v1",
         )
         body = self._post_json(
@@ -5549,20 +5549,18 @@ class ToriiClient:
         raise RuntimeError(f"{context} must be an object")
 
     @staticmethod
-    def _apply_governance_public_input_alias(
+    def _reject_governance_public_input_key(
         target: MutableMapping[str, Any],
-        alias_key: str,
+        key: str,
         canonical_key: str,
         *,
         context: str,
     ) -> None:
-        if alias_key not in target:
+        if key not in target:
             return
-        if canonical_key in target:
-            raise RuntimeError(
-                f"{context} cannot include both {alias_key} and {canonical_key}"
-            )
-        target[canonical_key] = target.pop(alias_key)
+        raise RuntimeError(
+            f"{context} must use {canonical_key} (unsupported key {key})"
+        )
 
     @staticmethod
     def _normalize_governance_public_hex_hint(
@@ -5575,6 +5573,25 @@ class ToriiClient:
             return
         value = target[key]
         if value is None:
+            return
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            raw = ToriiClient._normalize_hex_string(
+                value,
+                context=f"{context}.{key}",
+                expected_length=64,
+            )
+            target[key] = raw.lower()
+            return
+        if isinstance(value, (list, tuple)):
+            try:
+                raw = bytes(value).hex()
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    f"{context}.{key} must be a 32-byte hex string"
+                ) from exc
+            if len(raw) != 64:
+                raise RuntimeError(f"{context}.{key} must be a 32-byte hex string")
+            target[key] = raw.lower()
             return
         if not isinstance(value, str):
             raise RuntimeError(f"{context}.{key} must be a 32-byte hex string")
@@ -5619,30 +5636,42 @@ class ToriiClient:
         if not isinstance(value, Mapping):
             raise RuntimeError(f"{context} must be an object")
         normalized = dict(value)
-        cls._apply_governance_public_input_alias(
+        cls._reject_governance_public_input_key(
             normalized,
             "durationBlocks",
             "duration_blocks",
             context=context,
         )
-        cls._apply_governance_public_input_alias(
+        cls._reject_governance_public_input_key(
             normalized,
-            "nullifierHex",
-            "nullifier_hex",
+            "root_hint_hex",
+            "root_hint",
             context=context,
         )
-        cls._apply_governance_public_input_alias(
+        cls._reject_governance_public_input_key(
             normalized,
             "rootHintHex",
             "root_hint",
             context=context,
         )
-        cls._apply_governance_public_input_alias(
+        cls._reject_governance_public_input_key(
             normalized,
             "rootHint",
             "root_hint",
             context=context,
         )
+        cls._reject_governance_public_input_key(
+            normalized,
+            "nullifier_hex",
+            "nullifier",
+            context=context,
+        )
+        cls._reject_governance_public_input_key(
+            normalized,
+            "nullifierHex",
+            "nullifier",
+            context=context,
+        )
         cls._normalize_governance_public_hex_hint(
             normalized,
             "root_hint",
@@ -5650,7 +5679,7 @@ class ToriiClient:
         )
         cls._normalize_governance_public_hex_hint(
             normalized,
-            "nullifier_hex",
+            "nullifier",
             context=context,
         )
         cls._ensure_governance_lock_hints_complete(

@@ -170,7 +170,7 @@ fn zk_public_inputs(owner: &iroha_data_model::account::AccountId) -> String {
     norito::json::to_json(
         &norito::json::object([
             (
-                "nullifier_hex",
+                "nullifier",
                 norito::json::to_value(&"99".repeat(32)).expect("serialize nullifier"),
             ),
             (

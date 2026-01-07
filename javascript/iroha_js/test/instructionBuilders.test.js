@@ -940,21 +940,24 @@ test("buildCastZkBallotInstruction defaults public inputs to empty object", () =
   assert.deepEqual(decoded, instruction);
 });
 
-test("buildCastZkBallotInstruction normalizes lock hint aliases", () => {
-  const instruction = buildCastZkBallotInstruction({
-    electionId: "ref-3",
-    proof: Buffer.from([0x04]),
-    publicInputs: {
-      owner: ACCOUNT_ID,
-      amount: "250",
-      durationBlocks: 12,
+test("buildCastZkBallotInstruction rejects deprecated public input keys", () => {
+  assert.throws(
+    () =>
+      buildCastZkBallotInstruction({
+        electionId: "ref-3",
+        proof: Buffer.from([0x04]),
+        publicInputs: {
+          owner: ACCOUNT_ID,
+          amount: "250",
+          durationBlocks: 12,
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /durationBlocks/i);
+      return true;
     },
-  });
-  const parsed = JSON.parse(instruction.CastZkBallot.public_inputs_json);
-  assert.equal(parsed.owner, ACCOUNT_ID);
-  assert.equal(parsed.amount, "250");
-  assert.equal(parsed.duration_blocks, 12);
-  assert.equal(parsed.durationBlocks, undefined);
+  );
 });
 
 test("buildCastZkBallotInstruction canonicalizes hex hint values", () => {
@@ -964,14 +967,14 @@ test("buildCastZkBallotInstruction canonicalizes hex hint values", () => {
     publicInputs: {
       owner: ACCOUNT_ID,
       amount: "250",
-      durationBlocks: 12,
-      rootHintHex: `0x${"Aa".repeat(32)}`,
-      nullifierHex: `blake2b32:${"BB".repeat(32)}`,
+      duration_blocks: 12,
+      root_hint: `0x${"Aa".repeat(32)}`,
+      nullifier: `blake2b32:${"BB".repeat(32)}`,
     },
   });
   const parsed = JSON.parse(instruction.CastZkBallot.public_inputs_json);
   assert.equal(parsed.root_hint, "aa".repeat(32));
-  assert.equal(parsed.nullifier_hex, "bb".repeat(32));
+  assert.equal(parsed.nullifier, "bb".repeat(32));
 });
 
 test("buildCastZkBallotInstruction canonicalizes public input ordering", () => {

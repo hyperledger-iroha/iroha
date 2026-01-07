@@ -202,9 +202,9 @@ Endpoint للراحة
   - مفيد لتدقيق namespaces المحمية او التحقق من تدفقات deploy الخاضعة للحوكمة.
 - `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - يصدر هيكل JSON للـ metadata المستخدم عند نشر deploy الى namespaces المحمية، بما في ذلك `gov_manifest_approvers` الاختيارية لتلبية قواعد quorum للmanifest.
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — تلميحات القفل مطلوبة عندما يكون `min_bond_amount > 0`، وأي مجموعة تلميحات مقدمة يجب أن تتضمن `owner` و`amount` و`duration_blocks`.
+- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — تلميحات القفل مطلوبة عندما يكون `min_bond_amount > 0`، وأي مجموعة تلميحات مقدمة يجب أن تتضمن `owner` و`amount` و`duration_blocks`.
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
-  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
+  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - الملخص في سطر واحد يعرض الان `fingerprint=<hex>` حتميا مشتقا من `CastZkBallot` المشفر مع hints المفككة (`owner`, `amount`, `duration_blocks`, `direction` عند توفيرها).
   - ردود CLI تضع تعليقات على `tx_instructions[]` مع `payload_fingerprint_hex` بالاضافة الى حقول مفكوكة كي تتحقق الادوات اللاحقة من الهيكل بدون اعادة تنفيذ فك ترميز Norito.
   - توفير hints للـ lock يسمح للعقدة باصدار احداث `LockCreated`/`LockExtended` للـ ZK ballots بمجرد ان تكشف الدائرة القيم نفسها.
@@ -235,9 +235,9 @@ Endpoint للراحة
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
-      "root_hint_hex": "0x...64hex?",
+      "root_hint": "0x...64hex?",
       "owner": "alice@wonderland?",
-      "nullifier_hex": "blake2b32:...64hex?"
+      "nullifier": "blake2b32:...64hex?"
     }
   - الرد: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
 
@@ -252,9 +252,9 @@ Endpoint للراحة
       "ballot": {
         "backend": "halo2/ipa",
         "envelope_bytes": "AAECAwQ=",   // base64 لحاوية ZK1 او H2*
-        "root_hint": null,                // optional 32-byte array of bytes (eligibility root)
+        "root_hint": null,                // optional 32-byte hex string (eligibility root)
         "owner": null,                    // AccountId اختياري عندما تلتزم الدائرة بـ owner
-        "nullifier": null                 // optional 32-byte array of bytes (nullifier hint)
+        "nullifier": null                 // optional 32-byte hex string (nullifier hint)
       }
     }
   - الرد:

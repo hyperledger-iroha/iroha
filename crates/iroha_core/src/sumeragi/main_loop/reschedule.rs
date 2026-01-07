@@ -69,6 +69,7 @@ impl Actor {
                 pending.view,
                 expected_epoch,
             );
+            let commit_qc_cached = qc_precommit.is_some();
             let qc_any = qc_precommit.clone().or_else(|| {
                 cached_qc_for(
                     &self.qc_cache,
@@ -84,7 +85,8 @@ impl Actor {
                 prevote_timeouts.push((key, pending_age, qc_any));
                 continue;
             }
-            let (vote_count, quorum_reached) = if pending.commit_certificate_seen {
+            let (vote_count, quorum_reached) =
+                if pending.commit_certificate_seen || commit_qc_cached {
                 (0, true)
             } else {
                 self.commit_vote_quorum_status_for_block(*hash, pending.height, pending.view)
@@ -250,6 +252,17 @@ impl Actor {
         let block_hash = pending.block.hash();
         let height = pending.height;
         let view = pending.view;
+        let expected_epoch = self.epoch_for_height(height);
+        // Preserve commit QCs so late payloads can still finalize after a drop.
+        let keep_commit_qc = cached_qc_for(
+            &self.qc_cache,
+            crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            height,
+            view,
+            expected_epoch,
+        )
+        .is_some();
         let _queue_depth = self.queue.tx_len();
         let (state_height, tip_hash) = {
             let state_view = self.state.view();
@@ -312,12 +325,24 @@ impl Actor {
         );
 
         if drop_pending {
-            self.clean_rbc_sessions_for_block(block_hash, height);
+            if !keep_commit_qc {
+                self.clean_rbc_sessions_for_block(block_hash, height);
+            }
             self.qc_cache
-                .retain(|(_, qc_hash, _, _, _), _| qc_hash != &block_hash);
+                .retain(|(phase, qc_hash, _, _, _), _| {
+                    *qc_hash != block_hash
+                        || (keep_commit_qc
+                            && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
+                });
             self.qc_signer_tally
-                .retain(|(_, qc_hash, _, _, _), _| qc_hash != &block_hash);
-            self.execution_qc_cache.remove(&block_hash);
+                .retain(|(phase, qc_hash, _, _, _), _| {
+                    *qc_hash != block_hash
+                        || (keep_commit_qc
+                            && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
+                });
+            if !keep_commit_qc {
+                self.execution_qc_cache.remove(&block_hash);
+            }
         } else {
             // Keep the pending block and cached certificates so late commit certificates
             // can still finalize it.

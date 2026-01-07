@@ -5309,24 +5309,32 @@ public struct ToriiGovernanceZkBallotRequest: Encodable, Sendable {
 fileprivate func normalizeGovernanceZkPublicInputs(_ inputs: [String: ToriiJSONValue],
                                                    field: String) throws -> [String: ToriiJSONValue] {
     var normalized = inputs
-    try normalizeGovernanceZkPublicInputAlias(&normalized,
-                                              aliasKey: "durationBlocks",
-                                              canonicalKey: "duration_blocks",
-                                              field: field)
-    try normalizeGovernanceZkPublicInputAlias(&normalized,
-                                              aliasKey: "nullifierHex",
-                                              canonicalKey: "nullifier_hex",
-                                              field: field)
-    try normalizeGovernanceZkPublicInputAlias(&normalized,
-                                              aliasKey: "rootHintHex",
-                                              canonicalKey: "root_hint",
-                                              field: field)
-    try normalizeGovernanceZkPublicInputAlias(&normalized,
-                                              aliasKey: "rootHint",
-                                              canonicalKey: "root_hint",
-                                              field: field)
+    try rejectGovernanceZkPublicInputKey(&normalized,
+                                         key: "durationBlocks",
+                                         canonicalKey: "duration_blocks",
+                                         field: field)
+    try rejectGovernanceZkPublicInputKey(&normalized,
+                                         key: "root_hint_hex",
+                                         canonicalKey: "root_hint",
+                                         field: field)
+    try rejectGovernanceZkPublicInputKey(&normalized,
+                                         key: "rootHintHex",
+                                         canonicalKey: "root_hint",
+                                         field: field)
+    try rejectGovernanceZkPublicInputKey(&normalized,
+                                         key: "rootHint",
+                                         canonicalKey: "root_hint",
+                                         field: field)
+    try rejectGovernanceZkPublicInputKey(&normalized,
+                                         key: "nullifier_hex",
+                                         canonicalKey: "nullifier",
+                                         field: field)
+    try rejectGovernanceZkPublicInputKey(&normalized,
+                                         key: "nullifierHex",
+                                         canonicalKey: "nullifier",
+                                         field: field)
     try normalizeGovernanceZkPublicInputHex(&normalized, key: "root_hint", field: field)
-    try normalizeGovernanceZkPublicInputHex(&normalized, key: "nullifier_hex", field: field)
+    try normalizeGovernanceZkPublicInputHex(&normalized, key: "nullifier", field: field)
     let hasOwner = governanceZkHintPresent(normalized["owner"])
     let hasAmount = governanceZkHintPresent(normalized["amount"])
     let hasDuration = governanceZkHintPresent(normalized["duration_blocks"])
@@ -5339,18 +5347,14 @@ fileprivate func normalizeGovernanceZkPublicInputs(_ inputs: [String: ToriiJSONV
     return normalized
 }
 
-fileprivate func normalizeGovernanceZkPublicInputAlias(_ inputs: inout [String: ToriiJSONValue],
-                                                      aliasKey: String,
-                                                      canonicalKey: String,
-                                                      field: String) throws {
-    guard let aliasValue = inputs[aliasKey] else { return }
-    if inputs[canonicalKey] != nil {
-        throw ToriiClientError.invalidPayload(
-            "\(field) cannot include both \(aliasKey) and \(canonicalKey)."
-        )
-    }
-    inputs[canonicalKey] = aliasValue
-    inputs.removeValue(forKey: aliasKey)
+fileprivate func rejectGovernanceZkPublicInputKey(_ inputs: inout [String: ToriiJSONValue],
+                                                 key: String,
+                                                 canonicalKey: String,
+                                                 field: String) throws {
+    guard inputs[key] != nil else { return }
+    throw ToriiClientError.invalidPayload(
+        "\(field) must use \(canonicalKey) (unsupported key \(key))."
+    )
 }
 
 fileprivate func normalizeGovernanceZkPublicInputHex(_ inputs: inout [String: ToriiJSONValue],

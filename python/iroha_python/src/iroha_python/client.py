@@ -638,18 +638,16 @@ def _normalize_base64_payload(
     raise TypeError(f"{context} must be bytes or a base64 string")
 
 
-def _normalize_governance_public_input_alias(
+def _reject_governance_public_input_key(
     record: Dict[str, Any],
-    alias_key: str,
+    key: str,
     canonical_key: str,
     *,
     context: str,
 ) -> None:
-    if alias_key not in record:
+    if key not in record:
         return
-    if canonical_key in record:
-        raise ValueError(f"{context} cannot include both {alias_key} and {canonical_key}")
-    record[canonical_key] = record.pop(alias_key)
+    raise ValueError(f"{context} must use {canonical_key} (unsupported key {key})")
 
 
 def _normalize_governance_public_hex_hint(
@@ -662,6 +660,12 @@ def _normalize_governance_public_hex_hint(
         return
     value = record[key]
     if value is None:
+        return
+    if isinstance(value, (bytes, bytearray, memoryview, list, tuple)):
+        raw = _bytes_like_to_hex(value, f"{context}.{key}")
+        if len(raw) != 64:
+            raise ValueError(f"{context}.{key} must be a 32-byte hex string")
+        record[key] = raw.lower()
         return
     if not isinstance(value, str):
         raise ValueError(f"{context}.{key} must be a 32-byte hex string")
@@ -699,30 +703,42 @@ def _normalize_governance_zk_public_inputs(value: Any, *, context: str) -> Dict[
     if not isinstance(value, Mapping):
         raise TypeError(f"{context} must be an object")
     normalized = dict(value)
-    _normalize_governance_public_input_alias(
+    _reject_governance_public_input_key(
         normalized,
         "durationBlocks",
         "duration_blocks",
         context=context,
     )
-    _normalize_governance_public_input_alias(
+    _reject_governance_public_input_key(
         normalized,
-        "nullifierHex",
-        "nullifier_hex",
+        "root_hint_hex",
+        "root_hint",
         context=context,
     )
-    _normalize_governance_public_input_alias(
+    _reject_governance_public_input_key(
         normalized,
         "rootHintHex",
         "root_hint",
         context=context,
     )
-    _normalize_governance_public_input_alias(
+    _reject_governance_public_input_key(
         normalized,
         "rootHint",
         "root_hint",
         context=context,
     )
+    _reject_governance_public_input_key(
+        normalized,
+        "nullifier_hex",
+        "nullifier",
+        context=context,
+    )
+    _reject_governance_public_input_key(
+        normalized,
+        "nullifierHex",
+        "nullifier",
+        context=context,
+    )
     _normalize_governance_public_hex_hint(
         normalized,
         "root_hint",
@@ -730,7 +746,7 @@ def _normalize_governance_zk_public_inputs(value: Any, *, context: str) -> Dict[
     )
     _normalize_governance_public_hex_hint(
         normalized,
-        "nullifier_hex",
+        "nullifier",
         context=context,
     )
     _ensure_governance_lock_hints_complete(
@@ -766,32 +782,50 @@ def _normalize_governance_zk_ballot_v1_payload(
     context: str,
 ) -> Dict[str, Any]:
     record = dict(payload)
-    _normalize_governance_public_input_alias(
+    _reject_governance_public_input_key(
         record,
         "durationBlocks",
         "duration_blocks",
         context=context,
     )
-    _normalize_governance_public_input_alias(
+    _reject_governance_public_input_key(
+        record,
+        "root_hint_hex",
+        "root_hint",
+        context=context,
+    )
+    _reject_governance_public_input_key(
         record,
         "rootHintHex",
-        "root_hint_hex",
+        "root_hint",
         context=context,
     )
-    _normalize_governance_public_input_alias(
+    _reject_governance_public_input_key(
+        record,
+        "rootHint",
+        "root_hint",
+        context=context,
+    )
+    _reject_governance_public_input_key(
+        record,
+        "nullifier_hex",
+        "nullifier",
+        context=context,
+    )
+    _reject_governance_public_input_key(
         record,
         "nullifierHex",
-        "nullifier_hex",
+        "nullifier",
         context=context,
     )
     _normalize_governance_public_hex_hint(
         record,
-        "root_hint_hex",
+        "root_hint",
         context=context,
     )
     _normalize_governance_public_hex_hint(
         record,
-        "nullifier_hex",
+        "nullifier",
         context=context,
     )
     _ensure_governance_lock_hints_complete(
@@ -815,11 +849,52 @@ def _normalize_governance_zk_ballot_proof_payload(
     if not isinstance(ballot, Mapping):
         raise TypeError(f"{context}.ballot must be an object")
     ballot_record = dict(ballot)
+    ballot_context = f"{context}.ballot"
+    _reject_governance_public_input_key(
+        ballot_record,
+        "rootHintHex",
+        "root_hint",
+        context=ballot_context,
+    )
+    _reject_governance_public_input_key(
+        ballot_record,
+        "root_hint_hex",
+        "root_hint",
+        context=ballot_context,
+    )
+    _reject_governance_public_input_key(
+        ballot_record,
+        "rootHint",
+        "root_hint",
+        context=ballot_context,
+    )
+    _reject_governance_public_input_key(
+        ballot_record,
+        "nullifierHex",
+        "nullifier",
+        context=ballot_context,
+    )
+    _reject_governance_public_input_key(
+        ballot_record,
+        "nullifier_hex",
+        "nullifier",
+        context=ballot_context,
+    )
+    _normalize_governance_public_hex_hint(
+        ballot_record,
+        "root_hint",
+        context=ballot_context,
+    )
+    _normalize_governance_public_hex_hint(
+        ballot_record,
+        "nullifier",
+        context=ballot_context,
+    )
     _ensure_governance_lock_hints_complete(
         ballot_record.get("owner"),
         ballot_record.get("amount"),
         ballot_record.get("duration_blocks"),
-        context=f"{context}.ballot",
+        context=ballot_context,
     )
     record["ballot"] = ballot_record
     return record

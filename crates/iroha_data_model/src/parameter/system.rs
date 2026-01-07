@@ -1262,7 +1262,7 @@ mod defaults {
             nonzero!(16_u64)
         }
         pub const fn max_instructions() -> NonZeroU64 {
-            nonzero!(2_u64.pow(12))
+            nonzero!(20_000_u64)
         }
         pub const fn ivm_bytecode_size() -> NonZeroU64 {
             nonzero!(4 * 2_u64.pow(20))

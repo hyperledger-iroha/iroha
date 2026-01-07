@@ -202,9 +202,9 @@ Helpers CLI
   - Util para auditar namespaces protegidos ou verificar fluxos de deploy controlados por governanca.
 - `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - Emite o esqueleto JSON de metadata usado ao submeter deployments em namespaces protegidos, incluindo `gov_manifest_approvers` opcionais para satisfazer regras de quorum do manifesto.
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — lock hints são obrigatórios quando `min_bond_amount > 0`, e qualquer conjunto de hints fornecido deve incluir `owner`, `amount` e `duration_blocks`.
+- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — lock hints são obrigatórios quando `min_bond_amount > 0`, e qualquer conjunto de hints fornecido deve incluir `owner`, `amount` e `duration_blocks`.
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
-  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
+  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - O resumo de uma linha agora exibe `fingerprint=<hex>` deterministico derivado do `CastZkBallot` codificado junto com hints decodificados (`owner`, `amount`, `duration_blocks`, `direction` quando fornecidos).
   - As respostas da CLI anotam `tx_instructions[]` com `payload_fingerprint_hex` mais campos decodificados para que ferramentas downstream verifiquem o esqueleto sem reimplementar decodificacao Norito.
   - Fornecer hints de lock permite que o no emita eventos `LockCreated`/`LockExtended` para ballots ZK assim que o circuito expuser os mesmos valores.
@@ -235,9 +235,9 @@ Varredura de unlocks (Operador/Auditoria)
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
-      "root_hint_hex": "0x...64hex?",
+      "root_hint": "0x...64hex?",
       "owner": "alice@wonderland?",
-      "nullifier_hex": "blake2b32:...64hex?"
+      "nullifier": "blake2b32:...64hex?"
     }
   - Resposta: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
 
@@ -252,9 +252,9 @@ Varredura de unlocks (Operador/Auditoria)
       "ballot": {
         "backend": "halo2/ipa",
         "envelope_bytes": "AAECAwQ=",   // base64 do container ZK1 ou H2*
-        "root_hint": null,                // optional 32-byte array of bytes (eligibility root)
+        "root_hint": null,                // optional 32-byte hex string (eligibility root)
         "owner": null,                    // AccountId opcional quando o circuito compromete owner
-        "nullifier": null                 // optional 32-byte array of bytes (nullifier hint)
+        "nullifier": null                 // optional 32-byte hex string (nullifier hint)
       }
     }
   - Resposta:
