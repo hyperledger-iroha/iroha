@@ -1,6 +1,10 @@
 # Status
 
 ## Latest Updates
+- Test network harness: workspace fingerprint now honors simple `.gitignore` globs and ignores custom `CARGO_TARGET_DIR` paths to reduce unnecessary rebuilds; added unit coverage.
+- Tests: not run (not requested).
+- Integration tests: default sandbox network parallelism now scales with CPU/4 (matching the cross-process permit heuristic) and updated the serial-guard unit test to reflect the new default.
+- Tests: not run (not requested).
 - Data model: enable BLS feature in workspace `iroha_data_model` dependency so IH58 account parsing accepts BLS curve ids in integration tests/clients.
 - Asset tests: sync after fractional rejection operations in `fail_if_dont_satisfy_spec` to keep non-empty height tracking aligned under slow confirmations.
 - Tests: `CARGO_TARGET_DIR=target-codex cargo test -p integration_tests --test address_canonicalisation account_transactions_query_supports_address_format -- --nocapture` (pass).
