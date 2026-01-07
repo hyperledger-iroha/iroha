@@ -1913,7 +1913,7 @@ mod tests {
         let domain_id = DomainId::from_str(domain).expect("domain id");
         let mut bytes = [0u8; 32];
         bytes.fill(tag);
-        let encoded = format!("ed0120{}", hex::encode(bytes));
+        let encoded = format!("ed0120{}", hex::encode_upper(bytes));
         let public_key = PublicKey::from_str(&encoded).expect("public key");
         AccountId::new(domain_id, public_key)
     }

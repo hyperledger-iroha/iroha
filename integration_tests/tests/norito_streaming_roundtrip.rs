@@ -5,10 +5,13 @@ mod streaming;
 
 use hex::encode as hex_encode;
 use norito::streaming::{
-    FecScheme, Hash, Multiaddr, PrivacyCapabilities, PrivacyRelay, PrivacyRoute, Signature,
-    StreamMetadata,
+    EntropyMode, FecScheme, Hash, Multiaddr, PrivacyCapabilities, PrivacyRelay, PrivacyRoute,
+    Signature, StreamMetadata,
     chunk::{self, BaselineDecoder},
-    codec::{BaselineEncoderConfig, BaselineManifestParams, EncodedSegment, RawFrame},
+    codec::{
+        BaselineEncoder, BaselineEncoderConfig, BaselineManifestParams, EncodedSegment,
+        FrameDimensions, RawFrame, default_bundle_tables,
+    },
 };
 
 struct SegmentFixture {
@@ -16,6 +19,43 @@ struct SegmentFixture {
     config: BaselineEncoderConfig,
     segment: EncodedSegment,
     frames: Vec<RawFrame>,
+}
+
+fn bundled_segment_with_default_tables(
+    frame_count: usize,
+    bundle_width: u8,
+) -> (BaselineEncoderConfig, EncodedSegment, Vec<RawFrame>) {
+    assert!(frame_count > 0, "frame_count must be non-zero");
+    let dims = FrameDimensions::new(8, 8);
+    let frame_duration_ns = 25_000_000u32;
+    let mut frames = Vec::with_capacity(frame_count);
+    let base_luma = vec![0x33; dims.pixel_count()];
+    for _ in 0..frame_count {
+        frames.push(RawFrame::new(dims, base_luma.clone()).expect("valid frame"));
+    }
+
+    let tables = default_bundle_tables();
+    let max_width = tables.max_width().max(2);
+    let configured_width = bundle_width.clamp(2, max_width);
+
+    let config = BaselineEncoderConfig {
+        frame_dimensions: dims,
+        frame_duration_ns,
+        duration_ns: frame_duration_ns
+            .saturating_mul(u32::try_from(frame_count).expect("frame count fits u32")),
+        quantizer: 0,
+        entropy_mode: EntropyMode::RansBundled,
+        bundle_width: configured_width,
+        bundle_tables: tables,
+        ..BaselineEncoderConfig::default()
+    };
+
+    let mut encoder = BaselineEncoder::new(config.clone());
+    let segment = encoder
+        .encode_segment(6, 2_000_000, 9, &frames, None)
+        .expect("encode bundled segment");
+
+    (config, segment, frames)
 }
 
 fn segment_fixtures() -> Vec<SegmentFixture> {
@@ -29,7 +69,7 @@ fn segment_fixtures() -> Vec<SegmentFixture> {
         frames,
     });
 
-    let (config, segment, frames, _telemetry) = streaming::bundled_segment(2, 4);
+    let (config, segment, frames) = bundled_segment_with_default_tables(2, 4);
     fixtures.push(SegmentFixture {
         label: "rans_bundled",
         config,

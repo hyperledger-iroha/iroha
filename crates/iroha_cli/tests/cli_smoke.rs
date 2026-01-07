@@ -228,7 +228,8 @@ fn write_metrics_file(
 ) -> std::path::PathBuf {
     let file_name = format!("metrics-epoch-{}.to", metrics.epoch);
     let path = dir.path().join(file_name);
-    fs::write(&path, metrics.encode()).expect("write metrics");
+    let bytes = to_bytes(metrics).expect("encode metrics");
+    fs::write(&path, bytes).expect("write metrics");
     path
 }
 
@@ -237,7 +238,8 @@ fn write_bond_file(
     bond: &RelayBondLedgerEntryV1,
 ) -> std::path::PathBuf {
     let path = dir.path().join("bond.to");
-    fs::write(&path, bond.encode()).expect("write bond");
+    let bytes = to_bytes(bond).expect("encode bond");
+    fs::write(&path, bytes).expect("write bond");
     path
 }
 
@@ -245,7 +247,8 @@ fn write_metrics_snapshot(dir: &Path, metrics: &RelayEpochMetricsV1, suffix: &st
     let relay_hex = hex::encode(metrics.relay_id);
     let file_name = format!("relay-{}-epoch-{}-{}.to", relay_hex, metrics.epoch, suffix);
     let path = dir.join(file_name);
-    fs::write(&path, metrics.encode()).expect("write metrics snapshot");
+    let bytes = to_bytes(metrics).expect("encode metrics snapshot");
+    fs::write(&path, bytes).expect("write metrics snapshot");
     path
 }
 
@@ -539,8 +542,7 @@ fn sorafs_reserve_ledger_emits_instructions() {
         &AssetId::new(xor_asset_id(), provider_account.clone())
     );
     assert_eq!(rent_destination, &treasury_account);
-    let rent_amount = u64::try_from(rent_amount_numeric.clone()).expect("convert rent amount");
-    assert_eq!(rent_amount, 120);
+    assert_numeric_micro(rent_amount_numeric, 120_000_000);
 
     let (reserve_source, reserve_amount_numeric, reserve_destination) =
         transfer_parts(&instructions[1]);
@@ -549,9 +551,7 @@ fn sorafs_reserve_ledger_emits_instructions() {
         &AssetId::new(xor_asset_id(), provider_account.clone())
     );
     assert_eq!(reserve_destination, &reserve_account);
-    let reserve_amount =
-        u64::try_from(reserve_amount_numeric.clone()).expect("convert reserve amount");
-    assert_eq!(reserve_amount, 240);
+    assert_numeric_micro(reserve_amount_numeric, 240_000_000);
 }
 
 #[test]
@@ -1540,7 +1540,8 @@ fn gov_council_gen_vrf_outputs_expected_candidate() {
         .arg(&config_path)
         .args([
             "gov",
-            "council-gen-vrf",
+            "council",
+            "gen-vrf",
             "--count",
             "1",
             "--seed-hex",
@@ -3926,7 +3927,8 @@ fn incentives_daemon_processes_metrics_spool() {
 
     let bond_entry = sample_bond_entry();
     let bond_path = bonds_dir.join("relay-bond.to");
-    fs::write(&bond_path, bond_entry.encode()).expect("write bond entry");
+    let bond_bytes = to_bytes(&bond_entry).expect("encode bond entry");
+    fs::write(&bond_path, bond_bytes).expect("write bond entry");
     let relay_hex = hex::encode(bond_entry.relay_id);
     let beneficiary_account = account_id("relay1").to_string();
     let config_path = write_daemon_config(&temp_dir, &relay_hex, &beneficiary_account, &bond_path);
