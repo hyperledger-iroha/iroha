@@ -1829,16 +1829,6 @@ impl Actor {
             let roster_len = topology.as_ref().len();
             let min_votes_for_commit = self.commit_min_votes(&topology);
 
-            let delivered = da_enabled
-                && Self::ensure_block_matches_rbc_payload(
-                    &self.subsystems.da_rbc.rbc.sessions,
-                    &self.subsystems.da_rbc.rbc.status_handle,
-                    &hash,
-                    pending_height,
-                    &payload_hash,
-                );
-            let missing_local_data = da_enabled && !delivered;
-
             let mut emit_precommit = false;
             let mut abort_due_to_kura = false;
             let mut replay_msg: Option<BlockMessage> = None;
@@ -1848,6 +1838,17 @@ impl Actor {
                 Some(pending) => pending,
                 None => continue,
             };
+            let local_payload_ok = Self::local_payload_matches_hash(&pending.block, &payload_hash);
+            let delivered = da_enabled
+                && (local_payload_ok
+                    || Self::ensure_block_matches_rbc_payload(
+                        &self.subsystems.da_rbc.rbc.sessions,
+                        &self.subsystems.da_rbc.rbc.status_handle,
+                        &hash,
+                        pending_height,
+                        &payload_hash,
+                    ));
+            let missing_local_data = da_enabled && !delivered;
             if !pending.commit_certificate_seen {
                 if let Some(qc) = qc_cache_for_subject(&self.qc_cache, hash).find(|qc| {
                     matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
@@ -2894,7 +2895,10 @@ impl Actor {
 
     fn refresh_da_gate_status(&mut self, pending: &mut PendingBlock) -> DaGateStatus {
         let da_enabled = self.runtime_da_enabled();
+        let local_payload_ok =
+            Self::local_payload_matches_hash(&pending.block, &pending.payload_hash);
         let missing_local_data = da_enabled
+            && !local_payload_ok
             && !Self::ensure_block_matches_rbc_payload(
                 &self.subsystems.da_rbc.rbc.sessions,
                 &self.subsystems.da_rbc.rbc.status_handle,

@@ -11,10 +11,12 @@ use eyre::{Report, Result};
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
 use tokio::runtime::{Handle, Runtime};
 
+use crate::sync::get_status_with_retry;
+
 /// Optional guard that limits concurrent integration tests which spin up a network.
 ///
-/// Defaults to serial execution. Set `IROHA_TEST_NETWORK_PARALLELISM=<N>` to increase
-/// parallelism or `IROHA_TEST_SERIALIZE_NETWORKS=1` to force serialization explicitly.
+/// Defaults to CPU-scaled parallelism (cores / 4). Set `IROHA_TEST_NETWORK_PARALLELISM=<N>`
+/// to override or `IROHA_TEST_SERIALIZE_NETWORKS=1` to force serialization explicitly.
 #[must_use]
 pub struct SerialGuard {
     _guard: Option<NetworkPermit>,
@@ -135,6 +137,7 @@ impl Drop for NetworkPermit {
 const SERIAL_GUARD_LOG_INTERVAL: Duration = Duration::from_secs(60);
 const SERIAL_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MIN_NETWORK_PEERS: usize = 4; // DA-enabled consensus can stall with fewer peers.
+const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 4; // Match iroha_test_network default.
 const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
 const NETWORK_PARALLELISM_ENV: &str = "IROHA_TEST_NETWORK_PARALLELISM";
 
@@ -213,9 +216,12 @@ impl Drop for OverrideGuard {
 }
 
 fn default_network_parallelism() -> usize {
-    // Integration networks are heavy enough to overwhelm local Torii under parallel load.
-    // Default to serialized runs; allow opt-in parallelism via env overrides.
-    1
+    // Keep parallelism conservative by scaling with cores per minimal test network size.
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1);
+    let per_network = DEFAULT_NETWORK_PARALLELISM_PEERS.max(1);
+    cores.saturating_div(per_network).max(1)
 }
 
 fn network_parallelism_limit() -> usize {
@@ -314,6 +320,11 @@ pub fn start_network_blocking_or_skip(
     runtime
         .block_on(async { network.start_all().await })
         .map_err(|err| sandbox_error(err, context))?;
+    runtime
+        .block_on(async { network.ensure_blocks(1).await })
+        .map_err(|err| sandbox_error(err.wrap_err("reach block 1"), context))?;
+    get_status_with_retry(&network.client())
+        .map_err(|err| sandbox_error(err.wrap_err("wait for /status"), context))?;
     Ok(Some((SerializedNetwork::new(network, guard), runtime)))
 }
 
@@ -376,6 +387,15 @@ pub async fn start_network_async_or_skip(
         .start_all()
         .await
         .map_err(|err| sandbox_error(err, context))?;
+    network
+        .ensure_blocks(1)
+        .await
+        .map_err(|err| sandbox_error(err.wrap_err("reach block 1"), context))?;
+    let client = network.client();
+    let status = tokio::task::spawn_blocking(move || get_status_with_retry(&client))
+        .await
+        .map_err(|err| sandbox_error(Report::new(err), context))?;
+    status.map_err(|err| sandbox_error(err.wrap_err("wait for /status"), context))?;
     Ok(Some(SerializedNetwork::new(network, guard)))
 }
 
@@ -467,6 +487,29 @@ mod tests {
     use super::*;
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    struct EnvRestore {
+        key: &'static str,
+        value: Option<String>,
+    }
+
+    impl EnvRestore {
+        fn remove(key: &'static str) -> Self {
+            let value = std::env::var(key).ok();
+            std::env::remove_var(key);
+            Self { key, value }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            if let Some(value) = &self.value {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
 
     fn lock_env_guard() -> MutexGuard<'static, ()> {
         ENV_LOCK
@@ -589,11 +632,21 @@ mod tests {
     #[test]
     fn serial_guard_applies_default_parallelism() {
         let _env_guard = lock_env_guard();
-        let _override_guard = set_test_overrides(None, None);
+        let _serialize_guard = EnvRestore::remove(SERIALIZE_NETWORKS_ENV);
+        let _parallelism_guard = EnvRestore::remove(NETWORK_PARALLELISM_ENV);
+        let _override_guard = set_test_overrides(Some(false), None);
+        let expected = std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1)
+            .saturating_div(DEFAULT_NETWORK_PARALLELISM_PEERS.max(1))
+            .max(1);
         let (_, in_use_before) = network_permit_snapshot();
         let guard = serial_guard();
         let (limit, in_use) = network_permit_snapshot();
-        assert_eq!(limit, 1, "default network parallelism should be serialized");
+        assert_eq!(
+            limit, expected,
+            "default network parallelism should scale with CPU"
+        );
         assert_eq!(in_use, in_use_before.saturating_add(1));
         drop(guard);
         let (_, in_use_after) = network_permit_snapshot();
