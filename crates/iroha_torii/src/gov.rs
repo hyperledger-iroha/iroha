@@ -316,6 +316,78 @@ fn hint_present(map: &json::Map<String, json::Value>, key: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn normalize_zk_ballot_public_inputs(
+    map: &mut json::Map<String, json::Value>,
+) -> Result<(), String> {
+    normalize_zk_public_input_alias(map, "durationBlocks", "duration_blocks")?;
+    normalize_zk_public_input_alias(map, "nullifierHex", "nullifier_hex")?;
+    normalize_zk_public_input_alias(map, "rootHintHex", "root_hint")?;
+    normalize_zk_public_input_alias(map, "rootHint", "root_hint")?;
+    canonicalize_hex32_public_input(map, "root_hint", "root_hint")?;
+    canonicalize_hex32_public_input(map, "nullifier_hex", "nullifier")?;
+    Ok(())
+}
+
+fn normalize_zk_public_input_alias(
+    map: &mut json::Map<String, json::Value>,
+    alias: &str,
+    canonical: &str,
+) -> Result<(), String> {
+    let Some(value) = map.remove(alias) else {
+        return Ok(());
+    };
+    if map.contains_key(canonical) {
+        return Err(format!(
+            "public inputs cannot include both {alias} and {canonical}"
+        ));
+    }
+    map.insert(canonical.to_string(), value);
+    Ok(())
+}
+
+fn canonicalize_hex32_public_input(
+    map: &mut json::Map<String, json::Value>,
+    key: &str,
+    label: &str,
+) -> Result<(), String> {
+    let Some(value) = map.get_mut(key) else {
+        return Ok(());
+    };
+    if matches!(value, json::Value::Null) {
+        return Ok(());
+    }
+    let raw = value
+        .as_str()
+        .ok_or_else(|| format!("{label} must be 32-byte hex"))?;
+    let canonical = canonicalize_hex32_value(raw)
+        .ok_or_else(|| format!("{label} must be 32-byte hex"))?;
+    *value = json::Value::String(canonical);
+    Ok(())
+}
+
+fn canonicalize_hex32_value(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let without_scheme = if let Some((scheme, rest)) = trimmed.split_once(':') {
+        if scheme.is_empty() || scheme.eq_ignore_ascii_case("blake2b32") {
+            rest
+        } else {
+            return None;
+        }
+    } else {
+        trimmed
+    };
+    let body = without_scheme.trim();
+    let body = body
+        .strip_prefix("0x")
+        .or_else(|| body.strip_prefix("0X"))
+        .unwrap_or(body)
+        .trim();
+    if body.len() != 64 || !body.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(body.to_ascii_lowercase())
+}
+
 // -------- ZK Ballot V1 DTO (feature-gated) --------
 #[cfg(feature = "zk-ballot")]
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -413,7 +485,13 @@ pub async fn handle_gov_ballot_zk_v1(
     // Build public inputs JSON object with optional hints
     let mut pub_map = norito::json::Map::new();
     if let Some(rh) = &body.root_hint_hex {
-        pub_map.insert("root_hint".into(), norito::json::Value::from(rh.clone()));
+        let Some(canonical) = canonicalize_hex32_value(rh) else {
+            return Ok(ballot_rejection("root_hint must be 32-byte hex"));
+        };
+        pub_map.insert(
+            "root_hint".into(),
+            norito::json::Value::from(canonical),
+        );
     }
     if let Some(owner) = &body.owner {
         pub_map.insert("owner".into(), norito::json::Value::from(owner.clone()));
@@ -434,9 +512,12 @@ pub async fn handle_gov_ballot_zk_v1(
         );
     }
     if let Some(nullifier_hex) = &body.nullifier_hex {
+        let Some(canonical) = canonicalize_hex32_value(nullifier_hex) else {
+            return Ok(ballot_rejection("nullifier must be 32-byte hex"));
+        };
         pub_map.insert(
             "nullifier_hex".into(),
-            norito::json::Value::from(nullifier_hex.clone()),
+            norito::json::Value::from(canonical),
         );
     }
     let public_inputs_json = norito::json::to_json(&norito::json::Value::Object(pub_map))
@@ -1871,7 +1952,10 @@ pub async fn handle_gov_ballot_zk(
     )?;
     let public_inputs = match public {
         None => norito::json::Value::Object(norito::json::Map::new()),
-        Some(norito::json::Value::Object(map)) => {
+        Some(norito::json::Value::Object(mut map)) => {
+            if let Err(reason) = normalize_zk_ballot_public_inputs(&mut map) {
+                return Ok(ballot_rejection(&reason));
+            }
             let has_owner = hint_present(&map, "owner");
             let has_amount = hint_present(&map, "amount");
             let has_duration = hint_present(&map, "duration_blocks");
@@ -3159,6 +3243,108 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ballot_zk_rejects_alias_conflicts() {
+        let (state, queue, chain_id) = mk_basic_context();
+        let chain_id_str = chain_id.as_str().to_string();
+        let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
+        let mut map = norito::json::Map::new();
+        map.insert(
+            "rootHint".to_string(),
+            norito::json::Value::from("aa".repeat(32)),
+        );
+        map.insert(
+            "root_hint".to_string(),
+            norito::json::Value::from("bb".repeat(32)),
+        );
+        let dto = ZkBallotDto {
+            authority: ACCOUNT_AUTHORITY.to_string(),
+            chain_id: chain_id_str,
+            election_id: "e1".to_string(),
+            proof_b64,
+            public: Some(norito::json::Value::Object(map)),
+            private_key: None,
+        };
+        let res = handle_gov_ballot_zk(
+            chain_id,
+            queue,
+            state,
+            MaybeTelemetry::disabled(),
+            false,
+            NoritoJson(dto),
+        )
+        .await
+        .expect("handler ok");
+        let body = res.0;
+        assert!(!body.ok);
+        assert!(!body.accepted);
+        assert_eq!(
+            body.reason.as_deref(),
+            Some("public inputs cannot include both rootHint and root_hint")
+        );
+    }
+
+    #[test]
+    fn normalize_zk_ballot_public_inputs_maps_aliases_and_canonicalizes_hex() {
+        let mut map = norito::json::Map::new();
+        map.insert("durationBlocks".to_string(), norito::json::Value::from(10u64));
+        let root_raw = format!("0x{}", "Aa".repeat(32));
+        map.insert(
+            "rootHintHex".to_string(),
+            norito::json::Value::from(root_raw),
+        );
+        let nullifier_raw = format!("blake2b32:{}", "BB".repeat(32));
+        map.insert(
+            "nullifierHex".to_string(),
+            norito::json::Value::from(nullifier_raw),
+        );
+        normalize_zk_ballot_public_inputs(&mut map).expect("normalize");
+        let root_expected = "aa".repeat(32);
+        let nullifier_expected = "bb".repeat(32);
+        assert!(map.contains_key("duration_blocks"));
+        assert!(map.contains_key("root_hint"));
+        assert!(map.contains_key("nullifier_hex"));
+        assert!(!map.contains_key("durationBlocks"));
+        assert!(!map.contains_key("rootHintHex"));
+        assert!(!map.contains_key("nullifierHex"));
+        assert_eq!(
+            map.get("root_hint").and_then(norito::json::Value::as_str),
+            Some(root_expected.as_str())
+        );
+        assert_eq!(
+            map.get("nullifier_hex")
+                .and_then(norito::json::Value::as_str),
+            Some(nullifier_expected.as_str())
+        );
+    }
+
+    #[test]
+    fn normalize_zk_ballot_public_inputs_rejects_alias_conflicts() {
+        let mut map = norito::json::Map::new();
+        map.insert(
+            "rootHint".to_string(),
+            norito::json::Value::from("aa".repeat(32)),
+        );
+        map.insert(
+            "root_hint".to_string(),
+            norito::json::Value::from("bb".repeat(32)),
+        );
+        let err = normalize_zk_ballot_public_inputs(&mut map).expect_err("conflict");
+        assert!(err.contains("rootHint"));
+        assert!(err.contains("root_hint"));
+    }
+
+    #[test]
+    fn normalize_zk_ballot_public_inputs_rejects_invalid_hex() {
+        let mut map = norito::json::Map::new();
+        map.insert(
+            "root_hint".to_string(),
+            norito::json::Value::from("not-hex"),
+        );
+        let err = normalize_zk_ballot_public_inputs(&mut map).expect_err("invalid hex");
+        assert_eq!(err, "root_hint must be 32-byte hex");
+    }
+
+    #[tokio::test]
     async fn gov_get_tally_applies_conviction_factor() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -3588,6 +3774,44 @@ mod tests {
             v.get("tx_instructions")
                 .and_then(|x| x.as_array())
                 .is_some()
+        );
+    }
+
+    #[cfg(feature = "zk-ballot")]
+    #[tokio::test]
+    async fn ballot_zk_v1_rejects_invalid_root_hint_hex() {
+        let (state, queue, chain_id) = mk_basic_context();
+        let chain_id_str = chain_id.as_str().to_string();
+        let dto = super::ZkBallotV1Dto {
+            authority: ACCOUNT_AUTHORITY.to_string(),
+            chain_id: chain_id_str,
+            election_id: "ref-1".to_string(),
+            backend: "halo2/ipa".to_string(),
+            envelope_b64: base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]),
+            root_hint_hex: Some("invalid".to_string()),
+            owner: None,
+            amount: None,
+            duration_blocks: None,
+            direction: None,
+            nullifier_hex: None,
+            private_key: None,
+        };
+        let res = super::handle_gov_ballot_zk_v1(
+            chain_id,
+            queue,
+            state,
+            MaybeTelemetry::disabled(),
+            false,
+            crate::NoritoJson(dto),
+        )
+        .await
+        .expect("handler ok");
+        let body = res.0;
+        assert!(!body.ok);
+        assert!(!body.accepted);
+        assert_eq!(
+            body.reason.as_deref(),
+            Some("root_hint must be 32-byte hex")
         );
     }
 

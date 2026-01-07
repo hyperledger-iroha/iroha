@@ -55,7 +55,7 @@ iroha_smart_contract_codec = { path = "crates/iroha_smart_contract_codec" }
 iroha_trigger = { path = "crates/iroha_trigger" }
 iroha_trigger_derive = { path = "crates/iroha_trigger_derive" }
 
-iroha_data_model = { path = "crates/iroha_data_model", default-features = false, features = ["json", "governance", "http", "bridge"] }
+iroha_data_model = { path = "crates/iroha_data_model", default-features = false, features = ["json", "governance", "http", "bridge", "bls"] }
 iroha_executor_data_model = { path = "crates/iroha_executor_data_model" }
 
 iroha_test_network = { path = "crates/iroha_test_network" }

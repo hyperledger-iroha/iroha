@@ -14,8 +14,7 @@ use iroha_data_model::{
         AppleAppAttestProof, OfflineAllowanceCommitment, OfflineBalanceProof, OfflinePlatformProof,
         OfflinePlatformTokenSnapshot, OfflineProofRequestReplay, OfflineSpendReceipt,
         OfflineToOnlineTransfer, OfflineTransferRecord, OfflineTransferStatus,
-        OfflineWalletCertificate, OfflineWalletPolicy, PoseidonDigest,
-        canonical_app_attest_key_id,
+        OfflineWalletCertificate, OfflineWalletPolicy, PoseidonDigest, canonical_app_attest_key_id,
     },
 };
 use norito::{
@@ -442,8 +441,8 @@ impl PlatformProofSpec {
                 assertion_b64,
                 challenge_hash_hex,
             } => {
-                let key_id = canonical_app_attest_key_id(key_id)
-                    .wrap_err("invalid App Attest key id")?;
+                let key_id =
+                    canonical_app_attest_key_id(key_id).wrap_err("invalid App Attest key id")?;
                 let assertion = BASE64
                     .decode(assertion_b64)
                     .wrap_err("invalid App Attest assertion base64")?;

@@ -352,11 +352,12 @@ pub mod isi {
             });
         }
 
-        let columns = crate::zk::extract_pasta_instance_columns_bytes(proof_bytes).ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "failed to extract vote public inputs".into(),
-            )
-        })?;
+        let columns =
+            crate::zk::extract_pasta_instance_columns_bytes(proof_bytes).ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "failed to extract vote public inputs".into(),
+                )
+            })?;
         Ok(VotePublicInputs {
             columns,
             envelope: None,
@@ -9349,16 +9350,9 @@ pub mod isi {
         fn extract_vote_public_inputs_handles_halo2_envelope() {
             use iroha_zkp_halo2::Halo2ProofEnvelope;
 
-            let inputs = vec![
-                [1u8; 32],
-                [2u8; 32],
-                [3u8; 32],
-                [4u8; 32],
-                [5u8; 32],
-            ];
-            let halo_env =
-                Halo2ProofEnvelope::new(18, 1, 1, 0, inputs.clone(), vec![0xaa])
-                    .expect("halo2 envelope");
+            let inputs = vec![[1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32]];
+            let halo_env = Halo2ProofEnvelope::new(18, 1, 1, 0, inputs.clone(), vec![0xaa])
+                .expect("halo2 envelope");
             let proof_bytes = halo_env.to_bytes();
             let columns: Vec<Vec<[u8; 32]>> = inputs.iter().cloned().map(|v| vec![v]).collect();
             let public_inputs = flatten_instance_columns(&columns);
@@ -9371,8 +9365,7 @@ pub mod isi {
             );
             let payload = norito::to_bytes(&envelope).expect("encode envelope");
 
-            let parsed = extract_vote_public_inputs("halo2/ipa", &payload)
-                .expect("extract inputs");
+            let parsed = extract_vote_public_inputs("halo2/ipa", &payload).expect("extract inputs");
             assert_eq!(parsed.columns, columns);
             assert!(parsed.envelope.is_some());
 
@@ -9429,9 +9422,8 @@ pub mod isi {
                 Vec::new(),
                 Vec::new(),
             );
-            let resolved =
-                resolve_vk_commitment(&attachment, Some(&envelope), &stx)
-                    .expect("resolve vk commitment");
+            let resolved = resolve_vk_commitment(&attachment, Some(&envelope), &stx)
+                .expect("resolve vk commitment");
             assert_eq!(resolved, Some(commitment));
         }
 
@@ -9510,8 +9502,7 @@ pub mod isi {
             assert_eq!(ballot_vk, vk_box);
             assert_eq!(ballot_rec.commitment, commitment);
 
-            let tally_att =
-                ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id.clone());
+            let tally_att = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id.clone());
             let (tally_id, tally_vk, tally_rec) =
                 resolve_tally_vk(&st, &tally_att, &stx).expect("resolve tally vk");
             assert_eq!(tally_id, vk_id);
