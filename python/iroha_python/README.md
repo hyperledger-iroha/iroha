@@ -765,7 +765,7 @@ without bespoke parsing:
 from iroha_python import ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="admin-token")
-uaid_literal = "aabb" * 16  # raw hex accepted; the helper normalises to `uaid:<hex>`
+uaid_literal = "aabb" * 16  # raw hex (LSB=1) accepted; helper normalises to `uaid:<hex>`
 
 portfolio = client.get_uaid_portfolio_typed(uaid_literal)
 print("UAID", portfolio.uaid, "positions", portfolio.total_positions)
@@ -808,10 +808,10 @@ client.revoke_space_directory_manifest(
 )
 ```
 
-All helpers accept raw hex or `uaid:<hex>` literals, normalise query parameters, and return rich
-dataclasses (`UaidPortfolioSnapshot`, `UaidBindingsSnapshot`, `SpaceDirectoryManifestList`) so
-callers can render dashboards or build evidence bundles for the NX-16 rollout with deterministic
-parsing.
+All helpers accept raw hex (LSB=1) or `uaid:<hex>` literals, normalise query parameters, and
+return rich dataclasses (`UaidPortfolioSnapshot`, `UaidBindingsSnapshot`,
+`SpaceDirectoryManifestList`) so callers can render dashboards or build evidence bundles for the
+NX-16 rollout with deterministic parsing.
 
 ## Trigger lifecycle walkthrough
 

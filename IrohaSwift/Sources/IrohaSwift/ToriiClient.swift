@@ -5344,6 +5344,7 @@ fileprivate func normalizeGovernanceZkPublicInputs(_ inputs: [String: ToriiJSONV
             "\(field) must include owner, amount, and duration_blocks when providing lock hints."
         )
     }
+    try ensureGovernanceZkOwnerCanonical(normalized, field: field)
     return normalized
 }
 
@@ -5388,6 +5389,48 @@ fileprivate func canonicalizeZkBallotHexHint(_ raw: String, field: String) throw
         throw ToriiClientError.invalidPayload("\(field) must be a 32-byte hex string.")
     }
     return trimmed.lowercased()
+}
+
+fileprivate func ensureGovernanceZkOwnerCanonical(_ inputs: [String: ToriiJSONValue],
+                                                  field: String) throws {
+    guard let value = inputs["owner"] else { return }
+    if case .null = value { return }
+    guard case let .string(owner) = value else {
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
+    }
+    let canonical = try canonicalizeGovernanceZkOwnerLiteral(owner, field: field)
+    if canonical != owner {
+        throw ToriiClientError.invalidPayload("\(field).owner must use canonical account id form.")
+    }
+}
+
+fileprivate func canonicalizeGovernanceZkOwnerLiteral(_ raw: String, field: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, trimmed == raw else {
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
+    }
+    if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
+    }
+    let parts = trimmed.split(separator: "@", omittingEmptySubsequences: false)
+    guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
+    }
+    let addressPart = String(parts[0])
+    let domainPart = String(parts[1])
+    let canonicalDomain = try AccountAddress.canonicalizeDomainLabel(domainPart)
+    let (address, format) = try AccountAddress.parseAny(
+        addressPart,
+        expectedPrefix: 0x02F1
+    )
+    guard format == .ih58 else {
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
+    }
+    guard address.matchesDomainLabel(canonicalDomain) else {
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
+    }
+    let ih58 = try address.toIH58(networkPrefix: 0x02F1)
+    return "\(ih58)@\(canonicalDomain)"
 }
 
 fileprivate func governanceZkHintPresent(_ value: ToriiJSONValue?) -> Bool {
@@ -8494,6 +8537,10 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let allHex = rawHex.unicodeScalars.allSatisfy { hexSet.contains($0) }
         guard allHex else {
             throw ToriiClientError.invalidPayload("uaid must contain only hex characters.")
+        }
+        let lastChar = rawHex.lowercased().suffix(1)
+        guard ["1", "3", "5", "7", "9", "b", "d", "f"].contains(String(lastChar)) else {
+            throw ToriiClientError.invalidPayload("uaid must have least significant bit set to 1.")
         }
         return "uaid:\(rawHex.lowercased())"
     }

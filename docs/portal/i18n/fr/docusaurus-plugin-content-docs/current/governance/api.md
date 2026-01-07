@@ -31,7 +31,7 @@ Endpoints
       "abi_hash": "blake2b32:..." | "...64hex",
       "abi_version": "1",
       "window": { "lower": 12345, "upper": 12400 },
-      "authority": "alice@wonderland?",
+      "authority": "ih58…@wonderland?",
       "private_key": "...?"
     }
   - Reponse (JSON):
@@ -87,7 +87,7 @@ Cap de taille de code
   - Notes: les re-votes sont en extension seule - un nouveau ballot ne peut pas reduire l'amount ou l'expiry du verrou existant. Le `owner` doit egaler l'authority de la transaction. La duree minimale est `conviction_step_blocks`.
 
 - POST `/v1/gov/finalize`
-  - Requete: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "alice@wonderland?", "private_key": "...?" }
+  - Requete: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58…@wonderland?", "private_key": "...?" }
   - Reponse: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - Effet on-chain (scaffold actuel): enacter une proposition de deploy approuvee insere un `ContractManifest` minimal cle `code_hash` avec l'`abi_hash` attendu et marque la proposition Enacted. Si un manifeste existe deja pour le `code_hash` avec un `abi_hash` different, l'enactment est rejete.
   - Notes:
@@ -96,7 +96,7 @@ Cap de taille de code
     - Les verifications de turnout utilisent seulement approve+reject; abstain ne compte pas pour le turnout.
 
 - POST `/v1/gov/enact`
-  - Requete: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "alice@wonderland?", "private_key": "...?" }
+  - Requete: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58…@wonderland?", "private_key": "...?" }
   - Reponse: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Notes: Torii soumet la transaction signee quand `authority`/`private_key` sont fournis; sinon il renvoie un squelette pour signature et soumission client. Le preimage est optionnel et informatif pour l'instant.
 
@@ -236,7 +236,7 @@ Balayage d'unlocks (Operateur/Audit)
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x...64hex?",
-      "owner": "alice@wonderland?",
+      "owner": "ih58…@wonderland?",
       "nullifier": "blake2b32:...64hex?"
     }
   - Reponse: { "ok": true, "accepted": true, "tx_instructions": [{...}] }

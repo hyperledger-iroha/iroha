@@ -98,8 +98,8 @@ e registram eventos de ciclo de vida no world state (`iroha_core::state::space_d
    `--reason` preenche `entries[*].notes` para registros que omitiram notas do operador.
 
 3. **Expirar** manifestos que atingiram o fim de vida programado ou **revogar**
-   UAIDs sob demanda. Ambos os comandos aceitam `--uaid uaid:<hex>` e o id numerico
-   do dataspace:
+   UAIDs sob demanda. Ambos os comandos aceitam `--uaid uaid:<hex>` ou um digest
+   hex de 64 caracteres (LSB=1) e o id numerico do dataspace:
 
    ```bash
    iroha space-directory manifest expire \

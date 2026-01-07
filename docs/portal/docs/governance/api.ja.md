@@ -33,7 +33,7 @@ translation_last_reviewed: 2026-01-01
       "abi_hash": "blake2b32:..." | "...64hex",
       "abi_version": "1",
       "window": { "lower": 12345, "upper": 12400 },
-      "authority": "alice@wonderland?",
+      "authority": "ih58…@wonderland?",
       "private_key": "...?"
     }
   - レスポンス (JSON):
@@ -89,7 +89,7 @@ translation_last_reviewed: 2026-01-01
   - 注記: 再投票は延長のみで、新しい ballot は既存ロックの amount/expiry を減らせません。`owner` はトランザクションの authority と一致する必要があります。最小期間は `conviction_step_blocks` です。
 
 - POST `/v1/gov/finalize`
-  - リクエスト: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "alice@wonderland?", "private_key": "...?" }
+  - リクエスト: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58…@wonderland?", "private_key": "...?" }
   - レスポンス: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - オンチェーン効果 (現在のスキャフォールド): 承認済みのdeploy提案をenactすると、`code_hash` をキーにした最小 `ContractManifest` を `abi_hash` 期待値で挿入し、提案を Enacted にします。`code_hash` に異なる `abi_hash` の manifest が既に存在する場合、enactment は拒否されます。
   - 注記:
@@ -98,7 +98,7 @@ translation_last_reviewed: 2026-01-01
     - ターンアウト判定は approve+reject のみを使用し、abstain はカウントしません。
 
 - POST `/v1/gov/enact`
-  - リクエスト: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "alice@wonderland?", "private_key": "...?" }
+  - リクエスト: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58…@wonderland?", "private_key": "...?" }
   - レスポンス: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - 注記: `authority`/`private_key` が提供されるとToriiが署名済みトランザクションを送信します。それ以外はクライアントが署名・送信するためのスケルトンを返します。preimage は任意で現状は情報用途です。
 
@@ -238,7 +238,7 @@ Unlock sweep (オペレータ/監査)
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x...64hex?",
-      "owner": "alice@wonderland?",
+      "owner": "ih58…@wonderland?",
       "nullifier": "blake2b32:...64hex?"
     }
   - レスポンス: { "ok": true, "accepted": true, "tx_instructions": [{...}] }

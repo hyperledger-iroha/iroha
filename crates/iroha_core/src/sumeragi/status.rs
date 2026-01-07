@@ -3,7 +3,7 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 #[cfg(test)]
-use std::{cell::Cell, sync::MutexGuard};
+use std::sync::Condvar;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{
@@ -409,36 +409,25 @@ static VIEW_CHANGE_INSTALL_TOTAL: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
 static VIEW_CHANGE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[cfg(test)]
-static VIEW_CHANGE_CAUSE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static VIEW_CHANGE_CAUSE_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static LANE_RELAY_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[cfg(test)]
-static MISSING_BLOCK_FETCH_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static MISSING_BLOCK_FETCH_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static PREVOTE_TIMEOUT_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[cfg(test)]
-static COMMIT_HISTORY_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static COMMIT_HISTORY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
-static KURA_STORE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static KURA_STORE_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
-static DA_GATE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static DA_GATE_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
-static QC_STATUS_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static QC_STATUS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
-static VALIDATION_REJECT_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static VALIDATION_REJECT_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
-static RBC_STATUS_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-#[cfg(test)]
-thread_local! {
-    static COMMIT_HISTORY_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
-    static KURA_STORE_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
-    static DA_GATE_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
-    static QC_STATUS_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
-    static RBC_STATUS_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
-    static MISSING_BLOCK_FETCH_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
-    static VIEW_CHANGE_CAUSE_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
-    static VALIDATION_REJECT_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
-}
+static RBC_STATUS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 
 static AVAILABILITY_STATS: OnceLock<Mutex<AvailabilityStats>> = OnceLock::new();
 static QC_LATENCY_MS: OnceLock<Mutex<BTreeMap<&'static str, u64>>> = OnceLock::new();
@@ -5124,41 +5113,103 @@ pub(crate) fn reset_view_change_proof_counters_for_tests() {
 
 #[cfg(test)]
 #[allow(dead_code)]
-pub(crate) struct TestLockGuard<'a> {
-    guard: Option<MutexGuard<'a, ()>>,
-    held: &'static std::thread::LocalKey<Cell<usize>>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TestLockOwner {
+    Task(tokio::task::Id),
+    Thread(std::thread::ThreadId),
 }
 
 #[cfg(test)]
-impl Drop for TestLockGuard<'_> {
+impl TestLockOwner {
+    fn current() -> Self {
+        // Use task IDs so the guard remains reentrant even when async tests hop threads.
+        tokio::task::try_id()
+            .map(Self::Task)
+            .unwrap_or_else(|| Self::Thread(std::thread::current().id()))
+    }
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct TestLockState {
+    owner: Option<TestLockOwner>,
+    depth: usize,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct TestLock {
+    state: Mutex<TestLockState>,
+    cvar: Condvar,
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) struct TestLockGuard {
+    lock: &'static TestLock,
+    owner: TestLockOwner,
+}
+
+#[cfg(test)]
+impl Drop for TestLockGuard {
     fn drop(&mut self) {
-        self.held.with(|cell| {
-            let count = cell.get();
-            cell.set(count.saturating_sub(1));
-        });
+        let mut state = self
+            .lock
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.owner == Some(self.owner) {
+            state.depth = state.depth.saturating_sub(1);
+            if state.depth == 0 {
+                state.owner = None;
+                self.lock.cvar.notify_one();
+            }
+        }
     }
 }
 
 #[cfg(test)]
-fn reentrant_test_guard<'a>(
-    lock: &'static OnceLock<Mutex<()>>,
-    held: &'static std::thread::LocalKey<Cell<usize>>,
-) -> TestLockGuard<'a> {
-    let already_held = held.with(|cell| {
-        let count = cell.get();
-        cell.set(count.saturating_add(1));
-        count > 0
-    });
-    if already_held {
-        return TestLockGuard { guard: None, held };
-    }
-    let guard = lock
-        .get_or_init(|| Mutex::new(()))
+fn reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> TestLockGuard {
+    let owner = TestLockOwner::current();
+    let lock = lock.get_or_init(TestLock::default);
+    let mut state = lock
+        .state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    TestLockGuard {
-        guard: Some(guard),
-        held,
+    loop {
+        match state.owner {
+            None => {
+                state.owner = Some(owner);
+                state.depth = 1;
+                break;
+            }
+            Some(current) if current == owner => {
+                state.depth = state.depth.saturating_add(1);
+                break;
+            }
+            _ => {
+                state = lock
+                    .cvar
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+        }
+    }
+    TestLockGuard { lock, owner }
+}
+
+#[cfg(test)]
+fn test_lock_depth(lock: &'static OnceLock<TestLock>) -> usize {
+    let owner = TestLockOwner::current();
+    let lock = lock.get_or_init(TestLock::default);
+    let state = lock
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if state.owner == Some(owner) {
+        state.depth
+    } else {
+        0
     }
 }
 
@@ -5180,11 +5231,8 @@ pub(crate) fn lane_relay_test_guard() -> std::sync::MutexGuard<'static, ()> {
 
 #[cfg(test)]
 #[allow(private_interfaces)]
-pub(crate) fn missing_block_fetch_test_guard() -> TestLockGuard<'static> {
-    reentrant_test_guard(
-        &MISSING_BLOCK_FETCH_TEST_LOCK,
-        &MISSING_BLOCK_FETCH_LOCK_HELD,
-    )
+pub(crate) fn missing_block_fetch_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&MISSING_BLOCK_FETCH_TEST_LOCK)
 }
 
 #[cfg(test)]
@@ -5197,44 +5245,44 @@ pub(crate) fn prevote_timeout_test_guard() -> std::sync::MutexGuard<'static, ()>
 
 #[cfg(test)]
 #[allow(private_interfaces)]
-pub(crate) fn view_change_cause_test_guard() -> TestLockGuard<'static> {
-    reentrant_test_guard(&VIEW_CHANGE_CAUSE_TEST_LOCK, &VIEW_CHANGE_CAUSE_LOCK_HELD)
+pub(crate) fn view_change_cause_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&VIEW_CHANGE_CAUSE_TEST_LOCK)
 }
 
 #[cfg(test)]
 #[allow(private_interfaces)]
-pub(crate) fn validation_reject_test_guard() -> TestLockGuard<'static> {
-    reentrant_test_guard(&VALIDATION_REJECT_TEST_LOCK, &VALIDATION_REJECT_LOCK_HELD)
+pub(crate) fn validation_reject_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&VALIDATION_REJECT_TEST_LOCK)
 }
 
 #[cfg(test)]
 #[allow(private_interfaces)]
-pub(crate) fn commit_history_test_guard() -> TestLockGuard<'static> {
-    reentrant_test_guard(&COMMIT_HISTORY_TEST_LOCK, &COMMIT_HISTORY_LOCK_HELD)
+pub(crate) fn commit_history_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&COMMIT_HISTORY_TEST_LOCK)
 }
 
 #[cfg(test)]
 #[allow(private_interfaces)]
-pub(crate) fn kura_store_test_guard() -> TestLockGuard<'static> {
-    reentrant_test_guard(&KURA_STORE_TEST_LOCK, &KURA_STORE_LOCK_HELD)
+pub(crate) fn kura_store_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&KURA_STORE_TEST_LOCK)
 }
 
 #[cfg(test)]
 #[allow(private_interfaces)]
-pub(crate) fn da_gate_test_guard() -> TestLockGuard<'static> {
-    reentrant_test_guard(&DA_GATE_TEST_LOCK, &DA_GATE_LOCK_HELD)
+pub(crate) fn da_gate_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&DA_GATE_TEST_LOCK)
 }
 
 #[cfg(test)]
 #[allow(private_interfaces)]
-pub(crate) fn qc_status_test_guard() -> TestLockGuard<'static> {
-    reentrant_test_guard(&QC_STATUS_TEST_LOCK, &QC_STATUS_LOCK_HELD)
+pub(crate) fn qc_status_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&QC_STATUS_TEST_LOCK)
 }
 
 #[cfg(test)]
 #[allow(private_interfaces)]
-pub(crate) fn rbc_status_test_guard() -> TestLockGuard<'static> {
-    reentrant_test_guard(&RBC_STATUS_TEST_LOCK, &RBC_STATUS_LOCK_HELD)
+pub(crate) fn rbc_status_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&RBC_STATUS_TEST_LOCK)
 }
 
 #[cfg(test)]
@@ -5499,37 +5547,17 @@ mod tests {
 
     #[test]
     fn commit_history_test_guard_is_reentrant() {
-        super::COMMIT_HISTORY_LOCK_HELD.with(|cell| cell.set(0));
-        assert_eq!(
-            super::COMMIT_HISTORY_LOCK_HELD.with(std::cell::Cell::get),
-            0
-        );
-
         let outer = super::commit_history_test_guard();
-        assert!(outer.guard.is_some());
-        assert_eq!(
-            super::COMMIT_HISTORY_LOCK_HELD.with(std::cell::Cell::get),
-            1
-        );
+        assert_eq!(super::test_lock_depth(&super::COMMIT_HISTORY_TEST_LOCK), 1);
 
         {
-            let inner = super::commit_history_test_guard();
-            assert!(inner.guard.is_none());
-            assert_eq!(
-                super::COMMIT_HISTORY_LOCK_HELD.with(std::cell::Cell::get),
-                2
-            );
+            let _inner = super::commit_history_test_guard();
+            assert_eq!(super::test_lock_depth(&super::COMMIT_HISTORY_TEST_LOCK), 2);
         }
 
-        assert_eq!(
-            super::COMMIT_HISTORY_LOCK_HELD.with(std::cell::Cell::get),
-            1
-        );
+        assert_eq!(super::test_lock_depth(&super::COMMIT_HISTORY_TEST_LOCK), 1);
         drop(outer);
-        assert_eq!(
-            super::COMMIT_HISTORY_LOCK_HELD.with(std::cell::Cell::get),
-            0
-        );
+        assert_eq!(super::test_lock_depth(&super::COMMIT_HISTORY_TEST_LOCK), 0);
     }
 
     #[test]

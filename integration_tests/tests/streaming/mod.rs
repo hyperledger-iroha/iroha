@@ -486,8 +486,11 @@ pub fn bundled_streaming_handle_with_accel(
     let flags = BASE_CAPABILITIES;
     let mut codec = actual::StreamingCodec::from_defaults();
     codec.rans_tables_path = repo_rans_tables_path();
+    let max_width = load_bundle_tables_from_toml(&codec.rans_tables_path)
+        .expect("bundle tables must load for width selection")
+        .max_width();
     codec.entropy_mode = EntropyMode::RansBundled;
-    codec.bundle_width = bundle_width.max(2);
+    codec.bundle_width = bundle_width.max(2).min(max_width);
     codec.bundle_accel = accel;
     StreamingHandle::new()
         .with_capabilities(flags)
@@ -544,7 +547,7 @@ pub fn seed_viewer_negotiation(
 #[cfg(test)]
 mod tests {
     use norito::{
-        json::{Number, Value},
+        json::Value,
         streaming::{
             CapabilityFlags, CapabilityRole, HpkeSuite, PrivacyBucketGranularity,
             TransportCapabilityResolution,
@@ -552,6 +555,15 @@ mod tests {
     };
 
     use super::*;
+
+    fn expect_u64_field(map: &norito::json::Map, key: &str) -> u64 {
+        match map.get(key) {
+            Some(Value::Number(value)) => value
+                .as_u64()
+                .unwrap_or_else(|| panic!("{key} must be a non-negative integer")),
+            _ => panic!("{key} must be a number"),
+        }
+    }
 
     #[test]
     fn baseline_snapshot_matches_golden_fixture() {
@@ -670,63 +682,30 @@ mod tests {
             _ => panic!("owner must be a string"),
         };
         assert_eq!(owner, &vector.ticket.owner);
-        let dsid = match ticket_map.get("dsid") {
-            Some(Value::Number(Number::U64(value))) => *value,
-            _ => panic!("dsid must be a number"),
-        };
+        let dsid = expect_u64_field(ticket_map, "dsid");
         assert_eq!(dsid, vector.ticket.dsid);
-        let lane_id = match ticket_map.get("lane_id") {
-            Some(Value::Number(Number::U64(value))) => *value,
-            _ => panic!("lane_id must be a number"),
-        };
+        let lane_id = expect_u64_field(ticket_map, "lane_id");
         assert_eq!(lane_id, u64::from(vector.ticket.lane_id));
-        let settlement_bucket = match ticket_map.get("settlement_bucket") {
-            Some(Value::Number(Number::U64(value))) => *value,
-            _ => panic!("settlement_bucket must be a number"),
-        };
+        let settlement_bucket = expect_u64_field(ticket_map, "settlement_bucket");
         assert_eq!(settlement_bucket, vector.ticket.settlement_bucket);
-        let start_slot = match ticket_map.get("start_slot") {
-            Some(Value::Number(Number::U64(value))) => *value,
-            _ => panic!("start_slot must be a number"),
-        };
+        let start_slot = expect_u64_field(ticket_map, "start_slot");
         assert_eq!(start_slot, vector.ticket.start_slot);
-        let expire_slot = match ticket_map.get("expire_slot") {
-            Some(Value::Number(Number::U64(value))) => *value,
-            _ => panic!("expire_slot must be a number"),
-        };
+        let expire_slot = expect_u64_field(ticket_map, "expire_slot");
         assert_eq!(expire_slot, vector.ticket.expire_slot);
-        let prepaid_teu = match ticket_map.get("prepaid_teu") {
-            Some(Value::Number(Number::U64(value))) => *value,
-            _ => panic!("prepaid_teu must be a number"),
-        };
+        let prepaid_teu = expect_u64_field(ticket_map, "prepaid_teu");
         assert_eq!(
             prepaid_teu,
             u64::try_from(vector.ticket.prepaid_teu).expect("prepaid fits u64")
         );
-        let chunk_teu = match ticket_map.get("chunk_teu") {
-            Some(Value::Number(Number::U64(value))) => *value,
-            _ => panic!("chunk_teu must be a number"),
-        };
+        let chunk_teu = expect_u64_field(ticket_map, "chunk_teu");
         assert_eq!(chunk_teu, u64::from(vector.ticket.chunk_teu));
-        let fanout_quota = match ticket_map.get("fanout_quota") {
-            Some(Value::Number(Number::U64(value))) => *value,
-            _ => panic!("fanout_quota must be a number"),
-        };
+        let fanout_quota = expect_u64_field(ticket_map, "fanout_quota");
         assert_eq!(fanout_quota, u64::from(vector.ticket.fanout_quota));
-        let issued_at = match ticket_map.get("issued_at") {
-            Some(Value::Number(Number::U64(value))) => *value,
-            _ => panic!("issued_at must be a number"),
-        };
+        let issued_at = expect_u64_field(ticket_map, "issued_at");
         assert_eq!(issued_at, vector.ticket.issued_at);
-        let expires_at = match ticket_map.get("expires_at") {
-            Some(Value::Number(Number::U64(value))) => *value,
-            _ => panic!("expires_at must be a number"),
-        };
+        let expires_at = expect_u64_field(ticket_map, "expires_at");
         assert_eq!(expires_at, vector.ticket.expires_at);
-        let capabilities = match ticket_map.get("capabilities") {
-            Some(Value::Number(Number::U64(value))) => *value,
-            _ => panic!("capabilities must be a number"),
-        };
+        let capabilities = expect_u64_field(ticket_map, "capabilities");
         assert_eq!(capabilities, u64::from(vector.ticket.capabilities.bits()));
         let policy = match ticket_map.get("policy") {
             Some(Value::Object(value)) => value,
@@ -744,15 +723,9 @@ mod tests {
             })
             .collect();
         assert_eq!(regions, vec!["us", "jp"]);
-        let max_bandwidth = match policy.get("max_bandwidth_kbps") {
-            Some(Value::Number(Number::U64(value))) => *value,
-            _ => panic!("policy.max_bandwidth_kbps must be a number"),
-        };
+        let max_bandwidth = expect_u64_field(policy, "max_bandwidth_kbps");
         assert_eq!(max_bandwidth, 15_000);
-        let max_relays = match policy.get("max_relays") {
-            Some(Value::Number(Number::U64(value))) => *value,
-            _ => panic!("policy.max_relays must be a number"),
-        };
+        let max_relays = expect_u64_field(policy, "max_relays");
         assert_eq!(
             max_relays,
             u64::from(vector.ticket.policy.as_ref().unwrap().max_relays)
@@ -776,10 +749,7 @@ mod tests {
             Some(Value::String(value)) => value,
             _ => panic!("ticket_revocation.revocation_signature must be a string"),
         };
-        let revocation_reason = match revocation_map.get("reason_code") {
-            Some(Value::Number(Number::U64(value))) => *value,
-            _ => panic!("ticket_revocation.reason_code must be a number"),
-        };
+        let revocation_reason = expect_u64_field(revocation_map, "reason_code");
         assert_eq!(revocation_ticket_id, &expected_ticket_id);
         assert_eq!(revocation_nullifier, &hex_encode(vector.ticket.nullifier));
         assert_eq!(

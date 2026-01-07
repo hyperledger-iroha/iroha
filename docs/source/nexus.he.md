@@ -93,7 +93,7 @@ Manifests של capabilities ו-UAID
 
    `--reason` ממלא `entries[*].notes` עבור רשומות בלי הערות מפעיל.
 
-3. **Expirer** מניפסטים שהגיעו לסוף חיים או **Revoke** UAIDs לפי צורך. שני הפקודות מקבלות `--uaid uaid:<hex>` ו-id מספרי של dataspace:
+3. **Expirer** מניפסטים שהגיעו לסוף חיים או **Revoke** UAIDs לפי צורך. שני הפקודות מקבלות `--uaid uaid:<hex>` או digest hex באורך 64 תווים (LSB=1) ו-id מספרי של dataspace:
 
    ```bash
    iroha space-directory manifest expire \

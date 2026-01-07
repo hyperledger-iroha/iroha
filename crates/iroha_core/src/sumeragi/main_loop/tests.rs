@@ -919,7 +919,8 @@ fn test_sumeragi_config() -> SumeragiConfig {
         zk_finality_k: 0,
         require_precommit_qc: false,
         rbc_chunk_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES,
-        rbc_pending_max_chunks: iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
+        rbc_pending_max_chunks:
+            iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
         rbc_pending_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_BYTES,
         rbc_pending_ttl: Duration::from_millis(
             iroha_config::parameters::defaults::sumeragi::RBC_PENDING_TTL_MS,
@@ -927,8 +928,10 @@ fn test_sumeragi_config() -> SumeragiConfig {
         rbc_session_ttl: Duration::from_secs(
             iroha_config::parameters::defaults::sumeragi::RBC_SESSION_TTL_SECS,
         ),
-        rbc_store_max_sessions: iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
-        rbc_store_soft_sessions: iroha_config::parameters::defaults::sumeragi::RBC_STORE_SOFT_SESSIONS,
+        rbc_store_max_sessions:
+            iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
+        rbc_store_soft_sessions:
+            iroha_config::parameters::defaults::sumeragi::RBC_STORE_SOFT_SESSIONS,
         rbc_store_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_BYTES,
         rbc_store_soft_bytes: iroha_config::parameters::defaults::sumeragi::RBC_STORE_SOFT_BYTES,
         rbc_disk_store_ttl: Duration::from_secs(
@@ -1116,8 +1119,8 @@ struct TestActorHarness {
     shutdown: iroha_futures::supervisor::ShutdownSignal,
     _network_child: iroha_futures::supervisor::Child,
     _gossiper_child: iroha_futures::supervisor::Child,
-    _commit_history_guard: super::status::TestLockGuard<'static>,
-    _rbc_status_guard: super::status::TestLockGuard<'static>,
+    _commit_history_guard: super::status::TestLockGuard,
+    _rbc_status_guard: super::status::TestLockGuard,
     key_pairs: Vec<KeyPair>,
 }
 
@@ -1178,6 +1181,11 @@ async fn test_actor_harness_with_config_and_height_and_kura(
     };
     use iroha_data_model::Registrable as _;
     use iroha_futures::supervisor::ShutdownSignal;
+
+    assert!(
+        consensus_cfg.da_enabled,
+        "DA must remain enabled in sumeragi tests; disabling it can deadlock consensus startup"
+    );
 
     let _commit_history_guard = super::status::commit_history_test_guard();
     let _rbc_status_guard = super::status::rbc_status_test_guard();
@@ -2322,6 +2330,7 @@ async fn block_sync_update_defers_signature_mismatch_when_parent_missing() {
             height: block_height,
             view: 0,
             phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
             retry_window,
             view_change_window: Some(retry_window),
             first_seen: now,
@@ -3054,6 +3063,7 @@ async fn block_sync_update_records_commit_qc_from_cached_qc() {
         block_height,
         view,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         now,
         retry_window,
         Some(retry_window),
@@ -3859,6 +3869,7 @@ async fn block_sync_update_drops_mismatched_commit_votes() {
             height: block_height,
             view: 0,
             phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
             retry_window,
             view_change_window: Some(retry_window),
             first_seen: now,
@@ -4822,7 +4833,6 @@ async fn commit_pipeline_uses_commit_qc_roster_for_validation() {
     status::reset_commit_certs_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = false;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -5636,6 +5646,74 @@ async fn rbc_payload_rebroadcast_skips_derived_roster() {
     assert!(
         harness.background_rx.try_iter().next().is_none(),
         "expected derived roster to skip INIT rebroadcast"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rebroadcast_stalled_rbc_payloads_does_not_derive_roster_for_pending_chunks() {
+    let mut harness = test_actor_harness(4).await;
+    let key = session_key();
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let epoch = harness.actor.epoch_for_height(key.1);
+    let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
+
+    let chunk = crate::sumeragi::consensus::RbcChunk {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch,
+        idx: 0,
+        bytes: payload.clone(),
+    };
+    harness
+        .actor
+        .handle_rbc_chunk(chunk)
+        .expect("chunk stashed");
+    assert!(
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .contains_key(&key)
+    );
+
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session);
+
+    let progress = harness
+        .actor
+        .rebroadcast_stalled_rbc_payloads(Instant::now());
+    assert!(!progress);
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .session_rosters
+            .contains_key(&key),
+        "rebroadcast loop should not derive a roster without an authoritative snapshot"
+    );
+    assert!(
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .contains_key(&key),
+        "pending chunks should remain until a roster snapshot is available"
     );
 
     harness.shutdown.send();
@@ -8378,8 +8456,13 @@ async fn handle_rbc_ready_stashes_when_derived_roster_mismatches() {
     let epoch = harness.actor.epoch_for_height(key.1);
     let payload = b"payload".to_vec();
     let payload_hash = Hash::new(&payload);
-    let session =
-        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch).expect("session");
+    let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
+    session.record_ready(0, vec![0xAA]);
+    session.sent_ready = true;
+    session.delivered = true;
+    session.deliver_sender = Some(0);
+    session.deliver_signature = Some(vec![0xBB]);
 
     harness
         .actor
@@ -8470,6 +8553,10 @@ async fn handle_rbc_ready_stashes_when_derived_roster_mismatches() {
         .get(&key)
         .expect("session");
     assert!(stored.ready_signatures.is_empty());
+    assert!(!stored.sent_ready);
+    assert!(!stored.delivered);
+    assert!(stored.deliver_signature.is_none());
+    assert!(stored.deliver_sender.is_none());
 
     harness.shutdown.send();
 }
@@ -8599,12 +8686,16 @@ async fn handle_rbc_deliver_stashes_when_derived_roster_mismatches() {
     let epoch = harness.actor.epoch_for_height(key.1);
     let payload = b"payload".to_vec();
     let payload_hash = Hash::new(&payload);
-    let mut session =
-        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch).expect("session");
+    let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
 
     assert!(session.record_ready(0, vec![0xA1]));
     assert!(session.record_ready(1, vec![0xA2]));
     assert!(session.record_ready(2, vec![0xA3]));
+    session.sent_ready = true;
+    session.delivered = true;
+    session.deliver_sender = Some(1);
+    session.deliver_signature = Some(vec![0xCC]);
 
     harness
         .actor
@@ -8695,8 +8786,11 @@ async fn handle_rbc_deliver_stashes_when_derived_roster_mismatches() {
         .sessions
         .get(&key)
         .expect("session");
+    assert!(stored.ready_signatures.is_empty());
     assert!(!stored.delivered);
+    assert!(!stored.sent_ready);
     assert!(stored.deliver_signature.is_none());
+    assert!(stored.deliver_sender.is_none());
 
     harness.shutdown.send();
 }
@@ -8757,8 +8851,8 @@ async fn build_rbc_messages_skip_derived_roster() {
     let payload = b"payload".to_vec();
     let payload_hash = Hash::new(&payload);
     let epoch = harness.actor.epoch_for_height(key.1);
-    let session =
-        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch).expect("session");
+    let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
 
     let roster = harness.actor.effective_commit_topology();
     assert!(!roster.is_empty());
@@ -9149,12 +9243,11 @@ async fn recover_block_from_rbc_session_requests_missing_block_created() {
     .expect("session");
     session.test_set_delivered(true);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
-    actor
-        .record_rbc_session_roster(
-            key,
-            actor.effective_commit_topology(),
-            super::RbcRosterSource::Network,
-        );
+    actor.record_rbc_session_roster(
+        key,
+        actor.effective_commit_topology(),
+        super::RbcRosterSource::Network,
+    );
 
     actor.recover_block_from_rbc_session(key);
 
@@ -9273,12 +9366,7 @@ async fn record_rbc_session_roster_overrides_derived_with_authoritative() {
     actor.record_rbc_session_roster(key, roster_b.clone(), super::RbcRosterSource::Network);
 
     assert_eq!(
-        actor
-            .subsystems
-            .da_rbc
-            .rbc
-            .session_rosters
-            .get(&key),
+        actor.subsystems.da_rbc.rbc.session_rosters.get(&key),
         Some(&roster_b)
     );
     assert_eq!(
@@ -9394,15 +9482,20 @@ async fn handle_rbc_init_overrides_derived_roster_mismatch() {
 
     let payload = b"payload".to_vec();
     let payload_hash = Hash::new(&payload);
-    let mut session =
-        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch).expect("session");
+    let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
     let old_sender = 99_u32;
     session.record_ready(old_sender, vec![0xAA]);
     session.sent_ready = true;
     session.delivered = true;
     session.deliver_sender = Some(old_sender);
     session.deliver_signature = Some(vec![0xBB]);
-    actor.subsystems.da_rbc.rbc.sessions.insert(key, session.clone());
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
 
     let roster_a = actor.effective_commit_topology();
     assert!(roster_a.len() > 1, "test requires roster change");
@@ -9767,6 +9860,86 @@ async fn handle_rbc_ready_rejects_chunk_root_mismatch() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_deliver_rejects_chunk_root_mismatch() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let key = session_key();
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        1024,
+        actor.epoch_for_height(key.1),
+    )
+    .expect("session");
+
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+
+    let roster = actor.effective_commit_topology();
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
+    let local_peer = actor.common_config.peer.id().clone();
+    let signer_peer = roster
+        .iter()
+        .find(|peer| *peer != &local_peer)
+        .expect("signer peer")
+        .clone();
+    let signer_idx = roster
+        .iter()
+        .position(|peer| peer == &signer_peer)
+        .expect("signer index");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair");
+
+    let wrong_root = Hash::prehashed([0x98; 32]);
+    let mut deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch: actor.epoch_for_height(key.1),
+        roster_hash: roster_hash(&roster),
+        chunk_root: wrong_root,
+        sender: u32::try_from(signer_idx).expect("signer index fits u32"),
+        signature: Vec::new(),
+    };
+    let preimage =
+        super::rbc_deliver_preimage(&actor.common_config.chain, actor.mode_tag(), &deliver);
+    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    deliver.signature = signature.payload().to_vec();
+
+    actor.handle_rbc_deliver(deliver).expect("deliver handled");
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(!stored.delivered, "mismatched chunk root should be dropped");
+    assert!(
+        !stored.is_invalid(),
+        "mismatched chunk root should not invalidate the session"
+    );
+    assert!(stored.deliver_signature.is_none());
+    assert!(stored.deliver_sender.is_none());
+    assert!(
+        !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "mismatched chunk root should not be stashed"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rbc_ready_gossips_to_sampled_peers() {
     let mut harness = test_actor_harness(4).await;
     harness.actor.block_sync_gossip_limit = 1;
@@ -9784,13 +9957,11 @@ async fn rbc_ready_gossips_to_sampled_peers() {
         .rbc
         .sessions
         .insert(key, session);
-    harness
-        .actor
-        .record_rbc_session_roster(
-            key,
-            harness.actor.effective_commit_topology(),
-            super::RbcRosterSource::Network,
-        );
+    harness.actor.record_rbc_session_roster(
+        key,
+        harness.actor.effective_commit_topology(),
+        super::RbcRosterSource::Network,
+    );
 
     let roster = harness.actor.effective_commit_topology();
     let local_peer = harness.actor.common_config.peer.id().clone();
@@ -9902,11 +10073,9 @@ async fn rbc_ready_uses_session_roster_after_topology_change() {
         .expect("removable peer")
         .clone();
 
-    harness.actor.record_rbc_session_roster(
-        key,
-        roster_a.clone(),
-        super::RbcRosterSource::Network,
-    );
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Network);
 
     let mut ready = crate::sumeragi::consensus::RbcReady {
         block_hash: key.0,
@@ -10155,7 +10324,10 @@ async fn maybe_emit_rbc_deliver_defers_until_authoritative_roster() {
     let required = harness.actor.rbc_deliver_quorum(&topology);
     assert!(required > 0, "ready quorum should be non-zero");
     for idx in 0..required {
-        session.record_ready(u32::try_from(idx).expect("sender fits u32"), vec![idx as u8]);
+        session.record_ready(
+            u32::try_from(idx).expect("sender fits u32"),
+            vec![idx as u8],
+        );
     }
 
     harness
@@ -10214,6 +10386,192 @@ async fn maybe_emit_rbc_deliver_defers_until_authoritative_roster() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn maybe_emit_rbc_deliver_defers_until_chunks_complete() {
+    let mut harness = test_actor_harness(4).await;
+    let key = session_key();
+    let payload = vec![0xAB; 2048];
+    let payload_hash = Hash::new(&payload);
+    let mut session =
+        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0).expect("session");
+
+    let roster = harness.actor.effective_commit_topology();
+    assert!(!roster.is_empty());
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = harness.actor.rbc_deliver_quorum(&topology);
+    assert!(required > 0, "ready quorum should be non-zero");
+    for idx in 0..required {
+        session.record_ready(
+            u32::try_from(idx).expect("sender fits u32"),
+            vec![idx as u8],
+        );
+    }
+
+    let missing_idx = session
+        .chunks
+        .iter()
+        .position(|entry| entry.is_some())
+        .expect("chunk present");
+    session.chunks[missing_idx] = None;
+    session.received_chunks = session.received_chunks.saturating_sub(1);
+    assert!(session.received_chunks() < session.total_chunks());
+
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session);
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+
+    let _ = harness.background_rx.try_iter().count();
+    harness
+        .actor
+        .maybe_emit_rbc_deliver(key)
+        .expect("maybe emit deliver");
+    let stored = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(!stored.delivered);
+    assert!(stored.deliver_signature.is_none());
+    assert!(
+        harness.background_rx.try_iter().next().is_none(),
+        "expected missing chunks to defer DELIVER"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_emit_rbc_deliver_rejects_chunk_root_mismatch() {
+    let mut harness = test_actor_harness(4).await;
+    let key = session_key();
+    let payload = vec![0xAB; 2048];
+    let payload_hash = Hash::new(&payload);
+    let mut session =
+        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0).expect("session");
+
+    let roster = harness.actor.effective_commit_topology();
+    assert!(!roster.is_empty());
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = harness.actor.rbc_deliver_quorum(&topology);
+    assert!(required > 0, "ready quorum should be non-zero");
+    for idx in 0..required {
+        session.record_ready(
+            u32::try_from(idx).expect("sender fits u32"),
+            vec![idx as u8],
+        );
+    }
+
+    session.expected_chunk_root = Some(Hash::prehashed([0xEE; 32]));
+    assert!(
+        session.chunk_root().is_some(),
+        "precondition: session should have a computed chunk root"
+    );
+    assert_ne!(
+        session.expected_chunk_root,
+        session.chunk_root(),
+        "precondition: chunk root mismatch should be present"
+    );
+
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session);
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+
+    harness
+        .actor
+        .maybe_emit_rbc_deliver(key)
+        .expect("maybe emit deliver");
+    let stored = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(stored.is_invalid());
+    assert!(!stored.delivered);
+    assert!(stored.deliver_signature.is_none());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_session_ttl_prunes_stale_sessions() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.rbc_session_ttl = Duration::from_secs(1);
+    let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
+    let key = session_key();
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let session =
+        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0).expect("session");
+
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+    let roster = harness.actor.effective_commit_topology();
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+    harness.actor.update_rbc_status_entry(key, &session, false);
+
+    let stale_time = SystemTime::now() - Duration::from_secs(2);
+    harness.actor.subsystems.da_rbc.rbc.status_handle.update_at(
+        key,
+        session.total_chunks(),
+        session.received_chunks(),
+        u64::try_from(session.ready_signatures.len()).unwrap_or(u64::MAX),
+        session.delivered,
+        session.payload_hash(),
+        stale_time,
+        session.recovered_from_disk(),
+    );
+
+    assert!(harness.actor.prune_stale_rbc_sessions(SystemTime::now()));
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .contains_key(&key)
+    );
+    assert!(
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .status_handle
+            .get(&key)
+            .is_none()
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn seed_rbc_session_flushes_pending_ready() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.rbc_chunk_max_bytes = 1024;
@@ -10238,11 +10596,7 @@ async fn seed_rbc_session_flushes_pending_ready() {
     let roster = harness.actor.effective_commit_topology();
     harness
         .actor
-        .record_rbc_session_roster(
-            session_key,
-            roster,
-            super::RbcRosterSource::Network,
-        );
+        .record_rbc_session_roster(session_key, roster, super::RbcRosterSource::Network);
     let mut ready = harness
         .actor
         .build_rbc_ready(session_key, &session)
@@ -11398,7 +11752,10 @@ async fn commit_qc_rehydrates_pending_from_kura() {
         .expect("pending rehydrated");
     assert_eq!(pending.height, height);
     assert_eq!(pending.view, 0);
-    assert!(pending.kura_persisted, "rehydrated pending is already persisted");
+    assert!(
+        pending.kura_persisted,
+        "rehydrated pending is already persisted"
+    );
     assert!(
         pending.commit_qc_seen,
         "rehydrated pending should mark commit certificate seen"
@@ -14894,6 +15251,7 @@ fn touch_missing_block_request_retries_after_window() {
         height,
         0,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         now,
         window,
         Some(window)
@@ -14905,6 +15263,7 @@ fn touch_missing_block_request_retries_after_window() {
         height,
         0,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         now,
         window,
         Some(window)
@@ -14923,6 +15282,7 @@ fn touch_missing_block_request_retries_after_window() {
         height,
         0,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         later,
         window,
         Some(window)
@@ -14945,6 +15305,7 @@ fn touch_missing_block_request_preserves_first_seen_and_last_requested_on_backof
         height,
         0,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         start,
         window,
         Some(window)
@@ -14961,6 +15322,7 @@ fn touch_missing_block_request_preserves_first_seen_and_last_requested_on_backof
         height,
         0,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         mid,
         window,
         Some(window)
@@ -14977,6 +15339,7 @@ fn touch_missing_block_request_preserves_first_seen_and_last_requested_on_backof
         height,
         0,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         retry,
         window,
         Some(window)
@@ -14999,6 +15362,7 @@ fn touch_missing_block_request_updates_height_to_max() {
         2,
         0,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         start,
         window,
         Some(window)
@@ -15009,6 +15373,7 @@ fn touch_missing_block_request_updates_height_to_max() {
         9,
         0,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         start + Duration::from_millis(5),
         window,
         Some(window)
@@ -15017,6 +15382,65 @@ fn touch_missing_block_request_updates_height_to_max() {
     assert_eq!(stats.height, 9);
     assert_eq!(stats.first_seen, start);
     assert_eq!(stats.last_requested, start);
+}
+
+#[test]
+fn touch_missing_block_request_prefers_consensus_priority_windows() {
+    let mut requests = BTreeMap::new();
+    let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCE; 32]));
+    let now = Instant::now();
+    let background_retry = Duration::from_millis(10);
+    let consensus_retry = Duration::from_millis(40);
+    let background_view_change = Duration::from_millis(20);
+    let consensus_view_change = Duration::from_millis(60);
+
+    assert!(super::touch_missing_block_request(
+        &mut requests,
+        hash,
+        4,
+        0,
+        Phase::Commit,
+        super::MissingBlockPriority::Background,
+        now,
+        background_retry,
+        Some(background_view_change)
+    ));
+    let stats = requests.get(&hash).expect("entry exists");
+    assert_eq!(stats.priority, super::MissingBlockPriority::Background);
+
+    let upgraded = now + Duration::from_millis(1);
+    assert!(super::touch_missing_block_request(
+        &mut requests,
+        hash,
+        4,
+        0,
+        Phase::Commit,
+        super::MissingBlockPriority::Consensus,
+        upgraded,
+        consensus_retry,
+        Some(consensus_view_change),
+    ));
+    let stats = requests.get(&hash).expect("entry exists");
+    assert_eq!(stats.priority, super::MissingBlockPriority::Consensus);
+    assert_eq!(stats.retry_window, consensus_retry);
+    assert_eq!(stats.view_change_window, Some(consensus_view_change));
+
+    let lower = upgraded + Duration::from_millis(1);
+    super::touch_missing_block_request(
+        &mut requests,
+        hash,
+        4,
+        0,
+        Phase::Commit,
+        super::MissingBlockPriority::Background,
+        lower,
+        Duration::from_millis(5),
+        Some(Duration::from_millis(5)),
+    );
+    let stats = requests.get(&hash).expect("entry exists");
+    assert_eq!(stats.priority, super::MissingBlockPriority::Consensus);
+    assert_eq!(stats.retry_window, consensus_retry);
+    assert_eq!(stats.view_change_window, Some(consensus_view_change));
 }
 
 #[test]
@@ -15033,6 +15457,7 @@ fn clear_missing_block_request_resets_retry_window() {
         height,
         0,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         start,
         window,
         Some(window)
@@ -15043,6 +15468,7 @@ fn clear_missing_block_request_resets_retry_window() {
         height,
         0,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         start + Duration::from_millis(10),
         window,
         Some(window)
@@ -15058,6 +15484,7 @@ fn clear_missing_block_request_resets_retry_window() {
         height,
         0,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         retry_instant,
         window,
         Some(window)
@@ -15107,6 +15534,7 @@ fn plan_missing_block_fetch_requests_targets_on_first_seen() {
         height,
         0,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         &signers,
         &topology,
         now,
@@ -15146,6 +15574,7 @@ fn missing_block_view_change_triggers_once_after_dwell() {
         height,
         0,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         start,
         window,
         Some(window)
@@ -15195,6 +15624,7 @@ async fn retry_missing_block_requests_triggers_view_change_after_dwell() {
             height,
             view,
             phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
             retry_window,
             view_change_window: Some(retry_window),
             first_seen: dwell_start,
@@ -15241,6 +15671,7 @@ fn plan_missing_block_fetch_respects_backoff_window() {
         height,
         0,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         &signers,
         &topology,
         now,
@@ -15260,6 +15691,7 @@ fn plan_missing_block_fetch_respects_backoff_window() {
         height,
         0,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         &signers,
         &topology,
         now + Duration::from_millis(5),
@@ -15299,6 +15731,7 @@ fn plan_missing_block_fetch_falls_back_to_commit_topology() {
         height,
         0,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         &signers,
         &topology,
         now,
@@ -15346,6 +15779,7 @@ fn plan_missing_block_fetch_falls_back_after_signer_attempts() {
             height,
             view: 0,
             phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
             retry_window: window,
             view_change_window: Some(window),
             first_seen: now - window,
@@ -15361,6 +15795,7 @@ fn plan_missing_block_fetch_falls_back_after_signer_attempts() {
         height,
         0,
         Phase::Commit,
+        super::MissingBlockPriority::Consensus,
         &signers,
         &topology,
         now,
@@ -15720,6 +16155,7 @@ fn defer_qc_for_missing_block_records_backoff_metrics() {
             height,
             view: 2,
             phase: crate::sumeragi::consensus::Phase::Prepare,
+            priority: super::MissingBlockPriority::Consensus,
             retry_window: window,
             view_change_window: Some(window),
             first_seen,
@@ -21794,7 +22230,6 @@ async fn block_created_skips_pending_insert_while_processing() {
 async fn block_created_requests_missing_parent_on_height_gap() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = false;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -21826,6 +22261,17 @@ async fn block_created_requests_missing_parent_on_height_gap() {
         request.height,
         block_height.saturating_sub(1),
         "missing-parent request should track parent height"
+    );
+    let expected_window = actor.quorum_timeout(actor.runtime_da_enabled());
+    assert_eq!(
+        request.priority,
+        super::MissingBlockPriority::Background,
+        "missing-parent fetch should be treated as background priority"
+    );
+    assert_eq!(
+        request.view_change_window,
+        Some(expected_window),
+        "gap-1 missing-parent requests should allow view-change after quorum timeout"
     );
 
     harness.shutdown.send();
@@ -28517,7 +28963,6 @@ async fn conflicting_vote_does_not_override_first() {
 async fn stale_view_accepts_precommit_vote_when_missing_block_requested() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = false;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
     let height = 5;
@@ -28540,6 +28985,7 @@ async fn stale_view_accepts_precommit_vote_when_missing_block_requested() {
             height,
             view: stale_view,
             phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
             retry_window,
             view_change_window: None,
             first_seen: now,
@@ -28619,6 +29065,7 @@ async fn block_sync_update_accepts_stale_view_when_missing_block_requested() {
             height,
             view: stale_view,
             phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
             retry_window,
             view_change_window: None,
             first_seen: now,

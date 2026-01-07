@@ -26,7 +26,7 @@ Endpoints
       "abi_hash": "blake2b32:…" | "…64hex",
       "abi_version": "1",
       "window": { "lower": 12345, "upper": 12400 },
-      "authority": "alice@wonderland?",
+      "authority": "ih58…@wonderland?",
       "private_key": "…?"
     }
   - Response (JSON):
@@ -82,7 +82,7 @@ Code Size Cap
   - Notes: Re-votes are extend-only — a new ballot cannot reduce the existing lock’s amount or expiry. The `owner` must equal the transaction authority. Minimum duration is `conviction_step_blocks`.
 
 - POST `/v1/gov/finalize`
-  - Request: { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "alice@wonderland?", "private_key": "…?" }
+  - Request: { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "ih58…@wonderland?", "private_key": "…?" }
   - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }
   - On-chain effect (current scaffold): enacting an approved deploy proposal inserts a minimal `ContractManifest` keyed by `code_hash` with the expected `abi_hash` and marks the proposal Enacted. If a manifest already exists for the `code_hash` with a different `abi_hash`, enactment is rejected.
   - Notes:
@@ -91,7 +91,7 @@ Code Size Cap
     - Turnout checks use approve+reject only; abstain does not count toward turnout.
 
 - POST `/v1/gov/enact`
-  - Request: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "alice@wonderland?", "private_key": "…?" }
+  - Request: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58…@wonderland?", "private_key": "…?" }
   - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…EnactReferendum", "payload_hex": "…" }] }
   - Notes: Torii submits the signed transaction when `authority`/`private_key` are provided; otherwise it returns a skeleton for clients to sign and submit. The preimage is optional and currently informational.
 
@@ -231,7 +231,7 @@ Unlock Sweep (Operator/Audit)
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x…64hex?",
-      "owner": "alice@wonderland?",
+      "owner": "ih58…@wonderland?",          // canonical AccountId (IH58@domain)
       "amount": "100?",
       "duration_blocks": 6000?,
       "direction": "Aye|Nay|Abstain?",
@@ -251,7 +251,7 @@ Unlock Sweep (Operator/Audit)
         "backend": "halo2/ipa",
         "envelope_bytes": "AAECAwQ=",   // base64 of ZK1 or H2* container
         "root_hint": null,                // optional 32-byte hex string (eligibility root)
-        "owner": null,                    // optional AccountId when circuit commits owner
+        "owner": null,                    // optional canonical AccountId (IH58@domain)
         "nullifier": null,                // optional 32-byte hex string (nullifier hint)
         "amount": "100",                  // optional lock amount hint (decimal string)
         "duration_blocks": 6000,          // optional lock duration hint

@@ -31,7 +31,7 @@ Endpoints
       "abi_hash": "blake2b32:..." | "...64hex",
       "abi_version": "1",
       "window": { "lower": 12345, "upper": 12400 },
-      "authority": "alice@wonderland?",
+      "authority": "ih58…@wonderland?",
       "private_key": "...?"
     }
   - תשובה (JSON):
@@ -87,7 +87,7 @@ API חוזים (deploy)
   - הערות: re-votes הם extend-only - ballot חדש לא יכול להקטין amount או expiry של lock קיים. ה-`owner` חייב להיות זהה ל-authority של העסקה. משך מינימלי הוא `conviction_step_blocks`.
 
 - POST `/v1/gov/finalize`
-  - בקשה: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "alice@wonderland?", "private_key": "...?" }
+  - בקשה: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "ih58…@wonderland?", "private_key": "...?" }
   - תשובה: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - אפקט on-chain (scaffold נוכחי): enact של הצעת deploy מאושרת מוסיף `ContractManifest` מינימלי במפתח `code_hash` עם `abi_hash` הצפוי ומסמן את ההצעה כ-Enacted. אם manifest כבר קיים עבור `code_hash` עם `abi_hash` שונה, ה-enactment נדחה.
   - הערות:
@@ -96,7 +96,7 @@ API חוזים (deploy)
     - בדיקות turnout משתמשות רק ב-approve+reject; abstain לא נספר.
 
 - POST `/v1/gov/enact`
-  - בקשה: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "alice@wonderland?", "private_key": "...?" }
+  - בקשה: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "ih58…@wonderland?", "private_key": "...?" }
   - תשובה: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - הערות: Torii מגישה את העסקה החתומה כאשר `authority`/`private_key` מסופקים; אחרת היא מחזירה שלד עבור חתימה והגשה מצד הלקוח. ה-preimage אופציונלי וכרגע אינפורמטיבי.
 
@@ -236,7 +236,7 @@ Unlock sweep (מפעיל/ביקורת)
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
       "root_hint": "0x...64hex?",
-      "owner": "alice@wonderland?",
+      "owner": "ih58…@wonderland?",
       "nullifier": "blake2b32:...64hex?"
     }
   - תשובה: { "ok": true, "accepted": true, "tx_instructions": [{...}] }

@@ -3,7 +3,7 @@ import {
   extractConfidentialGasConfig,
 } from "./config.js";
 import { getNativeBinding } from "./native.js";
-import { normalizeAccountId } from "./normalizers.js";
+import { ensureCanonicalAccountId, normalizeAccountId } from "./normalizers.js";
 import { AccountAddressError } from "./address.js";
 import {
   buildDaIngestRequest,
@@ -13088,13 +13088,16 @@ function normalizeUaidLiteral(value, context = "uaid") {
     throw new TypeError(`${context} must be a non-empty string`);
   }
   let hexPortion;
-  if (trimmed.startsWith("uaid:") || trimmed.startsWith("UAID:")) {
-    hexPortion = trimmed.slice(5);
+  if (trimmed.slice(0, 5).toLowerCase() === "uaid:") {
+    hexPortion = trimmed.slice(5).trim();
   } else {
     hexPortion = trimmed;
   }
   if (hexPortion.length !== 64 || !/^[0-9a-fA-F]+$/.test(hexPortion)) {
     throw new TypeError(`${context} must contain 64 hex characters`);
+  }
+  if (!/[13579bdf]$/i.test(hexPortion)) {
+    throw new TypeError(`${context} must have least significant bit set to 1`);
   }
   return `uaid:${hexPortion.toLowerCase()}`;
 }
@@ -14978,6 +14981,12 @@ function normalizeGovernancePublicInputs(value, name) {
   normalizeGovernancePublicInputHex(normalized, "root_hint", name);
   normalizeGovernancePublicInputHex(normalized, "nullifier", name);
   ensureGovernanceLockHintsComplete(normalized, name);
+  if (
+    Object.prototype.hasOwnProperty.call(normalized, "owner") &&
+    normalized.owner !== null
+  ) {
+    normalized.owner = ensureCanonicalAccountId(normalized.owner, `${name}.owner`);
+  }
   return normalized;
 }
 
@@ -15168,6 +15177,12 @@ function normalizeGovernanceZkBallotV1Payload(input) {
     );
   }
   ensureGovernanceLockHintsComplete(payload, "governanceSubmitZkBallotV1");
+  if (payload.owner !== undefined && payload.owner !== null) {
+    payload.owner = ensureCanonicalAccountId(
+      payload.owner,
+      "governanceSubmitZkBallotV1.owner",
+    );
+  }
   return payload;
 }
 
@@ -15230,6 +15245,15 @@ function normalizeGovernanceZkBallotProofPayload(input) {
     }
   }
   ensureGovernanceLockHintsComplete(normalizedBallot, ballotContext);
+  if (
+    Object.prototype.hasOwnProperty.call(normalizedBallot, "owner") &&
+    normalizedBallot.owner !== null
+  ) {
+    normalizedBallot.owner = ensureCanonicalAccountId(
+      normalizedBallot.owner,
+      `${ballotContext}.owner`,
+    );
+  }
   const payload = {
     authority: requireNonEmptyString(
       record.authority,

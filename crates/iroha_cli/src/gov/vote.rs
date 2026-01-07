@@ -7,6 +7,7 @@ use crate::{
 use clap::ValueEnum;
 use eyre::{Result, eyre};
 use iroha::client::Client;
+use iroha::data_model::account::AccountId;
 use iroha::data_model::isi::{
     InstructionBox,
     governance::{CastPlainBallot, CastZkBallot},
@@ -86,6 +87,24 @@ fn ensure_lock_hints_complete(map: &json::Map) -> Result<()> {
         return Err(eyre!(
             "lock hints must include owner, amount, duration_blocks"
         ));
+    }
+    Ok(())
+}
+
+fn ensure_public_input_owner_canonical(map: &json::Map) -> Result<()> {
+    let Some(value) = map.get("owner") else {
+        return Ok(());
+    };
+    if matches!(value, json::Value::Null) {
+        return Ok(());
+    }
+    let owner = value
+        .as_str()
+        .ok_or_else(|| eyre!("owner must be a canonical account id"))?;
+    let canonical = AccountId::canonicalize(owner)
+        .map_err(|_| eyre!("owner must be a canonical account id"))?;
+    if canonical != owner {
+        return Err(eyre!("owner must use canonical account id form"));
     }
     Ok(())
 }
@@ -300,6 +319,7 @@ impl Run for VoteZkArgs {
             public_obj.insert("nullifier".to_owned(), json_value(&canonical)?);
         }
         ensure_lock_hints_complete(public_obj)?;
+        ensure_public_input_owner_canonical(public_obj)?;
         let body = json_object(vec![
             ("election_id", json_value(&self.election_id)?),
             ("proof_b64", json_value(&self.proof_b64)?),
@@ -674,6 +694,23 @@ mod tests {
         );
         let err = normalize_public_inputs(&mut map).expect_err("invalid hex");
         assert!(err.to_string().contains("root_hint"));
+    }
+
+    #[test]
+    fn public_inputs_reject_noncanonical_owner() {
+        const SIGNATORY: &str =
+            "ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C";
+        let owner_input = format!("{SIGNATORY}@wonderland");
+        let owner = AccountId::from_str(&owner_input).expect("valid account id");
+        let address_hex = owner.to_canonical_hex().expect("canonical hex");
+        let noncanonical = format!("{address_hex}@{}", owner.domain());
+        let mut map = json::Map::new();
+        map.insert(
+            "owner".to_string(),
+            json::Value::String(noncanonical),
+        );
+        let err = ensure_public_input_owner_canonical(&map).expect_err("noncanonical owner");
+        assert!(err.to_string().contains("canonical account id form"));
     }
 }
 

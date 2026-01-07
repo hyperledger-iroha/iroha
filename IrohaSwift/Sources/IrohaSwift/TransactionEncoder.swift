@@ -724,6 +724,7 @@ struct SwiftTransactionEncoder {
                 "lock hints must include owner, amount, duration_blocks"
             )
         }
+        try ensureZkBallotOwnerCanonical(normalized)
         let encoder = JSONEncoder()
         if #available(iOS 11.0, macOS 10.13, *) {
             encoder.outputFormatting.insert(.sortedKeys)
@@ -774,6 +775,61 @@ struct SwiftTransactionEncoder {
             )
         }
         return trimmed.lowercased()
+    }
+
+    private static func ensureZkBallotOwnerCanonical(_ inputs: [String: ToriiJSONValue]) throws {
+        guard let value = inputs["owner"] else { return }
+        if case .null = value { return }
+        guard case let .string(owner) = value else {
+            throw TransactionInputError.invalidZkBallotPublicInputs(
+                "owner must be a canonical account id"
+            )
+        }
+        let canonical = try canonicalizeZkBallotOwnerLiteral(owner)
+        if canonical != owner {
+            throw TransactionInputError.invalidZkBallotPublicInputs(
+                "owner must use canonical account id form"
+            )
+        }
+    }
+
+    private static func canonicalizeZkBallotOwnerLiteral(_ raw: String) throws -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed == raw else {
+            throw TransactionInputError.invalidZkBallotPublicInputs(
+                "owner must be a canonical account id"
+            )
+        }
+        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+            throw TransactionInputError.invalidZkBallotPublicInputs(
+                "owner must be a canonical account id"
+            )
+        }
+        let parts = trimmed.split(separator: "@", omittingEmptySubsequences: false)
+        guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
+            throw TransactionInputError.invalidZkBallotPublicInputs(
+                "owner must be a canonical account id"
+            )
+        }
+        let addressPart = String(parts[0])
+        let domainPart = String(parts[1])
+        let canonicalDomain = try AccountAddress.canonicalizeDomainLabel(domainPart)
+        let (address, format) = try AccountAddress.parseAny(
+            addressPart,
+            expectedPrefix: 0x02F1
+        )
+        guard format == .ih58 else {
+            throw TransactionInputError.invalidZkBallotPublicInputs(
+                "owner must be a canonical account id"
+            )
+        }
+        guard address.matchesDomainLabel(canonicalDomain) else {
+            throw TransactionInputError.invalidZkBallotPublicInputs(
+                "owner must be a canonical account id"
+            )
+        }
+        let ih58 = try address.toIH58(networkPrefix: 0x02F1)
+        return "\(ih58)@\(canonicalDomain)"
     }
 
     private static func zkHintPresent(_ value: ToriiJSONValue?) -> Bool {

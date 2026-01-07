@@ -20,6 +20,10 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     decode_pdp_commitment_header,
 )
 
+CANONICAL_OWNER = (
+    "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9@wonderland"
+)
+
 
 class StubResponse:
     def __init__(
@@ -597,7 +601,7 @@ def test_cancel_runtime_upgrade_posts_identifier() -> None:
 
 
 def test_get_uaid_portfolio_parses_payload() -> None:
-    uaid_literal = "UAID:" + "AA" * 32
+    uaid_literal = "UAID:" + "AB" * 32
     session = RecordingSession()
     session.queue(
         StubResponse(
@@ -630,11 +634,18 @@ def test_get_uaid_portfolio_parses_payload() -> None:
 
     response = client.get_uaid_portfolio(uaid_literal)
 
-    assert response.uaid == "uaid:" + "aa" * 32
+    assert response.uaid == "uaid:" + "ab" * 32
     assert response.totals.accounts == 2
     assert response.dataspaces[0].accounts[0].assets[0].quantity == "42"
-    expected_suffix = "/v1/accounts/uaid%3A" + "aa" * 32 + "/portfolio"
+    expected_suffix = "/v1/accounts/uaid%3A" + "ab" * 32 + "/portfolio"
     assert session.calls[0]["url"].endswith(expected_suffix)
+
+
+def test_get_uaid_portfolio_rejects_invalid_lsb() -> None:
+    client = ToriiClient("http://node.test", session=RecordingSession())
+    invalid = "uaid:" + "10" * 32
+    with pytest.raises(RuntimeError, match="least significant bit"):
+        client.get_uaid_portfolio(invalid)
 
 
 def test_get_uaid_bindings_applies_address_format() -> None:
@@ -663,7 +674,7 @@ def test_get_uaid_bindings_applies_address_format() -> None:
 
 
 def test_get_uaid_manifests_parses_payload_and_filters() -> None:
-    uaid_literal = "uaid:" + "cc" * 32
+    uaid_literal = "uaid:" + "cd" * 32
     manifest_hash = "0x" + "dd" * 32
     session = RecordingSession()
     session.queue(
@@ -755,7 +766,7 @@ def test_revoke_space_directory_manifest_posts_payload() -> None:
     result = client.revoke_space_directory_manifest(
         authority="ops@cbdc",
         private_key="ed25519:BBBB",
-        uaid="UAID:" + "22" * 32,
+        uaid="UAID:" + "23" * 32,
         dataspace=3,
         revoked_epoch=4096,
         reason="audit",
@@ -766,7 +777,7 @@ def test_revoke_space_directory_manifest_posts_payload() -> None:
     assert call["method"] == "POST"
     assert call["url"].endswith("/v1/space-directory/manifests/revoke")
     payload = json.loads(call["data"])
-    assert payload["uaid"] == "uaid:" + "22" * 32
+    assert payload["uaid"] == "uaid:" + "23" * 32
     assert payload["dataspace"] == 3
     assert payload["revoked_epoch"] == 4096
     assert payload["reason"] == "audit"
@@ -2219,7 +2230,7 @@ def test_submit_zk_ballot_rejects_deprecated_public_inputs() -> None:
             election_id="election-1",
             proof_b64="AAAA",
             public={
-                "owner": "alice@wonderland",
+                "owner": CANONICAL_OWNER,
                 "amount": "100",
                 "durationBlocks": 5,
             },
@@ -2246,7 +2257,7 @@ def test_submit_zk_ballot_normalizes_public_inputs() -> None:
         election_id="election-1",
         proof_b64="AAAA",
         public={
-            "owner": "alice@wonderland",
+            "owner": CANONICAL_OWNER,
             "amount": "100",
             "duration_blocks": 5,
             "root_hint": f"0x{'Cc' * 32}",
@@ -2272,7 +2283,7 @@ def test_submit_zk_ballot_rejects_invalid_hex_hints() -> None:
             election_id="election-1",
             proof_b64="AAAA",
             public={
-                "owner": "alice@wonderland",
+                "owner": CANONICAL_OWNER,
                 "amount": "100",
                 "duration_blocks": 5,
                 "root_hint": "not-hex",
@@ -2291,7 +2302,26 @@ def test_submit_zk_ballot_rejects_incomplete_lock_hints() -> None:
             chain_id="chain",
             election_id="election-1",
             proof_b64="AAAA",
-            public={"owner": "alice@wonderland"},
+            public={"owner": CANONICAL_OWNER},
+        )
+
+
+def test_submit_zk_ballot_rejects_noncanonical_owner() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload={"ok": True}))
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="canonical account id"):
+        client.submit_zk_ballot(
+            authority="alice@wonderland",
+            chain_id="chain",
+            election_id="election-1",
+            proof_b64="AAAA",
+            public={
+                "owner": "0xdead@wonderland",
+                "amount": "100",
+                "duration_blocks": 5,
+            },
         )
 
 
@@ -2307,7 +2337,25 @@ def test_submit_zk_ballot_v1_rejects_incomplete_lock_hints() -> None:
             election_id="election-1",
             backend="halo2/ipa",
             envelope_b64="AAAA",
-            owner="alice@wonderland",
+            owner=CANONICAL_OWNER,
+        )
+
+
+def test_submit_zk_ballot_v1_rejects_noncanonical_owner() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload={"ok": True}))
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="canonical account id"):
+        client.submit_zk_ballot_v1(
+            authority="alice@wonderland",
+            chain_id="chain",
+            election_id="election-1",
+            backend="halo2/ipa",
+            envelope_b64="AAAA",
+            owner="0xdead@wonderland",
+            amount="100",
+            duration_blocks=5,
         )
 
 

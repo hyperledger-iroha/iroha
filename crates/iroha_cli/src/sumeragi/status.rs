@@ -478,7 +478,7 @@ mod tests {
         });
         assert_eq!(
             summarize_status(&value),
-            "leader=4 hqc=7/3 subj=0xABCDEF lqc=5/2 subj=- gossip=8 drop=9 hint=6 proposal=5 da_resched=0 da_gate=none(last=none;avl=0) epoch_len=0 epoch_commit=0 epoch_reveal=0 vrf_epoch=12 vrf_late=15 vrf_non_reveal=13 vrf_no_part=14 membership=0/0/0 hash=- rbc_sessions=2 rbc_bytes=3 rbc_evictions=1 rbc_pressure=4 rbc_last=feedface@10/11 sealed=0 aliases=[-] dvp=none pvp=none"
+            "leader=4 hqc=7/3 subj=0xABCDEF lqc=5/2 subj=- gossip=8 drop=9 hint=6 proposal=5 da_resched=0 da_gate=none(last=none;missing=0) epoch_len=0 epoch_commit=0 epoch_reveal=0 vrf_epoch=12 vrf_late=15 vrf_non_reveal=13 vrf_no_part=14 membership=0/0/0 hash=- rbc_sessions=2 rbc_bytes=3 rbc_evictions=1 rbc_pressure=4 rbc_last=feedface@10/11 sealed=0 aliases=[-] dvp=none pvp=none"
         );
     }
 

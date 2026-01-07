@@ -214,7 +214,7 @@ POST /v1/space-directory/manifests/revoke
 |------|------|--------|
 | `authority` | `AccountId` | وہ اکاؤنٹ جو revocation ٹرانزیکشن پر دستخط کرتا ہے۔ |
 | `private_key` | `ExposedPrivateKey` | base64 پرائیویٹ کی جسے Torii سائننگ کے لیے استعمال کرتا ہے۔ |
-| `uaid` | `String` | UAID literal (`uaid:<hex>` یا 64 حروف پر مشتمل hex digest)۔ |
+| `uaid` | `String` | UAID literal (`uaid:<hex>` یا 64 حروف پر مشتمل hex digest، LSB=1)۔ |
 | `dataspace` | `u64` | وہ dataspace ID جہاں manifest موجود ہے۔ |
 | `revoked_epoch` | `u64` | وہ epoch (شامل) جس سے revocation مؤثر ہونا چاہیے۔ |
 | `reason` | `Option<String>` | audit trail کے لیے اختیاری میسج جو lifecycle ڈیٹا کے ساتھ محفوظ ہوتا ہے۔ |
@@ -312,4 +312,3 @@ whitelist paths کو متعلقہ capability manifests کی طرف اشارہ ک
 ریگولیٹر‑فرینڈلی ریکارڈ فراہم کرتا ہے۔
 
 </div>
-
