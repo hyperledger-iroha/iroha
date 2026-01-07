@@ -28,7 +28,6 @@ use super::{GeoLocation, GeoLookupConfig, ToriiUrl};
 const DEFAULT_GEO_ENDPOINT: &str = "http://ip-api.com/json";
 const GEO_QUERY_FIELDS: &str = "status,message,lat,lon,country,city";
 const GET_STATUS_INTERVAL: Duration = Duration::from_secs(5);
-const GET_STATUS_DISCONNECT_TIMEOUT: Duration = Duration::from_mins(1);
 const GET_PEERS_INTERVAL: Duration = Duration::from_mins(1);
 const TELEMETRY_UNSUPPORTED_CHECK_INTERVAL: Duration = Duration::from_mins(5);
 const GET_GEO_RETRY_INTERVAL: Duration = Duration::from_mins(1);
@@ -522,11 +521,10 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
             }
             Err(_) => {
                 iroha_logger::warn!(
-                    timeout = ?GET_STATUS_DISCONNECT_TIMEOUT,
-                    "peer status request timed out"
+                    timeout = ?GET_STATUS_INTERVAL,
+                    "peer status request timed out; disconnecting"
                 );
-                let _ = tx.send(Update::Disconnected).await;
-                tokio::time::sleep(GET_STATUS_DISCONNECT_TIMEOUT).await;
+                return;
             }
         }
     }
@@ -590,6 +588,7 @@ impl<const N: usize> CircularBuffer<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::net::TcpListener;
 
     #[test]
     fn decode_ip_api_com_success() {
@@ -694,5 +693,32 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn metrics_timeout_exits_poll_loop() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let accept_task = tokio::spawn(async move {
+            if let Ok((socket, _)) = listener.accept().await {
+                let _socket = socket;
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
+        });
+
+        let url: ToriiUrl = format!("http://{addr}")
+            .parse()
+            .expect("valid torii url");
+        let (tx, _rx) = mpsc::channel(1);
+        let result = tokio::time::timeout(
+            GET_STATUS_INTERVAL + Duration::from_secs(2),
+            get_metrics_periodic_timeout(&url, tx),
+        )
+        .await;
+
+        accept_task.abort();
+        assert!(result.is_ok(), "metrics loop should exit after timeout");
     }
 }

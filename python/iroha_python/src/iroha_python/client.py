@@ -652,6 +652,32 @@ def _normalize_governance_public_input_alias(
     record[canonical_key] = record.pop(alias_key)
 
 
+def _normalize_governance_public_hex_hint(
+    record: Dict[str, Any],
+    key: str,
+    *,
+    context: str,
+) -> None:
+    if key not in record:
+        return
+    value = record[key]
+    if value is None:
+        return
+    if not isinstance(value, str):
+        raise ValueError(f"{context}.{key} must be a 32-byte hex string")
+    raw = value.strip()
+    if ":" in raw:
+        scheme, rest = raw.split(":", 1)
+        if scheme and scheme.lower() != "blake2b32":
+            raise ValueError(f"{context}.{key} must be a 32-byte hex string")
+        raw = rest
+    if raw.startswith(("0x", "0X")):
+        raw = raw[2:]
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", raw):
+        raise ValueError(f"{context}.{key} must be a 32-byte hex string")
+    record[key] = raw.lower()
+
+
 def _ensure_governance_lock_hints_complete(
     owner: Any,
     amount: Any,
@@ -695,6 +721,16 @@ def _normalize_governance_zk_public_inputs(value: Any, *, context: str) -> Dict[
         normalized,
         "rootHint",
         "root_hint",
+        context=context,
+    )
+    _normalize_governance_public_hex_hint(
+        normalized,
+        "root_hint",
+        context=context,
+    )
+    _normalize_governance_public_hex_hint(
+        normalized,
+        "nullifier_hex",
         context=context,
     )
     _ensure_governance_lock_hints_complete(
@@ -745,6 +781,16 @@ def _normalize_governance_zk_ballot_v1_payload(
     _normalize_governance_public_input_alias(
         record,
         "nullifierHex",
+        "nullifier_hex",
+        context=context,
+    )
+    _normalize_governance_public_hex_hint(
+        record,
+        "root_hint_hex",
+        context=context,
+    )
+    _normalize_governance_public_hex_hint(
+        record,
         "nullifier_hex",
         context=context,
     )

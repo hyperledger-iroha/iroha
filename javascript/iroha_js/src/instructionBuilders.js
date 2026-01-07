@@ -1542,6 +1542,8 @@ function normalizeZkBallotPublicInputs(value, name) {
   normalizePublicInputAlias(normalized, "nullifierHex", "nullifier_hex", name);
   normalizePublicInputAlias(normalized, "rootHintHex", "root_hint", name);
   normalizePublicInputAlias(normalized, "rootHint", "root_hint", name);
+  normalizeZkBallotPublicInputHex(normalized, "root_hint", name);
+  normalizeZkBallotPublicInputHex(normalized, "nullifier_hex", name);
 
   const hasOwner = normalized.owner !== undefined && normalized.owner !== null;
   const hasAmount = normalized.amount !== undefined && normalized.amount !== null;
@@ -1556,6 +1558,47 @@ function normalizeZkBallotPublicInputs(value, name) {
     );
   }
   return normalized;
+}
+
+function normalizeZkBallotPublicInputHex(target, key, name) {
+  if (!Object.prototype.hasOwnProperty.call(target, key)) {
+    return;
+  }
+  const value = target[key];
+  if (value === null) {
+    return;
+  }
+  if (typeof value !== "string") {
+    fail(
+      ValidationErrorCode.INVALID_HEX,
+      `${name}.${key} must be a 32-byte hex string`,
+      name,
+    );
+  }
+  const trimmed = value.trim();
+  let body = trimmed;
+  if (trimmed.includes(":")) {
+    const [scheme, rest] = trimmed.split(":", 2);
+    if (scheme && scheme.toLowerCase() !== "blake2b32") {
+      fail(
+        ValidationErrorCode.INVALID_HEX,
+        `${name}.${key} must be a 32-byte hex string`,
+        name,
+      );
+    }
+    body = rest;
+  }
+  if (body.startsWith("0x") || body.startsWith("0X")) {
+    body = body.slice(2);
+  }
+  if (!/^[0-9a-fA-F]{64}$/.test(body)) {
+    fail(
+      ValidationErrorCode.INVALID_HEX,
+      `${name}.${key} must be a 32-byte hex string`,
+      name,
+    );
+  }
+  target[key] = body.toLowerCase();
 }
 
 function normalizePublicInputAlias(target, aliasKey, canonicalKey, name) {

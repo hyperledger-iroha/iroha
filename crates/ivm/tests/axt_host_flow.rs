@@ -13,7 +13,10 @@ use ivm::{
         TouchManifest,
     },
     host::DefaultHost,
-    mock_wsv::{AccountId as HostAccountId, DomainId as HostDomainId, MockWorldStateView, WsvHost},
+    mock_wsv::{
+        AccountId as HostAccountId, DataspaceAxtPolicy, DomainId as HostDomainId,
+        MockWorldStateView, WsvHost,
+    },
     syscalls,
 };
 
@@ -463,7 +466,7 @@ fn default_host_rejects_handle_subject_mismatch() {
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 80, None);
     let proof = axt::ProofBlob {
-        payload: vec![2],
+        payload: vec![1],
         expiry_slot: None,
     };
     let intent = RemoteSpendIntent {
@@ -1122,7 +1125,7 @@ fn wsv_host_policy_checks_root_and_expiry() {
         },
     };
     let proof = axt::ProofBlob {
-        payload: vec![1],
+        payload: manifest_root.to_vec(),
         expiry_slot: None,
     };
     assert!(matches!(
@@ -1198,7 +1201,7 @@ fn wsv_host_uses_slot_length_and_skew_for_expiry() {
         },
     };
     let proof = axt::ProofBlob {
-        payload: vec![1],
+        payload: manifest_root.to_vec(),
         expiry_slot: None,
     };
     assert_eq!(
@@ -1258,8 +1261,120 @@ fn wsv_host_rejects_handle_skew_above_config() {
         },
     };
     let proof = axt::ProofBlob {
-        payload: vec![2],
+        payload: manifest_root.to_vec(),
         expiry_slot: None,
+    };
+    assert!(matches!(
+        use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof)),
+        Err(VMError::PermissionDenied)
+    ));
+}
+
+#[test]
+fn wsv_host_accepts_proof_within_skew() {
+    let mut vm = IVM::new(1_000_000);
+    let caller = sample_wsv_caller();
+    let dsid = DataSpaceId::new(142);
+    let manifest_root = [0xAB; 32];
+    let mut wsv = MockWorldStateView::new();
+    wsv.set_slot_length_ms(10);
+    wsv.set_max_clock_skew_ms(15);
+    wsv.set_current_time_ms(25); // current_slot = 2
+    wsv.set_axt_policy(
+        dsid,
+        DataspaceAxtPolicy {
+            manifest_root,
+            target_lane: LaneId::new(0),
+            min_handle_era: 1,
+            min_sub_nonce: 1,
+            current_slot: 0,
+        },
+    );
+    let mut host = WsvHost::new(wsv, caller, HashMap::new(), HashMap::new());
+
+    let descriptor = axt::AxtDescriptor {
+        dsids: vec![dsid],
+        touches: vec![axt::AxtTouchSpec {
+            dsid,
+            read: vec!["orders".into()],
+            write: vec!["ledger".into()],
+        }],
+    };
+    let manifest = TouchManifest {
+        read: vec!["orders/skew".into()],
+        write: vec!["ledger/skew".into()],
+    };
+    let (_dsid, ds_ptr) = begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
+
+    let proof = axt::ProofBlob {
+        payload: manifest_root.to_vec(),
+        expiry_slot: Some(1),
+    };
+    let proof_ptr = store_tlv(
+        &mut vm,
+        PointerType::ProofBlob,
+        &norito::to_bytes(&proof).expect("encode proof"),
+    );
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, proof_ptr);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+        Ok(0)
+    );
+}
+
+#[test]
+fn wsv_host_rejects_inline_proof_expired_with_skew() {
+    let mut vm = IVM::new(1_000_000);
+    let caller = sample_wsv_caller();
+    let dsid = DataSpaceId::new(143);
+    let manifest_root = [0xBC; 32];
+    let mut wsv = MockWorldStateView::new();
+    wsv.set_slot_length_ms(10);
+    wsv.set_max_clock_skew_ms(5);
+    wsv.set_current_time_ms(50); // current_slot = 5
+    wsv.set_axt_policy(
+        dsid,
+        DataspaceAxtPolicy {
+            manifest_root,
+            target_lane: LaneId::new(0),
+            min_handle_era: 1,
+            min_sub_nonce: 1,
+            current_slot: 0,
+        },
+    );
+    let mut host = WsvHost::new(wsv, caller, HashMap::new(), HashMap::new());
+
+    let descriptor = axt::AxtDescriptor {
+        dsids: vec![dsid],
+        touches: vec![axt::AxtTouchSpec {
+            dsid,
+            read: vec!["orders".into()],
+            write: vec!["ledger".into()],
+        }],
+    };
+    let manifest = TouchManifest {
+        read: vec!["orders/inline".into()],
+        write: vec!["ledger/inline".into()],
+    };
+    begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
+
+    let binding = axt::compute_binding(&descriptor).expect("binding");
+    let mut handle = build_handle(dsid, binding, &["transfer"], "alice@wonderland", 10, None);
+    handle.expiry_slot = 20;
+    handle.manifest_view_root = manifest_root.to_vec();
+    let intent = RemoteSpendIntent {
+        asset_dsid: dsid,
+        op: SpendOp {
+            kind: "transfer".into(),
+            from: "alice@wonderland".into(),
+            to: "merchant@wonderland".into(),
+            amount: "1".into(),
+        },
+    };
+    let proof = axt::ProofBlob {
+        payload: manifest_root.to_vec(),
+        expiry_slot: Some(3),
     };
     assert!(matches!(
         use_handle(&mut vm, &mut host, &handle, &intent, Some(&proof)),
@@ -1310,7 +1425,7 @@ fn wsv_host_rejects_zero_manifest_root_and_handle_root() {
         },
     };
     let proof = axt::ProofBlob {
-        payload: vec![4],
+        payload: vec![0; 32],
         expiry_slot: Some(30),
     };
     assert!(matches!(
@@ -1374,6 +1489,7 @@ fn wsv_host_policy_checks_target_lane() {
     let mut vm = IVM::new(1_000_000);
     let caller = sample_wsv_caller();
     let dsid = DataSpaceId::new(121);
+    let manifest_root = [1u8; 32];
     let mut host = WsvHost::new(
         MockWorldStateView::new(),
         caller,
@@ -1381,7 +1497,7 @@ fn wsv_host_policy_checks_target_lane() {
         HashMap::new(),
     )
     .with_axt_target_lane(dsid, 7);
-    host.set_axt_manifest_root(dsid, [1; 32]);
+    host.set_axt_manifest_root(dsid, manifest_root);
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1410,7 +1526,7 @@ fn wsv_host_policy_checks_target_lane() {
         },
     };
     let proof = axt::ProofBlob {
-        payload: vec![2],
+        payload: manifest_root.to_vec(),
         expiry_slot: None,
     };
     assert!(matches!(
@@ -1431,10 +1547,11 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
     let mut vm = IVM::new(1_000_000);
     let caller = sample_wsv_caller();
     let dsid = DataSpaceId::new(130);
+    let manifest_root = [0x22; 32];
     let entries = vec![AxtPolicyBinding {
         dsid,
         policy: AxtPolicyEntry {
-            manifest_root: [0x22; 32],
+            manifest_root,
             target_lane: LaneId::new(4),
             min_handle_era: 1,
             min_sub_nonce: 1,
@@ -1478,13 +1595,13 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
         },
     };
     let proof = axt::ProofBlob {
-        payload: vec![0xCC],
+        payload: manifest_root.to_vec(),
         expiry_slot: None,
     };
 
     let mut wrong_lane = build_handle(dsid, binding, &["transfer"], &caller.to_string(), 10, None);
     wrong_lane.target_lane = LaneId::new(1);
-    wrong_lane.manifest_view_root = vec![0x22; 32];
+    wrong_lane.manifest_view_root = manifest_root.to_vec();
     assert!(matches!(
         use_handle(&mut vm, &mut host, &wrong_lane, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
@@ -1492,7 +1609,7 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
 
     let mut ok_lane = build_handle(dsid, binding, &["transfer"], &caller.to_string(), 10, None);
     ok_lane.target_lane = LaneId::new(4);
-    ok_lane.manifest_view_root = vec![0x22; 32];
+    ok_lane.manifest_view_root = manifest_root.to_vec();
     assert_eq!(
         use_handle(&mut vm, &mut host, &ok_lane, &intent, Some(&proof)),
         Ok(0)
@@ -1504,6 +1621,7 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
     let mut vm = IVM::new(1_000_000);
     let caller = sample_wsv_caller();
     let dsid = DataSpaceId::new(122);
+    let manifest_root = [1u8; 32];
     let mut host = WsvHost::new(
         MockWorldStateView::new(),
         caller,
@@ -1526,7 +1644,7 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
         write: vec!["ledger/era".into()],
     };
     begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
-    host.set_axt_manifest_root(dsid, [1; 32]);
+    host.set_axt_manifest_root(dsid, manifest_root);
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
     let intent = RemoteSpendIntent {
@@ -1539,7 +1657,7 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
         },
     };
     let proof = axt::ProofBlob {
-        payload: vec![3],
+        payload: manifest_root.to_vec(),
         expiry_slot: None,
     };
 

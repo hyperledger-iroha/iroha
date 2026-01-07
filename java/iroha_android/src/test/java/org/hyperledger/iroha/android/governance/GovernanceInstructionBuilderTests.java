@@ -25,6 +25,7 @@ public final class GovernanceInstructionBuilderTests {
     castZkBallotFromArgumentsNormalizesPublicInputs();
     castZkBallotRejectsIncompleteLockHints();
     castZkBallotRejectsNonObjectPublicInputs();
+    castZkBallotRejectsInvalidHexHints();
     castPlainBallotRoundTrip();
     enactReferendumRoundTrip();
     finalizeReferendumRoundTrip();
@@ -72,17 +73,28 @@ public final class GovernanceInstructionBuilderTests {
   }
 
   private static void castZkBallotNormalizesPublicInputs() {
+    final String rootHint = "0x" + "Aa".repeat(32);
+    final String nullifier = "blake2b32:" + "BB".repeat(32);
     final CastZkBallotInstruction instruction =
         CastZkBallotInstruction.builder()
             .setElectionId("election-2")
             .setProofBase64("AQID")
             .setPublicInputsJson(
-                "{\"durationBlocks\":64,\"owner\":\"alice@wonderland\",\"amount\":\"100\",\"rootHintHex\":\"aa\"}")
+                "{\"durationBlocks\":64,\"owner\":\"alice@wonderland\",\"amount\":\"100\","
+                    + "\"rootHintHex\":\""
+                    + rootHint
+                    + "\",\"nullifierHex\":\""
+                    + nullifier
+                    + "\"}")
             .build();
     final String normalized = instruction.publicInputsJson();
     assert normalized.contains("\"duration_blocks\"") : "duration_blocks alias not normalized";
     assert !normalized.contains("durationBlocks") : "alias key should be removed";
     assert normalized.contains("\"root_hint\"") : "root hint alias not normalized";
+    assert normalized.contains("\"root_hint\":\"" + "aa".repeat(32) + "\"")
+        : "root_hint should be canonicalized";
+    assert normalized.contains("\"nullifier_hex\":\"" + "bb".repeat(32) + "\"")
+        : "nullifier_hex should be canonicalized";
   }
 
   private static void castZkBallotFromArgumentsNormalizesPublicInputs() {
@@ -92,12 +104,17 @@ public final class GovernanceInstructionBuilderTests {
     args.put("proof_b64", "AQID");
     args.put(
         "public_inputs_json",
-        "{\"durationBlocks\":12,\"owner\":\"alice@wonderland\",\"amount\":\"100\"}");
+        "{\"durationBlocks\":12,\"owner\":\"alice@wonderland\",\"amount\":\"100\","
+            + "\"rootHintHex\":\"0x"
+            + "Aa".repeat(32)
+            + "\"}");
     final CastZkBallotInstruction instruction = CastZkBallotInstruction.fromArguments(args);
     final String normalized = instruction.toArguments().get("public_inputs_json");
     assert normalized != null && normalized.contains("\"duration_blocks\"")
         : "fromArguments should normalize public inputs";
     assert !normalized.contains("durationBlocks") : "fromArguments should strip alias keys";
+    assert normalized.contains("\"root_hint\":\"" + "aa".repeat(32) + "\"")
+        : "fromArguments should canonicalize hex hints";
   }
 
   private static void castZkBallotRejectsIncompleteLockHints() {
@@ -126,6 +143,22 @@ public final class GovernanceInstructionBuilderTests {
       failed = ex.getMessage().contains("JSON object");
     }
     assert failed : "expected non-object public inputs to be rejected";
+  }
+
+  private static void castZkBallotRejectsInvalidHexHints() {
+    boolean failed = false;
+    try {
+      CastZkBallotInstruction.builder()
+          .setElectionId("election-5")
+          .setProofBase64("AQID")
+          .setPublicInputsJson(
+              "{\"owner\":\"alice@wonderland\",\"amount\":\"100\",\"duration_blocks\":5,"
+                  + "\"root_hint\":\"not-hex\"}")
+          .build();
+    } catch (final IllegalArgumentException ex) {
+      failed = ex.getMessage().contains("root_hint");
+    }
+    assert failed : "expected invalid hex hints to be rejected";
   }
 
   private static void castPlainBallotRoundTrip() {

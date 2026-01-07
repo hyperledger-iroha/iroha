@@ -3329,7 +3329,7 @@ class ToriiClient:
             duration_blocks,
             context="zk ballot v1",
         )
-        if root_hint_hex:
+        if root_hint_hex is not None:
             payload["root_hint_hex"] = root_hint_hex
         if owner is not None:
             payload["owner"] = owner
@@ -3339,8 +3339,18 @@ class ToriiClient:
             payload["duration_blocks"] = duration_blocks
         if direction:
             payload["direction"] = direction
-        if nullifier_hex:
+        if nullifier_hex is not None:
             payload["nullifier_hex"] = nullifier_hex
+        self._normalize_governance_public_hex_hint(
+            payload,
+            "root_hint_hex",
+            context="zk ballot v1",
+        )
+        self._normalize_governance_public_hex_hint(
+            payload,
+            "nullifier_hex",
+            context="zk ballot v1",
+        )
         body = self._post_json(
             "/v1/gov/ballots/zk-v1",
             payload,
@@ -5555,6 +5565,32 @@ class ToriiClient:
         target[canonical_key] = target.pop(alias_key)
 
     @staticmethod
+    def _normalize_governance_public_hex_hint(
+        target: MutableMapping[str, Any],
+        key: str,
+        *,
+        context: str,
+    ) -> None:
+        if key not in target:
+            return
+        value = target[key]
+        if value is None:
+            return
+        if not isinstance(value, str):
+            raise RuntimeError(f"{context}.{key} must be a 32-byte hex string")
+        raw = value.strip()
+        if ":" in raw:
+            scheme, rest = raw.split(":", 1)
+            if scheme and scheme.lower() != "blake2b32":
+                raise RuntimeError(f"{context}.{key} must be a 32-byte hex string")
+            raw = rest
+        if raw.startswith(("0x", "0X")):
+            raw = raw[2:]
+        if len(raw) != 64 or any(ch not in "0123456789abcdefABCDEF" for ch in raw):
+            raise RuntimeError(f"{context}.{key} must be a 32-byte hex string")
+        target[key] = raw.lower()
+
+    @staticmethod
     def _ensure_governance_lock_hints_complete(
         owner: Any,
         amount: Any,
@@ -5605,6 +5641,16 @@ class ToriiClient:
             normalized,
             "rootHint",
             "root_hint",
+            context=context,
+        )
+        cls._normalize_governance_public_hex_hint(
+            normalized,
+            "root_hint",
+            context=context,
+        )
+        cls._normalize_governance_public_hex_hint(
+            normalized,
+            "nullifier_hex",
             context=context,
         )
         cls._ensure_governance_lock_hints_complete(
