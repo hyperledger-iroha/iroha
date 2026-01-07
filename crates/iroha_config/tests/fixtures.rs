@@ -2039,6 +2039,12 @@ fn nexus_lane_overrides_rejected_when_disabled() {
 }
 
 #[test]
+fn sumeragi_rejects_zero_rbc_chunk_max_bytes() {
+    let result = load_config_from_fixtures("bad.sumeragi_rbc_chunk_max_bytes_zero.toml");
+    assert!(result.is_err(), "zero chunk size must be rejected");
+}
+
+#[test]
 fn nexus_lane_relay_emergency_requires_nexus_enabled() {
     use iroha_config::parameters::user::{LaneRelayEmergency, Nexus};
     use iroha_config_base::util::Emitter;

@@ -21,7 +21,7 @@ use iroha_data_model::{
             SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiDataspaceCommitment,
             SumeragiKuraStoreStatus, SumeragiLaneCommitment, SumeragiLaneGovernance,
             SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
-            SumeragiMissingBlockFetchStatus, SumeragiPendingRbcStatus, SumeragiQcStatus,
+            SumeragiMissingBlockFetchStatus, SumeragiPendingRbcStatus,
             SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
             SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
         },
@@ -131,7 +131,6 @@ impl Default for MockToriiData {
             locked_qc_height: 9,
             locked_qc_view: 3,
             locked_qc_subject: None,
-            commit_qc: SumeragiQcStatus::default(),
             commit_quorum: SumeragiCommitQuorumStatus::default(),
             view_change_proof_accepted_total: 1,
             view_change_proof_stale_total: 0,
@@ -246,6 +245,7 @@ impl Default for MockToriiData {
             }],
             worker_loop: Default::default(),
             commit_inflight: Default::default(),
+            ..Default::default()
         };
 
         let configuration = norito::json!({

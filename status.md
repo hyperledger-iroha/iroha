@@ -1,6 +1,20 @@
 # Status
 
 ## Latest Updates
+- Sumeragi/RBC: represent empty payloads as a single chunk, invalidate recovered sessions on payload-hash mismatch, clear pending stash on chunk-root mismatch, and reset READY/DELIVER state when authoritative rosters override derived; add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi/RBC: require authoritative rosters before handling READY/DELIVER, stash unverified frames, retain delivered chunk bytes for sampling (no compaction), and reject zero `rbc_chunk_max_bytes`; update docs/tests/metrics accordingly.
+- Tests: not run (not requested).
+- Tx admission: compare signature/instruction/bytecode limits using u64 counts to avoid usize overflow panics on narrow platforms; keep limit errors deterministic.
+- Tests: not run (not requested).
+- CLI smoke fixes: align council/sumeragi summary expectations, keep ledger export schema hashing keyed to the iroha binary, and enrich ledger export schema-mismatch errors; drop unused imports in client/space-directory.
+- Tests: `cargo test -p iroha_cli --test cli_smoke`; `cargo test -p iroha_cli ledger_export_schema_mismatch_reports_expected_and_actual`.
+- Sumeragi/DA: treat local BlockCreated payloads as available for the DA gate (missing_local_data clears without waiting on RBC delivery), and only broadcast BlockSyncUpdate when a verifiable commit QC is attached; otherwise fall back to BlockCreated for precommit-vote/reschedule rebroadcasts; refresh docs and unit tests accordingly.
+- Tests: not run (not requested).
+- Offline balance proofs: reject invalid blinding/scalar byte lengths instead of panicking; add regression coverage for compute/builder paths.
+- Tests: not run (not requested).
+- Core/NFT: return `FindError::Domain` when registering/unregistering NFTs in missing domains instead of panicking; add regression coverage.
+- Tests: not run (not requested).
 - Maintenance: resolve merge conflicts in Sumeragi reschedule/tests and `status.md`.
 - Tests: not run (not requested).
 - Consensus fixtures: add parent/post state roots to Qc/QcVote test builders and align Torii consensus vote helpers with current vote fields.

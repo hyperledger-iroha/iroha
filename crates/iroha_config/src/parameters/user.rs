@@ -5786,6 +5786,16 @@ impl Sumeragi {
                 true
             };
 
+        let rbc_chunk_max_ok = if rbc_chunk_max_bytes == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.rbc_chunk_max_bytes must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
+
         let pending_caps_ok = if rbc_pending_max_chunks == 0 || rbc_pending_max_bytes == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig).attach(
@@ -5830,6 +5840,7 @@ impl Sumeragi {
             && redundant_ok
             && da_quorum_multiplier_ok
             && da_availability_multiplier_ok
+            && rbc_chunk_max_ok
             && pending_caps_ok
             && da_caps_ok
             && da_openings_ok

@@ -128,15 +128,30 @@ impl Actor {
                                 &self.vote_log,
                                 &vote,
                             );
-                            self.broadcast_block_sync_update(update, &topology_peers);
-                            iroha_logger::info!(
-                                height = vote.height,
-                                view = vote.view,
-                                block = %vote.block_hash,
-                                signer = vote.signer,
-                                targets = topology_peers.len(),
-                                "sending block sync update with cached precommit votes to commit topology after recording vote"
-                            );
+                            if super::block_sync_update_has_roster(&update) {
+                                self.broadcast_block_sync_update(update, &topology_peers);
+                                iroha_logger::info!(
+                                    height = vote.height,
+                                    view = vote.view,
+                                    block = %vote.block_hash,
+                                    signer = vote.signer,
+                                    targets = topology_peers.len(),
+                                    "sending block sync update with cached precommit votes to commit topology after recording vote"
+                                );
+                            } else {
+                                self.broadcast_block_created_for_block_sync(
+                                    super::message::BlockCreated::from(&pending.block),
+                                    &topology_peers,
+                                );
+                                iroha_logger::info!(
+                                    height = vote.height,
+                                    view = vote.view,
+                                    block = %vote.block_hash,
+                                    signer = vote.signer,
+                                    targets = topology_peers.len(),
+                                    "sending BlockCreated payload to commit topology (no verifiable roster yet)"
+                                );
+                            }
                         } else {
                             iroha_logger::trace!(
                                 height = vote.height,

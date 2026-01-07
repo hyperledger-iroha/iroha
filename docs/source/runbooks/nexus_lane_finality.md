@@ -8,7 +8,7 @@
 
 - **Grafana (`dashboards/grafana/nexus_lanes.json`)** — publishes the “Nexus Lane Finality & Oracles” board. Panels track:
   - `histogram_quantile()` on `iroha_slot_duration_ms` (p50/p95/p99) plus the latest sample gauge.
-  - `iroha_da_quorum_ratio` and `sumeragi_da_gate_block_total{reason="missing_local_data"}` to highlight DA availability lag.
+  - `iroha_da_quorum_ratio` and `sumeragi_da_gate_block_total{reason="missing_local_data"}` to highlight DA payload recovery lag.
   - Oracle surfaces: `iroha_oracle_price_local_per_xor`, `iroha_oracle_staleness_seconds`, `iroha_oracle_twap_window_seconds`, and `iroha_oracle_haircut_basis_points`.
   - Settlement buffer panel (`iroha_settlement_buffer_xor`) showing live per-lane debits sourced from `LaneBlockCommitment` receipts.
 - **Alert rules** — reuse the Slot/DA SLO clauses from `ans3.md`. Page when:
@@ -23,8 +23,8 @@
 |--------|----------------|-------|
 | `histogram_quantile(0.95, iroha_slot_duration_ms)` | ≤ 1000 ms (hard), 950 ms warning | Use the dashboard panel or run `scripts/telemetry/check_slot_duration.py` (`--json-out artifacts/nx18/slot_summary.json`) against the Prometheus export gathered during chaos runs. |
 | `iroha_slot_duration_ms_latest` | Mirrors most recent slot; investigate if > 1100 ms even when quantiles look OK. | Export value when filing incidents. |
-| `iroha_da_quorum_ratio` | ≥ 0.95 over rolling 30 m window. | Derived from missing-availability telemetry during block commits. |
-| `sumeragi_da_gate_block_total{reason="missing_local_data"}` | Should remain flat outside chaos rehearsals. | Treat sustained increases as missing availability evidence. |
+| `iroha_da_quorum_ratio` | ≥ 0.95 over rolling 30 m window. | Derived from DA availability telemetry during block commits. |
+| `sumeragi_da_gate_block_total{reason="missing_local_data"}` | Should remain flat outside chaos rehearsals. | Treat sustained increases as missing local payloads. |
 | `lane_relay_emergency_override_total{outcome="applied"}` | Should stay at 0 outside emergency drills. | Non-zero indicates admin override of lane relay validators. Check `outcome="disabled"` if overrides are not configured. |
 | `iroha_oracle_staleness_seconds` | ≤ 60 s. Alert at 75 s. | Indicates stale 60 s TWAP feeds. |
 | `iroha_oracle_twap_window_seconds` | Exactly 60 s ± 5 s tolerance. | Divergence means the oracle is misconfigured. |
@@ -36,11 +36,11 @@
 ### Slot-duration breach
 1. Confirm via dashboard + `promql` (p95/p99).  
 2. Capture `scripts/telemetry/check_slot_duration.py --json-out <path>` output (and the metrics snapshot) so CXO reviewers can verify the 1 s gate.  
-3. Inspect RCA inputs: mempool queue depth, missing-availability counters, IVM traces.  
+3. Inspect RCA inputs: mempool queue depth, missing-payload counters, IVM traces.  
 4. File incident, attach Grafana screenshot, and schedule chaos drill if regression persists.
 
 ### DA quorum degradation
-1. Check `iroha_da_quorum_ratio` and missing-availability counters; correlate with consensus logs.  
+1. Check `iroha_da_quorum_ratio` and missing-payload counters; correlate with consensus logs.  
 2. If ratio <0.95, pin failing attesters, widen sampling parameters, or move profile to XOR-only mode.  
 3. Run `scripts/telemetry/check_nexus_audit_outcome.py` during routed-trace rehearsals to prove `nexus.audit.outcome` events still pass after remediation.  
 4. Archive DA receipt bundles with the incident ticket.

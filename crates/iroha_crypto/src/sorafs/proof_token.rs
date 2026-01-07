@@ -258,13 +258,11 @@ impl ProofToken {
         } else {
             None
         };
-        if let Some(expires_at) = expires_at {
-            if expires_at <= issued_at {
-                return Err(DecodeError::InvalidExpiry {
-                    issued_at,
-                    expires_at,
-                });
-            }
+        if let Some(expires_at) = expires_at && expires_at <= issued_at {
+            return Err(DecodeError::InvalidExpiry {
+                issued_at,
+                expires_at,
+            });
         }
 
         let mut token_id = [0u8; 16];
@@ -751,7 +749,7 @@ mod tests {
         let mut order = 1usize;
         let mut acc = a_point;
         while !acc.is_identity() {
-            acc = acc + a_point;
+            acc += a_point;
             order += 1;
             assert!(order <= 8, "torsion order exceeded expected bound");
         }
@@ -760,7 +758,7 @@ mod tests {
         let mut acc = EdwardsPoint::identity();
         for _ in 0..order {
             torsion_points.push(acc);
-            acc = acc + a_point;
+            acc += a_point;
         }
 
         let mut token = ProofToken {

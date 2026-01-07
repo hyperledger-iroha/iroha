@@ -3294,6 +3294,10 @@ fn apply_roster_selection_to_block_sync_update(
     update.stake_snapshot.clone_from(&selection.stake_snapshot);
 }
 
+fn block_sync_update_has_roster(update: &super::message::BlockSyncUpdate) -> bool {
+    update.commit_qc.is_some()
+}
+
 fn stake_quorum_reached_for_peers(
     view: &StateView<'_>,
     roster: &[PeerId],
@@ -4576,6 +4580,29 @@ impl Actor {
                         .rbc
                         .persisted_full_sessions
                         .remove(&key);
+                    if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
+                        session.ready_signatures.clear();
+                        session.sent_ready = false;
+                        session.delivered = false;
+                        session.deliver_sender = None;
+                        session.deliver_signature = None;
+                    }
+                    self.clear_pending_rbc(&key);
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .payload_rebroadcast_last_sent
+                        .remove(&key);
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .ready_rebroadcast_last_sent
+                        .remove(&key);
+                    if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
+                        self.update_rbc_status_entry(key, &session, false);
+                        self.persist_rbc_session(key, &session);
+                    }
+                    self.publish_rbc_backlog_snapshot();
                 } else if source.is_authoritative() && existing_source.is_authoritative() {
                     warn!(
                         block = %key.0,
@@ -6912,6 +6939,7 @@ impl Actor {
             return Ok(());
         }
 
+        let mut invalidated = false;
         let result = (|| -> Result<Option<RbcReady>> {
             if session.sent_ready {
                 return Ok(None);
@@ -6971,6 +6999,7 @@ impl Actor {
                 if let Some(computed_root) = session.chunk_root() {
                     if computed_root != expected_root {
                         session.invalid = true;
+                        invalidated = true;
                         warn!(
                             height = key.1,
                             view = key.2,
@@ -7004,6 +7033,9 @@ impl Actor {
         if let Some(updated) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &updated, false);
             self.persist_rbc_session(key, &updated);
+        }
+        if invalidated {
+            self.clear_pending_rbc(&key);
         }
         self.publish_rbc_backlog_snapshot();
 
@@ -7337,7 +7369,10 @@ impl Actor {
             return false;
         }
         let roster = self.rbc_session_roster(key);
-        if roster.is_empty() {
+        let roster_source = self
+            .rbc_session_roster_source(key)
+            .unwrap_or(RbcRosterSource::Derived);
+        if roster.is_empty() || !roster_source.is_authoritative() {
             return false;
         }
         if let Err(err) = self.flush_pending_rbc(key) {

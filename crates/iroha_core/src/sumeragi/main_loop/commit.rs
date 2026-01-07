@@ -2004,15 +2004,30 @@ impl Actor {
             if topology_peers.is_empty() {
                 return;
             }
-            self.broadcast_block_sync_update(update, &topology_peers);
-            iroha_logger::info!(
-                height = vote.height,
-                view = vote.view,
-                block = %vote.block_hash,
-                signer = vote.signer,
-                targets = topology_peers.len(),
-                "sending block sync update to commit topology after emitting local precommit vote"
-            );
+            if super::block_sync_update_has_roster(&update) {
+                self.broadcast_block_sync_update(update, &topology_peers);
+                iroha_logger::info!(
+                    height = vote.height,
+                    view = vote.view,
+                    block = %vote.block_hash,
+                    signer = vote.signer,
+                    targets = topology_peers.len(),
+                    "sending block sync update to commit topology after emitting local precommit vote"
+                );
+            } else {
+                self.broadcast_block_created_for_block_sync(
+                    super::message::BlockCreated::from(&pending.block),
+                    &topology_peers,
+                );
+                iroha_logger::info!(
+                    height = vote.height,
+                    view = vote.view,
+                    block = %vote.block_hash,
+                    signer = vote.signer,
+                    targets = topology_peers.len(),
+                    "sending BlockCreated payload to commit topology (no verifiable roster yet)"
+                );
+            }
         } else {
             iroha_logger::trace!(
                 height = vote.height,
@@ -2674,7 +2689,6 @@ impl Actor {
         rbc_payload_matches(sessions, handle, block_hash, height, payload_hash)
     }
 
-    #[cfg(test)]
     fn local_payload_matches_hash(block: &SignedBlock, payload_hash: &Hash) -> bool {
         let payload_bytes = super::proposals::block_payload_bytes(block);
         Hash::new(&payload_bytes) == *payload_hash
@@ -2685,6 +2699,9 @@ impl Actor {
         handle: &rbc_status::Handle,
         pending: &PendingBlock,
     ) -> bool {
+        if Self::local_payload_matches_hash(&pending.block, &pending.payload_hash) {
+            return true;
+        }
         Self::ensure_block_matches_rbc_payload(
             sessions,
             handle,
@@ -2858,6 +2875,39 @@ impl Actor {
             self.schedule_background(BackgroundRequest::Post {
                 peer,
                 msg: BlockMessage::BlockSyncUpdate(update.clone()),
+            });
+        }
+    }
+
+    pub(super) fn broadcast_block_created_for_block_sync(
+        &mut self,
+        created: super::message::BlockCreated,
+        peers: &[PeerId],
+    ) {
+        let online_peers = self
+            .network
+            .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
+        let seed = created.block.hash();
+        let targets = Self::block_sync_update_targets_for_peers(
+            self.common_config.peer.id(),
+            self.block_sync_gossip_limit,
+            peers,
+            &online_peers,
+            seed.as_ref(),
+        );
+        if targets.is_empty() {
+            trace!(
+                height = created.block.header().height().get(),
+                view = u64::from(created.block.header().view_change_index()),
+                block = ?created.block.hash(),
+                "skipping block payload gossip: no targets"
+            );
+            return;
+        }
+        for peer in targets {
+            self.schedule_background(BackgroundRequest::Post {
+                peer,
+                msg: BlockMessage::BlockCreated(created.clone()),
             });
         }
     }
@@ -4438,14 +4488,14 @@ mod tests {
     }
 
     #[test]
-    fn payload_available_for_da_rejects_local_payload_without_rbc() {
+    fn payload_available_for_da_accepts_local_payload_without_rbc() {
         let block = sample_block(2, 0);
         let payload_hash = Hash::new(super::super::proposals::block_payload_bytes(&block));
         let pending = PendingBlock::new(block, payload_hash, 2, 0);
         let sessions = BTreeMap::new();
         let handle = rbc_status::Handle::new();
 
-        assert!(!Actor::payload_available_for_da(
+        assert!(Actor::payload_available_for_da(
             &sessions, &handle, &pending
         ));
     }
@@ -4453,7 +4503,7 @@ mod tests {
     #[test]
     fn payload_available_for_da_accepts_rbc_delivery() {
         let block = sample_block(2, 0);
-        let payload_hash = Hash::new(super::super::proposals::block_payload_bytes(&block));
+        let payload_hash = Hash::new(b"not-a-payload");
         let pending = PendingBlock::new(block, payload_hash, 2, 0);
         let sessions = BTreeMap::new();
         let handle = rbc_status::Handle::new();
@@ -4477,6 +4527,39 @@ mod tests {
         assert!(Actor::payload_available_for_da(
             &sessions, &handle, &pending
         ));
+    }
+
+    #[test]
+    fn block_sync_update_has_roster_requires_commit_qc() {
+        let block = sample_block(4, 0);
+        let mut update = super::super::message::BlockSyncUpdate::from(&block);
+
+        assert!(!super::super::block_sync_update_has_roster(&update));
+
+        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let validator_set = vec![iroha_data_model::peer::PeerId::new(
+            keypair.public_key().clone(),
+        )];
+        update.commit_qc = Some(crate::sumeragi::consensus::Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block.hash(),
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            height: 4,
+            view: 0,
+            epoch: 0,
+            mode_tag: super::super::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: vec![0b0000_0001],
+                bls_aggregate_signature: vec![0xAA; 96],
+            },
+        });
+
+        assert!(super::super::block_sync_update_has_roster(&update));
     }
 
     #[test]

@@ -418,13 +418,11 @@ fn validate_capability_payload(ty: u16, value: &[u8]) -> Result<(), HarnessError
 fn parse_required_flag(ty: u16, value: &mut [u8]) -> bool {
     match ty {
         CAPABILITY_SUITE_LIST => {
-            if let Some(first) = value.first_mut() {
+            value.first_mut().is_some_and(|first| {
                 let required = (*first & 0x80) != 0;
                 *first &= 0x7F;
                 required
-            } else {
-                false
-            }
+            })
         }
         CAPABILITY_PQKEM | CAPABILITY_PQSIG | CAPABILITY_CONSTANT_RATE => value
             .get(1)
@@ -4494,6 +4492,7 @@ fn build_telemetry_payload(
 }
 
 /// Inputs required to derive session keys and confirmation tags.
+#[derive(Clone, Copy)]
 struct SessionKeyInputs<'a> {
     suite: HandshakeSuite,
     transcript_hash: &'a [u8; 32],

@@ -3781,8 +3781,30 @@ fn read_reward_instruction(path: &Path) -> Result<RelayRewardInstructionV1> {
 fn read_ledger_export(path: &Path) -> Result<LedgerExportFile> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read ledger export from `{}`", path.display()))?;
-    let export: LedgerExportFile =
-        norito::decode_from_bytes(&bytes).wrap_err("failed to decode ledger export payload")?;
+    let export: LedgerExportFile = norito::decode_from_bytes(&bytes)
+        .map_err(|err| {
+            if matches!(err, norito::Error::SchemaMismatch) {
+                const SCHEMA_OFFSET: usize = 4 + 1 + 1;
+                const SCHEMA_LEN: usize = 16;
+                let expected = LedgerExportFile::schema_hash();
+                let actual = bytes
+                    .get(SCHEMA_OFFSET..SCHEMA_OFFSET + SCHEMA_LEN)
+                    .map(|slice| {
+                        let mut buf = [0_u8; SCHEMA_LEN];
+                        buf.copy_from_slice(slice);
+                        buf
+                    })
+                    .map(hex::encode)
+                    .unwrap_or_else(|| "<missing>".to_string());
+                eyre!(
+                    "schema mismatch (expected {}, got {actual})",
+                    hex::encode(expected)
+                )
+            } else {
+                eyre!(err)
+            }
+        })
+        .wrap_err("failed to decode ledger export payload")?;
     export.ensure_current()?;
     Ok(export)
 }
@@ -11619,6 +11641,37 @@ mod tests {
             source_asset: AssetId::new(xor_asset_id(), sample_account_id("treasury")),
             destination: sample_account_id("relay"),
         }
+    }
+
+    #[test]
+    fn ledger_export_schema_mismatch_reports_expected_and_actual() {
+        let export = LedgerExportFile {
+            version: LedgerExportFile::VERSION,
+            transfers: vec![sample_transfer_record(TransferKind::Payout, 5)],
+        };
+        let mut bytes = to_bytes(&export).expect("encode ledger export");
+        const SCHEMA_OFFSET: usize = 4 + 1 + 1;
+        bytes[SCHEMA_OFFSET] ^= 0xFF;
+        let file = NamedTempFile::new().expect("temp file");
+        fs::write(file.path(), bytes).expect("write ledger export");
+        let err = read_ledger_export(file.path()).expect_err("schema mismatch should fail");
+        let messages = err
+            .chain()
+            .map(|cause| cause.to_string())
+            .collect::<Vec<_>>();
+        let combined = messages.join("\n");
+        assert!(
+            combined.contains("schema mismatch"),
+            "expected schema mismatch in error chain: {combined}"
+        );
+        assert!(
+            combined.contains("expected"),
+            "expected schema hash detail in error chain: {combined}"
+        );
+        assert!(
+            combined.contains("got"),
+            "expected actual schema hash detail in error chain: {combined}"
+        );
     }
 
     #[test]

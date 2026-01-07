@@ -210,7 +210,7 @@ pub struct Proposal {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct QcVote {
-    /// Target phase (Prepare, Commit, NewView).
+    /// Target phase (`Prepare`, `Commit`, `NewView`).
     pub phase: CertPhase,
     /// Hash of the block being voted on.
     pub block_hash: HashOf<BlockHeader>,

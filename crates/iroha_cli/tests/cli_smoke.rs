@@ -36,14 +36,7 @@ use iroha_data_model::{
     soranet::incentives::{RelayBondLedgerEntryV1, RelayEpochMetricsV1, RelayRewardInstructionV1},
 };
 use iroha_primitives::numeric::Numeric;
-use norito::{
-    codec::Encode as NoritoEncode,
-    decode_from_bytes,
-    derive::NoritoSerialize,
-    json,
-    json::{Map, Value},
-    to_bytes,
-};
+use norito::{decode_from_bytes, derive::NoritoSerialize, json, json::{Map, Value}, to_bytes};
 use sorafs_orchestrator::treasury::{LedgerTransferRecord, TransferKind};
 fn cli_binary() -> &'static str {
     env!("CARGO_BIN_EXE_iroha")
@@ -153,6 +146,16 @@ fn sample_bond_entry() -> RelayBondLedgerEntryV1 {
 struct TestLedgerExport {
     version: u16,
     transfers: Vec<LedgerTransferRecord>,
+}
+
+fn encode_ledger_export(export: &TestLedgerExport) -> Vec<u8> {
+    const SCHEMA_OFFSET: usize = 4 + 1 + 1;
+    const SCHEMA_LEN: usize = 16;
+    let mut bytes = to_bytes(export).expect("encode ledger export");
+    let schema =
+        norito::core::schema_hash_for_name("iroha::commands::sorafs::LedgerExportFile");
+    bytes[SCHEMA_OFFSET..SCHEMA_OFFSET + SCHEMA_LEN].copy_from_slice(&schema);
+    bytes
 }
 
 fn parse_instruction_stdout(stdout: &str) -> Vec<InstructionBox> {
@@ -1424,7 +1427,7 @@ fn gov_council_vrf_commands_against_mock() {
     let derive_out = String::from_utf8_lossy(&derive.stdout);
     assert_eq!(
         derive_out.trim_end(),
-        "council derive-vrf: epoch=42 verified=1 members=[guardian-0@wonderland]"
+        "council derive-vrf: epoch=42 verified=1 members=[guardian-0@wonderland] alternates=[]"
     );
 
     let persist = command()
@@ -1454,7 +1457,7 @@ fn gov_council_vrf_commands_against_mock() {
     let persist_out = String::from_utf8_lossy(&persist.stdout);
     assert_eq!(
         persist_out.trim_end(),
-        "council persist: epoch=42 members=1 verified=1"
+        "council persist: epoch=42 members=1 alternates=0 verified=1"
     );
 
     let combined = command()
@@ -2229,11 +2232,10 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
     }
 
     let export_file = temp_dir.path().join("ledger_export.to");
-    let export_bytes = to_bytes(&TestLedgerExport {
+    let export_bytes = encode_ledger_export(&TestLedgerExport {
         version: 1,
         transfers: expected_transfers.clone(),
-    })
-    .expect("encode ledger export");
+    });
     fs::write(&export_file, export_bytes).expect("write export");
 
     let output = command()
@@ -2650,7 +2652,7 @@ fn gov_council_summary_against_mock() {
     let summary_line = String::from_utf8(summary.stdout).expect("summary output utf8");
     assert_eq!(
         summary_line.trim(),
-        "council: epoch=64 members_count=2 members=[guardian-0@wonderland, guardian-1@wonderland]"
+        "council: epoch=64 members_count=2 alternates_count=0 verified=0 derived_by=unknown members=[guardian-0@wonderland, guardian-1@wonderland] alternates=[]"
     );
 
     let json_output = command()
@@ -4078,7 +4080,7 @@ fn incentives_daemon_processes_metrics_spool() {
         version: 1,
         transfers,
     };
-    let export_bytes = to_bytes(&export).expect("encode ledger export");
+    let export_bytes = encode_ledger_export(&export);
     let ledger_export_path = temp_dir.path().join("ledger_export.to");
     fs::write(&ledger_export_path, export_bytes).expect("write ledger export");
 
@@ -4163,7 +4165,7 @@ fn sumeragi_summary_commands_against_torii_mock() {
 
     assert_summary(
         &["sumeragi", "status", "--summary"],
-        "leader=2 hqc=12/4 subj=abcdef12 lqc=10/3 subj=deadbeef gossip=1 drop=2 hint=3 proposal=4 da_resched=0 epoch_len=3600 epoch_commit=120 epoch_reveal=160 vrf_epoch=7 vrf_late=8 vrf_non_reveal=5 vrf_no_part=6 membership=0/0/0 hash=- rbc_sessions=9 rbc_bytes=1000 rbc_evictions=10 rbc_pressure=11 rbc_last=01234567@13/5 sealed=0 aliases=[-] dvp=none pvp=none",
+        "leader=2 hqc=12/4 subj=abcdef12 lqc=10/3 subj=deadbeef gossip=1 drop=2 hint=3 proposal=4 da_resched=0 da_gate=none(last=none;missing=0) epoch_len=3600 epoch_commit=120 epoch_reveal=160 vrf_epoch=7 vrf_late=8 vrf_non_reveal=5 vrf_no_part=6 membership=0/0/0 hash=- rbc_sessions=9 rbc_bytes=1000 rbc_evictions=10 rbc_pressure=11 rbc_last=01234567@13/5 sealed=0 aliases=[-] dvp=none pvp=none",
     );
     assert_summary(
         &["sumeragi", "leader", "--summary"],

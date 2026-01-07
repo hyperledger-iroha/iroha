@@ -38,7 +38,6 @@ pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
 use iroha_torii_shared::uri as torii_uri;
 use iroha_version::{DecodeAll, codec::EncodeVersioned};
 use norito::{
-    codec::Decode,
     decode_from_bytes,
     derive::{JsonDeserialize, JsonSerialize},
     json::{Map as JsonMap, Value as JsonValue},
@@ -73,7 +72,7 @@ use crate::{
     },
     data_model::{
         ChainId,
-        block::{BlockHeader, SignedBlock},
+        block::SignedBlock,
         consensus::Qc,
         events::pipeline::{
             BlockEventFilter, BlockStatus, PipelineEventBox, PipelineEventFilterBox,

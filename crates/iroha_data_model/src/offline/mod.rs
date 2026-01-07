@@ -101,7 +101,7 @@ pub fn marker_series_from_public_key(
 
 /// Return receipts sorted by `(counter, tx_id)` for deterministic processing.
 #[must_use]
-pub fn canonical_receipts<'a>(receipts: &'a [OfflineSpendReceipt]) -> Vec<&'a OfflineSpendReceipt> {
+pub fn canonical_receipts(receipts: &[OfflineSpendReceipt]) -> Vec<&OfflineSpendReceipt> {
     let mut ordered: Vec<&OfflineSpendReceipt> = receipts.iter().collect();
     ordered.sort_by(|lhs, rhs| receipt_cmp(lhs, rhs));
     ordered

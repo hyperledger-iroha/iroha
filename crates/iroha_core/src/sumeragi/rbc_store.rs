@@ -70,7 +70,7 @@ pub enum StorePressure {
         /// Total payload bytes retained on disk.
         bytes: usize,
     },
-    /// Soft quota exceeded even after compaction; back-pressure should engage.
+    /// Soft quota exceeded; back-pressure should engage.
     SoftLimit {
         /// Number of sessions retained on disk.
         sessions: usize,
@@ -633,15 +633,6 @@ impl ChunkStore {
             .map(|entry| entry.persisted.payload_bytes_len())
             .sum();
 
-        let compacted = if !entries.is_empty()
-            && (self.soft_triggered(entries.len(), total_bytes)
-                || (self.max_bytes > 0 && total_bytes > self.max_bytes))
-        {
-            self.compact_delivered(&mut entries, &mut total_bytes)?
-        } else {
-            false
-        };
-
         if self.max_bytes > 0 && total_bytes > self.max_bytes {
             while total_bytes > self.max_bytes && !entries.is_empty() {
                 let entry = entries.remove(0);
@@ -669,20 +660,6 @@ impl ChunkStore {
                 bytes: total_bytes,
             }
         };
-
-        if compacted {
-            match pressure {
-                StorePressure::Normal { sessions, bytes } => {
-                    debug!(dir=?self.dir, sessions, bytes, "RBC chunk store compacted delivered payloads");
-                }
-                StorePressure::SoftLimit { sessions, bytes } => {
-                    debug!(dir=?self.dir, sessions, bytes, "RBC chunk store compacted delivered payloads but soft quota remains exceeded");
-                }
-                StorePressure::HardLimit { .. } => {
-                    // Hard eviction logging handled below.
-                }
-            }
-        }
 
         if hard_eviction {
             warn!(
@@ -714,51 +691,6 @@ impl ChunkStore {
             || (self.soft_bytes > 0 && bytes > self.soft_bytes)
     }
 
-    fn compact_delivered(
-        &self,
-        entries: &mut [Entry],
-        total_bytes: &mut usize,
-    ) -> io::Result<bool> {
-        let mut candidates: Vec<usize> = entries
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, entry)| {
-                if entry.persisted.delivered && entry.persisted.payload_bytes_len() > 0 {
-                    Some(idx)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        if candidates.is_empty() {
-            return Ok(false);
-        }
-
-        candidates.sort_by_key(|idx| entries[*idx].persisted.last_updated_ms);
-        let session_count = entries.len();
-        let mut compacted = false;
-
-        for idx in candidates {
-            let persisted = &mut entries[idx].persisted;
-            let freed = persisted.payload_bytes_len();
-            if freed == 0 {
-                continue;
-            }
-            persisted.chunks.clear();
-            self.write_session(persisted)?;
-            *total_bytes = total_bytes.saturating_sub(freed);
-            compacted = true;
-
-            if !self.soft_triggered(session_count, *total_bytes)
-                && (self.max_bytes == 0 || *total_bytes <= self.max_bytes)
-            {
-                break;
-            }
-        }
-
-        Ok(compacted)
-    }
 }
 
 fn temp_session_path(path: &Path) -> PathBuf {
@@ -1498,7 +1430,7 @@ mod tests {
     }
 
     #[test]
-    fn compaction_drops_delivered_chunk_bytes() {
+    fn store_retains_delivered_chunk_bytes_for_sampling() {
         let dir = tempdir().unwrap();
         let key = session_key(2);
         let store = ChunkStore::new(
@@ -1525,25 +1457,32 @@ mod tests {
             .persist_session(key, &session, &chain_hash, &manifest, &[])
             .expect("persist session");
         match outcome.pressure {
-            StorePressure::Normal { sessions, bytes } => {
+            StorePressure::SoftLimit { sessions, bytes } => {
                 assert_eq!(sessions, 1);
-                assert_eq!(bytes, 0, "compaction should clear chunk bytes");
+                assert!(
+                    bytes >= 64,
+                    "stored payload bytes should remain available for sampling"
+                );
             }
-            other => panic!("unexpected pressure after compaction: {other:?}"),
+            other => panic!("unexpected pressure level: {other:?}"),
         }
 
         let load = store
             .load(&chain_hash, &manifest)
-            .expect("load after compaction");
+            .expect("load after persistence");
         assert!(load.removed.is_empty());
         assert!(matches!(
             load.pressure,
-            StorePressure::Normal { sessions, bytes } if sessions == 1 && bytes == 0
+            StorePressure::SoftLimit { sessions, bytes } if sessions == 1 && bytes >= 64
         ));
         let persisted = load.sessions.into_iter().next().expect("session persisted");
         assert!(
-            persisted.chunks.is_empty(),
-            "persisted session should retain metadata but drop chunk bytes"
+            persisted.chunks.len() == 2
+                && persisted
+                    .chunks
+                    .iter()
+                    .all(|chunk| !chunk.bytes.is_empty()),
+            "persisted session should retain chunk bytes for sampling"
         );
     }
 

@@ -603,16 +603,13 @@ impl<'tx> AcceptedTransaction<'tx> {
         signature_count: usize,
         limits: &TransactionParameters,
     ) -> Result<(), AcceptTransactionFail> {
-        let signature_limit = limits
-            .max_signatures()
-            .get()
-            .try_into()
-            .expect("INTERNAL BUG: max signatures exceeds usize::MAX");
-
-        if signature_count > signature_limit {
+        let signature_limit = limits.max_signatures().get();
+        let signature_count_u64 = u64::try_from(signature_count).unwrap_or(u64::MAX);
+        if signature_count_u64 > signature_limit {
             warn!(
                 signature_count,
-                signature_limit, "rejecting transaction: signature count exceeds configured limit"
+                signature_limit,
+                "rejecting transaction: signature count exceeds configured limit"
             );
             return Err(AcceptTransactionFail::TransactionLimit(
                 TransactionLimitError {
@@ -853,13 +850,9 @@ impl<'tx> AcceptedTransaction<'tx> {
                     ));
                 }
 
-                let instruction_limit = limits
-                    .max_instructions()
-                    .get()
-                    .try_into()
-                    .expect("INTERNAL BUG: max instructions exceeds usize::MAX");
-
-                if instructions.len() > instruction_limit {
+                let instruction_limit = limits.max_instructions().get();
+                let instruction_count = u64::try_from(instructions.len()).unwrap_or(u64::MAX);
+                if instruction_count > instruction_limit {
                     return Err(AcceptTransactionFail::TransactionLimit(
                         TransactionLimitError {
                             reason: format!(
@@ -873,10 +866,8 @@ impl<'tx> AcceptedTransaction<'tx> {
             }
             Executable::Ivm(smart_contract) => {
                 let ivm_bytecode_size_limit = limits.ivm_bytecode_size().get();
-                let ivm_bytecode_size_limit_usize = usize::try_from(ivm_bytecode_size_limit)
-                    .expect("INTERNAL BUG: ivm bytecode size exceeds usize::MAX");
-
-                if smart_contract.size_bytes() > ivm_bytecode_size_limit_usize {
+                let bytecode_size = u64::try_from(smart_contract.size_bytes()).unwrap_or(u64::MAX);
+                if bytecode_size > ivm_bytecode_size_limit {
                     return Err(AcceptTransactionFail::TransactionLimit(
                         TransactionLimitError {
                             reason: format!(
@@ -920,13 +911,9 @@ impl<'tx> AcceptedTransaction<'tx> {
                     ));
                 }
 
-                let instruction_limit = limits
-                    .max_instructions()
-                    .get()
-                    .try_into()
-                    .expect("INTERNAL BUG: max instructions exceeds usize::MAX");
-
-                if decoded.len() > instruction_limit {
+                let instruction_limit = limits.max_instructions().get();
+                let decoded_len = u64::try_from(decoded.len()).unwrap_or(u64::MAX);
+                if decoded_len > instruction_limit {
                     return Err(AcceptTransactionFail::TransactionLimit(
                         TransactionLimitError {
                             reason: format!(
@@ -1112,12 +1099,9 @@ impl<'tx> AcceptedTransaction<'tx> {
                         },
                     ));
                 }
-                let instruction_limit = limits
-                    .max_instructions()
-                    .get()
-                    .try_into()
-                    .expect("INTERNAL BUG: max instructions exceeds usize::MAX");
-                if instructions.len() > instruction_limit {
+                let instruction_limit = limits.max_instructions().get();
+                let instruction_count = u64::try_from(instructions.len()).unwrap_or(u64::MAX);
+                if instruction_count > instruction_limit {
                     return Err(AcceptTransactionFail::TransactionLimit(
                         TransactionLimitError {
                             reason: format!(

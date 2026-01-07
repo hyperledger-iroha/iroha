@@ -5690,6 +5690,11 @@ async fn rebroadcast_stalled_rbc_payloads_does_not_derive_roster_for_pending_chu
         .rbc
         .sessions
         .insert(key, session);
+    let roster = harness.actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "roster should not be empty");
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
     let progress = harness
         .actor
@@ -6081,7 +6086,7 @@ async fn pacemaker_base_interval_uses_chain_block_time_on_mode_reset() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn precommit_vote_block_sync_update_is_rate_limited() {
+async fn precommit_vote_payload_broadcast_is_rate_limited() {
     let mut harness = test_actor_harness(4).await;
 
     let block = sample_block(1, 0, None);
@@ -6153,28 +6158,28 @@ async fn precommit_vote_block_sync_update_is_rate_limited() {
     let topology_peers = harness.actor.effective_commit_topology();
     let expected_targets = expected_block_sync_update_targets(&harness.actor, &topology_peers);
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let sync_updates = posts
+    let payload_posts = posts
         .iter()
         .filter(|post| {
             matches!(
                 post,
                 BackgroundPost::Post {
-                    msg: BlockMessage::BlockSyncUpdate(update),
+                    msg: BlockMessage::BlockCreated(created),
                     ..
-                } if update.block.hash() == block_hash
+                } if created.block.hash() == block_hash
             )
         })
         .count();
     assert_eq!(
-        sync_updates, expected_targets,
-        "block sync updates should be throttled across rapid precommit votes"
+        payload_posts, expected_targets,
+        "block payload broadcasts should be throttled across rapid precommit votes"
     );
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn precommit_vote_block_sync_update_cooldown_uses_chain_block_time() {
+async fn precommit_vote_payload_broadcast_cooldown_uses_chain_block_time() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -6260,28 +6265,28 @@ async fn precommit_vote_block_sync_update_cooldown_uses_chain_block_time() {
     let topology_peers = actor.effective_commit_topology();
     let expected_targets = expected_block_sync_update_targets(actor, &topology_peers);
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let sync_updates = posts
+    let payload_posts = posts
         .iter()
         .filter(|post| {
             matches!(
                 post,
                 BackgroundPost::Post {
-                    msg: BlockMessage::BlockSyncUpdate(update),
+                    msg: BlockMessage::BlockCreated(created),
                     ..
-                } if update.block.hash() == block_hash
+                } if created.block.hash() == block_hash
             )
         })
         .count();
     assert_eq!(
-        sync_updates, expected_targets,
-        "block sync update cooldown should follow chain block_time"
+        payload_posts, expected_targets,
+        "block payload broadcast cooldown should follow chain block_time"
     );
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn precommit_vote_skips_block_sync_update_for_aborted_pending() {
+async fn precommit_vote_skips_payload_broadcast_for_aborted_pending() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -6322,28 +6327,28 @@ async fn precommit_vote_skips_block_sync_update_for_aborted_pending() {
     actor.handle_vote(vote);
 
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let sync_updates = posts
+    let payload_posts = posts
         .iter()
         .filter(|post| {
             matches!(
                 post,
                 BackgroundPost::Post {
-                    msg: BlockMessage::BlockSyncUpdate(update),
+                    msg: BlockMessage::BlockCreated(created),
                     ..
-                } if update.block.hash() == block_hash
+                } if created.block.hash() == block_hash
             )
         })
         .count();
     assert_eq!(
-        sync_updates, 0,
-        "aborted pending block should not trigger block sync updates"
+        payload_posts, 0,
+        "aborted pending block should not trigger payload broadcasts"
     );
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn precommit_vote_broadcasts_block_sync_update_when_pending_untracked() {
+async fn precommit_vote_broadcasts_payload_when_pending_untracked() {
     let mut harness = test_actor_harness(4).await;
 
     let _genesis_hash = seed_genesis_block_for_state(harness.actor.state.as_ref());
@@ -6380,28 +6385,28 @@ async fn precommit_vote_broadcasts_block_sync_update_when_pending_untracked() {
     let topology_peers = harness.actor.effective_commit_topology();
     let expected_targets = expected_block_sync_update_targets(&harness.actor, &topology_peers);
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let sync_updates = posts
+    let payload_posts = posts
         .iter()
         .filter(|post| {
             matches!(
                 post,
                 BackgroundPost::Post {
-                    msg: BlockMessage::BlockSyncUpdate(update),
+                    msg: BlockMessage::BlockCreated(created),
                     ..
-                } if update.block.hash() == block_hash
+                } if created.block.hash() == block_hash
             )
         })
         .count();
     assert_eq!(
-        sync_updates, expected_targets,
-        "expected block sync update posts after local precommit"
+        payload_posts, expected_targets,
+        "expected block payload posts after local precommit"
     );
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn precommit_vote_block_sync_update_skips_aborted_pending_untracked() {
+async fn precommit_vote_payload_broadcast_skips_aborted_pending_untracked() {
     let mut harness = test_actor_harness(4).await;
 
     let _genesis_hash = seed_genesis_block_for_state(harness.actor.state.as_ref());
@@ -6437,21 +6442,21 @@ async fn precommit_vote_block_sync_update_skips_aborted_pending_untracked() {
         .maybe_broadcast_block_sync_update_for_precommit_vote(&pending, &vote);
 
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let sync_updates = posts
+    let payload_posts = posts
         .iter()
         .filter(|post| {
             matches!(
                 post,
                 BackgroundPost::Post {
-                    msg: BlockMessage::BlockSyncUpdate(update),
+                    msg: BlockMessage::BlockCreated(created),
                     ..
-                } if update.block.hash() == block_hash
+                } if created.block.hash() == block_hash
             )
         })
         .count();
     assert_eq!(
-        sync_updates, 0,
-        "aborted pending block should not trigger block sync updates"
+        payload_posts, 0,
+        "aborted pending block should not trigger payload broadcasts"
     );
 
     harness.shutdown.send();
@@ -8209,11 +8214,11 @@ async fn rbc_chunk_commit_pipeline_runs_on_completion() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rbc_chunk_accepts_minimum_size_when_chunk_max_zero() {
+async fn rbc_pending_caps_respect_minimum_chunk_size() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da_enabled = true;
-    consensus_cfg.rbc_chunk_max_bytes = 0;
+    consensus_cfg.rbc_chunk_max_bytes = 1;
     let hard_chunk_cap = usize::try_from(super::RBC_MAX_TOTAL_CHUNKS).unwrap_or(usize::MAX);
     let chunk_max_bytes = consensus_cfg.rbc_chunk_max_bytes.max(1);
     let hard_byte_cap = chunk_max_bytes.saturating_mul(hard_chunk_cap);
@@ -8525,24 +8530,24 @@ async fn handle_rbc_ready_stashes_when_derived_roster_mismatches() {
         .expect("pending stash");
     assert_eq!(pending.ready.len(), 1);
     assert!(
-        !harness
+        harness
             .actor
             .subsystems
             .da_rbc
             .rbc
             .session_rosters
             .contains_key(&key),
-        "derived roster should be cleared on mismatch"
+        "derived roster should remain until an authoritative snapshot arrives"
     );
     assert!(
-        !harness
+        harness
             .actor
             .subsystems
             .da_rbc
             .rbc
             .session_roster_sources
             .contains_key(&key),
-        "roster source should be cleared on mismatch"
+        "roster source should remain until an authoritative snapshot arrives"
     );
     let stored = harness
         .actor
@@ -8552,11 +8557,11 @@ async fn handle_rbc_ready_stashes_when_derived_roster_mismatches() {
         .sessions
         .get(&key)
         .expect("session");
-    assert!(stored.ready_signatures.is_empty());
-    assert!(!stored.sent_ready);
-    assert!(!stored.delivered);
-    assert!(stored.deliver_signature.is_none());
-    assert!(stored.deliver_sender.is_none());
+    assert_eq!(stored.ready_signatures.len(), 1);
+    assert!(stored.sent_ready);
+    assert!(stored.delivered);
+    assert!(stored.deliver_signature.is_some());
+    assert!(stored.deliver_sender.is_some());
 
     harness.shutdown.send();
 }
@@ -8759,24 +8764,24 @@ async fn handle_rbc_deliver_stashes_when_derived_roster_mismatches() {
         .expect("pending stash");
     assert_eq!(pending.deliver.len(), 1);
     assert!(
-        !harness
+        harness
             .actor
             .subsystems
             .da_rbc
             .rbc
             .session_rosters
             .contains_key(&key),
-        "derived roster should be cleared on mismatch"
+        "derived roster should remain until an authoritative snapshot arrives"
     );
     assert!(
-        !harness
+        harness
             .actor
             .subsystems
             .da_rbc
             .rbc
             .session_roster_sources
             .contains_key(&key),
-        "roster source should be cleared on mismatch"
+        "roster source should remain until an authoritative snapshot arrives"
     );
     let stored = harness
         .actor
@@ -8786,11 +8791,11 @@ async fn handle_rbc_deliver_stashes_when_derived_roster_mismatches() {
         .sessions
         .get(&key)
         .expect("session");
-    assert!(stored.ready_signatures.is_empty());
-    assert!(!stored.delivered);
-    assert!(!stored.sent_ready);
-    assert!(stored.deliver_signature.is_none());
-    assert!(stored.deliver_sender.is_none());
+    assert_eq!(stored.ready_signatures.len(), 3);
+    assert!(stored.delivered);
+    assert!(stored.sent_ready);
+    assert!(stored.deliver_signature.is_some());
+    assert!(stored.deliver_sender.is_some());
 
     harness.shutdown.send();
 }
@@ -8840,6 +8845,66 @@ async fn maybe_emit_rbc_ready_skips_invalid_session() {
     assert!(stored.is_invalid());
     assert!(!stored.sent_ready);
     assert_eq!(stored.ready_signatures.len(), 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_emit_rbc_ready_marks_invalid_and_clears_pending_on_chunk_root_mismatch() {
+    let mut harness = test_actor_harness(4).await;
+    let key = session_key();
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let epoch = harness.actor.epoch_for_height(key.1);
+    let mut session =
+        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+            .expect("session");
+    session.expected_chunk_root = Some(Hash::prehashed([0xAA; 32]));
+
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session);
+    let roster = harness.actor.effective_commit_topology();
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+    let pending = harness.actor.pending_rbc_slot(key);
+    let _ = pending.push_chunk_capped(
+        crate::sumeragi::consensus::RbcChunk {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            epoch,
+            idx: 0,
+            bytes: vec![0xAB],
+        },
+        usize::MAX,
+        usize::MAX,
+        std::time::Instant::now(),
+    );
+
+    harness
+        .actor
+        .maybe_emit_rbc_ready(key)
+        .expect("maybe emit ready");
+
+    let stored = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(stored.is_invalid());
+    assert!(
+        !harness.actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "pending stash should be cleared after invalidation"
+    );
 
     harness.shutdown.send();
 }
@@ -9265,6 +9330,71 @@ async fn recover_block_from_rbc_session_requests_missing_block_created() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn recover_block_from_rbc_session_marks_invalid_on_payload_hash_mismatch() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let block = sample_block(height, u32::try_from(view).expect("view fits u32"), None);
+    let block_hash = block.hash();
+    let key = (block_hash, height, view);
+
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        1024,
+        actor.epoch_for_height(height),
+    )
+    .expect("session");
+    session.payload_hash = Some(Hash::prehashed([0xEE; 32]));
+    session.test_set_delivered(true);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(
+        key,
+        actor.effective_commit_topology(),
+        super::RbcRosterSource::Network,
+    );
+    let pending = actor.pending_rbc_slot(key);
+    let _ = pending.push_chunk_capped(
+        crate::sumeragi::consensus::RbcChunk {
+            block_hash,
+            height,
+            view,
+            epoch: actor.epoch_for_height(height),
+            idx: 0,
+            bytes: vec![0xCD],
+        },
+        usize::MAX,
+        usize::MAX,
+        std::time::Instant::now(),
+    );
+
+    actor.recover_block_from_rbc_session(key);
+
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(stored.is_invalid());
+    assert!(
+        !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "pending stash should be cleared on mismatch"
+    );
+    assert!(
+        actor.pending.missing_block_requests.contains_key(&block_hash),
+        "mismatch should still trigger missing-block recovery"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn seed_rbc_session_from_block_records_roster_snapshot() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -9356,7 +9486,34 @@ async fn record_rbc_session_roster_overrides_derived_with_authoritative() {
     roster_b.pop();
     assert!(!roster_b.is_empty(), "roster should remain non-empty");
 
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let epoch = actor.epoch_for_height(height);
+    let mut session =
+        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+            .expect("session");
+    session.record_ready(42, vec![0xAA]);
+    session.sent_ready = true;
+    session.delivered = true;
+    session.deliver_sender = Some(42);
+    session.deliver_signature = Some(vec![0xBB]);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
     actor.record_rbc_session_roster(key, roster_a, super::RbcRosterSource::Derived);
+    let pending = actor.pending_rbc_slot(key);
+    let _ = pending.push_chunk_capped(
+        crate::sumeragi::consensus::RbcChunk {
+            block_hash,
+            height,
+            view,
+            epoch,
+            idx: 0,
+            bytes: vec![0xCD],
+        },
+        usize::MAX,
+        usize::MAX,
+        std::time::Instant::now(),
+    );
     actor
         .subsystems
         .da_rbc
@@ -9386,6 +9543,22 @@ async fn record_rbc_session_roster_overrides_derived_with_authoritative() {
             .rbc
             .persisted_full_sessions
             .contains(&key)
+    );
+    let session = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session stored");
+    assert!(session.ready_signatures.is_empty());
+    assert!(!session.sent_ready);
+    assert!(!session.delivered);
+    assert!(session.deliver_signature.is_none());
+    assert!(session.deliver_sender.is_none());
+    assert!(
+        !actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "pending stash should be cleared after roster override"
     );
 
     harness.shutdown.send();
@@ -26798,8 +26971,16 @@ fn chunk_payload_bytes_splits_payload() {
 }
 
 #[test]
+fn chunk_payload_bytes_encodes_empty_payload_as_single_chunk() {
+    let payload: Vec<u8> = Vec::new();
+    let chunks = super::rbc::chunk_payload_bytes(&payload, 4);
+    assert_eq!(chunks.len(), 1);
+    assert!(chunks[0].is_empty());
+}
+
+#[test]
 fn chunk_count_tracks_payload_length() {
-    assert_eq!(super::rbc::chunk_count(0, 4), 0);
+    assert_eq!(super::rbc::chunk_count(0, 4), 1);
     assert_eq!(super::rbc::chunk_count(1, 4), 1);
     assert_eq!(super::rbc::chunk_count(4, 4), 1);
     assert_eq!(super::rbc::chunk_count(5, 4), 2);
