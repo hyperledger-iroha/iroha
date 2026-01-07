@@ -5583,7 +5583,7 @@ class ToriiClient:
             scheme, rest = raw.split(":", 1)
             if scheme and scheme.lower() != "blake2b32":
                 raise RuntimeError(f"{context}.{key} must be a 32-byte hex string")
-            raw = rest
+            raw = rest.strip()
         if raw.startswith(("0x", "0X")):
             raw = raw[2:]
         if len(raw) != 64 or any(ch not in "0123456789abcdefABCDEF" for ch in raw):

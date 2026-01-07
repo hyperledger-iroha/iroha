@@ -5375,7 +5375,7 @@ fileprivate func canonicalizeZkBallotHexHint(_ raw: String, field: String) throw
         if !scheme.isEmpty && scheme.lowercased() != "blake2b32" {
             throw ToriiClientError.invalidPayload("\(field) must be a 32-byte hex string.")
         }
-        trimmed = rest
+        trimmed = rest.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
         trimmed = String(trimmed.dropFirst(2))

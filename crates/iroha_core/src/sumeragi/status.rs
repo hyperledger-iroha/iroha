@@ -427,11 +427,14 @@ static QC_STATUS_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[cfg(test)]
 static VALIDATION_REJECT_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[cfg(test)]
+static RBC_STATUS_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+#[cfg(test)]
 thread_local! {
     static COMMIT_HISTORY_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
     static KURA_STORE_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
     static DA_GATE_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
     static QC_STATUS_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
+    static RBC_STATUS_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
     static MISSING_BLOCK_FETCH_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
     static VIEW_CHANGE_CAUSE_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
     static VALIDATION_REJECT_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
@@ -5225,7 +5228,17 @@ pub(crate) fn qc_status_test_guard() -> TestLockGuard<'static> {
 }
 
 #[cfg(test)]
+#[allow(private_interfaces)]
+pub(crate) fn rbc_status_test_guard() -> TestLockGuard<'static> {
+    reentrant_test_guard(&RBC_STATUS_TEST_LOCK, &RBC_STATUS_LOCK_HELD)
+}
+
+#[cfg(test)]
 pub(crate) fn reset_rbc_store_evictions_for_tests() {
+    RBC_STORE_SESSIONS.store(0, Ordering::Relaxed);
+    RBC_STORE_BYTES.store(0, Ordering::Relaxed);
+    RBC_STORE_PRESSURE_LEVEL.store(0, Ordering::Relaxed);
+    RBC_STORE_BACKPRESSURE_DEFERRALS_TOTAL.store(0, Ordering::Relaxed);
     RBC_STORE_EVICTIONS_TOTAL.store(0, Ordering::Relaxed);
     if let Some(slot) = RBC_STORE_RECENT_EVICTIONS.get() {
         slot.lock()
@@ -5766,6 +5779,7 @@ mod tests {
 
     #[test]
     fn rbc_backlog_snapshot_updates() {
+        let _guard = super::rbc_status_test_guard();
         super::reset_rbc_backlog_stats_for_tests();
         super::set_rbc_backlog_snapshot(10, 4, 2);
         super::set_rbc_lane_backlog(vec![super::LaneRbcSnapshot {
@@ -6147,6 +6161,7 @@ mod tests {
 
     #[test]
     fn rbc_store_pressure_snapshot_updates() {
+        let _guard = super::rbc_status_test_guard();
         super::reset_rbc_store_evictions_for_tests();
         super::set_rbc_store_pressure(0, 0, 0);
         super::set_rbc_store_pressure(3, 4_096, 1);

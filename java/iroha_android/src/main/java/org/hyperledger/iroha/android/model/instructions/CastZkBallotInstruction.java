@@ -221,7 +221,7 @@ public final class CastZkBallotInstruction implements InstructionTemplate {
         throw new IllegalArgumentException(
             "publicInputsJson " + field + " must be 32-byte hex");
       }
-      trimmed = rest;
+      trimmed = rest.trim();
     }
     if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
       trimmed = trimmed.substring(2);

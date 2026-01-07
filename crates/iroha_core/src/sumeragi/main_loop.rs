@@ -4555,12 +4555,16 @@ impl Actor {
         if roster.is_empty() {
             return;
         }
-        self.subsystems
+        if let Entry::Vacant(entry) = self
+            .subsystems
             .da_rbc
             .rbc
             .session_rosters
             .entry(key)
-            .or_insert(roster);
+        {
+            entry.insert(roster);
+            self.subsystems.da_rbc.rbc.persisted_full_sessions.remove(&key);
+        }
     }
 
     fn clear_rbc_session_roster(&mut self, key: &super::rbc_store::SessionKey) {
@@ -6874,7 +6878,7 @@ impl Actor {
 
             let total = session.total_chunks();
             if total != 0 && session.received_chunks() < total {
-                let commit_topology = self.rbc_session_roster(key);
+                let commit_topology = self.ensure_rbc_session_roster(key);
                 if commit_topology.is_empty() {
                     debug!(
                         height = key.1,
@@ -6924,7 +6928,7 @@ impl Actor {
                 session.sent_ready = true;
                 Ok(Some(ready))
             } else {
-                let commit_topology = self.rbc_session_roster(key);
+                let commit_topology = self.ensure_rbc_session_roster(key);
                 if commit_topology.is_empty() {
                     debug!(
                         height = key.1,
@@ -7037,7 +7041,7 @@ impl Actor {
         key: super::rbc_store::SessionKey,
         session: &RbcSession,
     ) {
-        let roster = self.rbc_session_roster(key);
+        let roster = self.ensure_rbc_session_roster(key);
         if roster.is_empty() {
             return;
         }
@@ -7056,10 +7060,23 @@ impl Actor {
         if readies.is_empty() {
             return;
         }
-        let topology_peers = self.rbc_session_roster(key);
+        let expected_hash = readies.first().map(|ready| ready.roster_hash);
+        let topology_peers = self.ensure_rbc_session_roster(key);
         let local_peer_id = self.common_config.peer.id().clone();
         if topology_peers.is_empty() {
             return;
+        }
+        if let Some(expected_hash) = expected_hash {
+            let computed_hash = rbc::rbc_roster_hash(&topology_peers);
+            if computed_hash != expected_hash {
+                warn!(
+                    ?key,
+                    ?expected_hash,
+                    ?computed_hash,
+                    "skipping RBC READY rebroadcast: roster hash mismatch"
+                );
+                return;
+            }
         }
         let now = Instant::now();
         let cooldown = self.rebroadcast_cooldown();

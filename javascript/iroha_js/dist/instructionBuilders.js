@@ -1462,28 +1462,158 @@ function normalizeVotingMode(value, name) {
 }
 
 function normalizeJsonPayload(value, name) {
+  if (value === null || value === undefined) {
+    return "{}";
+  }
+  let payload = value;
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (!trimmed) {
       fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
     }
-    return trimmed;
+    try {
+      payload = JSON.parse(trimmed);
+    } catch (error) {
+      fail(
+        ValidationErrorCode.INVALID_JSON_VALUE,
+        `${name} must be valid JSON`,
+        name,
+        error,
+      );
+    }
   }
-  if (value === null || value === undefined) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be provided`, name);
+  const normalized = normalizeZkBallotPublicInputs(payload, name);
+  return canonicalJsonStringify(normalized, name);
+}
+
+function canonicalJsonStringify(value, name) {
+  return JSON.stringify(canonicalizeJsonValue(value, name, new Set()));
+}
+
+function canonicalizeJsonValue(value, name, stack) {
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    return value;
   }
-  try {
-    return JSON.stringify(value);
-  } catch (error) {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      fail(ValidationErrorCode.INVALID_JSON_VALUE, `${name} must not contain non-finite numbers`, name);
+    }
+    return value;
+  }
+  if (typeof value === "bigint") {
+    fail(ValidationErrorCode.INVALID_JSON_VALUE, `${name} must not contain BigInt values`, name);
+  }
+  if (typeof value === "function" || typeof value === "symbol") {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => canonicalizeJsonValue(entry, name, stack));
+  }
+  if (value && typeof value === "object") {
+    if (typeof value.toJSON === "function") {
+      return canonicalizeJsonValue(value.toJSON(), name, stack);
+    }
+    if (stack.has(value)) {
+      fail(
+        ValidationErrorCode.INVALID_JSON_VALUE,
+        `${name} must not contain circular references`,
+        name,
+      );
+    }
+    stack.add(value);
+    const result = {};
+    const keys = Object.keys(value).sort();
+    for (const key of keys) {
+      const entry = value[key];
+      if (entry === undefined || typeof entry === "function" || typeof entry === "symbol") {
+        continue;
+      }
+      result[key] = canonicalizeJsonValue(entry, name, stack);
+    }
+    stack.delete(value);
+    return result;
+  }
+  return value;
+}
+
+function normalizeZkBallotPublicInputs(value, name) {
+  const normalized = { ...assertPlainObject(value, name) };
+  normalizePublicInputAlias(normalized, "durationBlocks", "duration_blocks", name);
+  normalizePublicInputAlias(normalized, "nullifierHex", "nullifier_hex", name);
+  normalizePublicInputAlias(normalized, "rootHintHex", "root_hint", name);
+  normalizePublicInputAlias(normalized, "rootHint", "root_hint", name);
+  normalizeZkBallotPublicInputHex(normalized, "root_hint", name);
+  normalizeZkBallotPublicInputHex(normalized, "nullifier_hex", name);
+
+  const hasOwner = normalized.owner !== undefined && normalized.owner !== null;
+  const hasAmount = normalized.amount !== undefined && normalized.amount !== null;
+  const hasDuration =
+    normalized.duration_blocks !== undefined && normalized.duration_blocks !== null;
+  const hasAnyLockHint = hasOwner || hasAmount || hasDuration;
+  if (hasAnyLockHint && !(hasOwner && hasAmount && hasDuration)) {
     fail(
-      ValidationErrorCode.INVALID_JSON_VALUE,
-      `failed to serialise ${name}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must include owner, amount, and duration_blocks when providing lock hints`,
       name,
-      error,
     );
   }
+  return normalized;
+}
+
+function normalizeZkBallotPublicInputHex(target, key, name) {
+  if (!Object.prototype.hasOwnProperty.call(target, key)) {
+    return;
+  }
+  const value = target[key];
+  if (value === null) {
+    return;
+  }
+  if (typeof value !== "string") {
+    fail(
+      ValidationErrorCode.INVALID_HEX,
+      `${name}.${key} must be a 32-byte hex string`,
+      name,
+    );
+  }
+  const trimmed = value.trim();
+  let body = trimmed;
+  if (trimmed.includes(":")) {
+    const [scheme, rest] = trimmed.split(":", 2);
+    if (scheme && scheme.toLowerCase() !== "blake2b32") {
+      fail(
+        ValidationErrorCode.INVALID_HEX,
+        `${name}.${key} must be a 32-byte hex string`,
+        name,
+      );
+    }
+    body = rest.trim();
+  }
+  if (body.startsWith("0x") || body.startsWith("0X")) {
+    body = body.slice(2);
+  }
+  if (!/^[0-9a-fA-F]{64}$/.test(body)) {
+    fail(
+      ValidationErrorCode.INVALID_HEX,
+      `${name}.${key} must be a 32-byte hex string`,
+      name,
+    );
+  }
+  target[key] = body.toLowerCase();
+}
+
+function normalizePublicInputAlias(target, aliasKey, canonicalKey, name) {
+  if (!Object.prototype.hasOwnProperty.call(target, aliasKey)) {
+    return;
+  }
+  if (Object.prototype.hasOwnProperty.call(target, canonicalKey)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} cannot include both ${aliasKey} and ${canonicalKey}`,
+      name,
+    );
+  }
+  target[canonicalKey] = target[aliasKey];
+  delete target[aliasKey];
 }
 
 function normalizeUintString(value, name) {

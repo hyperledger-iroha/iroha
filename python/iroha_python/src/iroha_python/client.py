@@ -670,7 +670,7 @@ def _normalize_governance_public_hex_hint(
         scheme, rest = raw.split(":", 1)
         if scheme and scheme.lower() != "blake2b32":
             raise ValueError(f"{context}.{key} must be a 32-byte hex string")
-        raw = rest
+        raw = rest.strip()
     if raw.startswith(("0x", "0X")):
         raw = raw[2:]
     if not re.fullmatch(r"[0-9a-fA-F]{64}", raw):

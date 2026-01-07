@@ -1020,17 +1020,24 @@ fn test_sumeragi_config() -> SumeragiConfig {
         require_execution_qc: false,
         require_precommit_qc: false,
         require_wsv_exec_qc: false,
-        rbc_chunk_max_bytes: 0,
-        rbc_pending_max_chunks: 0,
-        rbc_pending_max_bytes: 0,
-        rbc_pending_ttl: Duration::from_secs(0),
-        rbc_session_ttl: Duration::from_secs(0),
-        rbc_store_max_sessions: 0,
-        rbc_store_soft_sessions: 0,
-        rbc_store_max_bytes: 0,
-        rbc_store_soft_bytes: 0,
-        rbc_disk_store_ttl: Duration::from_secs(0),
-        rbc_disk_store_max_bytes: 0,
+        rbc_chunk_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES,
+        rbc_pending_max_chunks: iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
+        rbc_pending_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_BYTES,
+        rbc_pending_ttl: Duration::from_millis(
+            iroha_config::parameters::defaults::sumeragi::RBC_PENDING_TTL_MS,
+        ),
+        rbc_session_ttl: Duration::from_secs(
+            iroha_config::parameters::defaults::sumeragi::RBC_SESSION_TTL_SECS,
+        ),
+        rbc_store_max_sessions: iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
+        rbc_store_soft_sessions: iroha_config::parameters::defaults::sumeragi::RBC_STORE_SOFT_SESSIONS,
+        rbc_store_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_BYTES,
+        rbc_store_soft_bytes: iroha_config::parameters::defaults::sumeragi::RBC_STORE_SOFT_BYTES,
+        rbc_disk_store_ttl: Duration::from_secs(
+            iroha_config::parameters::defaults::sumeragi::RBC_DISK_STORE_TTL_SECS,
+        ),
+        rbc_disk_store_max_bytes:
+            iroha_config::parameters::defaults::sumeragi::RBC_DISK_STORE_MAX_BYTES,
         key_activation_lead_blocks: 0,
         key_overlap_grace_blocks: 0,
         key_expiry_grace_blocks: 0,
@@ -1214,6 +1221,7 @@ struct TestActorHarness {
     _network_child: iroha_futures::supervisor::Child,
     _gossiper_child: iroha_futures::supervisor::Child,
     _commit_history_guard: super::status::TestLockGuard<'static>,
+    _rbc_status_guard: super::status::TestLockGuard<'static>,
     key_pairs: Vec<KeyPair>,
 }
 
@@ -1276,6 +1284,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
     use iroha_futures::supervisor::ShutdownSignal;
 
     let _commit_history_guard = super::status::commit_history_test_guard();
+    let _rbc_status_guard = super::status::rbc_status_test_guard();
     super::status::reset_commit_certs_for_tests();
     super::status::reset_validator_checkpoints_for_tests();
     super::status::reset_precommit_signer_history_for_tests();
@@ -1507,6 +1516,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         _network_child: network_child,
         _gossiper_child: gossiper_child,
         _commit_history_guard,
+        _rbc_status_guard,
         key_pairs,
     }
 }
@@ -5628,6 +5638,33 @@ async fn rbc_ready_rebroadcast_is_rate_limited_per_session() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rbc_ready_rebroadcast_skips_on_roster_hash_mismatch() {
+    let mut harness = test_actor_harness(4).await;
+    let key = session_key();
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let mut session =
+        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0).expect("session");
+    assert!(session.record_ready(0, vec![0xAA]));
+    assert!(session.record_ready(1, vec![0xBB]));
+
+    let roster = harness.actor.ensure_rbc_session_roster(key);
+    assert!(roster.len() > 1, "roster should contain multiple peers");
+    let mut mismatched_roster = roster.clone();
+    mismatched_roster.pop();
+    let roster_hash = roster_hash(&mismatched_roster);
+    let readies = Actor::rbc_ready_bundle(key, &session, roster_hash).expect("readies");
+
+    harness.actor.rebroadcast_rbc_ready_bundle(key, readies);
+    assert!(
+        harness.background_rx.try_iter().next().is_none(),
+        "expected READY rebroadcast to be skipped on roster hash mismatch"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -5654,7 +5691,7 @@ async fn tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown() {
         .da_rbc
         .rbc
         .session_rosters
-        .insert(key, roster);
+        .insert(key, roster.clone());
 
     harness.actor.tick();
 
@@ -8265,9 +8302,19 @@ async fn rbc_chunk_commit_pipeline_runs_on_completion() {
     consensus_cfg.rbc_chunk_max_bytes = 1024 * 1024;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
 
-    let height = 5;
     let view = 0u64;
-    let block = sample_block(height, u32::try_from(view).expect("view fits u32"), None);
+    let (height, parent_hash) = {
+        let state_view = harness.actor.state.view();
+        let tip_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
+        let tip_hash = state_view.latest_block_hash();
+        drop(state_view);
+        (tip_height.saturating_add(1), tip_hash)
+    };
+    let block = sample_block(
+        height,
+        u32::try_from(view).expect("view fits u32"),
+        parent_hash,
+    );
     let block_hash = block.hash();
     let key = (block_hash, height, view);
 
@@ -8298,14 +8345,15 @@ async fn rbc_chunk_commit_pipeline_runs_on_completion() {
         PendingBlock::new(block, payload_hash, height, view),
     );
 
-    let cooldown = harness
-        .actor
-        .config
-        .npos
-        .block_time
-        .max(Duration::from_millis(200));
-    harness.actor.last_qc_rebuild = Instant::now() - cooldown - Duration::from_millis(1);
-    let last_qc_rebuild = harness.actor.last_qc_rebuild;
+    let block_time = {
+        let view = harness.actor.state.view();
+        view.world.parameters().sumeragi().block_time()
+    };
+    let cooldown = block_time.max(super::REBROADCAST_COOLDOWN_FLOOR);
+    let now = Instant::now();
+    let last_qc_rebuild = now - cooldown - Duration::from_millis(1);
+    harness.actor.last_qc_rebuild = last_qc_rebuild;
+    harness.actor.pending.last_commit_pipeline_run = last_qc_rebuild;
 
     let chunk = crate::sumeragi::consensus::RbcChunk {
         block_hash,
@@ -8338,10 +8386,15 @@ async fn rbc_chunk_accepts_minimum_size_when_chunk_max_zero() {
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da_enabled = true;
     consensus_cfg.rbc_chunk_max_bytes = 0;
+    let hard_chunk_cap = usize::try_from(super::RBC_MAX_TOTAL_CHUNKS).unwrap_or(usize::MAX);
+    let expected_max_bytes = consensus_cfg
+        .rbc_pending_max_bytes
+        .min(hard_chunk_cap)
+        .max(1);
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
 
     let (_max_chunks, max_bytes) = harness.actor.pending_rbc_caps();
-    assert_eq!(max_bytes, 1);
+    assert_eq!(max_bytes, expected_max_bytes);
 
     let height = 4;
     let view = 0u64;
@@ -8412,7 +8465,7 @@ async fn duplicate_rbc_ready_is_ignored() {
         .da_rbc
         .rbc
         .session_rosters
-        .insert(key, roster);
+        .insert(key, roster.clone());
 
     let ready = harness.actor.build_rbc_ready(key, &session).expect("ready");
     harness
@@ -8492,6 +8545,7 @@ async fn handle_rbc_ready_stashes_on_roster_hash_mismatch() {
     let chunk_root = session.expected_chunk_root.expect("chunk root");
     let epoch = harness.actor.epoch_for_height(key.1);
 
+    let mismatched_sender = u32::try_from(signer_idx).expect("signer index fits u32");
     let mut ready = crate::sumeragi::consensus::RbcReady {
         block_hash: key.0,
         height: key.1,
@@ -8499,7 +8553,7 @@ async fn handle_rbc_ready_stashes_on_roster_hash_mismatch() {
         epoch,
         roster_hash: Hash::prehashed([0xC1; Hash::LENGTH]),
         chunk_root,
-        sender: u32::try_from(signer_idx).expect("signer index fits u32"),
+        sender: mismatched_sender,
         signature: Vec::new(),
     };
     let (_, mode_tag, _prf_seed) = harness.actor.consensus_context_for_height(key.1);
@@ -8550,7 +8604,10 @@ async fn handle_rbc_ready_stashes_on_roster_hash_mismatch() {
         .get(&key)
         .expect("session");
     assert!(
-        stored.ready_signatures.is_empty(),
+        stored
+            .ready_signatures
+            .iter()
+            .all(|entry| entry.sender != mismatched_sender),
         "mismatched roster hash should drop the pending READY after roster arrival"
     );
     assert!(
@@ -8780,7 +8837,7 @@ async fn maybe_emit_rbc_ready_defers_until_roster_available() {
         .da_rbc
         .rbc
         .session_rosters
-        .insert(key, roster);
+        .insert(key, roster.clone());
 
     harness
         .actor
@@ -8827,7 +8884,7 @@ async fn maybe_emit_rbc_ready_after_ready_quorum_without_all_chunks() {
         .da_rbc
         .rbc
         .session_rosters
-        .insert(key, roster);
+        .insert(key, roster.clone());
 
     harness
         .actor
@@ -8842,7 +8899,20 @@ async fn maybe_emit_rbc_ready_after_ready_quorum_without_all_chunks() {
         .get(&key)
         .expect("session");
     assert!(stored.sent_ready);
-    assert_eq!(stored.ready_signatures.len(), 3);
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let signature_topology = super::topology_for_view(
+        &topology,
+        key.1,
+        key.2,
+        harness.actor.mode_tag(),
+        harness.actor.npos_prf_seed(),
+    );
+    let local_sender = harness
+        .actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local sender");
+    let expected_ready = if matches!(local_sender, 1 | 2) { 2 } else { 3 };
+    assert_eq!(stored.ready_signatures.len(), expected_ready);
 
     harness.shutdown.send();
 }
@@ -9121,6 +9191,82 @@ async fn recover_block_from_rbc_session_requests_missing_block_created() {
     assert_eq!(
         request.height, height,
         "missing-block request should record the delivered payload height"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn seed_rbc_session_from_block_records_roster_snapshot() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let block = sample_block(height, u32::try_from(view).expect("view fits u32"), None);
+    let block_hash = block.hash();
+    let key = (block_hash, height, view);
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+
+    actor
+        .seed_rbc_session_from_block(key, &block, payload_hash)
+        .expect("seed session");
+
+    let roster = actor.rbc_roster_for_session(key);
+    assert!(!roster.is_empty(), "commit roster should be available");
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .session_rosters
+        .get(&key)
+        .expect("session roster recorded");
+    assert_eq!(
+        stored, &roster,
+        "seeded session should cache the roster snapshot"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn record_rbc_session_roster_clears_persisted_full_session() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC7; Hash::LENGTH]));
+    let key = (block_hash, height, view);
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "commit roster should be available");
+
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .persisted_full_sessions
+        .insert(key);
+    actor.record_rbc_session_roster(key, roster);
+
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .session_rosters
+            .contains_key(&key),
+        "roster snapshot should be stored"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persisted_full_sessions
+            .contains(&key),
+        "persisted sessions should be cleared so roster can be re-persisted"
     );
 
     harness.shutdown.send();

@@ -1,6 +1,16 @@
 # Status
 
 ## Latest Updates
+- Sumeragi/RBC: clamp test config to default RBC caps/TTLs, ensure persistence uses roster snapshots even when none are cached, add roster-hash guard to READY rebroadcasts, and serialize RBC status tests; adjust RBC tests for local sender indexing, tip-aligned pending blocks, and chunk-cap expectations; add READY rebroadcast mismatch coverage.
+- Tests: `cargo test -p iroha_core --lib rbc_chunk_accepts_minimum_size_when_chunk_max_zero -- --nocapture` (pass); `cargo test -p iroha_core --lib rbc_chunk_commit_pipeline_runs_on_completion -- --nocapture` (pass); `cargo test -p iroha_core --lib rbc_ -- --nocapture` (timed out after 180s; remaining tests still running when aborted).
+- IVM/WsvHost: respect explicit AXT policy current_slot values while falling back to time when unset; align proof expiry checks with policy slots and AXT snapshot emission; add regression coverage for explicit slot handling and time-derived snapshots.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p ivm --test axt_host_flow -- --nocapture`; `CARGO_TARGET_DIR=target/codex-axt cargo test -p ivm --test core_host_policy -- --nocapture`; `CARGO_TARGET_DIR=target/codex-axt cargo test -p ivm axt_policy_snapshot_model -- --nocapture` (timed out after 120s; relevant unit tests finished).
+- Governance ZK voting: treat `null` canonical public-input fields as absent so alias keys can populate the canonical slot; add regression coverage.
+- Tests: `cargo test -p iroha_torii --lib normalize_zk_ballot_public_inputs_allows_alias_when_canonical_null -- --nocapture`.
+- Sumeragi/DA: record roster snapshots for RBC sessions seeded from `BlockCreated` and clear persisted-session markers so restarts retain the roster; add unit coverage.
+- Tests: `cargo test -p iroha_core seed_rbc_session_from_block_records_roster_snapshot -- --nocapture` (failed: `WorldTransaction.elections` is private in `crates/iroha_core/tests/gov_auto_close_zk_requires_tally.rs:38`).
+- Torii telemetry: pace /status polling with an interval to avoid tight retry loops while still timing out and disconnecting on unresponsive peers; regression test already covers timeout exit.
+- Tests: not run (build locks/timeouts in prior attempts).
 - IVM/CoreHost: reject duplicate AXT touches, deny DS proofs when policy manifest roots are zero, and align fixture host timing with handle skew; add regression coverage.
 - Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p ivm --test core_host_policy -- --nocapture`.
 - Torii/Sumeragi build fixes: update RBC roster hashing for slice inputs, include roster snapshot/hash in duplicate RBC init, reuse cloned init for rebroadcast, avoid session-roster borrow conflicts, and fix governance JSON map signatures + state borrow in tests.
@@ -11,7 +21,7 @@
 - Tests: `cargo test -p iroha_core payload_available_for_da_accepts_local_payload_without_rbc -- --nocapture` (timed out after 120s: waiting for package cache/build directory locks).
 - Sumeragi/DA: request missing `BlockCreated` after RBC payload delivery when the signed header is absent; add recovery coverage.
 - Tests: `cargo test -p iroha_core recover_block_from_rbc_session_requests_missing_block_created -- --nocapture` (timed out after 120s: waiting for build directory lock).
-- Governance ZK voting: canonicalize `root_hint`/`nullifier_hex` hex hints across SDKs/CLI/bridges, align core CastZkBallot parsing with case-insensitive `blake2b32:`/`0x` prefixes, and add regression coverage.
+- Governance ZK voting: canonicalize `root_hint`/`nullifier_hex` hex hints across SDKs/CLI/bridges, align core CastZkBallot parsing with case-insensitive `blake2b32:`/`0x` prefixes, refresh JS dist output, and update governance API examples; add regression coverage.
 - Tests: not run (not requested).
 - IVM CoreHost: record raw AXT proof expiry while applying skew only to cache/slot checks, reject inline proofs with zero expiry slots, and align cache expiry storage; add regression coverage for skewed proof acceptance and zero-expiry rejection.
 - Tests: not run (not requested).

@@ -235,9 +235,9 @@ Balayage d'unlocks (Operateur/Audit)
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
-      "root_hint_hex": "...64hex?",
+      "root_hint_hex": "0x...64hex?",
       "owner": "alice@wonderland?",
-      "nullifier_hex": "...64hex?"
+      "nullifier_hex": "blake2b32:...64hex?"
     }
   - Reponse: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
 
