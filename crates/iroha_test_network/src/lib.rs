@@ -15,7 +15,7 @@ use std::{
     net::TcpListener,
     num::NonZero,
     ops::Deref,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::{Command, ExitStatus, Stdio},
     sync::{
         Arc, Mutex as StdMutex, OnceLock,
@@ -529,6 +529,14 @@ fn lock_path(cache_dir: &Path, pkg: &str, profile: &str) -> PathBuf {
 struct IgnoreList {
     dirs: HashSet<PathBuf>,
     files: HashSet<PathBuf>,
+    globs: Vec<IgnorePattern>,
+}
+
+#[derive(Debug)]
+struct IgnorePattern {
+    pattern: String,
+    dir_only: bool,
+    match_basename: bool,
 }
 
 fn read_build_stamp(path: &Path) -> color_eyre::Result<Option<BuildStamp>> {
@@ -608,16 +616,23 @@ fn load_ignore_list(root: &Path) -> IgnoreList {
         if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('!') {
             continue;
         }
-        if trimmed.contains('*') || trimmed.contains('?') {
-            // Ignore glob patterns for now; keeping logic simple but deterministic.
-            continue;
-        }
         let is_dir = trimmed.ends_with('/');
-        let path_str = trimmed
+        let mut path_str = trimmed
             .trim_start_matches("./")
             .trim_end_matches('/')
             .trim();
+        if let Some(stripped) = path_str.strip_prefix('/') {
+            path_str = stripped;
+        }
         if path_str.is_empty() {
+            continue;
+        }
+        if path_str.contains('*') || path_str.contains('?') {
+            list.globs.push(IgnorePattern {
+                pattern: path_str.to_string(),
+                dir_only: is_dir,
+                match_basename: !path_str.contains('/'),
+            });
             continue;
         }
         let path = PathBuf::from(path_str);
@@ -640,9 +655,8 @@ fn should_ignore_path(rel: &Path, ignore: &IgnoreList, is_dir: bool) -> bool {
                 return true;
             }
         }
-        return false;
     }
-    if ignore.files.contains(rel) {
+    if !is_dir && ignore.files.contains(rel) {
         return true;
     }
     for ignored in &ignore.dirs {
@@ -650,7 +664,80 @@ fn should_ignore_path(rel: &Path, ignore: &IgnoreList, is_dir: bool) -> bool {
             return true;
         }
     }
+    if ignore.globs.is_empty() {
+        return false;
+    }
+    let rel_str = normalize_rel_path(rel);
+    let name = rel
+        .file_name()
+        .map(|s| s.to_string_lossy())
+        .unwrap_or_else(|| Cow::Borrowed(""));
+    for pattern in &ignore.globs {
+        if pattern.dir_only && !is_dir {
+            continue;
+        }
+        let text = if pattern.match_basename {
+            name.as_ref()
+        } else {
+            rel_str.as_str()
+        };
+        if glob_match(&pattern.pattern, text) {
+            return true;
+        }
+    }
     false
+}
+
+fn normalize_rel_path(rel: &Path) -> String {
+    let mut out = String::new();
+    for component in rel.components() {
+        let Component::Normal(raw) = component else {
+            continue;
+        };
+        if !out.is_empty() {
+            out.push('/');
+        }
+        out.push_str(&raw.to_string_lossy());
+    }
+    out
+}
+
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let pattern = pattern.as_bytes();
+    let text = text.as_bytes();
+    let mut pi = 0;
+    let mut ti = 0;
+    let mut star = None;
+    let mut star_match = 0;
+    while ti < text.len() {
+        if pi < pattern.len() && (pattern[pi] == b'?' || pattern[pi] == text[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < pattern.len() && pattern[pi] == b'*' {
+            star = Some(pi);
+            pi += 1;
+            star_match = ti;
+        } else if let Some(star_pos) = star {
+            star_match += 1;
+            ti = star_match;
+            pi = star_pos + 1;
+        } else {
+            return false;
+        }
+    }
+    while pi < pattern.len() && pattern[pi] == b'*' {
+        pi += 1;
+    }
+    pi == pattern.len()
+}
+
+fn add_target_dir_to_ignore(root: &Path, ignore: &mut IgnoreList) {
+    let target_dir = resolve_target_dir(root);
+    if let Ok(relative) = target_dir.strip_prefix(root) {
+        if !relative.as_os_str().is_empty() {
+            ignore.dirs.insert(relative.to_path_buf());
+        }
+    }
 }
 
 fn workspace_members(root: &Path) -> color_eyre::Result<Vec<PathBuf>> {
@@ -877,7 +964,8 @@ fn should_skip_file(path: &Path) -> bool {
 
 fn workspace_fingerprint(root: &Path) -> color_eyre::Result<u64> {
     let mut hasher = DefaultHasher::new();
-    let ignore = load_ignore_list(root);
+    let mut ignore = load_ignore_list(root);
+    add_target_dir_to_ignore(root, &mut ignore);
     let members = workspace_members(root)?;
 
     hash_file_if_exists(root, &root.join("Cargo.toml"), &mut hasher)?;
@@ -6403,6 +6491,79 @@ mod tests {
         assert_eq!(before, after);
 
         fs::write(root.join("member/src/lib.rs"), b"pub fn greet() { 2 }\n")
+            .expect("update source file");
+        let final_fp = workspace_fingerprint(root).expect("final fingerprint");
+
+        assert_ne!(after, final_fp);
+    }
+
+    #[test]
+    fn workspace_fingerprint_respects_gitignore_globs() {
+        let temp = tempdir().expect("temporary workspace");
+        let root = temp.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"member\"]\n",
+        )
+        .expect("write manifest");
+        fs::write(root.join(".gitignore"), "target*/\n*.log\n").expect("write gitignore");
+        fs::create_dir_all(root.join("member/src")).expect("create member src directory");
+        fs::write(root.join("member/src/lib.rs"), b"pub fn greet() {}\n")
+            .expect("write source file");
+
+        let target_dir = root.join("member/target-codex");
+        fs::create_dir_all(&target_dir).expect("create target-codex directory");
+        let target_artifact = target_dir.join("artifact");
+        fs::write(&target_artifact, b"one").expect("write target artifact");
+
+        let log_path = root.join("member/build.log");
+        fs::write(&log_path, b"initial").expect("write log file");
+
+        let before = workspace_fingerprint(root).expect("initial fingerprint");
+        thread::sleep(Duration::from_millis(20));
+        fs::write(&target_artifact, b"two").expect("update target artifact");
+        fs::write(&log_path, b"updated").expect("update log file");
+        let after = workspace_fingerprint(root).expect("post-ignore fingerprint");
+
+        assert_eq!(before, after);
+
+        thread::sleep(Duration::from_millis(20));
+        fs::write(root.join("member/src/lib.rs"), b"pub fn greet() { 3 }\n")
+            .expect("update source file");
+        let final_fp = workspace_fingerprint(root).expect("final fingerprint");
+
+        assert_ne!(after, final_fp);
+    }
+
+    #[test]
+    fn workspace_fingerprint_ignores_custom_target_dir_env() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let temp = tempdir().expect("temporary workspace");
+        let root = temp.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"member\"]\n",
+        )
+        .expect("write manifest");
+        fs::create_dir_all(root.join("member/src")).expect("create member src directory");
+        fs::write(root.join("member/src/lib.rs"), b"pub fn greet() {}\n")
+            .expect("write source file");
+
+        let _target_guard = EnvVarRestore::set("CARGO_TARGET_DIR", "member/build-output");
+        let target_dir = root.join("member/build-output");
+        fs::create_dir_all(&target_dir).expect("create target directory");
+        let artifact = target_dir.join("artifact");
+        fs::write(&artifact, b"one").expect("write target artifact");
+
+        let before = workspace_fingerprint(root).expect("initial fingerprint");
+        thread::sleep(Duration::from_millis(20));
+        fs::write(&artifact, b"two").expect("update target artifact");
+        let after = workspace_fingerprint(root).expect("post-artifact fingerprint");
+
+        assert_eq!(before, after);
+
+        thread::sleep(Duration::from_millis(20));
+        fs::write(root.join("member/src/lib.rs"), b"pub fn greet() { 4 }\n")
             .expect("update source file");
         let final_fp = workspace_fingerprint(root).expect("final fingerprint");
 

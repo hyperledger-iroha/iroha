@@ -615,6 +615,7 @@ impl HostAxtState {
                     .handle
                     .binding_array()
                     .is_some_and(|prev_binding| prev_binding == binding)
+                && prev.handle.target_lane == usage.handle.target_lane
                 && usage.handle.sub_nonce <= prev.handle.sub_nonce
         }) {
             return Err(VMError::PermissionDenied);
@@ -681,11 +682,11 @@ impl HostAxtState {
                 return Err(VMError::PermissionDenied);
             }
         }
-        let mut seen_nonces: BTreeMap<([u8; 32], u64), u64> = BTreeMap::new();
+        let mut seen_nonces: BTreeMap<([u8; 32], u64, LaneId), u64> = BTreeMap::new();
         let mut accumulators: Vec<HandleAccumulator> = Vec::new();
         for usage in &self.handles {
             let binding = usage.handle.binding_array().ok_or(VMError::NoritoInvalid)?;
-            let key = (binding, usage.handle.handle_era);
+            let key = (binding, usage.handle.handle_era, usage.handle.target_lane);
             if let Some(prev) = seen_nonces.get(&key)
                 && usage.handle.sub_nonce <= *prev
             {
@@ -1176,6 +1177,64 @@ mod tests {
             .record_handle(usage)
             .expect_err("duplicate sub-nonce must be rejected");
         assert!(matches!(err, VMError::PermissionDenied));
+    }
+
+    #[test]
+    fn record_handle_allows_same_sub_nonce_across_lanes() {
+        let ds_a = DataSpaceId::new(8);
+        let ds_b = DataSpaceId::new(9);
+        let descriptor = AxtDescriptor {
+            dsids: vec![ds_a, ds_b],
+            touches: vec![
+                AxtTouchSpec {
+                    dsid: ds_a,
+                    read: vec!["orders".into()],
+                    write: vec!["ledger".into()],
+                },
+                AxtTouchSpec {
+                    dsid: ds_b,
+                    read: vec!["orders".into()],
+                    write: vec!["ledger".into()],
+                },
+            ],
+        };
+        let binding = compute_binding(&descriptor).expect("binding");
+        let mut state = HostAxtState::new(descriptor, binding);
+        state
+            .record_touch(ds_a, sample_touch_manifest())
+            .expect("touch recorded");
+        state
+            .record_touch(ds_b, sample_touch_manifest())
+            .expect("touch recorded");
+
+        let mut handle_a = sample_handle(ds_a, binding, 50, None);
+        handle_a.target_lane = LaneId::new(1);
+        let mut handle_b = sample_handle(ds_b, binding, 50, None);
+        handle_b.target_lane = LaneId::new(2);
+        handle_b.sub_nonce = handle_a.sub_nonce;
+
+        let proof = Some(ProofBlob {
+            payload: vec![1],
+            expiry_slot: None,
+        });
+        state
+            .record_handle(HandleUsage {
+                handle: handle_a,
+                intent: sample_intent(ds_a, "10"),
+                proof: proof.clone(),
+                amount: 10,
+            })
+            .expect("first usage accepted");
+        state
+            .record_handle(HandleUsage {
+                handle: handle_b,
+                intent: sample_intent(ds_b, "10"),
+                proof,
+                amount: 10,
+            })
+            .expect("second usage accepted for different lane");
+
+        assert!(matches!(state.validate_commit(), Ok(())));
     }
 
     #[test]

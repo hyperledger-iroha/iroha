@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 
 use super::{
     Actor, DataspaceAllocation, InvalidSigKind, InvalidSigOutcome, LaneAllocation,
-    MissingBlockFetchDecision, PipelinePhase, RBC_MAX_TOTAL_CHUNKS, RbcSession,
+    MissingBlockFetchDecision, PipelinePhase, RBC_MAX_TOTAL_CHUNKS, RbcRosterSource, RbcSession,
     pending_rbc::{
         PENDING_RBC_STASH_LIMIT, PendingChunkOutcome, PendingRbcDropReason, PendingRbcMessages,
     },
@@ -887,7 +887,7 @@ impl Actor {
         self.update_rbc_status_entry(key, &plan.session, false);
         self.persist_rbc_session(key, &plan.session);
 
-        self.record_rbc_session_roster(key, plan.roster.clone());
+        self.record_rbc_session_roster(key, plan.roster.clone(), RbcRosterSource::Network);
         Ok(())
     }
 
@@ -1332,18 +1332,44 @@ impl Actor {
         if let Some(existing_roster) = self.subsystems.da_rbc.rbc.session_rosters.get(&key) {
             let existing_hash = rbc_roster_hash(existing_roster);
             if existing_hash != init.roster_hash {
-                warn!(
+                let source = self
+                    .rbc_session_roster_source(key)
+                    .unwrap_or(RbcRosterSource::Derived);
+                if source.is_authoritative() {
+                    warn!(
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        expected = ?existing_hash,
+                        observed = ?init.roster_hash,
+                        "rejecting RBC init with conflicting roster snapshot"
+                    );
+                    return Ok(());
+                }
+                debug!(
                     height = init.height,
                     view = init.view,
                     block = %init.block_hash,
                     expected = ?existing_hash,
                     observed = ?init.roster_hash,
-                    "rejecting RBC init with conflicting roster snapshot"
+                    "overriding derived RBC roster snapshot with init roster"
                 );
-                return Ok(());
+                self.subsystems
+                    .da_rbc
+                    .rbc
+                    .session_rosters
+                    .insert(key, init.roster.clone());
+                self.subsystems
+                    .da_rbc
+                    .rbc
+                    .session_roster_sources
+                    .insert(key, RbcRosterSource::Network);
+                self.subsystems.da_rbc.rbc.persisted_full_sessions.remove(&key);
+            } else {
+                self.record_rbc_session_roster(key, init.roster.clone(), RbcRosterSource::Network);
             }
         } else {
-            self.record_rbc_session_roster(key, init.roster.clone());
+            self.record_rbc_session_roster(key, init.roster.clone(), RbcRosterSource::Network);
         }
         if let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) {
             if let Some(expected_hash) = session.payload_hash() {
@@ -1723,16 +1749,58 @@ impl Actor {
                 return Ok(());
             }
             topology_peers = fallback;
-            self.record_rbc_session_roster(key, topology_peers.clone());
+            self.record_rbc_session_roster(key, topology_peers.clone(), RbcRosterSource::Network);
         } else if rbc_roster_hash(&topology_peers) != ready.roster_hash {
-            warn!(
-                height = ready.height,
-                view = ready.view,
-                sender = ready.sender,
-                expected = ?rbc_roster_hash(&topology_peers),
-                observed = ?ready.roster_hash,
-                "dropping RBC READY: roster hash mismatch"
-            );
+            let source = self
+                .rbc_session_roster_source(key)
+                .unwrap_or(RbcRosterSource::Derived);
+            if source.is_authoritative() {
+                warn!(
+                    height = ready.height,
+                    view = ready.view,
+                    sender = ready.sender,
+                    expected = ?rbc_roster_hash(&topology_peers),
+                    observed = ?ready.roster_hash,
+                    "dropping RBC READY: roster hash mismatch"
+                );
+                return Ok(());
+            }
+            self.clear_rbc_session_roster(&key);
+            let max_bytes = self.pending_rbc_caps().1;
+            let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
+                let pending = self.pending_rbc_slot(key);
+                let (accepted, dropped_bytes) =
+                    pending.push_ready_capped(ready, max_bytes, Instant::now());
+                (
+                    accepted,
+                    dropped_bytes,
+                    pending.pending_chunks(),
+                    pending.pending_bytes(),
+                )
+            };
+            if accepted {
+                info!(
+                    ?key,
+                    pending_chunks,
+                    pending_bytes,
+                    ready_sender,
+                    ready_view,
+                    "stashed RBC READY: derived roster hash mismatch"
+                );
+            } else {
+                warn!(
+                    ?key,
+                    max_bytes,
+                    "dropping pending RBC READY: roster mismatch and stash limits exceeded"
+                );
+                Self::record_pending_drop_counts(
+                    self.telemetry_handle(),
+                    PendingRbcDropReason::Cap,
+                    1,
+                    u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
+                );
+            }
+            self.publish_rbc_backlog_snapshot();
             return Ok(());
         }
         let topology = crate::sumeragi::network_topology::Topology::new(topology_peers);
@@ -2193,16 +2261,56 @@ impl Actor {
                 return Ok(());
             }
             topology_peers = fallback;
-            self.record_rbc_session_roster(key, topology_peers.clone());
+            self.record_rbc_session_roster(key, topology_peers.clone(), RbcRosterSource::Network);
         } else if rbc_roster_hash(&topology_peers) != deliver.roster_hash {
-            warn!(
-                height = deliver.height,
-                view = deliver.view,
-                sender = deliver.sender,
-                expected = ?rbc_roster_hash(&topology_peers),
-                observed = ?deliver.roster_hash,
-                "dropping RBC DELIVER: roster hash mismatch"
-            );
+            let source = self
+                .rbc_session_roster_source(key)
+                .unwrap_or(RbcRosterSource::Derived);
+            if source.is_authoritative() {
+                warn!(
+                    height = deliver.height,
+                    view = deliver.view,
+                    sender = deliver.sender,
+                    expected = ?rbc_roster_hash(&topology_peers),
+                    observed = ?deliver.roster_hash,
+                    "dropping RBC DELIVER: roster hash mismatch"
+                );
+                return Ok(());
+            }
+            self.clear_rbc_session_roster(&key);
+            let max_bytes = self.pending_rbc_caps().1;
+            let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
+                let pending = self.pending_rbc_slot(key);
+                let (accepted, dropped_bytes) =
+                    pending.push_deliver_capped(deliver, max_bytes, Instant::now());
+                (
+                    accepted,
+                    dropped_bytes,
+                    pending.pending_chunks(),
+                    pending.pending_bytes(),
+                )
+            };
+            if accepted {
+                debug!(
+                    ?key,
+                    pending_chunks,
+                    pending_bytes,
+                    "stashed RBC DELIVER: derived roster hash mismatch"
+                );
+            } else {
+                warn!(
+                    ?key,
+                    max_bytes,
+                    "dropping pending RBC DELIVER: roster mismatch and stash limits exceeded"
+                );
+                Self::record_pending_drop_counts(
+                    self.telemetry_handle(),
+                    PendingRbcDropReason::Cap,
+                    1,
+                    u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
+                );
+            }
+            self.publish_rbc_backlog_snapshot();
             return Ok(());
         }
         let topology = crate::sumeragi::network_topology::Topology::new(topology_peers);
