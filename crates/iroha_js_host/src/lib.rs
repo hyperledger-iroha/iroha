@@ -4682,6 +4682,8 @@ fn normalize_zk_ballot_public_inputs(
     normalize_zk_public_input_alias(map, "nullifierHex", "nullifier_hex", context)?;
     normalize_zk_public_input_alias(map, "rootHintHex", "root_hint", context)?;
     normalize_zk_public_input_alias(map, "rootHint", "root_hint", context)?;
+    canonicalize_hex32_public_input(map, "root_hint", "root_hint", context)?;
+    canonicalize_hex32_public_input(map, "nullifier_hex", "nullifier", context)?;
     let has_owner = zk_hint_present(map, "owner");
     let has_amount = zk_hint_present(map, "amount");
     let has_duration = zk_hint_present(map, "duration_blocks");
@@ -4714,6 +4716,57 @@ fn normalize_zk_public_input_alias(
         map.insert(canonical.to_owned(), value);
     }
     Ok(())
+}
+
+fn canonicalize_hex32_public_input(
+    map: &mut json::Map,
+    key: &str,
+    label: &str,
+    context: &str,
+) -> napi::Result<()> {
+    let Some(value) = map.get_mut(key) else {
+        return Ok(());
+    };
+    if matches!(value, json::Value::Null) {
+        return Ok(());
+    }
+    let raw = value.as_str().ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context}.{label} must be 32-byte hex"),
+        )
+    })?;
+    let canonical = canonicalize_hex32_value(raw).ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context}.{label} must be 32-byte hex"),
+        )
+    })?;
+    *value = json::Value::String(canonical);
+    Ok(())
+}
+
+fn canonicalize_hex32_value(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let without_scheme = if let Some((scheme, rest)) = trimmed.split_once(':') {
+        if scheme.is_empty() || scheme.eq_ignore_ascii_case("blake2b32") {
+            rest
+        } else {
+            return None;
+        }
+    } else {
+        trimmed
+    };
+    let body = without_scheme.trim();
+    let body = body
+        .strip_prefix("0x")
+        .or_else(|| body.strip_prefix("0X"))
+        .unwrap_or(body)
+        .trim();
+    if body.len() != 64 || !body.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(body.to_ascii_lowercase())
 }
 
 fn zk_hint_present(map: &json::Map, key: &str) -> bool {
@@ -8627,6 +8680,50 @@ mod tests {
     }
 
     #[test]
+    fn governance_cast_zk_ballot_public_inputs_canonicalizes_hex_hints() {
+        let mut inner = json::Map::new();
+        inner.insert(
+            "election_id".to_owned(),
+            json::Value::String("ref-1".to_owned()),
+        );
+        inner.insert(
+            "proof_b64".to_owned(),
+            json::Value::String(BASE64.encode([0x01, 0x02])),
+        );
+        inner.insert(
+            "public_inputs_json".to_owned(),
+            json::Value::String(
+                format!(
+                    r#"{{"owner":"alice@wonderland","amount":"10","duration_blocks":64,"rootHintHex":"0x{}","nullifierHex":"blake2b32:{}"}}"#,
+                    "Aa".repeat(32),
+                    "BB".repeat(32)
+                ),
+            ),
+        );
+        let mut outer = json::Map::new();
+        outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
+
+        let instruction = value_to_instruction(json::Value::Object(outer))
+            .expect("deserialize CastZkBallot");
+        let ballot = instruction
+            .as_any()
+            .downcast_ref::<CastZkBallot>()
+            .expect("CastZkBallot");
+        let parsed: json::Value =
+            json::from_str(&ballot.public_inputs_json).expect("parse public inputs");
+        let root_hint = parsed
+            .get("root_hint")
+            .and_then(json::Value::as_str)
+            .expect("root_hint");
+        let nullifier = parsed
+            .get("nullifier_hex")
+            .and_then(json::Value::as_str)
+            .expect("nullifier_hex");
+        assert_eq!(root_hint, "aa".repeat(32));
+        assert_eq!(nullifier, "bb".repeat(32));
+    }
+
+    #[test]
     fn governance_cast_zk_ballot_public_inputs_rejects_partial_hints() {
         let mut inner = json::Map::new();
         inner.insert(
@@ -8662,6 +8759,29 @@ mod tests {
             "public_inputs_json".to_owned(),
             json::Value::String(
                 r#"{"owner":"alice@wonderland","amount":"10","duration_blocks":64,"rootHint":"aa","root_hint":"bb"}"#.to_owned(),
+            ),
+        );
+        let mut outer = json::Map::new();
+        outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
+
+        assert!(value_to_instruction(json::Value::Object(outer)).is_err());
+    }
+
+    #[test]
+    fn governance_cast_zk_ballot_public_inputs_rejects_invalid_hex() {
+        let mut inner = json::Map::new();
+        inner.insert(
+            "election_id".to_owned(),
+            json::Value::String("ref-1".to_owned()),
+        );
+        inner.insert(
+            "proof_b64".to_owned(),
+            json::Value::String(BASE64.encode([0x01])),
+        );
+        inner.insert(
+            "public_inputs_json".to_owned(),
+            json::Value::String(
+                r#"{"owner":"alice@wonderland","amount":"10","duration_blocks":64,"root_hint":"not-hex"}"#.to_owned(),
             ),
         );
         let mut outer = json::Map::new();

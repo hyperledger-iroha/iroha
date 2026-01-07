@@ -301,13 +301,14 @@ pub struct HandshakeGate {
 
 /// Build canonical preimage for signing an RBC READY message.
 pub fn rbc_ready_preimage(chain_id: &ChainId, mode_tag: &str, ready: &RbcReady) -> Vec<u8> {
-    let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 4 + 32);
-    let domain = consensus_domain(chain_id, "RbcReady", b"v1", mode_tag);
+    let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 4 + 32 + 32);
+    let domain = consensus_domain(chain_id, "RbcReady", b"v2", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(ready.block_hash.as_ref().as_ref());
     out.extend_from_slice(&ready.height.to_be_bytes());
     out.extend_from_slice(&ready.view.to_be_bytes());
     out.extend_from_slice(&ready.epoch.to_be_bytes());
+    out.extend_from_slice(ready.roster_hash.as_ref());
     out.extend_from_slice(ready.chunk_root.as_ref());
     out.extend_from_slice(&ready.sender.to_be_bytes());
     out
@@ -315,13 +316,14 @@ pub fn rbc_ready_preimage(chain_id: &ChainId, mode_tag: &str, ready: &RbcReady) 
 
 /// Build canonical preimage for signing an RBC DELIVER message.
 pub fn rbc_deliver_preimage(chain_id: &ChainId, mode_tag: &str, deliver: &RbcDeliver) -> Vec<u8> {
-    let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 4 + 32);
-    let domain = consensus_domain(chain_id, "RbcDeliver", b"v1", mode_tag);
+    let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 4 + 32 + 32);
+    let domain = consensus_domain(chain_id, "RbcDeliver", b"v2", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(deliver.block_hash.as_ref().as_ref());
     out.extend_from_slice(&deliver.height.to_be_bytes());
     out.extend_from_slice(&deliver.view.to_be_bytes());
     out.extend_from_slice(&deliver.epoch.to_be_bytes());
+    out.extend_from_slice(deliver.roster_hash.as_ref());
     out.extend_from_slice(deliver.chunk_root.as_ref());
     out.extend_from_slice(&deliver.sender.to_be_bytes());
     out

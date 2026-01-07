@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Governance ZK voting: canonicalize `root_hint`/`nullifier_hex` hex hints across SDKs/CLI/bridges, align core CastZkBallot parsing with case-insensitive `blake2b32:`/`0x` prefixes, and add regression coverage.
+- Tests: not run (not requested).
 - IVM CoreHost: record raw AXT proof expiry while applying skew only to cache/slot checks, reject inline proofs with zero expiry slots, and align cache expiry storage; add regression coverage for skewed proof acceptance and zero-expiry rejection.
 - Tests: not run (not requested).
 - Maintenance: resolve merge conflicts in `status.md`, `roadmap.md`, `crates/iroha_core/src/block.rs`, and `crates/iroha_core/src/smartcontracts/isi/offline.rs`.

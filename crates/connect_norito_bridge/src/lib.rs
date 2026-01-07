@@ -475,6 +475,8 @@ fn normalize_zk_ballot_public_inputs(value: &mut JsonValue) -> BridgeResult<()> 
     normalize_zk_public_input_alias(map, "nullifierHex", "nullifier_hex")?;
     normalize_zk_public_input_alias(map, "rootHintHex", "root_hint")?;
     normalize_zk_public_input_alias(map, "rootHint", "root_hint")?;
+    canonicalize_hex32_public_input(map, "root_hint")?;
+    canonicalize_hex32_public_input(map, "nullifier_hex")?;
     let has_owner = zk_hint_present(map, "owner");
     let has_amount = zk_hint_present(map, "amount");
     let has_duration = zk_hint_present(map, "duration_blocks");
@@ -500,6 +502,42 @@ fn normalize_zk_public_input_alias(
         map.insert(canonical.to_owned(), value);
     }
     Ok(())
+}
+
+fn canonicalize_hex32_public_input(map: &mut JsonMap, key: &str) -> BridgeResult<()> {
+    let Some(value) = map.get_mut(key) else {
+        return Ok(());
+    };
+    if matches!(value, JsonValue::Null) {
+        return Ok(());
+    }
+    let raw = value.as_str().ok_or(BridgeError::Governance)?;
+    let canonical = canonicalize_hex32_value(raw).ok_or(BridgeError::Governance)?;
+    *value = JsonValue::String(canonical);
+    Ok(())
+}
+
+fn canonicalize_hex32_value(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let without_scheme = if let Some((scheme, rest)) = trimmed.split_once(':') {
+        if scheme.is_empty() || scheme.eq_ignore_ascii_case("blake2b32") {
+            rest
+        } else {
+            return None;
+        }
+    } else {
+        trimmed
+    };
+    let body = without_scheme.trim();
+    let body = body
+        .strip_prefix("0x")
+        .or_else(|| body.strip_prefix("0X"))
+        .unwrap_or(body)
+        .trim();
+    if body.len() != 64 || !body.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(body.to_ascii_lowercase())
 }
 
 fn zk_hint_present(map: &JsonMap, key: &str) -> bool {
@@ -11007,9 +11045,11 @@ mod tests {
     #[test]
     fn zk_ballot_public_inputs_normalizes_aliases() {
         let mut map = JsonMap::new();
+        let root_raw = format!("0x{}", "Aa".repeat(32));
+        let nullifier_raw = format!("blake2b32:{}", "BB".repeat(32));
         map.insert("durationBlocks".to_owned(), JsonValue::from(64u64));
-        map.insert("nullifierHex".to_owned(), JsonValue::from("aa".repeat(32)));
-        map.insert("rootHintHex".to_owned(), JsonValue::from("bb".repeat(32)));
+        map.insert("nullifierHex".to_owned(), JsonValue::from(nullifier_raw));
+        map.insert("rootHintHex".to_owned(), JsonValue::from(root_raw));
         map.insert("owner".to_owned(), JsonValue::from("alice@wonderland"));
         map.insert("amount".to_owned(), JsonValue::from("100"));
         let mut value = JsonValue::Object(map);
@@ -11023,6 +11063,16 @@ mod tests {
         assert!(!map.contains_key("durationBlocks"));
         assert!(!map.contains_key("nullifierHex"));
         assert!(!map.contains_key("rootHintHex"));
+        let root_expected = "aa".repeat(32);
+        let nullifier_expected = "bb".repeat(32);
+        assert_eq!(
+            map.get("root_hint").and_then(JsonValue::as_str),
+            Some(root_expected.as_str())
+        );
+        assert_eq!(
+            map.get("nullifier_hex").and_then(JsonValue::as_str),
+            Some(nullifier_expected.as_str())
+        );
     }
 
     #[test]
@@ -11044,6 +11094,17 @@ mod tests {
         let mut map = JsonMap::new();
         map.insert("rootHint".to_owned(), JsonValue::from("aa".repeat(32)));
         map.insert("root_hint".to_owned(), JsonValue::from("bb".repeat(32)));
+        let mut value = JsonValue::Object(map);
+        assert!(normalize_zk_ballot_public_inputs(&mut value).is_err());
+    }
+
+    #[test]
+    fn zk_ballot_public_inputs_rejects_invalid_hex() {
+        let mut map = JsonMap::new();
+        map.insert("owner".to_owned(), JsonValue::from("alice@wonderland"));
+        map.insert("amount".to_owned(), JsonValue::from("100"));
+        map.insert("duration_blocks".to_owned(), JsonValue::from(64u64));
+        map.insert("root_hint".to_owned(), JsonValue::from("not-hex"));
         let mut value = JsonValue::Object(map);
         assert!(normalize_zk_ballot_public_inputs(&mut value).is_err());
     }

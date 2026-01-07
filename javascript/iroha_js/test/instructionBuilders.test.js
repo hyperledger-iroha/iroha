@@ -957,6 +957,23 @@ test("buildCastZkBallotInstruction normalizes lock hint aliases", () => {
   assert.equal(parsed.durationBlocks, undefined);
 });
 
+test("buildCastZkBallotInstruction canonicalizes hex hint values", () => {
+  const instruction = buildCastZkBallotInstruction({
+    electionId: "ref-3",
+    proof: Buffer.from([0x04]),
+    publicInputs: {
+      owner: ACCOUNT_ID,
+      amount: "250",
+      durationBlocks: 12,
+      rootHintHex: `0x${"Aa".repeat(32)}`,
+      nullifierHex: `blake2b32:${"BB".repeat(32)}`,
+    },
+  });
+  const parsed = JSON.parse(instruction.CastZkBallot.public_inputs_json);
+  assert.equal(parsed.root_hint, "aa".repeat(32));
+  assert.equal(parsed.nullifier_hex, "bb".repeat(32));
+});
+
 test("buildCastZkBallotInstruction canonicalizes public input ordering", () => {
   const instruction = buildCastZkBallotInstruction({
     electionId: "ref-4",

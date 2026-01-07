@@ -310,7 +310,7 @@ fn lock_hints_incomplete(owner: bool, amount: bool, duration: bool) -> bool {
     any && !(owner && amount && duration)
 }
 
-fn hint_present(map: &json::Map<String, json::Value>, key: &str) -> bool {
+fn hint_present(map: &json::Map, key: &str) -> bool {
     map.get(key)
         .map(|value| !matches!(value, json::Value::Null))
         .unwrap_or(false)
@@ -2703,6 +2703,16 @@ mod tests {
         "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland";
     const ACCOUNT_OWNER_ALT: &str =
         "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland";
+
+    #[test]
+    fn hint_present_handles_nulls() {
+        let mut map = json::Map::new();
+        assert!(!hint_present(&map, "owner"));
+        map.insert("owner".to_string(), json::Value::Null);
+        assert!(!hint_present(&map, "owner"));
+        map.insert("owner".to_string(), json::Value::String("alice".to_string()));
+        assert!(hint_present(&map, "owner"));
+    }
 
     fn canonical_literal(raw: &str) -> String {
         iroha_data_model::account::AccountId::parse(raw)

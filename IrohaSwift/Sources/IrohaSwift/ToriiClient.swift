@@ -5325,6 +5325,8 @@ fileprivate func normalizeGovernanceZkPublicInputs(_ inputs: [String: ToriiJSONV
                                               aliasKey: "rootHint",
                                               canonicalKey: "root_hint",
                                               field: field)
+    try normalizeGovernanceZkPublicInputHex(&normalized, key: "root_hint", field: field)
+    try normalizeGovernanceZkPublicInputHex(&normalized, key: "nullifier_hex", field: field)
     let hasOwner = governanceZkHintPresent(normalized["owner"])
     let hasAmount = governanceZkHintPresent(normalized["amount"])
     let hasDuration = governanceZkHintPresent(normalized["duration_blocks"])
@@ -5338,9 +5340,9 @@ fileprivate func normalizeGovernanceZkPublicInputs(_ inputs: [String: ToriiJSONV
 }
 
 fileprivate func normalizeGovernanceZkPublicInputAlias(_ inputs: inout [String: ToriiJSONValue],
-                                                       aliasKey: String,
-                                                       canonicalKey: String,
-                                                       field: String) throws {
+                                                      aliasKey: String,
+                                                      canonicalKey: String,
+                                                      field: String) throws {
     guard let aliasValue = inputs[aliasKey] else { return }
     if inputs[canonicalKey] != nil {
         throw ToriiClientError.invalidPayload(
@@ -5349,6 +5351,39 @@ fileprivate func normalizeGovernanceZkPublicInputAlias(_ inputs: inout [String: 
     }
     inputs[canonicalKey] = aliasValue
     inputs.removeValue(forKey: aliasKey)
+}
+
+fileprivate func normalizeGovernanceZkPublicInputHex(_ inputs: inout [String: ToriiJSONValue],
+                                                     key: String,
+                                                     field: String) throws {
+    guard let value = inputs[key] else { return }
+    if case .null = value { return }
+    guard case let .string(raw) = value else {
+        throw ToriiClientError.invalidPayload(
+            "\(field).\(key) must be a 32-byte hex string."
+        )
+    }
+    let canonical = try canonicalizeZkBallotHexHint(raw, field: "\(field).\(key)")
+    inputs[key] = .string(canonical)
+}
+
+fileprivate func canonicalizeZkBallotHexHint(_ raw: String, field: String) throws -> String {
+    var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let colonIndex = trimmed.firstIndex(of: ":") {
+        let scheme = String(trimmed[..<colonIndex])
+        let rest = String(trimmed[trimmed.index(after: colonIndex)...])
+        if !scheme.isEmpty && scheme.lowercased() != "blake2b32" {
+            throw ToriiClientError.invalidPayload("\(field) must be a 32-byte hex string.")
+        }
+        trimmed = rest
+    }
+    if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
+        trimmed = String(trimmed.dropFirst(2))
+    }
+    guard trimmed.count == 64, Data(hexString: trimmed) != nil else {
+        throw ToriiClientError.invalidPayload("\(field) must be a 32-byte hex string.")
+    }
+    return trimmed.lowercased()
 }
 
 fileprivate func governanceZkHintPresent(_ value: ToriiJSONValue?) -> Bool {

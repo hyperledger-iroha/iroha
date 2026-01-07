@@ -4187,8 +4187,8 @@ id: 88
                                                         "owner": .string("alice@wonderland"),
                                                         "amount": .string("250"),
                                                         "durationBlocks": .number(12),
-                                                        "rootHintHex": .string("aa"),
-                                                        "nullifierHex": .string("bb"),
+                                                        "rootHintHex": .string("0x\(String(repeating: "Aa", count: 32))"),
+                                                        "nullifierHex": .string("blake2b32:\(String(repeating: "BB", count: 32))"),
                                                      ])
         let data = try JSONEncoder().encode(request)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -4199,10 +4199,29 @@ id: 88
         XCTAssertEqual(publicInputs["amount"] as? String, "250")
         XCTAssertEqual(publicInputs["duration_blocks"] as? Int, 12)
         XCTAssertNil(publicInputs["durationBlocks"])
-        XCTAssertEqual(publicInputs["root_hint"] as? String, "aa")
+        XCTAssertEqual(publicInputs["root_hint"] as? String, String(repeating: "aa", count: 32))
         XCTAssertNil(publicInputs["rootHintHex"])
-        XCTAssertEqual(publicInputs["nullifier_hex"] as? String, "bb")
+        XCTAssertEqual(publicInputs["nullifier_hex"] as? String, String(repeating: "bb", count: 32))
         XCTAssertNil(publicInputs["nullifierHex"])
+    }
+
+    func testSubmitGovernanceZkBallotRejectsInvalidHexHints() {
+        let request = ToriiGovernanceZkBallotRequest(authority: "alice@wonderland",
+                                                     chainId: "chain",
+                                                     electionId: "election-1",
+                                                     proofB64: "AAAA",
+                                                     publicInputs: [
+                                                        "owner": .string("alice@wonderland"),
+                                                        "amount": .string("250"),
+                                                        "duration_blocks": .number(12),
+                                                        "root_hint": .string("not-hex"),
+                                                     ])
+        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
+            guard case let ToriiClientError.invalidPayload(message) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("root_hint"))
+        }
     }
 
     func testGetGovernanceProposalDecodesRecord() {

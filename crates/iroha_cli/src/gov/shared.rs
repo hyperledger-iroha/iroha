@@ -28,15 +28,25 @@ pub fn print_with_summary<C: RunContext>(
 /// Normalize a 32-byte hex string.
 pub(super) fn canonicalize_hex32(input: &str) -> Result<String> {
     let trimmed = input.trim();
-    let without_scheme = trimmed.strip_prefix("blake2b32:").unwrap_or(trimmed);
-    let without_prefix = without_scheme
+    let without_scheme = if let Some((scheme, rest)) = trimmed.split_once(':') {
+        if scheme.is_empty() || scheme.eq_ignore_ascii_case("blake2b32") {
+            rest
+        } else {
+            return Err(eyre!("expected 32-byte hex string"));
+        }
+    } else {
+        trimmed
+    };
+    let body = without_scheme.trim();
+    let body = body
         .strip_prefix("0x")
-        .or_else(|| without_scheme.strip_prefix("0X"))
-        .unwrap_or(without_scheme);
-    if without_prefix.len() != 64 || !without_prefix.chars().all(|c| c.is_ascii_hexdigit()) {
+        .or_else(|| body.strip_prefix("0X"))
+        .unwrap_or(body)
+        .trim();
+    if body.len() != 64 || !body.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(eyre!("expected 32-byte hex string"));
     }
-    Ok(without_prefix.to_ascii_lowercase())
+    Ok(body.to_ascii_lowercase())
 }
 
 /// Decode a canonicalized 32-byte hex string into bytes.
@@ -104,7 +114,7 @@ mod tests {
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
         );
 
-        let scheme = "blake2b32:11".to_string() + &"22".repeat(31);
+        let scheme = "BLAKE2B32:11".to_string() + &"22".repeat(31);
         let canon2 = canonicalize_hex32(&scheme).expect("canonicalize with scheme");
         assert_eq!(canon2.len(), 64);
     }

@@ -707,6 +707,8 @@ struct SwiftTransactionEncoder {
         try normalizeZkBallotPublicInputAlias(&normalized,
                                               aliasKey: "rootHint",
                                               canonicalKey: "root_hint")
+        try normalizeZkBallotPublicInputHex(&normalized, key: "root_hint")
+        try normalizeZkBallotPublicInputHex(&normalized, key: "nullifier_hex")
         let hasOwner = zkHintPresent(normalized["owner"])
         let hasAmount = zkHintPresent(normalized["amount"])
         let hasDuration = zkHintPresent(normalized["duration_blocks"])
@@ -734,6 +736,42 @@ struct SwiftTransactionEncoder {
         }
         inputs[canonicalKey] = aliasValue
         inputs.removeValue(forKey: aliasKey)
+    }
+
+    private static func normalizeZkBallotPublicInputHex(_ inputs: inout [String: ToriiJSONValue],
+                                                        key: String) throws {
+        guard let value = inputs[key] else { return }
+        if case .null = value { return }
+        guard case let .string(raw) = value else {
+            throw TransactionInputError.invalidZkBallotPublicInputs(
+                "\(key) must be 32-byte hex"
+            )
+        }
+        let canonical = try canonicalizeZkBallotHexHint(raw, field: key)
+        inputs[key] = .string(canonical)
+    }
+
+    private static func canonicalizeZkBallotHexHint(_ raw: String, field: String) throws -> String {
+        var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let colonIndex = trimmed.firstIndex(of: ":") {
+            let scheme = String(trimmed[..<colonIndex])
+            let rest = String(trimmed[trimmed.index(after: colonIndex)...])
+            if !scheme.isEmpty && scheme.lowercased() != "blake2b32" {
+                throw TransactionInputError.invalidZkBallotPublicInputs(
+                    "\(field) must be 32-byte hex"
+                )
+            }
+            trimmed = rest
+        }
+        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
+            trimmed = String(trimmed.dropFirst(2))
+        }
+        guard trimmed.count == 64, Data(hexString: trimmed) != nil else {
+            throw TransactionInputError.invalidZkBallotPublicInputs(
+                "\(field) must be 32-byte hex"
+            )
+        }
+        return trimmed.lowercased()
     }
 
     private static func zkHintPresent(_ value: ToriiJSONValue?) -> Bool {

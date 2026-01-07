@@ -95,6 +95,23 @@ fn normalize_public_input_aliases(map: &mut json::Map<String, json::Value>) -> R
     normalize_public_input_alias(map, "nullifierHex", "nullifier_hex")?;
     normalize_public_input_alias(map, "rootHintHex", "root_hint")?;
     normalize_public_input_alias(map, "rootHint", "root_hint")?;
+    canonicalize_public_input_hex(map, "root_hint")?;
+    canonicalize_public_input_hex(map, "nullifier_hex")?;
+    Ok(())
+}
+
+fn canonicalize_public_input_hex(map: &mut json::Map<String, json::Value>, key: &str) -> Result<()> {
+    let Some(value) = map.get_mut(key) else {
+        return Ok(());
+    };
+    if matches!(value, json::Value::Null) {
+        return Ok(());
+    }
+    let raw = value
+        .as_str()
+        .ok_or_else(|| eyre!("{key} must be 32-byte hex"))?;
+    let canonical = canonicalize_hex32(raw).map_err(|_| eyre!("{key} must be 32-byte hex"))?;
+    *value = json::Value::String(canonical);
     Ok(())
 }
 
@@ -628,14 +645,18 @@ mod tests {
     #[test]
     fn normalize_public_input_aliases_maps_keys() {
         let mut map = json::Map::new();
+        let root_raw = format!("0x{}", "Aa".repeat(32));
+        let nullifier_raw = format!("blake2b32:{}", "BB".repeat(32));
+        let root_expected = "aa".repeat(32);
+        let nullifier_expected = "bb".repeat(32);
         map.insert("durationBlocks".to_string(), json::Value::from(64u64));
         map.insert(
             "rootHintHex".to_string(),
-            json::Value::String("aa".repeat(32)),
+            json::Value::String(root_raw),
         );
         map.insert(
             "nullifierHex".to_string(),
-            json::Value::String("bb".repeat(32)),
+            json::Value::String(nullifier_raw),
         );
         normalize_public_input_aliases(&mut map).expect("normalize aliases");
         assert!(map.contains_key("duration_blocks"));
@@ -644,6 +665,14 @@ mod tests {
         assert!(!map.contains_key("durationBlocks"));
         assert!(!map.contains_key("rootHintHex"));
         assert!(!map.contains_key("nullifierHex"));
+        assert_eq!(
+            map.get("root_hint").and_then(json::Value::as_str),
+            Some(root_expected.as_str())
+        );
+        assert_eq!(
+            map.get("nullifier_hex").and_then(json::Value::as_str),
+            Some(nullifier_expected.as_str())
+        );
     }
 
     #[test]
@@ -656,6 +685,17 @@ mod tests {
         );
         let err = normalize_public_input_aliases(&mut map).expect_err("alias conflict");
         assert!(err.to_string().contains("rootHint"));
+    }
+
+    #[test]
+    fn normalize_public_input_aliases_rejects_invalid_hex() {
+        let mut map = json::Map::new();
+        map.insert(
+            "root_hint".to_string(),
+            json::Value::String("not-hex".to_string()),
+        );
+        let err = normalize_public_input_aliases(&mut map).expect_err("invalid hex");
+        assert!(err.to_string().contains("root_hint"));
     }
 }
 

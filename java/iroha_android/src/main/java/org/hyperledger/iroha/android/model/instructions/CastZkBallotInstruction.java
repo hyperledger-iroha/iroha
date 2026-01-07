@@ -177,6 +177,8 @@ public final class CastZkBallotInstruction implements InstructionTemplate {
     normalizePublicInputsAlias(normalized, "nullifierHex", "nullifier_hex");
     normalizePublicInputsAlias(normalized, "rootHintHex", "root_hint");
     normalizePublicInputsAlias(normalized, "rootHint", "root_hint");
+    normalizePublicInputsHex(normalized, "root_hint");
+    normalizePublicInputsHex(normalized, "nullifier_hex");
     ensureLockHintsComplete(normalized);
     return JsonEncoder.encode(normalized);
   }
@@ -191,6 +193,44 @@ public final class CastZkBallotInstruction implements InstructionTemplate {
           "publicInputsJson cannot include both " + aliasKey + " and " + canonicalKey);
     }
     target.put(canonicalKey, target.remove(aliasKey));
+  }
+
+  private static void normalizePublicInputsHex(
+      final Map<String, Object> target, final String key) {
+    if (!target.containsKey(key)) {
+      return;
+    }
+    final Object value = target.get(key);
+    if (value == null) {
+      return;
+    }
+    if (!(value instanceof String)) {
+      throw new IllegalArgumentException(
+          "publicInputsJson " + key + " must be 32-byte hex");
+    }
+    target.put(key, canonicalizeHex32((String) value, key));
+  }
+
+  private static String canonicalizeHex32(final String raw, final String field) {
+    String trimmed = raw.trim();
+    final int colonIndex = trimmed.indexOf(':');
+    if (colonIndex >= 0) {
+      final String scheme = trimmed.substring(0, colonIndex);
+      final String rest = trimmed.substring(colonIndex + 1);
+      if (!scheme.isEmpty() && !"blake2b32".equalsIgnoreCase(scheme)) {
+        throw new IllegalArgumentException(
+            "publicInputsJson " + field + " must be 32-byte hex");
+      }
+      trimmed = rest;
+    }
+    if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+      trimmed = trimmed.substring(2);
+    }
+    if (trimmed.length() != 64 || !trimmed.matches("^[0-9a-fA-F]+$")) {
+      throw new IllegalArgumentException(
+          "publicInputsJson " + field + " must be 32-byte hex");
+    }
+    return trimmed.toLowerCase();
   }
 
   private static void ensureLockHintsComplete(final Map<String, Object> publicInputs) {
