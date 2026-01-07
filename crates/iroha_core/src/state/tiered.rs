@@ -1092,8 +1092,7 @@ impl TieredStateBackend {
         collect_map!(TieredSegment::Proofs, Proof, world.proofs);
         collect_map!(TieredSegment::ProofTags, ProofTag, world.proof_tags);
         collect_map!(TieredSegment::ProofsByTag, ProofByTag, world.proofs_by_tag);
-        collect_map!(TieredSegment::ExecRoots, ExecRoot, world.exec_roots);
-        collect_map!(TieredSegment::ExecQcs, ExecQc, world.exec_qcs);
+        collect_map!(TieredSegment::CommitQcs, CommitQc, world.commit_qcs);
         collect_map!(
             TieredSegment::ContractManifests,
             ContractManifest,
@@ -1545,8 +1544,7 @@ enum TieredSegment {
     Proofs,
     ProofTags,
     ProofsByTag,
-    ExecRoots,
-    ExecQcs,
+    CommitQcs,
     ContractManifests,
     ContractCode,
     ContractInstances,
@@ -1583,8 +1581,7 @@ impl TieredSegment {
             TieredSegment::Proofs => "proofs",
             TieredSegment::ProofTags => "proof_tags",
             TieredSegment::ProofsByTag => "proofs_by_tag",
-            TieredSegment::ExecRoots => "exec_roots",
-            TieredSegment::ExecQcs => "exec_qcs",
+            TieredSegment::CommitQcs => "commit_qcs",
             TieredSegment::ContractManifests => "contract_manifests",
             TieredSegment::ContractCode => "contract_code",
             TieredSegment::ContractInstances => "contract_instances",
@@ -1632,8 +1629,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "proofs" => TieredSegment::Proofs,
             "proof_tags" => TieredSegment::ProofTags,
             "proofs_by_tag" => TieredSegment::ProofsByTag,
-            "exec_roots" => TieredSegment::ExecRoots,
-            "exec_qcs" => TieredSegment::ExecQcs,
+            "commit_qcs" => TieredSegment::CommitQcs,
             "contract_manifests" => TieredSegment::ContractManifests,
             "contract_code" => TieredSegment::ContractCode,
             "contract_instances" => TieredSegment::ContractInstances,
@@ -1806,8 +1802,7 @@ enum TieredKeyHandle {
     Proof(iroha_data_model::proof::ProofId),
     ProofTag(iroha_data_model::proof::ProofId),
     ProofByTag([u8; 4]),
-    ExecRoot(iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>),
-    ExecQc(iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>),
+    CommitQc(iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>),
     ContractManifest(iroha_crypto::Hash),
     ContractCode(iroha_crypto::Hash),
     ContractInstance((String, String)),
@@ -1857,8 +1852,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Proof(id) => fetch!(world.proofs, id),
             TieredKeyHandle::ProofTag(id) => fetch!(world.proof_tags, id),
             TieredKeyHandle::ProofByTag(tag) => fetch!(world.proofs_by_tag, tag),
-            TieredKeyHandle::ExecRoot(hash) => fetch!(world.exec_roots, hash),
-            TieredKeyHandle::ExecQc(hash) => fetch!(world.exec_qcs, hash),
+            TieredKeyHandle::CommitQc(hash) => fetch!(world.commit_qcs, hash),
             TieredKeyHandle::ContractManifest(hash) => fetch!(world.contract_manifests, hash),
             TieredKeyHandle::ContractCode(hash) => fetch!(world.contract_code, hash),
             TieredKeyHandle::ContractInstance(key) => fetch!(world.contract_instances, key),
@@ -1899,8 +1893,7 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::Proof(id) => write!(f, "proof:{id}"),
             TieredKeyHandle::ProofTag(id) => write!(f, "proof_tag:{id}"),
             TieredKeyHandle::ProofByTag(tag) => write!(f, "proofs_by_tag:{tag:?}"),
-            TieredKeyHandle::ExecRoot(hash) => write!(f, "exec_root:{hash}"),
-            TieredKeyHandle::ExecQc(hash) => write!(f, "exec_qc:{hash}"),
+            TieredKeyHandle::CommitQc(hash) => write!(f, "commit_qc:{hash}"),
             TieredKeyHandle::ContractManifest(hash) => write!(f, "contract_manifest:{hash}"),
             TieredKeyHandle::ContractCode(hash) => write!(f, "contract_code:{hash}"),
             TieredKeyHandle::ContractInstance(key) => write!(f, "contract_instance:{key:?}"),
@@ -1971,11 +1964,12 @@ mod tests {
     use std::os::unix::fs::MetadataExt;
 
     use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
-    use iroha_crypto::Hash;
+    use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         block::BlockHeader,
-        consensus::ExecutionQcRecord,
+        consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
         nexus::{LaneCatalog, LaneConfig, LaneId},
+        peer::PeerId,
     };
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
@@ -2006,8 +2000,10 @@ mod tests {
         assert_eq!(stream_hash, sha256(&encoded));
     }
 
-    fn dummy_qc(seed: u8) -> ExecutionQcRecord {
-        ExecutionQcRecord {
+    fn dummy_qc(seed: u8) -> Qc {
+        let validator_set: Vec<PeerId> = Vec::new();
+        Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
                 Hash::new([seed; 4]),
             ),
@@ -2016,8 +2012,15 @@ mod tests {
             height: u64::from(seed),
             view: u64::from(seed),
             epoch: 0,
-            signers_bitmap: vec![seed],
-            bls_aggregate_signature: vec![seed, seed + 1],
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: QcAggregate {
+                signers_bitmap: vec![seed],
+                bls_aggregate_signature: vec![seed, seed + 1],
+            },
         }
     }
 
@@ -2074,8 +2077,8 @@ mod tests {
 
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
-        world.exec_qcs.insert(qc1.subject_block_hash, qc1.clone());
-        world.exec_qcs.insert(qc2.subject_block_hash, qc2.clone());
+        world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
+        world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
 
         backend
             .record_world_snapshot(&world)
@@ -2105,14 +2108,14 @@ mod tests {
         let payload_path = snapshot_dir.join(spill_path);
         assert!(payload_path.exists());
         let encoded = fs::read(&payload_path).expect("payload read");
-        let decoded: ExecutionQcRecord = json::from_slice(&encoded).expect("cold payload decodes");
+        let decoded: Qc = json::from_slice(&encoded).expect("cold payload decodes");
         assert!(decoded == qc1 || decoded == qc2);
 
         // Mutate the other record so the hot entry flips on the next snapshot.
         let mut updated = qc2.clone();
         updated.view = 99;
         world
-            .exec_qcs
+            .commit_qcs
             .insert(updated.subject_block_hash, updated.clone());
 
         backend
@@ -2139,8 +2142,8 @@ mod tests {
 
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
-        world.exec_qcs.insert(qc1.subject_block_hash, qc1);
-        world.exec_qcs.insert(qc2.subject_block_hash, qc2);
+        world.commit_qcs.insert(qc1.subject_block_hash, qc1);
+        world.commit_qcs.insert(qc2.subject_block_hash, qc2);
 
         backend
             .record_world_snapshot(&world)
@@ -2162,8 +2165,8 @@ mod tests {
 
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
-        world.exec_qcs.insert(qc1.subject_block_hash, qc1.clone());
-        world.exec_qcs.insert(qc2.subject_block_hash, qc2.clone());
+        world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
+        world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
 
         backend
             .record_world_snapshot(&world)
@@ -2186,7 +2189,7 @@ mod tests {
         let mutate = if hot_hash == qc1_hash { qc2 } else { qc1 };
         let mut updated = mutate.clone();
         updated.view = 99;
-        world.exec_qcs.insert(updated.subject_block_hash, updated);
+        world.commit_qcs.insert(updated.subject_block_hash, updated);
 
         backend
             .record_world_snapshot(&world)
@@ -2206,8 +2209,8 @@ mod tests {
 
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
-        world.exec_qcs.insert(qc1.subject_block_hash, qc1);
-        world.exec_qcs.insert(qc2.subject_block_hash, qc2);
+        world.commit_qcs.insert(qc1.subject_block_hash, qc1);
+        world.commit_qcs.insert(qc2.subject_block_hash, qc2);
 
         backend
             .record_world_snapshot(&world)
@@ -2232,8 +2235,8 @@ mod tests {
 
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
-        world.exec_qcs.insert(qc1.subject_block_hash, qc1);
-        world.exec_qcs.insert(qc2.subject_block_hash, qc2);
+        world.commit_qcs.insert(qc1.subject_block_hash, qc1);
+        world.commit_qcs.insert(qc2.subject_block_hash, qc2);
 
         backend
             .record_world_snapshot(&world)
@@ -2287,8 +2290,8 @@ mod tests {
 
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
-        world.exec_qcs.insert(qc1.subject_block_hash, qc1.clone());
-        world.exec_qcs.insert(qc2.subject_block_hash, qc2.clone());
+        world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
+        world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
 
         backend
             .record_world_snapshot(&world)
@@ -2300,7 +2303,7 @@ mod tests {
 
         let mut updated = qc2;
         updated.view = 99;
-        world.exec_qcs.insert(updated.subject_block_hash, updated);
+        world.commit_qcs.insert(updated.subject_block_hash, updated);
 
         backend
             .record_world_snapshot(&world)
@@ -2398,7 +2401,7 @@ mod tests {
             TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), 0, 0);
         let mut world = World::default();
         let qc = dummy_qc(1);
-        world.exec_qcs.insert(qc.subject_block_hash, qc);
+        world.commit_qcs.insert(qc.subject_block_hash, qc);
 
         backend
             .record_world_snapshot(&world)

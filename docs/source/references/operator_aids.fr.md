@@ -48,7 +48,7 @@ Consensus (Sumeragi)
 Preuves (audit ; hors consensus)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
 - GET `/v1/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
-  - Inclut des champs de base (p. ex., DoublePrepare/Precommit, InvalidCommitCertificate, InvalidProposal) pour inspection.
+  - Inclut des champs de base (p. ex., DoublePrepare/DoubleCommit, InvalidQc, InvalidProposal) pour inspection.
   - Exemples :
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence/count | jq .`
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`

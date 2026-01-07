@@ -226,8 +226,7 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha sumeragi rbc sessions`↴](#iroha-sumeragi-rbc-sessions)
 * [`iroha sumeragi vrf-penalties`↴](#iroha-sumeragi-vrf-penalties)
 * [`iroha sumeragi vrf-epoch`↴](#iroha-sumeragi-vrf-epoch)
-* [`iroha sumeragi exec-qc-get`↴](#iroha-sumeragi-exec-qc-get)
-* [`iroha sumeragi exec-root-get`↴](#iroha-sumeragi-exec-root-get)
+* [`iroha sumeragi commit-qc-get`↴](#iroha-sumeragi-commit-qc-get)
 * [`iroha contracts`↴](#iroha-contracts)
 * [`iroha contracts code-bytes-get`↴](#iroha-contracts-code-bytes-get)
 * [`iroha contracts deploy`↴](#iroha-contracts-deploy)
@@ -3540,8 +3539,7 @@ Sumeragi helpers (status)
 * `rbc` — RBC helpers (status/sessions)
 * `vrf-penalties` — Show VRF penalties for the given epoch
 * `vrf-epoch` — Show persisted VRF epoch snapshot (seed, participants, penalties)
-* `exec-qc-get` — Fetch full ExecutionQC record (if present) for a parent block hash
-* `exec-root-get` — Fetch execution root (if present) for a parent block hash
+* `commit-qc-get` — Fetch full commit QC record (if present) for a block hash
 
 
 
@@ -3801,27 +3799,16 @@ Show persisted VRF epoch snapshot (seed, participants, penalties)
 
 
 
-## `iroha sumeragi exec-qc-get`
+## `iroha sumeragi commit-qc-get`
 
-Fetch full ExecutionQC record (if present) for a parent block hash
+Fetch full commit QC record (if present) for a block hash
 
-**Usage:** `iroha sumeragi exec-qc-get --hash <HASH>`
-
-###### **Options:**
-
-* `--hash <HASH>` — Block hash for which the ExecutionQC should be fetched
-
-
-
-## `iroha sumeragi exec-root-get`
-
-Fetch execution root (if present) for a parent block hash
-
-**Usage:** `iroha sumeragi exec-root-get --hash <HASH>`
+**Usage:** `iroha sumeragi commit-qc-get --hash <HASH>`
 
 ###### **Options:**
 
-* `--hash <HASH>` — Block hash for which the execution root should be fetched
+* `--hash <HASH>` — Block hash for which the commit QC should be fetched
+
 
 
 

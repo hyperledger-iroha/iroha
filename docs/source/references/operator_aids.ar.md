@@ -50,7 +50,7 @@ translation_last_reviewed: 2026-01-01
 الأدلة (تدقيق؛ خارج التوافق)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
 - GET `/v1/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
-  - تتضمن حقولًا أساسية (مثل DoublePrepare/Precommit، InvalidCommitCertificate، InvalidProposal) للفحص.
+  - تتضمن حقولًا أساسية (مثل DoublePrepare/DoubleCommit، InvalidQc، InvalidProposal) للفحص.
   - أمثلة:
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence/count | jq .`
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`

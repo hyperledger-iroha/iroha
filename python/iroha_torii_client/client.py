@@ -852,9 +852,9 @@ class SumeragiRbcDeliveryStatus:
 SUMERAGI_EVIDENCE_KIND_FILTERS = {
     "DoublePrepare",
     "DoubleCommit",
-    "DoubleExecVote",
-    "InvalidCommitCertificate",
+    "InvalidQc",
     "InvalidProposal",
+    "Censorship",
 }
 SUMERAGI_EVIDENCE_PHASES = {"Prepare", "Commit", "NewView"}
 
@@ -880,6 +880,11 @@ class SumeragiEvidenceRecord:
     post_state_root_2: Optional[str] = None
     subject_block_hash: Optional[str] = None
     payload_hash: Optional[str] = None
+    tx_hash: Optional[str] = None
+    receipt_count: Optional[int] = None
+    min_height: Optional[int] = None
+    max_height: Optional[int] = None
+    signers: Optional[List[str]] = None
     reason: Optional[str] = None
     detail: Optional[str] = None
 
@@ -1981,8 +1986,6 @@ class SumeragiConsensusCaps:
     collectors_k: int
     redundant_send_r: int
     da_enabled: bool
-    require_execution_qc: bool
-    require_wsv_exec_qc: bool
     rbc_chunk_max_bytes: int
     rbc_session_ttl_ms: int
     rbc_store_max_sessions: int
@@ -3865,8 +3868,6 @@ class ToriiClient:
             collectors_k=self._coerce_int(record.get("collectors_k"), "status.consensus_caps.collectors_k"),
             redundant_send_r=self._coerce_int(record.get("redundant_send_r"), "status.consensus_caps.redundant_send_r"),
             da_enabled=self._coerce_bool(record.get("da_enabled"), "status.consensus_caps.da_enabled"),
-            require_execution_qc=self._coerce_bool(record.get("require_execution_qc"), "status.consensus_caps.require_execution_qc"),
-            require_wsv_exec_qc=self._coerce_bool(record.get("require_wsv_exec_qc"), "status.consensus_caps.require_wsv_exec_qc"),
             rbc_chunk_max_bytes=self._coerce_int(record.get("rbc_chunk_max_bytes"), "status.consensus_caps.rbc_chunk_max_bytes"),
             rbc_session_ttl_ms=self._coerce_int(record.get("rbc_session_ttl_ms"), "status.consensus_caps.rbc_session_ttl_ms"),
             rbc_store_max_sessions=self._coerce_int(record.get("rbc_store_max_sessions"), "status.consensus_caps.rbc_store_max_sessions"),
@@ -4809,31 +4810,7 @@ class ToriiClient:
                     f"{context}.block_hash_2",
                 ),
             )
-        if kind == "DoubleExecVote":
-            return SumeragiEvidenceRecord(
-                kind=kind,
-                recorded_height=recorded_height,
-                recorded_view=recorded_view,
-                recorded_ms=recorded_ms,
-                height=ToriiClient._coerce_unsigned(pick("height", "height"), f"{context}.height"),
-                view=ToriiClient._coerce_unsigned(pick("view", "view"), f"{context}.view"),
-                epoch=ToriiClient._coerce_unsigned(pick("epoch", "epoch"), f"{context}.epoch"),
-                signer=ToriiClient._require_non_empty_string(pick("signer", "signer"), f"{context}.signer"),
-                block_hash=ToriiClient._require_hex_string(pick("block_hash", "blockHash"), f"{context}.block_hash"),
-                parent_state_root=ToriiClient._require_hex_string(
-                    pick("parent_state_root", "parentStateRoot"),
-                    f"{context}.parent_state_root",
-                ),
-                post_state_root_1=ToriiClient._require_hex_string(
-                    pick("post_state_root_1", "postStateRoot1"),
-                    f"{context}.post_state_root_1",
-                ),
-                post_state_root_2=ToriiClient._require_hex_string(
-                    pick("post_state_root_2", "postStateRoot2"),
-                    f"{context}.post_state_root_2",
-                ),
-            )
-        if kind == "InvalidCommitCertificate":
+        if kind == "InvalidQc":
             phase_literal = ToriiClient._require_non_empty_string(pick("phase", "phase"), f"{context}.phase")
             if phase_literal not in SUMERAGI_EVIDENCE_PHASES:
                 allowed = ", ".join(sorted(SUMERAGI_EVIDENCE_PHASES))
@@ -4871,6 +4848,24 @@ class ToriiClient:
                     f"{context}.payload_hash",
                 ),
                 reason=ToriiClient._require_non_empty_string(pick("reason", "reason"), f"{context}.reason"),
+            )
+        if kind == "Censorship":
+            signers_value = record.get("signers")
+            signers = (
+                [ToriiClient._require_non_empty_string(item, f"{context}.signers") for item in signers_value]
+                if isinstance(signers_value, list)
+                else None
+            )
+            return SumeragiEvidenceRecord(
+                kind=kind,
+                recorded_height=recorded_height,
+                recorded_view=recorded_view,
+                recorded_ms=recorded_ms,
+                tx_hash=ToriiClient._require_hex_string(pick("tx_hash", "txHash"), f"{context}.tx_hash"),
+                receipt_count=ToriiClient._coerce_unsigned(pick("receipt_count", "receiptCount"), f"{context}.receipt_count"),
+                min_height=ToriiClient._coerce_unsigned(pick("min_height", "minHeight"), f"{context}.min_height"),
+                max_height=ToriiClient._coerce_unsigned(pick("max_height", "maxHeight"), f"{context}.max_height"),
+                signers=signers,
             )
         detail_value = record.get("detail")
         detail = (

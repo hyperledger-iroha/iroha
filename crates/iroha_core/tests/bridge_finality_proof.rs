@@ -19,7 +19,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, StateReadOnly, World},
     sumeragi::status::{
-        record_commit_certificate, reset_commit_certs_for_tests, set_commit_cert_history_cap,
+        record_commit_qc, reset_commit_certs_for_tests, set_commit_cert_history_cap,
     },
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
@@ -27,7 +27,7 @@ use iroha_data_model::{
     ChainId,
     block::{BlockHeader, builder::BlockBuilder},
     bridge::BridgeFinalityProof,
-    consensus::{CommitAggregate, CommitCertificate, VALIDATOR_SET_HASH_VERSION_V1},
+    consensus::{QcAggregate, Qc, VALIDATOR_SET_HASH_VERSION_V1},
     peer::PeerId,
 };
 
@@ -93,10 +93,12 @@ fn aggregate_signature_for_signers(
     let vote = Vote {
         phase,
         block_hash,
+        parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
         height,
         view,
         epoch,
-        highest_cert: None,
+        highest_qc: None,
         signer: 0,
         bls_sig: Vec::new(),
     };
@@ -112,7 +114,7 @@ fn aggregate_signature_for_signers(
     iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate signature")
 }
 
-fn build_commit_certificate(
+fn build_commit_qc(
     chain_id: &ChainId,
     block_hash: HashOf<BlockHeader>,
     height: u64,
@@ -120,7 +122,7 @@ fn build_commit_certificate(
     epoch: u64,
     peer_ids: &[PeerId],
     keypairs: &[KeyPair],
-) -> CommitCertificate {
+) -> Qc {
     let signers: BTreeSet<_> = (0..peer_ids.len())
         .filter_map(|idx| ValidatorIndex::try_from(idx).ok())
         .collect();
@@ -138,18 +140,20 @@ fn build_commit_certificate(
     );
     let validator_set = peer_ids.to_vec();
     let validator_set_hash = HashOf::new(&validator_set);
-    CommitCertificate {
+    Qc {
         phase: Phase::Commit,
         subject_block_hash: block_hash,
+        parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
         height,
         view,
         epoch,
         mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_cert: None,
+        highest_qc: None,
         validator_set_hash,
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
         validator_set,
-        aggregate: CommitAggregate {
+        aggregate: QcAggregate {
             signers_bitmap,
             bls_aggregate_signature: aggregate_signature,
         },
@@ -184,8 +188,8 @@ fn build_proof_with_validators(
     let chain_id = state.view().chain_id().clone();
 
     let validator_set_hash = HashOf::new(&peer_ids);
-    let cert = build_commit_certificate(&chain_id, block_hash, 1, 0, 0, &peer_ids, validators);
-    record_commit_certificate(cert);
+    let cert = build_commit_qc(&chain_id, block_hash, 1, 0, 0, &peer_ids, validators);
+    record_commit_qc(cert);
 
     let view = state.view();
     let proof = build_finality_proof(&view, 1).expect("finality proof");
@@ -222,7 +226,7 @@ fn builds_finality_proof_for_stored_block() {
     // Record commit certificate matching the stored block.
     let validator_set = vec![peer_id.clone()];
     let keypairs = vec![kp.clone()];
-    let cert = build_commit_certificate(
+    let cert = build_commit_qc(
         &state.view().chain_id().clone(),
         block_hash,
         1,
@@ -231,7 +235,7 @@ fn builds_finality_proof_for_stored_block() {
         &validator_set,
         &keypairs,
     );
-    record_commit_certificate(cert.clone());
+    record_commit_qc(cert.clone());
 
     let view = state.view();
     let proof = build_finality_proof(&view, 1).expect("finality proof");
@@ -239,12 +243,12 @@ fn builds_finality_proof_for_stored_block() {
     assert_eq!(proof.height, 1);
     assert_eq!(proof.chain_id, *view.chain_id());
     assert_eq!(proof.block_hash, block_hash);
-    assert_eq!(proof.commit_certificate, cert);
+    assert_eq!(proof.commit_qc, cert);
     assert_eq!(proof.block_header.hash(), block_hash);
 }
 
 #[test]
-fn finality_proof_rejects_commit_certificate_hash_mismatch() {
+fn finality_proof_rejects_commit_qc_hash_mismatch() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(DEFAULT_COMMIT_CERT_HISTORY_CAP);
 
@@ -274,7 +278,7 @@ fn finality_proof_rejects_commit_certificate_hash_mismatch() {
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD1; Hash::LENGTH]));
     let validator_set = vec![peer_id.clone()];
     let keypairs = vec![kp.clone()];
-    let cert = build_commit_certificate(
+    let cert = build_commit_qc(
         &state.view().chain_id().clone(),
         forged_hash,
         1,
@@ -283,11 +287,11 @@ fn finality_proof_rejects_commit_certificate_hash_mismatch() {
         &validator_set,
         &keypairs,
     );
-    record_commit_certificate(cert);
+    record_commit_qc(cert);
 
     let view = state.view();
     match build_finality_proof(&view, 1).unwrap_err() {
-        BridgeFinalityError::CommitCertificateHashMismatch {
+        BridgeFinalityError::QcHashMismatch {
             height,
             cert_hash,
             block_hash: stored,
@@ -301,7 +305,7 @@ fn finality_proof_rejects_commit_certificate_hash_mismatch() {
 }
 
 #[test]
-fn finality_proof_respects_commit_certificate_retention_cap() {
+fn finality_proof_respects_commit_qc_retention_cap() {
     let _exclusive = lock_finality_tests();
     let _guard = CommitCertHistoryGuard::with_cap(2);
 
@@ -330,7 +334,7 @@ fn finality_proof_respects_commit_certificate_retention_cap() {
         parent = Some(block_hash);
         kura.store_block(block).expect("store block");
 
-        let cert = build_commit_certificate(
+        let cert = build_commit_qc(
             &state.view().chain_id().clone(),
             block_hash,
             height,
@@ -339,13 +343,13 @@ fn finality_proof_respects_commit_certificate_retention_cap() {
             &validator_set,
             &keypairs,
         );
-        record_commit_certificate(cert);
+        record_commit_qc(cert);
     }
 
     let view = state.view();
     assert!(matches!(
         build_finality_proof(&view, 1),
-        Err(BridgeFinalityError::CommitCertificateNotFound(1))
+        Err(BridgeFinalityError::QcNotFound(1))
     ));
     build_finality_proof(&view, 2).expect("recent proof should be retained");
     build_finality_proof(&view, 3).expect("newest proof should be retained");
@@ -390,7 +394,7 @@ fn builds_finality_bundle_for_stored_block() {
 
     let validator_set = vec![peer_id.clone()];
     let keypairs = vec![kp.clone()];
-    let cert = build_commit_certificate(
+    let cert = build_commit_qc(
         &state.view().chain_id().clone(),
         block_hash,
         2,
@@ -399,7 +403,7 @@ fn builds_finality_bundle_for_stored_block() {
         &validator_set,
         &keypairs,
     );
-    record_commit_certificate(cert.clone());
+    record_commit_qc(cert.clone());
 
     let view = state.view();
     let bundle = iroha_core::bridge::build_finality_bundle(&view, 2).expect("finality bundle");
@@ -413,7 +417,7 @@ fn builds_finality_bundle_for_stored_block() {
     );
     assert_eq!(bundle.commitment.authority_set.id, 2);
     assert_eq!(bundle.block_header.hash(), block_hash);
-    assert_eq!(bundle.commit_certificate, cert);
+    assert_eq!(bundle.commit_qc, cert);
     assert_eq!(bundle.justification.signatures.len(), 1);
     // MMR root reflects bag-of-peaks over blocks 1..=2; should not equal the leaf hash.
     assert!(bundle.commitment.mmr_root.is_some());
@@ -460,7 +464,7 @@ fn finality_bundle_rebuilds_mmr_after_top_block_replace() {
 
     let validator_set = vec![peer_id.clone()];
     let keypairs = vec![kp.clone()];
-    let cert = build_commit_certificate(
+    let cert = build_commit_qc(
         &state.view().chain_id().clone(),
         block_hash,
         2,
@@ -469,7 +473,7 @@ fn finality_bundle_rebuilds_mmr_after_top_block_replace() {
         &validator_set,
         &keypairs,
     );
-    record_commit_certificate(cert);
+    record_commit_qc(cert);
 
     let view = state.view();
     let bundle = build_finality_bundle(&view, 2).expect("finality bundle");
@@ -489,7 +493,7 @@ fn finality_bundle_rebuilds_mmr_after_top_block_replace() {
     kura.replace_top_block(replacement)
         .expect("replace top block");
 
-    let cert_replacement = build_commit_certificate(
+    let cert_replacement = build_commit_qc(
         &state.view().chain_id().clone(),
         replacement_hash,
         2,
@@ -498,7 +502,7 @@ fn finality_bundle_rebuilds_mmr_after_top_block_replace() {
         &validator_set,
         &keypairs,
     );
-    record_commit_certificate(cert_replacement);
+    record_commit_qc(cert_replacement);
 
     let refreshed = build_finality_bundle(&view, 2).expect("refreshed bundle");
     assert_eq!(refreshed.commitment.block_hash, replacement_hash);

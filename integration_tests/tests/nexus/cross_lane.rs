@@ -14,17 +14,40 @@ use iroha_config::parameters::actual::{GovernanceCatalog, GovernanceModule, Lane
 use iroha_core::governance::manifest::{GovernanceGuardReason, LaneManifestRegistry};
 use iroha_crypto::{Hash, HashOf, LaneCommitmentId};
 use iroha_data_model::{
-    block::consensus::LaneBlockCommitment,
-    consensus::ExecutionQcRecord,
+    block::consensus::{LaneBlockCommitment, PERMISSIONED_TAG},
+    consensus::{CertPhase, Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
     nexus::{
         DataSpaceId, LaneCatalog, LaneConfig, LaneId, LanePrivacyProof, LaneRelayEnvelope,
         LaneRelayError, LaneStorageProfile, compute_settlement_hash,
     },
+    peer::PeerId,
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
 };
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{core as norito_core, json};
 use tempfile::tempdir;
+
+fn sample_commit_qc(header: &iroha_data_model::block::BlockHeader) -> Qc {
+    let validator_set: Vec<PeerId> = Vec::new();
+    Qc {
+        phase: CertPhase::Commit,
+        subject_block_hash: header.hash(),
+        parent_state_root: Hash::new([0x22; 4]),
+        post_state_root: Hash::new([0x11, 0x22, 0x33, 0x44]),
+        height: header.height().get(),
+        view: 1,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set,
+        aggregate: QcAggregate {
+            signers_bitmap: vec![0b1010_0001],
+            bls_aggregate_signature: vec![0x01; 48],
+        },
+    }
+}
 
 #[test]
 fn commitment_only_lane_without_privacy_commitments_is_gated() -> Result<()> {
@@ -136,16 +159,7 @@ fn lane_relay_envelope_must_have_consistent_qc() -> Result<()> {
     let da_hash = Hash::new([0xAA, 0xBB, 0xCC, 0xDD]);
     let da_commitment_hash = Some(HashOf::from_untyped_unchecked(da_hash));
     header.set_da_commitments_hash(da_commitment_hash);
-    let mut qc = ExecutionQcRecord {
-        subject_block_hash: header.hash(),
-        parent_state_root: Hash::new([0x22; 4]),
-        post_state_root: Hash::new([0x11, 0x22, 0x33, 0x44]),
-        height: header.height().get(),
-        view: 1,
-        epoch: 0,
-        signers_bitmap: vec![0b1010_0001],
-        bls_aggregate_signature: vec![0x01; 48],
-    };
+    let mut qc = sample_commit_qc(&header);
 
     // Tamper with the QC so the builder surfaces the mismatch.
     qc.subject_block_hash = HashOf::from_untyped_unchecked(Hash::new([0xFF; 4]));
@@ -159,20 +173,12 @@ fn lane_relay_envelope_must_have_consistent_qc() -> Result<()> {
     .expect_err("expected QC subject mismatch");
     assert!(matches!(
         err,
-        nexus::CrossLaneProofError::Relay(LaneRelayError::ExecutionQcSubjectMismatch)
+        nexus::CrossLaneProofError::Relay(LaneRelayError::QcSubjectMismatch)
     ));
 
     // Height mismatch should also be rejected.
-    let height_mismatch_qc = ExecutionQcRecord {
-        subject_block_hash: header.hash(),
-        parent_state_root: Hash::new([0x22; 4]),
-        post_state_root: Hash::new([0x11, 0x22, 0x33, 0x44]),
-        height: header.height().get() + 1,
-        view: 1,
-        epoch: 0,
-        signers_bitmap: vec![0b1010_0001],
-        bls_aggregate_signature: vec![0x01; 48],
-    };
+    let mut height_mismatch_qc = sample_commit_qc(&header);
+    height_mismatch_qc.height = header.height().get() + 1;
     let err = nexus::CrossLaneTransferBuilder::new(
         header,
         Some(height_mismatch_qc),
@@ -183,22 +189,13 @@ fn lane_relay_envelope_must_have_consistent_qc() -> Result<()> {
     .expect_err("expected QC height mismatch");
     assert!(matches!(
         err,
-        nexus::CrossLaneProofError::Relay(LaneRelayError::ExecutionQcHeightMismatch)
+        nexus::CrossLaneProofError::Relay(LaneRelayError::QcHeightMismatch)
     ));
 
     // Untampered QC should build a verifiable envelope.
     let proof = nexus::CrossLaneTransferBuilder::new(
         header,
-        Some(ExecutionQcRecord {
-            subject_block_hash: header.hash(),
-            parent_state_root: Hash::new([0x22; 4]),
-            post_state_root: Hash::new([0x11, 0x22, 0x33, 0x44]),
-            height: header.height().get(),
-            view: 1,
-            epoch: 0,
-            signers_bitmap: vec![0b1010_0001],
-            bls_aggregate_signature: vec![0x01; 48],
-        }),
+        Some(sample_commit_qc(&header)),
         da_commitment_hash,
         settlement,
     )
@@ -385,16 +382,10 @@ fn lane_relay_quorum_rejects_out_of_range_signer() {
         1_700_000_040_000,
         0,
     );
-    let qc = ExecutionQcRecord {
-        subject_block_hash: header.hash(),
-        parent_state_root: Hash::new([0x33; 4]),
-        post_state_root: Hash::new([0x44; 4]),
-        height: header.height().get(),
-        view: 2,
-        epoch: 0,
-        signers_bitmap: vec![0b0010_0000], // bit 5 set -> exceeds 5 validators
-        bls_aggregate_signature: vec![0x11; 48],
-    };
+    let mut qc = sample_commit_qc(&header);
+    qc.view = 2;
+    qc.aggregate.signers_bitmap = vec![0b0010_0000]; // bit 5 set -> exceeds 5 validators
+    qc.aggregate.bls_aggregate_signature = vec![0x11; 48];
     let proof = nexus::CrossLaneTransferBuilder::new(header, Some(qc), None, settlement)
         .build()
         .expect("proof");
@@ -433,16 +424,9 @@ fn lane_relay_quorum_rejects_zero_signature() {
         1_700_000_050_000,
         0,
     );
-    let qc = ExecutionQcRecord {
-        subject_block_hash: header.hash(),
-        parent_state_root: Hash::new([0x44; 4]),
-        post_state_root: Hash::new([0x55; 4]),
-        height: header.height().get(),
-        view: 1,
-        epoch: 0,
-        signers_bitmap: vec![0b0000_0011],
-        bls_aggregate_signature: vec![0; 48],
-    };
+    let mut qc = sample_commit_qc(&header);
+    qc.aggregate.signers_bitmap = vec![0b0000_0011];
+    qc.aggregate.bls_aggregate_signature = vec![0; 48];
     let proof = nexus::CrossLaneTransferBuilder::new(header, Some(qc), None, settlement)
         .build()
         .expect("proof");
@@ -481,16 +465,10 @@ fn lane_relay_quorum_requires_quorum_bitmap() {
         1_700_000_060_000,
         0,
     );
-    let qc = ExecutionQcRecord {
-        subject_block_hash: header.hash(),
-        parent_state_root: Hash::new([0x55; 4]),
-        post_state_root: Hash::new([0x66; 4]),
-        height: header.height().get(),
-        view: 2,
-        epoch: 0,
-        signers_bitmap: vec![0b0000_0010], // single signer
-        bls_aggregate_signature: vec![0x22; 48],
-    };
+    let mut qc = sample_commit_qc(&header);
+    qc.view = 2;
+    qc.aggregate.signers_bitmap = vec![0b0000_0010]; // single signer
+    qc.aggregate.bls_aggregate_signature = vec![0x22; 48];
     let proof = nexus::CrossLaneTransferBuilder::new(header, Some(qc), None, settlement)
         .build()
         .expect("proof");

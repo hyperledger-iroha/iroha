@@ -26,10 +26,6 @@ pub enum BlockMessage {
     VrfCommit(#[skip_try_from] super::consensus::VrfCommit),
     /// VRF reveal (`NPoS` randomness).
     VrfReveal(#[skip_try_from] super::consensus::VrfReveal),
-    /// Execution vote over post-state root.
-    ExecVote(#[skip_try_from] super::consensus::ExecVote),
-    /// `ExecutionQC` certifying post-state root.
-    ExecutionQC(#[skip_try_from] super::consensus::ExecutionQC),
     /// Execution witness with metadata for SMT recomputation.
     ExecWitness(#[skip_try_from] super::consensus::ExecWitnessMsg),
     /// RBC init (payload distribution scaffold).
@@ -47,9 +43,9 @@ pub enum BlockMessage {
     /// Full proposal header + payload hash. Used for on-wire parent/HighestQC checks.
     Proposal(#[skip_try_from] super::consensus::Proposal),
     /// Commit vote (Prepare/Commit/NewView) carrying a BLS signature.
-    CommitVote(#[skip_try_from] super::consensus::CommitVote),
+    QcVote(#[skip_try_from] super::consensus::QcVote),
     /// Commit certificate (Prepare/Commit/NewView) aggregating BLS signatures.
-    CommitCertificate(#[skip_try_from] super::consensus::CommitCertificate),
+    Qc(#[skip_try_from] super::consensus::Qc),
 }
 
 /// Control-flow signals exchanged between peers (pacemaker frames).
@@ -70,7 +66,7 @@ pub struct ProposalHint {
     /// View for which the proposal applies.
     pub view: u64,
     /// Highest certificate reference known to the proposer.
-    pub highest_cert: super::consensus::CommitCertificateRef,
+    pub highest_qc: super::consensus::QcRef,
 }
 
 // Bridge Norito codec (Encode/Decode) to core slice-based decoding for strict-safe paths.
@@ -148,9 +144,9 @@ pub struct BlockSyncUpdate {
     /// The corresponding block.
     pub block: SignedBlock,
     /// Cached commit votes for the block (used to backfill missing votes on peers).
-    pub commit_votes: Vec<super::consensus::CommitVote>,
+    pub commit_votes: Vec<super::consensus::QcVote>,
     /// Optional commit certificate associated with the block height.
-    pub commit_certificate: Option<iroha_data_model::consensus::CommitCertificate>,
+    pub commit_qc: Option<iroha_data_model::consensus::Qc>,
     /// Optional validator checkpoint associated with the block height.
     pub validator_checkpoint: Option<iroha_data_model::consensus::ValidatorSetCheckpoint>,
     /// Optional stake snapshot aligned to the validator set.
@@ -164,7 +160,7 @@ impl From<&SignedBlock> for BlockSyncUpdate {
         Self {
             block: block.clone(),
             commit_votes: Vec::new(),
-            commit_certificate: None,
+            commit_qc: None,
             validator_checkpoint: None,
             stake_snapshot: None,
         }
@@ -238,20 +234,24 @@ mod tests {
         let v1 = consensus::Vote {
             phase: consensus::Phase::Prepare,
             block_hash: dummy_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 1,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
         let v2 = consensus::Vote {
             phase: consensus::Phase::Prepare,
             block_hash: dummy_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 1,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };

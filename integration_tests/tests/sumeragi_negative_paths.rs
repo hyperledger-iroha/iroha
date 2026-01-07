@@ -14,14 +14,13 @@ use iroha::{
         prelude::TransactionBuilder,
     },
 };
-use iroha_core::sumeragi::consensus::Phase;
-use iroha_core::sumeragi::consensus::{PERMISSIONED_TAG, vote_preimage};
+use iroha_core::sumeragi::consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage};
 use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
     ChainId,
     block::{
         BlockHeader,
-        consensus::{CommitVote as Vote, Evidence, EvidenceKind, EvidencePayload},
+        consensus::{Evidence, EvidenceKind, EvidencePayload},
     },
 };
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
@@ -41,10 +40,12 @@ fn make_vote(seed: u8) -> Vote {
     Vote {
         phase: Phase::Prepare,
         block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(hash),
+        parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
         height: 10,
         view: 3,
         epoch: 0,
-        highest_cert: None,
+        highest_qc: None,
         signer: 0,
         bls_sig: vec![seed; 96],
     }
@@ -63,10 +64,12 @@ fn signed_vote(
     let mut vote = Vote {
         phase: Phase::Prepare,
         block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(hash),
+        parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
         height,
         view,
         epoch,
-        highest_cert: None,
+        highest_qc: None,
         signer,
         bls_sig: Vec::new(),
     };
@@ -204,7 +207,7 @@ fn posting_evidence_with_kind_payload_mismatch_is_rejected() -> Result<()> {
     let mut v2 = v1.clone();
     v2.block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x52; 32]));
     let evidence = Evidence {
-        kind: EvidenceKind::InvalidCommitCertificate,
+        kind: EvidenceKind::InvalidQc,
         payload: EvidencePayload::DoubleVote { v1, v2 },
     };
 

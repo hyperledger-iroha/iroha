@@ -15,7 +15,7 @@ use std::{
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::BlockHeader,
-    consensus::{CommitCertificate, ValidatorSetCheckpoint},
+    consensus::{Qc, ValidatorSetCheckpoint},
 };
 use iroha_logger::warn;
 use norito::{
@@ -43,7 +43,7 @@ struct CommitRosterRecord {
     /// Block hash certified by this entry.
     block_hash: HashOf<BlockHeader>,
     /// Commit certificate for the block.
-    commit_certificate: CommitCertificate,
+    commit_qc: Qc,
     /// Validator set checkpoint for the block.
     validator_checkpoint: ValidatorSetCheckpoint,
     /// Optional stake snapshot aligned to the validator set.
@@ -99,7 +99,7 @@ pub enum CommitRosterJournalError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitRosterSnapshot {
     /// Commit certificate for the block.
-    pub commit_certificate: CommitCertificate,
+    pub commit_qc: Qc,
     /// Validator set checkpoint for the block.
     pub validator_checkpoint: ValidatorSetCheckpoint,
     /// Optional stake snapshot aligned to the validator set.
@@ -180,14 +180,14 @@ impl CommitRosterJournal {
         };
 
         for entry in persisted.entries {
-            if entry.height != entry.commit_certificate.height
-                || entry.block_hash != entry.commit_certificate.subject_block_hash
+            if entry.height != entry.commit_qc.height
+                || entry.block_hash != entry.commit_qc.subject_block_hash
             {
                 warn!(
                     height = entry.height,
                     block = %entry.block_hash,
-                    cert_height = entry.commit_certificate.height,
-                    cert_block = %entry.commit_certificate.subject_block_hash,
+                    cert_height = entry.commit_qc.height,
+                    cert_block = %entry.commit_qc.subject_block_hash,
                     "dropping commit roster entry with mismatched commit certificate metadata"
                 );
                 continue;
@@ -205,7 +205,7 @@ impl CommitRosterJournal {
                 continue;
             }
             journal.upsert(
-                entry.commit_certificate,
+                entry.commit_qc,
                 entry.validator_checkpoint,
                 entry.stake_snapshot,
             );
@@ -282,21 +282,21 @@ impl CommitRosterJournal {
     /// Upsert a commit roster entry, replacing older views for the same block hash/height.
     pub fn upsert(
         &mut self,
-        commit_certificate: CommitCertificate,
+        commit_qc: Qc,
         validator_checkpoint: ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) {
         let key = (
-            commit_certificate.height,
-            commit_certificate.subject_block_hash,
+            commit_qc.height,
+            commit_qc.subject_block_hash,
         );
         match self.entries.entry(key) {
             Entry::Occupied(mut entry) => {
-                if entry.get().commit_certificate.view <= commit_certificate.view {
+                if entry.get().commit_qc.view <= commit_qc.view {
                     let stake_snapshot =
                         stake_snapshot.or_else(|| entry.get().stake_snapshot.clone());
                     entry.insert(CommitRosterSnapshot {
-                        commit_certificate,
+                        commit_qc,
                         validator_checkpoint,
                         stake_snapshot,
                     });
@@ -304,7 +304,7 @@ impl CommitRosterJournal {
             }
             Entry::Vacant(entry) => {
                 entry.insert(CommitRosterSnapshot {
-                    commit_certificate,
+                    commit_qc,
                     validator_checkpoint,
                     stake_snapshot,
                 });
@@ -333,7 +333,7 @@ impl CommitRosterJournal {
                 .map(|((height, block_hash), snapshot)| CommitRosterRecord {
                     height: *height,
                     block_hash: *block_hash,
-                    commit_certificate: snapshot.commit_certificate.clone(),
+                    commit_qc: snapshot.commit_qc.clone(),
                     validator_checkpoint: snapshot.validator_checkpoint.clone(),
                     stake_snapshot: snapshot.stake_snapshot.clone(),
                 })
@@ -440,15 +440,15 @@ mod tests {
 
     use super::*;
     use crate::sumeragi::{
-        consensus::{CommitAggregate, PERMISSIONED_TAG, Phase},
+        consensus::{QcAggregate, PERMISSIONED_TAG, Phase},
         stake_snapshot::CommitStakeSnapshotEntry,
     };
 
-    fn sample_cert(view: u64) -> (CommitCertificate, ValidatorSetCheckpoint) {
+    fn sample_cert(view: u64) -> (Qc, ValidatorSetCheckpoint) {
         cert_with_height(2, view)
     }
 
-    fn cert_with_height(height: u64, view: u64) -> (CommitCertificate, ValidatorSetCheckpoint) {
+    fn cert_with_height(height: u64, view: u64) -> (Qc, ValidatorSetCheckpoint) {
         let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer = PeerId::new(kp.public_key().clone());
         let header = BlockHeader::new(
@@ -463,18 +463,20 @@ mod tests {
         let roster = vec![peer];
         let signers_bitmap = vec![0b0000_0001];
         let bls_aggregate_signature = vec![0xAB; 96];
-        let cert = CommitCertificate {
+        let cert = Qc {
             phase: Phase::Commit,
             subject_block_hash: block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height,
             view,
             epoch: 0,
             mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: signers_bitmap.clone(),
                 bls_aggregate_signature: bls_aggregate_signature.clone(),
             },
@@ -523,7 +525,7 @@ mod tests {
         assert_eq!(
             snapshots[0],
             CommitRosterSnapshot {
-                commit_certificate: cert,
+                commit_qc: cert,
                 validator_checkpoint: checkpoint,
                 stake_snapshot: None,
             }
@@ -553,7 +555,7 @@ mod tests {
         let snapshot = loaded
             .get(cert2.height, cert2.subject_block_hash)
             .expect("new entry should exist");
-        assert_eq!(snapshot.commit_certificate, cert2);
+        assert_eq!(snapshot.commit_qc, cert2);
         assert_eq!(snapshot.validator_checkpoint, checkpoint2);
     }
 
@@ -575,14 +577,14 @@ mod tests {
                 CommitRosterRecord {
                     height: cert1.height,
                     block_hash: cert1.subject_block_hash,
-                    commit_certificate: cert1.clone(),
+                    commit_qc: cert1.clone(),
                     validator_checkpoint: checkpoint1.clone(),
                     stake_snapshot: None,
                 },
                 CommitRosterRecord {
                     height: cert2.height,
                     block_hash: cert2.subject_block_hash,
-                    commit_certificate: cert2.clone(),
+                    commit_qc: cert2.clone(),
                     validator_checkpoint: checkpoint2.clone(),
                     stake_snapshot: None,
                 },
@@ -614,7 +616,7 @@ mod tests {
         let loaded = CommitRosterJournal::load(path, retention(4)).expect("load");
         let snapshots = loaded.snapshots();
         assert_eq!(snapshots.len(), 1);
-        assert_eq!(snapshots[0].commit_certificate.view, high_view_cert.view);
+        assert_eq!(snapshots[0].commit_qc.view, high_view_cert.view);
     }
 
     #[test]
@@ -627,7 +629,7 @@ mod tests {
             entries: vec![CommitRosterRecord {
                 height: cert.height,
                 block_hash: cert.subject_block_hash,
-                commit_certificate: cert.clone(),
+                commit_qc: cert.clone(),
                 validator_checkpoint: checkpoint.clone(),
                 stake_snapshot: None,
             }],
@@ -641,7 +643,7 @@ mod tests {
         assert_eq!(
             snapshots[0],
             CommitRosterSnapshot {
-                commit_certificate: cert,
+                commit_qc: cert,
                 validator_checkpoint: checkpoint,
                 stake_snapshot: None,
             }
@@ -679,7 +681,7 @@ mod tests {
             entries: vec![CommitRosterRecord {
                 height: cert.height,
                 block_hash: cert.subject_block_hash,
-                commit_certificate: cert.clone(),
+                commit_qc: cert.clone(),
                 validator_checkpoint: checkpoint.clone(),
                 stake_snapshot: None,
             }],
@@ -693,7 +695,7 @@ mod tests {
         assert_eq!(
             snapshots[0],
             CommitRosterSnapshot {
-                commit_certificate: cert,
+                commit_qc: cert,
                 validator_checkpoint: checkpoint,
                 stake_snapshot: None,
             }
@@ -724,7 +726,7 @@ mod tests {
         assert_eq!(
             snapshots[0],
             CommitRosterSnapshot {
-                commit_certificate: cert,
+                commit_qc: cert,
                 validator_checkpoint: checkpoint,
                 stake_snapshot: None,
             }
@@ -763,7 +765,7 @@ mod tests {
         let found = journal
             .get(cert.height, cert.subject_block_hash)
             .expect("snapshot must be present");
-        assert_eq!(found.commit_certificate, cert);
+        assert_eq!(found.commit_qc, cert);
         assert_eq!(found.validator_checkpoint, checkpoint);
 
         assert!(
@@ -786,7 +788,7 @@ mod tests {
         let snapshots = journal.snapshots();
         let heights: Vec<_> = snapshots
             .iter()
-            .map(|snapshot| snapshot.commit_certificate.height)
+            .map(|snapshot| snapshot.commit_qc.height)
             .collect();
         assert_eq!(heights, vec![2, 3]);
 
@@ -795,7 +797,7 @@ mod tests {
         let reloaded_heights: Vec<_> = reloaded
             .snapshots()
             .into_iter()
-            .map(|snapshot| snapshot.commit_certificate.height)
+            .map(|snapshot| snapshot.commit_qc.height)
             .collect();
         assert_eq!(reloaded_heights, vec![2, 3]);
     }

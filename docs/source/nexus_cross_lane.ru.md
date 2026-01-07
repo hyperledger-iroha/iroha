@@ -70,7 +70,7 @@ Receipts наследуют детерминированные правила к
 ### `LaneRelayEnvelope`
 
 `LaneRelayEnvelope` (см. `crates/iroha_data_model/src/nexus/relay.rs`) упаковывает lane
-`BlockHeader`, опциональный `ExecutionQcRecord`, опциональный хэш `DaCommitmentBundle`, полный
+`BlockHeader`, опциональный `commit QC (`Qc`)`, опциональный хэш `DaCommitmentBundle`, полный
 `LaneBlockCommitment` и число байтов RBC на лейн. Envelope хранит Norito-derived
 `settlement_hash` (через `compute_settlement_hash`), чтобы получатели могли проверить settlement
 payload перед пересылкой в merge ledger. Отправители должны отвергать envelope, когда `verify`

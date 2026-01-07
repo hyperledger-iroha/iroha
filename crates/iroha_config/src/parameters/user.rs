@@ -5206,7 +5206,7 @@ pub struct Sumeragi {
     /// NPoS-specific tuning knobs (only effective in `npos` mode).
     #[config(nested)]
     pub npos: SumeragiNpos,
-    /// Proof policy (off/exec_qc/zk_parent/hybrid)
+    /// Proof policy (off/zk_parent)
     #[config(env = "SUMERAGI_PROOF_POLICY", default = "ProofPolicy::Off")]
     pub proof_policy: ProofPolicy,
     /// Cap for in-memory commit certificate history (used for status/finality proofs).
@@ -5221,24 +5221,12 @@ pub struct Sumeragi {
         default = "defaults::sumeragi::ZK_FINALITY_K"
     )]
     pub zk_finality_k: u8,
-    /// Require ExecutionQC gate (effective when `proof_policy` != Off)
-    #[config(
-        env = "SUMERAGI_REQUIRE_EXECUTION_QC",
-        default = "defaults::sumeragi::REQUIRE_EXECUTION_QC"
-    )]
-    pub require_execution_qc: bool,
     /// Require `PrecommitQC` presence before committing a block (consensus path).
     #[config(
         env = "SUMERAGI_REQUIRE_PRECOMMIT_QC",
         default = "defaults::sumeragi::REQUIRE_PRECOMMIT_QC"
     )]
     pub require_precommit_qc: bool,
-    /// Require presence of a full `ExecutionQC` record in WSV before commit (consensus path).
-    #[config(
-        env = "SUMERAGI_REQUIRE_WSV_EXEC_QC",
-        default = "defaults::sumeragi::REQUIRE_WSV_EXEC_QC_RECORD"
-    )]
-    pub require_wsv_exec_qc: bool,
     /// Epoch length in blocks (`NPoS`)
     #[config(default = "defaults::sumeragi::EPOCH_LENGTH_BLOCKS")]
     pub epoch_length_blocks: u64,
@@ -5493,12 +5481,8 @@ impl json::JsonDeserialize for ConsensusMode {
 pub enum ProofPolicy {
     /// Disable proof propagation.
     Off,
-    /// Require executor quorum certificates.
-    ExecQc,
     /// Require parent zero-knowledge proof.
     ZkParent,
-    /// Require both executor QCs and parent ZK proofs.
-    Hybrid,
 }
 
 impl json::JsonSerialize for ProofPolicy {
@@ -5660,9 +5644,7 @@ impl Sumeragi {
             proof_policy,
             commit_cert_history_cap,
             zk_finality_k,
-            require_execution_qc,
             require_precommit_qc,
-            require_wsv_exec_qc,
             epoch_length_blocks,
             vrf_commit_deadline_offset,
             vrf_reveal_deadline_offset,
@@ -5956,14 +5938,10 @@ impl Sumeragi {
             npos,
             proof_policy: match proof_policy {
                 ProofPolicy::Off => actual::ProofPolicy::Off,
-                ProofPolicy::ExecQc => actual::ProofPolicy::ExecQcOnly,
                 ProofPolicy::ZkParent => actual::ProofPolicy::ZkParent,
-                ProofPolicy::Hybrid => actual::ProofPolicy::Hybrid,
             },
             zk_finality_k,
-            require_execution_qc,
             require_precommit_qc,
-            require_wsv_exec_qc,
             epoch_length_blocks,
             vrf_commit_deadline_offset,
             vrf_reveal_deadline_offset,

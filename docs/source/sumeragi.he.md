@@ -87,7 +87,6 @@ translator: manual
 
 ### דפוסי הפעלה למודים
 - מסלול Permissioned: סינגל-צינור עם פרוקסי-טייל יחיד, Viewchange קלאסי וקומיט מבוסס `BlockCommitted`.
-- מסלול Strict / ExecQC: מוסיף דרישה ל-ExecQC (SBV-AM) בלבד. מצריך תיעוד ותיאום סביב דרישות Evidencing. חיבור ל-WSV מספק ראיה למולקות.
 
 ### CLI / API צ'יטשיט
 - `iroha_cli sumeragi params --summary` – בדיקת טיימרים ופרמטרים.
@@ -127,15 +126,9 @@ translator: manual
 - סשני RBC מזוהים באמצעות `RbcSessionId` ומכילים מטא-נתונים על גובה, hash, ומספר חלקים. הם מפיצים את גוף הבלוק ומספקים זמינות נתונים.
 - כאשר `sumeragi.da_enabled` פעיל, קומיט תלוי ב-`availability evidence` (ולא בהשלמה מקומית של RBC). RBC משמש כמנגנון הפצה/שחזור של ה-payload.
 
-### ExecQC וראיות
-- ExecQC מספק חתימות SBV-AM על שורש המצב לאחר ההרצה. כאשר `require_execution_qc` מופעל, קומיט תלוי הן ב-commit certificate (precommit) והן ב-ExecQC.
-- `require_wsv_exec_qc` מבטיח שה-WSV שומר את ה-ExecQC לפני הקומיט, אחרת הקומיט מושהה.
-- כאשר שער ה-ExecQC נדרש, הודעות ExecutionQC מ-view ישן עדיין מתקבלות; אם ה-payload חסר הן מפעילות בקשת בלוק חסר כדי למנוע תקיעה במוד קפדני.
-
 ### הגדרת `proof_policy`
-- `proof_policy = "precommit_qc"` (ברירת מחדל): דרישה ל-commit certificate (precommit) בלבד.
-- `proof_policy = "exec_qc"` או `require_execution_qc = true`: מוסיפים שער ExecQC.
-- `proof_policy = "off"`: מבטל את דרישת ה-commit certificate (לצורכי בדיקה בלבד, לא מומלץ לייצור).
+- `proof_policy = "off"` (ברירת מחדל): commit QC בלבד.
+- `proof_policy = "zk_parent"`: דרישה להוכחת ZK של ההורה (`zk_finality_k`).
 
 ### Telemetry & Backpressure
 - `pacemaker_backpressure_deferrals_total` מורה על עיכובים עקב לחץ תורים; `scripts/sumeragi_backpressure_log_scraper.py` קושר בין לוגים למדדים.
@@ -259,22 +252,5 @@ python3 scripts/run_sumeragi_soak_matrix.py \
 
 מידע נוסף וקובץ הבקרה לחתימה מתוארים ב-
 [`sumeragi_soak_matrix.md`](sumeragi_soak_matrix.md).
-
-### ExecQC במוד קפדני
-
-```toml
-[sumeragi]
-# דרישה ל-ExecQC (SBV-AM) לפני קומיט של ההורה
-proof_policy = "exec_qc"
-require_execution_qc = true
-
-# מוד קפדני: מחייב שמירת ExecutionQC מלאה ב-WSV באותו עדכון
-require_wsv_exec_qc = true
-
-# השבתת שער Precommit אינה מומלצת
-# require_precommit_qc = false
-```
-
-כאשר `require_wsv_exec_qc = true`, הנוד מחייב את ה-WSV לשמור את ה-ExecutionQC באותו טרנזקציה; ללא רשומה זו הקומיט מושהה עד להשלמה.
 
 </div>

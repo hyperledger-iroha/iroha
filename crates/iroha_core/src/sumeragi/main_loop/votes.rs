@@ -151,7 +151,7 @@ impl Actor {
                 }
             }
             Phase::NewView => {
-                if let Some(highest) = vote.highest_cert {
+                if let Some(highest) = vote.highest_qc {
                     if highest.phase != Phase::Commit {
                         debug!(
                             height = vote.height,
@@ -576,9 +576,9 @@ impl Actor {
         Some(hashes)
     }
 
-    fn roster_from_commit_certificate_history(&self, height: u64) -> Option<Vec<PeerId>> {
+    fn roster_from_commit_qc_history(&self, height: u64) -> Option<Vec<PeerId>> {
         let parent_height = height.checked_sub(1)?;
-        let cert = super::status::commit_certificate_history()
+        let cert = super::status::commit_qc_history()
             .into_iter()
             .find(|candidate| {
                 candidate.height == parent_height
@@ -597,14 +597,14 @@ impl Actor {
         }
     }
 
-    pub(super) fn roster_from_commit_certificate_history_roll_forward(
+    pub(super) fn roster_from_commit_qc_history_roll_forward(
         &self,
         height: u64,
         target_parent_hash: Option<HashOf<BlockHeader>>,
     ) -> Option<Vec<PeerId>> {
         let target_parent = height.checked_sub(1)?;
         let cert = target_parent_hash.and_then(|target_hash| {
-            super::status::commit_certificate_history()
+            super::status::commit_qc_history()
                 .into_iter()
                 .find(|candidate| {
                     candidate.height == target_parent
@@ -613,7 +613,7 @@ impl Actor {
                 })
         });
         let cert = cert.or_else(|| {
-            super::status::commit_certificate_history()
+            super::status::commit_qc_history()
                 .into_iter()
                 .find(|candidate| {
                     candidate.height <= target_parent
@@ -739,11 +739,11 @@ impl Actor {
                 .get(&block_hash)
                 .and_then(|pending| pending.block.header().prev_block_hash());
             if let Some(roster) =
-                self.roster_from_commit_certificate_history_roll_forward(height, parent_hash)
+                self.roster_from_commit_qc_history_roll_forward(height, parent_hash)
             {
                 return roster;
             }
-            if let Some(roster) = self.roster_from_commit_certificate_history(height) {
+            if let Some(roster) = self.roster_from_commit_qc_history(height) {
                 return roster;
             }
             return Vec::new();
@@ -763,7 +763,7 @@ impl Actor {
             return self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
         }
         if let Some(roster) =
-            self.roster_from_commit_certificate_history_roll_forward(height, Some(block_hash))
+            self.roster_from_commit_qc_history_roll_forward(height, Some(block_hash))
         {
             return roster;
         }
@@ -777,153 +777,6 @@ impl Actor {
         self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode)
     }
 
-    #[allow(clippy::too_many_lines)]
-    #[allow(clippy::too_many_lines)]
-    pub(super) fn handle_exec_vote(&mut self, vote: crate::sumeragi::consensus::ExecVote) {
-        if let Some(local_view) = self.stale_view(vote.height, vote.view) {
-            let missing_request = self
-                .pending
-                .missing_block_requests
-                .contains_key(&vote.block_hash);
-            if self.block_known_locally(vote.block_hash) || missing_request {
-                debug!(
-                    height = vote.height,
-                    view = vote.view,
-                    local_view,
-                    signer = vote.signer,
-                    block = %vote.block_hash,
-                    missing_request,
-                    "accepting exec vote for stale view"
-                );
-            } else {
-                debug!(
-                    height = vote.height,
-                    view = vote.view,
-                    local_view,
-                    kind = "ExecVote",
-                    "dropping consensus message for stale view"
-                );
-                return;
-            }
-        }
-        let expected_epoch = self.epoch_for_height(vote.height);
-        if vote.epoch != expected_epoch {
-            iroha_logger::debug!(
-                height = vote.height,
-                view = vote.view,
-                epoch = vote.epoch,
-                expected_epoch,
-                signer = vote.signer,
-                block = %vote.block_hash,
-                "dropping exec vote with mismatched epoch"
-            );
-            return;
-        }
-        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(vote.height);
-        let topology_peers =
-            self.roster_for_vote_with_mode(vote.block_hash, vote.height, vote.view, consensus_mode);
-        if topology_peers.is_empty() {
-            warn!(
-                height = vote.height,
-                view = vote.view,
-                signer = vote.signer,
-                block_hash = %vote.block_hash,
-                "dropping exec vote: empty commit topology"
-            );
-            return;
-        }
-        let topology = super::network_topology::Topology::new(topology_peers);
-        let evidence_context = super::evidence::EvidenceValidationContext {
-            topology: &topology,
-            chain_id: &self.common_config.chain,
-            mode_tag,
-            prf_seed,
-        };
-        let signature_topology =
-            topology_for_view(&topology, vote.height, vote.view, mode_tag, prf_seed);
-        match super::exec_vote_signature_check(
-            &vote,
-            &signature_topology,
-            &self.common_config.chain,
-            mode_tag,
-        ) {
-            Ok(()) => {}
-            Err(err) => {
-                warn!(
-                    height = vote.height,
-                    view = vote.view,
-                    signer = vote.signer,
-                    block_hash = %vote.block_hash,
-                    roster_len = signature_topology.as_ref().len(),
-                    ?err,
-                    "dropping exec vote with invalid signature"
-                );
-                return;
-            }
-        }
-        let key = (vote.height, vote.view, vote.epoch, vote.signer);
-        if let Some(existing) = self.exec_vote_log.get(&key) {
-            if existing.block_hash == vote.block_hash
-                && existing.parent_state_root == vote.parent_state_root
-                && existing.post_state_root == vote.post_state_root
-            {
-                iroha_logger::debug!(
-                    height = vote.height,
-                    view = vote.view,
-                    epoch = vote.epoch,
-                    signer = vote.signer,
-                    block_hash = ?vote.block_hash,
-                    "dropping duplicate exec vote already recorded"
-                );
-                return;
-            }
-            if existing.block_hash == vote.block_hash
-                && super::evidence::record_double_exec_vote(
-                    &mut self.evidence_store,
-                    self.state.as_ref(),
-                    existing,
-                    &vote,
-                    &evidence_context,
-                )
-            {
-                warn!(
-                    height = vote.height,
-                    view = vote.view,
-                    epoch = vote.epoch,
-                    signer = vote.signer,
-                    "double execution vote detected; storing evidence"
-                );
-            } else {
-                warn!(
-                    height = vote.height,
-                    view = vote.view,
-                    epoch = vote.epoch,
-                    signer = vote.signer,
-                    block_hash = ?vote.block_hash,
-                    existing_block = ?existing.block_hash,
-                    "dropping conflicting exec vote for signer"
-                );
-            }
-            return;
-        }
-        let duplicate = self.exec_vote_log.insert(key, vote.clone()).is_some();
-        iroha_logger::debug!(
-            height = vote.height,
-            view = vote.view,
-            epoch = vote.epoch,
-            signer = vote.signer,
-            block_hash = ?vote.block_hash,
-            duplicate,
-            "recorded exec vote"
-        );
-        self.try_form_exec_qc_from_votes(
-            vote.block_hash,
-            vote.height,
-            vote.view,
-            vote.epoch,
-            topology,
-        );
-    }
 }
 
 #[cfg(test)]
@@ -952,9 +805,11 @@ mod tests {
             height: 3,
             view: 0,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
         }
     }
 
@@ -1062,6 +917,6 @@ mod tests {
 
         assert_eq!(update.commit_votes.len(), 1);
         assert_eq!(update.commit_votes[0].block_hash, block_hash);
-        assert!(update.commit_certificate.is_none());
+        assert!(update.commit_qc.is_none());
     }
 }

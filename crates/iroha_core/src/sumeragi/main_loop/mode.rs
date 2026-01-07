@@ -98,7 +98,6 @@ impl Actor {
         self.subsystems.propose.proposal_cache = ProposalCache::new(PROPOSAL_CACHE_LIMIT);
         self.subsystems.propose.proposals_seen.clear();
         self.qc_cache.clear();
-        self.execution_qc_cache.clear();
         self.vote_log.clear();
         let (_, redundant_r) = self.collector_plan_params();
         self.subsystems.propose.collector_redundant_limit = redundant_r.max(1);
@@ -128,7 +127,6 @@ impl Actor {
             &mut self.subsystems.propose.last_successful_proposal,
             &mut self.tick_counter,
             &mut self.qc_signer_tally,
-            &mut self.exec_vote_log,
             &mut self.voting_block,
             &mut self.pending_roster_activation,
             &mut self.subsystems.propose.last_empty_child_attempt,

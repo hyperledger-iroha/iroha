@@ -24,7 +24,7 @@ use iroha_data_model::{
         consensus::{LaneBlockCommitment, SumeragiMembershipStatus, ValidatorIndex},
     },
     consensus::{
-        CommitCertificate, ConsensusKeyRecord, ValidatorElectionOutcome, ValidatorSetCheckpoint,
+        Qc, ConsensusKeyRecord, ValidatorElectionOutcome, ValidatorSetCheckpoint,
     },
     isi::settlement::{SettlementAtomicity, SettlementExecutionOrder},
     nexus::{LaneId, LaneRelayEnvelope, LaneRelayError},
@@ -491,7 +491,7 @@ const VALIDATOR_CHECKPOINT_HISTORY_CAP: usize = 64;
 const KEY_LIFECYCLE_HISTORY_CAP: usize = 128;
 static VALIDATOR_CHECKPOINT_HISTORY: OnceLock<Mutex<VecDeque<ValidatorSetCheckpoint>>> =
     OnceLock::new();
-static COMMIT_CERT_HISTORY: OnceLock<Mutex<VecDeque<CommitCertificate>>> = OnceLock::new();
+static COMMIT_CERT_HISTORY: OnceLock<Mutex<VecDeque<Qc>>> = OnceLock::new();
 static PRECOMMIT_SIGNER_HISTORY: OnceLock<Mutex<VecDeque<PrecommitSignerRecord>>> = OnceLock::new();
 static KEY_LIFECYCLE_HISTORY: OnceLock<Mutex<VecDeque<ConsensusKeyRecord>>> = OnceLock::new();
 const NPOS_ELECTION_HISTORY_CAP: usize = 32;
@@ -2010,11 +2010,11 @@ pub struct KuraStoreSnapshot {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BlockSyncRosterSnapshot {
     /// Total times a commit certificate hint was used.
-    pub commit_certificate_hint_total: u64,
+    pub commit_qc_hint_total: u64,
     /// Total times a validator-checkpoint hint was used.
     pub checkpoint_hint_total: u64,
     /// Total times commit-certificate history was used.
-    pub commit_certificate_history_total: u64,
+    pub commit_qc_history_total: u64,
     /// Total times validator-checkpoint history was used.
     pub checkpoint_history_total: u64,
     /// Total times a roster sidecar was used.
@@ -2370,7 +2370,7 @@ pub struct CommitQuorumSnapshot {
 
 /// Snapshot of the most recent commit certificate (summary only).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct CommitCertificateSnapshot {
+pub struct QcSnapshot {
     /// Block height certified by the latest commit certificate.
     pub height: u64,
     /// View associated with the commit certificate.
@@ -2468,7 +2468,7 @@ pub struct StatusSnapshot {
     /// Optional `LockedQC` subject block hash (best-effort).
     pub locked_qc_subject: Option<HashOf<BlockHeader>>,
     /// Latest commit certificate summary (best-effort).
-    pub commit_certificate: CommitCertificateSnapshot,
+    pub commit_qc: QcSnapshot,
     /// Latest commit quorum signature tally (best-effort).
     pub commit_quorum: CommitQuorumSnapshot,
     /// Settlement telemetry snapshot (DvP/PvP).
@@ -2669,7 +2669,7 @@ fn key_history_slot() -> &'static Mutex<VecDeque<ConsensusKeyRecord>> {
     KEY_LIFECYCLE_HISTORY.get_or_init(|| Mutex::new(VecDeque::new()))
 }
 
-fn commit_cert_history_slot() -> &'static Mutex<VecDeque<CommitCertificate>> {
+fn commit_cert_history_slot() -> &'static Mutex<VecDeque<Qc>> {
     COMMIT_CERT_HISTORY.get_or_init(|| Mutex::new(VecDeque::new()))
 }
 
@@ -2684,6 +2684,10 @@ pub struct PrecommitSignerRecord {
     pub view: u64,
     /// Epoch (permissioned mode uses zero).
     pub epoch: u64,
+    /// Parent state root bound into commit vote preimages.
+    pub parent_state_root: Hash,
+    /// Post-state root bound into commit vote preimages.
+    pub post_state_root: Hash,
     /// Signers that participated in the precommit QC (canonical validator-set order).
     pub signers: BTreeSet<ValidatorIndex>,
     /// Aggregate BLS signature covering the precommit vote preimage.
@@ -2728,7 +2732,7 @@ pub fn validator_checkpoint_history() -> Vec<ValidatorSetCheckpoint> {
 }
 
 /// Record a commit certificate, retaining a bounded history (newest-last order).
-pub fn record_commit_certificate(cert: CommitCertificate) {
+pub fn record_commit_qc(cert: Qc) {
     #[cfg(test)]
     let _guard = commit_history_test_guard();
     let mut guard = commit_cert_history_slot()
@@ -2749,7 +2753,7 @@ pub fn record_commit_certificate(cert: CommitCertificate) {
 
 /// Return commit certificates in newest-first order.
 #[must_use]
-pub fn commit_certificate_history() -> Vec<CommitCertificate> {
+pub fn commit_qc_history() -> Vec<Qc> {
     #[cfg(test)]
     let _guard = commit_history_test_guard();
     let mut entries: Vec<_> = commit_cert_history_slot()
@@ -2947,10 +2951,10 @@ fn da_gate_snapshot() -> DaGateSnapshot {
 
 fn block_sync_roster_snapshot() -> BlockSyncRosterSnapshot {
     BlockSyncRosterSnapshot {
-        commit_certificate_hint_total: BLOCK_SYNC_ROSTER_COMMIT_CERT_HINT_TOTAL
+        commit_qc_hint_total: BLOCK_SYNC_ROSTER_COMMIT_CERT_HINT_TOTAL
             .load(Ordering::Relaxed),
         checkpoint_hint_total: BLOCK_SYNC_ROSTER_CHECKPOINT_HINT_TOTAL.load(Ordering::Relaxed),
-        commit_certificate_history_total: BLOCK_SYNC_ROSTER_COMMIT_CERT_HISTORY_TOTAL
+        commit_qc_history_total: BLOCK_SYNC_ROSTER_COMMIT_CERT_HISTORY_TOTAL
             .load(Ordering::Relaxed),
         checkpoint_history_total: BLOCK_SYNC_ROSTER_CHECKPOINT_HISTORY_TOTAL
             .load(Ordering::Relaxed),
@@ -3159,7 +3163,7 @@ pub fn snapshot() -> StatusSnapshot {
         locked_qc_view: LOCKED_QC_VIEW.load(Ordering::Relaxed),
         highest_qc_subject: highest_qc_hash(),
         locked_qc_subject: locked_qc_hash(),
-        commit_certificate: commit_certificate_snapshot(),
+        commit_qc: commit_qc_snapshot(),
         commit_quorum: commit_quorum_snapshot(),
         settlement: settlement_snapshot(),
         gossip_fallback_total: GOSSIP_FALLBACK_TOTAL.load(Ordering::Relaxed),
@@ -3592,13 +3596,13 @@ pub fn inc_block_sync_roster_source(source: &str) {
             BLOCK_SYNC_ROSTER_COMMIT_CERT_HINT_TOTAL.fetch_add(1, Ordering::Relaxed);
             BLOCK_SYNC_ROSTER_CHECKPOINT_HINT_TOTAL.fetch_add(1, Ordering::Relaxed);
         }
-        "commit_certificate_hint" => {
+        "commit_qc_hint" => {
             BLOCK_SYNC_ROSTER_COMMIT_CERT_HINT_TOTAL.fetch_add(1, Ordering::Relaxed);
         }
         "validator_checkpoint_hint" => {
             BLOCK_SYNC_ROSTER_CHECKPOINT_HINT_TOTAL.fetch_add(1, Ordering::Relaxed);
         }
-        "commit_certificate_history" => {
+        "commit_qc_history" => {
             BLOCK_SYNC_ROSTER_COMMIT_CERT_HISTORY_TOTAL.fetch_add(1, Ordering::Relaxed);
         }
         "validator_checkpoint_history" => {
@@ -4950,10 +4954,10 @@ fn commit_quorum_snapshot() -> CommitQuorumSnapshot {
     }
 }
 
-fn commit_certificate_snapshot() -> CommitCertificateSnapshot {
-    let latest = commit_certificate_history().into_iter().next();
+fn commit_qc_snapshot() -> QcSnapshot {
+    let latest = commit_qc_history().into_iter().next();
     if let Some(cert) = latest {
-        CommitCertificateSnapshot {
+        QcSnapshot {
             height: cert.height,
             view: cert.view,
             epoch: cert.epoch,
@@ -4964,7 +4968,7 @@ fn commit_certificate_snapshot() -> CommitCertificateSnapshot {
                 .unwrap_or(u64::MAX),
         }
     } else {
-        CommitCertificateSnapshot::default()
+        QcSnapshot::default()
     }
 }
 
@@ -5352,7 +5356,7 @@ mod tests {
             consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         },
         consensus::{
-            CommitCertificate, ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole,
+            Qc, ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole,
             ConsensusKeyStatus, ValidatorSetCheckpoint,
         },
         name::Name,
@@ -5368,7 +5372,7 @@ mod tests {
         ManifestGateKind, PrecommitSignerRecord, WorkerLoopStage, WorkerQueueKind,
     };
     use crate::governance::manifest::{GovernanceHooks, GovernanceRules, RuntimeUpgradeHook};
-    use crate::sumeragi::consensus::{CommitAggregate, PERMISSIONED_TAG, Phase};
+    use crate::sumeragi::consensus::{QcAggregate, PERMISSIONED_TAG, Phase};
 
     #[test]
     fn locked_qc_updates_monotonically() {
@@ -5562,7 +5566,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_certificate_history_is_capped_and_ordered() {
+    fn commit_qc_history_is_capped_and_ordered() {
         let _guard = super::commit_history_test_guard();
         super::reset_commit_certs_for_tests();
         let old_cap = super::commit_cert_history_cap();
@@ -5576,27 +5580,29 @@ mod tests {
         let validator_set_hash = HashOf::new(&validator_set);
         let cap = super::commit_cert_history_cap();
         for height in 0..(cap as u64 + 5) {
-            let cert = CommitCertificate {
+            let cert = Qc {
                 phase: Phase::Commit,
                 subject_block_hash: block_hash,
+                parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+                post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
                 height,
                 view: height * 2,
                 epoch: 0,
                 mode_tag: PERMISSIONED_TAG.to_string(),
-                highest_cert: None,
+                highest_qc: None,
                 validator_set_hash,
                 validator_set_hash_version:
                     iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
                 validator_set: validator_set.clone(),
-                aggregate: CommitAggregate {
+                aggregate: QcAggregate {
                     signers_bitmap: Vec::new(),
                     bls_aggregate_signature: Vec::new(),
                 },
             };
-            super::record_commit_certificate(cert);
+            super::record_commit_qc(cert);
         }
 
-        let history = super::commit_certificate_history();
+        let history = super::commit_qc_history();
         assert_eq!(history.len(), cap);
         let newest = history.first().expect("history not empty");
         assert_eq!(newest.height, cap as u64 + 4);
@@ -5627,7 +5633,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_certificate_snapshot_tracks_latest() {
+    fn commit_qc_snapshot_tracks_latest() {
         let _guard = super::commit_history_test_guard();
         super::reset_commit_certs_for_tests();
         let block_hash_a = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
@@ -5641,43 +5647,47 @@ mod tests {
         let validator_set = vec![peer_a, peer_b];
         let validator_set_hash = HashOf::new(&validator_set);
 
-        let first = CommitCertificate {
+        let first = Qc {
             phase: Phase::Commit,
             subject_block_hash: block_hash_a,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 1,
             epoch: 0,
             mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash,
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: validator_set.clone(),
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: Vec::new(),
                 bls_aggregate_signature: Vec::new(),
             },
         };
-        let second = CommitCertificate {
+        let second = Qc {
             phase: Phase::Commit,
             subject_block_hash: block_hash_b,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 2,
             view: 4,
             epoch: 1,
             mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash,
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set,
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: Vec::new(),
                 bls_aggregate_signature: Vec::new(),
             },
         };
 
-        super::record_commit_certificate(first);
-        super::record_commit_certificate(second.clone());
+        super::record_commit_qc(first);
+        super::record_commit_qc(second.clone());
 
-        let snapshot = super::snapshot().commit_certificate;
+        let snapshot = super::snapshot().commit_qc;
         assert_eq!(snapshot.height, second.height);
         assert_eq!(snapshot.view, second.view);
         assert_eq!(snapshot.epoch, second.epoch);
@@ -5874,7 +5884,7 @@ mod tests {
         assert_eq!(snapshot.block_sync_drop_invalid_signatures_total, 1);
         assert_eq!(snapshot.block_sync_qc_replaced_total, 1);
         assert_eq!(snapshot.block_sync_qc_derive_failed_total, 1);
-        assert_eq!(snapshot.block_sync_roster.commit_certificate_hint_total, 1);
+        assert_eq!(snapshot.block_sync_roster.commit_qc_hint_total, 1);
         assert_eq!(snapshot.block_sync_roster.checkpoint_hint_total, 1);
         assert_eq!(snapshot.block_sync_roster.commit_roster_journal_total, 1);
         assert_eq!(snapshot.block_sync_roster.drop_missing_total, 1);
@@ -5889,11 +5899,14 @@ mod tests {
         let mut signers = BTreeSet::new();
         signers.insert(0);
         let validator_set = vec![PeerId::new(KeyPair::random().public_key().clone())];
+        let zero_root = UntypedHash::prehashed([0u8; UntypedHash::LENGTH]);
         super::record_precommit_signers(PrecommitSignerRecord {
             block_hash,
             height: 1,
             view: 0,
             epoch: 0,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             signers,
             roster_len: 1,
             bls_aggregate_signature: vec![1],

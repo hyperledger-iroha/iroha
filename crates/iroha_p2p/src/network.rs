@@ -1930,8 +1930,6 @@ mod handle_update_tests {
                 collectors_k: 0,
                 redundant_send_r: 0,
                 da_enabled: false,
-                require_execution_qc: false,
-                require_wsv_exec_qc: false,
                 rbc_chunk_max_bytes: 0,
                 rbc_session_ttl_ms: 0,
                 rbc_store_max_sessions: 0,

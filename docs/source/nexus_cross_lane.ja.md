@@ -70,7 +70,7 @@ translation_last_reviewed: 2026-01-01
 ### `LaneRelayEnvelope`
 
 `LaneRelayEnvelope`（`crates/iroha_data_model/src/nexus/relay.rs` 参照）は、レーンの
-`BlockHeader`、任意の `ExecutionQcRecord`、任意の `DaCommitmentBundle` ハッシュ、完全な
+`BlockHeader`、任意の `commit QC (`Qc`)`、任意の `DaCommitmentBundle` ハッシュ、完全な
 `LaneBlockCommitment`、およびレーン単位の RBC バイト数をパッケージする。エンベロープは
 Norito 由来の `settlement_hash`（`compute_settlement_hash` 経由）を保持し、受信者が merge
 ledger へ転送する前に settlement ペイロードを検証できるようにする。`verify` が失敗する

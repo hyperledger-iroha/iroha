@@ -142,7 +142,6 @@ impl Actor {
             .retain(|(_, hash, _, _, _), _| hash != &pending_hash);
         self.qc_signer_tally
             .retain(|(_, hash, _, _, _), _| hash != &pending_hash);
-        self.execution_qc_cache.remove(&pending_hash);
         self.subsystems
             .propose
             .proposal_cache
@@ -746,7 +745,7 @@ impl Actor {
                     block_hash,
                     height: proposal_height,
                     view,
-                    highest_cert: highest_qc,
+                    highest_qc: highest_qc,
                 };
                 self.subsystems
                     .propose
@@ -1020,7 +1019,7 @@ impl Actor {
                 height: block_height,
                 view,
                 epoch: highest_qc.epoch,
-                highest_cert: highest_qc,
+                highest_qc: highest_qc,
             },
             payload_hash,
         }
@@ -1655,7 +1654,7 @@ impl Actor {
         }
 
         let proposal_roster = self
-            .roster_from_commit_certificate_history_roll_forward(
+            .roster_from_commit_qc_history_roll_forward(
                 height,
                 Some(highest_qc.subject_block_hash),
             )

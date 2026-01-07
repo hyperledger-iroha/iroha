@@ -38,10 +38,10 @@ use iroha_data_model::{
     },
     asset::{AssetDefinitionId, AssetId, definition::Mintable},
     block::consensus::{
-        SumeragiBlockSyncRosterStatus, SumeragiCommitCertificateStatus, SumeragiCommitQuorumStatus,
-        SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
-        SumeragiKuraStoreStatus, SumeragiLaneGovernance, SumeragiMissingBlockFetchStatus,
-        SumeragiPendingRbcStatus, SumeragiRbcStoreStatus, SumeragiStatusWire,
+        SumeragiBlockSyncRosterStatus, SumeragiCommitQuorumStatus, SumeragiDaGateReason,
+        SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiKuraStoreStatus,
+        SumeragiLaneGovernance, SumeragiMissingBlockFetchStatus, SumeragiPendingRbcStatus,
+        SumeragiQcStatus, SumeragiRbcStoreStatus, SumeragiStatusWire,
         SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
     },
     da::commitment::DaProofScheme,
@@ -11281,7 +11281,7 @@ impl PeerStatusView {
         governance: Option<&&SumeragiLaneGovernance>,
     ) -> RelayIngestState {
         if let Some(relay) = relay {
-            if relay.execution_qc.is_none() {
+            if relay.qc.is_none() {
                 return RelayIngestState::MissingQc;
             }
             if relay.da_commitment_hash.is_none() {
@@ -12258,7 +12258,7 @@ mod tests {
             locked_qc_height: 9,
             locked_qc_view: 3,
             locked_qc_subject: None,
-            commit_certificate: SumeragiCommitCertificateStatus::default(),
+            commit_qc: SumeragiQcStatus::default(),
             commit_quorum: SumeragiCommitQuorumStatus::default(),
             view_change_proof_accepted_total: 5,
             view_change_proof_stale_total: 6,

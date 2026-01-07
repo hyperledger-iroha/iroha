@@ -28,8 +28,6 @@ fn sample_consensus_config_caps() -> ConsensusConfigCaps {
         collectors_k: 1,
         redundant_send_r: 1,
         da_enabled: true,
-        require_execution_qc: false,
-        require_wsv_exec_qc: false,
         rbc_chunk_max_bytes: 65_536,
         rbc_session_ttl_ms: 120_000,
         rbc_store_max_sessions: 1_024,

@@ -5,7 +5,7 @@ use iroha_core::state::StateReadOnly;
 use iroha_data_model::prelude::ChainId;
 use iroha_data_model::{
     block::consensus::{
-        SumeragiBlockSyncRosterStatus, SumeragiCommitCertificateStatus, SumeragiCommitInflightStatus,
+        SumeragiBlockSyncRosterStatus, SumeragiQcStatus, SumeragiCommitInflightStatus,
         SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiDataspaceCommitment,
         SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
         SumeragiMembershipStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
@@ -20,12 +20,6 @@ use iroha_data_model::{
 struct EvidenceListWire {
     total: u64,
     items: Vec<EvidenceRecord>,
-}
-
-#[derive(Clone, Debug, Encode, Decode)]
-struct ExecRootWire {
-    block_hash: iroha_crypto::HashOf<BlockHeader>,
-    exec_root: Option<iroha_crypto::Hash>,
 }
 
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
@@ -913,7 +907,7 @@ pub struct EvidenceListQuery {
     pub limit: Option<usize>,
     /// Offset into the snapshot list. Default 0.
     pub offset: Option<usize>,
-    /// Optional filter by kind: one of DoublePrepare, DoubleCommit, DoubleExecVote, InvalidCommitCertificate, InvalidProposal
+    /// Optional filter by kind: one of DoublePrepare, DoubleCommit, InvalidQc, InvalidProposal
     pub kind: Option<String>,
 }
 
@@ -932,9 +926,8 @@ pub async fn handle_v1_sumeragi_evidence_list(
         let kind_opt = match kind_s {
             "DoublePrepare" | "DoublePrevote" => Some(EvidenceKind::DoublePrepare),
             "DoubleCommit" | "DoublePrecommit" => Some(EvidenceKind::DoubleCommit),
-            "DoubleExecVote" => Some(EvidenceKind::DoubleExecVote),
-            "InvalidCommitCertificate" | "InvalidQC" => {
-                Some(EvidenceKind::InvalidCommitCertificate)
+            "InvalidQc" | "InvalidQC" => {
+                Some(EvidenceKind::InvalidQc)
             }
             "InvalidProposal" => Some(EvidenceKind::InvalidProposal),
             _ => None,
@@ -1136,17 +1129,17 @@ mod evidence_submit_tests {
         let mut vote = Vote {
             phase: Phase::Prepare,
             block_hash: HashOf::from_untyped_unchecked(hash),
+            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
             height,
             view,
             epoch: 0,
             signer: 0,
             bls_sig: Vec::new(),
-            signature: Vec::new(),
         };
         let preimage = iroha_core::sumeragi::consensus::vote_preimage(chain_id, mode_tag, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         let payload = signature.payload().to_vec();
-        vote.signature = payload.clone();
         vote.bls_sig = payload;
         vote
     }
@@ -2031,16 +2024,16 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
     ]);
     let block_sync_roster = json_object(vec![
         json_entry(
-            "commit_certificate_hint_total",
-            snap.block_sync_roster.commit_certificate_hint_total,
+            "commit_qc_hint_total",
+            snap.block_sync_roster.commit_qc_hint_total,
         ),
         json_entry(
             "checkpoint_hint_total",
             snap.block_sync_roster.checkpoint_hint_total,
         ),
         json_entry(
-            "commit_certificate_history_total",
-            snap.block_sync_roster.commit_certificate_history_total,
+            "commit_qc_history_total",
+            snap.block_sync_roster.commit_qc_history_total,
         ),
         json_entry(
             "checkpoint_history_total",
@@ -2406,8 +2399,6 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                 json_entry("collectors_k", caps.collectors_k),
                 json_entry("redundant_send_r", caps.redundant_send_r),
                 json_entry("da_enabled", caps.da_enabled),
-                json_entry("require_execution_qc", caps.require_execution_qc),
-                json_entry("require_wsv_exec_qc", caps.require_wsv_exec_qc),
                 json_entry("rbc_chunk_max_bytes", caps.rbc_chunk_max_bytes),
                 json_entry("rbc_session_ttl_ms", caps.rbc_session_ttl_ms),
                 json_entry("rbc_store_max_sessions", caps.rbc_store_max_sessions),
@@ -3122,8 +3113,6 @@ pub async fn handle_v1_sumeragi_status(
                     collectors_k: caps.collectors_k,
                     redundant_send_r: caps.redundant_send_r,
                     da_enabled: caps.da_enabled,
-                    require_execution_qc: caps.require_execution_qc,
-                    require_wsv_exec_qc: caps.require_wsv_exec_qc,
                     rbc_chunk_max_bytes: caps.rbc_chunk_max_bytes,
                     rbc_session_ttl_ms: caps.rbc_session_ttl_ms,
                     rbc_store_max_sessions: caps.rbc_store_max_sessions,
@@ -3138,14 +3127,14 @@ pub async fn handle_v1_sumeragi_status(
             locked_qc_height: snap.locked_qc_height,
             locked_qc_view: snap.locked_qc_view,
             locked_qc_subject: snap.locked_qc_subject,
-            commit_certificate: SumeragiCommitCertificateStatus {
-                height: snap.commit_certificate.height,
-                view: snap.commit_certificate.view,
-                epoch: snap.commit_certificate.epoch,
-                block_hash: snap.commit_certificate.block_hash,
-                validator_set_hash: snap.commit_certificate.validator_set_hash,
-                validator_set_len: snap.commit_certificate.validator_set_len,
-                signatures_total: snap.commit_certificate.signatures_total,
+            commit_qc: SumeragiQcStatus {
+                height: snap.commit_qc.height,
+                view: snap.commit_qc.view,
+                epoch: snap.commit_qc.epoch,
+                block_hash: snap.commit_qc.block_hash,
+                validator_set_hash: snap.commit_qc.validator_set_hash,
+                validator_set_len: snap.commit_qc.validator_set_len,
+                signatures_total: snap.commit_qc.signatures_total,
             },
             commit_quorum: SumeragiCommitQuorumStatus {
                 height: snap.commit_quorum.height,
@@ -3218,11 +3207,11 @@ pub async fn handle_v1_sumeragi_status(
                 last_timestamp_ms: snap.peer_key_policy.last_timestamp_ms,
             },
             block_sync_roster: SumeragiBlockSyncRosterStatus {
-                commit_certificate_hint_total: snap.block_sync_roster.commit_certificate_hint_total,
+                commit_qc_hint_total: snap.block_sync_roster.commit_qc_hint_total,
                 checkpoint_hint_total: snap.block_sync_roster.checkpoint_hint_total,
-                commit_certificate_history_total: snap
+                commit_qc_history_total: snap
                     .block_sync_roster
-                    .commit_certificate_history_total,
+                    .commit_qc_history_total,
                 checkpoint_history_total: snap.block_sync_roster.checkpoint_history_total,
                 roster_sidecar_total: snap.block_sync_roster.roster_sidecar_total,
                 commit_roster_journal_total: snap.block_sync_roster.commit_roster_journal_total,
@@ -4151,9 +4140,9 @@ pub async fn handle_v1_sumeragi_rbc_delivered_height_view(
     Ok(resp)
 }
 
-/// GET /v1/sumeragi/exec_root/{hash} — return execution post-state root for a block hash (if present)
+/// GET /v1/sumeragi/commit_qc/{hash} — return full commit QC record for a block hash (if present)
 #[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_exec_root(
+pub async fn handle_v1_sumeragi_commit_qc(
     State(state): State<std::sync::Arc<CoreState>>,
     axum::extract::Path(hash_hex): axum::extract::Path<String>,
     accept: Option<axum::http::HeaderValue>,
@@ -4167,85 +4156,48 @@ pub async fn handle_v1_sumeragi_exec_root(
     })?;
     let typed = iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(parsed);
     let view = state.view();
-    let root_opt = view.world.exec_roots().get(&typed);
-    let exec_root_opt = root_opt.copied();
+    let qc_opt = view.world.commit_qcs().get(&typed).cloned();
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
 
     if matches!(format, crate::utils::ResponseFormat::Norito) {
-        let wire = ExecRootWire {
-            block_hash: typed,
-            exec_root: exec_root_opt.clone(),
-        };
-        return Ok(crate::NoritoBody(wire).into_response());
+        return Ok(crate::NoritoBody(qc_opt).into_response());
     }
-    let payload = match exec_root_opt {
-        Some(r) => crate::json_object(vec![
-            json_entry("block_hash", hash_hex.clone()),
-            json_entry("exec_root", format!("{r}")),
-        ]),
-        None => crate::json_object(vec![
-            json_entry("block_hash", hash_hex.clone()),
-            json_entry("exec_root", Value::Null),
-        ]),
-    };
-    let body = norito::json::to_json_pretty(&payload).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            e.to_string(),
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-/// GET /v1/sumeragi/exec_qc/{hash} — return full ExecutionQC record for a block hash (if present)
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_exec_qc(
-    State(state): State<std::sync::Arc<CoreState>>,
-    axum::extract::Path(hash_hex): axum::extract::Path<String>,
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    use core::str::FromStr as _;
-    let parsed = iroha_crypto::Hash::from_str(&hash_hex).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "invalid hash: {}",
-            e
-        )))
-    })?;
-    let typed = iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(parsed);
-    let view = state.view();
-    let rec_opt = view.world.exec_qcs().get(&typed);
-    let record_opt = rec_opt.cloned();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-
-    if matches!(format, crate::utils::ResponseFormat::Norito) {
-        return Ok(crate::NoritoBody(record_opt).into_response());
-    }
-    let payload = match record_opt.as_ref() {
-        Some(r) => crate::json_object(vec![
-            json_entry("subject_block_hash", hash_hex.clone()),
-            json_entry("post_state_root", format!("{}", r.post_state_root)),
-            json_entry("height", r.height),
-            json_entry("view", r.view),
-            json_entry("epoch", r.epoch),
-            json_entry("signers_bitmap", hex::encode(&r.signers_bitmap)),
-            json_entry(
-                "bls_aggregate_signature",
-                hex::encode(&r.bls_aggregate_signature),
-            ),
-        ]),
+    let payload = match qc_opt.as_ref() {
+        Some(qc) => {
+            let validator_set = norito::json::Value::Array(
+                qc.validator_set
+                    .iter()
+                    .map(|peer| norito::json::Value::from(peer.to_string()))
+                    .collect(),
+            );
+            let commit_qc = crate::json_object(vec![
+                json_entry("phase", format!("{:?}", qc.phase)),
+                json_entry("parent_state_root", format!("{}", qc.parent_state_root)),
+                json_entry("post_state_root", format!("{}", qc.post_state_root)),
+                json_entry("height", qc.height),
+                json_entry("view", qc.view),
+                json_entry("epoch", qc.epoch),
+                json_entry("mode_tag", qc.mode_tag.clone()),
+                json_entry("validator_set_hash", format!("{}", qc.validator_set_hash)),
+                json_entry("validator_set_hash_version", qc.validator_set_hash_version),
+                json_entry("validator_set", validator_set),
+                json_entry("signers_bitmap", hex::encode(&qc.aggregate.signers_bitmap)),
+                json_entry(
+                    "bls_aggregate_signature",
+                    hex::encode(&qc.aggregate.bls_aggregate_signature),
+                ),
+            ]);
+            crate::json_object(vec![
+                json_entry("subject_block_hash", hash_hex.clone()),
+                json_entry("commit_qc", commit_qc),
+            ])
+        }
         None => crate::json_object(vec![
             json_entry("subject_block_hash", hash_hex.clone()),
-            json_entry("exec_qc", Value::Null),
+            json_entry("commit_qc", norito::json::Value::Null),
         ]),
     };
     let body = norito::json::to_json_pretty(&payload).map_err(|e| {

@@ -30,7 +30,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::{
     block::{BlockHeader, SignedBlock, decode_framed_signed_block},
-    consensus::{CommitCertificate, ValidatorSetCheckpoint},
+    consensus::{Qc, ValidatorSetCheckpoint},
     merge::MergeLedgerEntry,
     peer::PeerId,
     transaction::signed::TransactionEntrypoint,
@@ -2327,7 +2327,7 @@ pub struct RosterSidecar {
     pub block_hash: HashOf<BlockHeader>,
     /// Optional commit certificate capturing the validator set.
     #[norito(default)]
-    pub commit_certificate: Option<CommitCertificate>,
+    pub commit_qc: Option<Qc>,
     /// Optional validator-set checkpoint capturing the validator set.
     #[norito(default)]
     pub validator_checkpoint: Option<ValidatorSetCheckpoint>,
@@ -2344,7 +2344,7 @@ impl RosterSidecar {
     pub fn new_v1(
         height: u64,
         block_hash: HashOf<BlockHeader>,
-        commit_certificate: Option<CommitCertificate>,
+        commit_qc: Option<Qc>,
         validator_checkpoint: Option<ValidatorSetCheckpoint>,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> Self {
@@ -2352,7 +2352,7 @@ impl RosterSidecar {
             format: RosterSidecarFormat::V1,
             height,
             block_hash,
-            commit_certificate,
+            commit_qc,
             validator_checkpoint,
             stake_snapshot,
         }
@@ -2378,7 +2378,7 @@ impl RosterSidecar {
     /// checkpoints.
     #[must_use]
     pub fn roster_snapshot(&self) -> Option<Vec<PeerId>> {
-        self.commit_certificate
+        self.commit_qc
             .as_ref()
             .map(|cert| cert.validator_set.clone())
             .or_else(|| {
@@ -2578,7 +2578,7 @@ impl Kura {
                     "roster sidecar block hash mismatch"
                 );
                 None
-            } else if let Some(cert) = sidecar.commit_certificate.as_ref()
+            } else if let Some(cert) = sidecar.commit_qc.as_ref()
                 && (cert.height != sidecar.height || cert.subject_block_hash != sidecar.block_hash)
             {
                 iroha_logger::warn!(
@@ -5001,7 +5001,7 @@ mod tests {
     use iroha_data_model::{
         ChainId, Level,
         account::Account,
-        consensus::CommitCertificate,
+        consensus::Qc,
         domain::{Domain, DomainId},
         isi::{Log, Upgrade},
         merge::MergeQuorumCertificate,
@@ -5026,7 +5026,7 @@ mod tests {
         smartcontracts::Registrable,
         state::State,
         sumeragi::{
-            consensus::{CommitAggregate, PERMISSIONED_TAG, Phase},
+            consensus::{QcAggregate, PERMISSIONED_TAG, Phase},
             network_topology::Topology,
         },
     };
@@ -8082,18 +8082,20 @@ mod tests {
         let block_hash = store_dummy_blocks(&kura, 1)[0];
         let signers_bitmap = vec![0b0000_0001];
         let bls_aggregate_signature = vec![0xAB; 96];
-        let cert = CommitCertificate {
+        let cert = Qc {
             phase: Phase::Commit,
             subject_block_hash: block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 0,
             epoch: 0,
             mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: signers_bitmap.clone(),
                 bls_aggregate_signature: bls_aggregate_signature.clone(),
             },
@@ -8107,7 +8109,7 @@ mod tests {
         assert_eq!(got.block_hash, block_hash);
         assert_eq!(got.format_label(), "roster.snapshot.v1");
         assert_eq!(
-            got.commit_certificate
+            got.commit_qc
                 .as_ref()
                 .map(|c| c.validator_set_hash),
             Some(HashOf::new(&roster))
@@ -8213,7 +8215,7 @@ mod tests {
     }
 
     #[test]
-    fn roster_sidecar_rejects_commit_certificate_mismatch() {
+    fn roster_sidecar_rejects_commit_qc_mismatch() {
         use iroha_config::base::WithOrigin;
 
         let temp_dir = TempDir::new().unwrap();
@@ -8250,18 +8252,20 @@ mod tests {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xEE; Hash::LENGTH]));
         assert_ne!(block_hash, mismatch_hash, "mismatch hash must differ");
 
-        let cert = CommitCertificate {
+        let cert = Qc {
             phase: Phase::Commit,
             subject_block_hash: mismatch_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 0,
             epoch: 0,
             mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster,
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: vec![0b0000_0001],
                 bls_aggregate_signature: vec![0xAA; 96],
             },
@@ -8307,18 +8311,20 @@ mod tests {
         let block_hash = store_dummy_blocks(&kura, 1)[0];
         let signers_bitmap = vec![0b0000_0001];
         let bls_aggregate_signature = vec![0xAC; 96];
-        let cert = CommitCertificate {
+        let cert = Qc {
             phase: Phase::Commit,
             subject_block_hash: block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 0,
             epoch: 0,
             mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: signers_bitmap.clone(),
                 bls_aggregate_signature: bls_aggregate_signature.clone(),
             },

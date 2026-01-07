@@ -270,7 +270,7 @@ mod tests {
         block::{
             BlockHeader, BlockSignature, SignedBlock,
             consensus::{
-                CommitAggregate, ConsensusBlockHeader, LaneBlockCommitment, Proposal, RbcChunk,
+                ConsensusBlockHeader, LaneBlockCommitment, Proposal, RbcChunk,
             },
         },
         consensus::VrfEpochRecord,
@@ -377,15 +377,17 @@ mod tests {
         let vote = Vote {
             phase: Phase::Prepare,
             block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 0,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
         vote_tx
-            .send(BlockMessage::CommitVote(vote))
+            .send(BlockMessage::QcVote(vote))
             .expect("send prevote");
 
         let proposal = Proposal {
@@ -397,7 +399,7 @@ mod tests {
                 height: 1,
                 view: 0,
                 epoch: 0,
-                highest_cert: QcHeaderRef {
+                highest_qc: QcHeaderRef {
                     height: 0,
                     view: 0,
                     epoch: 0,
@@ -466,15 +468,17 @@ mod tests {
         let vote = Vote {
             phase: Phase::Prepare,
             block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 0,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
         vote_tx
-            .send(BlockMessage::CommitVote(vote))
+            .send(BlockMessage::QcVote(vote))
             .expect("send prevote");
 
         let proposal = Proposal {
@@ -486,7 +490,7 @@ mod tests {
                 height: 1,
                 view: 0,
                 epoch: 0,
-                highest_cert: QcHeaderRef {
+                highest_qc: QcHeaderRef {
                     height: 0,
                     view: 0,
                     epoch: 0,
@@ -1150,14 +1154,16 @@ mod tests {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(
                 iroha_crypto::Hash::prehashed([1u8; 32]),
             ),
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 3,
             view: 0,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
-        let msg = BlockMessage::CommitVote(vote.clone());
+        let msg = BlockMessage::QcVote(vote.clone());
 
         handle.incoming_block_message(msg.clone());
         handle.incoming_block_message(msg);
@@ -1165,7 +1171,7 @@ mod tests {
         let received: Vec<_> = vote_rx.try_iter().collect();
         assert_eq!(received.len(), 1);
         let only = received.into_iter().next().expect("one message");
-        assert!(matches!(only, BlockMessage::CommitVote(_)));
+        assert!(matches!(only, BlockMessage::QcVote(_)));
     }
 
     #[test]
@@ -1208,20 +1214,24 @@ mod tests {
         let v1 = Vote {
             phase: Phase::Prepare,
             block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 0,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
         let v2 = Vote {
             phase: Phase::Prepare,
             block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 0,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
@@ -2006,7 +2016,7 @@ mod tests {
             block_hash,
             height: 2,
             view: 0,
-            highest_cert: qc,
+            highest_qc: qc,
         };
 
         handle.incoming_block_message(BlockMessage::ProposalHint(hint));
@@ -2015,130 +2025,6 @@ mod tests {
             .try_recv()
             .expect("ProposalHint should be enqueued to vote channel");
         assert!(matches!(received, BlockMessage::ProposalHint(_)));
-        assert!(matches!(
-            block_payload_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-        assert!(matches!(
-            block_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-        assert!(matches!(
-            rbc_chunk_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-    }
-
-    #[test]
-    fn incoming_block_message_routes_exec_vote_via_vote_queue() {
-        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
-            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
-        ));
-        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
-            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
-                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
-                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
-            )));
-        let handle = SumeragiHandle::new(
-            block_payload_tx,
-            block_tx,
-            rbc_chunk_tx,
-            vote_tx,
-            consensus_tx,
-            background_tx,
-            lane_tx,
-            vote_dedup,
-            block_payload_dedup,
-        );
-
-        let vote = crate::sumeragi::consensus::ExecVote {
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([1u8; 32])),
-            parent_state_root: Hash::prehashed([2u8; 32]),
-            post_state_root: Hash::prehashed([3u8; 32]),
-            height: 1,
-            view: 0,
-            epoch: 0,
-            signer: 0,
-            bls_sig: Vec::new(),
-        };
-
-        handle.incoming_block_message(BlockMessage::ExecVote(vote));
-
-        let received = vote_rx
-            .try_recv()
-            .expect("ExecVote should be enqueued to vote channel");
-        assert!(matches!(received, BlockMessage::ExecVote(_)));
-        assert!(matches!(
-            block_payload_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-        assert!(matches!(
-            block_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-        assert!(matches!(
-            rbc_chunk_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
-    }
-
-    #[test]
-    fn incoming_block_message_routes_execution_qc_via_vote_queue() {
-        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
-        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
-            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
-        ));
-        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
-            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
-                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
-                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
-            )));
-        let handle = SumeragiHandle::new(
-            block_payload_tx,
-            block_tx,
-            rbc_chunk_tx,
-            vote_tx,
-            consensus_tx,
-            background_tx,
-            lane_tx,
-            vote_dedup,
-            block_payload_dedup,
-        );
-
-        let qc = crate::sumeragi::consensus::ExecutionQC {
-            subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                [4u8; 32],
-            )),
-            parent_state_root: Hash::prehashed([5u8; 32]),
-            post_state_root: Hash::prehashed([6u8; 32]),
-            height: 2,
-            view: 0,
-            epoch: 0,
-            aggregate: CommitAggregate {
-                signers_bitmap: Vec::new(),
-                bls_aggregate_signature: Vec::new(),
-            },
-        };
-
-        handle.incoming_block_message(BlockMessage::ExecutionQC(qc));
-
-        let received = vote_rx
-            .try_recv()
-            .expect("ExecutionQC should be enqueued to vote channel");
-        assert!(matches!(received, BlockMessage::ExecutionQC(_)));
         assert!(matches!(
             block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -2271,7 +2157,7 @@ mod tests {
     impl WorkerActor for RecordingActor {
         fn on_block_message(&mut self, msg: BlockMessage) -> Result<()> {
             let label = match msg {
-                BlockMessage::CommitVote(_) => "vote",
+                BlockMessage::QcVote(_) => "vote",
                 BlockMessage::RbcChunk(_) => "rbc",
                 BlockMessage::Proposal(_) => "payload",
                 BlockMessage::ConsensusParams(_) => "block",
@@ -2343,7 +2229,7 @@ mod tests {
     impl WorkerActor for RecordingActorWithTick {
         fn on_block_message(&mut self, msg: BlockMessage) -> Result<()> {
             let label = match msg {
-                BlockMessage::CommitVote(_) => "vote",
+                BlockMessage::QcVote(_) => "vote",
                 BlockMessage::RbcChunk(_) => "rbc",
                 BlockMessage::Proposal(_) => "payload",
                 BlockMessage::ConsensusParams(_) => "block",
@@ -2383,7 +2269,7 @@ mod tests {
     impl WorkerActor for SlowVoteActor {
         fn on_block_message(&mut self, msg: BlockMessage) -> Result<()> {
             match msg {
-                BlockMessage::CommitVote(_) => {
+                BlockMessage::QcVote(_) => {
                     std::thread::sleep(self.vote_sleep);
                     self.events.push("vote");
                 }
@@ -2447,7 +2333,7 @@ mod tests {
                     height: 1,
                     view: 0,
                     epoch: 0,
-                    highest_cert: QcHeaderRef {
+                    highest_qc: QcHeaderRef {
                         height: 0,
                         view: 0,
                         epoch: 0,
@@ -2482,15 +2368,17 @@ mod tests {
         let vote = Vote {
             phase: Phase::Prepare,
             block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 0,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
         vote_tx
-            .send(BlockMessage::CommitVote(vote))
+            .send(BlockMessage::QcVote(vote))
             .expect("send prevote");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
 
@@ -2516,7 +2404,7 @@ mod tests {
                 height: 1,
                 view: 0,
                 epoch: 0,
-                highest_cert: QcHeaderRef {
+                highest_qc: QcHeaderRef {
                     height: 0,
                     view: 0,
                     epoch: 0,
@@ -2610,15 +2498,17 @@ mod tests {
         let vote = Vote {
             phase: Phase::Prepare,
             block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 0,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
         vote_tx
-            .send(BlockMessage::CommitVote(vote))
+            .send(BlockMessage::QcVote(vote))
             .expect("send prevote");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
 
@@ -2644,7 +2534,7 @@ mod tests {
                 height: 1,
                 view: 0,
                 epoch: 0,
-                highest_cert: QcHeaderRef {
+                highest_qc: QcHeaderRef {
                     height: 0,
                     view: 0,
                     epoch: 0,
@@ -2790,15 +2680,17 @@ mod tests {
         let vote = Vote {
             phase: Phase::Prepare,
             block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 0,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
         vote_tx
-            .send(BlockMessage::CommitVote(vote))
+            .send(BlockMessage::QcVote(vote))
             .expect("send prevote");
         status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
 
@@ -2811,7 +2703,7 @@ mod tests {
                 height: 1,
                 view: 0,
                 epoch: 0,
-                highest_cert: QcHeaderRef {
+                highest_qc: QcHeaderRef {
                     height: 0,
                     view: 0,
                     epoch: 0,
@@ -2897,15 +2789,17 @@ mod tests {
             let vote = Vote {
                 phase: Phase::Prepare,
                 block_hash,
+                parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+                post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
                 height: 1,
                 view: 0,
                 epoch: 0,
-                highest_cert: None,
+                highest_qc: None,
                 signer,
                 bls_sig: Vec::new(),
             };
             vote_tx
-                .send(BlockMessage::CommitVote(vote))
+                .send(BlockMessage::QcVote(vote))
                 .expect("send prevote");
             status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
         }
@@ -2984,20 +2878,24 @@ mod tests {
         let v1 = Vote {
             phase: Phase::Prepare,
             block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 1,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
         let v2 = Vote {
             phase: Phase::Prepare,
             block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 1,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
@@ -3134,15 +3032,17 @@ mod tests {
             let vote = Vote {
                 phase: Phase::Prepare,
                 block_hash,
+                parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+                post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
                 height: 1,
                 view: 0,
                 epoch: 0,
-                highest_cert: None,
+                highest_qc: None,
                 signer: 0,
                 bls_sig: Vec::new(),
             };
             vote_tx
-                .send(BlockMessage::CommitVote(vote))
+                .send(BlockMessage::QcVote(vote))
                 .expect("send prevote");
             status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
 
@@ -3168,7 +3068,7 @@ mod tests {
                     height: 1,
                     view: 0,
                     epoch: 0,
-                    highest_cert: QcHeaderRef {
+                    highest_qc: QcHeaderRef {
                         height: 0,
                         view: 0,
                         epoch: 0,
@@ -3197,20 +3097,24 @@ mod tests {
             let v1 = Vote {
                 phase: Phase::Prepare,
                 block_hash,
+                parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+                post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
                 height: 1,
                 view: 1,
                 epoch: 0,
-                highest_cert: None,
+                highest_qc: None,
                 signer: 0,
                 bls_sig: Vec::new(),
             };
             let v2 = Vote {
                 phase: Phase::Prepare,
                 block_hash,
+                parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+                post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
                 height: 1,
                 view: 1,
                 epoch: 0,
-                highest_cert: None,
+                highest_qc: None,
                 signer: 0,
                 bls_sig: Vec::new(),
             };
@@ -3333,14 +3237,16 @@ mod tests {
         let vote = Vote {
             phase: Phase::Prepare,
             block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 0,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
-        handle.incoming_block_message(BlockMessage::CommitVote(vote));
+        handle.incoming_block_message(BlockMessage::QcVote(vote));
 
         let rbc_chunk = RbcChunk {
             block_hash,
@@ -3361,7 +3267,7 @@ mod tests {
                 height: 1,
                 view: 0,
                 epoch: 0,
-                highest_cert: QcHeaderRef {
+                highest_qc: QcHeaderRef {
                     height: 0,
                     view: 0,
                     epoch: 0,
@@ -4170,7 +4076,7 @@ impl SumeragiHandle {
                 },
             };
         match msg {
-            BlockMessage::CommitVote(vote) => {
+            BlockMessage::QcVote(vote) => {
                 let duplicate = !self.dedup_vote((
                     Self::phase_id(vote.phase),
                     vote.block_hash,
@@ -4202,27 +4108,15 @@ impl SumeragiHandle {
                 );
                 enqueue_blocking(
                     &self.votes,
-                    BlockMessage::CommitVote(vote),
-                    "CommitVote",
+                    BlockMessage::QcVote(vote),
+                    "QcVote",
                     status::WorkerQueueKind::Votes,
                 )
             }
-            BlockMessage::ExecVote(vote) => enqueue_blocking(
+            BlockMessage::Qc(cert) => enqueue_blocking(
                 &self.votes,
-                BlockMessage::ExecVote(vote),
-                "ExecVote",
-                status::WorkerQueueKind::Votes,
-            ),
-            BlockMessage::ExecutionQC(qc) => enqueue_blocking(
-                &self.votes,
-                BlockMessage::ExecutionQC(qc),
-                "ExecutionQC",
-                status::WorkerQueueKind::Votes,
-            ),
-            BlockMessage::CommitCertificate(cert) => enqueue_blocking(
-                &self.votes,
-                BlockMessage::CommitCertificate(cert),
-                "CommitCertificate",
+                BlockMessage::Qc(cert),
+                "Qc",
                 status::WorkerQueueKind::Votes,
             ),
             BlockMessage::ProposalHint(hint) => enqueue_blocking(
@@ -5252,7 +5146,7 @@ fn drain_mailbox<A: WorkerActor>(
         status::set_worker_stage(tier.stage());
         match envelope.message {
             WorkerMessage::Block(msg) => {
-                if let BlockMessage::CommitVote(vote) = &msg {
+                if let BlockMessage::QcVote(vote) = &msg {
                     stats.precommit_votes_handled = stats.precommit_votes_handled.saturating_add(1);
                     stats.last_precommit_vote =
                         Some((vote.height, vote.view, vote.epoch, vote.block_hash));

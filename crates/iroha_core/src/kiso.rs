@@ -964,12 +964,10 @@ mod tests {
                     iroha_config::parameters::defaults::sumeragi::DA_MAX_COMMITMENTS_PER_BLOCK,
                 da_max_proof_openings_per_block:
                     iroha_config::parameters::defaults::sumeragi::DA_MAX_PROOF_OPENINGS_PER_BLOCK,
-	                proof_policy: iroha_config::parameters::actual::ProofPolicy::Off,
+                proof_policy: iroha_config::parameters::actual::ProofPolicy::Off,
                 commit_cert_history_cap:
                     iroha_config::parameters::defaults::sumeragi::COMMIT_CERT_HISTORY_CAP,
                 zk_finality_k: 0,
-                require_execution_qc: false,
-                require_wsv_exec_qc: false,
                 require_precommit_qc:
                     iroha_config::parameters::defaults::sumeragi::REQUIRE_PRECOMMIT_QC,
                 rbc_chunk_max_bytes: 64 * 1024,

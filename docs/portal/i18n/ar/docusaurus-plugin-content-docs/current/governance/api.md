@@ -294,9 +294,9 @@ use iroha_data_model::block::consensus::EvidenceKind;
 let offences = [
     EvidenceKind::DoublePrepare,
     EvidenceKind::DoubleCommit,
-    EvidenceKind::InvalidCommitCertificate,
+    EvidenceKind::InvalidQc,
     EvidenceKind::InvalidProposal,
-    EvidenceKind::DoubleExecVote,
+    EvidenceKind::Censorship,
 ];
 
 for (expected, kind) in offences.iter().enumerate() {
@@ -305,9 +305,9 @@ for (expected, kind) in offences.iter().enumerate() {
 ```
 
 - **DoublePrepare/DoubleCommit** - المدقق وقع hashes متعارضة لنفس tuple `(phase,height,view,epoch)`.
-- **DoubleExecVote** - تصويتات تنفيذ متعارضة تعلن جذور حالة لاحقة مختلفة.
-- **InvalidCommitCertificate** - قام مجمع ببث commit certificate شكله يفشل الفحوص الحتمية (مثلا bitmap موقعين فارغ).
+- **InvalidQc** - قام مجمع ببث commit certificate شكله يفشل الفحوص الحتمية (مثلا bitmap موقعين فارغ).
 - **InvalidProposal** - قدم قائد بلوكا يفشل التحقق البنيوي (مثلا يكسر قاعدة locked-chain).
+- **Censorship** — signed submission receipts show a transaction that was never proposed/committed.
 
 يمكن للمشغلين والادوات فحص واعادة بث الحمولات عبر:
 

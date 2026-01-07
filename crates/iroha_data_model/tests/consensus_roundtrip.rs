@@ -12,12 +12,11 @@ use iroha_data_model::{
     block::{
         Header as BlockHeader,
         consensus::{
-            CertPhase, CommitAggregate, CommitCertificate, CommitCertificateRef, CommitVote,
-            ConsensusBlockHeader, ConsensusGenesisParams, Evidence, EvidenceKind, EvidencePayload,
-            EvidenceRecord, ExecKv, ExecVote, ExecWitness, ExecWitnessMsg, ExecutionQC,
-            LaneBlockCommitment, LaneSettlementReceipt, NposGenesisParams, PERMISSIONED_TAG,
-            Proposal, RbcChunk, RbcDeliver, RbcInit, RbcReady, Reconfig,
-            SumeragiBlockSyncRosterStatus, SumeragiCommitCertificateStatus,
+            CertPhase, QcAggregate, Qc, QcRef, QcVote, ConsensusBlockHeader,
+            ConsensusGenesisParams, Evidence, EvidenceKind, EvidencePayload, EvidenceRecord, ExecKv,
+            ExecWitness, ExecWitnessMsg, LaneBlockCommitment, LaneSettlementReceipt,
+            NposGenesisParams, PERMISSIONED_TAG, Proposal, RbcChunk, RbcDeliver, RbcInit, RbcReady,
+            Reconfig, SumeragiBlockSyncRosterStatus, SumeragiQcStatus,
             SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
             SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
             SumeragiDataspaceCommitment, SumeragiKuraStoreStatus, SumeragiLaneCommitment,
@@ -30,7 +29,6 @@ use iroha_data_model::{
             SumeragiWorkerQueueTotals, VrfCommit, VrfReveal,
         },
     },
-    consensus::ExecutionQcRecord,
     da::commitment,
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     peer::PeerId,
@@ -166,8 +164,8 @@ fn rng_cert_phase_any(rng: &mut DeterministicRng) -> CertPhase {
     }
 }
 
-fn rng_commit_certificate_ref(rng: &mut DeterministicRng) -> CommitCertificateRef {
-    CommitCertificateRef {
+fn rng_commit_qc_ref(rng: &mut DeterministicRng) -> QcRef {
+    QcRef {
         height: rng.next_u64(),
         view: rng.next_u64(),
         epoch: rng.next_u64(),
@@ -185,15 +183,15 @@ fn rng_consensus_block_header(rng: &mut DeterministicRng) -> ConsensusBlockHeade
         height: rng.next_u64(),
         view: rng.next_u64(),
         epoch: rng.next_u64(),
-        highest_cert: rng_commit_certificate_ref(rng),
+        highest_qc: rng_commit_qc_ref(rng),
     }
 }
 
-fn rng_commit_aggregate(rng: &mut DeterministicRng) -> CommitAggregate {
+fn rng_commit_aggregate(rng: &mut DeterministicRng) -> QcAggregate {
     let signers_bitmap = rng.bytes(8);
     let bls_len = rng.range_inclusive(0, 96);
     let bls_aggregate_signature = (0..bls_len).map(|_| rng.next_u8()).collect();
-    CommitAggregate {
+    QcAggregate {
         signers_bitmap,
         bls_aggregate_signature,
     }
@@ -250,32 +248,50 @@ fn rng_proposal(rng: &mut DeterministicRng) -> Proposal {
     }
 }
 
-fn rng_commit_vote(rng: &mut DeterministicRng) -> CommitVote {
+fn rng_commit_vote(rng: &mut DeterministicRng) -> QcVote {
     let phase = rng_cert_phase_any(rng);
-    let highest_cert = matches!(phase, CertPhase::NewView).then(|| rng_commit_certificate_ref(rng));
-    let (block_hash, height, epoch) = highest_cert
+    let highest_qc = matches!(phase, CertPhase::NewView).then(|| rng_commit_qc_ref(rng));
+    let (block_hash, height, epoch) = highest_qc
         .as_ref()
         .map(|cert| (cert.subject_block_hash, cert.height, cert.epoch))
         .unwrap_or_else(|| (rng_block_hash(rng), rng.next_u64(), rng.next_u64()));
-    CommitVote {
+    let (parent_state_root, post_state_root) = if matches!(phase, CertPhase::Commit) {
+        (rng_hash(rng), rng_hash(rng))
+    } else {
+        (
+            Hash::prehashed([0u8; Hash::LENGTH]),
+            Hash::prehashed([0u8; Hash::LENGTH]),
+        )
+    };
+    QcVote {
         phase,
         block_hash,
+        parent_state_root,
+        post_state_root,
         height,
         view: rng.next_u64(),
         epoch,
-        highest_cert,
+        highest_qc,
         signer: rng.next_u32(),
         bls_sig: rng.bytes(64),
     }
 }
 
-fn rng_commit_certificate(rng: &mut DeterministicRng) -> CommitCertificate {
+fn rng_commit_qc(rng: &mut DeterministicRng) -> Qc {
     let phase = rng_cert_phase_any(rng);
-    let highest_cert = matches!(phase, CertPhase::NewView).then(|| rng_commit_certificate_ref(rng));
-    let (subject_block_hash, height, epoch) = highest_cert
+    let highest_qc = matches!(phase, CertPhase::NewView).then(|| rng_commit_qc_ref(rng));
+    let (subject_block_hash, height, epoch) = highest_qc
         .as_ref()
         .map(|cert| (cert.subject_block_hash, cert.height, cert.epoch))
         .unwrap_or_else(|| (rng_block_hash(rng), rng.next_u64(), rng.next_u64()));
+    let (parent_state_root, post_state_root) = if matches!(phase, CertPhase::Commit) {
+        (rng_hash(rng), rng_hash(rng))
+    } else {
+        (
+            Hash::prehashed([0u8; Hash::LENGTH]),
+            Hash::prehashed([0u8; Hash::LENGTH]),
+        )
+    };
     let roster_len = rng.range_inclusive(1, 4);
     let mut validator_set = Vec::with_capacity(roster_len);
     for _ in 0..roster_len {
@@ -285,42 +301,19 @@ fn rng_commit_certificate(rng: &mut DeterministicRng) -> CommitCertificate {
                 .clone(),
         ));
     }
-    CommitCertificate {
+    Qc {
         phase,
         subject_block_hash,
+        parent_state_root,
+        post_state_root,
         height,
         view: rng.next_u64(),
         epoch,
         mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_cert,
+        highest_qc,
         validator_set_hash: HashOf::new(&validator_set),
         validator_set_hash_version: 1,
         validator_set,
-        aggregate: rng_commit_aggregate(rng),
-    }
-}
-
-fn rng_exec_vote(rng: &mut DeterministicRng) -> ExecVote {
-    ExecVote {
-        block_hash: rng_block_hash(rng),
-        parent_state_root: rng_hash(rng),
-        post_state_root: rng_hash(rng),
-        height: rng.next_u64(),
-        view: rng.next_u64(),
-        epoch: rng.next_u64(),
-        signer: rng.next_u32(),
-        bls_sig: rng.bytes(64),
-    }
-}
-
-fn rng_execution_qc(rng: &mut DeterministicRng) -> ExecutionQC {
-    ExecutionQC {
-        subject_block_hash: rng_block_hash(rng),
-        parent_state_root: rng_hash(rng),
-        post_state_root: rng_hash(rng),
-        height: rng.next_u64(),
-        view: rng.next_u64(),
-        epoch: rng.next_u64(),
         aggregate: rng_commit_aggregate(rng),
     }
 }
@@ -455,12 +448,12 @@ fn rng_rbc_deliver_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcDelive
 }
 
 fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
-    match rng.up_to(3) {
+    match rng.up_to(2) {
         0 => {
             let mut v1 = rng_commit_vote(rng);
             if matches!(v1.phase, CertPhase::NewView) {
                 v1.phase = CertPhase::Prepare;
-                v1.highest_cert = None;
+                v1.highest_qc = None;
             }
             let mut v2 = v1.clone();
             v2.block_hash = rng_block_hash(rng);
@@ -475,9 +468,9 @@ fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
             }
         }
         1 => Evidence {
-            kind: EvidenceKind::InvalidCommitCertificate,
-            payload: EvidencePayload::InvalidCommitCertificate {
-                certificate: rng_commit_certificate(rng),
+            kind: EvidenceKind::InvalidQc,
+            payload: EvidencePayload::InvalidQc {
+                certificate: rng_commit_qc(rng),
                 reason: rng_ascii_string(rng, 32),
             },
         },
@@ -488,15 +481,7 @@ fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
                 reason: rng_ascii_string(rng, 32),
             },
         },
-        _ => {
-            let v1 = rng_exec_vote(rng);
-            let mut v2 = v1.clone();
-            v2.post_state_root = rng_hash(rng);
-            Evidence {
-                kind: EvidenceKind::DoubleExecVote,
-                payload: EvidencePayload::DoubleExecVote { v1, v2 },
-            }
-        }
+        _ => unreachable!("rng.up_to(2) must be within 0..=2"),
     }
 }
 
@@ -541,7 +526,7 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
         } else {
             None
         },
-        commit_certificate: rng_commit_certificate_status(rng),
+        commit_qc: rng_commit_qc_status(rng),
         commit_quorum: rng_commit_quorum_status(rng),
         view_change_proof_accepted_total: rng.next_u64(),
         view_change_proof_stale_total: rng.next_u64(),
@@ -626,9 +611,9 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
             last_timestamp_ms: rng.next_u64(),
         },
         block_sync_roster: SumeragiBlockSyncRosterStatus {
-            commit_certificate_hint_total: rng.next_u64(),
+            commit_qc_hint_total: rng.next_u64(),
             checkpoint_hint_total: rng.next_u64(),
-            commit_certificate_history_total: rng.next_u64(),
+            commit_qc_history_total: rng.next_u64(),
             checkpoint_history_total: rng.next_u64(),
             roster_sidecar_total: rng.next_u64(),
             commit_roster_journal_total: rng.next_u64(),
@@ -765,22 +750,31 @@ fn rng_lane_relay_envelope(rng: &mut DeterministicRng) -> LaneRelayEnvelope {
         swap_metadata: None,
         receipts: vec![receipt],
     };
-    let execution_qc = if rng.next_bool() {
-        Some(ExecutionQcRecord {
+    let qc = if rng.next_bool() {
+        let validator_set: Vec<PeerId> = Vec::new();
+        Some(Qc {
+            phase: CertPhase::Commit,
             subject_block_hash: header.hash(),
             parent_state_root: rng_hash(rng),
             post_state_root: rng_hash(rng),
             height: header.height().get(),
             view: rng.next_u64(),
             epoch: rng.next_u64(),
-            signers_bitmap: vec![rng.next_u8()],
-            bls_aggregate_signature: sample_bytes(rng.next_u8(), 48),
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: 1,
+            validator_set,
+            aggregate: QcAggregate {
+                signers_bitmap: vec![rng.next_u8()],
+                bls_aggregate_signature: sample_bytes(rng.next_u8(), 48),
+            },
         })
     } else {
         None
     };
 
-    LaneRelayEnvelope::new(header, execution_qc, da_hash, settlement, rng.next_u64())
+    LaneRelayEnvelope::new(header, qc, da_hash, settlement, rng.next_u64())
         .expect("construct lane relay envelope")
 }
 
@@ -860,8 +854,6 @@ fn rng_consensus_caps_status(rng: &mut DeterministicRng) -> SumeragiConsensusCap
         collectors_k: rng.next_u16(),
         redundant_send_r: rng.next_u8(),
         da_enabled: rng.next_bool(),
-        require_execution_qc: rng.next_bool(),
-        require_wsv_exec_qc: rng.next_bool(),
         rbc_chunk_max_bytes: rng.next_u64(),
         rbc_session_ttl_ms: rng.next_u64(),
         rbc_store_max_sessions: rng.next_u32(),
@@ -1048,8 +1040,8 @@ fn rng_commit_quorum_status(rng: &mut DeterministicRng) -> SumeragiCommitQuorumS
     }
 }
 
-fn rng_commit_certificate_status(rng: &mut DeterministicRng) -> SumeragiCommitCertificateStatus {
-    SumeragiCommitCertificateStatus {
+fn rng_commit_qc_status(rng: &mut DeterministicRng) -> SumeragiQcStatus {
+    SumeragiQcStatus {
         height: rng.next_u64(),
         view: rng.next_u64(),
         epoch: rng.next_u64(),
@@ -1083,8 +1075,6 @@ fn sumeragi_wire_status_roundtrip() {
             collectors_k: 1,
             redundant_send_r: 1,
             da_enabled: true,
-            require_execution_qc: false,
-            require_wsv_exec_qc: false,
             rbc_chunk_max_bytes: 65536,
             rbc_session_ttl_ms: 120_000,
             rbc_store_max_sessions: 1024,
@@ -1099,7 +1089,7 @@ fn sumeragi_wire_status_roundtrip() {
         locked_qc_height: 14,
         locked_qc_view: 5,
         locked_qc_subject: None,
-        commit_certificate: SumeragiCommitCertificateStatus {
+        commit_qc: SumeragiQcStatus {
             height: 12,
             view: 4,
             epoch: 1,
@@ -1175,9 +1165,9 @@ fn sumeragi_wire_status_roundtrip() {
             last_timestamp_ms: 456,
         },
         block_sync_roster: SumeragiBlockSyncRosterStatus {
-            commit_certificate_hint_total: 2,
+            commit_qc_hint_total: 2,
             checkpoint_hint_total: 3,
-            commit_certificate_history_total: 4,
+            commit_qc_history_total: 4,
             checkpoint_history_total: 5,
             roster_sidecar_total: 6,
             commit_roster_journal_total: 7,
@@ -1487,7 +1477,7 @@ fn consensus_messages_norito_roundtrip() {
                 .clone(),
         ),
     ];
-    let cert_header = CommitCertificateRef {
+    let cert_header = QcRef {
         height: 42,
         view: 4,
         epoch: 2,
@@ -1502,92 +1492,80 @@ fn consensus_messages_norito_roundtrip() {
         height: 43,
         view: 5,
         epoch: 2,
-        highest_cert: cert_header,
+        highest_qc: cert_header,
     };
     let proposal = Proposal {
         header: block_header,
         payload_hash: sample_hash(0x04),
     };
-    let prepare_vote = CommitVote {
+    let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+    let prepare_vote = QcVote {
         phase: CertPhase::Prepare,
         block_hash: sample_block_hash(0x05),
+        parent_state_root: zero_root,
+        post_state_root: zero_root,
         height: 43,
         view: 5,
         epoch: 2,
-        highest_cert: None,
+        highest_qc: None,
         signer: 11,
         bls_sig: sample_bytes(0xA0, 32),
     };
-    let other_prepare_vote = CommitVote {
+    let other_prepare_vote = QcVote {
         block_hash: sample_block_hash(0x06),
         ..prepare_vote.clone()
     };
-    let commit_vote = CommitVote {
+    let commit_vote = QcVote {
         phase: CertPhase::Commit,
         block_hash: sample_block_hash(0x07),
+        parent_state_root: sample_hash(0x0B),
+        post_state_root: sample_hash(0x0C),
         ..prepare_vote.clone()
     };
-    let aggregate = CommitAggregate {
+    let aggregate = QcAggregate {
         signers_bitmap: sample_bytes(0xE0, 8),
         bls_aggregate_signature: sample_bytes(0xF0, 96),
     };
-    let commit_cert = CommitCertificate {
+    let commit_cert = Qc {
         phase: CertPhase::Commit,
         subject_block_hash: sample_block_hash(0x09),
-        height: 43,
-        view: 6,
-        epoch: 2,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_cert: None,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: 1,
-        validator_set: validator_set.clone(),
-        aggregate: aggregate.clone(),
-    };
-    let new_view_vote = CommitVote {
-        phase: CertPhase::NewView,
-        block_hash: cert_header.subject_block_hash,
-        height: cert_header.height,
-        view: 7,
-        epoch: cert_header.epoch,
-        highest_cert: Some(cert_header),
-        signer: 12,
-        bls_sig: sample_bytes(0xC0, 32),
-    };
-    let new_view_cert = CommitCertificate {
-        phase: CertPhase::NewView,
-        subject_block_hash: cert_header.subject_block_hash,
-        height: cert_header.height,
-        view: 7,
-        epoch: cert_header.epoch,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_cert: Some(cert_header),
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: 1,
-        validator_set: validator_set.clone(),
-        aggregate: aggregate.clone(),
-    };
-    let exec_vote = ExecVote {
-        block_hash: sample_block_hash(0x0A),
-        parent_state_root: sample_hash(0x0B),
-        post_state_root: sample_hash(0x0C),
-        height: 43,
-        view: 6,
-        epoch: 2,
-        signer: 13,
-        bls_sig: sample_bytes(0x11, 64),
-    };
-    let other_exec_vote = ExecVote {
-        post_state_root: sample_hash(0x0D),
-        ..exec_vote.clone()
-    };
-    let execution_qc = ExecutionQC {
-        subject_block_hash: sample_block_hash(0x0E),
         parent_state_root: sample_hash(0x0A),
         post_state_root: sample_hash(0x0F),
         height: 43,
         view: 6,
         epoch: 2,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set_hash_version: 1,
+        validator_set: validator_set.clone(),
+        aggregate: aggregate.clone(),
+    };
+    let new_view_vote = QcVote {
+        phase: CertPhase::NewView,
+        block_hash: cert_header.subject_block_hash,
+        parent_state_root: zero_root,
+        post_state_root: zero_root,
+        height: cert_header.height,
+        view: 7,
+        epoch: cert_header.epoch,
+        highest_qc: Some(cert_header),
+        signer: 12,
+        bls_sig: sample_bytes(0xC0, 32),
+    };
+    let new_view_cert = Qc {
+        phase: CertPhase::NewView,
+        subject_block_hash: cert_header.subject_block_hash,
+        parent_state_root: zero_root,
+        post_state_root: zero_root,
+        height: cert_header.height,
+        view: 7,
+        epoch: cert_header.epoch,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: Some(cert_header),
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set_hash_version: 1,
+        validator_set: validator_set.clone(),
         aggregate: aggregate.clone(),
     };
     let double_prepare = Evidence {
@@ -1598,8 +1576,8 @@ fn consensus_messages_norito_roundtrip() {
         },
     };
     let invalid_cert = Evidence {
-        kind: EvidenceKind::InvalidCommitCertificate,
-        payload: EvidencePayload::InvalidCommitCertificate {
+        kind: EvidenceKind::InvalidQc,
+        payload: EvidencePayload::InvalidQc {
             certificate: commit_cert.clone(),
             reason: "aggregate mismatch".to_owned(),
         },
@@ -1609,13 +1587,6 @@ fn consensus_messages_norito_roundtrip() {
         payload: EvidencePayload::InvalidProposal {
             proposal: proposal.clone(),
             reason: "payload commitment mismatch".to_owned(),
-        },
-    };
-    let double_exec = Evidence {
-        kind: EvidenceKind::DoubleExecVote,
-        payload: EvidencePayload::DoubleExecVote {
-            v1: exec_vote.clone(),
-            v2: other_exec_vote.clone(),
         },
     };
     let evidence_record = EvidenceRecord {
@@ -1717,13 +1688,9 @@ fn consensus_messages_norito_roundtrip() {
     assert_roundtrip(&aggregate);
     assert_roundtrip(&commit_cert);
     assert_roundtrip(&new_view_cert);
-    assert_roundtrip(&exec_vote);
-    assert_roundtrip(&other_exec_vote);
-    assert_roundtrip(&execution_qc);
     assert_roundtrip(&double_prepare);
     assert_roundtrip(&invalid_cert);
     assert_roundtrip(&invalid_proposal);
-    assert_roundtrip(&double_exec);
     assert_roundtrip(&evidence_record);
     assert_roundtrip(&exec_witness);
     assert_roundtrip(&exec_witness_msg);
@@ -1765,7 +1732,7 @@ fn consensus_roundtrip_deterministic_fuzz() {
             panic!("consensus genesis roundtrip mismatch");
         }
 
-        let cert_header = rng_commit_certificate_ref(&mut rng);
+        let cert_header = rng_commit_qc_ref(&mut rng);
         assert_roundtrip(&cert_header);
 
         let block_header = rng_consensus_block_header(&mut rng);
@@ -1780,14 +1747,8 @@ fn consensus_roundtrip_deterministic_fuzz() {
         let aggregate = rng_commit_aggregate(&mut rng);
         assert_roundtrip(&aggregate);
 
-        let cert = rng_commit_certificate(&mut rng);
+        let cert = rng_commit_qc(&mut rng);
         assert_roundtrip(&cert);
-
-        let exec_vote = rng_exec_vote(&mut rng);
-        assert_roundtrip(&exec_vote);
-
-        let exec_qc = rng_execution_qc(&mut rng);
-        assert_roundtrip(&exec_qc);
 
         let exec_kv = rng_exec_kv(&mut rng);
         assert_roundtrip(&exec_kv);

@@ -60,7 +60,14 @@ impl Actor {
         self.voting_block = None;
 
         match result {
-            Ok(()) => {
+            Ok(roots) => {
+                if let Some(roots) = roots {
+                    pending.parent_state_root = Some(roots.parent_state_root);
+                    pending.post_state_root = Some(roots.post_state_root);
+                } else {
+                    pending.parent_state_root = None;
+                    pending.post_state_root = None;
+                }
                 pending.validation_status = ValidationStatus::Valid;
                 self.pending.pending_blocks.insert(hash, pending);
                 ValidationGateOutcome::Valid
@@ -182,7 +189,6 @@ impl Actor {
             .retain(|(_, cached_hash, _, _, _), _| cached_hash != &hash);
         self.qc_signer_tally
             .retain(|(_, cached_hash, _, _, _), _| cached_hash != &hash);
-        self.execution_qc_cache.remove(&hash);
         ValidationGateOutcome::Invalid {
             hash,
             height,

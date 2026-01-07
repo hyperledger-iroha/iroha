@@ -170,7 +170,7 @@ Commit rule (commit certificate)
 - Each validator tracks `highest_qc`/`locked_qc` commit certificate references for view-change safety, but commits are driven by `CommitCertificate`s rather than child certificates.
 - Validators sign the proposed block header and send `CommitVote` to the deterministic collector set; if collector fan-out is below quorum, votes fall back to the full commit topology. Any collector that reaches quorum aggregates `2f+1` signatures (permissioned) or ≥2/3 total stake (NPoS) into a `CommitCertificate` and gossips it.
 - A block finalises when a valid `CommitCertificate` for `(height,hash)` is available **and** the block payload is known locally. Peers that receive the certificate first request the payload via block sync and commit once it arrives.
-- Execution QC gating remains in effect when configured (`require_execution_qc` or hybrid policies); Data Availability evidence is external and never blocks commit.
+- Commit QCs always bind `parent_state_root` and `post_state_root`; there is no separate execution QC gate. Data Availability evidence is external and never blocks commit.
 
 Pacemaker (view changes)
 - View‑0 voting follows the same rules for Set A and Set B validators. On local timeout in view 0, nodes suggest a view change (no widen‑before‑rotate). Timing is driven by on‑chain `SumeragiParameters` (`BlockTimeMs` and `CommitTimeMs`), with leader proposal roughly at 1/3 and expected commit at 2/3 of the pipeline time.
@@ -303,8 +303,7 @@ Commit rules (scaffold wiring)
   - Staging is atomic: pipeline events and WSV deltas are buffered until `kura.store_block` succeeds. The status surface reports `stage_total`/`stage_last_*` for staged blocks, `rollback_total`/`rollback_last_*` with the last reason (`store_failure` or `state_commit_failure`) when a stage is dropped before WSV apply, and `lock_reset_total`/`lock_reset_last_*` when highest/locked certificates are reset to the latest committed tip after a kura abort.
 - Availability status is data driven: every availability-evidence update (RBC `READY` quorum or availability votes) or `NEW_VIEW` update re-evaluates tracking. Blocks finalize based on `CommitCertificate`s plus payload validation (see `process_commit_candidates` in `main_loop.rs`).
 - RBC worker recovery: background fan-out uses a bounded channel. If the queue is full the sender blocks and `sumeragi_bg_post_overflow_total{kind}` increments; if the queue is missing or disconnected the message is dropped and `sumeragi_bg_post_drop_total{kind}` increments. RBC sessions themselves are persisted and marked `recovered: true` on restart; the integration scenarios `sumeragi_rbc_recovers_after_peer_restart` and `sumeragi_rbc_session_recovers_after_cold_restart` assert this behaviour end-to-end.
-- Exec gate: when proof policy requires it (ExecQcOnly/Hybrid or `require_execution_qc=true`), commit depends on the parent’s execution evidence being available. Validators emit `ExecVote`/`ExecWitness` after commit and route them to deterministic collectors derived from the `(height, view)` topology (falling back to the commit topology when the collector set is empty, local-only, or below quorum). ExecutionQCs can form later from aggregated exec votes (including stale-view votes for known blocks or blocks under missing-block fetch), and received `ExecutionQC` messages are materialized into WSV, making the gate restart-safe. When ExecQC gating is required, stale-view `ExecutionQC` messages are still accepted; if the payload is missing they trigger missing-block fetch to avoid strict-mode stalls. ExecutionQCs validate against the roster snapshot for the block when available so topology changes do not invalidate late aggregates.
-  - Strict mode: if `require_wsv_exec_qc=true`, commit requires a WSV `ExecutionQcRecord` for the parent. Genesis is still allowed as a base case; otherwise missing parent records block commit until the real record is present.
+- State roots: commit votes bind `parent_state_root` and `post_state_root` derived from execution witness snapshots. Commit uses the commit certificate plus payload; there is no separate execution QC gate or WSV requirement.
 - Commit certificate safety: validators only commit one block per height/epoch (re-votes across views must target the same block). Collectors skip commit-certificate aggregation for blocks that do not extend the locked chain, and receivers drop conflicting commit certificates instead of caching them for finalize.
 
 Commit certificate verification (basic)
@@ -804,16 +803,16 @@ DA availability transitions also emit structured debug logs when the reason chan
 
 **Evidence API & CLI quick reference**
 - **List** — `iroha_cli sumeragi evidence list --summary` (JSON via `/v1/sumeragi/evidence`) surfaces the total count and the most recent records; drop `--summary` for the full Norito payload.
-- **Filter** — refine the snapshot with `--kind DoublePrepare` / `DoubleCommit` / `DoubleExecVote` / `InvalidCommitCertificate` / `InvalidProposal` and paginate via `--limit` / `--offset` when auditing large incident windows.
+- **Filter** — refine the snapshot with `--kind DoublePrepare` / `DoubleCommit` / `InvalidQc` / `InvalidProposal` / `Censorship` and paginate via `--limit` / `--offset` when auditing large incident windows.
 - **Count** — `iroha_cli sumeragi evidence count` (or `GET /v1/sumeragi/evidence/count`) reports the deduplicated total so operators can confirm that rejected payloads did not persist.
-- **Submit** — `iroha_cli sumeragi evidence submit --evidence-hex <0x…>` (or `--evidence-hex-file forged_evidence.hex`) wraps `POST /v1/sumeragi/evidence` with a hex-encoded Norito payload. Torii validates structure and signatures (vote/exec-vote signatures against the commit topology and chain ID), emits `invalid consensus evidence` on mismatch, and never stores the entry.
+- **Submit** — `iroha_cli sumeragi evidence submit --evidence-hex <0x…>` (or `--evidence-hex-file forged_evidence.hex`) wraps `POST /v1/sumeragi/evidence` with a hex-encoded Norito payload. Torii validates structure and signatures (vote signatures against the commit topology and chain ID), emits `invalid consensus evidence` on mismatch, and never stores the entry.
 - **Horizon audit** — `iroha_cli sumeragi params --summary` shows the active `evidence_horizon_blocks`; governance updates flow through `SetParameter::Custom(SumeragiNposParameters)` and tests guard short horizons to prevent stale replays from succeeding.
 
 **Evidence runbook (operator checklist)**
 - Record the current count via `sumeragi evidence count` before submitting slashing material; the value should increase only after valid payloads are accepted.
 - When ingesting evidence manually, inspect the payload locally (for example with the Norito tooling or a staging node) to avoid propagating malformed votes before calling `sumeragi evidence submit`.
 - After submission, poll `sumeragi evidence list --summary` and confirm the new record’s `recorded_at_height` equals the subject height (or the fallback height if horizon pruning applied).
-- Use `sumeragi evidence list --kind <Kind>` to isolate double votes versus invalid commit certificate/proposal reports; reconcile the paginated output (`--limit`, `--offset`) across peers to ensure the in-memory snapshot matches before/after governance actions.
+- Use `sumeragi evidence list --kind <Kind>` to isolate double votes versus invalid QC/proposal reports; reconcile the paginated output (`--limit`, `--offset`) across peers to ensure the in-memory snapshot matches before/after governance actions.
 - If a payload is rejected with `invalid consensus evidence`, inspect the CLI’s structured error and cross-check the underlying votes or proposal. No state change should occur; the count remains unchanged by design.
 - Periodically compare `/v1/sumeragi/evidence/count` across peers. Divergence indicates a horizon mismatch or a node that failed to persist the record and should trigger incident response.
 - Submit payloads with `iroha_cli sumeragi evidence submit --evidence-hex <0x…>` or
@@ -829,22 +828,3 @@ CI coverage keeps the evidence pipeline honest:
 - `integration_tests/tests/sumeragi_negative_paths.rs` posts forged double-vote payloads with mismatched signer/height/view/epoch/signature metadata, invalid kind/payload pairings, and stale heights; each permutation must yield `invalid consensus evidence` and leave the persisted count untouched.
 - `crates/iroha_core/src/sumeragi/evidence.rs` round-trips every negative mutation through the Norito codec before feeding it to the validator so encode/decode cannot “heal” malformed payloads. The fuzz-style loop jitters signatures and block hashes to guard the deduplication keys.
 - The helper `set_evidence_horizon` in the integration suite stages short horizons and proves that stale evidence sourced from old heights is ignored even when the network replays it later.
-
-### Configuration (strict ExecQC in WSV)
-
-To require that a full ExecutionQC record exists in WSV before a parent block may commit, enable strict mode in your config. This also enables the ExecQC gate itself.
-
-```toml
-[sumeragi]
-# Require ExecQC (SBV‑AM) before committing parents
-proof_policy = "exec_qc"           # or set `require_execution_qc = true`
-require_execution_qc = true         # effective when proof_policy != "off"
-
-# Strict: require full ExecutionQC record in WSV
-require_wsv_exec_qc = true
-
-# The commit certificate gate (`require_precommit_qc`) is enabled by default. Uncomment to opt out (not recommended):
-# require_precommit_qc = false
-```
-
-When `require_wsv_exec_qc = true` is set, the node requires a WSV `ExecutionQcRecord` for the parent before commit. If a cached `ExecutionQC` is available it is materialized into WSV immediately; otherwise, if the parent block is known but WSV data is missing, commit blocks until a real record is persisted. ExecutionQCs are synthesized from exec votes emitted after commit and routed to deterministic collectors, and stale-view exec votes for known blocks are still recorded so the QC can form after view changes.

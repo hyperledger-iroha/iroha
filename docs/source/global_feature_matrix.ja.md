@@ -21,7 +21,7 @@ translator: manual
 | NEW_VIEW ゲーティング & Highest commit certificate 追跡 | ◉ | NEW_VIEW / Evidence を伝搬し、Highest commit certificate は単調増加で採用。ハンドシェイクがフィンガープリントを保護。 | status.md:210 |
 | availability evidence ゲーティング | ○ | `da_enabled=true` で Availability 投票 / availability evidence を発行しコミットを制御。追加の磨き込みは継続。 | status.md:190 |
 | 信頼できるブロードキャスト（DA ペイロード輸送） | ◉ | `da_enabled=true` で RBC (Init/Chunk/Ready/Deliver) が有効化され、ペイロード配布/欠落回復に利用。コミットは availability evidence でゲート（ローカルの `DELIVER` は条件ではありません）。 | status.md:283-284 |
-| ExecutionQC 収集 & ゲーティング | ○ | Exec 投票、ウィットネス封筒、ゲーティングを実装済み。集約署名の最適化が未完。 | status.md:177 |
+| Commit QC 状態ルート束縛 | ◉ | Commit QC が parent/post state roots を保持し、execution QC ゲートは廃止。 | status.md:latest |
 | エビデンス伝搬 & 監査エンドポイント | ◉ | `ControlFlow::Evidence`、Torii エビデンス API、ネガティブテストを実装。 | status.md:176; status.md:760-761 |
 | RBC テレメトリ、準備／DELIVER メトリクス | ◉ | `/v1/sumeragi/rbc*` エンドポイントとテレメトリカウンタ／ヒストグラムを提供。 | status.md:283-284; status.md:772 |
 | コンセンサスパラメータ広告 & トポロジ検証 | ◉ | ノードが `(collectors_k, redundant_send_r)` をブロードキャストし、ピア間の一致を検証。 | status.md:255 |

@@ -1,4 +1,4 @@
-# Iroha v2 Transaction Processing Pipeline
+# Iroha v1 Transaction Processing Pipeline
 
 This document describes the end‑to‑end path a transaction follows through an Iroha node and the network, from submission at the API boundary to final commitment and post‑commit effects. It focuses on architectural steps, components involved, and how different transaction types flow through the system. Names in backticks refer to crates or major modules in this repository.
 
@@ -16,7 +16,7 @@ This document describes the end‑to‑end path a transaction follows through an
 - `norito`: Compact, deterministic codec for wire formats (tx, blocks, queries, etc.).
 - `iroha_p2p`: Peer‑to‑peer networking, gossip, and topology management.
 
-**Runtime target:** Iroha Core, Torii, and companion crates are built for the Rust standard library (`std`) only. WASM or other no-std variants are no longer supported in v2, so plan integrations and tooling accordingly.
+**Runtime target:** Iroha Core, Torii, and companion crates are built for the Rust standard library (`std`) only. WASM or other no-std variants are not supported, so plan integrations and tooling accordingly.
 
 ## Transaction Types
 
@@ -67,11 +67,11 @@ All of the above share the same validation and consensus pipeline once they beco
 - On success, the validator signs the block (or the header) and sends an approval to the leader and/or other committee members depending on the consensus message pattern.
 
 8) Commit (Quorum Reached)
-- Once the leader (or the network) observes a quorum of approvals, `sumeragi` finalizes the block after verifying the required conditions:
+  - Once the leader (or the network) observes a quorum of approvals, `sumeragi` finalizes the block after verifying the required conditions:
   - Commit certificate: validators send `CommitVote` signatures to the deterministic collector set (proxy tail + Set B slice), with fallback to the full commit topology when collector fan-out is below quorum. Any collector that reaches quorum aggregates `2f+1` signatures (permissioned) or ≥2/3 total stake (NPoS) into a `CommitCertificate`. Peers commit when the certificate and payload are both available.
   - Data availability: when `SumeragiParameter::DaEnabled = true` (`sumeragi.da_enabled=true`), availability evidence is tracked via availability votes or an RBC `READY` quorum (>= `Topology::min_votes_for_commit()`), but commit does not wait on it.
   - Reliable broadcast (RBC): enabled automatically when `sumeragi.da_enabled=true` as a transport/recovery path for block payload distribution; commit does not wait on local `RbcDeliver`.
-  - Execution QC: when the proof policy requires execution QCs (`require_execution_qc=true` or hybrid modes), the parent’s `ExecutionQcRecord` must be available. Nodes persist `exec_root` + `ExecutionQcRecord` on commit (derived from the execution witness); in strict WSV mode (`require_wsv_exec_qc=true`) missing parent records block commit until the real record is present.
+  - State roots: commit QCs always bind `parent_state_root` and `post_state_root` derived from execution witness snapshots; there is no separate execution QC gate.
 - After the required checks succeed, all committee peers persist the block to `kura` (append‑only block store) and advance their canonical state by applying the block contents in a single atomic commit.
 - Non‑committee peers learn of the commit via gossip and catch up by fetching and applying the committed block(s).
 
@@ -103,7 +103,7 @@ Determinism:
 - Round lifecycle: propose → validate → vote → commit.
 - Leader responsibilities: gather txs, validate (stateless+stateful), include triggers, build and sign the block, collect approvals.
 - Validator responsibilities: verify proposal integrity, independently re‑validate, vote.
-- Commit rule: once a valid `CommitCertificate` is available and ExecutionQC gating (when enabled) passes, the block is finalized; DA evidence is tracked but never blocks commit.
+- Commit rule: once a valid `CommitCertificate` is available and the payload is present, the block is finalized; DA evidence is tracked but never blocks commit.
 - Fault handling: if the leader is faulty or slow, the round times out and leadership rotates; pending txs remain available for the next leader.
 
 ## Executor & IVM
@@ -274,6 +274,6 @@ Iroha can group signatures by scheme during block validation and verify them in 
 
 - Evidence audit (non‑consensus):
   - `GET /v1/sumeragi/evidence/count` — `{ "count": <u64> }` for in‑memory evidence store.
-- `GET /v1/sumeragi/evidence` — `{ "total": <u64>, "items": [...] }` with basic fields per evidence (DoublePrepare/Precommit, InvalidCommitCertificate, InvalidProposal).
+- `GET /v1/sumeragi/evidence` — `{ "total": <u64>, "items": [...] }` with basic fields per evidence (DoublePrepare/DoubleCommit, InvalidQc, InvalidProposal, Censorship).
 - Python SDK shortcuts: `iroha_python.ToriiClient.get_pipeline_recovery(height)` fetches the JSON sidecar, and `stream_pipeline_transactions`/`stream_pipeline_blocks`/`stream_pipeline_witnesses`/`stream_pipeline_merges` expose the SSE feeds with Norito-backed filters.
   - Purpose: quick inspection during development and ops. Data is node‑local and not persisted.

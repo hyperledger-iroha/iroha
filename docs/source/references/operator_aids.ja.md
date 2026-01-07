@@ -49,7 +49,7 @@ translator: manual
 
 - `GET /v1/sumeragi/evidence/count` → `{ "count": <u64> }`
 - `GET /v1/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
-  - DoublePrepare/Precommit、InvalidCommitCertificate、InvalidProposal などの基本フィールドを含む。
+  - DoublePrepare/DoubleCommit、InvalidQc、InvalidProposal などの基本フィールドを含む。
   - 例:
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence/count | jq .`
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`

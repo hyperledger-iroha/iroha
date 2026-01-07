@@ -808,15 +808,15 @@ impl NetworkRelay {
                 )
             }
             ConsensusParams(_) => ("ConsensusParams", None, None),
-            CommitVote(vote) => {
+            QcVote(vote) => {
                 let label = match vote.phase {
                     iroha_core::sumeragi::consensus::Phase::Prepare => "PrepareVote",
-                    iroha_core::sumeragi::consensus::Phase::Commit => "CommitVote",
+                    iroha_core::sumeragi::consensus::Phase::Commit => "QcVote",
                     iroha_core::sumeragi::consensus::Phase::NewView => "NewViewVote",
                 };
                 (label, Some(vote.height), Some(vote.view))
             }
-            CommitCertificate(cert) => {
+            Qc(cert) => {
                 let label = match cert.phase {
                     iroha_core::sumeragi::consensus::Phase::Prepare => "PrepareCert",
                     iroha_core::sumeragi::consensus::Phase::Commit => "CommitCert",
@@ -826,8 +826,6 @@ impl NetworkRelay {
             }
             VrfCommit(_) => ("VrfCommit", None, None),
             VrfReveal(_) => ("VrfReveal", None, None),
-            ExecVote(vote) => ("ExecVote", Some(vote.height), Some(vote.view)),
-            ExecutionQC(qc) => ("ExecutionQC", Some(qc.height), Some(qc.view)),
             ExecWitness(witness) => ("ExecWitness", Some(witness.height), Some(witness.view)),
             RbcInit(init) => ("RbcInit", Some(init.height), Some(init.view)),
             RbcChunk(chunk) => ("RbcChunk", Some(chunk.height), Some(chunk.view)),
@@ -4118,8 +4116,6 @@ fn build_consensus_config_caps(
         collectors_k,
         redundant_send_r: sumeragi.collectors_redundant_send_r,
         da_enabled: sumeragi.da_enabled,
-        require_execution_qc: sumeragi.require_execution_qc,
-        require_wsv_exec_qc: sumeragi.require_wsv_exec_qc,
         rbc_chunk_max_bytes,
         rbc_session_ttl_ms,
         rbc_store_max_sessions,

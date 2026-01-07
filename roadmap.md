@@ -169,16 +169,17 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Standardize Norito length-prefix flag scoping (COMPACT_LEN/COMPACT_SEQ_LEN/VARINT_OFFSETS) and update the spec/docs.
  - [x] Sweep docs/translations for remaining references and clean up tooling flags.
 
-15. **SUMERAGI-UNIFIED-QC — Merge commit + execution certificates into a single QC** (Consensus/Sumeragi, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈳 Not Started, target TBD)
- - [ ] Define unified `QC`/`QcVote` types (rename Commit*), add `parent_state_root` + `post_state_root`, update Norito schema, and bump `PROTO_VERSION`.
- - [ ] Update vote preimage/signing rules to include roots for all phases (zero roots for non-Commit) and refresh signature tests/fixtures.
- - [ ] Remove ExecVote/ExecutionQC wire messages and handlers; decide ExecWitness scope (pipeline-only) and update `BlockMessage`/event plumbing.
- - [ ] Move execution-root computation to the pre-vote path (validation/witness capture), store roots with pending blocks, and require roots to emit commit votes.
- - [ ] Refactor QC aggregation/validation to verify roots + signers, and remove exec_vote_log/execution_qc_cache tracking and telemetry.
- - [ ] Evidence updates: drop DoubleExecVote, treat conflicting roots as double-commit evidence, and update evidence validation/tests.
- - [ ] Storage updates: remove `exec_qcs`/`exec_roots`, persist QC roots for audit/bridge, update tiered storage segments/snapshots.
- - [ ] Block sync + bridge: adapt QC derivation/validation and finality proof paths to the unified QC layout (roots included).
- - [ ] Config cleanup: remove `require_execution_qc`/`require_wsv_exec_qc`, collapse ProofPolicy to QC (+ optional ZK), update defaults.
+15. **SUMERAGI-UNIFIED-QC — Merge commit + execution certificates into a single QC** (Consensus/Sumeragi, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🟡 In Progress, target TBD)
+ - [x] Define unified `QC`/`QcVote` types (rename Commit*), add `parent_state_root` + `post_state_root`, update Norito schema, and bump `PROTO_VERSION`.
+ - [x] Update vote preimage/signing rules to include roots for all phases (zero roots for non-Commit) and refresh signature tests/fixtures.
+ - [x] Remove ExecVote/ExecutionQC wire messages and handlers; decide ExecWitness scope (pipeline-only) and update `BlockMessage`/event plumbing.
+ - [x] Capture execution roots during pre-vote validation (witness capture) and store them with pending blocks.
+ - [x] Require commit votes to use stored roots and remove commit-phase recomputation.
+ - [x] Refactor QC aggregation/validation to verify roots + signers, and remove exec_vote_log/execution_qc_cache tracking and telemetry.
+ - [x] Evidence updates: drop conflicting-root evidence variants, treat conflicting roots as double-commit evidence, and update evidence validation/tests.
+ - [x] Storage updates: remove execution-QC/root storage, persist QC roots for audit/bridge, update tiered storage segments/snapshots.
+ - [x] Block sync + bridge: adapt QC derivation/validation and finality proof paths to the unified QC layout (roots included).
+ - [x] Config cleanup: remove execution-QC gating toggles, collapse ProofPolicy to QC (+ optional ZK), update defaults.
  - [ ] Docs/telemetry/tests: update pipeline + sumeragi docs, evidence API, status/metrics fields, and add unit/integration coverage; run `cargo test --workspace`.
 
 17. **BRIDGE-RECEIPTS-TYPED — Replace bridge log stub with typed events** (Core/Executor/CLI, Line: Shared, Owner: Core Protocol WG, Priority: Medium, Status: 🈴 Completed, target TBD)
@@ -465,7 +466,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 32. **CODE-HEALTH-REFACTOR — Remove remaining refactor TODOs** (Core/Tooling, Line: Shared, Owner: Core Protocol WG, Priority: Low, Status: 🈴 Completed, target TBD)
  - [x] Split large helpers flagged in `irohad/src/main.rs` and `iroha/src/client.rs`.
- - [x] Decompose Sumeragi loops (`main_loop.rs`, `mode.rs`, `validation.rs`, `pending_block.rs`, `exec_qc.rs`, `qc.rs`, `reschedule.rs`, `votes.rs`) and `block_sync.rs` validation flow.
+ - [x] Decompose Sumeragi loops (`main_loop.rs`, `mode.rs`, `validation.rs`, `pending_block.rs`, `qc.rs`, `reschedule.rs`, `votes.rs`) and `block_sync.rs` validation flow.
  - [x] Refactor `account_admission.rs`, `settlement.rs` error payloads, and multisig ownership/borrowing to remove lint suppressions.【crates/iroha_core/src/smartcontracts/isi/account_admission.rs:1】【crates/iroha_core/src/smartcontracts/isi/settlement.rs:1】【crates/iroha_core/src/smartcontracts/isi/multisig.rs:1】
  - [x] Consolidate boolean policy knobs in `state.rs` into enums/bitflags and split large validation helpers.
 
@@ -856,9 +857,9 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - Payload/DA handling: QC-first arrival without payload must not lock/commit; with `da_enabled=true`, availability evidence is tracked (not local RBC delivery) while commit proceeds once payload is available; DA-disabled path still handles QC-first safely; add DA timeout + DA-disabled regression.
    - Byzantine leader: equivocation with two proposals same height/view emits evidence, accepts only extending QC, ignores conflicting QC; QC for already committed height with divergent hash rejected; rebuild ignores invalid signatures and refuses forged QC.
    - Recovery/sync: node starting from snapshot consumes highest QC but still enforces lock and DA before progressing; late payload arrival triggers QC rebuild and commit if quorum valid; integration test: QC-first then payload-late happy path; integration test: sync via checkpoint + highest QC with missing payload triggers block fetch before lock/commit.
-   - Evidence validation: enforce cryptographic vote/exec-vote signature checks (Torii evidence ingest validates against commit topology), rejecting forged payloads before persistence.【crates/iroha_core/src/sumeragi/evidence.rs:383】【crates/iroha_torii/src/routing.rs:4432】
-   - ExecutionQC integrity: validate aggregate signature/bitmap/quorum on receipt before caching/persisting and block strict WSV mode without placeholder backfill; regressions cover valid/invalid aggregates.【crates/iroha_core/src/sumeragi/main_loop/qc.rs:1118】【crates/iroha_core/src/sumeragi/main_loop/exec_qc.rs:209】【crates/iroha_core/src/sumeragi/main_loop/tests.rs:4443】
-   - ExecutionQC vote routing: exec votes/witness target deterministic collectors per `(height, view)` with commit-topology fallback when collectors are empty/local-only/below quorum, and stale-view exec votes are recorded for known blocks so ExecutionQCs can form after view changes; tests/docs updated.【crates/iroha_core/src/sumeragi/main_loop/commit.rs】【crates/iroha_core/src/sumeragi/main_loop/votes.rs】【crates/iroha_core/src/sumeragi/main_loop/tests.rs】【docs/source/sumeragi.md】
+   - Evidence validation: enforce cryptographic vote signature checks (Torii evidence ingest validates against commit topology), rejecting forged payloads before persistence.【crates/iroha_core/src/sumeragi/evidence.rs:383】【crates/iroha_torii/src/routing.rs:4432】
+   - Commit QC integrity: validate aggregate signature/bitmap/quorum on receipt before caching/persisting; regressions cover valid/invalid aggregates.【crates/iroha_core/src/sumeragi/main_loop/qc.rs:1118】【crates/iroha_core/src/sumeragi/main_loop/tests.rs:4443】
+   - Witness routing: exec witnesses target deterministic collectors per `(height, view)` with commit-topology fallback when collectors are empty/local-only/below quorum; tests/docs updated.【crates/iroha_core/src/sumeragi/main_loop/commit.rs】【crates/iroha_core/src/sumeragi/main_loop/tests.rs】【docs/source/sumeragi.md】
    - NEXT: refine into executable work items:
      1) Double-vote evidence:
         - [x] Added a shared `record_double_vote` helper and prevote/precommit regressions to persist/deduplicate equivocation evidence across the in-memory store and WSV, covering duplicate suppression on repeated votes.

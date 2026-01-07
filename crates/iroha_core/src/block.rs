@@ -73,7 +73,7 @@ use iroha_data_model::{
         *,
     },
     confidential::ConfidentialFeatureDigest,
-    consensus::{ConsensusKeyRole, ExecutionQcRecord},
+    consensus::{ConsensusKeyRole, Qc},
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -267,7 +267,7 @@ fn lane_relay_envelopes_for_block(
     da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
     lane_settlement_commitments: &[LaneBlockCommitment],
     lane_summaries: &BTreeMap<LaneId, LaneSummary>,
-    execution_qc: Option<&ExecutionQcRecord>,
+    commit_qc: Option<&Qc>,
 ) -> Vec<LaneRelayEnvelope> {
     lane_settlement_commitments
         .iter()
@@ -278,7 +278,7 @@ fn lane_relay_envelopes_for_block(
 
             LaneRelayEnvelope::new(
                 *block_header,
-                execution_qc.cloned(),
+                commit_qc.cloned(),
                 da_commitment_hash,
                 commitment.clone(),
                 rbc_bytes_total,
@@ -5631,9 +5631,9 @@ pub(crate) mod valid {
                 );
                 let block_header = block.header();
                 let da_commitment_hash = block_header.da_commitments_hash();
-                let execution_qc = state_block
+                let commit_qc = state_block
                     .world
-                    .exec_qcs()
+                    .commit_qcs()
                     .get(&block_header.hash())
                     .cloned();
                 let manifest_roots: BTreeMap<DataSpaceId, [u8; 32]> = state_block
@@ -5653,7 +5653,7 @@ pub(crate) mod valid {
                     da_commitment_hash,
                     &lane_settlement_commitments,
                     &lane_summaries,
-                    execution_qc.as_ref(),
+                    commit_qc.as_ref(),
                 );
                 attach_manifest_roots_to_relays(&mut lane_relay_envelopes, &manifest_roots);
                 crate::sumeragi::status::set_lane_relay_envelopes(lane_relay_envelopes);
@@ -11071,14 +11071,15 @@ mod tests {
     }
 
     #[test]
-    fn lane_relay_helper_threads_execution_qc_and_rbc_bytes() {
+    fn lane_relay_helper_threads_commit_qc_and_rbc_bytes() {
         use iroha_crypto::{Hash, HashOf};
         use iroha_data_model::{
             block::consensus::{LaneBlockCommitment, LaneSettlementReceipt},
-            consensus::ExecutionQcRecord,
             da::commitment::DaCommitmentBundle,
             nexus::{DataSpaceId, LaneId},
+            peer::PeerId,
         };
+        use iroha_data_model::consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1};
 
         let da_hash: Option<HashOf<DaCommitmentBundle>> = Some(HashOf::from_untyped_unchecked(
             Hash::prehashed([0xAB; Hash::LENGTH]),
@@ -11125,15 +11126,24 @@ mod tests {
             },
         );
 
-        let execution_qc = ExecutionQcRecord {
+        let validator_set: Vec<PeerId> = Vec::new();
+        let commit_qc = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_header.hash(),
             parent_state_root: Hash::prehashed([0xCE; Hash::LENGTH]),
             post_state_root: Hash::prehashed([0xCD; Hash::LENGTH]),
             height: block_header.height().get(),
             view: 3,
             epoch: 0,
-            signers_bitmap: vec![0x01],
-            bls_aggregate_signature: vec![0x02],
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: QcAggregate {
+                signers_bitmap: vec![0x01],
+                bls_aggregate_signature: vec![0x02],
+            },
         };
 
         let with_qc = lane_relay_envelopes_for_block(
@@ -11141,11 +11151,11 @@ mod tests {
             da_hash,
             std::slice::from_ref(&settlement),
             &lane_summaries,
-            Some(&execution_qc),
+            Some(&commit_qc),
         );
         assert_eq!(with_qc.len(), 1);
         let envelope = &with_qc[0];
-        assert_eq!(envelope.execution_qc.as_ref(), Some(&execution_qc));
+        assert_eq!(envelope.qc.as_ref(), Some(&commit_qc));
         assert_eq!(envelope.rbc_bytes_total, 2048);
         envelope.verify().expect("envelope should validate");
 
@@ -11157,7 +11167,7 @@ mod tests {
             None,
         );
         assert_eq!(without_qc.len(), 1);
-        assert!(without_qc[0].execution_qc.is_none());
+        assert!(without_qc[0].qc.is_none());
         assert_eq!(without_qc[0].rbc_bytes_total, 2048);
         without_qc[0].verify().expect("envelope should validate");
     }
@@ -11167,10 +11177,11 @@ mod tests {
         use iroha_crypto::{Hash, HashOf};
         use iroha_data_model::{
             block::consensus::{LaneBlockCommitment, LaneSettlementReceipt},
-            consensus::ExecutionQcRecord,
             da::commitment::DaCommitmentBundle,
             nexus::{DataSpaceId, LaneId},
+            peer::PeerId,
         };
+        use iroha_data_model::consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1};
 
         let da_hash: Option<HashOf<DaCommitmentBundle>> = Some(HashOf::from_untyped_unchecked(
             Hash::prehashed([0xAB; Hash::LENGTH]),
@@ -11217,15 +11228,24 @@ mod tests {
             },
         );
 
-        let execution_qc = ExecutionQcRecord {
+        let validator_set: Vec<PeerId> = Vec::new();
+        let commit_qc = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_header.hash(),
             parent_state_root: Hash::prehashed([0xCE; Hash::LENGTH]),
             post_state_root: Hash::prehashed([0xCD; Hash::LENGTH]),
             height: block_header.height().get(),
             view: 3,
             epoch: 0,
-            signers_bitmap: vec![0x01],
-            bls_aggregate_signature: vec![0x02],
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: QcAggregate {
+                signers_bitmap: vec![0x01],
+                bls_aggregate_signature: vec![0x02],
+            },
         };
 
         let mut envelopes = lane_relay_envelopes_for_block(
@@ -11233,7 +11253,7 @@ mod tests {
             da_hash,
             std::slice::from_ref(&settlement),
             &lane_summaries,
-            Some(&execution_qc),
+            Some(&commit_qc),
         );
         let manifest_root = [0x44; 32];
         let manifest_roots: BTreeMap<DataSpaceId, [u8; 32]> =

@@ -3392,12 +3392,8 @@ pub enum ConsensusMode {
 pub enum ProofPolicy {
     /// No additional proof gating beyond the standard single-chain QC.
     Off,
-    /// Require ExecutionQC (SBV-AM) before finalizing parent.
-    ExecQcOnly,
-    /// Require zk parent-proving with depth `zk_finality_k` (optionally combined with ExecQC when `require_execution_qc` is set).
+    /// Require zk parent-proving with depth `zk_finality_k`.
     ZkParent,
-    /// Require both ExecutionQC and zk parent-proving.
-    Hybrid,
 }
 
 /// Adaptive observability configuration used to auto-tune consensus when telemetry detects slowness.
@@ -3517,19 +3513,15 @@ pub struct Sumeragi {
     pub da_max_commitments_per_block: usize,
     /// Maximum DA proof openings permitted in a single block (aggregate cap).
     pub da_max_proof_openings_per_block: usize,
-    /// Proof policy selector (off/exec_qc/zk_parent/hybrid).
+    /// Proof policy selector (off/zk_parent).
     pub proof_policy: ProofPolicy,
     /// Cap for in-memory commit certificate history (used for status/finality proofs).
     pub commit_cert_history_cap: usize,
     /// Zk parent-proving depth (0 disables zk finality).
     pub zk_finality_k: u8,
-    /// Require ExecutionQC gate (effective when proof_policy != Off).
-    pub require_execution_qc: bool,
     /// Require PrecommitQC for the candidate block before commit (consensus path).
     /// Defaults to false while the new voting path is being integrated.
     pub require_precommit_qc: bool,
-    /// Require that a full ExecutionQC record exists in WSV before commit proceeds (consensus path).
-    pub require_wsv_exec_qc: bool,
     /// RBC chunk maximum bytes per chunk.
     pub rbc_chunk_max_bytes: usize,
     /// Maximum pending RBC chunks stashed before INIT.

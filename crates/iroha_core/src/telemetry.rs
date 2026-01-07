@@ -45,7 +45,7 @@ use iroha_data_model::{
     Identifiable,
     asset::AssetDefinitionId,
     block::BlockHeader,
-    consensus::CommitCertificate,
+    consensus::Qc,
     nexus::{
         AxtPolicySnapshot, AxtRejectReason, DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId,
         LaneStorageProfile, LaneVisibility, PublicLaneValidatorStatus, UniversalAccountId,
@@ -5495,7 +5495,7 @@ impl Telemetry {
 
     fn record_consensus_message(&self, msg: &BlockMessage, sent: bool) {
         match msg {
-            BlockMessage::CommitVote(vote) => {
+            BlockMessage::QcVote(vote) => {
                 let phase_label = match vote.phase {
                     crate::sumeragi::consensus::Phase::Prepare => PHASE_PREPARE,
                     crate::sumeragi::consensus::Phase::Commit => PHASE_COMMIT,
@@ -5513,7 +5513,7 @@ impl Telemetry {
                         .inc();
                 }
             }
-            BlockMessage::CommitCertificate(cert) => {
+            BlockMessage::Qc(cert) => {
                 let phase_label = match cert.phase {
                     crate::sumeragi::consensus::Phase::Prepare => PHASE_PREPARE,
                     crate::sumeragi::consensus::Phase::Commit => PHASE_COMMIT,
@@ -5559,13 +5559,6 @@ impl Telemetry {
         if self.enabled.load(Ordering::Relaxed) {
             let ms = dwell.as_secs_f64() * 1_000.0;
             self.metrics.sumeragi_missing_block_dwell_ms.observe(ms);
-        }
-    }
-
-    /// Increment when an `ExecutionQC` is assembled (placeholder counter).
-    pub fn inc_exec_qc_assembled(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_exec_qc_assembled_total.inc();
         }
     }
 
@@ -7747,23 +7740,23 @@ impl Telemetry {
     }
 
     /// Record the latest commit certificate summary (best-effort).
-    pub fn set_commit_certificate_summary(&self, cert: &CommitCertificate) {
+    pub fn set_commit_qc_summary(&self, cert: &Qc) {
         if self.enabled.load(Ordering::Relaxed) {
             self.metrics
-                .sumeragi_commit_certificate_height
+                .sumeragi_commit_qc_height
                 .set(cert.height);
-            self.metrics.sumeragi_commit_certificate_view.set(cert.view);
+            self.metrics.sumeragi_commit_qc_view.set(cert.view);
             self.metrics
-                .sumeragi_commit_certificate_epoch
+                .sumeragi_commit_qc_epoch
                 .set(cert.epoch);
             self.metrics
-                .sumeragi_commit_certificate_signatures_total
+                .sumeragi_commit_qc_signatures_total
                 .set(
                     u64::try_from(crate::sumeragi::consensus::qc_signer_count(cert))
                         .unwrap_or(u64::MAX),
                 );
             self.metrics
-                .sumeragi_commit_certificate_validator_set_len
+                .sumeragi_commit_qc_validator_set_len
                 .set(u64::try_from(cert.validator_set.len()).unwrap_or(u64::MAX));
         }
     }
@@ -8538,7 +8531,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_certificate_summary_metrics_updated() {
+    fn commit_qc_summary_metrics_updated() {
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
         let telemetry = Telemetry::new(metrics.clone(), true);
 
@@ -8547,34 +8540,36 @@ mod tests {
         let validator_set = vec![peer_a, peer_b];
         let validator_set_hash = HashOf::new(&validator_set);
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; 32]));
-        let cert = CommitCertificate {
+        let cert = Qc {
             phase: consensus::Phase::Commit,
             subject_block_hash: block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 42,
             view: 7,
             epoch: 1,
             mode_tag: consensus::PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash,
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: validator_set.clone(),
-            aggregate: consensus::CommitAggregate {
+            aggregate: consensus::QcAggregate {
                 signers_bitmap: Vec::new(),
                 bls_aggregate_signature: Vec::new(),
             },
         };
 
-        telemetry.set_commit_certificate_summary(&cert);
+        telemetry.set_commit_qc_summary(&cert);
 
-        assert_eq!(metrics.sumeragi_commit_certificate_height.get(), 42);
-        assert_eq!(metrics.sumeragi_commit_certificate_view.get(), 7);
-        assert_eq!(metrics.sumeragi_commit_certificate_epoch.get(), 1);
+        assert_eq!(metrics.sumeragi_commit_qc_height.get(), 42);
+        assert_eq!(metrics.sumeragi_commit_qc_view.get(), 7);
+        assert_eq!(metrics.sumeragi_commit_qc_epoch.get(), 1);
         assert_eq!(
-            metrics.sumeragi_commit_certificate_signatures_total.get(),
+            metrics.sumeragi_commit_qc_signatures_total.get(),
             0
         );
         assert_eq!(
-            metrics.sumeragi_commit_certificate_validator_set_len.get(),
+            metrics.sumeragi_commit_qc_validator_set_len.get(),
             2
         );
     }
@@ -10685,14 +10680,16 @@ mod tests {
         let vote = consensus::Vote {
             phase: consensus::Phase::Prepare,
             block_hash: vote_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
             view: 1,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
-        let vote_msg = BlockMessage::CommitVote(vote.clone());
+        let vote_msg = BlockMessage::QcVote(vote.clone());
         telemetry.note_consensus_message_sent(&vote_msg);
         telemetry.note_consensus_message_received(&vote_msg);
 
@@ -10717,23 +10714,25 @@ mod tests {
         let validator_set = vec![iroha_data_model::peer::PeerId::new(
             KeyPair::random().public_key().clone(),
         )];
-        let qc = consensus::CommitCertificate {
+        let qc = consensus::Qc {
             phase: consensus::Phase::Commit,
             subject_block_hash: qc_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 2,
             view: 3,
             epoch: 0,
             mode_tag: consensus::PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set,
-            aggregate: consensus::CommitAggregate {
+            aggregate: consensus::QcAggregate {
                 signers_bitmap: vec![0x01],
                 bls_aggregate_signature: Vec::new(),
             },
         };
-        let qc_msg = BlockMessage::CommitCertificate(qc.clone());
+        let qc_msg = BlockMessage::Qc(qc.clone());
         telemetry.note_consensus_message_sent(&qc_msg);
         telemetry.note_consensus_message_received(&qc_msg);
 

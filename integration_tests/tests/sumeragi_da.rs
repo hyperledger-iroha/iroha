@@ -14,7 +14,7 @@ use iroha::{
     client::{Client, Status},
     data_model::{
         Level,
-        consensus::CommitCertificate,
+        consensus::Qc,
         isi::{Log, SetParameter, Unregister},
         parameter::{Parameter, SumeragiParameter, TransactionParameter},
         prelude::QueryBuilderExt,
@@ -58,6 +58,8 @@ struct RbcObservation {
     ready_count: u64,
     block_hash: String,
 }
+
+type CommitCertificate = Qc;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
@@ -208,9 +210,9 @@ async fn sumeragi_rbc_da_large_payload_six_peers() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn sumeragi_exec_qc_with_tight_block_queue_four_peers() -> Result<()> {
+async fn sumeragi_commit_qc_with_tight_block_queue_four_peers() -> Result<()> {
     let result = run_sumeragi_da_scenario_with(
-        "sumeragi_exec_qc_with_tight_block_queue_four_peers",
+        "sumeragi_commit_qc_with_tight_block_queue_four_peers",
         4,
         LARGE_PAYLOAD_BYTES,
         false,
@@ -220,7 +222,7 @@ async fn sumeragi_exec_qc_with_tight_block_queue_four_peers() -> Result<()> {
         |_| Ok(()),
     )
     .await;
-    if sandbox::handle_result(result, "sumeragi_exec_qc_with_tight_block_queue_four_peers")?
+    if sandbox::handle_result(result, "sumeragi_commit_qc_with_tight_block_queue_four_peers")?
         .is_none()
     {
         return Ok(());
@@ -326,9 +328,6 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
                 .write(["network", "p2p_queue_cap_high"], P2P_QUEUE_CAP_HIGH)
                 .write(["network", "p2p_queue_cap_low"], P2P_QUEUE_CAP_LOW)
                 .write(["network", "p2p_post_queue_cap"], P2P_POST_QUEUE_CAP)
-                .write(["sumeragi", "proof_policy"], "exec_qc")
-                .write(["sumeragi", "require_execution_qc"], true)
-                .write(["sumeragi", "require_wsv_exec_qc"], true)
                 .write(["sumeragi", "rbc_chunk_max_bytes"], rbc_chunk_max_bytes)
                 .write(["sumeragi", "rbc_session_ttl_secs"], 600i64)
                 .write(["sumeragi", "rbc_disk_store_ttl_secs"], 600i64);
@@ -493,9 +492,6 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
                     ["torii", "max_content_len"],
                     torii_max_content_len_for_payload(payload_bytes),
                 )
-                .write(["sumeragi", "proof_policy"], "exec_qc")
-                .write(["sumeragi", "require_execution_qc"], true)
-                .write(["sumeragi", "require_wsv_exec_qc"], true)
                 .write(
                     ["sumeragi", "rbc_chunk_max_bytes"],
                     i64::from(rbc_chunk_max_bytes),
@@ -832,9 +828,6 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
                     ["torii", "max_content_len"],
                     torii_max_content_len_for_payload(payload_bytes),
                 )
-                .write(["sumeragi", "proof_policy"], "exec_qc")
-                .write(["sumeragi", "require_execution_qc"], true)
-                .write(["sumeragi", "require_wsv_exec_qc"], true)
                 .write(["sumeragi", "rbc_chunk_max_bytes"], rbc_chunk_max_bytes);
         });
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -1094,9 +1087,6 @@ where
                 ["network", "max_frame_bytes_tx_gossip"],
                 P2P_TX_FRAME_BUDGET_BYTES,
             )
-            .write(["sumeragi", "proof_policy"], "exec_qc")
-            .write(["sumeragi", "require_execution_qc"], true)
-            .write(["sumeragi", "require_wsv_exec_qc"], true)
             .write(["sumeragi", "rbc_chunk_max_bytes"], rbc_chunk_max_bytes)
             .write(["sumeragi", "rbc_store_max_sessions"], 2_048i64)
             .write(["sumeragi", "rbc_store_soft_sessions"], 1_536i64)

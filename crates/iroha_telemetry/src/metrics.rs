@@ -3845,19 +3845,19 @@ pub struct SumeragiConsensusStatus {
     pub commit_signatures_required: u64,
     /// Latest commit certificate height (best-effort).
     #[norito(default)]
-    pub commit_certificate_height: u64,
+    pub commit_qc_height: u64,
     /// Latest commit certificate view (best-effort).
     #[norito(default)]
-    pub commit_certificate_view: u64,
+    pub commit_qc_view: u64,
     /// Latest commit certificate epoch (best-effort).
     #[norito(default)]
-    pub commit_certificate_epoch: u64,
+    pub commit_qc_epoch: u64,
     /// Signatures attached to the latest commit certificate.
     #[norito(default)]
-    pub commit_certificate_signatures_total: u64,
+    pub commit_qc_signatures_total: u64,
     /// Validator-set size for the latest commit certificate.
     #[norito(default)]
-    pub commit_certificate_validator_set_len: u64,
+    pub commit_qc_validator_set_len: u64,
     /// Total gossip fallback invocations (collectors exhausted).
     pub gossip_fallback_total: u64,
     /// Total BlockCreated drops due to locked QC gate.
@@ -4009,11 +4009,11 @@ struct SumeragiConsensusStatusPayload {
     commit_signatures_counted: u64,
     commit_signatures_set_b: u64,
     commit_signatures_required: u64,
-    commit_certificate_height: u64,
-    commit_certificate_view: u64,
-    commit_certificate_epoch: u64,
-    commit_certificate_signatures_total: u64,
-    commit_certificate_validator_set_len: u64,
+    commit_qc_height: u64,
+    commit_qc_view: u64,
+    commit_qc_epoch: u64,
+    commit_qc_signatures_total: u64,
+    commit_qc_validator_set_len: u64,
 }
 
 fn decode_field<'a, T: DecodeFromSlice<'a>>(
@@ -4353,11 +4353,11 @@ impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
             commit_signatures_counted,
             commit_signatures_set_b,
             commit_signatures_required,
-            commit_certificate_height,
-            commit_certificate_view,
-            commit_certificate_epoch,
-            commit_certificate_signatures_total,
-            commit_certificate_validator_set_len,
+            commit_qc_height,
+            commit_qc_view,
+            commit_qc_epoch,
+            commit_qc_signatures_total,
+            commit_qc_validator_set_len,
         ) = decode_commit_fields(bytes, &mut used)?;
 
         Ok((
@@ -4402,11 +4402,11 @@ impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
                 commit_signatures_counted,
                 commit_signatures_set_b,
                 commit_signatures_required,
-                commit_certificate_height,
-                commit_certificate_view,
-                commit_certificate_epoch,
-                commit_certificate_signatures_total,
-                commit_certificate_validator_set_len,
+                commit_qc_height,
+                commit_qc_view,
+                commit_qc_epoch,
+                commit_qc_signatures_total,
+                commit_qc_validator_set_len,
             },
             used,
         ))
@@ -4455,11 +4455,11 @@ impl From<&SumeragiConsensusStatus> for SumeragiConsensusStatusPayload {
             commit_signatures_counted: status.commit_signatures_counted,
             commit_signatures_set_b: status.commit_signatures_set_b,
             commit_signatures_required: status.commit_signatures_required,
-            commit_certificate_height: status.commit_certificate_height,
-            commit_certificate_view: status.commit_certificate_view,
-            commit_certificate_epoch: status.commit_certificate_epoch,
-            commit_certificate_signatures_total: status.commit_certificate_signatures_total,
-            commit_certificate_validator_set_len: status.commit_certificate_validator_set_len,
+            commit_qc_height: status.commit_qc_height,
+            commit_qc_view: status.commit_qc_view,
+            commit_qc_epoch: status.commit_qc_epoch,
+            commit_qc_signatures_total: status.commit_qc_signatures_total,
+            commit_qc_validator_set_len: status.commit_qc_validator_set_len,
         }
     }
 }
@@ -4507,11 +4507,11 @@ impl From<SumeragiConsensusStatusPayload> for SumeragiConsensusStatus {
             commit_signatures_counted: payload.commit_signatures_counted,
             commit_signatures_set_b: payload.commit_signatures_set_b,
             commit_signatures_required: payload.commit_signatures_required,
-            commit_certificate_height: payload.commit_certificate_height,
-            commit_certificate_view: payload.commit_certificate_view,
-            commit_certificate_epoch: payload.commit_certificate_epoch,
-            commit_certificate_signatures_total: payload.commit_certificate_signatures_total,
-            commit_certificate_validator_set_len: payload.commit_certificate_validator_set_len,
+            commit_qc_height: payload.commit_qc_height,
+            commit_qc_view: payload.commit_qc_view,
+            commit_qc_epoch: payload.commit_qc_epoch,
+            commit_qc_signatures_total: payload.commit_qc_signatures_total,
+            commit_qc_validator_set_len: payload.commit_qc_validator_set_len,
         }
     }
 }
@@ -5430,14 +5430,14 @@ fn build_sumeragi_status(metrics: &Metrics) -> SumeragiConsensusStatus {
         commit_signatures_counted: metrics.sumeragi_commit_signatures_counted.get(),
         commit_signatures_set_b: metrics.sumeragi_commit_signatures_set_b.get(),
         commit_signatures_required: metrics.sumeragi_commit_signatures_required.get(),
-        commit_certificate_height: metrics.sumeragi_commit_certificate_height.get(),
-        commit_certificate_view: metrics.sumeragi_commit_certificate_view.get(),
-        commit_certificate_epoch: metrics.sumeragi_commit_certificate_epoch.get(),
-        commit_certificate_signatures_total: metrics
-            .sumeragi_commit_certificate_signatures_total
+        commit_qc_height: metrics.sumeragi_commit_qc_height.get(),
+        commit_qc_view: metrics.sumeragi_commit_qc_view.get(),
+        commit_qc_epoch: metrics.sumeragi_commit_qc_epoch.get(),
+        commit_qc_signatures_total: metrics
+            .sumeragi_commit_qc_signatures_total
             .get(),
-        commit_certificate_validator_set_len: metrics
-            .sumeragi_commit_certificate_validator_set_len
+        commit_qc_validator_set_len: metrics
+            .sumeragi_commit_qc_validator_set_len
             .get(),
         gossip_fallback_total: metrics.sumeragi_gossip_fallback_total.get(),
         block_created_dropped_by_lock_total: metrics
@@ -6148,8 +6148,6 @@ pub struct Metrics {
     pub sumeragi_view_change_install_total: IntCounter,
     /// Sumeragi: view-change proof counters grouped by outcome (accepted|stale|rejected)
     pub sumeragi_view_change_proof_total: GenericGaugeVec<AtomicU64>,
-    /// Sumeragi: ExecutionQC assembled (cumulative)
-    pub sumeragi_exec_qc_assembled_total: IntCounter,
     /// Sumeragi: Witness-availability QC assembled (cumulative)
     pub sumeragi_wa_qc_assembled_total: IntCounter,
     /// Sumeragi: certificate size histogram (signatures per committed block)
@@ -6163,15 +6161,15 @@ pub struct Metrics {
     /// Sumeragi: required commit quorum size for the active topology.
     pub sumeragi_commit_signatures_required: GenericGauge<AtomicU64>,
     /// Sumeragi: latest commit certificate height (best-effort).
-    pub sumeragi_commit_certificate_height: GenericGauge<AtomicU64>,
+    pub sumeragi_commit_qc_height: GenericGauge<AtomicU64>,
     /// Sumeragi: latest commit certificate view (best-effort).
-    pub sumeragi_commit_certificate_view: GenericGauge<AtomicU64>,
+    pub sumeragi_commit_qc_view: GenericGauge<AtomicU64>,
     /// Sumeragi: latest commit certificate epoch (best-effort).
-    pub sumeragi_commit_certificate_epoch: GenericGauge<AtomicU64>,
+    pub sumeragi_commit_qc_epoch: GenericGauge<AtomicU64>,
     /// Sumeragi: signatures attached to the latest commit certificate.
-    pub sumeragi_commit_certificate_signatures_total: GenericGauge<AtomicU64>,
+    pub sumeragi_commit_qc_signatures_total: GenericGauge<AtomicU64>,
     /// Sumeragi: validator-set size for the latest commit certificate.
-    pub sumeragi_commit_certificate_validator_set_len: GenericGauge<AtomicU64>,
+    pub sumeragi_commit_qc_validator_set_len: GenericGauge<AtomicU64>,
     /// Sumeragi: redundant vote sends (cumulative)
     pub sumeragi_redundant_sends_total: IntCounter,
     /// Sumeragi: redundant vote sends by collector index (labeled by `idx`)
@@ -9712,10 +9710,10 @@ impl Default for Metrics {
         )
         .expect("Infallible");
         for label in [
-            "commit_certificate_hint",
+            "commit_qc_hint",
             "commit_checkpoint_pair_hint",
             "validator_checkpoint_hint",
-            "commit_certificate_history",
+            "commit_qc_history",
             "validator_checkpoint_history",
             "roster_sidecar",
             "commit_roster_journal",
@@ -9795,11 +9793,6 @@ impl Default for Metrics {
         for label in ["accepted", "stale", "rejected"] {
             let _ = sumeragi_view_change_proof_total.with_label_values(&[label]);
         }
-        let sumeragi_exec_qc_assembled_total = IntCounter::new(
-            "sumeragi_exec_qc_assembled_total",
-            "ExecutionQC assembled (cumulative)",
-        )
-        .expect("Infallible");
         let sumeragi_wa_qc_assembled_total = IntCounter::new(
             "sumeragi_wa_qc_assembled_total",
             "Witness-availability QC assembled (cumulative)",
@@ -9833,28 +9826,28 @@ impl Default for Metrics {
             "Commit-quorum size required by the active topology",
         )
         .expect("Infallible");
-        let sumeragi_commit_certificate_height = GenericGauge::<AtomicU64>::new(
-            "sumeragi_commit_certificate_height",
+        let sumeragi_commit_qc_height = GenericGauge::<AtomicU64>::new(
+            "sumeragi_commit_qc_height",
             "Latest commit certificate height (best-effort)",
         )
         .expect("Infallible");
-        let sumeragi_commit_certificate_view = GenericGauge::<AtomicU64>::new(
-            "sumeragi_commit_certificate_view",
+        let sumeragi_commit_qc_view = GenericGauge::<AtomicU64>::new(
+            "sumeragi_commit_qc_view",
             "Latest commit certificate view (best-effort)",
         )
         .expect("Infallible");
-        let sumeragi_commit_certificate_epoch = GenericGauge::<AtomicU64>::new(
-            "sumeragi_commit_certificate_epoch",
+        let sumeragi_commit_qc_epoch = GenericGauge::<AtomicU64>::new(
+            "sumeragi_commit_qc_epoch",
             "Latest commit certificate epoch (best-effort)",
         )
         .expect("Infallible");
-        let sumeragi_commit_certificate_signatures_total = GenericGauge::<AtomicU64>::new(
-            "sumeragi_commit_certificate_signatures_total",
+        let sumeragi_commit_qc_signatures_total = GenericGauge::<AtomicU64>::new(
+            "sumeragi_commit_qc_signatures_total",
             "Signatures attached to the latest commit certificate",
         )
         .expect("Infallible");
-        let sumeragi_commit_certificate_validator_set_len = GenericGauge::<AtomicU64>::new(
-            "sumeragi_commit_certificate_validator_set_len",
+        let sumeragi_commit_qc_validator_set_len = GenericGauge::<AtomicU64>::new(
+            "sumeragi_commit_qc_validator_set_len",
             "Validator-set size for the latest commit certificate",
         )
         .expect("Infallible");
@@ -12503,11 +12496,11 @@ impl Default for Metrics {
             sumeragi_commit_signatures_counted,
             sumeragi_commit_signatures_set_b,
             sumeragi_commit_signatures_required,
-            sumeragi_commit_certificate_height,
-            sumeragi_commit_certificate_view,
-            sumeragi_commit_certificate_epoch,
-            sumeragi_commit_certificate_signatures_total,
-            sumeragi_commit_certificate_validator_set_len,
+            sumeragi_commit_qc_height,
+            sumeragi_commit_qc_view,
+            sumeragi_commit_qc_epoch,
+            sumeragi_commit_qc_signatures_total,
+            sumeragi_commit_qc_validator_set_len,
             sumeragi_leader_index,
             sumeragi_highest_qc_height,
             sumeragi_locked_qc_height,
@@ -13029,18 +13022,17 @@ impl Default for Metrics {
             sumeragi_view_change_suggest_total,
             sumeragi_view_change_install_total,
             sumeragi_view_change_proof_total,
-            sumeragi_exec_qc_assembled_total,
             sumeragi_wa_qc_assembled_total,
             sumeragi_cert_size,
             sumeragi_commit_signatures_present,
             sumeragi_commit_signatures_counted,
             sumeragi_commit_signatures_set_b,
             sumeragi_commit_signatures_required,
-            sumeragi_commit_certificate_height,
-            sumeragi_commit_certificate_view,
-            sumeragi_commit_certificate_epoch,
-            sumeragi_commit_certificate_signatures_total,
-            sumeragi_commit_certificate_validator_set_len,
+            sumeragi_commit_qc_height,
+            sumeragi_commit_qc_view,
+            sumeragi_commit_qc_epoch,
+            sumeragi_commit_qc_signatures_total,
+            sumeragi_commit_qc_validator_set_len,
             sumeragi_redundant_sends_total,
             sumeragi_redundant_sends_by_collector,
             sumeragi_redundant_sends_by_peer,
@@ -16301,11 +16293,11 @@ mod test {
                 commit_signatures_counted: 5,
                 commit_signatures_set_b: 2,
                 commit_signatures_required: 5,
-                commit_certificate_height: 12,
-                commit_certificate_view: 4,
-                commit_certificate_epoch: 1,
-                commit_certificate_signatures_total: 5,
-                commit_certificate_validator_set_len: 7,
+                commit_qc_height: 12,
+                commit_qc_view: 4,
+                commit_qc_epoch: 1,
+                commit_qc_signatures_total: 5,
+                commit_qc_validator_set_len: 7,
                 gossip_fallback_total: 2,
                 block_created_dropped_by_lock_total: 1,
                 block_created_hint_mismatch_total: 0,
@@ -16469,11 +16461,11 @@ mod test {
                 "commit_signatures_counted": 5,
                 "commit_signatures_set_b": 2,
                 "commit_signatures_required": 5,
-                "commit_certificate_height": 12,
-                "commit_certificate_view": 4,
-                "commit_certificate_epoch": 1,
-                "commit_certificate_signatures_total": 5,
-                "commit_certificate_validator_set_len": 7,
+                "commit_qc_height": 12,
+                "commit_qc_view": 4,
+                "commit_qc_epoch": 1,
+                "commit_qc_signatures_total": 5,
+                "commit_qc_validator_set_len": 7,
                 "gossip_fallback_total": 2,
                 "block_created_dropped_by_lock_total": 1,
                 "block_created_hint_mismatch_total": 0,
@@ -16624,11 +16616,11 @@ mod test {
                 "commit_signatures_counted": 5,
                 "commit_signatures_set_b": 2,
                 "commit_signatures_required": 5,
-                "commit_certificate_height": 12,
-                "commit_certificate_view": 4,
-                "commit_certificate_epoch": 1,
-                "commit_certificate_signatures_total": 5,
-                "commit_certificate_validator_set_len": 7,
+                "commit_qc_height": 12,
+                "commit_qc_view": 4,
+                "commit_qc_epoch": 1,
+                "commit_qc_signatures_total": 5,
+                "commit_qc_validator_set_len": 7,
                 "gossip_fallback_total": 2,
                 "block_created_dropped_by_lock_total": 1,
                 "block_created_hint_mismatch_total": 0,

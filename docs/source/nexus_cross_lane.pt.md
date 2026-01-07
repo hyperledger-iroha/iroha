@@ -70,7 +70,7 @@ Essas structs ja derivam `NoritoSerialize`/`NoritoDeserialize`, entao podem ser 
 ### `LaneRelayEnvelope`
 
 `LaneRelayEnvelope` (ver `crates/iroha_data_model/src/nexus/relay.rs`) empacota o `BlockHeader`
-da lane, um `ExecutionQcRecord` opcional, um hash opcional de `DaCommitmentBundle`, o
+da lane, um `commit QC (`Qc`)` opcional, um hash opcional de `DaCommitmentBundle`, o
 `LaneBlockCommitment` completo e o contador de bytes RBC por lane. O envelope armazena um
 `settlement_hash` derivado por Norito (via `compute_settlement_hash`) para que os receptores
 validem o payload de settlement antes de encaminha-lo ao merge ledger. Chamadores devem rejeitar

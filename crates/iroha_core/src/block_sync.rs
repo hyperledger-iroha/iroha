@@ -8,10 +8,10 @@ use std::{
 };
 
 use iroha_config::parameters::actual::{BlockSync as Config, ConsensusMode};
-use iroha_crypto::HashOf;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     block::{BlockHeader, SignedBlock},
-    consensus::{CommitCertificate, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
+    consensus::{Qc, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
     prelude::*,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
@@ -28,7 +28,7 @@ use crate::{
     sumeragi::{
         SumeragiHandle,
         consensus::{
-            CommitAggregate, NPOS_TAG, PERMISSIONED_TAG, Phase, Qc, ValidatorIndex, qc_signer_count,
+            QcAggregate, NPOS_TAG, PERMISSIONED_TAG, Phase, ValidatorIndex, qc_signer_count,
         },
         network_topology::Topology,
         stake_snapshot::CommitStakeSnapshot,
@@ -348,6 +348,8 @@ impl BlockSynchronizer {
         mode_tag: &str,
         validator_set: Vec<PeerId>,
         block_hash: HashOf<BlockHeader>,
+        parent_state_root: Hash,
+        post_state_root: Hash,
         height: u64,
         view: u64,
         epoch: u64,
@@ -369,15 +371,17 @@ impl BlockSynchronizer {
         Some(Qc {
             phase: Phase::Commit,
             subject_block_hash: block_hash,
+            parent_state_root,
+            post_state_root,
             height,
             view,
             epoch,
             mode_tag: mode_tag.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set,
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap,
                 bls_aggregate_signature: aggregate_signature,
             },
@@ -405,6 +409,8 @@ impl BlockSynchronizer {
                 &record.mode_tag,
                 record.validator_set.clone(),
                 block_hash,
+                record.parent_state_root,
+                record.post_state_root,
                 record.height,
                 record.view,
                 record.epoch,
@@ -850,7 +856,7 @@ mod roster_metadata_tests {
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_data_model::{
         block::BlockHeader,
-        consensus::{CommitCertificate, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
+        consensus::{Qc, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
         peer::PeerId,
     };
     use nonzero_ext::nonzero;
@@ -858,7 +864,7 @@ mod roster_metadata_tests {
     use super::*;
     use crate::{prelude::World, query::store::LiveQueryStore, sumeragi::status};
 
-    fn sample_roster_artifacts() -> (CommitCertificate, ValidatorSetCheckpoint) {
+    fn sample_roster_artifacts() -> (Qc, ValidatorSetCheckpoint) {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let block_hash = header.hash();
         let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -866,18 +872,21 @@ mod roster_metadata_tests {
         let roster = vec![peer];
         let signers_bitmap = vec![0b0000_0001];
         let bls_aggregate_signature = vec![0xAA; 96];
-        let commit_certificate = CommitCertificate {
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+        let commit_qc = Qc {
             phase: Phase::Commit,
             subject_block_hash: block_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height: 1,
             view: 0,
             epoch: 0,
             mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&roster),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: roster.clone(),
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: signers_bitmap.clone(),
                 bls_aggregate_signature: bls_aggregate_signature.clone(),
             },
@@ -891,7 +900,7 @@ mod roster_metadata_tests {
             VALIDATOR_SET_HASH_VERSION_V1,
             None,
         );
-        (commit_certificate, checkpoint)
+        (commit_qc, checkpoint)
     }
 
     #[test]
@@ -904,11 +913,11 @@ mod roster_metadata_tests {
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
         );
-        let (commit_certificate, checkpoint) = sample_roster_artifacts();
-        let block_hash = commit_certificate.subject_block_hash;
-        let roster = commit_certificate.validator_set.clone();
+        let (commit_qc, checkpoint) = sample_roster_artifacts();
+        let block_hash = commit_qc.subject_block_hash;
+        let roster = commit_qc.validator_set.clone();
         state.commit_roster_journal.write().upsert(
-            commit_certificate.clone(),
+            commit_qc.clone(),
             checkpoint.clone(),
             None,
         );
@@ -916,21 +925,21 @@ mod roster_metadata_tests {
         let metadata =
             super::message::roster_metadata_from_state(&state, kura.as_ref(), 1, block_hash)
                 .expect("metadata should be available from journal");
-        assert_eq!(metadata.commit_certificate, Some(commit_certificate));
+        assert_eq!(metadata.commit_qc, Some(commit_qc));
         assert_eq!(metadata.validator_checkpoint, Some(checkpoint));
         assert_eq!(metadata.roster_snapshot().expect("roster"), roster);
     }
 
     #[test]
     fn effective_roster_metadata_prefers_incoming() {
-        let (commit_certificate, checkpoint) = sample_roster_artifacts();
+        let (commit_qc, checkpoint) = sample_roster_artifacts();
         let incoming = RosterMetadata {
-            commit_certificate: Some(commit_certificate.clone()),
+            commit_qc: Some(commit_qc.clone()),
             validator_checkpoint: None,
             stake_snapshot: None,
         };
         let fallback = RosterMetadata {
-            commit_certificate: None,
+            commit_qc: None,
             validator_checkpoint: Some(checkpoint),
             stake_snapshot: None,
         };
@@ -941,14 +950,14 @@ mod roster_metadata_tests {
 
     #[test]
     fn effective_roster_metadata_falls_back_when_incoming_empty() {
-        let (_commit_certificate, checkpoint) = sample_roster_artifacts();
+        let (_commit_qc, checkpoint) = sample_roster_artifacts();
         let incoming = RosterMetadata {
-            commit_certificate: None,
+            commit_qc: None,
             validator_checkpoint: None,
             stake_snapshot: None,
         };
         let fallback = RosterMetadata {
-            commit_certificate: None,
+            commit_qc: None,
             validator_checkpoint: Some(checkpoint.clone()),
             stake_snapshot: None,
         };
@@ -961,7 +970,7 @@ mod roster_metadata_tests {
     #[test]
     fn effective_roster_metadata_returns_none_when_empty() {
         let incoming = RosterMetadata {
-            commit_certificate: None,
+            commit_qc: None,
             validator_checkpoint: None,
             stake_snapshot: None,
         };
@@ -992,13 +1001,16 @@ mod qc_build_tests {
         view: u64,
         epoch: u64,
     ) -> Vec<u8> {
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
         let vote = crate::sumeragi::consensus::Vote {
             phase,
             block_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             height,
             view,
             epoch,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
@@ -1055,6 +1067,7 @@ mod qc_build_tests {
         let height = 1;
         let view = 0;
         let epoch = 0;
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
         let mut signers = BTreeSet::new();
         signers.insert(ValidatorIndex::try_from(0).expect("index 0"));
         signers.insert(ValidatorIndex::try_from(1).expect("index 1"));
@@ -1075,6 +1088,8 @@ mod qc_build_tests {
             mode_tag,
             peers.clone(),
             block_hash,
+            zero_root,
+            zero_root,
             height,
             view,
             epoch,
@@ -1087,6 +1102,8 @@ mod qc_build_tests {
             mode_tag,
             peers.clone(),
             block_hash,
+            zero_root,
+            zero_root,
             height,
             view,
             epoch,
@@ -1104,6 +1121,8 @@ mod qc_build_tests {
             mode_tag,
             peers,
             block_hash,
+            zero_root,
+            zero_root,
             height,
             view,
             epoch,
@@ -1147,11 +1166,14 @@ mod qc_build_tests {
             &topology,
             &keypairs,
         );
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
         status::record_precommit_signers(status::PrecommitSignerRecord {
             block_hash,
             height,
             view,
             epoch: 0,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             signers: signers.clone(),
             roster_len: topology.as_ref().len(),
             mode_tag: mode_tag.to_string(),
@@ -1199,11 +1221,14 @@ mod qc_build_tests {
             &topology,
             &keypairs,
         );
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
         status::record_precommit_signers(status::PrecommitSignerRecord {
             block_hash,
             height,
             view,
             epoch,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
             signers: signers.clone(),
             roster_len: topology.as_ref().len(),
             mode_tag: mode_tag.to_string(),
@@ -1228,7 +1253,7 @@ pub mod message {
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     pub struct RosterMetadata {
         /// Optional commit certificate for the block.
-        pub commit_certificate: Option<CommitCertificate>,
+        pub commit_qc: Option<Qc>,
         /// Optional validator checkpoint for the block.
         pub validator_checkpoint: Option<ValidatorSetCheckpoint>,
         /// Optional stake snapshot aligned to the validator set.
@@ -1239,7 +1264,7 @@ pub mod message {
 
     impl RosterMetadata {
         fn validator_set(&self) -> Option<&[PeerId]> {
-            self.commit_certificate
+            self.commit_qc
                 .as_ref()
                 .map(|cert| cert.validator_set.as_slice())
                 .or_else(|| {
@@ -1251,7 +1276,7 @@ pub mod message {
 
         #[cfg(test)]
         pub(crate) fn roster_snapshot(&self) -> Option<Vec<PeerId>> {
-            self.commit_certificate
+            self.commit_qc
                 .as_ref()
                 .map(|cert| cert.validator_set.clone())
                 .or_else(|| {
@@ -1368,7 +1393,7 @@ pub mod message {
     ) -> Option<RosterMetadata> {
         if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
             return Some(RosterMetadata {
-                commit_certificate: Some(snapshot.commit_certificate),
+                commit_qc: Some(snapshot.commit_qc),
                 validator_checkpoint: Some(snapshot.validator_checkpoint),
                 stake_snapshot: snapshot.stake_snapshot,
             });
@@ -1388,7 +1413,7 @@ pub mod message {
             }
         }) {
             return Some(RosterMetadata {
-                commit_certificate: meta.commit_certificate,
+                commit_qc: meta.commit_qc,
                 validator_checkpoint: meta.validator_checkpoint,
                 stake_snapshot: meta.stake_snapshot,
             });
@@ -1396,27 +1421,27 @@ pub mod message {
 
         if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
             return Some(RosterMetadata {
-                commit_certificate: Some(snapshot.commit_certificate),
+                commit_qc: Some(snapshot.commit_qc),
                 validator_checkpoint: Some(snapshot.validator_checkpoint),
                 stake_snapshot: snapshot.stake_snapshot,
             });
         }
 
-        let commit_certificate = status::commit_certificate_history()
+        let commit_qc = status::commit_qc_history()
             .into_iter()
             .find(|cert| cert.height == block_height && cert.subject_block_hash == block_hash);
         let validator_checkpoint = status::validator_checkpoint_history()
             .into_iter()
             .find(|chk| chk.height == block_height && chk.block_hash == block_hash);
 
-        match (commit_certificate, validator_checkpoint) {
+        match (commit_qc, validator_checkpoint) {
             (Some(cert), checkpoint) => Some(RosterMetadata {
-                commit_certificate: Some(cert),
+                commit_qc: Some(cert),
                 validator_checkpoint: checkpoint,
                 stake_snapshot: None,
             }),
             (None, Some(checkpoint)) => Some(RosterMetadata {
-                commit_certificate: None,
+                commit_qc: None,
                 validator_checkpoint: Some(checkpoint),
                 stake_snapshot: None,
             }),
@@ -1430,7 +1455,7 @@ pub mod message {
         fallback: Option<RosterMetadata>,
     ) -> Option<RosterMetadata> {
         let incoming_present = incoming.is_some_and(|meta| {
-            meta.commit_certificate.is_some() || meta.validator_checkpoint.is_some()
+            meta.commit_qc.is_some() || meta.validator_checkpoint.is_some()
         });
         if incoming_present {
             incoming.cloned()
@@ -1760,7 +1785,7 @@ pub mod message {
                                     hash,
                                 )
                                 .unwrap_or(RosterMetadata {
-                                    commit_certificate: None,
+                                    commit_qc: None,
                                     validator_checkpoint: None,
                                     stake_snapshot: None,
                                 })
@@ -1846,14 +1871,14 @@ pub mod message {
                         );
                         if let Some(metadata) = effective_roster_metadata(incoming_roster, fallback)
                         {
-                            msg.commit_certificate
-                                .clone_from(&metadata.commit_certificate);
+                            msg.commit_qc
+                                .clone_from(&metadata.commit_qc);
                             msg.validator_checkpoint
                                 .clone_from(&metadata.validator_checkpoint);
                             msg.stake_snapshot.clone_from(&metadata.stake_snapshot);
                         }
-                        if msg.commit_certificate.is_none() {
-                            msg.commit_certificate = incoming_qc
+                        if msg.commit_qc.is_none() {
+                            msg.commit_qc = incoming_qc
                                 .or_else(|| BlockSynchronizer::block_sync_qc_for(&block));
                         }
                         block_sync.sumeragi.incoming_block_message(
@@ -2117,7 +2142,7 @@ pub mod message {
                     qcs: vec![None, None],
                     rosters: vec![
                         RosterMetadata {
-                            commit_certificate: None,
+                            commit_qc: None,
                             validator_checkpoint: None,
                             stake_snapshot: None,
                         };
@@ -2149,7 +2174,7 @@ pub mod message {
                     qcs: vec![None, None],
                     rosters: vec![
                         RosterMetadata {
-                            commit_certificate: None,
+                            commit_qc: None,
                             validator_checkpoint: None,
                             stake_snapshot: None,
                         };
@@ -2189,7 +2214,7 @@ pub mod message {
                     peer: leader_peer_id,
                     qcs: Vec::new(),
                     rosters: vec![RosterMetadata {
-                        commit_certificate: None,
+                        commit_qc: None,
                         validator_checkpoint: None,
                         stake_snapshot: None,
                     }],
@@ -2217,7 +2242,7 @@ pub mod message {
                     qcs: vec![None, None],
                     rosters: vec![
                         RosterMetadata {
-                            commit_certificate: None,
+                            commit_qc: None,
                             validator_checkpoint: None,
                             stake_snapshot: None,
                         };
@@ -2344,13 +2369,16 @@ pub mod message {
             view: u64,
             epoch: u64,
         ) -> Vec<u8> {
+            let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
             let vote = crate::sumeragi::consensus::Vote {
                 phase,
                 block_hash,
+                parent_state_root: zero_root,
+                post_state_root: zero_root,
                 height,
                 view,
                 epoch,
-                highest_cert: None,
+                highest_qc: None,
                 signer: 0,
                 bls_sig: Vec::new(),
             };
@@ -2413,10 +2441,13 @@ pub mod message {
                 topology,
                 keypairs,
             );
+            let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
             BlockSynchronizer::qc_from_signers(
                 mode_tag,
                 topology.as_ref().to_vec(),
                 block_hash,
+                zero_root,
+                zero_root,
                 height,
                 view,
                 epoch,
@@ -2799,7 +2830,7 @@ pub mod message {
             rosters.insert(
                 block.hash(),
                 RosterMetadata {
-                    commit_certificate: None,
+                    commit_qc: None,
                     validator_checkpoint: Some(checkpoint),
                     stake_snapshot: None,
                 },
@@ -2962,12 +2993,15 @@ pub mod message {
                 &topology,
                 &[kp_leader.clone(), kp_proxy.clone()],
             );
+            let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
             crate::sumeragi::status::record_precommit_signers(
                 crate::sumeragi::status::PrecommitSignerRecord {
                     block_hash,
                     height: block.header().height().get(),
                     view: u64::from(block.header().view_change_index()),
                     epoch: 0,
+                    parent_state_root: zero_root,
+                    post_state_root: zero_root,
                     signers: commit_signers.clone(),
                     roster_len: topology.as_ref().len(),
                     mode_tag: mode_tag.to_string(),
@@ -3035,12 +3069,15 @@ pub mod message {
                 &topology,
                 &[kp_leader.clone(), kp_validator.clone()],
             );
+            let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
             crate::sumeragi::status::record_precommit_signers(
                 crate::sumeragi::status::PrecommitSignerRecord {
                     block_hash: block.hash(),
                     height: block.header().height().get(),
                     view: u64::from(block.header().view_change_index()),
                     epoch: 0,
+                    parent_state_root: zero_root,
+                    post_state_root: zero_root,
                     signers: recorded_signers,
                     roster_len: topology.as_ref().len(),
                     mode_tag: mode_tag.to_string(),
@@ -3126,12 +3163,15 @@ pub mod message {
                     kp_extra.clone(),
                 ],
             );
+            let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
             crate::sumeragi::status::record_precommit_signers(
                 crate::sumeragi::status::PrecommitSignerRecord {
                     block_hash: block.hash(),
                     height: block.header().height().get(),
                     view: u64::from(block.header().view_change_index()),
                     epoch: 0,
+                    parent_state_root: zero_root,
+                    post_state_root: zero_root,
                     signers: recorded_signers,
                     roster_len: topology.as_ref().len(),
                     mode_tag: mode_tag.to_string(),
@@ -3327,12 +3367,15 @@ pub mod message {
                     kp_extra.clone(),
                 ],
             );
+            let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
             crate::sumeragi::status::record_precommit_signers(
                 crate::sumeragi::status::PrecommitSignerRecord {
                     block_hash: block.hash(),
                     height: block.header().height().get(),
                     view: u64::from(block.header().view_change_index()),
                     epoch: 0,
+                    parent_state_root: zero_root,
+                    post_state_root: zero_root,
                     signers: recorded_signers,
                     roster_len: topology.as_ref().len(),
                     mode_tag: mode_tag.to_string(),

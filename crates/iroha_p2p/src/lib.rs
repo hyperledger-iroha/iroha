@@ -151,10 +151,6 @@ pub struct ConsensusConfigCaps {
     pub redundant_send_r: u8,
     /// Data availability enabled (RBC + availability QC gating).
     pub da_enabled: bool,
-    /// Execution QC gating enabled.
-    pub require_execution_qc: bool,
-    /// Execution QC persistence in WSV required before commit.
-    pub require_wsv_exec_qc: bool,
     /// Maximum RBC chunk size in bytes.
     pub rbc_chunk_max_bytes: u64,
     /// RBC session TTL in milliseconds.
@@ -181,7 +177,7 @@ pub struct ConsensusHandshakeCaps {
     pub proto_version: u32,
     /// Deterministic consensus fingerprint (blake2b-32 bytes).
     pub consensus_fingerprint: [u8; 32],
-    /// Deterministic runtime config summary (collectors/DA/ExecQC/RBC caps).
+    /// Deterministic runtime config summary (collectors/DA/RBC caps).
     pub config: ConsensusConfigCaps,
 }
 

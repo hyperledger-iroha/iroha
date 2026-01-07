@@ -2,7 +2,7 @@
 
 mod commands;
 mod evidence;
-mod exec;
+mod commit_qc;
 mod rbc;
 mod status;
 mod telemetry;

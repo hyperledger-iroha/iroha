@@ -89,7 +89,7 @@ cargo test -p integration_tests \
 
 - `sumeragi_adversarial_chunk_drop`: `sumeragi.debug.rbc.drop_every_nth_chunk = 2` を有効化し、リーダーが隔チャンクで欠落させた場合にコミットが停止することを確認。サマリ行は `sumeragi_adversarial::chunk_drop::{...}` として出力され、RBC セッション状態を含みます。
 - `sumeragi_adversarial_chunk_reorder`: `sumeragi.debug.rbc.shuffle_chunks = true` を有効化し、チャンク順序を入れ替えても DELIVER とコミットに影響しないことを実証。
-- `sumeragi_adversarial_witness_corruption`: `proof_policy = exec_qc` の下で `sumeragi.debug.rbc.corrupt_witness_ack = true` を有効化し、破損した ACK がコミット高さをブロックする一方で RBC セッションが完了することを確認。
+- `sumeragi_adversarial_witness_corruption`: `sumeragi.debug.rbc.corrupt_witness_ack = true` を有効化し、破損した ACK がコミット高さをブロックする一方で RBC セッションが完了することを確認。
 - `sumeragi_adversarial_duplicate_inits`: `sumeragi.debug.rbc.duplicate_inits = true` を用い、次ビューで重複提案ペイロードが DELIVER され、オペレーターサマリに現れることを検証。
 - `sumeragi_adversarial_chunk_drop_recovery`: 2 段階フロー。まず `drop_every_nth_chunk` を有効化してコレクタ停止を確認し、次にノブを無効化してネットワークを再起動し、誠実な振る舞いでコミットが再開することを確認。
 

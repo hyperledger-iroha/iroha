@@ -3483,10 +3483,10 @@ impl NetworkBuilder {
                 ["genesis", "public_key"],
                 genesis_key_pair.public_key().to_string(),
             )
-            // Keep consensus permissive for integration tests: disable precommit/Wsv Execution QC
-            // requirements so small networks can make progress even when peers start slowly.
+            // Keep consensus permissive for integration tests: disable precommit QC requirement
+            // so small networks can make progress even when peers start slowly.
             .write(["sumeragi", "require_precommit_qc"], false)
-            .write(["sumeragi", "require_wsv_exec_qc"], false);
+            ;
         base_layer = base_layer
             // Ensure BLS batching stays enabled so PoP-based peers can register and vote.
             .write(["pipeline", "signature_batch_max_bls"], 4i64)

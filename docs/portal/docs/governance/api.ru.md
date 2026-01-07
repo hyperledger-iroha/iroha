@@ -296,9 +296,9 @@ use iroha_data_model::block::consensus::EvidenceKind;
 let offences = [
     EvidenceKind::DoublePrepare,
     EvidenceKind::DoubleCommit,
-    EvidenceKind::InvalidCommitCertificate,
+    EvidenceKind::InvalidQc,
     EvidenceKind::InvalidProposal,
-    EvidenceKind::DoubleExecVote,
+    EvidenceKind::Censorship,
 ];
 
 for (expected, kind) in offences.iter().enumerate() {
@@ -307,9 +307,9 @@ for (expected, kind) in offences.iter().enumerate() {
 ```
 
 - **DoublePrepare/DoubleCommit** - валидатор подписал конфликтующие хэши для одного `(phase,height,view,epoch)`.
-- **DoubleExecVote** - конфликтные execution votes объявляют разные post-state roots.
-- **InvalidCommitCertificate** - агрегатор разослал commit certificate, чья форма не проходит детерминированные проверки (например, пустой signer bitmap).
+- **InvalidQc** - агрегатор разослал commit certificate, чья форма не проходит детерминированные проверки (например, пустой signer bitmap).
 - **InvalidProposal** - лидер предложил блок, который проваливает структурную валидацию (например, нарушает locked-chain rule).
+- **Censorship** — signed submission receipts show a transaction that was never proposed/committed.
 
 Операторы и инструменты могут просматривать и повторно рассылать payloads через:
 

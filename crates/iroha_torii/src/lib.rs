@@ -229,7 +229,6 @@ use iroha_data_model::{
     alias::AliasIndex,
     asset::{AssetDefinitionId, AssetId},
     block::{BlockHeader, proofs::BlockProofs},
-    consensus::ExecutionQcRecord,
     domain::DomainId,
     events::{
         EventBox,
@@ -360,8 +359,8 @@ pub use routing::{
 pub use routing::{
     handle_post_soranet_privacy_event, handle_post_soranet_privacy_share,
     handle_v1_kaigi_relay_detail, handle_v1_kaigi_relays, handle_v1_kaigi_relays_health,
-    handle_v1_kaigi_relays_sse, handle_v1_sumeragi_collectors, handle_v1_sumeragi_exec_qc,
-    handle_v1_sumeragi_exec_root, handle_v1_sumeragi_leader, handle_v1_sumeragi_pacemaker,
+    handle_v1_kaigi_relays_sse, handle_v1_sumeragi_collectors, handle_v1_sumeragi_commit_qc,
+    handle_v1_sumeragi_leader, handle_v1_sumeragi_pacemaker,
     handle_v1_sumeragi_params, handle_v1_sumeragi_phases, handle_v1_sumeragi_qc,
     handle_v1_sumeragi_rbc_delivered_height_view, handle_v1_sumeragi_rbc_sessions,
     handle_v1_sumeragi_rbc_status, handle_v1_sumeragi_status, handle_v1_sumeragi_status_sse,
@@ -6873,7 +6872,7 @@ async fn handler_sumeragi_checkpoints(
 }
 
 #[cfg(feature = "telemetry")]
-async fn handler_sumeragi_commit_certificates(
+async fn handler_sumeragi_commit_qcs(
     State(app): State<SharedAppState>,
     window: crate::NoritoQuery<routing::HistoryWindowQuery>,
     headers: axum::http::HeaderMap,
@@ -6908,7 +6907,7 @@ async fn handler_sumeragi_commit_certificates(
     }
     rate_limit_requests(&app, &key).await?;
     Ok(
-        routing::handle_v1_sumeragi_commit_certificates(window, accept)
+        routing::handle_v1_sumeragi_commit_qcs(window, accept)
             .await?
             .into_response(),
     )
@@ -7155,7 +7154,7 @@ async fn handler_sumeragi_key_lifecycle(
 }
 
 #[cfg(feature = "telemetry")]
-async fn handler_exec_root(
+async fn handler_commit_qc(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     accept: Option<utils::extractors::ExtractAccept>,
@@ -7178,7 +7177,7 @@ async fn handler_exec_root(
     let key = rate_limit_key(
         &headers,
         None,
-        "v1/sumeragi/exec_root",
+        "v1/sumeragi/commit_qc",
         app.api_token_enforced(),
     );
     if !app.rate_limiter.allow(&key).await {
@@ -7186,50 +7185,13 @@ async fn handler_exec_root(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    routing::handle_v1_sumeragi_exec_root(
+    routing::handle_v1_sumeragi_commit_qc(
         State(app.state.clone()),
         AxPath(hash),
         accept.map(|e| e.0),
     )
     .await
     .map(axum::response::IntoResponse::into_response)
-}
-
-#[cfg(feature = "telemetry")]
-async fn handler_exec_qc(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    accept: Option<utils::extractors::ExtractAccept>,
-    AxPath(hash): AxPath<String>,
-) -> Result<AxResponse, Error> {
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        None,
-        "v1/sumeragi/exec_qc",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    routing::handle_v1_sumeragi_exec_qc(State(app.state.clone()), AxPath(hash), accept.map(|e| e.0))
-        .await
-        .map(axum::response::IntoResponse::into_response)
 }
 // ---------------- Contracts/VK POST handlers ----------------
 
@@ -10179,12 +10141,12 @@ const LEDGER_HEADER_PAGE_CAP: u64 = 512;
 struct StateRootResponse {
     height: u64,
     block_hash: HashOf<BlockHeader>,
-    /// Execution state root if available (from exec QC or result Merkle root).
+    /// State root if available (from commit QC or result Merkle root).
     state_root: iroha_crypto::Hash,
-    /// Source of the state root for observability (`execution_qc` or `result_merkle_root`).
+    /// Source of the state root for observability (`commit_qc` or `result_merkle_root`).
     source: String,
-    /// Execution QC payload when available for attestation (subject hash, bitmap, aggregate sig).
-    exec_qc: Option<iroha_data_model::consensus::ExecutionQcRecord>,
+    /// Commit QC payload when available for attestation (subject hash, bitmap, aggregate sig).
+    commit_qc: Option<iroha_data_model::consensus::Qc>,
 }
 
 #[derive(
@@ -10199,7 +10161,7 @@ struct StateProofResponse {
     height: u64,
     block_hash: HashOf<BlockHeader>,
     state_root: iroha_crypto::Hash,
-    exec_qc: iroha_data_model::consensus::ExecutionQcRecord,
+    commit_qc: iroha_data_model::consensus::Qc,
 }
 
 async fn handler_ledger_headers(
@@ -10301,23 +10263,14 @@ async fn handler_ledger_state_root(
         )));
     };
     let block_hash = block.hash();
-    let exec_qc = view.world.exec_qcs().get(&block_hash).cloned();
-    let exec_root = view.world.exec_roots().get(&block_hash).copied();
-    let payload = if let Some(qc) = exec_qc {
+    let commit_qc = view.world.commit_qcs().get(&block_hash).cloned();
+    let payload = if let Some(qc) = commit_qc {
         StateRootResponse {
             height,
             block_hash,
             state_root: qc.post_state_root,
-            source: "execution_qc".to_owned(),
-            exec_qc: Some(qc),
-        }
-    } else if let Some(root) = exec_root {
-        StateRootResponse {
-            height,
-            block_hash,
-            state_root: root,
-            source: "execution_qc".to_owned(),
-            exec_qc: None,
+            source: "commit_qc".to_owned(),
+            commit_qc: Some(qc),
         }
     } else if let Some(result_root) = block.header().result_merkle_root() {
         StateRootResponse {
@@ -10325,7 +10278,7 @@ async fn handler_ledger_state_root(
             block_hash,
             state_root: iroha_crypto::Hash::prehashed(*result_root.as_ref()),
             source: "result_merkle_root".to_owned(),
-            exec_qc: None,
+            commit_qc: None,
         }
     } else {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -10379,10 +10332,10 @@ async fn handler_ledger_state_proof(
         )));
     };
     let block_hash = block.hash();
-    // Ledger state proof requires a persisted ExecutionQC; avoid placeholder synthesis.
-    let exec_qc = view
+    // Ledger state proof requires a persisted commit QC; avoid placeholder synthesis.
+    let commit_qc = view
         .world
-        .exec_qcs()
+        .commit_qcs()
         .get(&block_hash)
         .cloned()
         .ok_or_else(|| {
@@ -10393,8 +10346,8 @@ async fn handler_ledger_state_proof(
     let payload = StateProofResponse {
         height,
         block_hash,
-        state_root: exec_qc.post_state_root,
-        exec_qc,
+        state_root: commit_qc.post_state_root,
+        commit_qc,
     };
 
     match format {
@@ -11006,7 +10959,7 @@ impl Torii {
                 )
                 .route(
                     "/v1/sumeragi/commit-certificates",
-                    get(handler_sumeragi_commit_certificates),
+                    get(handler_sumeragi_commit_qcs),
                 )
                 .route(
                     "/v1/bridge/finality/{height}",
@@ -11035,8 +10988,7 @@ impl Torii {
                 .route("/v1/sumeragi/telemetry", get(handler_sumeragi_telemetry))
                 .route("/v1/sumeragi/params", get(handler_sumeragi_params))
                 .route("/v1/sumeragi/rbc/sessions", get(handler_rbc_sessions))
-                .route("/v1/sumeragi/exec_root/{hash}", get(handler_exec_root))
-                .route("/v1/sumeragi/exec_qc/{hash}", get(handler_exec_qc))
+                .route("/v1/sumeragi/commit_qc/{hash}", get(handler_commit_qc))
                 .route("/v1/sumeragi/collectors", get(handler_sumeragi_collectors));
 
             let sumeragi = sumeragi
@@ -14246,15 +14198,13 @@ pub(crate) mod tests_runtime_handlers {
         query::store::LiveQueryStore,
         sumeragi::{
             consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage},
-            status::record_commit_certificate,
+            status::record_commit_qc,
         },
     };
     use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
         block::{BlockSignature, SignedBlock},
-        consensus::{
-            CommitAggregate, CommitCertificate, ExecutionQcRecord, VALIDATOR_SET_HASH_VERSION_V1,
-        },
+        consensus::{QcAggregate, Qc, VALIDATOR_SET_HASH_VERSION_V1},
         nexus::{AxtPolicySnapshot, AxtRejectReason, DataSpaceId, LaneId},
         peer::{Peer, PeerId},
         soranet::privacy_metrics::{
@@ -14271,7 +14221,7 @@ pub(crate) mod tests_runtime_handlers {
     use crate::{
         routing::{
             ActivateInstanceDto, DeployContractDto, RegisterContractCodeDto,
-            handle_v1_sumeragi_commit_certificates,
+            handle_v1_sumeragi_commit_qcs,
         },
         utils::extractors::NoritoJson,
     };
@@ -15193,83 +15143,97 @@ pub(crate) mod tests_runtime_handlers {
         hash
     }
 
-    fn sample_exec_qc_record(
+    fn sample_commit_qc(
         block_hash: HashOf<BlockHeader>,
         post_state_root: iroha_crypto::Hash,
         height: u64,
         view: u64,
         epoch: u64,
-    ) -> ExecutionQcRecord {
+    ) -> Qc {
         let chain_id: ChainId = "chain".parse().expect("chain id");
         let parent_state_root = iroha_crypto::Hash::prehashed([0x11; 32]);
         let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let vote = iroha_core::sumeragi::consensus::ExecVote {
+        let vote = Vote {
+            phase: Phase::Commit,
             block_hash,
             parent_state_root,
             post_state_root,
             height,
             view,
             epoch,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
-        let preimage = iroha_core::sumeragi::consensus::bls_preimage::exec_vote(
-            &chain_id,
-            PERMISSIONED_TAG,
-            &vote,
-        );
+        let preimage = vote_preimage(&chain_id, PERMISSIONED_TAG, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         let sig_bytes = signature.payload().to_vec();
         let sig_refs = vec![sig_bytes.as_slice()];
         let aggregate_signature =
             iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate signatures");
 
-        ExecutionQcRecord {
+        let peer_id = PeerId::from(keypair.public_key().clone());
+        let validator_set = vec![peer_id];
+        Qc {
+            phase: Phase::Commit,
             subject_block_hash: block_hash,
             parent_state_root,
             post_state_root,
             height,
             view,
             epoch,
-            signers_bitmap: vec![0b0000_0001],
-            bls_aggregate_signature: aggregate_signature,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: QcAggregate {
+                signers_bitmap: vec![0b0000_0001],
+                bls_aggregate_signature: aggregate_signature,
+            },
         }
     }
 
-    fn record_commit_cert(height: u64) -> CommitCertificate {
+    fn record_commit_cert(height: u64) -> Qc {
         let chain_id: ChainId = "chain".parse().expect("chain id");
         let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::from(keypair.public_key().clone());
         let block_hash = HashOf::from_untyped_unchecked(Hash::prehashed([height as u8; 32]));
+        let parent_state_root = iroha_crypto::Hash::prehashed([0x22; 32]);
+        let post_state_root = iroha_crypto::Hash::prehashed([0x33; 32]);
         let vote = Vote {
             phase: Phase::Commit,
             block_hash,
+            parent_state_root,
+            post_state_root,
             height,
             view: 0,
             epoch: 0,
-            highest_cert: None,
+            highest_qc: None,
             signer: 0,
             bls_sig: Vec::new(),
         };
         let preimage = vote_preimage(&chain_id, PERMISSIONED_TAG, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
-        let cert = CommitCertificate {
+        let cert = Qc {
             phase: Phase::Commit,
             height,
             subject_block_hash: block_hash,
+            parent_state_root,
+            post_state_root,
             view: 0,
             epoch: 0,
             mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_cert: None,
+            highest_qc: None,
             validator_set_hash: HashOf::new(&vec![peer_id.clone()]),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set: vec![peer_id],
-            aggregate: CommitAggregate {
+            aggregate: QcAggregate {
                 signers_bitmap: vec![0b0000_0001],
                 bls_aggregate_signature: signature.payload().to_vec(),
             },
         };
-        record_commit_certificate(cert.clone());
+        record_commit_qc(cert.clone());
         cert
     }
 
@@ -15332,12 +15296,12 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn commit_certificate_window_clamped() {
+    async fn commit_qc_window_clamped() {
         let high = 10_000;
         let latest = record_commit_cert(high + 1);
         let older = record_commit_cert(high);
 
-        let resp = handle_v1_sumeragi_commit_certificates(
+        let resp = handle_v1_sumeragi_commit_qcs(
             crate::NoritoQuery(routing::HistoryWindowQuery {
                 from: Some(high + 1),
                 limit: Some(1),
@@ -15349,12 +15313,12 @@ pub(crate) mod tests_runtime_handlers {
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("bytes");
-        let certs: Vec<CommitCertificate> =
+        let certs: Vec<Qc> =
             norito::json::from_slice(&bytes).expect("decode certs json");
         assert_eq!(certs.len(), 1);
         assert_eq!(certs[0].height, latest.height);
 
-        let norito_resp = handle_v1_sumeragi_commit_certificates(
+        let norito_resp = handle_v1_sumeragi_commit_qcs(
             crate::NoritoQuery(routing::HistoryWindowQuery {
                 from: Some(high + 1),
                 limit: Some(2),
@@ -15366,8 +15330,8 @@ pub(crate) mod tests_runtime_handlers {
         let norito_bytes = axum::body::to_bytes(norito_resp.into_body(), usize::MAX)
             .await
             .expect("bytes");
-        let archived = norito::from_bytes::<Vec<CommitCertificate>>(&norito_bytes).expect("arch");
-        let decoded: Vec<CommitCertificate> =
+        let archived = norito::from_bytes::<Vec<Qc>>(&norito_bytes).expect("arch");
+        let decoded: Vec<Qc> =
             norito::core::NoritoDeserialize::deserialize(archived);
         assert!(decoded.iter().any(|c| c.height == latest.height));
         assert!(decoded.iter().any(|c| c.height == older.height));
@@ -15442,7 +15406,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn ledger_state_root_includes_exec_root() {
+    async fn ledger_state_root_uses_result_merkle_root_when_no_commit_qc() {
         let app = mk_app_state_for_tests();
         let (mut block, _) = make_signed_block(1, None);
         let entry_hashes = [block
@@ -15501,7 +15465,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn ledger_state_proof_returns_exec_qc() {
+    async fn ledger_state_proof_returns_commit_qc() {
         let app = mk_app_state_for_tests();
         let (mut block, _) = make_signed_block(1, None);
         let entry_hashes = [block
@@ -15523,12 +15487,12 @@ pub(crate) mod tests_runtime_handlers {
         let block_hash = block.hash();
         store_block(&app, block);
 
-        let qc = sample_exec_qc_record(block_hash, expected_root, 1, 2, 0);
+        let qc = sample_commit_qc(block_hash, expected_root, 1, 2, 0);
         let mut app = app;
         let app_mut = Arc::get_mut(&mut app).expect("unique app state for test");
         Arc::get_mut(&mut app_mut.state)
             .expect("unique core state for test")
-            .insert_exec_qc_for_testing(block_hash, qc.clone());
+            .insert_commit_qc_for_testing(block_hash, qc.clone());
 
         let resp = handler_ledger_state_proof(
             State(app.clone()),
@@ -15544,12 +15508,15 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(proof.height, 1);
         assert_eq!(proof.block_hash, block_hash);
         assert_eq!(proof.state_root, expected_root);
-        assert_eq!(proof.exec_qc.subject_block_hash, block_hash);
-        assert_eq!(proof.exec_qc.post_state_root, expected_root);
-        assert_eq!(proof.exec_qc.signers_bitmap, qc.signers_bitmap);
+        assert_eq!(proof.commit_qc.subject_block_hash, block_hash);
+        assert_eq!(proof.commit_qc.post_state_root, expected_root);
         assert_eq!(
-            proof.exec_qc.bls_aggregate_signature,
-            qc.bls_aggregate_signature
+            proof.commit_qc.aggregate.signers_bitmap,
+            qc.aggregate.signers_bitmap
+        );
+        assert_eq!(
+            proof.commit_qc.aggregate.bls_aggregate_signature,
+            qc.aggregate.bls_aggregate_signature
         );
 
         let mut accept = HeaderMap::new();
@@ -15565,7 +15532,7 @@ pub(crate) mod tests_runtime_handlers {
             .expect("bytes");
         let archived = norito::from_bytes::<StateProofResponse>(&norito_bytes).expect("arch");
         let decoded: StateProofResponse = norito::core::NoritoDeserialize::deserialize(archived);
-        assert_eq!(decoded.exec_qc.post_state_root, expected_root);
+        assert_eq!(decoded.commit_qc.post_state_root, expected_root);
     }
 
     #[tokio::test]
@@ -15600,11 +15567,11 @@ pub(crate) mod tests_runtime_handlers {
         let block_hash = block.hash();
         store_block(&app, block);
 
-        let qc = sample_exec_qc_record(block_hash, expected_root, 1, 2, 0);
+        let qc = sample_commit_qc(block_hash, expected_root, 1, 2, 0);
         let mut app = Arc::into_inner(app).unwrap_or_else(|| panic!("unique app state for test"));
         let mut state =
             Arc::into_inner(app.state).unwrap_or_else(|| panic!("unique core state for test"));
-        state.insert_exec_qc_for_testing(block_hash, qc.clone());
+        state.insert_commit_qc_for_testing(block_hash, qc.clone());
         app.state = Arc::new(state);
         let app: SharedAppState = Arc::new(app);
 
@@ -15628,10 +15595,13 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(proof.height, 1);
         assert_eq!(proof.block_hash, block_hash);
         assert_eq!(proof.state_root, expected_root);
-        assert_eq!(proof.exec_qc.signers_bitmap, qc.signers_bitmap);
         assert_eq!(
-            proof.exec_qc.bls_aggregate_signature,
-            qc.bls_aggregate_signature
+            proof.commit_qc.aggregate.signers_bitmap,
+            qc.aggregate.signers_bitmap
+        );
+        assert_eq!(
+            proof.commit_qc.aggregate.bls_aggregate_signature,
+            qc.aggregate.bls_aggregate_signature
         );
 
         let request = Request::builder()
@@ -15653,7 +15623,7 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(proof.height, 1);
         assert_eq!(proof.block_hash, block_hash);
         assert_eq!(proof.state_root, expected_root);
-        assert_eq!(proof.exec_qc.post_state_root, expected_root);
+        assert_eq!(proof.commit_qc.post_state_root, expected_root);
     }
 
     #[tokio::test]
@@ -16145,56 +16115,12 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(feature = "telemetry")]
     #[tokio::test]
-    async fn telemetry_exec_root_and_qc_null_on_empty() {
+    async fn telemetry_commit_qc_null_on_empty() {
         let app = mk_app_state_for_tests();
         let headers = HeaderMap::new();
         let sample_hash = format!("{}", iroha_crypto::Hash::new(b"torii-telemetry-test"));
 
-        // exec_root
-        let resp = super::handler_exec_root(
-            State(app.clone()),
-            headers.clone(),
-            None,
-            axum::extract::Path(sample_hash.clone()),
-        )
-        .await
-        .expect("ok")
-        .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        let body = http_body_util::BodyExt::collect(resp.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
-        assert!(v.get("exec_root").is_some());
-        assert!(v.get("exec_root").unwrap().is_null());
-        let resp = super::handler_exec_root(
-            State(app.clone()),
-            headers.clone(),
-            Some(crate::utils::extractors::ExtractAccept(
-                HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
-            )),
-            axum::extract::Path(sample_hash.clone()),
-        )
-        .await
-        .expect("ok")
-        .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        let bytes = http_body_util::BodyExt::collect(resp.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
-        struct ExecRootWire {
-            block_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
-            exec_root: Option<iroha_crypto::Hash>,
-        }
-        let wire: ExecRootWire =
-            norito::decode_from_bytes(&bytes).expect("decode exec_root norito");
-        assert!(wire.exec_root.is_none());
-
-        // exec_qc
-        let resp = super::handler_exec_qc(
+        let resp = super::handler_commit_qc(
             State(app.clone()),
             headers,
             None,
@@ -16209,9 +16135,9 @@ pub(crate) mod tests_runtime_handlers {
             .unwrap()
             .to_bytes();
         let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
-        // When not present, handler responds with subject hash and nulls omitted; ensure keys present
         assert!(v.get("subject_block_hash").is_some());
-        let resp = super::handler_exec_qc(
+        assert!(v.get("commit_qc").is_some());
+        let resp = super::handler_commit_qc(
             State(app),
             HeaderMap::new(),
             Some(crate::utils::extractors::ExtractAccept(
@@ -16230,8 +16156,8 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .unwrap()
             .to_bytes();
-        let decoded_opt: Option<ExecutionQcRecord> =
-            norito::decode_from_bytes(&bytes).expect("decode exec_qc norito");
+        let decoded_opt: Option<Qc> =
+            norito::decode_from_bytes(&bytes).expect("decode commit_qc norito");
         assert!(decoded_opt.is_none());
     }
 
@@ -17032,7 +16958,6 @@ mod tests {
         ChainId, ValidationFail,
         account::AccountId,
         block::{BlockHeader, BlockSignature, SignedBlock},
-        consensus::ExecutionQcRecord,
         domain::DomainId,
         nexus::{AxtPolicySnapshot, AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId},
         proof::{ProofId, ProofRecord, ProofStatus},

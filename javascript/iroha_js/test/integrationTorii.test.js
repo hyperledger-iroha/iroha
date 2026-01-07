@@ -6840,17 +6840,7 @@ function assertEvidenceRecord(entry) {
       assertHexString(entry.block_hash_1, "double vote evidence block_hash_1");
       assertHexString(entry.block_hash_2, "double vote evidence block_hash_2");
       break;
-    case "DoubleExecVote":
-      assertNonNegativeInteger(entry.height, "double exec vote height must be non-negative");
-      assertNonNegativeInteger(entry.view, "double exec vote view must be non-negative");
-      assertNonNegativeInteger(entry.epoch, "double exec vote epoch must be non-negative");
-      assert.equal(typeof entry.signer, "string", "double exec vote signer must be a string");
-      assertHexString(entry.block_hash, "double exec vote block_hash");
-      assertHexString(entry.parent_state_root, "double exec vote parent_state_root");
-      assertHexString(entry.post_state_root_1, "double exec vote post_state_root_1");
-      assertHexString(entry.post_state_root_2, "double exec vote post_state_root_2");
-      break;
-    case "InvalidCommitCertificate":
+    case "InvalidQc":
       assertNonNegativeInteger(entry.height, "invalid QC height must be non-negative");
       assertNonNegativeInteger(entry.view, "invalid QC view must be non-negative");
       assertNonNegativeInteger(entry.epoch, "invalid QC epoch must be non-negative");
@@ -6865,6 +6855,16 @@ function assertEvidenceRecord(entry) {
       assertHexString(entry.subject_block_hash, "invalid proposal subject_block_hash");
       assertHexString(entry.payload_hash, "invalid proposal payload_hash");
       assert.equal(typeof entry.reason, "string", "invalid proposal entries must expose a reason");
+      break;
+    case "Censorship":
+      assertHexString(entry.tx_hash, "censorship tx_hash");
+      assertNonNegativeInteger(entry.receipt_count, "censorship receipt_count must be non-negative");
+      assertNonNegativeInteger(entry.min_height, "censorship min_height must be non-negative");
+      assertNonNegativeInteger(entry.max_height, "censorship max_height must be non-negative");
+      assert.ok(Array.isArray(entry.signers), "censorship signers must be an array");
+      entry.signers.forEach((signer) => {
+        assert.equal(typeof signer, "string", "censorship signer must be a string");
+      });
       break;
     default:
       if ("detail" in entry && entry.detail !== undefined && entry.detail !== null) {
