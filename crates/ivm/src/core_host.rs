@@ -325,9 +325,6 @@ impl CoreHost {
         if !state.expected_dsids().contains(&dsid) {
             return Err(VMError::PermissionDenied);
         }
-        if state.has_touch(&dsid) {
-            return Ok(0);
-        }
         let manifest_ptr = vm.register(11);
         let manifest = if manifest_ptr == 0 {
             axt::TouchManifest {
@@ -363,6 +360,10 @@ impl CoreHost {
             .policy_entry_for(dsid)
             .ok_or(VMError::PermissionDenied)?;
         self.reset_axt_proof_cache_for_slot(Some(policy.current_slot));
+        if policy.manifest_root.iter().all(|byte| *byte == 0) {
+            self.axt_proof_cache.remove(&dsid);
+            return Err(VMError::PermissionDenied);
+        }
 
         let proof_ptr = vm.register(11);
         if proof_ptr == 0 {

@@ -3371,31 +3371,33 @@ mod tests {
             0,
             0,
         );
-        let mut sblock = state.block(header);
-        let mut stx = sblock.transaction();
-        stx.world.governance_referenda_mut().insert(
-            rid.clone(),
-            GovernanceReferendumRecord {
-                h_start: 1,
-                h_end: 10,
-                status: GovernanceReferendumStatus::Open,
-                mode: GovernanceReferendumMode::Plain,
-            },
-        );
-        let mut locks = GovernanceLocksForReferendum::default();
-        locks.locks.insert(
-            ALICE_ID.clone(),
-            GovernanceLockRecord {
-                owner: ALICE_ID.clone(),
-                amount: 9,
-                slashed: 0,
-                expiry_height: 100,
-                direction: 0,
-                duration_blocks: 4,
-            },
-        );
-        stx.world.governance_locks_mut().insert(rid.clone(), locks);
-        stx.apply();
+        {
+            let mut sblock = state.block(header);
+            let mut stx = sblock.transaction();
+            stx.world.governance_referenda_mut().insert(
+                rid.clone(),
+                GovernanceReferendumRecord {
+                    h_start: 1,
+                    h_end: 10,
+                    status: GovernanceReferendumStatus::Open,
+                    mode: GovernanceReferendumMode::Plain,
+                },
+            );
+            let mut locks = GovernanceLocksForReferendum::default();
+            locks.locks.insert(
+                ALICE_ID.clone(),
+                GovernanceLockRecord {
+                    owner: ALICE_ID.clone(),
+                    amount: 9,
+                    slashed: 0,
+                    expiry_height: 100,
+                    direction: 0,
+                    duration_blocks: 4,
+                },
+            );
+            stx.world.governance_locks_mut().insert(rid.clone(), locks);
+            stx.apply();
+        }
 
         let res = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))
             .await
