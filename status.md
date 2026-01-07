@@ -1,6 +1,15 @@
 # Status
 
 ## Latest Updates
+- Roadmap: add Sumeragi unified QC (commit + execution) task breakdown for the first-release, no-backcompat design.
+- Integration tests: import QueryBuilderExt in connected_peers roster polling to fix execute_all usage.
+- Tests: not run (not requested).
+- Integration tests: align connected-peer expectations with commit-quorum size and wait for roster updates during unregister/re-register; accept terminal pipeline events even if queued is missed; use default pipeline timing and blocking submits in `multiple_blocks_created`; expand trigger failure error matching to include SmartContract invalid-parameter failures.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p integration_tests extra_functional::connected_peers::connected_peers_with_f_1_0_1 -- --nocapture` (timed out after 10m; test still running).
+- Sumeragi: treat DA availability as missing until RBC payload evidence arrives (ignore local payload matches) so commit reschedules record `MissingLocalData`.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core --lib sumeragi::main_loop::tests::commit_pipeline_reschedules_without_da_gate_blocking -- --nocapture`.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core` (timed out after 3h; no failures observed before timeout).
 - Client: clarify blocking submit waits for `Applied` and log applied block-event confirmations.
 - Integration tests: centralize env var mutation helpers in `integration_tests/src/sandbox.rs` and add EnvRestore roundtrip coverage.
 - Tests: `cargo test -p iroha_core pacemaker_ignores_stale_new_view_entries -- --nocapture` (x10; all pass).
@@ -1602,3 +1611,5 @@
 - Hardened the Norito bridge CastZkBallot encoder to normalize alias keys and enforce complete lock hints, with regression coverage for invalid inputs.
 - Normalized JS host CastZkBallot parsing to canonicalize public inputs (alias mapping, complete lock hints) with regression tests for invalid payloads.
 - Torii now normalizes ZK ballot public-input aliases and canonicalizes `root_hint`/`nullifier_hex` hints (including V1 endpoints), rejecting conflicts or invalid hex with new unit tests.
+- Retried trigger-failure submission in the notification integration test on transient Torii/consensus errors before asserting expected failure types.
+- Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 600s; compile finished; test `events::notification::trigger_completion_failure_reports_error` still running).
