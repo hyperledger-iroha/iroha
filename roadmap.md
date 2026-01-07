@@ -4,7 +4,7 @@ This roadmap enumerates the outstanding efforts required to ship the optional
 NPoS Sumeragi mode and keep the broader Nexus transition on track. For every task listed here we are preparing the first public release, so teams can design and implement with a clean slate. Completed
 items continue to live in `status.md`; only tasks that still need engineering
 work appear here.
-Latest sync: Governance ZK ballot hint hex normalization is standardized end-to-end (Torii + core, SDKs/CLI/bridges, optional `0x`/`blake2b32:` prefixes); RBC INIT/READY/DELIVER now bind roster hashes and INIT rebroadcasts go out even without cached chunks; RBC persistence now derives missing roster snapshots and READY rebroadcasts enforce roster-hash matching; DA gate now accepts local payload hashes; asset integration tests re-run (decimal/quantity/exchange) passed; integration-test revalidation still pending (see `status.md` for details).
+Latest sync: Governance ZK ballot hint formats are standardized to `root_hint`/`nullifier` across public inputs and BallotProof hex strings (optional `0x`/`blake2b32:` prefixes) with deprecated alias keys rejected, SDK/CLI/bridge updates, and refreshed docs; RBC INIT/READY/DELIVER now bind roster hashes and INIT rebroadcasts go out even without cached chunks; RBC persistence now derives missing roster snapshots and READY rebroadcasts enforce roster-hash matching; DA gate now accepts local payload hashes; asset integration tests re-run (decimal/quantity/exchange) passed; integration-test revalidation still pending (see `status.md` for details).
 
 The repository now serves two release lines:
 - **Iroha 2** — the self-hosted deployment track for organisations running

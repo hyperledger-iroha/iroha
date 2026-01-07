@@ -90,13 +90,15 @@ fn ensure_lock_hints_complete(map: &json::Map) -> Result<()> {
     Ok(())
 }
 
-fn normalize_public_input_aliases(map: &mut json::Map) -> Result<()> {
-    normalize_public_input_alias(map, "durationBlocks", "duration_blocks")?;
-    normalize_public_input_alias(map, "nullifierHex", "nullifier_hex")?;
-    normalize_public_input_alias(map, "rootHintHex", "root_hint")?;
-    normalize_public_input_alias(map, "rootHint", "root_hint")?;
+fn normalize_public_inputs(map: &mut json::Map) -> Result<()> {
+    reject_public_input_key(map, "durationBlocks", "duration_blocks")?;
+    reject_public_input_key(map, "root_hint_hex", "root_hint")?;
+    reject_public_input_key(map, "rootHintHex", "root_hint")?;
+    reject_public_input_key(map, "rootHint", "root_hint")?;
+    reject_public_input_key(map, "nullifier_hex", "nullifier")?;
+    reject_public_input_key(map, "nullifierHex", "nullifier")?;
     canonicalize_public_input_hex(map, "root_hint")?;
-    canonicalize_public_input_hex(map, "nullifier_hex")?;
+    canonicalize_public_input_hex(map, "nullifier")?;
     Ok(())
 }
 
@@ -115,21 +117,11 @@ fn canonicalize_public_input_hex(map: &mut json::Map, key: &str) -> Result<()> {
     Ok(())
 }
 
-fn normalize_public_input_alias(
-    map: &mut json::Map,
-    alias: &str,
-    canonical: &str,
-) -> Result<()> {
-    if !map.contains_key(alias) {
-        return Ok(());
-    }
-    if map.contains_key(canonical) {
+fn reject_public_input_key(map: &json::Map, key: &str, canonical: &str) -> Result<()> {
+    if map.contains_key(key) {
         return Err(eyre!(
-            "public inputs JSON cannot include both {alias} and {canonical}"
+            "public inputs JSON does not support {key}; use {canonical}"
         ));
-    }
-    if let Some(value) = map.remove(alias) {
-        map.insert(canonical.to_owned(), value);
     }
     Ok(())
 }
@@ -160,8 +152,8 @@ pub struct VoteArgs {
     #[arg(long)]
     pub direction: Option<String>,
     /// Optional 32-byte nullifier hint for ZK ballots (hex).
-    #[arg(long = "nullifier-hex")]
-    pub nullifier_hex: Option<String>,
+    #[arg(long = "nullifier")]
+    pub nullifier: Option<String>,
     /// Print only the compact summary line (suppresses raw JSON)
     #[arg(long, default_value_t = false)]
     pub summary_only: bool,
@@ -181,7 +173,7 @@ impl Run for VoteArgs {
             amount,
             duration_blocks,
             direction,
-            nullifier_hex,
+            nullifier,
             summary_only,
             no_summary,
         } = self;
@@ -203,7 +195,7 @@ impl Run for VoteArgs {
                     amount,
                     duration_blocks,
                     direction,
-                    nullifier_hex,
+                    nullifier,
                     summary_only,
                     no_summary,
                 };
@@ -267,8 +259,8 @@ pub struct VoteZkArgs {
     #[arg(long)]
     pub direction: Option<String>,
     /// Optional 32-byte nullifier hint derived from the proof commitment.
-    #[arg(long = "nullifier-hex")]
-    pub nullifier_hex: Option<String>,
+    #[arg(long = "nullifier")]
+    pub nullifier: Option<String>,
     /// Print only the compact summary line (suppresses raw JSON)
     #[arg(long, default_value_t = false)]
     pub summary_only: bool,
@@ -290,7 +282,7 @@ impl Run for VoteZkArgs {
         let public_obj = public
             .as_object_mut()
             .ok_or_else(|| eyre!("public inputs JSON must be an object"))?;
-        normalize_public_input_aliases(public_obj)?;
+        normalize_public_inputs(public_obj)?;
         if let Some(owner) = self.owner {
             public_obj.insert("owner".to_owned(), json_value(&owner)?);
         }
@@ -303,9 +295,9 @@ impl Run for VoteZkArgs {
         if let Some(direction) = self.direction {
             public_obj.insert("direction".to_owned(), json_value(&direction)?);
         }
-        if let Some(nullifier_hex) = self.nullifier_hex {
-            let canonical = canonicalize_hex32(&nullifier_hex)?;
-            public_obj.insert("nullifier_hex".to_owned(), json_value(&canonical)?);
+        if let Some(nullifier) = self.nullifier {
+            let canonical = canonicalize_hex32(&nullifier)?;
+            public_obj.insert("nullifier".to_owned(), json_value(&canonical)?);
         }
         ensure_lock_hints_complete(public_obj)?;
         let body = json_object(vec![
@@ -563,7 +555,7 @@ mod tests {
             election_id: "ref-zk".to_string(),
             proof_b64: "AAA=".to_string(),
             public_inputs_json: format!(
-                r#"{{"owner":"bob@wonderland","amount":"100","duration_blocks":256,"direction":"Nay","nullifier_hex":"{nullifier}"}}"#
+                r#"{{"owner":"bob@wonderland","amount":"100","duration_blocks":256,"direction":"Nay","nullifier":"{nullifier}"}}"#
             ),
         };
         let instruction: InstructionBox = InstructionBox::from(ballot);
@@ -592,7 +584,7 @@ mod tests {
         assert_eq!(summary.amount.as_deref(), Some("100"));
         assert_eq!(summary.duration_blocks.as_deref(), Some("256"));
         assert_eq!(summary.direction.as_deref(), Some("Nay"));
-        assert_eq!(summary.nullifier_hex.as_deref(), Some(nullifier.as_str()));
+        assert_eq!(summary.nullifier.as_deref(), Some(nullifier.as_str()));
 
         let line = format_vote_summary(&VoteSummaryInput {
             prefix: "vote-zk",
@@ -606,7 +598,7 @@ mod tests {
         });
         assert!(line.contains("fingerprint="));
         assert!(line.contains("owner=bob@wonderland"));
-        assert!(line.contains("nullifier_hex="));
+        assert!(line.contains("nullifier="));
 
         let instr = value
             .get("tx_instructions")
@@ -620,7 +612,7 @@ mod tests {
             Some("bob@wonderland")
         );
         assert_eq!(
-            instr.get("nullifier_hex").and_then(json::Value::as_str),
+            instr.get("nullifier").and_then(json::Value::as_str),
             Some(nullifier.as_str())
         );
     }
@@ -643,58 +635,44 @@ mod tests {
     }
 
     #[test]
-    fn normalize_public_input_aliases_maps_keys() {
+    fn normalize_public_inputs_canonicalizes_hex() {
         let mut map = json::Map::new();
         let root_raw = format!("0x{}", "Aa".repeat(32));
         let nullifier_raw = format!("blake2b32:{}", "BB".repeat(32));
         let root_expected = "aa".repeat(32);
         let nullifier_expected = "bb".repeat(32);
-        map.insert("durationBlocks".to_string(), json::Value::from(64u64));
-        map.insert(
-            "rootHintHex".to_string(),
-            json::Value::String(root_raw),
-        );
-        map.insert(
-            "nullifierHex".to_string(),
-            json::Value::String(nullifier_raw),
-        );
-        normalize_public_input_aliases(&mut map).expect("normalize aliases");
-        assert!(map.contains_key("duration_blocks"));
-        assert!(map.contains_key("root_hint"));
-        assert!(map.contains_key("nullifier_hex"));
-        assert!(!map.contains_key("durationBlocks"));
-        assert!(!map.contains_key("rootHintHex"));
-        assert!(!map.contains_key("nullifierHex"));
+        map.insert("root_hint".to_string(), json::Value::String(root_raw));
+        map.insert("nullifier".to_string(), json::Value::String(nullifier_raw));
+        normalize_public_inputs(&mut map).expect("normalize");
         assert_eq!(
             map.get("root_hint").and_then(json::Value::as_str),
             Some(root_expected.as_str())
         );
         assert_eq!(
-            map.get("nullifier_hex").and_then(json::Value::as_str),
+            map.get("nullifier").and_then(json::Value::as_str),
             Some(nullifier_expected.as_str())
         );
     }
 
     #[test]
-    fn normalize_public_input_aliases_rejects_conflicts() {
+    fn normalize_public_inputs_rejects_deprecated_keys() {
         let mut map = json::Map::new();
-        map.insert("rootHint".to_string(), json::Value::String("aa".repeat(32)));
         map.insert(
-            "root_hint".to_string(),
-            json::Value::String("bb".repeat(32)),
+            "nullifier_hex".to_string(),
+            json::Value::String("aa".repeat(32)),
         );
-        let err = normalize_public_input_aliases(&mut map).expect_err("alias conflict");
-        assert!(err.to_string().contains("rootHint"));
+        let err = normalize_public_inputs(&mut map).expect_err("deprecated key");
+        assert!(err.to_string().contains("nullifier_hex"));
     }
 
     #[test]
-    fn normalize_public_input_aliases_rejects_invalid_hex() {
+    fn normalize_public_inputs_rejects_invalid_hex() {
         let mut map = json::Map::new();
         map.insert(
             "root_hint".to_string(),
             json::Value::String("not-hex".to_string()),
         );
-        let err = normalize_public_input_aliases(&mut map).expect_err("invalid hex");
+        let err = normalize_public_inputs(&mut map).expect_err("invalid hex");
         assert!(err.to_string().contains("root_hint"));
     }
 }
@@ -862,7 +840,7 @@ struct VoteInstructionSummary {
     amount: Option<String>,
     duration_blocks: Option<String>,
     direction: Option<String>,
-    nullifier_hex: Option<String>,
+    nullifier: Option<String>,
 }
 
 fn annotate_vote_instructions(value: &mut json::Value) -> Result<Option<VoteInstructionSummary>> {
@@ -951,13 +929,13 @@ fn annotate_vote_instructions(value: &mut json::Value) -> Result<Option<VoteInst
                     );
                     summary.direction.get_or_insert(direction);
                 }
-                if let Some(nullifier_val) = hints.get("nullifier_hex") {
+                if let Some(nullifier_val) = hints.get("nullifier") {
                     let nullifier = stringify_json_value(nullifier_val);
                     map.insert(
-                        "nullifier_hex".to_owned(),
+                        "nullifier".to_owned(),
                         json::Value::String(nullifier.clone()),
                     );
-                    summary.nullifier_hex.get_or_insert(nullifier);
+                    summary.nullifier.get_or_insert(nullifier);
                 }
             }
         }
@@ -1061,8 +1039,8 @@ fn format_vote_summary(input: &VoteSummaryInput<'_>) -> String {
         if let Some(direction) = &summary.direction {
             parts.push(format!("direction={direction}"));
         }
-        if let Some(nullifier) = &summary.nullifier_hex {
-            parts.push(format!("nullifier_hex={nullifier}"));
+        if let Some(nullifier) = &summary.nullifier {
+            parts.push(format!("nullifier={nullifier}"));
         }
     }
     if !input.reason.is_empty() {

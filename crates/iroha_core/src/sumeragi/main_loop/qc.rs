@@ -69,6 +69,7 @@ impl Actor {
         let deferred = defer_qc_for_missing_block(
             self.block_payload_available_locally(block_hash),
             retry_window,
+            Some(retry_window),
             now,
             block_hash,
             height,
@@ -84,7 +85,7 @@ impl Actor {
         self.pending.missing_block_requests = requests;
         if deferred {
             if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
-                if stats.mark_view_change_if_due(now, retry_window) {
+                if stats.mark_view_change_if_due(now) {
                     let dwell_ms = now.saturating_duration_since(stats.first_seen).as_millis();
                     let since_last_ms = now
                         .saturating_duration_since(stats.last_requested)
@@ -176,6 +177,222 @@ impl Actor {
         _targets: usize,
         _dwell: Duration,
     ) {
+    }
+
+    pub(super) fn retry_missing_block_requests(&mut self, now: Instant) -> bool {
+        if self.pending.missing_block_requests.is_empty() {
+            return false;
+        }
+
+        let mut progress = false;
+        let pending_keys: Vec<_> = self
+            .pending
+            .missing_block_requests
+            .keys()
+            .cloned()
+            .collect();
+        for block_hash in pending_keys {
+            if self.block_payload_available_locally(block_hash) {
+                self.clear_missing_block_request(
+                    &block_hash,
+                    MissingBlockClearReason::PayloadAvailable,
+                );
+                progress = true;
+                continue;
+            }
+
+            let stats_snapshot = match self.pending.missing_block_requests.get(&block_hash) {
+                Some(stats) => stats.clone(),
+                None => continue,
+            };
+            let expected_epoch = self.epoch_for_height(stats_snapshot.height);
+            let mut signers = BTreeSet::new();
+            let topology = if let Some(qc) = super::cached_qc_for(
+                &self.qc_cache,
+                crate::sumeragi::consensus::Phase::Commit,
+                block_hash,
+                stats_snapshot.height,
+                stats_snapshot.view,
+                expected_epoch,
+            )
+            .or_else(|| {
+                super::cached_qc_for(
+                    &self.qc_cache,
+                    stats_snapshot.phase,
+                    block_hash,
+                    stats_snapshot.height,
+                    stats_snapshot.view,
+                    expected_epoch,
+                )
+            }) {
+                let topology = super::network_topology::Topology::new(qc.validator_set.clone());
+                let roster_len = topology.as_ref().len();
+                match super::qc_signer_indices(&qc, roster_len, roster_len) {
+                    Ok(parsed) => {
+                        signers = parsed.voting;
+                    }
+                    Err(err) => {
+                        warn!(
+                            height = stats_snapshot.height,
+                            view = stats_snapshot.view,
+                            phase = ?stats_snapshot.phase,
+                            block = ?block_hash,
+                            ?err,
+                            "failed to parse QC signer bitmap for missing-block retry"
+                        );
+                    }
+                }
+                topology
+            } else {
+                let (consensus_mode, _, _) =
+                    self.consensus_context_for_height(stats_snapshot.height);
+                let commit_topology = if matches!(
+                    stats_snapshot.phase,
+                    crate::sumeragi::consensus::Phase::NewView
+                ) {
+                    self.roster_for_new_view_with_mode(
+                        block_hash,
+                        stats_snapshot.height,
+                        stats_snapshot.view,
+                        consensus_mode,
+                    )
+                } else {
+                    self.roster_for_vote_with_mode(
+                        block_hash,
+                        stats_snapshot.height,
+                        stats_snapshot.view,
+                        consensus_mode,
+                    )
+                };
+                super::network_topology::Topology::new(commit_topology)
+            };
+
+            let retry_window = self
+                .pending
+                .missing_block_requests
+                .get(&block_hash)
+                .map(|stats| stats.retry_window)
+                .unwrap_or(stats_snapshot.retry_window);
+            let view_change_window = self
+                .pending
+                .missing_block_requests
+                .get(&block_hash)
+                .map(|stats| stats.view_change_window)
+                .unwrap_or(stats_snapshot.view_change_window);
+            let decision = super::plan_missing_block_fetch(
+                &mut self.pending.missing_block_requests,
+                block_hash,
+                stats_snapshot.height,
+                stats_snapshot.view,
+                stats_snapshot.phase,
+                &signers,
+                &topology,
+                now,
+                retry_window,
+                view_change_window,
+                self.config.missing_block_signer_fallback_attempts,
+            );
+
+            let (dwell, since_last_request, attempts) =
+                self.pending.missing_block_requests.get(&block_hash).map_or(
+                    (Duration::ZERO, Duration::ZERO, 0),
+                    |stats: &MissingBlockRequest| {
+                        (
+                            now.saturating_duration_since(stats.first_seen),
+                            now.saturating_duration_since(stats.last_requested),
+                            stats.attempts,
+                        )
+                    },
+                );
+            let dwell_ms = dwell.as_millis().try_into().unwrap_or(u64::MAX);
+            let since_last_ms = since_last_request
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX);
+            let retry_window_ms = retry_window.as_millis();
+            let targets_len = match &decision {
+                MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
+                _ => 0,
+            };
+
+            self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+            super::status::record_missing_block_fetch(targets_len, dwell_ms);
+
+            match decision {
+                MissingBlockFetchDecision::Requested {
+                    targets,
+                    target_kind,
+                } => {
+                    self.request_missing_block(block_hash, &targets);
+                    iroha_logger::info!(
+                        height = stats_snapshot.height,
+                        view = stats_snapshot.view,
+                        phase = ?stats_snapshot.phase,
+                        block = ?block_hash,
+                        targets = ?targets,
+                        target_kind = target_kind.label(),
+                        retry_window_ms,
+                        dwell_ms,
+                        since_last_ms,
+                        attempts,
+                        "retrying missing block fetch"
+                    );
+                    progress = true;
+                }
+                MissingBlockFetchDecision::NoTargets => {
+                    iroha_logger::warn!(
+                        height = stats_snapshot.height,
+                        view = stats_snapshot.view,
+                        phase = ?stats_snapshot.phase,
+                        block = ?block_hash,
+                        retry_window_ms,
+                        dwell_ms,
+                        since_last_ms,
+                        attempts,
+                        "unable to retry missing block fetch: no peers available"
+                    );
+                }
+                MissingBlockFetchDecision::Backoff => {
+                    iroha_logger::debug!(
+                        height = stats_snapshot.height,
+                        view = stats_snapshot.view,
+                        phase = ?stats_snapshot.phase,
+                        block = ?block_hash,
+                        retry_window_ms,
+                        dwell_ms,
+                        since_last_ms,
+                        attempts,
+                        "missing-block retry still in backoff"
+                    );
+                }
+            }
+
+            let mut view_change = None;
+            if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
+                if stats.mark_view_change_if_due(now) {
+                    view_change = Some((stats.height, stats.view, stats.attempts));
+                }
+            }
+            if let Some((height, view, attempts)) = view_change {
+                warn!(
+                    height,
+                    view,
+                    dwell_ms,
+                    since_last_ms,
+                    attempts,
+                    "missing block dwell exceeded view-change window; forcing view change"
+                );
+                self.trigger_view_change_with_cause(
+                    height,
+                    view,
+                    ViewChangeCause::MissingPayload,
+                );
+                progress = true;
+            }
+        }
+
+        self.update_missing_block_gauges();
+        progress
     }
 
     pub(super) fn clear_missing_block_request(
@@ -1053,6 +1270,76 @@ impl Actor {
         }
     }
 
+    pub(super) fn rehydrate_pending_from_kura_for_qc(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+    ) -> bool {
+        if self.pending.pending_blocks.contains_key(&qc.subject_block_hash) {
+            return true;
+        }
+        if self
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_some_and(|inflight| inflight.block_hash == qc.subject_block_hash)
+        {
+            return true;
+        }
+        if self
+            .pending
+            .pending_processing
+            .get()
+            .is_some_and(|hash| hash == qc.subject_block_hash)
+        {
+            return true;
+        }
+        let Some(height_nz) = self.kura.get_block_height_by_hash(qc.subject_block_hash) else {
+            return false;
+        };
+        let Some(block) = self.kura.get_block(height_nz) else {
+            return false;
+        };
+        let block_height = u64::try_from(height_nz.get()).unwrap_or(u64::MAX);
+        if block_height != qc.height {
+            warn!(
+                qc_height = qc.height,
+                block_height,
+                block = %qc.subject_block_hash,
+                "skipping pending rehydration: kura height mismatch"
+            );
+            return false;
+        }
+        let block_view = u64::from(block.header().view_change_index());
+        if block_view != qc.view {
+            warn!(
+                qc_height = qc.height,
+                qc_view = qc.view,
+                block_view,
+                block = %qc.subject_block_hash,
+                "skipping pending rehydration: kura view mismatch"
+            );
+            return false;
+        }
+        let payload_bytes = super::proposals::block_payload_bytes(&block);
+        let payload_hash = iroha_crypto::Hash::new(&payload_bytes);
+        let mut pending =
+            PendingBlock::new(block.as_ref().clone(), payload_hash, qc.height, qc.view);
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+            pending.commit_certificate_seen = true;
+            pending.commit_certificate_epoch = Some(qc.epoch);
+        }
+        pending.mark_kura_persisted();
+        self.pending
+            .pending_blocks
+            .insert(qc.subject_block_hash, pending);
+        self.clear_missing_block_request(
+            &qc.subject_block_hash,
+            MissingBlockClearReason::PayloadAvailable,
+        );
+        true
+    }
+
     pub(super) fn prune_precommit_votes_conflicting_with_lock(
         &mut self,
         lock: crate::sumeragi::consensus::QcHeaderRef,
@@ -1265,10 +1552,13 @@ impl Actor {
                 &mut self.pending.missing_block_requests,
                 qc.subject_block_hash,
                 qc.height,
+                qc.view,
+                qc.phase,
                 &signer_set,
                 &topology,
                 now,
                 retry_window,
+                Some(retry_window),
                 self.config.missing_block_signer_fallback_attempts,
             );
             let dwell = self
@@ -1369,6 +1659,7 @@ impl Actor {
             "cached validated QC"
         );
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) && block_known {
+            let _ = self.rehydrate_pending_from_kura_for_qc(&qc);
             self.apply_commit_certificate(
                 &qc,
                 &commit_topology,

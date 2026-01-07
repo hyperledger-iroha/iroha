@@ -695,20 +695,26 @@ struct SwiftTransactionEncoder {
             throw TransactionInputError.invalidZkBallotPublicInputs("public_inputs_json must be a JSON object.")
         }
         var normalized = map
-        try normalizeZkBallotPublicInputAlias(&normalized,
-                                              aliasKey: "durationBlocks",
-                                              canonicalKey: "duration_blocks")
-        try normalizeZkBallotPublicInputAlias(&normalized,
-                                              aliasKey: "nullifierHex",
-                                              canonicalKey: "nullifier_hex")
-        try normalizeZkBallotPublicInputAlias(&normalized,
-                                              aliasKey: "rootHintHex",
-                                              canonicalKey: "root_hint")
-        try normalizeZkBallotPublicInputAlias(&normalized,
-                                              aliasKey: "rootHint",
-                                              canonicalKey: "root_hint")
+        try rejectZkBallotPublicInputKey(&normalized,
+                                         key: "durationBlocks",
+                                         canonicalKey: "duration_blocks")
+        try rejectZkBallotPublicInputKey(&normalized,
+                                         key: "root_hint_hex",
+                                         canonicalKey: "root_hint")
+        try rejectZkBallotPublicInputKey(&normalized,
+                                         key: "rootHintHex",
+                                         canonicalKey: "root_hint")
+        try rejectZkBallotPublicInputKey(&normalized,
+                                         key: "rootHint",
+                                         canonicalKey: "root_hint")
+        try rejectZkBallotPublicInputKey(&normalized,
+                                         key: "nullifier_hex",
+                                         canonicalKey: "nullifier")
+        try rejectZkBallotPublicInputKey(&normalized,
+                                         key: "nullifierHex",
+                                         canonicalKey: "nullifier")
         try normalizeZkBallotPublicInputHex(&normalized, key: "root_hint")
-        try normalizeZkBallotPublicInputHex(&normalized, key: "nullifier_hex")
+        try normalizeZkBallotPublicInputHex(&normalized, key: "nullifier")
         let hasOwner = zkHintPresent(normalized["owner"])
         let hasAmount = zkHintPresent(normalized["amount"])
         let hasDuration = zkHintPresent(normalized["duration_blocks"])
@@ -725,17 +731,13 @@ struct SwiftTransactionEncoder {
         return try encoder.encode(ToriiJSONValue.object(normalized))
     }
 
-    private static func normalizeZkBallotPublicInputAlias(_ inputs: inout [String: ToriiJSONValue],
-                                                          aliasKey: String,
-                                                          canonicalKey: String) throws {
-        guard let aliasValue = inputs[aliasKey] else { return }
-        if inputs[canonicalKey] != nil {
-            throw TransactionInputError.invalidZkBallotPublicInputs(
-                "public_inputs_json cannot include both \(aliasKey) and \(canonicalKey)"
-            )
-        }
-        inputs[canonicalKey] = aliasValue
-        inputs.removeValue(forKey: aliasKey)
+    private static func rejectZkBallotPublicInputKey(_ inputs: inout [String: ToriiJSONValue],
+                                                     key: String,
+                                                     canonicalKey: String) throws {
+        guard inputs[key] != nil else { return }
+        throw TransactionInputError.invalidZkBallotPublicInputs(
+            "public_inputs_json must use \(canonicalKey) (unsupported key \(key))"
+        )
     }
 
     private static func normalizeZkBallotPublicInputHex(_ inputs: inout [String: ToriiJSONValue],

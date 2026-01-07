@@ -171,6 +171,72 @@ pub mod fixed_bytes {
     }
 }
 
+/// Serialize and deserialize fixed-size byte arrays as hex strings.
+#[cfg(feature = "json")]
+#[allow(dead_code)]
+pub mod fixed_bytes_hex {
+    use super::*;
+
+    pub fn serialize<const N: usize>(bytes: &[u8; N], out: &mut String) {
+        let encoded = hex::encode(bytes);
+        JsonSerialize::json_serialize(&encoded, out);
+    }
+
+    pub fn deserialize<const N: usize>(parser: &mut Parser<'_>) -> Result<[u8; N], json::Error> {
+        let raw = parser.parse_string()?;
+        parse_hex_bytes::<N>(&raw)
+    }
+
+    #[allow(dead_code)]
+    pub mod option {
+        use super::*;
+
+        #[allow(clippy::ref_option)] // Norito serializer interface requires `&Option<T>` signature
+        pub fn serialize<const N: usize>(value: &Option<[u8; N]>, out: &mut String) {
+            match value.as_ref() {
+                Some(bytes) => super::serialize(bytes, out),
+                None => out.push_str("null"),
+            }
+        }
+
+        pub fn deserialize<const N: usize>(
+            parser: &mut Parser<'_>,
+        ) -> Result<Option<[u8; N]>, json::Error> {
+            parser.skip_ws();
+            if parser.try_consume_null()? {
+                return Ok(None);
+            }
+            super::deserialize(parser).map(Some)
+        }
+    }
+
+    fn parse_hex_bytes<const N: usize>(raw: &str) -> Result<[u8; N], json::Error> {
+        let trimmed = raw.trim();
+        let without_scheme = if let Some((scheme, rest)) = trimmed.split_once(':') {
+            if scheme.is_empty() || scheme.eq_ignore_ascii_case("blake2b32") {
+                rest
+            } else {
+                return Err(json::Error::Message("expected hex string".to_string()));
+            }
+        } else {
+            trimmed
+        };
+        let mut body = without_scheme.trim();
+        if let Some(stripped) = body.strip_prefix("0x").or_else(|| body.strip_prefix("0X")) {
+            body = stripped;
+        }
+        if body.len() != N * 2 || !body.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(json::Error::Message(format!(
+                "expected {N}-byte hex string"
+            )));
+        }
+        let mut out = [0_u8; N];
+        hex::decode_to_slice(body, &mut out)
+            .map_err(|err| json::Error::Message(err.to_string()))?;
+        Ok(out)
+    }
+}
+
 /// Serialize and deserialize [`SoranetPrivacyModeV1`] values as their label strings.
 #[cfg(feature = "json")]
 #[allow(dead_code)]

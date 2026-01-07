@@ -616,7 +616,7 @@ impl HostAxtState {
                     .binding_array()
                     .is_some_and(|prev_binding| prev_binding == binding)
                 && prev.handle.target_lane == usage.handle.target_lane
-                && usage.handle.sub_nonce <= prev.handle.sub_nonce
+                && usage.handle.sub_nonce == prev.handle.sub_nonce
         }) {
             return Err(VMError::PermissionDenied);
         }
@@ -682,17 +682,19 @@ impl HostAxtState {
                 return Err(VMError::PermissionDenied);
             }
         }
-        let mut seen_nonces: BTreeMap<([u8; 32], u64, LaneId), u64> = BTreeMap::new();
+        let mut seen_nonces: BTreeSet<([u8; 32], u64, LaneId, u64)> = BTreeSet::new();
         let mut accumulators: Vec<HandleAccumulator> = Vec::new();
         for usage in &self.handles {
             let binding = usage.handle.binding_array().ok_or(VMError::NoritoInvalid)?;
-            let key = (binding, usage.handle.handle_era, usage.handle.target_lane);
-            if let Some(prev) = seen_nonces.get(&key)
-                && usage.handle.sub_nonce <= *prev
-            {
+            let key = (
+                binding,
+                usage.handle.handle_era,
+                usage.handle.target_lane,
+                usage.handle.sub_nonce,
+            );
+            if !seen_nonces.insert(key) {
                 return Err(VMError::PermissionDenied);
             }
-            seen_nonces.insert(key, usage.handle.sub_nonce);
             if usage.amount > usage.handle.budget.remaining {
                 return Err(VMError::PermissionDenied);
             }
@@ -1177,6 +1179,52 @@ mod tests {
             .record_handle(usage)
             .expect_err("duplicate sub-nonce must be rejected");
         assert!(matches!(err, VMError::PermissionDenied));
+    }
+
+    #[test]
+    fn record_handle_allows_out_of_order_sub_nonce() {
+        let dsid = DataSpaceId::new(11);
+        let descriptor = AxtDescriptor {
+            dsids: vec![dsid],
+            touches: vec![AxtTouchSpec {
+                dsid,
+                read: vec!["orders".into()],
+                write: vec!["ledger".into()],
+            }],
+        };
+        let binding = compute_binding(&descriptor).expect("binding");
+        let mut state = HostAxtState::new(descriptor, binding);
+        state
+            .record_touch(dsid, sample_touch_manifest())
+            .expect("touch recorded");
+
+        let mut handle_high = sample_handle(dsid, binding, 100, None);
+        handle_high.sub_nonce = 2;
+        let mut handle_low = handle_high.clone();
+        handle_low.sub_nonce = 1;
+
+        let proof = Some(ProofBlob {
+            payload: vec![1],
+            expiry_slot: None,
+        });
+        state
+            .record_handle(HandleUsage {
+                handle: handle_high,
+                intent: sample_intent(dsid, "10"),
+                proof: proof.clone(),
+                amount: 10,
+            })
+            .expect("first usage accepted");
+        state
+            .record_handle(HandleUsage {
+                handle: handle_low,
+                intent: sample_intent(dsid, "10"),
+                proof,
+                amount: 10,
+            })
+            .expect("second usage accepted");
+
+        assert!(matches!(state.validate_commit(), Ok(())));
     }
 
     #[test]

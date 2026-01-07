@@ -2292,13 +2292,13 @@ fn gov_vote_zk_against_mock() {
     let owner =
         AccountId::from_str(ALICE_ACCOUNT).expect("ALICE_ACCOUNT constant should parse cleanly");
     let owner_str = owner.to_string();
-    let nullifier_hex = "11".repeat(32);
+    let nullifier = "11".repeat(32);
     let hint_payload = norito::json!({
         "owner": owner_str,
         "amount": "700",
         "duration_blocks": 256,
         "direction": "Nay",
-        "nullifier_hex": nullifier_hex,
+        "nullifier": nullifier,
     });
     let public_inputs_json =
         String::from_utf8(norito::json::to_vec(&hint_payload).expect("serialize hints to JSON"))
@@ -2355,8 +2355,8 @@ fn gov_vote_zk_against_mock() {
             "256",
             "--direction",
             "Nay",
-            "--nullifier-hex",
-            &nullifier_hex,
+            "--nullifier",
+            &nullifier,
             "--no-summary",
         ])
         .output()
@@ -2398,9 +2398,9 @@ fn gov_vote_zk_against_mock() {
     );
     assert_eq!(
         entry
-            .get("nullifier_hex")
+            .get("nullifier")
             .and_then(norito::json::Value::as_str),
-        Some(nullifier_hex.as_str())
+        Some(nullifier.as_str())
     );
     assert!(
         entry.contains_key("payload_fingerprint_hex"),
@@ -2439,13 +2439,13 @@ fn gov_vote_zk_subcommand_emits_summary_and_json() {
     let duration_blocks = 512u64;
     let duration_blocks_str = duration_blocks.to_string();
     let direction = "Nay";
-    let nullifier_hex = "22".repeat(32);
+    let nullifier = "22".repeat(32);
     let hint_payload = norito::json!({
         "owner": owner_str,
         "amount": amount,
         "duration_blocks": duration_blocks,
         "direction": direction,
-        "nullifier_hex": nullifier_hex,
+        "nullifier": nullifier,
     });
     let public_inputs_json =
         String::from_utf8(norito::json::to_vec(&hint_payload).expect("serialize hints to JSON"))
@@ -2504,8 +2504,8 @@ fn gov_vote_zk_subcommand_emits_summary_and_json() {
             &duration_blocks_str,
             "--direction",
             direction,
-            "--nullifier-hex",
-            &nullifier_hex,
+            "--nullifier",
+            &nullifier,
             "--summary-only",
         ])
         .output()
@@ -2517,7 +2517,7 @@ fn gov_vote_zk_subcommand_emits_summary_and_json() {
     );
     let summary_text = String::from_utf8_lossy(&summary.stdout);
     let expected_summary = format!(
-        "vote-zk: election_id=ref-zk ok=true accepted=true instrs=1 fingerprint={fingerprint} owner={owner_str} amount={amount} duration_blocks={duration_blocks} direction={direction} nullifier_hex={nullifier_hex}"
+        "vote-zk: election_id=ref-zk ok=true accepted=true instrs=1 fingerprint={fingerprint} owner={owner_str} amount={amount} duration_blocks={duration_blocks} direction={direction} nullifier={nullifier}"
     );
     assert_eq!(summary_text.trim_end(), expected_summary);
 
@@ -2539,8 +2539,8 @@ fn gov_vote_zk_subcommand_emits_summary_and_json() {
             &duration_blocks_str,
             "--direction",
             direction,
-            "--nullifier-hex",
-            &nullifier_hex,
+            "--nullifier",
+            &nullifier,
             "--no-summary",
         ])
         .output()
@@ -2594,9 +2594,9 @@ fn gov_vote_zk_subcommand_emits_summary_and_json() {
     );
     assert_eq!(
         entry
-            .get("nullifier_hex")
+            .get("nullifier")
             .and_then(norito::json::Value::as_str),
-        Some(nullifier_hex.as_str())
+        Some(nullifier.as_str())
     );
 }
 

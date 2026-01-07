@@ -4110,6 +4110,7 @@ impl Actor {
         self.subsystems.da_rbc.rbc.pending.clear();
         self.subsystems.da_rbc.rbc.sessions.clear();
         self.subsystems.da_rbc.rbc.session_rosters.clear();
+        self.subsystems.da_rbc.rbc.session_roster_sources.clear();
         self.subsystems
             .da_rbc
             .rbc

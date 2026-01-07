@@ -3003,12 +3003,12 @@ export interface ToriiGovernanceZkBallotV1Request {
   backend: string;
   envelope?: BinaryLike | string;
   envelopeB64?: BinaryLike | string;
-  rootHintHex?: string | BinaryLike | null;
+  root_hint?: string | BinaryLike | null;
   owner?: string | null;
   amount?: NumericLike | null;
   durationBlocks?: number | string | bigint | null;
   direction?: ToriiGovernanceBallotDirection | string | null;
-  nullifierHex?: string | BinaryLike | null;
+  nullifier?: string | BinaryLike | null;
 }
 
 export interface ToriiGovernanceZkBallotProofRequest {

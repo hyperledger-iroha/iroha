@@ -885,9 +885,8 @@ impl Actor {
             );
         }
         self.update_rbc_status_entry(key, &plan.session, false);
-        self.persist_rbc_session(key, &plan.session);
-
         self.record_rbc_session_roster(key, plan.roster.clone(), RbcRosterSource::Network);
+        self.persist_rbc_session(key, &plan.session);
         Ok(())
     }
 
@@ -1157,10 +1156,13 @@ impl Actor {
             &mut requests,
             key.0,
             key.1,
+            key.2,
+            crate::sumeragi::consensus::Phase::Commit,
             &signers,
             &topology,
             now,
             retry_window,
+            None,
             self.config.missing_block_signer_fallback_attempts,
         );
         self.pending.missing_block_requests = requests;
@@ -1329,6 +1331,7 @@ impl Actor {
             );
             return Ok(());
         }
+        let mut reset_ready_state = false;
         if let Some(existing_roster) = self.subsystems.da_rbc.rbc.session_rosters.get(&key) {
             let existing_hash = rbc_roster_hash(existing_roster);
             if existing_hash != init.roster_hash {
@@ -1365,6 +1368,17 @@ impl Actor {
                     .session_roster_sources
                     .insert(key, RbcRosterSource::Network);
                 self.subsystems.da_rbc.rbc.persisted_full_sessions.remove(&key);
+                self.subsystems
+                    .da_rbc
+                    .rbc
+                    .payload_rebroadcast_last_sent
+                    .remove(&key);
+                self.subsystems
+                    .da_rbc
+                    .rbc
+                    .ready_rebroadcast_last_sent
+                    .remove(&key);
+                reset_ready_state = true;
             } else {
                 self.record_rbc_session_roster(key, init.roster.clone(), RbcRosterSource::Network);
             }
@@ -1372,6 +1386,13 @@ impl Actor {
             self.record_rbc_session_roster(key, init.roster.clone(), RbcRosterSource::Network);
         }
         if let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) {
+            if reset_ready_state {
+                session.ready_signatures.clear();
+                session.sent_ready = false;
+                session.delivered = false;
+                session.deliver_sender = None;
+                session.deliver_signature = None;
+            }
             if let Some(expected_hash) = session.payload_hash() {
                 if expected_hash != init.payload_hash {
                     warn!(
@@ -2496,7 +2517,16 @@ impl Actor {
                         .copied()
                         .collect();
                     for session_key in session_keys {
-                        let session_roster = self.ensure_rbc_session_roster(session_key);
+                        let roster_source = self
+                            .rbc_session_roster_source(session_key)
+                            .unwrap_or(RbcRosterSource::Derived);
+                        if !roster_source.is_authoritative() {
+                            continue;
+                        }
+                        let session_roster = self.rbc_session_roster(session_key);
+                        if session_roster.is_empty() {
+                            continue;
+                        }
                         let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&session_key)
                         else {
                             continue;
@@ -2631,6 +2661,16 @@ impl Actor {
         if session.received_chunks() < total_chunks {
             return;
         }
+        let roster_source = self
+            .rbc_session_roster_source(key)
+            .unwrap_or(RbcRosterSource::Derived);
+        if !roster_source.is_authoritative() {
+            return;
+        }
+        let session_roster = self.rbc_session_roster(key);
+        if session_roster.is_empty() {
+            return;
+        }
         if self
             .subsystems
             .da_rbc
@@ -2644,7 +2684,6 @@ impl Actor {
             return;
         }
         if self.subsystems.da_rbc.rbc.persist_tx.is_some() {
-            let session_roster = self.ensure_rbc_session_roster(key);
             let persisted = session.to_persisted(
                 key,
                 self.chain_hash,
@@ -2684,7 +2723,6 @@ impl Actor {
             return;
         }
 
-        let session_roster = self.ensure_rbc_session_roster(key);
         let store = self
             .subsystems
             .da_rbc

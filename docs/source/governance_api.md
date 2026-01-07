@@ -223,9 +223,9 @@ CLI Helpers
   - Useful for auditing protected namespaces or verifying governance-controlled deploy workflows.
 - `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including optional `gov_manifest_approvers` for satisfying manifest quorum rules.
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
-  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
+  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - The one-line summary now surfaces a deterministic `fingerprint=<hex>` derived from the encoded `CastZkBallot` along with any decoded hints (`owner`, `amount`, `duration_blocks`, `direction` when provided).
   - CLI responses annotate `tx_instructions[]` with `payload_fingerprint_hex` plus decoded fields so downstream tooling can verify the skeleton without reimplementing Norito decoding.
   - When any lock hint is provided, ZK ballots must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required. Direction remains optional and is treated as a hint only.
@@ -256,12 +256,12 @@ Unlock Sweep (Operator/Audit)
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
-      "root_hint_hex": "0x…64hex?",
+      "root_hint": "0x…64hex?",
       "owner": "alice@wonderland?",
       "amount": "100?",
       "duration_blocks": 6000?,
       "direction": "Aye|Nay|Abstain?",
-      "nullifier_hex": "blake2b32:…64hex?"
+      "nullifier": "blake2b32:…64hex?"
     }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
 
@@ -276,9 +276,9 @@ Unlock Sweep (Operator/Audit)
       "ballot": {
         "backend": "halo2/ipa",
         "envelope_bytes": "AAECAwQ=",   // base64 of ZK1 or H2* container
-        "root_hint": null,                // optional 32-byte array of bytes (eligibility root)
+        "root_hint": null,                // optional 32-byte hex string (eligibility root)
         "owner": null,                    // optional AccountId when circuit commits owner
-        "nullifier": null,                // optional 32-byte array of bytes (nullifier hint)
+        "nullifier": null,                // optional 32-byte hex string (nullifier hint)
         "amount": "100",                  // optional lock amount hint (decimal string)
         "duration_blocks": 6000,          // optional lock duration hint
         "direction": "Aye"                // optional direction hint
@@ -295,7 +295,7 @@ Unlock Sweep (Operator/Audit)
     }
   - Notes:
     - When `private_key` is provided, Torii submits the signed transaction and sets `reason` to `submitted transaction`.
-    - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` (as `nullifier_hex`) from the ballot to `public_inputs_json` for `CastZkBallot`.
+    - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
     - The envelope bytes are re-encoded as base64 for the instruction payload.
     - This endpoint is only available when the `zk-ballot` feature is enabled.
 

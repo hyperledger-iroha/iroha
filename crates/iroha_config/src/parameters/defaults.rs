@@ -173,7 +173,7 @@ pub mod transaction {
 
     /// Maximum instructions allowed in a transaction payload.
     pub const fn max_instructions() -> NonZeroU64 {
-        nonzero!(2_u64.pow(12))
+        nonzero!(20_000_u64)
     }
 
     /// Maximum Kotodama bytecode length (bytes) allowed during admission.

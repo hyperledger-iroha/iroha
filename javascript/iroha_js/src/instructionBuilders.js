@@ -1538,12 +1538,14 @@ function canonicalizeJsonValue(value, name, stack) {
 
 function normalizeZkBallotPublicInputs(value, name) {
   const normalized = { ...assertPlainObject(value, name) };
-  normalizePublicInputAlias(normalized, "durationBlocks", "duration_blocks", name);
-  normalizePublicInputAlias(normalized, "nullifierHex", "nullifier_hex", name);
-  normalizePublicInputAlias(normalized, "rootHintHex", "root_hint", name);
-  normalizePublicInputAlias(normalized, "rootHint", "root_hint", name);
+  rejectPublicInputKey(normalized, "durationBlocks", "duration_blocks", name);
+  rejectPublicInputKey(normalized, "root_hint_hex", "root_hint", name);
+  rejectPublicInputKey(normalized, "rootHintHex", "root_hint", name);
+  rejectPublicInputKey(normalized, "rootHint", "root_hint", name);
+  rejectPublicInputKey(normalized, "nullifier_hex", "nullifier", name);
+  rejectPublicInputKey(normalized, "nullifierHex", "nullifier", name);
   normalizeZkBallotPublicInputHex(normalized, "root_hint", name);
-  normalizeZkBallotPublicInputHex(normalized, "nullifier_hex", name);
+  normalizeZkBallotPublicInputHex(normalized, "nullifier", name);
 
   const hasOwner = normalized.owner !== undefined && normalized.owner !== null;
   const hasAmount = normalized.amount !== undefined && normalized.amount !== null;
@@ -1601,19 +1603,15 @@ function normalizeZkBallotPublicInputHex(target, key, name) {
   target[key] = body.toLowerCase();
 }
 
-function normalizePublicInputAlias(target, aliasKey, canonicalKey, name) {
-  if (!Object.prototype.hasOwnProperty.call(target, aliasKey)) {
+function rejectPublicInputKey(target, key, canonicalKey, name) {
+  if (!Object.prototype.hasOwnProperty.call(target, key)) {
     return;
   }
-  if (Object.prototype.hasOwnProperty.call(target, canonicalKey)) {
-    fail(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${name} cannot include both ${aliasKey} and ${canonicalKey}`,
-      name,
-    );
-  }
-  target[canonicalKey] = target[aliasKey];
-  delete target[aliasKey];
+  fail(
+    ValidationErrorCode.INVALID_OBJECT,
+    `${name} must use ${canonicalKey} (unsupported key ${key})`,
+    name,
+  );
 }
 
 function normalizeUintString(value, name) {

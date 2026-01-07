@@ -105,4 +105,49 @@ final class TransactionEncoderValidationTests: XCTestCase {
                            .invalidZkBallotPublicInputs("root_hint must be 32-byte hex"))
         }
     }
+
+    func testCastZkBallotRejectsDeprecatedAliases() throws {
+        let publicInputs = try NoritoJSON([
+            "owner": "alice@wonderland",
+            "amount": "1",
+            "duration_blocks": 1,
+            "root_hint_hex": "0x" + String(repeating: "Cc", count: 32),
+        ])
+        let request = CastZkBallotRequest(chainId: "chain",
+                                          authority: "alice@wonderland",
+                                          electionId: "election-1",
+                                          proofB64: "AAAA",
+                                          publicInputs: publicInputs,
+                                          ttlMs: nil)
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
+
+        XCTAssertThrowsError(
+            try SwiftTransactionEncoder.encodeCastZkBallot(request: request,
+                                                           signingKey: signingKey,
+                                                           creationTimeMs: 1)
+        )
+    }
+
+    func testCastZkBallotAcceptsCanonicalHints() throws {
+        let publicInputs = try NoritoJSON([
+            "owner": "alice@wonderland",
+            "amount": "1",
+            "duration_blocks": 1,
+            "root_hint": "0x" + String(repeating: "Cc", count: 32),
+            "nullifier": "blake2b32:" + String(repeating: "DD", count: 32),
+        ])
+        let request = CastZkBallotRequest(chainId: "chain",
+                                          authority: "alice@wonderland",
+                                          electionId: "election-1",
+                                          proofB64: "AAAA",
+                                          publicInputs: publicInputs,
+                                          ttlMs: nil)
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
+
+        XCTAssertNoThrow(
+            try SwiftTransactionEncoder.encodeCastZkBallot(request: request,
+                                                           signingKey: signingKey,
+                                                           creationTimeMs: 1)
+        )
+    }
 }

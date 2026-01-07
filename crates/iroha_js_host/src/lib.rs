@@ -4675,12 +4675,14 @@ fn normalize_zk_ballot_public_inputs(value: &mut json::Value, context: &str) -> 
             ));
         }
     };
-    normalize_zk_public_input_alias(map, "durationBlocks", "duration_blocks", context)?;
-    normalize_zk_public_input_alias(map, "nullifierHex", "nullifier_hex", context)?;
-    normalize_zk_public_input_alias(map, "rootHintHex", "root_hint", context)?;
-    normalize_zk_public_input_alias(map, "rootHint", "root_hint", context)?;
+    reject_zk_public_input_key(map, "durationBlocks", "duration_blocks", context)?;
+    reject_zk_public_input_key(map, "root_hint_hex", "root_hint", context)?;
+    reject_zk_public_input_key(map, "rootHintHex", "root_hint", context)?;
+    reject_zk_public_input_key(map, "rootHint", "root_hint", context)?;
+    reject_zk_public_input_key(map, "nullifier_hex", "nullifier", context)?;
+    reject_zk_public_input_key(map, "nullifierHex", "nullifier", context)?;
     canonicalize_hex32_public_input(map, "root_hint", "root_hint", context)?;
-    canonicalize_hex32_public_input(map, "nullifier_hex", "nullifier", context)?;
+    canonicalize_hex32_public_input(map, "nullifier", "nullifier", context)?;
     let has_owner = zk_hint_present(map, "owner");
     let has_amount = zk_hint_present(map, "amount");
     let has_duration = zk_hint_present(map, "duration_blocks");
@@ -4696,23 +4698,17 @@ fn normalize_zk_ballot_public_inputs(value: &mut json::Value, context: &str) -> 
     Ok(())
 }
 
-fn normalize_zk_public_input_alias(
-    map: &mut json::Map,
-    alias: &str,
+fn reject_zk_public_input_key(
+    map: &json::Map,
+    key: &str,
     canonical: &str,
     context: &str,
 ) -> napi::Result<()> {
-    if !map.contains_key(alias) {
-        return Ok(());
-    }
-    if map.contains_key(canonical) {
+    if map.contains_key(key) {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
-            format!("{context} cannot include both {alias} and {canonical}"),
+            format!("{context} must use {canonical} (unsupported key {key})"),
         ));
-    }
-    if let Some(value) = map.remove(alias) {
-        map.insert(canonical.to_owned(), value);
     }
     Ok(())
 }
@@ -8649,7 +8645,7 @@ mod tests {
     }
 
     #[test]
-    fn governance_cast_zk_ballot_public_inputs_normalizes_aliases() {
+    fn governance_cast_zk_ballot_public_inputs_rejects_deprecated_keys() {
         let mut inner = json::Map::new();
         inner.insert(
             "election_id".to_owned(),
@@ -8668,14 +8664,7 @@ mod tests {
         let mut outer = json::Map::new();
         outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
 
-        let instruction =
-            value_to_instruction(json::Value::Object(outer)).expect("deserialize CastZkBallot");
-        let ballot = instruction
-            .as_any()
-            .downcast_ref::<CastZkBallot>()
-            .expect("CastZkBallot");
-        assert!(ballot.public_inputs_json.contains("\"duration_blocks\""));
-        assert!(!ballot.public_inputs_json.contains("durationBlocks"));
+        assert!(value_to_instruction(json::Value::Object(outer)).is_err());
     }
 
     #[test]
@@ -8693,7 +8682,7 @@ mod tests {
             "public_inputs_json".to_owned(),
             json::Value::String(
                 format!(
-                    r#"{{"owner":"alice@wonderland","amount":"10","duration_blocks":64,"rootHintHex":"0x{}","nullifierHex":"blake2b32:{}"}}"#,
+                    r#"{{"owner":"alice@wonderland","amount":"10","duration_blocks":64,"root_hint":"0x{}","nullifier":"blake2b32:{}"}}"#,
                     "Aa".repeat(32),
                     "BB".repeat(32)
                 ),
@@ -8715,9 +8704,9 @@ mod tests {
             .and_then(json::Value::as_str)
             .expect("root_hint");
         let nullifier = parsed
-            .get("nullifier_hex")
+            .get("nullifier")
             .and_then(json::Value::as_str)
-            .expect("nullifier_hex");
+            .expect("nullifier");
         assert_eq!(root_hint, "aa".repeat(32));
         assert_eq!(nullifier, "bb".repeat(32));
     }
@@ -8744,7 +8733,7 @@ mod tests {
     }
 
     #[test]
-    fn governance_cast_zk_ballot_public_inputs_rejects_alias_conflicts() {
+    fn governance_cast_zk_ballot_public_inputs_rejects_deprecated_aliases() {
         let mut inner = json::Map::new();
         inner.insert(
             "election_id".to_owned(),
@@ -8757,7 +8746,7 @@ mod tests {
         inner.insert(
             "public_inputs_json".to_owned(),
             json::Value::String(
-                r#"{"owner":"alice@wonderland","amount":"10","duration_blocks":64,"rootHint":"aa","root_hint":"bb"}"#.to_owned(),
+                r#"{"owner":"alice@wonderland","amount":"10","duration_blocks":64,"rootHint":"aa"}"#.to_owned(),
             ),
         );
         let mut outer = json::Map::new();

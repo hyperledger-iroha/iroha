@@ -4178,7 +4178,7 @@ id: 88
         }
     }
 
-    func testSubmitGovernanceZkBallotNormalizesPublicInputAliases() throws {
+    func testSubmitGovernanceZkBallotRejectsDeprecatedPublicInputs() throws {
         let request = ToriiGovernanceZkBallotRequest(authority: "alice@wonderland",
                                                      chainId: "chain",
                                                      electionId: "election-1",
@@ -4190,19 +4190,33 @@ id: 88
                                                         "rootHintHex": .string("0x\(String(repeating: "Aa", count: 32))"),
                                                         "nullifierHex": .string("blake2b32:\(String(repeating: "BB", count: 32))"),
                                                      ])
+        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
+            guard case let ToriiClientError.invalidPayload(message) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("durationBlocks"))
+        }
+    }
+
+    func testSubmitGovernanceZkBallotNormalizesPublicInputs() throws {
+        let request = ToriiGovernanceZkBallotRequest(authority: "alice@wonderland",
+                                                     chainId: "chain",
+                                                     electionId: "election-1",
+                                                     proofB64: "AAAA",
+                                                     publicInputs: [
+                                                        "owner": .string("alice@wonderland"),
+                                                        "amount": .string("250"),
+                                                        "duration_blocks": .number(12),
+                                                        "root_hint": .string("0x\(String(repeating: "Cc", count: 32))"),
+                                                        "nullifier": .string("blake2b32:\(String(repeating: "DD", count: 32))"),
+                                                     ])
         let data = try JSONEncoder().encode(request)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let publicInputs = json["public"] as? [String: Any] else {
             return XCTFail("missing public inputs")
         }
-        XCTAssertEqual(publicInputs["owner"] as? String, "alice@wonderland")
-        XCTAssertEqual(publicInputs["amount"] as? String, "250")
-        XCTAssertEqual(publicInputs["duration_blocks"] as? Int, 12)
-        XCTAssertNil(publicInputs["durationBlocks"])
-        XCTAssertEqual(publicInputs["root_hint"] as? String, String(repeating: "aa", count: 32))
-        XCTAssertNil(publicInputs["rootHintHex"])
-        XCTAssertEqual(publicInputs["nullifier_hex"] as? String, String(repeating: "bb", count: 32))
-        XCTAssertNil(publicInputs["nullifierHex"])
+        XCTAssertEqual(publicInputs["root_hint"] as? String, String(repeating: "cc", count: 32))
+        XCTAssertEqual(publicInputs["nullifier"] as? String, String(repeating: "dd", count: 32))
     }
 
     func testSubmitGovernanceZkBallotRejectsInvalidHexHints() {

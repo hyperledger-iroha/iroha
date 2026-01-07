@@ -8543,10 +8543,10 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
     public: {
       owner: "bob@wonderland",
       amount: "42",
-      durationBlocks: 128,
+      duration_blocks: 128,
       direction: "Aye",
-      rootHintHex: `0x${"Aa".repeat(32)}`,
-      nullifierHex: `blake2b32:${"BB".repeat(32)}`,
+      root_hint: `0x${"Aa".repeat(32)}`,
+      nullifier: `blake2b32:${"BB".repeat(32)}`,
     },
   });
   assert.equal(calls[0].body.proof_b64, "AQID");
@@ -8556,7 +8556,7 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
     duration_blocks: 128,
     direction: "Aye",
     root_hint: "aa".repeat(32),
-    nullifier_hex: "bb".repeat(32),
+    nullifier: "bb".repeat(32),
   });
   assert.equal(zkResult.accepted, true);
 
@@ -8566,15 +8566,34 @@ test("governanceSubmitZk ballots encode proofs and hints", async () => {
     electionId: "ref-zk",
     backend: "halo2/ipa",
     envelope: [4, 5],
-    rootHintHex: `blake2b32:${"Ab".repeat(32)}`,
+    root_hint: `blake2b32:${"Ab".repeat(32)}`,
     owner: null,
-    nullifierHex: Buffer.alloc(32, 0xff),
+    nullifier: Buffer.alloc(32, 0xff),
   });
   assert.equal(calls[1].body.envelope_b64, "BAU=");
-  assert.equal(calls[1].body.root_hint_hex, "ab".repeat(32));
-  assert.equal(calls[1].body.nullifier_hex, "ff".repeat(32));
+  assert.equal(calls[1].body.root_hint, "ab".repeat(32));
+  assert.equal(calls[1].body.nullifier, "ff".repeat(32));
   assert.equal(zkV1Result.accepted, false);
   assert.equal(zkV1Result.reason, "build transaction skeleton");
+
+  const zkProofResult = await client.governanceSubmitZkBallotProofV1({
+    authority: "bob@wonderland",
+    chainId: "chain-0",
+    electionId: "ref-zk",
+    ballot: {
+      backend: "halo2/ipa",
+      envelope_bytes: "AAE=",
+      root_hint: `blake2b32:${"Cc".repeat(32)}`,
+      nullifier: `0x${"DD".repeat(32)}`,
+      owner: null,
+      amount: null,
+      duration_blocks: null,
+      direction: null,
+    },
+  });
+  assert.equal(calls[2].body.ballot.root_hint, "cc".repeat(32));
+  assert.equal(calls[2].body.ballot.nullifier, "dd".repeat(32));
+  assert.equal(zkProofResult.accepted, false);
 });
 
 test("governanceSubmitZk ballots reject partial lock hints", async () => {
@@ -8616,13 +8635,40 @@ test("governanceSubmitZk ballots reject invalid hex hints", async () => {
         public: {
           owner: "bob@wonderland",
           amount: "42",
-          durationBlocks: 128,
-          rootHintHex: "not-hex",
+          duration_blocks: 128,
+          root_hint: "not-hex",
         },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_HEX);
       assert.match(String(error?.message), /root_hint/i);
+      return true;
+    },
+  );
+});
+
+test("governanceSubmitZk ballots reject deprecated public input keys", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.governanceSubmitZkBallot({
+        authority: "bob@wonderland",
+        chainId: "chain-0",
+        electionId: "ref-zk",
+        proof: [1, 2, 3],
+        public: {
+          owner: "bob@wonderland",
+          amount: "42",
+          durationBlocks: 128,
+        },
+      }),
+    (error) => {
+      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
+      assert.match(String(error?.message), /durationBlocks/i);
       return true;
     },
   );
@@ -8666,11 +8712,11 @@ test("governanceSubmitZkBallotV1 rejects invalid hex hints", async () => {
         electionId: "ref-zk",
         backend: "halo2/ipa",
         envelope: [4, 5],
-        rootHintHex: "not-hex",
+        root_hint: "not-hex",
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_HEX);
-      assert.match(String(error?.message), /rootHintHex/i);
+      assert.match(String(error?.message), /root_hint/i);
       return true;
     },
   );

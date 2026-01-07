@@ -202,9 +202,9 @@ Helpers ל-CLI
   - שימושי לאודיט של namespaces מוגנים או לאימות זרימות deploy נשלטות ממשל.
 - `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - מפיק שלד JSON של metadata המשמש בעת שליחת deployments ל-namespaces מוגנים, כולל `gov_manifest_approvers` אופציונלי כדי לעמוד בכללי quorum של ה-manifest.
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — רמזי lock נדרשים כאשר `min_bond_amount > 0`, וכל סט רמזים שסופק חייב לכלול `owner`, `amount` ו-`duration_blocks`.
+- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — רמזי lock נדרשים כאשר `min_bond_amount > 0`, וכל סט רמזים שסופק חייב לכלול `owner`, `amount` ו-`duration_blocks`.
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
-  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
+  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - סיכום שורה אחת מציג כעת `fingerprint=<hex>` דטרמיניסטי שנגזר מ-`CastZkBallot` המוצפן יחד עם hints מפוענחים (`owner`, `amount`, `duration_blocks`, `direction` כאשר סופקו).
   - תשובות CLI מסמנות `tx_instructions[]` עם `payload_fingerprint_hex` ועוד שדות מפוענחים כדי שכלי downstream יוכלו לאמת את השלד בלי ליישם שוב Norito decoding.
   - מתן hints של lock מאפשר לצומת לשדר אירועים `LockCreated`/`LockExtended` עבור ballots של ZK כאשר המעגל יחשוף את אותם ערכים.
@@ -235,9 +235,9 @@ Unlock sweep (מפעיל/ביקורת)
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
-      "root_hint_hex": "0x...64hex?",
+      "root_hint": "0x...64hex?",
       "owner": "alice@wonderland?",
-      "nullifier_hex": "blake2b32:...64hex?"
+      "nullifier": "blake2b32:...64hex?"
     }
   - תשובה: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
 
@@ -252,9 +252,9 @@ Unlock sweep (מפעיל/ביקורת)
       "ballot": {
         "backend": "halo2/ipa",
         "envelope_bytes": "AAECAwQ=",   // base64 של מיכל ZK1 או H2*
-        "root_hint": null,                // optional 32-byte array of bytes (eligibility root)
+        "root_hint": null,                // optional 32-byte hex string (eligibility root)
         "owner": null,                    // AccountId אופציונלי כאשר המעגל מחייב owner
-        "nullifier": null                 // optional 32-byte array of bytes (nullifier hint)
+        "nullifier": null                 // optional 32-byte hex string (nullifier hint)
       }
     }
   - תשובה:

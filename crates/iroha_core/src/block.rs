@@ -2509,16 +2509,6 @@ pub(crate) mod valid {
                             None,
                         ));
                     }
-                    if fragment.handle.target_lane != envelope.lane {
-                        return Err(make_env_error(
-                            envelope_lane,
-                            AxtRejectReason::Lane,
-                            "handle target lane does not match envelope lane",
-                            Some(fragment.intent.asset_dsid),
-                            None,
-                            None,
-                        ));
-                    }
                     let policy = policies.get(&fragment.intent.asset_dsid).ok_or_else(|| {
                         make_env_error(
                             envelope_lane,
@@ -2534,6 +2524,16 @@ pub(crate) mod valid {
                             envelope_lane,
                             AxtRejectReason::Descriptor,
                             "handle references undeclared dataspace",
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        ));
+                    }
+                    if !touch_dsids.contains(&fragment.intent.asset_dsid) {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::Descriptor,
+                            "missing touch manifest for handle dataspace",
                             Some(fragment.intent.asset_dsid),
                             None,
                             None,
@@ -8828,6 +8828,7 @@ mod commit {
             AxtTouchFragment, AxtTouchSpec, GroupBinding, HandleBudget, HandleSubject, ProofBlob,
             RemoteSpendIntent, SpendOp, TouchManifest,
         };
+        use iroha_primitives::time::TimeSource;
 
         use super::*;
         use crate::{
@@ -9060,6 +9061,71 @@ mod commit {
         }
 
         #[test]
+        fn axt_validation_accepts_cross_lane_handles() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            let dsid_a = DataSpaceId::new(7);
+            let dsid_b = DataSpaceId::new(8);
+            let lane_a = LaneId::new(1);
+            let lane_b = LaneId::new(2);
+            let policy_a = AxtPolicyEntry {
+                manifest_root: [0x11; 32],
+                target_lane: lane_a,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 0,
+            };
+            let policy_b = AxtPolicyEntry {
+                manifest_root: [0x22; 32],
+                target_lane: lane_b,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 0,
+            };
+            state.set_axt_policy(dsid_a, policy_a);
+            state.set_axt_policy(dsid_b, policy_b);
+
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid_a, dsid_b],
+                touches: Vec::new(),
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane: lane_a,
+                descriptor,
+                touches: Vec::new(),
+                proofs: vec![
+                    AxtProofFragment {
+                        dsid: dsid_a,
+                        proof: ProofBlob {
+                            payload: policy_a.manifest_root.to_vec(),
+                            expiry_slot: Some(25),
+                        },
+                    },
+                    AxtProofFragment {
+                        dsid: dsid_b,
+                        proof: ProofBlob {
+                            payload: policy_b.manifest_root.to_vec(),
+                            expiry_slot: Some(25),
+                        },
+                    },
+                ],
+                handles: vec![
+                    sample_handle(binding, lane_a, dsid_a, 20, policy_a.manifest_root),
+                    sample_handle(binding, lane_b, dsid_b, 20, policy_b.manifest_root),
+                ],
+                commit_height: Some(1),
+            };
+            let snapshot = state.axt_policy_snapshot();
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+
+            assert!(validate_axt_envelopes(&block, &state_block).is_ok());
+        }
+
+        #[test]
         fn axt_validation_rejects_handle_amount_mismatch() {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -9154,6 +9220,56 @@ mod commit {
 
             let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
             expect_axt_error(err, AxtRejectReason::Descriptor, "missing touch manifest");
+        }
+
+        #[test]
+        fn axt_validation_rejects_handle_without_touch_manifest() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::new(), kura, query);
+            let dsid = DataSpaceId::new(9);
+            let lane = LaneId::new(1);
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x23; 32],
+                target_lane: lane,
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 0,
+            };
+            state.set_axt_policy(dsid, policy);
+
+            let descriptor = AxtDescriptor {
+                dsids: vec![dsid],
+                touches: Vec::new(),
+            };
+            let binding = binding_for_descriptor(&descriptor);
+            let handle = sample_handle(binding, lane, dsid, 5, policy.manifest_root);
+
+            let envelope = AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor,
+                touches: Vec::new(),
+                proofs: vec![AxtProofFragment {
+                    dsid,
+                    proof: ProofBlob {
+                        payload: policy.manifest_root.to_vec(),
+                        expiry_slot: Some(12),
+                    },
+                }],
+                handles: vec![handle],
+                commit_height: Some(1),
+            };
+            let snapshot = state.axt_policy_snapshot();
+            let block = build_block_with_envelopes(envelope, snapshot);
+            let state_block = state.block(block.header());
+
+            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
+            expect_axt_error(
+                err,
+                AxtRejectReason::Descriptor,
+                "missing touch manifest for handle dataspace",
+            );
         }
 
         #[test]

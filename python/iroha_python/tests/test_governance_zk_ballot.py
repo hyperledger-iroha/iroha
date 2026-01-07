@@ -9,7 +9,27 @@ from iroha_python.client import ToriiClient
 from .helpers import RecordingSession, StubResponse
 
 
-def test_governance_submit_zk_ballot_normalizes_public_aliases() -> None:
+def test_governance_submit_zk_ballot_rejects_deprecated_public_inputs() -> None:
+    session = RecordingSession(StubResponse(payload={"ok": True}))
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(ValueError, match="durationBlocks"):
+        client.governance_submit_zk_ballot(
+            {
+                "authority": "alice@wonderland",
+                "chain_id": "chain",
+                "election_id": "election-1",
+                "proof_b64": "AAAA",
+                "public": {
+                    "owner": "alice@wonderland",
+                    "amount": "100",
+                    "durationBlocks": 5,
+                },
+            }
+        )
+
+
+def test_governance_submit_zk_ballot_normalizes_public_inputs() -> None:
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
@@ -22,23 +42,17 @@ def test_governance_submit_zk_ballot_normalizes_public_aliases() -> None:
             "public": {
                 "owner": "alice@wonderland",
                 "amount": "100",
-                "durationBlocks": 5,
-                "rootHintHex": f"0x{'Aa' * 32}",
-                "nullifierHex": f"blake2b32:{'BB' * 32}",
+                "duration_blocks": 5,
+                "root_hint": f"0x{'Cc' * 32}",
+                "nullifier": bytes.fromhex("DD" * 32),
             },
         }
     )
 
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
     public = payload["public"]
-    assert public["owner"] == "alice@wonderland"
-    assert public["amount"] == "100"
-    assert public["duration_blocks"] == 5
-    assert "durationBlocks" not in public
-    assert public["root_hint"] == "aa" * 32
-    assert "rootHintHex" not in public
-    assert public["nullifier_hex"] == "bb" * 32
-    assert "nullifierHex" not in public
+    assert public["root_hint"] == "cc" * 32
+    assert public["nullifier"] == "dd" * 32
 
 
 def test_governance_submit_zk_ballot_rejects_incomplete_lock_hints() -> None:
@@ -89,6 +103,30 @@ def test_governance_submit_zk_ballot_proof_v1_rejects_incomplete_lock_hints() ->
         )
 
 
+def test_governance_submit_zk_ballot_proof_v1_normalizes_hex_hints() -> None:
+    session = RecordingSession(StubResponse(payload={"ok": True}))
+    client = ToriiClient("http://node.test", session=session)
+
+    client.governance_submit_zk_ballot_proof_v1(
+        {
+            "authority": "alice@wonderland",
+            "chain_id": "chain",
+            "election_id": "election-1",
+            "ballot": {
+                "backend": "halo2/ipa",
+                "envelope_bytes": "AAE=",
+                "root_hint": f"blake2b32:{'Aa' * 32}",
+                "nullifier": bytes.fromhex("BB" * 32),
+            },
+        }
+    )
+
+    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
+    ballot = payload["ballot"]
+    assert ballot["root_hint"] == "aa" * 32
+    assert ballot["nullifier"] == "bb" * 32
+
+
 def test_governance_submit_zk_ballot_v1_normalizes_hex_hints() -> None:
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
@@ -100,23 +138,21 @@ def test_governance_submit_zk_ballot_v1_normalizes_hex_hints() -> None:
             "election_id": "election-1",
             "backend": "halo2/ipa",
             "envelope_b64": "AAAA",
-            "rootHintHex": f"0x{'Aa' * 32}",
-            "nullifierHex": f"blake2b32:{'BB' * 32}",
+            "root_hint": f"0x{'Aa' * 32}",
+            "nullifier": f"blake2b32:{'BB' * 32}",
         }
     )
 
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["root_hint_hex"] == "aa" * 32
-    assert payload["nullifier_hex"] == "bb" * 32
-    assert "rootHintHex" not in payload
-    assert "nullifierHex" not in payload
+    assert payload["root_hint"] == "aa" * 32
+    assert payload["nullifier"] == "bb" * 32
 
 
 def test_governance_submit_zk_ballot_v1_rejects_invalid_hex_hints() -> None:
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(ValueError, match="root_hint_hex"):
+    with pytest.raises(ValueError, match="root_hint"):
         client.governance_submit_zk_ballot_v1(
             {
                 "authority": "alice@wonderland",
@@ -124,7 +160,7 @@ def test_governance_submit_zk_ballot_v1_rejects_invalid_hex_hints() -> None:
                 "election_id": "election-1",
                 "backend": "halo2/ipa",
                 "envelope_b64": "AAAA",
-                "root_hint_hex": "not-hex",
+                "root_hint": "not-hex",
             }
         )
 

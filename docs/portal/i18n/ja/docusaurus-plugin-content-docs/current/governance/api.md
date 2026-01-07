@@ -202,9 +202,9 @@ CLIヘルパー
   - 保護されたnamespaceの監査やガバナンス制御デプロイフローの検証に有用。
 - `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - 保護namespaceへのデプロイ時に使うmetadata JSONスケルトンを出力し、manifest quorum を満たすための `gov_manifest_approvers` を任意で含めます。
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0` の場合は lock hints が必須であり、提供する場合は `owner` / `amount` / `duration_blocks` をすべて含める必要があります。
+- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0` の場合は lock hints が必須であり、提供する場合は `owner` / `amount` / `duration_blocks` をすべて含める必要があります。
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
-  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
+  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - 1行サマリは、`CastZkBallot` から導出された決定的な `fingerprint=<hex>` と、デコードされたヒント (`owner`, `amount`, `duration_blocks`, `direction` 提供時) を表示します。
   - CLIレスポンスは `tx_instructions[]` に `payload_fingerprint_hex` とデコード済みフィールドを付与し、下流ツールがNoritoデコードを再実装せずスケルトンを検証できます。
   - ロックヒントを提供すると、回路が同じ値を公開した際にZK ballotに対して `LockCreated`/`LockExtended` イベントが発行されます。
@@ -235,9 +235,9 @@ Unlock sweep (オペレータ/監査)
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
-      "root_hint_hex": "0x...64hex?",
+      "root_hint": "0x...64hex?",
       "owner": "alice@wonderland?",
-      "nullifier_hex": "blake2b32:...64hex?"
+      "nullifier": "blake2b32:...64hex?"
     }
   - レスポンス: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
 
@@ -252,9 +252,9 @@ Unlock sweep (オペレータ/監査)
       "ballot": {
         "backend": "halo2/ipa",
         "envelope_bytes": "AAECAwQ=",   // ZK1 または H2* コンテナのbase64
-        "root_hint": null,                // optional 32-byte array of bytes (eligibility root)
+        "root_hint": null,                // optional 32-byte hex string (eligibility root)
         "owner": null,                    // 回路が owner をコミットする場合のAccountId
-        "nullifier": null                 // optional 32-byte array of bytes (nullifier hint)
+        "nullifier": null                 // optional 32-byte hex string (nullifier hint)
       }
     }
   - レスポンス:
