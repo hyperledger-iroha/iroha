@@ -19,7 +19,7 @@ use iroha_data_model::{
 fn zk_referendum_auto_close_defers_decision_without_tally() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), kura, query);
+    let state = State::new_for_testing(World::default(), kura, query);
 
     let rid = hex::encode([0x11_u8; 32]);
 
