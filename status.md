@@ -1,9 +1,16 @@
 # Status
 
 ## Latest Updates
+- Client: clarify blocking submit waits for `Applied` and log applied block-event confirmations.
+- Integration tests: centralize env var mutation helpers in `integration_tests/src/sandbox.rs` and add EnvRestore roundtrip coverage.
+- Tests: `cargo test -p iroha_core pacemaker_ignores_stale_new_view_entries -- --nocapture` (x10; all pass).
+- Tests: `cargo test -p integration_tests --test iterable_queries_torii burn_trigger_repetitions_removes_from_active_ids -- --nocapture` (pass).
+- Tests: `cargo test -p integration_tests --lib env_restore_roundtrips_env_var -- --nocapture` (pass).
+- Integration tests: allow sandbox env var mutation helpers under `#[allow(unsafe_code)]` to satisfy `rust.unsafe_code = "deny"` while calling `std::env::set_var`/`remove_var`.
+- Tests: `cargo test -p integration_tests` (timed out after ~4m while running `address_canonicalisation`; compilation succeeded and unit tests completed).
 - Maintenance: resolve merge conflicts in `crates/iroha_core/src/sumeragi/main_loop/commit.rs` and `status.md`.
 - Tests: not run (not requested).
-- Integration tests: remove `unsafe` wrappers around sandbox env var restore helpers to satisfy `-D unsafe-code`.
+- Integration tests: remove `unsafe` blocks around sandbox env var restore helpers in `integration_tests/src/sandbox.rs`, add env-restore roundtrip coverage to satisfy `-D unsafe-code`.
 - Tests: not run (not requested).
 - Integration tests: wrap env var mutation helpers in `unsafe` blocks and document the env-lock requirement for Rust's environment safety contract.
 - Tests: not run (not requested).

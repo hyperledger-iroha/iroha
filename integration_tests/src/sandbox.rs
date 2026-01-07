@@ -488,6 +488,22 @@ mod tests {
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+    #[allow(unsafe_code)]
+    fn remove_env_var(key: &str) {
+        // Safety: tests serialize env mutation with ENV_LOCK.
+        unsafe {
+            std::env::remove_var(key);
+        }
+    }
+
+    #[allow(unsafe_code)]
+    fn set_env_var(key: &str, value: &str) {
+        // Safety: tests serialize env mutation with ENV_LOCK.
+        unsafe {
+            std::env::set_var(key, value);
+        }
+    }
+
     struct EnvRestore {
         key: &'static str,
         value: Option<String>,
@@ -496,8 +512,7 @@ mod tests {
     impl EnvRestore {
         fn remove(key: &'static str) -> Self {
             let value = std::env::var(key).ok();
-            // SAFETY: tests serialize env mutations via `lock_env_guard`.
-            unsafe { std::env::remove_var(key) };
+            remove_env_var(key);
             Self { key, value }
         }
     }
@@ -505,11 +520,9 @@ mod tests {
     impl Drop for EnvRestore {
         fn drop(&mut self) {
             if let Some(value) = &self.value {
-                // SAFETY: tests serialize env mutations via `lock_env_guard`.
-                unsafe { std::env::set_var(self.key, value) };
+                set_env_var(self.key, value);
             } else {
-                // SAFETY: tests serialize env mutations via `lock_env_guard`.
-                unsafe { std::env::remove_var(self.key) };
+                remove_env_var(self.key);
             }
         }
     }
@@ -577,6 +590,32 @@ mod tests {
             panic_reason(panic_payload.as_ref()),
             Some("operation not permitted".to_string())
         );
+    }
+
+    #[test]
+    fn env_restore_roundtrips_env_var() {
+        let _env_guard = lock_env_guard();
+        let key = "IROHA_TEST_SANDBOX_ENV_RESTORE";
+        let original = std::env::var(key).ok();
+
+        remove_env_var(key);
+        {
+            let _restore = EnvRestore::remove(key);
+            assert!(std::env::var(key).is_err());
+        }
+        assert!(std::env::var(key).is_err());
+
+        set_env_var(key, "1");
+        {
+            let _restore = EnvRestore::remove(key);
+            assert!(std::env::var(key).is_err());
+        }
+        assert_eq!(std::env::var(key).as_deref(), Ok("1"));
+
+        match original {
+            Some(value) => set_env_var(key, &value),
+            None => remove_env_var(key),
+        }
     }
 
     #[test]

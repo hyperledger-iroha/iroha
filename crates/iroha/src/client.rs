@@ -4879,10 +4879,10 @@ impl Client {
         Ok(hash)
     }
 
-    /// Submit the prebuilt transaction and wait until it is either rejected or committed.
+    /// Submit the prebuilt transaction and wait until it is either rejected or applied.
     /// If rejected, return the rejection reason.
-    /// Note: `Committed` is emitted after Kura persistence (before WSV apply).
-    /// Wait for `Applied` if you require WSV apply semantics.
+    /// Note: `Committed` is emitted after Kura persistence (before WSV apply), so
+    /// confirmation always waits for `Applied` to ensure state updates are visible.
     ///
     /// # Errors
     /// Fails if sending a transaction to a peer fails or there is an error in the response
@@ -8239,7 +8239,7 @@ where
                                         %hash,
                                         height = block_event.header().height().get(),
                                         status = ?block_event.status(),
-                                        "transaction commit observed in block event"
+                                        "transaction applied observed in block event"
                                     );
                                     return Ok(hash);
                                 }
