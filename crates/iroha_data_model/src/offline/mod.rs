@@ -58,23 +58,19 @@ fn invalid_counter_scope_error(
 ///
 /// Returns [`OfflineProofRequestError::InvalidCounterScope`] if the key id is empty,
 /// not valid base64, or not in canonical standard base64 form.
-pub fn canonical_app_attest_key_id(
-    key_id: &str,
-) -> Result<String, OfflineProofRequestError> {
+pub fn canonical_app_attest_key_id(key_id: &str) -> Result<String, OfflineProofRequestError> {
     if key_id.trim().is_empty() {
         return Err(invalid_counter_scope_error(
             OfflineTransferRejectionPlatform::Apple,
             "apple_app_attest.key_id must be non-empty",
         ));
     }
-    let bytes = BASE64_STANDARD
-        .decode(key_id.as_bytes())
-        .map_err(|_| {
-            invalid_counter_scope_error(
-                OfflineTransferRejectionPlatform::Apple,
-                "apple_app_attest.key_id must use standard base64 encoding",
-            )
-        })?;
+    let bytes = BASE64_STANDARD.decode(key_id.as_bytes()).map_err(|_| {
+        invalid_counter_scope_error(
+            OfflineTransferRejectionPlatform::Apple,
+            "apple_app_attest.key_id must use standard base64 encoding",
+        )
+    })?;
     let canonical = BASE64_STANDARD.encode(bytes);
     if canonical != key_id {
         return Err(invalid_counter_scope_error(
@@ -105,9 +101,7 @@ pub fn marker_series_from_public_key(
 
 /// Return receipts sorted by `(counter, tx_id)` for deterministic processing.
 #[must_use]
-pub fn canonical_receipts<'a>(
-    receipts: &'a [OfflineSpendReceipt],
-) -> Vec<&'a OfflineSpendReceipt> {
+pub fn canonical_receipts<'a>(receipts: &'a [OfflineSpendReceipt]) -> Vec<&'a OfflineSpendReceipt> {
     let mut ordered: Vec<&OfflineSpendReceipt> = receipts.iter().collect();
     ordered.sort_by(|lhs, rhs| receipt_cmp(lhs, rhs));
     ordered
@@ -203,9 +197,7 @@ fn provisioned_counter_scope(
     Ok(format!("{PROVISIONED_COUNTER_PREFIX}{schema}::{device_id}"))
 }
 
-fn provisioned_device_id(
-    manifest: &Metadata,
-) -> Result<String, OfflineProofRequestError> {
+fn provisioned_device_id(manifest: &Metadata) -> Result<String, OfflineProofRequestError> {
     let name = Name::from_str(ANDROID_PROVISIONED_DEVICE_ID_KEY).map_err(|err| {
         let _ = err;
         invalid_counter_scope_error(
@@ -2322,9 +2314,7 @@ mod model {
     }
 
     impl OfflineToOnlineTransfer {
-        fn ordered_receipts(
-            &self,
-        ) -> Result<Vec<&OfflineSpendReceipt>, OfflineProofRequestError> {
+        fn ordered_receipts(&self) -> Result<Vec<&OfflineSpendReceipt>, OfflineProofRequestError> {
             ensure_single_counter_scope(&self.receipts)?;
             Ok(canonical_receipts(&self.receipts))
         }
@@ -3499,8 +3489,12 @@ mod tests {
     fn receipts_canonical_ordering_helpers() {
         let receipt_a = sample_receipt_with_counter(2);
         let receipt_b = sample_receipt_with_counter(1);
-        assert!(!receipts_are_canonical(&[receipt_a.clone(), receipt_b.clone()]));
-        let ordered = canonical_receipts(&[receipt_a, receipt_b]);
+        assert!(!receipts_are_canonical(&[
+            receipt_a.clone(),
+            receipt_b.clone()
+        ]));
+        let receipts = [receipt_a, receipt_b];
+        let ordered = canonical_receipts(&receipts);
         assert_eq!(ordered.first().unwrap().platform_proof.counter(), 1);
     }
 

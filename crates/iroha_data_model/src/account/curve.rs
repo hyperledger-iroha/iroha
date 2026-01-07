@@ -146,11 +146,10 @@ pub enum CurveRegistryError {
     UnknownCurveId(u8),
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "bls"))]
 mod tests {
     use super::*;
 
-    #[cfg(feature = "bls")]
     #[test]
     fn bls_curve_ids_round_trip() {
         let normal = CurveId::try_from_algorithm(Algorithm::BlsNormal)

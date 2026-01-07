@@ -432,6 +432,7 @@ thread_local! {
     static KURA_STORE_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
     static DA_GATE_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
     static QC_STATUS_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
+    static MISSING_BLOCK_FETCH_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
     static VIEW_CHANGE_CAUSE_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
     static VALIDATION_REJECT_LOCK_HELD: Cell<usize> = const { Cell::new(0) };
 }
@@ -3754,6 +3755,8 @@ pub fn inc_kura_store_abort() {
 
 /// Record a missing-block fetch attempt triggered by a QC-first arrival.
 pub fn record_missing_block_fetch(targets: usize, dwell_ms: u64) {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
     MISSING_BLOCK_FETCH_TOTAL.fetch_add(1, Ordering::Relaxed);
     MISSING_BLOCK_FETCH_LAST_TARGETS.store(targets as u64, Ordering::Relaxed);
     MISSING_BLOCK_FETCH_LAST_DWELL_MS.store(dwell_ms, Ordering::Relaxed);
@@ -5169,11 +5172,12 @@ pub(crate) fn lane_relay_test_guard() -> std::sync::MutexGuard<'static, ()> {
 }
 
 #[cfg(test)]
-pub(crate) fn missing_block_fetch_test_guard() -> std::sync::MutexGuard<'static, ()> {
-    MISSING_BLOCK_FETCH_TEST_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("missing-block fetch test lock poisoned")
+#[allow(private_interfaces)]
+pub(crate) fn missing_block_fetch_test_guard() -> TestLockGuard<'static> {
+    reentrant_test_guard(
+        &MISSING_BLOCK_FETCH_TEST_LOCK,
+        &MISSING_BLOCK_FETCH_LOCK_HELD,
+    )
 }
 
 #[cfg(test)]

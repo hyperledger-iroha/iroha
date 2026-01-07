@@ -1690,6 +1690,9 @@ impl Actor {
         let _ = self.drain_commit_results();
         let now = Instant::now();
         let _ = self.abort_inflight_commit_if_timed_out(now);
+        if matches!(trigger, CommitPipelineTrigger::Event) {
+            let _ = self.reschedule_stale_pending_blocks();
+        }
         // Commit certificates remain authoritative, but the QC pipeline is required to
         // keep NEW_VIEW liveness (precommit QCs) and backfill telemetry.
         let enable_qc_pipeline = true;
@@ -1826,17 +1829,14 @@ impl Actor {
             let roster_len = topology.as_ref().len();
             let min_votes_for_commit = self.commit_min_votes(&topology);
 
-            let delivered = if da_enabled {
-                Self::ensure_block_matches_rbc_payload(
+            let delivered = da_enabled
+                && Self::ensure_block_matches_rbc_payload(
                     &self.subsystems.da_rbc.rbc.sessions,
                     &self.subsystems.da_rbc.rbc.status_handle,
                     &hash,
                     pending_height,
                     &payload_hash,
-                )
-            } else {
-                false
-            };
+                );
             let missing_local_data = da_enabled && !delivered;
 
             let mut emit_precommit = false;
@@ -2789,6 +2789,11 @@ impl Actor {
         payload_hash: &Hash,
     ) -> bool {
         rbc_payload_matches(sessions, handle, block_hash, height, payload_hash)
+    }
+
+    fn local_payload_matches_hash(block: &SignedBlock, payload_hash: &Hash) -> bool {
+        let payload_bytes = super::proposals::block_payload_bytes(block);
+        Hash::new(&payload_bytes) == *payload_hash
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4514,6 +4519,20 @@ mod tests {
         let signature = SignatureOf::from_hash(&private_key, header.hash());
         let block_signature = BlockSignature::new(0, signature);
         SignedBlock::presigned(block_signature, header, Vec::<SignedTransaction>::new())
+    }
+
+    #[test]
+    fn local_payload_matches_hash_accepts_block_payload() {
+        let block = sample_block(2, 0);
+        let payload_hash = Hash::new(super::super::proposals::block_payload_bytes(&block));
+        assert!(Actor::local_payload_matches_hash(&block, &payload_hash));
+    }
+
+    #[test]
+    fn local_payload_matches_hash_rejects_mismatched_payload() {
+        let block = sample_block(2, 0);
+        let payload_hash = Hash::new(b"not-a-payload");
+        assert!(!Actor::local_payload_matches_hash(&block, &payload_hash));
     }
 
     #[test]

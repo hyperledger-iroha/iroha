@@ -160,7 +160,10 @@ fn zk_ballot_rejects_missing_lock_hints_when_bond_required() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query_handle);
-    assert!(state.gov.min_bond_amount > 0, "bond must be required by default");
+    assert!(
+        state.gov.min_bond_amount > 0,
+        "bond must be required by default"
+    );
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();

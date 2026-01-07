@@ -299,7 +299,8 @@ impl Topology {
         }
     }
 
-    /// Add or remove peers from the topology.
+    /// Add or remove peers from the topology (test helper).
+    #[cfg(test)]
     fn update_peer_list(&mut self, new_peers: impl IntoIterator<Item = PeerId>) {
         let (old_peers, new_peers): (IndexSet<_>, IndexSet<_>) = new_peers
             .into_iter()
@@ -334,12 +335,19 @@ impl Topology {
     }
 
     /// Rotate topology after a block has been committed, keyed to the previous block hash.
+    ///
+    /// Peer ordering is canonicalized (sorted by `PeerId`) before rotation to keep
+    /// topology deterministic across nodes and restarts.
     pub fn block_committed(
         &mut self,
         new_peers: impl IntoIterator<Item = PeerId>,
         prev_block_hash: HashOf<BlockHeader>,
     ) {
-        self.update_peer_list(new_peers);
+        // Canonicalize ordering to keep topology deterministic across nodes and restarts.
+        let mut peers: Vec<PeerId> = new_peers.into_iter().collect();
+        peers.sort();
+        peers.dedup();
+        self.0 = peers;
         let rotate_at = self.min_votes_for_commit();
         let k = rotation_offset_for_prev_hash(&prev_block_hash, rotate_at);
         if k > 0 {
@@ -542,9 +550,11 @@ pub enum Role {
 #[cfg(test)]
 #[allow(dead_code)]
 fn test_peers(n_peers: usize) -> Vec<PeerId> {
-    (0..n_peers)
+    let mut peers: Vec<_> = (0..n_peers)
         .map(|_| PeerId::new(KeyPair::random().into_parts().0))
-        .collect()
+        .collect();
+    peers.sort();
+    peers
 }
 
 #[cfg(test)]
@@ -1273,6 +1283,21 @@ mod tests {
         let cs_after: Vec<_> = idxs_after.iter().map(|&i| topo.0[i].clone()).collect();
         let expect_after = vec![peers[1].clone(), peers[5].clone(), peers[6].clone()];
         assert_eq!(cs_after, expect_after);
+    }
+
+    #[test]
+    fn block_committed_canonicalizes_peer_order() {
+        let mut peers = test_peers(4);
+        peers.reverse();
+        let mut topo = Topology::new(peers.clone());
+        let prev_hash = prev_hash_with_seed(0);
+
+        topo.block_committed(peers.clone(), prev_hash);
+
+        let mut expected = peers;
+        expected.sort();
+        expected.dedup();
+        assert_eq!(topo.as_ref(), expected.as_slice());
     }
 
     #[test]

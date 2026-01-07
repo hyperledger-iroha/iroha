@@ -82,8 +82,8 @@ use iroha_data_model::{
     events::prelude::*,
     isi::{GrantBox, register::RegisterBox, transfer::TransferBox},
     nexus::{
-        AssetHandle, AxtBinding, AxtHandleReplayKey, AxtPolicyEntry, AxtRejectReason, DataSpaceId,
-        LaneConfig, LaneId, LaneRelayEnvelope, ProofBlob, proof_matches_manifest,
+        AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtRejectReason, DataSpaceId, LaneConfig,
+        LaneId, LaneRelayEnvelope, ProofBlob, proof_matches_manifest,
     },
     peer::PeerId,
     permission::Permission,
@@ -8615,9 +8615,9 @@ mod commit {
         use std::collections::BTreeMap;
 
         use iroha_data_model::nexus::{
-            AssetHandle, AxtDescriptor, AxtEnvelopeRecord, AxtHandleFragment, AxtPolicyBinding,
-            AxtPolicyEntry, AxtPolicySnapshot, AxtProofFragment, GroupBinding, HandleBudget,
-            HandleSubject, ProofBlob, RemoteSpendIntent, SpendOp,
+            AssetHandle, AxtBinding, AxtDescriptor, AxtEnvelopeRecord, AxtHandleFragment,
+            AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtProofFragment, GroupBinding,
+            HandleBudget, HandleSubject, ProofBlob, RemoteSpendIntent, SpendOp,
         };
 
         use super::*;

@@ -9433,6 +9433,13 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.governance_referenda
     }
 
+    /// Test helper: get mutable access to elections storage for direct seeding.
+    pub fn elections_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, String, ElectionState> {
+        &mut self.elections
+    }
+
     /// Test helper: get mutable access to parliament approvals for direct seeding.
     pub fn governance_stage_approvals_mut(
         &mut self,
@@ -27830,6 +27837,27 @@ mod tests {
         let state = State::new_for_testing(World::default(), kura, query_handle);
         // Basic smoke check: view is accessible
         let _ = state.view();
+    }
+
+    #[test]
+    fn elections_mut_seeds_storage() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let election_id = "election-1".to_string();
+        stx.world
+            .elections_mut()
+            .insert(election_id.clone(), ElectionState::default());
+        stx.apply();
+        state_block.commit().expect("commit block");
+
+        let view = state.view();
+        assert!(view.world.elections().get(&election_id).is_some());
     }
 
     #[tokio::test]
