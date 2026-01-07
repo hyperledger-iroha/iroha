@@ -92,7 +92,10 @@ translation_last_reviewed: 2026-01-01
   - リクエスト: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "alice@wonderland?", "private_key": "...?" }
   - レスポンス: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - オンチェーン効果 (現在のスキャフォールド): 承認済みのdeploy提案をenactすると、`code_hash` をキーにした最小 `ContractManifest` を `abi_hash` 期待値で挿入し、提案を Enacted にします。`code_hash` に異なる `abi_hash` の manifest が既に存在する場合、enactment は拒否されます。
-  - 注記: ZK選挙では、コントラクト経路は `FinalizeElection` の前に `ZK_VOTE_VERIFY_TALLY` を呼ぶ必要があり、ホストはワンショット・ラッチを強制します。
+  - 注記:
+    - ZK選挙では、コントラクト経路は `FinalizeElection` の前に `ZK_VOTE_VERIFY_TALLY` を呼ぶ必要があり、ホストはワンショット・ラッチを強制します。`FinalizeReferendum` は選挙集計が確定するまで ZK レファレンダムを拒否します。
+    - `h_end` の自動クローズは Plain レファレンダムのみ Approved/Rejected を発行します。ZK は集計が確定して `FinalizeReferendum` が実行されるまで Closed のままです。
+    - ターンアウト判定は approve+reject のみを使用し、abstain はカウントしません。
 
 - POST `/v1/gov/enact`
   - リクエスト: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "alice@wonderland?", "private_key": "...?" }
@@ -201,7 +204,7 @@ CLIヘルパー
   - 保護されたnamespaceの監査やガバナンス制御デプロイフローの検証に有用。
 - `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - 保護namespaceへのデプロイ時に使うmetadata JSONスケルトンを出力し、manifest quorum を満たすための `gov_manifest_approvers` を任意で含めます。
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0` の場合は lock hints が必須であり、提供する場合は `owner` / `amount` / `duration_blocks` をすべて含める必要があります。
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
   - 1行サマリは、`CastZkBallot` から導出された決定的な `fingerprint=<hex>` と、デコードされたヒント (`owner`, `amount`, `duration_blocks`, `direction` 提供時) を表示します。

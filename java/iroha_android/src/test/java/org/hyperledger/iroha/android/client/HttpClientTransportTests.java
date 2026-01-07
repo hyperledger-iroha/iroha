@@ -18,6 +18,7 @@ import org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference;
 import org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueue;
 import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
 import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.nexus.AddressFormatOption;
 import org.hyperledger.iroha.android.nexus.UaidBindingsQuery;
 import org.hyperledger.iroha.android.nexus.UaidBindingsResponse;
@@ -88,12 +89,7 @@ public final class HttpClientTransportTests {
             .build();
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 
-    final SignedTransaction transaction =
-        new SignedTransaction(
-            new byte[] {0x01, 0x02, 0x03},
-            new byte[] {0x04, 0x05},
-            new byte[] {0x06},
-            "iroha.android.transaction.Payload.v1");
+    final SignedTransaction transaction = transactionWithPayload((byte) 0x01);
 
     final ClientResponse response = transport.submitTransaction(transaction).join();
     assert response.statusCode() == 202 : "Expected stub executor to return 202";
@@ -149,8 +145,7 @@ public final class HttpClientTransportTests {
                 .addObserver(observer)
                 .build());
 
-    final SignedTransaction transaction =
-        new SignedTransaction(new byte[] {0x00}, new byte[] {0x01}, new byte[] {0x02}, "schema");
+    final SignedTransaction transaction = transactionWithPayload((byte) 0x02);
 
     boolean threw = false;
     try {
@@ -182,8 +177,7 @@ public final class HttpClientTransportTests {
             .build();
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 
-    final SignedTransaction transaction =
-        new SignedTransaction(new byte[] {0x00}, new byte[] {0x01}, new byte[] {0x02}, "schema");
+    final SignedTransaction transaction = transactionWithPayload((byte) 0x03);
 
     boolean threw = false;
     try {
@@ -210,8 +204,7 @@ public final class HttpClientTransportTests {
             .build();
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 
-    final SignedTransaction transaction =
-        new SignedTransaction(new byte[] {0x00}, new byte[] {0x01}, new byte[] {0x02}, "schema");
+    final SignedTransaction transaction = transactionWithPayload((byte) 0x04);
 
     final ClientResponse response = transport.submitTransaction(transaction).join();
     assert response.statusCode() == 202 : "Final attempt should succeed";
@@ -1135,13 +1128,29 @@ public final class HttpClientTransportTests {
   private static int aliasCounter = 0;
 
   private static SignedTransaction transactionWithPayload(final byte fillValue) {
-    final byte[] payload = new byte[8];
     final byte[] signature = new byte[64];
     final byte[] publicKey = new byte[32];
-    java.util.Arrays.fill(payload, fillValue);
     java.util.Arrays.fill(signature, (byte) (fillValue + 1));
     java.util.Arrays.fill(publicKey, (byte) (fillValue + 2));
-    return new SignedTransaction(payload, signature, publicKey, "schema.v1", "alias-" + aliasCounter++);
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId(String.format("%08x", fillValue))
+            .setAuthority("alice@wonderland")
+            .setCreationTimeMs(1_700_000_000_000L + (fillValue & 0xFF))
+            .setInstructionBytes(new byte[] {fillValue, (byte) (fillValue + 1)})
+            .setTimeToLiveMs(5_000L)
+            .setNonce(fillValue & 0xFF)
+            .setMetadata(Map.of("note", "txn-" + fillValue))
+            .build();
+    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
+    final byte[] encodedPayload;
+    try {
+      encodedPayload = codec.encodeTransaction(payload);
+    } catch (final Exception ex) {
+      throw new IllegalStateException("Failed to encode transaction payload", ex);
+    }
+    return new SignedTransaction(
+        encodedPayload, signature, publicKey, codec.schemaName(), "alias-" + aliasCounter++);
   }
 
   private static byte[] statusPayload(final String kind) {

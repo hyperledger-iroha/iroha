@@ -1911,13 +1911,14 @@ impl Actor {
                 }
             }
             if let Some(init) = replay_rbc_init.take() {
+                let msg = BlockMessage::RbcInit(init);
                 for peer in &commit_topology {
                     if peer == &local_peer_id {
                         continue;
                     }
                     self.schedule_background(BackgroundRequest::Post {
                         peer: peer.clone(),
-                        msg: BlockMessage::RbcInit(init),
+                        msg: msg.clone(),
                     });
                 }
             }
@@ -2808,6 +2809,9 @@ impl Actor {
         lane_config: &LaneConfigSnapshot,
         telemetry: Option<&crate::telemetry::Telemetry>,
     ) -> DaGateStatus {
+        if !da_enabled {
+            return recompute_da_gate_status(pending, da_enabled, missing_local_data);
+        }
         if pending.block.da_commitments().is_some() {
             let mut cache_outcome = super::CacheOutcome::Hit;
             match manifests_available_for_block(
@@ -4895,13 +4899,18 @@ mod tests {
         let mut session = RbcSession::test_new(2, Some(payload_hash), Some(chunk_root), 0);
         session.test_note_chunk(0, vec![1, 2, 3], 0);
         session.test_note_chunk(1, vec![4, 5], 0);
+        let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+        let roster_hash = super::rbc::rbc_roster_hash(&roster);
 
         let (init, chunks) =
-            super::super::Actor::rbc_payload_bundle((block_hash, 5, 0), &session).expect("bundle");
+            super::super::Actor::rbc_payload_bundle((block_hash, 5, 0), &session, &roster)
+                .expect("bundle");
 
         assert_eq!(init.block_hash, block_hash);
         assert_eq!(init.total_chunks, 2);
         assert_eq!(init.chunk_root, chunk_root);
+        assert_eq!(init.roster, roster);
+        assert_eq!(init.roster_hash, roster_hash);
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0].idx, 0);
         assert_eq!(chunks[0].bytes, vec![1, 2, 3]);
@@ -4918,12 +4927,16 @@ mod tests {
         let mut session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
         session.record_ready(0, vec![9, 9, 9]);
         session.record_ready(2, vec![7, 8]);
+        let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+        let roster_hash = super::rbc::rbc_roster_hash(&roster);
 
         let readies =
-            super::super::Actor::rbc_ready_bundle((block_hash, 6, 0), &session).expect("ready set");
+            super::super::Actor::rbc_ready_bundle((block_hash, 6, 0), &session, roster_hash)
+                .expect("ready set");
         let senders: BTreeSet<_> = readies.iter().map(|ready| ready.sender).collect();
 
         assert_eq!(senders, BTreeSet::from([0, 2]));
         assert!(readies.iter().all(|ready| ready.chunk_root == chunk_root));
+        assert!(readies.iter().all(|ready| ready.roster_hash == roster_hash));
     }
 }

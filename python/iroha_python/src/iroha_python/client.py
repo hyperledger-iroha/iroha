@@ -638,6 +638,193 @@ def _normalize_base64_payload(
     raise TypeError(f"{context} must be bytes or a base64 string")
 
 
+def _normalize_governance_public_input_alias(
+    record: Dict[str, Any],
+    alias_key: str,
+    canonical_key: str,
+    *,
+    context: str,
+) -> None:
+    if alias_key not in record:
+        return
+    if canonical_key in record:
+        raise ValueError(f"{context} cannot include both {alias_key} and {canonical_key}")
+    record[canonical_key] = record.pop(alias_key)
+
+
+def _normalize_governance_public_hex_hint(
+    record: Dict[str, Any],
+    key: str,
+    *,
+    context: str,
+) -> None:
+    if key not in record:
+        return
+    value = record[key]
+    if value is None:
+        return
+    if not isinstance(value, str):
+        raise ValueError(f"{context}.{key} must be a 32-byte hex string")
+    raw = value.strip()
+    if ":" in raw:
+        scheme, rest = raw.split(":", 1)
+        if scheme and scheme.lower() != "blake2b32":
+            raise ValueError(f"{context}.{key} must be a 32-byte hex string")
+        raw = rest
+    if raw.startswith(("0x", "0X")):
+        raw = raw[2:]
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", raw):
+        raise ValueError(f"{context}.{key} must be a 32-byte hex string")
+    record[key] = raw.lower()
+
+
+def _ensure_governance_lock_hints_complete(
+    owner: Any,
+    amount: Any,
+    duration_blocks: Any,
+    *,
+    context: str,
+) -> None:
+    has_owner = owner is not None
+    has_amount = amount is not None
+    has_duration = duration_blocks is not None
+    has_any = has_owner or has_amount or has_duration
+    if has_any and not (has_owner and has_amount and has_duration):
+        raise ValueError(
+            f"{context} must include owner, amount, duration_blocks when providing lock hints"
+        )
+
+
+def _normalize_governance_zk_public_inputs(value: Any, *, context: str) -> Dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{context} must be an object")
+    normalized = dict(value)
+    _normalize_governance_public_input_alias(
+        normalized,
+        "durationBlocks",
+        "duration_blocks",
+        context=context,
+    )
+    _normalize_governance_public_input_alias(
+        normalized,
+        "nullifierHex",
+        "nullifier_hex",
+        context=context,
+    )
+    _normalize_governance_public_input_alias(
+        normalized,
+        "rootHintHex",
+        "root_hint",
+        context=context,
+    )
+    _normalize_governance_public_input_alias(
+        normalized,
+        "rootHint",
+        "root_hint",
+        context=context,
+    )
+    _normalize_governance_public_hex_hint(
+        normalized,
+        "root_hint",
+        context=context,
+    )
+    _normalize_governance_public_hex_hint(
+        normalized,
+        "nullifier_hex",
+        context=context,
+    )
+    _ensure_governance_lock_hints_complete(
+        normalized.get("owner"),
+        normalized.get("amount"),
+        normalized.get("duration_blocks"),
+        context=context,
+    )
+    return normalized
+
+
+def _normalize_governance_zk_ballot_payload(
+    payload: Mapping[str, Any],
+    *,
+    context: str,
+) -> Dict[str, Any]:
+    record = dict(payload)
+    if "public" in record:
+        public_inputs = record.get("public")
+        if public_inputs is None:
+            record.pop("public", None)
+        else:
+            record["public"] = _normalize_governance_zk_public_inputs(
+                public_inputs,
+                context=f"{context}.public",
+            )
+    return record
+
+
+def _normalize_governance_zk_ballot_v1_payload(
+    payload: Mapping[str, Any],
+    *,
+    context: str,
+) -> Dict[str, Any]:
+    record = dict(payload)
+    _normalize_governance_public_input_alias(
+        record,
+        "durationBlocks",
+        "duration_blocks",
+        context=context,
+    )
+    _normalize_governance_public_input_alias(
+        record,
+        "rootHintHex",
+        "root_hint_hex",
+        context=context,
+    )
+    _normalize_governance_public_input_alias(
+        record,
+        "nullifierHex",
+        "nullifier_hex",
+        context=context,
+    )
+    _normalize_governance_public_hex_hint(
+        record,
+        "root_hint_hex",
+        context=context,
+    )
+    _normalize_governance_public_hex_hint(
+        record,
+        "nullifier_hex",
+        context=context,
+    )
+    _ensure_governance_lock_hints_complete(
+        record.get("owner"),
+        record.get("amount"),
+        record.get("duration_blocks"),
+        context=context,
+    )
+    return record
+
+
+def _normalize_governance_zk_ballot_proof_payload(
+    payload: Mapping[str, Any],
+    *,
+    context: str,
+) -> Dict[str, Any]:
+    record = dict(payload)
+    ballot = record.get("ballot")
+    if ballot is None:
+        raise ValueError(f"{context}.ballot must be provided")
+    if not isinstance(ballot, Mapping):
+        raise TypeError(f"{context}.ballot must be an object")
+    ballot_record = dict(ballot)
+    _ensure_governance_lock_hints_complete(
+        ballot_record.get("owner"),
+        ballot_record.get("amount"),
+        ballot_record.get("duration_blocks"),
+        context=f"{context}.ballot",
+    )
+    record["ballot"] = ballot_record
+    return record
+
+
 def _build_sorafs_por_status_params(
     manifest_hex: Optional[str],
     provider_hex: Optional[str],
@@ -9962,7 +10149,10 @@ class ConnectAdmissionManifest:
         return self.request_json(
             "POST",
             "/v1/gov/ballots/zk",
-            json_body=dict(payload),
+            json_body=_normalize_governance_zk_ballot_payload(
+                payload,
+                context="governance zk ballot",
+            ),
         )
 
     def governance_submit_zk_ballot_v1(self, payload: Mapping[str, Any]) -> Optional[Any]:
@@ -9971,7 +10161,10 @@ class ConnectAdmissionManifest:
         return self.request_json(
             "POST",
             "/v1/gov/ballots/zk-v1",
-            json_body=dict(payload),
+            json_body=_normalize_governance_zk_ballot_v1_payload(
+                payload,
+                context="governance zk ballot v1",
+            ),
         )
 
     def governance_submit_zk_ballot_proof_v1(self, payload: Mapping[str, Any]) -> Optional[Any]:
@@ -9980,7 +10173,10 @@ class ConnectAdmissionManifest:
         return self.request_json(
             "POST",
             "/v1/gov/ballots/zk-v1/ballot-proof",
-            json_body=dict(payload),
+            json_body=_normalize_governance_zk_ballot_proof_payload(
+                payload,
+                context="governance zk ballot proof v1",
+            ),
         )
 
     def governance_finalize_referendum(self, payload: Mapping[str, Any]) -> Optional[Any]:

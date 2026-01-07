@@ -1,4 +1,4 @@
-//! Pending-RBC stash (chunks/ready/deliver seen before INIT).
+//! Pending-RBC stash (chunks/ready/deliver seen before INIT or roster resolution).
 
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -59,7 +59,7 @@ impl PendingRbcMessages {
     }
 
     pub(super) fn touch(&mut self, _now: Instant) {
-        // TTL is anchored to `first_seen` to avoid unbounded retention when INIT never appears.
+        // TTL is anchored to `first_seen` for pre-INIT stashes; active sessions bypass TTL.
     }
 
     pub(super) fn pending_bytes(&self) -> usize {
@@ -259,6 +259,7 @@ impl core::fmt::Debug for PendingRbcEviction {
 impl Actor {
     pub(super) fn apply_pending_rbc_housekeeping(
         pending: &mut BTreeMap<SessionKey, PendingRbcMessages>,
+        active_sessions: Option<&BTreeMap<SessionKey, super::RbcSession>>,
         key: SessionKey,
         session_cap: usize,
         ttl: Duration,
@@ -268,7 +269,14 @@ impl Actor {
         if ttl > Duration::ZERO && !pending.is_empty() {
             let expired: Vec<_> = pending
                 .iter()
-                .filter(|(_, entry)| entry.expired(ttl, now))
+                .filter(|(session_key, entry)| {
+                    if let Some(sessions) = active_sessions {
+                        if sessions.contains_key(session_key) {
+                            return false;
+                        }
+                    }
+                    entry.expired(ttl, now)
+                })
                 .map(|(session_key, _)| *session_key)
                 .collect();
             for session_key in expired {
@@ -303,14 +311,22 @@ impl Actor {
 
     #[allow(clippy::type_complexity)]
     #[allow(dead_code)]
-    pub(super) fn take_pending_rbc_slot(
-        pending: &mut BTreeMap<SessionKey, PendingRbcMessages>,
+    pub(super) fn take_pending_rbc_slot<'a>(
+        pending: &'a mut BTreeMap<SessionKey, PendingRbcMessages>,
+        active_sessions: Option<&BTreeMap<SessionKey, super::RbcSession>>,
         key: SessionKey,
         session_cap: usize,
         ttl: Duration,
         now: Instant,
-    ) -> (&mut PendingRbcMessages, Vec<PendingRbcEviction>) {
-        let evictions = Self::apply_pending_rbc_housekeeping(pending, key, session_cap, ttl, now);
+    ) -> (&'a mut PendingRbcMessages, Vec<PendingRbcEviction>) {
+        let evictions = Self::apply_pending_rbc_housekeeping(
+            pending,
+            active_sessions,
+            key,
+            session_cap,
+            ttl,
+            now,
+        );
         let pending_slot = pending
             .entry(key)
             .or_insert_with(|| PendingRbcMessages::new(now));
@@ -323,6 +339,7 @@ impl Actor {
         let ttl = self.config.rbc_pending_ttl;
         let evictions = Self::apply_pending_rbc_housekeeping(
             &mut self.subsystems.da_rbc.rbc.pending,
+            Some(&self.subsystems.da_rbc.rbc.sessions),
             key,
             PENDING_RBC_STASH_LIMIT,
             ttl,
@@ -421,10 +438,49 @@ impl Actor {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::BTreeMap,
+        time::{Duration, Instant},
+    };
+
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::block::BlockHeader;
+
+    use super::Actor;
+    use crate::sumeragi::rbc_store::SessionKey;
+
+    #[test]
+    fn take_pending_rbc_slot_inserts_entry() {
+        let key: SessionKey = (
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"pending-rbc-slot")),
+            1,
+            2,
+        );
+        let mut pending = BTreeMap::new();
+        let now = Instant::now();
+        {
+            let (slot, evictions) = Actor::take_pending_rbc_slot(
+                &mut pending,
+                None,
+                key,
+                4,
+                Duration::from_secs(5),
+                now,
+            );
+            assert!(evictions.is_empty());
+            assert_eq!(slot.pending_chunks(), 0);
+        }
+        assert!(pending.contains_key(&key));
+    }
+}
+
 fn rbc_ready_stash_bytes(ready: &RbcReady) -> usize {
     ready
         .signature
         .len()
+        .saturating_add(ready.roster_hash.as_ref().len())
         .saturating_add(ready.chunk_root.as_ref().len())
         .saturating_add(ready.block_hash.as_ref().as_ref().len())
         .saturating_add(std::mem::size_of::<u64>() * 3)
@@ -435,6 +491,7 @@ fn rbc_deliver_stash_bytes(deliver: &RbcDeliver) -> usize {
     deliver
         .signature
         .len()
+        .saturating_add(deliver.roster_hash.as_ref().len())
         .saturating_add(deliver.chunk_root.as_ref().len())
         .saturating_add(deliver.block_hash.as_ref().as_ref().len())
         .saturating_add(std::mem::size_of::<u64>() * 3)

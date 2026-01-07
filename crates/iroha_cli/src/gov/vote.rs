@@ -71,6 +71,69 @@ fn resolve_vote_mode(
     }
 }
 
+fn hint_present(map: &json::Map<String, json::Value>, key: &str) -> bool {
+    map.get(key)
+        .map(|value| !matches!(value, json::Value::Null))
+        .unwrap_or(false)
+}
+
+fn ensure_lock_hints_complete(map: &json::Map<String, json::Value>) -> Result<()> {
+    let has_owner = hint_present(map, "owner");
+    let has_amount = hint_present(map, "amount");
+    let has_duration = hint_present(map, "duration_blocks");
+    let any = has_owner || has_amount || has_duration;
+    if any && !(has_owner && has_amount && has_duration) {
+        return Err(eyre!(
+            "lock hints must include owner, amount, duration_blocks"
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_public_input_aliases(map: &mut json::Map<String, json::Value>) -> Result<()> {
+    normalize_public_input_alias(map, "durationBlocks", "duration_blocks")?;
+    normalize_public_input_alias(map, "nullifierHex", "nullifier_hex")?;
+    normalize_public_input_alias(map, "rootHintHex", "root_hint")?;
+    normalize_public_input_alias(map, "rootHint", "root_hint")?;
+    canonicalize_public_input_hex(map, "root_hint")?;
+    canonicalize_public_input_hex(map, "nullifier_hex")?;
+    Ok(())
+}
+
+fn canonicalize_public_input_hex(map: &mut json::Map<String, json::Value>, key: &str) -> Result<()> {
+    let Some(value) = map.get_mut(key) else {
+        return Ok(());
+    };
+    if matches!(value, json::Value::Null) {
+        return Ok(());
+    }
+    let raw = value
+        .as_str()
+        .ok_or_else(|| eyre!("{key} must be 32-byte hex"))?;
+    let canonical = canonicalize_hex32(raw).map_err(|_| eyre!("{key} must be 32-byte hex"))?;
+    *value = json::Value::String(canonical);
+    Ok(())
+}
+
+fn normalize_public_input_alias(
+    map: &mut json::Map<String, json::Value>,
+    alias: &str,
+    canonical: &str,
+) -> Result<()> {
+    if !map.contains_key(alias) {
+        return Ok(());
+    }
+    if map.contains_key(canonical) {
+        return Err(eyre!(
+            "public inputs JSON cannot include both {alias} and {canonical}"
+        ));
+    }
+    if let Some(value) = map.remove(alias) {
+        map.insert(canonical.to_owned(), value);
+    }
+    Ok(())
+}
+
 #[derive(clap::Args, Debug)]
 pub struct VoteArgs {
     #[arg(long, value_name = "REFERENDUM_ID")]
@@ -227,6 +290,7 @@ impl Run for VoteZkArgs {
         let public_obj = public
             .as_object_mut()
             .ok_or_else(|| eyre!("public inputs JSON must be an object"))?;
+        normalize_public_input_aliases(public_obj)?;
         if let Some(owner) = self.owner {
             public_obj.insert("owner".to_owned(), json_value(&owner)?);
         }
@@ -243,6 +307,7 @@ impl Run for VoteZkArgs {
             let canonical = canonicalize_hex32(&nullifier_hex)?;
             public_obj.insert("nullifier_hex".to_owned(), json_value(&canonical)?);
         }
+        ensure_lock_hints_complete(public_obj)?;
         let body = json_object(vec![
             ("election_id", json_value(&self.election_id)?),
             ("proof_b64", json_value(&self.proof_b64)?),
@@ -558,6 +623,79 @@ mod tests {
             instr.get("nullifier_hex").and_then(json::Value::as_str),
             Some(nullifier.as_str())
         );
+    }
+
+    #[test]
+    fn lock_hints_require_complete_triplet() {
+        let mut map = json::Map::new();
+        map.insert(
+            "owner".to_string(),
+            json::Value::String("alice@wonderland".to_string()),
+        );
+        assert!(ensure_lock_hints_complete(&map).is_err());
+        map.insert(
+            "amount".to_string(),
+            json::Value::String("10".to_string()),
+        );
+        assert!(ensure_lock_hints_complete(&map).is_err());
+        map.insert("duration_blocks".to_string(), json::Value::from(64u64));
+        assert!(ensure_lock_hints_complete(&map).is_ok());
+    }
+
+    #[test]
+    fn normalize_public_input_aliases_maps_keys() {
+        let mut map = json::Map::new();
+        let root_raw = format!("0x{}", "Aa".repeat(32));
+        let nullifier_raw = format!("blake2b32:{}", "BB".repeat(32));
+        let root_expected = "aa".repeat(32);
+        let nullifier_expected = "bb".repeat(32);
+        map.insert("durationBlocks".to_string(), json::Value::from(64u64));
+        map.insert(
+            "rootHintHex".to_string(),
+            json::Value::String(root_raw),
+        );
+        map.insert(
+            "nullifierHex".to_string(),
+            json::Value::String(nullifier_raw),
+        );
+        normalize_public_input_aliases(&mut map).expect("normalize aliases");
+        assert!(map.contains_key("duration_blocks"));
+        assert!(map.contains_key("root_hint"));
+        assert!(map.contains_key("nullifier_hex"));
+        assert!(!map.contains_key("durationBlocks"));
+        assert!(!map.contains_key("rootHintHex"));
+        assert!(!map.contains_key("nullifierHex"));
+        assert_eq!(
+            map.get("root_hint").and_then(json::Value::as_str),
+            Some(root_expected.as_str())
+        );
+        assert_eq!(
+            map.get("nullifier_hex").and_then(json::Value::as_str),
+            Some(nullifier_expected.as_str())
+        );
+    }
+
+    #[test]
+    fn normalize_public_input_aliases_rejects_conflicts() {
+        let mut map = json::Map::new();
+        map.insert("rootHint".to_string(), json::Value::String("aa".repeat(32)));
+        map.insert(
+            "root_hint".to_string(),
+            json::Value::String("bb".repeat(32)),
+        );
+        let err = normalize_public_input_aliases(&mut map).expect_err("alias conflict");
+        assert!(err.to_string().contains("rootHint"));
+    }
+
+    #[test]
+    fn normalize_public_input_aliases_rejects_invalid_hex() {
+        let mut map = json::Map::new();
+        map.insert(
+            "root_hint".to_string(),
+            json::Value::String("not-hex".to_string()),
+        );
+        let err = normalize_public_input_aliases(&mut map).expect_err("invalid hex");
+        assert!(err.to_string().contains("root_hint"));
     }
 }
 

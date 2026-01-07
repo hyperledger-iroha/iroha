@@ -4533,7 +4533,18 @@ impl Actor {
             .session_rosters
             .get(&key)
             .cloned()
-            .unwrap_or_else(|| self.rbc_roster_for_session(key))
+            .unwrap_or_default()
+    }
+
+    fn ensure_rbc_session_roster(&mut self, key: super::rbc_store::SessionKey) -> Vec<PeerId> {
+        if let Some(roster) = self.subsystems.da_rbc.rbc.session_rosters.get(&key) {
+            return roster.clone();
+        }
+        let roster = self.rbc_roster_for_session(key);
+        if !roster.is_empty() {
+            self.record_rbc_session_roster(key, roster.clone());
+        }
+        roster
     }
 
     fn record_rbc_session_roster(
@@ -6696,6 +6707,7 @@ impl Actor {
         if commit_topology.is_empty() {
             return None;
         }
+        let roster_hash = rbc::rbc_roster_hash(&commit_topology);
         let topology = super::network_topology::Topology::new(commit_topology);
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
         let signature_topology = topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
@@ -6708,6 +6720,7 @@ impl Actor {
             height,
             view: view_idx,
             epoch: session.epoch,
+            roster_hash,
             chunk_root,
             sender,
             signature: Vec::new(),
@@ -6728,6 +6741,7 @@ impl Actor {
         if commit_topology.is_empty() {
             return None;
         }
+        let roster_hash = rbc::rbc_roster_hash(&commit_topology);
         let topology = super::network_topology::Topology::new(commit_topology);
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
         let signature_topology = topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
@@ -6740,6 +6754,7 @@ impl Actor {
             height,
             view: view_idx,
             epoch: session.epoch,
+            roster_hash,
             chunk_root,
             sender,
             signature: Vec::new(),
@@ -6820,6 +6835,11 @@ impl Actor {
         if session.is_invalid() {
             return None;
         }
+        let roster = self.rbc_session_roster(key);
+        if roster.is_empty() {
+            return None;
+        }
+        let roster_hash = rbc::rbc_roster_hash(&roster);
         let payload_hash = session.payload_hash()?;
         let chunk_root = session
             .expected_chunk_root
@@ -6829,6 +6849,8 @@ impl Actor {
             height: key.1,
             view: key.2,
             epoch: session.epoch,
+            roster,
+            roster_hash,
             total_chunks: session.total_chunks(),
             payload_hash,
             chunk_root,
@@ -6986,6 +7008,7 @@ impl Actor {
     fn rbc_ready_bundle(
         key: super::rbc_store::SessionKey,
         session: &RbcSession,
+        roster_hash: Hash,
     ) -> Option<Vec<RbcReady>> {
         let chunk_root = session
             .expected_chunk_root
@@ -7000,6 +7023,7 @@ impl Actor {
                 height: key.1,
                 view: key.2,
                 epoch: session.epoch,
+                roster_hash,
                 chunk_root,
                 sender: entry.sender,
                 signature: entry.signature.clone(),
@@ -7013,7 +7037,12 @@ impl Actor {
         key: super::rbc_store::SessionKey,
         session: &RbcSession,
     ) {
-        let Some(readies) = Self::rbc_ready_bundle(key, session) else {
+        let roster = self.rbc_session_roster(key);
+        if roster.is_empty() {
+            return;
+        }
+        let roster_hash = rbc::rbc_roster_hash(&roster);
+        let Some(readies) = Self::rbc_ready_bundle(key, session, roster_hash) else {
             return;
         };
         self.rebroadcast_rbc_ready_bundle(key, readies);
@@ -7066,11 +7095,15 @@ impl Actor {
     fn rbc_payload_bundle(
         key: super::rbc_store::SessionKey,
         session: &RbcSession,
+        roster: &[PeerId],
     ) -> Option<(
         crate::sumeragi::consensus::RbcInit,
         Vec<crate::sumeragi::consensus::RbcChunk>,
     )> {
         if session.total_chunks() == 0 {
+            return None;
+        }
+        if roster.is_empty() {
             return None;
         }
         let payload_hash = session.payload_hash()?;
@@ -7090,14 +7123,14 @@ impl Actor {
                 });
             }
         }
-        if chunks.is_empty() {
-            return None;
-        }
+        let roster_hash = rbc::rbc_roster_hash(roster);
         let init = crate::sumeragi::consensus::RbcInit {
             block_hash: key.0,
             height: key.1,
             view: key.2,
             epoch: session.epoch,
+            roster: roster.to_vec(),
+            roster_hash,
             total_chunks: session.total_chunks(),
             payload_hash,
             chunk_root,
@@ -7125,9 +7158,7 @@ impl Actor {
                 return;
             }
         }
-        if chunks.is_empty() {
-            return;
-        }
+        let chunk_count = chunks.len();
         for chunk in &chunks {
             self.schedule_rbc_chunk_broadcast(chunk.clone());
         }
@@ -7136,10 +7167,13 @@ impl Actor {
             view = key.2,
             block = %key.0,
             ready = ready_count,
-            chunk_count = chunks.len(),
+            chunk_count,
             "rebroadcasting RBC INIT and cached chunks while awaiting READY quorum"
         );
-        let topology_peers = self.rbc_session_roster(key);
+        let topology_peers = self.ensure_rbc_session_roster(key);
+        if topology_peers.is_empty() {
+            return;
+        }
         let local_peer_id = self.common_config.peer.id().clone();
         for peer in &topology_peers {
             if peer == &local_peer_id {
@@ -7147,7 +7181,7 @@ impl Actor {
             }
             self.schedule_background(BackgroundRequest::Post {
                 peer: peer.clone(),
-                msg: BlockMessage::RbcInit(init),
+                msg: BlockMessage::RbcInit(init.clone()),
             });
         }
         self.subsystems
@@ -7158,12 +7192,13 @@ impl Actor {
     }
 
     fn rebroadcast_rbc_payload(&mut self, key: super::rbc_store::SessionKey, session: &RbcSession) {
-        let Some((init, chunks)) = Self::rbc_payload_bundle(key, session) else {
+        let roster = self.ensure_rbc_session_roster(key);
+        let Some((init, chunks)) = Self::rbc_payload_bundle(key, session, &roster) else {
             debug!(
                 height = key.1,
                 view = key.2,
                 block = %key.0,
-                "skipping RBC payload rebroadcast: payload missing"
+                "skipping RBC payload rebroadcast: payload or roster missing"
             );
             return;
         };
@@ -7202,6 +7237,21 @@ impl Actor {
             })
     }
 
+    fn flush_pending_rbc_if_roster_ready(&mut self, key: super::rbc_store::SessionKey) -> bool {
+        if !self.subsystems.da_rbc.rbc.pending.contains_key(&key) {
+            return false;
+        }
+        let roster = self.ensure_rbc_session_roster(key);
+        if roster.is_empty() {
+            return false;
+        }
+        if let Err(err) = self.flush_pending_rbc(key) {
+            warn!(?err, ?key, "failed to flush pending RBC messages");
+            return false;
+        }
+        true
+    }
+
     fn rebroadcast_stalled_rbc_payloads(&mut self, now: Instant) -> bool {
         if !self.runtime_da_enabled() {
             return false;
@@ -7223,6 +7273,9 @@ impl Actor {
         let mut progress = false;
 
         for key in keys {
+            if self.flush_pending_rbc_if_roster_ready(key) {
+                progress = true;
+            }
             let attempt_ready =
                 self.subsystems
                     .da_rbc
@@ -7261,37 +7314,40 @@ impl Actor {
                     progress = true;
                 }
             }
-            let Some((payload_bundle, ready_bundle, ready_count)) = (|| {
-                let session = self.subsystems.da_rbc.rbc.sessions.get(&key)?;
-                if session.delivered || session.is_invalid() {
-                    return None;
-                }
-                let topology_peers = self.rbc_session_roster(key);
-                if topology_peers.is_empty() {
-                    return None;
-                }
-                let topology = super::network_topology::Topology::new(topology_peers);
-                let required = self.rbc_deliver_quorum(&topology);
-                let ready_count = session.ready_signatures.len();
-                if ready_count >= required {
-                    return None;
-                }
-                let payload_bundle =
-                    if self.rbc_payload_rebroadcast_due(&key, now, payload_cooldown) {
-                        Self::rbc_payload_bundle(key, session)
-                    } else {
-                        None
-                    };
-                let ready_bundle = if !session.ready_signatures.is_empty()
-                    && self.rbc_ready_rebroadcast_due(&key, now, ready_cooldown)
-                {
-                    Self::rbc_ready_bundle(key, session)
-                } else {
-                    None
-                };
-                Some((payload_bundle, ready_bundle, ready_count))
-            })() else {
+            if !self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
                 continue;
+            }
+            let mut roster = self.rbc_session_roster(key);
+            if roster.is_empty() {
+                roster = self.ensure_rbc_session_roster(key);
+            }
+            if roster.is_empty() {
+                continue;
+            }
+            let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) else {
+                continue;
+            };
+            if session.delivered || session.is_invalid() {
+                continue;
+            }
+            let roster_hash = rbc::rbc_roster_hash(&roster);
+            let topology = super::network_topology::Topology::new(roster.clone());
+            let required = self.rbc_deliver_quorum(&topology);
+            let ready_count = session.ready_signatures.len();
+            if ready_count >= required {
+                continue;
+            }
+            let payload_bundle = if self.rbc_payload_rebroadcast_due(&key, now, payload_cooldown) {
+                Self::rbc_payload_bundle(key, session, &roster)
+            } else {
+                None
+            };
+            let ready_bundle = if !session.ready_signatures.is_empty()
+                && self.rbc_ready_rebroadcast_due(&key, now, ready_cooldown)
+            {
+                Self::rbc_ready_bundle(key, session, roster_hash)
+            } else {
+                None
             };
 
             if let Some((init, chunks)) = payload_bundle {

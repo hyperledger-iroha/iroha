@@ -6,6 +6,8 @@ import java.nio.file.Path;
 import java.util.List;
 import org.hyperledger.iroha.android.offline.OfflineJournal;
 import org.hyperledger.iroha.android.offline.OfflineJournalKey;
+import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.offline.OfflineSigningEnvelope;
 
@@ -64,7 +66,6 @@ public final class OfflineJournalPendingTransactionQueueTest {
 
   /** Minimal helper for constructing deterministic signed transactions. */
   private static final class TestTransactions {
-    private static final byte[] PAYLOAD = "payload".getBytes(StandardCharsets.UTF_8);
     private static final byte[] SIGNATURE = new byte[64];
     private static final byte[] PUBLIC_KEY = new byte[32];
 
@@ -74,12 +75,29 @@ public final class OfflineJournalPendingTransactionQueueTest {
     }
 
     static SignedTransaction sampleSignedTransaction() {
+      final TransactionPayload payload =
+          TransactionPayload.builder()
+              .setChainId("00000001")
+              .setAuthority("queue@wonderland")
+              .setCreationTimeMs(1_700_000_000_000L)
+              .setInstructionBytes("payload".getBytes(StandardCharsets.UTF_8))
+              .setTimeToLiveMs(5_000L)
+              .setNonce(1)
+              .setMetadata(java.util.Map.of("test", "true"))
+              .build();
+      final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
+      final byte[] encoded;
+      try {
+        encoded = codec.encodeTransaction(payload);
+      } catch (final Exception ex) {
+        throw new IllegalStateException("Failed to encode transaction payload", ex);
+      }
       final OfflineSigningEnvelope envelope =
           OfflineSigningEnvelope.builder()
-              .setEncodedPayload(PAYLOAD)
+              .setEncodedPayload(encoded)
               .setSignature(SIGNATURE)
               .setPublicKey(PUBLIC_KEY)
-              .setSchemaName("iroha.android.transaction.Payload.v1")
+              .setSchemaName(codec.schemaName())
               .setKeyAlias("test")
               .setIssuedAtMs(1_700_000_000_000L)
               .setMetadata(java.util.Map.of("test", "true"))

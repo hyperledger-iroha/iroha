@@ -14151,6 +14151,11 @@ function normalizeOptionalHex32(value, name) {
 
 function normalizeHex32String(value, name, options = {}) {
   const allowShort = options.allowShort === true;
+  const allowScheme = options.allowScheme === true;
+  const schemeName =
+    typeof options.scheme === "string" && options.scheme.trim()
+      ? options.scheme.trim().toLowerCase()
+      : "blake2b32";
   if (Buffer.isBuffer(value)) {
     return normalizeHex32String(value.toString("hex"), name, options);
   }
@@ -14167,7 +14172,18 @@ function normalizeHex32String(value, name, options = {}) {
   if (Array.isArray(value)) {
     return normalizeHex32String(normalizeByteArray(value, name).toString("hex"), name, options);
   }
-  const normalized = requireNonEmptyString(value, name);
+  let normalized = requireNonEmptyString(value, name);
+  if (allowScheme && normalized.includes(":")) {
+    const [scheme, rest] = normalized.split(":", 2);
+    if (scheme && scheme.toLowerCase() !== schemeName) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_HEX,
+        `${name} must be a 32-byte hex string`,
+        name,
+      );
+    }
+    normalized = rest.trim();
+  }
   const hex =
     normalized.startsWith("0x") || normalized.startsWith("0X")
       ? normalized.slice(2)
@@ -14946,6 +14962,106 @@ function normalizeGovernanceBallotDirection(value, name) {
   throw new TypeError(`${name} must be one of Aye, Nay, or Abstain`);
 }
 
+function normalizeGovernancePublicInputs(value, name) {
+  const cloned = cloneJsonValue(value, name);
+  if (!isPlainObject(cloned)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be an object`,
+      name,
+    );
+  }
+  const normalized = { ...cloned };
+  normalizeGovernancePublicInputAlias(
+    normalized,
+    "durationBlocks",
+    "duration_blocks",
+    name,
+  );
+  normalizeGovernancePublicInputAlias(
+    normalized,
+    "nullifierHex",
+    "nullifier_hex",
+    name,
+  );
+  normalizeGovernancePublicInputAlias(
+    normalized,
+    "rootHintHex",
+    "root_hint",
+    name,
+  );
+  normalizeGovernancePublicInputAlias(normalized, "rootHint", "root_hint", name);
+  normalizeGovernancePublicInputHex(normalized, "root_hint", name);
+  normalizeGovernancePublicInputHex(normalized, "nullifier_hex", name);
+  ensureGovernanceLockHintsComplete(normalized, name);
+  return normalized;
+}
+
+function normalizeGovernancePublicInputHex(target, key, name) {
+  if (!Object.prototype.hasOwnProperty.call(target, key)) {
+    return;
+  }
+  const value = target[key];
+  if (value === null) {
+    return;
+  }
+  const context = `${name}.${key}`;
+  const raw = requireNonEmptyString(value, context).trim();
+  let body = raw;
+  if (raw.includes(":")) {
+    const [scheme, rest] = raw.split(":", 2);
+    if (scheme && scheme.toLowerCase() !== "blake2b32") {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_HEX,
+        `${context} must be a 32-byte hex string`,
+        context,
+      );
+    }
+    body = rest;
+  }
+  if (body.startsWith("0x") || body.startsWith("0X")) {
+    body = body.slice(2);
+  }
+  if (!/^[0-9a-fA-F]{64}$/.test(body)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context} must be a 32-byte hex string`,
+      context,
+    );
+  }
+  target[key] = body.toLowerCase();
+}
+
+function normalizeGovernancePublicInputAlias(target, aliasKey, canonicalKey, name) {
+  if (!Object.prototype.hasOwnProperty.call(target, aliasKey)) {
+    return;
+  }
+  if (Object.prototype.hasOwnProperty.call(target, canonicalKey)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} cannot include both ${aliasKey} and ${canonicalKey}`,
+      name,
+    );
+  }
+  target[canonicalKey] = target[aliasKey];
+  delete target[aliasKey];
+}
+
+function ensureGovernanceLockHintsComplete(source, name) {
+  const hasOwner = source.owner !== undefined && source.owner !== null;
+  const hasAmount = source.amount !== undefined && source.amount !== null;
+  const hasDuration =
+    source.duration_blocks !== undefined && source.duration_blocks !== null;
+  const hasAnyLockHint = hasOwner || hasAmount || hasDuration;
+  if (hasAnyLockHint && !(hasOwner && hasAmount && hasDuration)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must include owner, amount, and duration_blocks when providing lock hints`,
+      name,
+    );
+  }
+}
+
 function normalizeGovernanceZkBallotPayload(input) {
   const record = ensureRecord(input, "governanceSubmitZkBallot payload");
   const payload = {
@@ -14967,7 +15083,10 @@ function normalizeGovernanceZkBallotPayload(input) {
     ),
   };
   if (record.public !== undefined && record.public !== null) {
-    payload.public = cloneJsonValue(record.public, "governanceSubmitZkBallot.public");
+    payload.public = normalizeGovernancePublicInputs(
+      record.public,
+      "governanceSubmitZkBallot.public",
+    );
   }
   return payload;
 }
@@ -14996,10 +15115,12 @@ function normalizeGovernanceZkBallotV1Payload(input) {
       "governanceSubmitZkBallotV1.envelopeB64",
     ),
   };
-  if (record.root_hint_hex ?? record.rootHintHex) {
+  const rootHintHex = record.root_hint_hex ?? record.rootHintHex;
+  if (rootHintHex !== undefined && rootHintHex !== null) {
     payload.root_hint_hex = normalizeHex32String(
-      record.root_hint_hex ?? record.rootHintHex,
+      rootHintHex,
       "governanceSubmitZkBallotV1.rootHintHex",
+      { allowScheme: true, scheme: "blake2b32" },
     );
   }
   if (record.owner !== undefined && record.owner !== null) {
@@ -15028,17 +15149,28 @@ function normalizeGovernanceZkBallotV1Payload(input) {
       "governanceSubmitZkBallotV1.direction",
     );
   }
-  if (record.nullifier_hex ?? record.nullifierHex) {
+  const nullifierHex = record.nullifier_hex ?? record.nullifierHex;
+  if (nullifierHex !== undefined && nullifierHex !== null) {
     payload.nullifier_hex = normalizeHex32String(
-      record.nullifier_hex ?? record.nullifierHex,
+      nullifierHex,
       "governanceSubmitZkBallotV1.nullifierHex",
+      { allowScheme: true, scheme: "blake2b32" },
     );
   }
+  ensureGovernanceLockHintsComplete(payload, "governanceSubmitZkBallotV1");
   return payload;
 }
 
 function normalizeGovernanceZkBallotProofPayload(input) {
   const record = ensureRecord(input, "governanceSubmitZkBallotProofV1 payload");
+  const ballot = ensureRecord(
+    record.ballot,
+    "governanceSubmitZkBallotProofV1.ballot",
+  );
+  ensureGovernanceLockHintsComplete(
+    ballot,
+    "governanceSubmitZkBallotProofV1.ballot",
+  );
   const payload = {
     authority: requireNonEmptyString(
       record.authority,
@@ -15052,7 +15184,7 @@ function normalizeGovernanceZkBallotProofPayload(input) {
       record.election_id ?? record.electionId,
       "governanceSubmitZkBallotProofV1.electionId",
     ),
-    ballot: ensureRecord(record.ballot, "governanceSubmitZkBallotProofV1.ballot"),
+    ballot,
   };
   return payload;
 }

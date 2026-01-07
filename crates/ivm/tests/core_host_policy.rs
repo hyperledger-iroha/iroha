@@ -844,6 +844,126 @@ fn core_host_rejects_inline_proof_manifest_mismatch() {
     ));
 }
 
+#[test]
+fn core_host_accepts_proof_within_skew() {
+    use std::num::NonZeroU64;
+
+    let mut vm = IVM::new(1_000_000);
+    let dsid = DataSpaceId::new(23);
+    let manifest_root = [0xAC; 32];
+    let snapshot = make_policy_snapshot(dsid, manifest_root, LaneId::new(0), 1, 1, 5);
+    let mut host = CoreHost::new()
+        .with_axt_timing(NonZeroU64::new(1).expect("slot length"), 1)
+        .with_axt_policy_snapshot(&snapshot);
+
+    let descriptor = make_descriptor(dsid);
+    let desc_ptr = store_tlv(
+        &mut vm,
+        PointerType::AxtDescriptor,
+        &norito::to_bytes(&descriptor).expect("encode descriptor"),
+    );
+    vm.set_register(10, desc_ptr);
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
+        Ok(0)
+    );
+
+    let ds_ptr = store_tlv(
+        &mut vm,
+        PointerType::DataSpaceId,
+        &norito::to_bytes(&dsid).expect("encode dsid"),
+    );
+    let proof = proof_blob_for(dsid, manifest_root, vec![0xAA], 4);
+    let proof_ptr = store_tlv(
+        &mut vm,
+        PointerType::ProofBlob,
+        &norito::to_bytes(&proof).expect("encode proof"),
+    );
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, proof_ptr);
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+        Ok(0)
+    );
+}
+
+#[test]
+fn core_host_rejects_inline_proof_zero_expiry_slot() {
+    let mut vm = IVM::new(1_000_000);
+    let dsid = DataSpaceId::new(24);
+    let manifest_root = [0xAD; 32];
+    let snapshot = make_policy_snapshot(dsid, manifest_root, LaneId::new(0), 1, 1, 0);
+    let mut host = CoreHost::new().with_axt_policy_snapshot(&snapshot);
+
+    let descriptor = make_descriptor(dsid);
+    let desc_ptr = store_tlv(
+        &mut vm,
+        PointerType::AxtDescriptor,
+        &norito::to_bytes(&descriptor).expect("encode descriptor"),
+    );
+    vm.set_register(10, desc_ptr);
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm),
+        Ok(0)
+    );
+
+    let ds_ptr = store_tlv(
+        &mut vm,
+        PointerType::DataSpaceId,
+        &norito::to_bytes(&dsid).expect("encode dsid"),
+    );
+    let manifest = TouchManifest {
+        read: vec!["orders/inline".into()],
+        write: vec!["ledger/inline".into()],
+    };
+    let manifest_ptr = store_tlv(
+        &mut vm,
+        PointerType::NoritoBytes,
+        &norito::to_bytes(&manifest).expect("encode manifest"),
+    );
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, manifest_ptr);
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm),
+        Ok(0)
+    );
+
+    let binding = axt::compute_binding(&descriptor).expect("binding");
+    let handle = make_handle(binding, LaneId::new(0), manifest_root, 1, 1, 10);
+    let intent = RemoteSpendIntent {
+        asset_dsid: dsid,
+        op: SpendOp {
+            kind: "transfer".into(),
+            from: "alice@wonderland".into(),
+            to: "merchant@wonderland".into(),
+            amount: "1".into(),
+        },
+    };
+    let intent_ptr = store_tlv(
+        &mut vm,
+        PointerType::NoritoBytes,
+        &norito::to_bytes(&intent).expect("encode intent"),
+    );
+    let handle_ptr = store_tlv(
+        &mut vm,
+        PointerType::AssetHandle,
+        &norito::to_bytes(&handle).expect("encode handle"),
+    );
+    let proof = proof_blob_for(dsid, manifest_root, vec![0xBB], 0);
+    let proof_ptr = store_tlv(
+        &mut vm,
+        PointerType::ProofBlob,
+        &norito::to_bytes(&proof).expect("encode proof"),
+    );
+    vm.set_register(10, handle_ptr);
+    vm.set_register(11, intent_ptr);
+    vm.set_register(12, proof_ptr);
+    assert!(matches!(
+        host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
+        Err(VMError::NoritoInvalid)
+    ));
+}
+
 fn exercise_fixture_handle(
     descriptor: &axt::AxtDescriptor,
     snapshot: &AxtPolicySnapshot,

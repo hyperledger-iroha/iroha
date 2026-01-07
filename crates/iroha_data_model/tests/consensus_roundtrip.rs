@@ -389,12 +389,25 @@ fn rng_reconfig(rng: &mut DeterministicRng) -> Reconfig {
     }
 }
 
+fn rng_roster(rng: &mut DeterministicRng) -> Vec<PeerId> {
+    let roster_len = rng.range_inclusive(1, 4);
+    let mut roster = Vec::with_capacity(roster_len);
+    for _ in 0..roster_len {
+        roster.push(PeerId::from(KeyPair::random().public_key().clone()));
+    }
+    roster
+}
+
 fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
+    let roster = rng_roster(rng);
+    let roster_hash = Hash::new(&roster.encode());
     RbcInit {
         block_hash: rng_block_hash(rng),
         height: rng.next_u64(),
         view: rng.next_u64(),
         epoch: rng.next_u64(),
+        roster,
+        roster_hash,
         total_chunks: u32::try_from(rng.range_inclusive(1, 8)).expect("range bound fits u32"),
         payload_hash: rng_hash(rng),
         chunk_root: rng_hash(rng),
@@ -421,6 +434,7 @@ fn rng_rbc_ready_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcReady {
         height: init.height,
         view: init.view,
         epoch: init.epoch,
+        roster_hash: init.roster_hash,
         chunk_root: init.chunk_root,
         sender: rng.next_u32(),
         signature: rng.bytes(64),
@@ -433,6 +447,7 @@ fn rng_rbc_deliver_from(rng: &mut DeterministicRng, init: &RbcInit) -> RbcDelive
         height: init.height,
         view: init.view,
         epoch: init.epoch,
+        roster_hash: init.roster_hash,
         chunk_root: init.chunk_root,
         sender: rng.next_u32(),
         signature: rng.bytes(64),
@@ -1648,11 +1663,18 @@ fn consensus_messages_norito_roundtrip() {
         new_roster: peer_ids,
         activation_height: 100,
     };
+    let roster = vec![
+        PeerId::from(KeyPair::random().public_key().clone()),
+        PeerId::from(KeyPair::random().public_key().clone()),
+    ];
+    let roster_hash = Hash::new(&roster.encode());
     let rbc_init = RbcInit {
         block_hash: sample_block_hash(0x30),
         height: 44,
         view: 7,
         epoch: 2,
+        roster,
+        roster_hash,
         total_chunks: 3,
         payload_hash: sample_hash(0x31),
         chunk_root: sample_hash(0x32),
@@ -1670,6 +1692,7 @@ fn consensus_messages_norito_roundtrip() {
         height: rbc_init.height,
         view: rbc_init.view,
         epoch: rbc_init.epoch,
+        roster_hash,
         chunk_root: rbc_init.chunk_root,
         sender: 15,
         signature: sample_bytes(0x50, 64),
@@ -1679,6 +1702,7 @@ fn consensus_messages_norito_roundtrip() {
         height: rbc_init.height,
         view: rbc_init.view,
         epoch: rbc_init.epoch,
+        roster_hash,
         chunk_root: rbc_init.chunk_root,
         sender: 16,
         signature: sample_bytes(0x60, 64),

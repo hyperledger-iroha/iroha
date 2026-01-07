@@ -630,6 +630,19 @@ class _MockState:
         election_id = payload.get("election_id")
         if not isinstance(election_id, str):
             raise ValueError("election_id must be provided")
+        public_inputs = payload.get("public")
+        if public_inputs is not None:
+            if not isinstance(public_inputs, Mapping):
+                raise ValueError("public inputs must be a JSON object")
+            has_owner = public_inputs.get("owner") is not None
+            has_amount = public_inputs.get("amount") is not None
+            has_duration = public_inputs.get("duration_blocks") is not None
+            if (has_owner or has_amount or has_duration) and not (
+                has_owner and has_amount and has_duration
+            ):
+                raise ValueError(
+                    "lock hints must include owner, amount, duration_blocks"
+                )
         entry = self.gov_referenda.get(election_id)
         if entry is None or entry.get("ballot_zk") is None:
             raise KeyError("governance zk ballot not configured")

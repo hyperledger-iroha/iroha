@@ -833,11 +833,11 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         XCTAssertEqual(fieldsB.receiverHash, "C305E9A5BB13CBBDCF728EAAD3965FFB421576F1DD04F401DCCB1EE94740A761")
         XCTAssertEqual(fieldsA.invoiceHash, "E00BE9DF519D103B25A6D2A1DB7580E50F8373A00F36DDCB0702BC89EE0AD1DD")
         XCTAssertEqual(fieldsB.invoiceHash, "989A58422C86F0BD2FEADF2EEB4648D532402E003DEEC9A7D9C932BB7FD6A779")
-        XCTAssertEqual(fieldsA.platformProofHash, "A82D1F1661FD0313425414E3F511942D51211B4C48FE02A10CBFA97035597971")
-        XCTAssertEqual(fieldsB.platformProofHash, "E03DA51B71C263A811DF64381F5ED5092CA1FE305739C508B6AEFB91043686E1")
+        XCTAssertEqual(fieldsA.platformProofHash, "F7B9AC9BC9CDE2A7BE9002A1F36E5FD7CD11BF07FA2D793CAA50554A99A389A3")
+        XCTAssertEqual(fieldsB.platformProofHash, "4286178ABF3C0AF3FB9DC9E8389167F2369767087F9944EF90E8E615EA1DF3D7")
         let root = try OfflineReceiptBuilder.computeReceiptsRoot(receipts: [receiptA, receiptB])
         XCTAssertEqual(root.bytes.hexUppercased(),
-                       "00000000000000000000000000000000000000000000000099456678CF401BF0")
+                       "0000000000000000000000000000000000000000000000003E09C16D3EAE69CE")
     }
 
     func testReceiptRecorderAppendsAuditAndJournal() throws {
@@ -1031,16 +1031,10 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         let txId = IrohaHash.hash(Data("tx-\(seed)".utf8))
         let amount = "250"
         let invoiceId = "invoice-\(seed)"
-        let issuedAtMs: UInt64 = 1_700_000_000_000
-        let challengeHash = try challengeHash(txId: txId,
-                                              chainId: chainId,
-                                              receiver: controller,
-                                              assetId: assetId,
-                                              amount: amount,
-                                              issuedAtMs: issuedAtMs,
-                                              invoiceId: invoiceId)
+        let issuedAtMs: UInt64 = 1
+        let challengeHash = IrohaHash.hash(Data("challenge".utf8))
         let proof = AppleAppAttestProof(
-            keyId: Data(seed.utf8).base64EncodedString(),
+            keyId: seed,
             counter: counter,
             assertion: Data([1, 2, 3]),
             challengeHash: challengeHash
@@ -1108,7 +1102,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         invoiceHash: String,
         platformProofHash: String
     ) {
-        let receiverPayload = OfflineNorito.encodeString(receipt.to)
+        let receiverPayload = try OfflineNorito.encodeAccountId(receipt.to)
         let receiverBytes = OfflineNorito.wrap(
             typeName: "iroha_data_model::account::model::AccountId",
             payload: receiverPayload

@@ -8,8 +8,10 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import okhttp3.OkHttpClient;
 import okhttp3.mockwebserver.MockResponse;
@@ -21,6 +23,8 @@ import org.hyperledger.iroha.android.offline.attestation.HttpSafetyDetectService
 import org.hyperledger.iroha.android.offline.attestation.SafetyDetectAttestation;
 import org.hyperledger.iroha.android.offline.attestation.SafetyDetectOptions;
 import org.hyperledger.iroha.android.offline.attestation.SafetyDetectRequest;
+import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchOptions;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchSummary;
@@ -63,12 +67,7 @@ public final class OkHttpClientIntegrationTests {
               .build();
       final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 
-      final SignedTransaction transaction =
-          new SignedTransaction(
-              new byte[] {0x01, 0x02},
-              new byte[] {0x03, 0x04},
-              new byte[] {0x05, 0x06},
-              "iroha.android.transaction.Payload.v1");
+      final SignedTransaction transaction = sampleTransaction((byte) 0x01);
 
       final ClientResponse submitResponse = transport.submitTransaction(transaction).get(2, TimeUnit.SECONDS);
       assertEquals(202, submitResponse.statusCode());
@@ -117,7 +116,7 @@ public final class OkHttpClientIntegrationTests {
               .addObserver(observer)
               .build();
       final GatewayFetchSummary summary = gatewayClient.fetchSummary(fetchRequest).get(2, TimeUnit.SECONDS);
-      assertEquals("0123", summary.manifestIdHex());
+      assertEquals("01".repeat(32), summary.manifestIdHex());
       assertEquals("sorafs.sf1@1.0.0", summary.chunkerHandle());
       final RecordedRequest fetch = server.takeRequest();
       assertEquals("/v1/sorafs/gateway/fetch", fetch.getPath());
@@ -188,10 +187,11 @@ public final class OkHttpClientIntegrationTests {
   }
 
   private static String sampleGatewaySummaryJson() {
+    final String manifestId = "01".repeat(32);
     return String.join(
         "\n",
         "{",
-        "  \"manifest_id_hex\": \"0123\",",
+        "  \"manifest_id_hex\": \"" + manifestId + "\",",
         "  \"chunker_handle\": \"sorafs.sf1@1.0.0\",",
         "  \"client_id\": \"android-sdk\",",
         "  \"chunk_count\": 2,",
@@ -220,6 +220,31 @@ public final class OkHttpClientIntegrationTests {
         "  \"anonymity_brownout_effective\": false,",
         "  \"anonymity_uses_classical\": false",
         "}");
+  }
+
+  private static SignedTransaction sampleTransaction(final byte seed) {
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId(String.format("%08x", seed))
+            .setAuthority("okhttp@wonderland")
+            .setCreationTimeMs(1_700_000_000_000L + (seed & 0xFF))
+            .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
+            .setTimeToLiveMs(5_000L)
+            .setNonce((seed & 0xFF) + 1)
+            .setMetadata(Map.of("note", "tx-" + seed))
+            .build();
+    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
+    final byte[] encoded;
+    try {
+      encoded = codec.encodeTransaction(payload);
+    } catch (final Exception ex) {
+      throw new IllegalStateException("Failed to encode transaction payload", ex);
+    }
+    final byte[] signature = new byte[64];
+    final byte[] publicKey = new byte[32];
+    Arrays.fill(signature, (byte) (seed + 1));
+    Arrays.fill(publicKey, (byte) (seed + 2));
+    return new SignedTransaction(encoded, signature, publicKey, codec.schemaName());
   }
 
   private static final class RecordingTelemetrySink implements TelemetrySink {

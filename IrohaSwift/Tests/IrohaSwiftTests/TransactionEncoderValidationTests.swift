@@ -60,4 +60,49 @@ final class TransactionEncoderValidationTests: XCTestCase {
                            .malformedAssetId("rose#wonderland"))
         }
     }
+
+    func testCastZkBallotRejectsIncompleteLockHints() throws {
+        let publicInputs = try NoritoJSON(["owner": "alice@wonderland"])
+        let request = CastZkBallotRequest(chainId: "chain",
+                                          authority: "alice@wonderland",
+                                          electionId: "election-1",
+                                          proofB64: "AAAA",
+                                          publicInputs: publicInputs,
+                                          ttlMs: nil)
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
+
+        XCTAssertThrowsError(
+            try SwiftTransactionEncoder.encodeCastZkBallot(request: request,
+                                                           signingKey: signingKey,
+                                                           creationTimeMs: 1)
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .invalidZkBallotPublicInputs("lock hints must include owner, amount, duration_blocks"))
+        }
+    }
+
+    func testCastZkBallotRejectsInvalidRootHintHex() throws {
+        let publicInputs = try NoritoJSON([
+            "owner": "alice@wonderland",
+            "amount": "1",
+            "duration_blocks": 1,
+            "root_hint": "not-hex",
+        ])
+        let request = CastZkBallotRequest(chainId: "chain",
+                                          authority: "alice@wonderland",
+                                          electionId: "election-1",
+                                          proofB64: "AAAA",
+                                          publicInputs: publicInputs,
+                                          ttlMs: nil)
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
+
+        XCTAssertThrowsError(
+            try SwiftTransactionEncoder.encodeCastZkBallot(request: request,
+                                                           signingKey: signingKey,
+                                                           creationTimeMs: 1)
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .invalidZkBallotPublicInputs("root_hint must be 32-byte hex"))
+        }
+    }
 }

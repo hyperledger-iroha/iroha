@@ -92,7 +92,10 @@ Code Size Cap
   - Request: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "alice@wonderland?", "private_key": "...?" }
   - Response: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - On-chain effect (current scaffold): منظور شدہ deploy proposal کو enact کرنے سے `code_hash` keyed minimal `ContractManifest` شامل ہوتا ہے جس میں متوقع `abi_hash` ہوتا ہے اور proposal Enacted ہو جاتا ہے۔ اگر `code_hash` کے لئے مختلف `abi_hash` والا manifest پہلے سے ہو تو enactment reject ہوتا ہے۔
-  - Notes: ZK elections کے لئے contract paths کو `FinalizeElection` سے پہلے `ZK_VOTE_VERIFY_TALLY` کال کرنا لازمی ہے؛ hosts one-shot latch enforce کرتے ہیں۔
+  - Notes:
+    - ZK elections کے لئے contract paths کو `FinalizeElection` سے پہلے `ZK_VOTE_VERIFY_TALLY` کال کرنا لازمی ہے؛ hosts one-shot latch enforce کرتے ہیں۔ `FinalizeReferendum` ZK referenda کو اس وقت تک reject کرتا ہے جب تک election tally finalized نہ ہو جائے۔
+    - Auto-close `h_end` پر صرف Plain referenda کے لئے Approved/Rejected emit کرتا ہے؛ ZK referenda Closed رہتے ہیں جب تک finalized tally submit نہ ہو اور `FinalizeReferendum` execute نہ ہو۔
+    - Turnout checks صرف approve+reject استعمال کرتی ہیں؛ abstain turnout میں شمار نہیں ہوتا۔
 
 - POST `/v1/gov/enact`
   - Request: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "alice@wonderland?", "private_key": "...?" }
@@ -201,7 +204,7 @@ CLI Helpers
   - Protected namespaces کے audit یا governance-controlled deploy workflows کی تصدیق کے لئے مفید۔
 - `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - Protected namespaces میں deployment کے لئے JSON metadata skeleton دیتا ہے، جس میں optional `gov_manifest_approvers` شامل ہیں تاکہ manifest quorum rules پوری ہوں۔
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier-hex <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0` ہونے پر lock hints لازم ہیں، اور فراہم کیے گئے کسی بھی hints سیٹ میں `owner`, `amount` اور `duration_blocks` شامل ہونا ضروری ہے۔
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier-hex` is validated against the proof when supplied.
   - ایک لائن خلاصہ اب deterministic `fingerprint=<hex>` دکھاتا ہے جو encoded `CastZkBallot` سے derive ہوتا ہے، ساتھ decoded hints (`owner`, `amount`, `duration_blocks`, `direction` جب فراہم ہوں)۔
