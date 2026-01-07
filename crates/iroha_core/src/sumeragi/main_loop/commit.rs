@@ -2791,6 +2791,7 @@ impl Actor {
         rbc_payload_matches(sessions, handle, block_hash, height, payload_hash)
     }
 
+    #[cfg(test)]
     fn local_payload_matches_hash(block: &SignedBlock, payload_hash: &Hash) -> bool {
         let payload_bytes = super::proposals::block_payload_bytes(block);
         Hash::new(&payload_bytes) == *payload_hash
@@ -2801,16 +2802,13 @@ impl Actor {
         handle: &rbc_status::Handle,
         pending: &PendingBlock,
     ) -> bool {
-        if Self::ensure_block_matches_rbc_payload(
+        Self::ensure_block_matches_rbc_payload(
             sessions,
             handle,
             &pending.block.hash(),
             pending.height,
             &pending.payload_hash,
-        ) {
-            return true;
-        }
-        Self::local_payload_matches_hash(&pending.block, &pending.payload_hash)
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4556,27 +4554,43 @@ mod tests {
     }
 
     #[test]
-    fn payload_available_for_da_accepts_local_payload_without_rbc() {
+    fn payload_available_for_da_rejects_local_payload_without_rbc() {
         let block = sample_block(2, 0);
         let payload_hash = Hash::new(super::super::proposals::block_payload_bytes(&block));
         let pending = PendingBlock::new(block, payload_hash, 2, 0);
         let sessions = BTreeMap::new();
         let handle = rbc_status::Handle::new();
 
-        assert!(Actor::payload_available_for_da(
+        assert!(!Actor::payload_available_for_da(
             &sessions, &handle, &pending
         ));
     }
 
     #[test]
-    fn payload_available_for_da_rejects_mismatched_payload_without_rbc() {
+    fn payload_available_for_da_accepts_rbc_delivery() {
         let block = sample_block(2, 0);
-        let payload_hash = Hash::new(b"mismatch");
+        let payload_hash = Hash::new(super::super::proposals::block_payload_bytes(&block));
         let pending = PendingBlock::new(block, payload_hash, 2, 0);
         let sessions = BTreeMap::new();
         let handle = rbc_status::Handle::new();
 
-        assert!(!Actor::payload_available_for_da(
+        let summary = rbc_status::Summary {
+            block_hash: pending.block.hash(),
+            height: pending.height,
+            view: pending.view,
+            total_chunks: 0,
+            received_chunks: 0,
+            ready_count: 0,
+            delivered: true,
+            payload_hash: Some(pending.payload_hash),
+            recovered_from_disk: false,
+            invalid: false,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        handle.update(summary, std::time::SystemTime::now());
+
+        assert!(Actor::payload_available_for_da(
             &sessions, &handle, &pending
         ));
     }
