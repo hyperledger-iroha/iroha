@@ -536,6 +536,7 @@ struct GenesisEnv<'a> {
 }
 
 impl<'a> GenesisEnv<'a> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         key_pair: &'a peer::ExposedKeyPair,
         ports: [u16; 2],

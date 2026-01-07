@@ -1603,7 +1603,7 @@ pub mod error {
             pub cap: u32,
         }
 
-        /// Implicit account creation fee could not be paid for {asset_definition} (required {required}, available {available}).
+        /// Implicit account creation fee could not be paid for `{asset_definition}` (required `{required}`, available `{available}`).
         #[derive(
             Debug,
             displaydoc::Display,

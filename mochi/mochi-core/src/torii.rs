@@ -5356,7 +5356,7 @@ mod tests {
                     SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiDataspaceCommitment,
                     SumeragiKuraStoreStatus, SumeragiLaneCommitment, SumeragiLaneGovernance,
                     SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
-                    SumeragiMissingBlockFetchStatus, SumeragiPendingRbcStatus, SumeragiQcStatus,
+                    SumeragiMissingBlockFetchStatus, SumeragiPendingRbcStatus,
                     SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
                     SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
                 },
@@ -5384,7 +5384,6 @@ mod tests {
             locked_qc_height: 14,
             locked_qc_view: 5,
             locked_qc_subject: None,
-            commit_qc: SumeragiQcStatus::default(),
             commit_quorum: SumeragiCommitQuorumStatus::default(),
             view_change_proof_accepted_total: 9,
             view_change_proof_stale_total: 10,
@@ -5504,6 +5503,7 @@ mod tests {
             }],
             worker_loop: Default::default(),
             commit_inflight: Default::default(),
+            ..Default::default()
         }
     }
 

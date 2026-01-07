@@ -406,13 +406,23 @@ impl Actor {
                 view,
                 expected_epoch,
             );
-            for peer in topology_peers {
-                self.schedule_background(BackgroundRequest::Post {
-                    peer: peer.clone(),
-                    msg: BlockMessage::BlockSyncUpdate(update.clone()),
-                });
+            if super::block_sync_update_has_roster(&update) {
+                for peer in topology_peers {
+                    self.schedule_background(BackgroundRequest::Post {
+                        peer: peer.clone(),
+                        msg: BlockMessage::BlockSyncUpdate(update.clone()),
+                    });
+                }
+                true
+            } else {
+                debug!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    "skipping block sync update rebroadcast: no verifiable roster"
+                );
+                false
             }
-            true
         };
         let hint = if drop_pending {
             false

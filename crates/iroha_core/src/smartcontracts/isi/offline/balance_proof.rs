@@ -170,6 +170,8 @@ enum BalanceProofError {
     InvalidRangeProofLength { expected: usize, actual: usize },
     #[error("commitment must be 32 bytes (got {0})")]
     CommitmentLength(usize),
+    #[error("scalar must be 32 bytes (got {0})")]
+    ScalarLength(usize),
     #[error("commitment encoding is invalid")]
     CommitmentEncoding,
     #[error("proof point encoding is invalid")]
@@ -223,7 +225,13 @@ fn decode_point(bytes: &[u8]) -> Result<RistrettoPoint, BalanceProofError> {
 }
 
 fn decode_scalar(bytes: &[u8]) -> Result<Scalar, BalanceProofError> {
-    let scalar = Scalar::from_canonical_bytes(bytes.try_into().unwrap());
+    if bytes.len() != 32 {
+        return Err(BalanceProofError::ScalarLength(bytes.len()));
+    }
+    let scalar =
+        Scalar::from_canonical_bytes(bytes.try_into().map_err(|_| {
+            BalanceProofError::ScalarLength(bytes.len())
+        })?);
     Option::from(scalar).ok_or(BalanceProofError::NonCanonicalScalar)
 }
 
@@ -724,6 +732,56 @@ mod tests {
             expected_scale,
         };
         assert!(verify_balance_proof(&inputs).is_ok());
+    }
+
+    #[test]
+    fn compute_commitment_rejects_invalid_blinding_length() {
+        let value = Numeric::new(1, 0);
+        let err = compute_commitment(&value, 0, &[0u8; 31])
+            .expect_err("invalid blinding length should be rejected");
+        assert!(
+            err.to_string().contains("scalar must be 32 bytes"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn build_balance_proof_rejects_invalid_blinding_length() {
+        let chain_id: ChainId = "testnet".parse().unwrap();
+        let initial_value = 10u64;
+        let delta = 5u64;
+        let resulting_value = initial_value + delta;
+        let expected_scale = 0;
+        let initial_blind = Scalar::from(3u64);
+        let resulting_blind = Scalar::from(7u64);
+        let initial_commitment = pedersen_commit(initial_value, initial_blind)
+            .compress()
+            .as_bytes()
+            .to_vec();
+        let resulting_commitment = pedersen_commit(resulting_value, resulting_blind)
+            .compress()
+            .as_bytes()
+            .to_vec();
+        let claimed_delta = Numeric::new(u128::from(delta), expected_scale);
+        let resulting_value_numeric = Numeric::new(u128::from(resulting_value), expected_scale);
+        let invalid_blinding = [0u8; 31];
+        let resulting_blinding = resulting_blind.to_bytes();
+
+        let err = build_balance_proof(
+            &chain_id,
+            expected_scale,
+            &claimed_delta,
+            &resulting_value_numeric,
+            &initial_commitment,
+            &resulting_commitment,
+            &invalid_blinding,
+            &resulting_blinding,
+        )
+        .expect_err("invalid blinding length should be rejected");
+        assert!(
+            err.to_string().contains("scalar must be 32 bytes"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

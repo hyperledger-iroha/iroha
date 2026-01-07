@@ -6788,6 +6788,7 @@ mod tests {
         assert!(matches!(result, Err(Error::LengthMismatch)));
     }
 
+    #[allow(dead_code)]
     #[repr(align(64))]
     struct Align64(u8);
 

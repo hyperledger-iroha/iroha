@@ -797,10 +797,9 @@ pub fn verify_at(
     let now_duration = now.duration_since(UNIX_EPOCH)?;
     let now_secs = now_duration.as_secs();
     let expires_at = Duration::from_secs(ticket.expires_at);
-    if expires_at <= now_duration {
-        return Err(Error::Expired(ticket.expires_at, now_secs));
-    }
-    let ttl_remaining = expires_at - now_duration;
+    let ttl_remaining = expires_at
+        .checked_sub(now_duration)
+        .ok_or(Error::Expired(ticket.expires_at, now_secs))?;
     let deficit = params.min_ttl.saturating_sub(ttl_remaining);
     if deficit > TTL_GRACE {
         return Err(Error::ExpiryWindowTooSmall(params.min_ttl));

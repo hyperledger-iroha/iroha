@@ -1,7 +1,8 @@
 //! Crate with derive `IntoSchema` macro
 
 #![allow(clippy::large_enum_variant)]
-// darling-generated code triggers this lint
+// darling-generated code triggers these lints
+#![allow(clippy::needless_continue)]
 #![allow(clippy::option_if_let_else)]
 
 mod trait_bounds;

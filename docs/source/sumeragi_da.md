@@ -14,15 +14,15 @@ For light-client driven sampling of RBC payloads see
 
 ### DA timeout & advisory warnings
 
-With `da_enabled=true`, the commit pipeline records availability evidence
-(either `availability evidence` or an RBC `READY` quorum; not local RBC `DELIVER`).
-Consensus does **not** wait for availability evidence: commit/finalize proceeds
-based on the normal commit-certificate thresholds, and missing availability is logged for
+With `da_enabled=true`, the commit pipeline records local payload availability
+(`BlockCreated` or RBC delivery) in the DA gate. Availability evidence (availability votes
+or an RBC `READY` quorum) is tracked separately and does not gate commit/finalize, which
+proceeds on the normal commit-certificate thresholds. Missing local payloads are logged for
 operator visibility.
 
 The availability deadline is derived from the configured block/commit times and the
-DA timeout tuning knobs; it is used to classify missing availability evidence as
-"stale" for logging and rebroadcast heuristics:
+DA timeout tuning knobs; it is used to classify missing payloads as "stale" for logging
+and rebroadcast heuristics:
 - `sumeragi.da_quorum_timeout_multiplier` scales `block_time + 4 * commit_time`
   when DA is enabled (default `3`).
 - `sumeragi.da_availability_timeout_multiplier` scales the availability timeout

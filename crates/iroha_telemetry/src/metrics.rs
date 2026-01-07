@@ -6330,9 +6330,9 @@ pub struct Metrics {
     pub sumeragi_qc_assembly_latency_ms: HistogramVec,
     /// Sumeragi QC last observed latency gauge (milliseconds) labeled by `kind`
     pub sumeragi_qc_last_latency_ms: GenericGaugeVec<AtomicU64>,
-    /// Sumeragi RBC: persisted store sessions after compaction (gauge)
+    /// Sumeragi RBC: persisted store sessions (gauge)
     pub sumeragi_rbc_store_sessions: GenericGauge<AtomicU64>,
-    /// Sumeragi RBC: persisted store payload bytes after compaction (gauge)
+    /// Sumeragi RBC: persisted store payload bytes (gauge)
     pub sumeragi_rbc_store_bytes: GenericGauge<AtomicU64>,
     /// Sumeragi RBC: current store pressure level (0=normal,1=soft,2=hard)
     pub sumeragi_rbc_store_pressure: GenericGauge<AtomicU64>,
@@ -9275,12 +9275,12 @@ impl Default for Metrics {
         .expect("Infallible");
         let sumeragi_rbc_store_sessions = GenericGauge::new(
             "sumeragi_rbc_store_sessions",
-            "Sumeragi RBC persisted store sessions after compaction (gauge)",
+            "Sumeragi RBC persisted store sessions (gauge)",
         )
         .expect("Infallible");
         let sumeragi_rbc_store_bytes = GenericGauge::new(
             "sumeragi_rbc_store_bytes",
-            "Sumeragi RBC persisted store payload bytes after compaction (gauge)",
+            "Sumeragi RBC persisted store payload bytes (gauge)",
         )
         .expect("Infallible");
         let sumeragi_rbc_store_pressure = GenericGauge::new(

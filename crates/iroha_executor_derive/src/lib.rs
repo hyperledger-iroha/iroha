@@ -1,4 +1,6 @@
 //! Crate with macros that facilitate writing a custom executor
+// darling-generated code triggers this lint
+#![allow(clippy::needless_continue)]
 
 use manyhow::{Emitter, emit, manyhow};
 use proc_macro2::TokenStream;

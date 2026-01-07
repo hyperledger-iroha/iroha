@@ -676,7 +676,7 @@ impl BridgeFinalityVerifier {
             public_keys.push(payload);
         }
 
-        let preimage = commit_vote_preimage(chain_id, certificate)?;
+        let preimage = commit_vote_preimage(chain_id, certificate);
         iroha_crypto::bls_normal_verify_preaggregated_same_message(
             &preimage,
             &certificate.aggregate.bls_aggregate_signature,
@@ -722,10 +722,7 @@ fn consensus_domain(
     out
 }
 
-fn commit_vote_preimage(
-    chain_id: &ChainId,
-    certificate: &crate::consensus::Qc,
-) -> Result<Vec<u8>, BridgeFinalityVerifyError> {
+fn commit_vote_preimage(chain_id: &ChainId, certificate: &crate::consensus::Qc) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 1);
     let domain = consensus_domain(chain_id, "Vote", b"v1", &certificate.mode_tag);
     out.extend_from_slice(&domain);
@@ -735,14 +732,14 @@ fn commit_vote_preimage(
     out.extend_from_slice(&certificate.epoch.to_be_bytes());
     out.push(certificate.phase as u8);
 
-    Ok(out)
+    out
 }
 
 fn signer_indices_from_bitmap(
     bitmap: &[u8],
     roster_len: usize,
 ) -> Result<Vec<usize>, BridgeFinalityVerifyError> {
-    let expected_len = (roster_len + 7) / 8;
+    let expected_len = roster_len.div_ceil(8);
     if bitmap.len() != expected_len {
         return Err(BridgeFinalityVerifyError::SignerBitmapLengthMismatch {
             expected: expected_len,
@@ -834,8 +831,8 @@ mod tests {
                 bls_aggregate_signature: Vec::new(),
             },
         };
-        let preimage = commit_vote_preimage(&chain_id.parse().expect("chain id"), &cert_template)
-            .expect("preimage");
+        let preimage =
+            commit_vote_preimage(&chain_id.parse().expect("chain id"), &cert_template);
         let mut sig_payloads = Vec::with_capacity(keys.len());
         for kp in keys {
             let signature = Signature::new(kp.private_key(), &preimage);

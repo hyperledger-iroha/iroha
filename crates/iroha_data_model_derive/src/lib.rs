@@ -1,4 +1,6 @@
 //! A crate containing various derive macros for `iroha_data_model`
+// darling-generated code triggers this lint
+#![allow(clippy::needless_continue)]
 mod emitter_ext;
 mod enum_ref;
 mod event_set;

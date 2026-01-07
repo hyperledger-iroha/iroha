@@ -23,7 +23,6 @@ use iroha::{
     config::Config,
     data_model::{Decode, Encode},
 };
-use iroha_crypto::Hash;
 use iroha_data_model::{
     asset::AssetDefinitionId,
     name::Name,

@@ -453,7 +453,7 @@ Sumeragi metrics
 - VRF emission: `sumeragi_vrf_commits_emitted_total`, `sumeragi_vrf_reveals_emitted_total`, and `sumeragi_vrf_reveals_late_total` count how many commit/reveal messages this validator broadcast (including late reveals accepted after the window). Pair with `sumeragi_vrf_non_reveal_*` counters to monitor participation health at epoch boundaries.
 - Collector fan-out: `sumeragi_redundant_sends_total` (aggregate), `sumeragi_redundant_sends_by_peer{peer="…"}`, and `sumeragi_redundant_sends_by_collector{idx="…"}` highlight redundant collector sends; investigate sustained spikes to locate congested collectors or unhealthy peers.
 - Collector targeting: `sumeragi_collectors_targeted_current` (gauge) tracks the in-flight collector count for the current block; `sumeragi_collectors_targeted_per_block` histogram (`*_bucket`) records how many collectors were targeted per committed block.
-- DA availability warnings: `sumeragi_rbc_da_reschedule_total` (and `/v1/sumeragi/status → da_reschedule_total`) is legacy and no longer increments; use `sumeragi_da_gate_block_total{reason="missing_local_data"}` for missing availability evidence.
+- DA availability warnings: `sumeragi_rbc_da_reschedule_total` (and `/v1/sumeragi/status → da_reschedule_total`) is legacy and no longer increments; use `sumeragi_da_gate_block_total{reason="missing_local_data"}` for missing local payloads.
 - Channel pressure: `sumeragi_dropped_block_messages_total` and `sumeragi_dropped_control_messages_total` partition channel drops; `dropped_messages` remains the aggregate counter for existing dashboards.
 
 Sumeragi additions (new series)
@@ -774,7 +774,7 @@ Configuration
 
 DA/RBC (Sumeragi) configuration
 - `sumeragi.da_enabled` (bool): enables data availability tracking and Reliable Broadcast (RBC) payload distribution together. Availability evidence (`availability evidence` or an RBC `READY` quorum) is recorded but does not gate commit; RBC remains transport/recovery and its delivery latency is still tracked.
-- `sumeragi.rbc_chunk_max_bytes` (usize): maximum bytes per RBC chunk when broadcasting payloads.
+- `sumeragi.rbc_chunk_max_bytes` (usize): maximum bytes per RBC chunk when broadcasting payloads; must be > 0.
 - `sumeragi.rbc_session_ttl_secs` (u64): inactive RBC sessions are pruned after this TTL to bound memory.
 
 Metrics: RBC exports gauges/counters (`sumeragi_rbc_sessions_active`, `sumeragi_rbc_sessions_pruned_total`, `sumeragi_rbc_ready_broadcasts_total`, `sumeragi_rbc_deliver_broadcasts_total`, `sumeragi_rbc_payload_bytes_delivered_total`) and per-lane/dataspace backlog gauges (`sumeragi_rbc_lane_{tx_count,total_chunks,pending_chunks,bytes_total}{lane_id}` and `sumeragi_rbc_dataspace_{tx_count,total_chunks,pending_chunks,bytes_total}{lane_id,dataspace_id}`) alongside the Torii JSON endpoints shown above.

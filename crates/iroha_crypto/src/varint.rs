@@ -113,7 +113,7 @@ impl VarUint {
         let (payload, empty) = bytes.as_ref().split_at(idx + 1);
         let payload = payload.to_vec();
 
-        if payload.len() > 1 && (payload.last().copied().unwrap_or(0) & 0b0111_1111) == 0 {
+        if payload.len() > 1 && payload.last().copied().unwrap_or(0).trailing_zeros() >= 7 {
             return Err(ConvertError::new(String::from(
                 "Non-canonical varuint encoding",
             )));

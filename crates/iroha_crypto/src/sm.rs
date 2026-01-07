@@ -221,6 +221,9 @@ impl Sm2PublicKey {
     }
 
     /// Override the global default distinguishing identifier used when callers omit one.
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when `distid` is invalid.
     pub fn set_default_distid(distid: impl Into<String>) -> Result<(), ParseError> {
         let distid = distid.into();
         validate_distid(&distid)?;
@@ -541,6 +544,9 @@ impl Sm2PrivateKey {
 /// Encode an SM2 public key payload with an explicit distinguishing identifier.
 ///
 /// Layout: `distid_len (u16 BE)` || `distid bytes` || `SEC1 uncompressed (65 bytes)`.
+///
+/// # Errors
+/// Returns [`ParseError`] when `distid` is invalid or `sec1` has the wrong length.
 pub fn encode_sm2_public_key_payload(distid: &str, sec1: &[u8]) -> Result<Vec<u8>, ParseError> {
     if sec1.len() != SM2_PUBLIC_KEY_UNCOMPRESSED_LEN {
         return Err(ParseError(format!(
@@ -559,6 +565,9 @@ pub fn encode_sm2_public_key_payload(distid: &str, sec1: &[u8]) -> Result<Vec<u8
 /// Encode an SM2 private key payload with an explicit distinguishing identifier.
 ///
 /// Layout: `distid_len (u16 BE)` || `distid bytes` || `secret (32 bytes)`.
+///
+/// # Errors
+/// Returns [`ParseError`] when `distid` is invalid or `secret` has the wrong length.
 pub fn encode_sm2_private_key_payload(distid: &str, secret: &[u8]) -> Result<Vec<u8>, ParseError> {
     if secret.len() != SM2_PRIVATE_KEY_LEN {
         return Err(ParseError(format!(
@@ -574,6 +583,10 @@ pub fn encode_sm2_private_key_payload(distid: &str, secret: &[u8]) -> Result<Vec
 }
 
 /// Decode an SM2 public key payload that embeds the distinguishing identifier.
+///
+/// # Errors
+/// Returns [`ParseError`] when the payload is malformed, the key bytes are invalid,
+/// or the encoding is not canonical.
 pub fn decode_sm2_public_key_payload(payload: &[u8]) -> Result<Sm2PublicKey, ParseError> {
     let (distid, rest) = split_sm2_payload(payload)?;
     if rest.len() != SM2_PUBLIC_KEY_UNCOMPRESSED_LEN {
@@ -589,6 +602,9 @@ pub fn decode_sm2_public_key_payload(payload: &[u8]) -> Result<Sm2PublicKey, Par
 }
 
 /// Decode an SM2 private key payload that embeds the distinguishing identifier.
+///
+/// # Errors
+/// Returns [`ParseError`] when the payload is malformed or the key bytes are invalid.
 pub fn decode_sm2_private_key_payload(payload: &[u8]) -> Result<Sm2PrivateKey, ParseError> {
     let (distid, rest) = split_sm2_payload(payload)?;
     if rest.len() != SM2_PRIVATE_KEY_LEN {
@@ -3328,15 +3344,7 @@ mod tests {
 
     #[test]
     fn sm2_signature_der_rejects_negative_single_byte_integer() {
-        let mut der = Vec::with_capacity(8);
-        der.push(0x30);
-        der.push(0x06);
-        der.push(0x02);
-        der.push(0x01);
-        der.push(0x80);
-        der.push(0x02);
-        der.push(0x01);
-        der.push(0x01);
+        let der = vec![0x30, 0x06, 0x02, 0x01, 0x80, 0x02, 0x01, 0x01];
 
         assert!(Sm2Signature::from_der(&der).is_err());
     }

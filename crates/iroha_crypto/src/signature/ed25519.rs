@@ -631,7 +631,7 @@ mod test {
             let mut order = 1usize;
             let mut acc = a_point;
             while !acc.is_identity() {
-                acc = acc + a_point;
+                acc += a_point;
                 order += 1;
                 assert!(order <= 8, "torsion order exceeded expected bound");
             }
@@ -640,7 +640,7 @@ mod test {
             let mut acc = EdwardsPoint::identity();
             for _ in 0..order {
                 torsion_points.push(acc);
-                acc = acc + a_point;
+                acc += a_point;
             }
 
             for counter in 0u32..512 {

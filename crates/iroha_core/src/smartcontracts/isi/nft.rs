@@ -32,10 +32,7 @@ pub mod isi {
                 }
                 .into());
             }
-            state_transaction
-                .world
-                .domain(nft_id.domain())
-                .expect("INTERNAL BUG: Can't find domain of NFT to register");
+            let _ = state_transaction.world.domain(nft_id.domain())?;
 
             state_transaction.world.nfts.insert(nft_id, nft_value);
 
@@ -61,10 +58,7 @@ pub mod isi {
                 .nfts
                 .remove(nft_id.clone())
                 .ok_or_else(|| FindError::Nft(nft_id.clone()))?;
-            state_transaction
-                .world
-                .domain(nft_id.domain())
-                .expect("INTERNAL BUG: Can't find domain of NFT to unregister");
+            let _ = state_transaction.world.domain(nft_id.domain())?;
 
             state_transaction
                 .world
@@ -174,6 +168,82 @@ pub mod isi {
                 })));
 
             Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use core::num::NonZeroU64;
+
+        use iroha_data_model::query::error::FindError;
+        use iroha_test_samples::ALICE_ID;
+
+        use super::*;
+        use crate::{
+            block::ValidBlock,
+            kura::Kura,
+            query::store::LiveQueryStore,
+            state::{State, World},
+        };
+
+        fn new_dummy_block() -> crate::block::CommittedBlock {
+            let (leader_public_key, leader_private_key) =
+                iroha_crypto::KeyPair::random().into_parts();
+            let peer_id = crate::PeerId::new(leader_public_key);
+            let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
+            ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
+                h.set_height(NonZeroU64::new(1).unwrap());
+            })
+            .commit(&topology)
+            .unpack(|_| {})
+            .unwrap()
+        }
+
+        #[test]
+        fn register_nft_rejects_missing_domain() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let nft_id: NftId = "nft1#wonderland".parse().unwrap();
+            let err = Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("missing domain should be rejected");
+
+            assert!(
+                matches!(err, Error::Find(FindError::Domain(id)) if id == *nft_id.domain()),
+                "expected missing-domain error, got {err:?}"
+            );
+        }
+
+        #[test]
+        fn unregister_nft_rejects_missing_domain() {
+            let mut world = World::default();
+            let nft_id: NftId = "nft1#wonderland".parse().unwrap();
+            let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&ALICE_ID);
+            let (id, value) = nft.into_key_value();
+            world.nfts.insert(id, value);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let err = Unregister::nft(nft_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("missing domain should be rejected");
+
+            assert!(
+                matches!(err, Error::Find(FindError::Domain(id)) if id == *nft_id.domain()),
+                "expected missing-domain error, got {err:?}"
+            );
         }
     }
 }

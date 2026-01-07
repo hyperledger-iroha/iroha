@@ -748,7 +748,8 @@ impl<T> CompactMerkleProof<T> {
     /// reconstructing the parent hashes guided by the `dirs` bitset. Returns
     /// `false` if `depth` exceeds 32 or `siblings.len()` does not match `depth`.
     pub fn verify(self, leaf: &HashOf<T>, root: &HashOf<MerkleTree<T>>) -> bool {
-        if self.depth > u32::BITS as u8 {
+        let max_depth = u8::try_from(u32::BITS).expect("u32::BITS fits in u8");
+        if self.depth > max_depth {
             return false;
         }
         let depth = self.depth as usize;
@@ -863,7 +864,8 @@ impl CompactMerkleProof<[u8; 32]> {
         root: &HashOf<MerkleTree<[u8; 32]>>,
     ) -> bool {
         use crate::Hash;
-        if self.depth > u32::BITS as u8 {
+        let max_depth = u8::try_from(u32::BITS).expect("u32::BITS fits in u8");
+        if self.depth > max_depth {
             return false;
         }
         let mut acc_bytes: [u8; 32] = *leaf.as_ref();
@@ -1081,6 +1083,9 @@ impl MerkleTree<[u8; 32]> {
     }
 
     /// Parallel variant of `from_byte_chunks` guarded by the `rayon` feature.
+    ///
+    /// # Errors
+    /// Returns [`MerkleError::InvalidChunkSize`] when `chunk` is outside `1..=32`.
     #[cfg(feature = "rayon")]
     pub fn from_chunked_bytes_parallel(data: &[u8], chunk: usize) -> Result<Self, MerkleError> {
         validate_chunk_size(chunk)?;
@@ -1630,8 +1635,8 @@ mod tests {
             let depth = compact.depth() as usize;
             let mask = (1u64 << depth) - 1;
             assert_eq!(
-                compact.dirs() as u64,
-                (idx as u64) & mask,
+                u64::from(compact.dirs()),
+                u64::from(idx) & mask,
                 "dirs mismatch at idx={idx}"
             );
             assert!(compact.clone().verify(&leaf, &root));
@@ -1649,7 +1654,7 @@ mod tests {
         let compact = CompactMerkleProof::from_full(full);
         let depth = compact.depth() as usize;
         let mask = (1u64 << depth) - 1;
-        assert_eq!(compact.dirs() as u64, (idx as u64) & mask);
+        assert_eq!(u64::from(compact.dirs()), u64::from(idx) & mask);
         assert!(compact.verify_sha256(&leaf, &root));
     }
 

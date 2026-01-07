@@ -548,7 +548,9 @@ impl TimeInterval {
 
     /// Create [`Self`] from since and to points
     pub fn new_since_to(since: Duration, to: Duration) -> Self {
-        let length = to - since;
+        let length = to
+            .checked_sub(since)
+            .expect("time interval end must be after start");
         Self::new(since, length)
     }
 

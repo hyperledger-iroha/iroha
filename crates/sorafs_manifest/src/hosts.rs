@@ -75,7 +75,7 @@ fn validate_scheme(scheme: &str) -> Result<(), HostMappingError> {
         return Err(HostMappingError::EmptyScheme);
     }
     let bytes = scheme.as_bytes();
-    if !matches!(bytes[0], b'a'..=b'z' | b'A'..=b'Z') {
+    if !bytes[0].is_ascii_alphabetic() {
         return Err(HostMappingError::InvalidSchemeStart {
             scheme: scheme.to_string(),
         });
