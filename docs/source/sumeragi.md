@@ -261,6 +261,7 @@ Notes
 - RBC INIT carries the session roster snapshot and its `roster_hash`; READY/DELIVER include the same `roster_hash` so signatures are bound to a single roster.
 - RBC sessions cache the roster from INIT (or a fallback commit topology) and reuse it for READY/DELIVER validation and rebroadcasts so roster changes do not invalidate in-flight availability evidence. READY/DELIVER received before a roster is available are stashed and replayed once a roster is known, and mismatched `roster_hash` values are dropped.
 - RBC payload rebroadcasts always include INIT even when no chunks are cached, so peers can learn the roster snapshot and request missing chunks.
+- RBC payloads carry canonical block payload bytes only; if delivery completes before `BlockCreated` arrives, the node requests the signed block header/body from peers so validation and voting can proceed.
 - RBC INIT/READY/DELIVER must carry the epoch derived from the advertised height; mismatched epochs are rejected to prevent cross-epoch availability drift.
 - RBC READY must reference the expected chunk root for the session; mismatched roots are rejected so quorum only counts votes for the same payload.
 - Persisted RBC sessions include the roster snapshot so restarts validate READY/DELIVER against the original topology even if the live roster changes.
@@ -765,7 +766,7 @@ and `/v1/sumeragi/telemetry`’s `vrf` section for dashboards.
 Build-line policy: v3 uses `sumeragi.da_enabled` as the single DA/RBC switch. In this first release, Iroha v3 deployments must keep DA/RBC enabled; the runtime honors the on-chain value and applies no override, and the node refuses to start if `sumeragi.da_enabled` is false.
 
 - **DA/RBC enabled (`da_enabled=true`)** — availability evidence is tracked (advisory); commits proceed without waiting:
-  - Missing availability evidence sets `status.da_gate.reason = missing_local_data`; `status.da_gate.missing_local_data_total` increments on every transition into this state (unless an RBC `READY` quorum is already present and records availability).
+  - Missing availability evidence sets `status.da_gate.reason = missing_local_data`; `status.da_gate.missing_local_data_total` increments on every transition into this state. The gate clears once a delivered RBC payload or a local payload hash match is observed (an RBC `READY` quorum still records availability, but `DELIVER` is not required when the payload is already present).
   - Manifest guard: when a block carries DA commitments but the corresponding manifest is missing or mismatched, `status.da_gate.reason` becomes one of `manifest_missing` / `manifest_hash_mismatch` / `manifest_read_failed` / `manifest_spool_scan` and `status.da_gate.manifest_guard_total` increments. Audit-only lanes still log the warning; strict lanes report the same reason but do not block commit.
 - **DA/RBC disabled (`da_enabled=false`)** — availability evidence and manifest guard checks are skipped; `status.da_gate.reason` remains `none` and the spool is not scanned.
 - `status.da_gate.last_satisfied` records `missing_data_recovered` when availability is observed (including when an RBC `READY` quorum is treated as availability). Commit does not depend on local RBC delivery; RBC is transport/recovery and is tracked separately via the RBC endpoints and metrics.

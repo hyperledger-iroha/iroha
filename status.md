@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Maintenance: resolve merge conflicts in `crates/iroha_core/src/sumeragi/main_loop/commit.rs` and `status.md`.
+- Tests: not run (not requested).
 - Integration tests: remove `unsafe` wrappers around sandbox env var restore helpers to satisfy `-D unsafe-code`.
 - Tests: not run (not requested).
 - Integration tests: wrap env var mutation helpers in `unsafe` blocks and document the env-lock requirement for Rust's environment safety contract.
@@ -10,6 +12,16 @@
 - Test network harness: workspace fingerprint now honors simple `.gitignore` globs and ignores custom `CARGO_TARGET_DIR` paths to reduce unnecessary rebuilds; added unit coverage.
 - Tests: not run (not requested).
 - Integration tests: default sandbox network parallelism now scales with CPU/4 (matching the cross-process permit heuristic) and updated the serial-guard unit test to reflect the new default.
+- IVM/CoreHost: reject duplicate AXT touches, deny DS proofs when policy manifest roots are zero, and align fixture host timing with handle skew; add regression coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p ivm --test core_host_policy -- --nocapture`.
+- Torii/Sumeragi build fixes: update RBC roster hashing for slice inputs, include roster snapshot/hash in duplicate RBC init, reuse cloned init for rebroadcast, avoid session-roster borrow conflicts, and fix governance JSON map signatures + state borrow in tests.
+- Tests: `cargo test -p iroha_torii metrics_timeout_exits_poll_loop -- --nocapture` (timed out after ~10m; build succeeded but test harness still running); `cargo test -p iroha_torii --lib metrics_timeout_exits_poll_loop -- --nocapture` (timed out waiting for build lock).
+- IVM/WsvHost: validate AXT proofs against manifest roots and skewed expiry (including inline proofs); add regression tests for skewed proof acceptance and inline expiry rejection.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p ivm --test axt_host_flow -- --nocapture`.
+- Sumeragi/DA: treat locally available payload hashes as availability evidence for the DA gate so missing-local-data warnings clear even when RBC delivery lags; add unit coverage.
+- Tests: `cargo test -p iroha_core payload_available_for_da_accepts_local_payload_without_rbc -- --nocapture` (timed out after 120s: waiting for package cache/build directory locks).
+- Sumeragi/DA: request missing `BlockCreated` after RBC payload delivery when the signed header is absent; add recovery coverage.
+- Tests: `cargo test -p iroha_core recover_block_from_rbc_session_requests_missing_block_created -- --nocapture` (timed out after 120s: waiting for build directory lock).
 - Governance ZK voting: canonicalize `root_hint`/`nullifier_hex` hex hints across SDKs/CLI/bridges, align core CastZkBallot parsing with case-insensitive `blake2b32:`/`0x` prefixes, and add regression coverage.
 - Tests: not run (not requested).
 - IVM CoreHost: record raw AXT proof expiry while applying skew only to cache/slot checks, reject inline proofs with zero expiry slots, and align cache expiry storage; add regression coverage for skewed proof acceptance and zero-expiry rejection.

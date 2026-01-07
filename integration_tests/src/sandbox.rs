@@ -496,7 +496,8 @@ mod tests {
     impl EnvRestore {
         fn remove(key: &'static str) -> Self {
             let value = std::env::var(key).ok();
-            std::env::remove_var(key);
+            // SAFETY: tests serialize env mutations via `lock_env_guard`.
+            unsafe { std::env::remove_var(key) };
             Self { key, value }
         }
     }
@@ -504,9 +505,11 @@ mod tests {
     impl Drop for EnvRestore {
         fn drop(&mut self) {
             if let Some(value) = &self.value {
-                std::env::set_var(self.key, value);
+                // SAFETY: tests serialize env mutations via `lock_env_guard`.
+                unsafe { std::env::set_var(self.key, value) };
             } else {
-                std::env::remove_var(self.key);
+                // SAFETY: tests serialize env mutations via `lock_env_guard`.
+                unsafe { std::env::remove_var(self.key) };
             }
         }
     }
