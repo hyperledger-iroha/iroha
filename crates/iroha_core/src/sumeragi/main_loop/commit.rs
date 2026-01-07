@@ -1838,16 +1838,14 @@ impl Actor {
                 Some(pending) => pending,
                 None => continue,
             };
-            let local_payload_ok = Self::local_payload_matches_hash(&pending.block, &payload_hash);
             let delivered = da_enabled
-                && (local_payload_ok
-                    || Self::ensure_block_matches_rbc_payload(
-                        &self.subsystems.da_rbc.rbc.sessions,
-                        &self.subsystems.da_rbc.rbc.status_handle,
-                        &hash,
-                        pending_height,
-                        &payload_hash,
-                    ));
+                && Self::ensure_block_matches_rbc_payload(
+                    &self.subsystems.da_rbc.rbc.sessions,
+                    &self.subsystems.da_rbc.rbc.status_handle,
+                    &hash,
+                    pending_height,
+                    &payload_hash,
+                );
             let missing_local_data = da_enabled && !delivered;
             if !pending.commit_certificate_seen {
                 if let Some(qc) = qc_cache_for_subject(&self.qc_cache, hash).find(|qc| {
@@ -2793,6 +2791,7 @@ impl Actor {
         rbc_payload_matches(sessions, handle, block_hash, height, payload_hash)
     }
 
+    #[cfg(test)]
     fn local_payload_matches_hash(block: &SignedBlock, payload_hash: &Hash) -> bool {
         let payload_bytes = super::proposals::block_payload_bytes(block);
         Hash::new(&payload_bytes) == *payload_hash
@@ -2899,10 +2898,7 @@ impl Actor {
 
     fn refresh_da_gate_status(&mut self, pending: &mut PendingBlock) -> DaGateStatus {
         let da_enabled = self.runtime_da_enabled();
-        let local_payload_ok =
-            Self::local_payload_matches_hash(&pending.block, &pending.payload_hash);
         let missing_local_data = da_enabled
-            && !local_payload_ok
             && !Self::ensure_block_matches_rbc_payload(
                 &self.subsystems.da_rbc.rbc.sessions,
                 &self.subsystems.da_rbc.rbc.status_handle,

@@ -1,6 +1,10 @@
 # Status
 
 ## Latest Updates
+- Integration tests: remove `unsafe` wrappers around sandbox env var restore helpers to satisfy `-D unsafe-code`.
+- Tests: not run (not requested).
+- Integration tests: wrap env var mutation helpers in `unsafe` blocks and document the env-lock requirement for Rust's environment safety contract.
+- Tests: not run (not requested).
 - Maintenance: resolve merge conflict markers in `status.md`.
 - Tests: not run (not requested).
 - Test network harness: workspace fingerprint now honors simple `.gitignore` globs and ignores custom `CARGO_TARGET_DIR` paths to reduce unnecessary rebuilds; added unit coverage.
