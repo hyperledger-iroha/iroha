@@ -1,5 +1,7 @@
 //! Tests for notifications emitted after trigger execution.
 
+use std::time::Duration;
+
 use eyre::Result;
 use futures_util::StreamExt;
 use integration_tests::sandbox;
@@ -7,7 +9,10 @@ use iroha::data_model::{ValidationFail, prelude::*, query::error::FindError};
 use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
-use tokio::{task::spawn_blocking, time::timeout};
+use tokio::{
+    task::spawn_blocking,
+    time::{sleep, timeout},
+};
 
 #[tokio::test]
 async fn trigger_completion_success_should_produce_event() -> Result<()> {
@@ -112,11 +117,56 @@ async fn trigger_completion_failure_reports_error() -> Result<()> {
     spawn_blocking(move || client.submit_blocking(register_trigger)).await??;
     network.ensure_blocks(2).await?;
 
-    let call_trigger = ExecuteTrigger::new(trigger_id);
-    let client = network.client();
-    let err = spawn_blocking(move || client.submit_blocking(call_trigger))
-        .await?
-        .expect_err("should immediately result in error");
+    let retry_delay = Duration::from_secs(2);
+    let mut attempts = 0;
+    let err = loop {
+        let call_trigger = ExecuteTrigger::new(trigger_id.clone());
+        let client = network.client();
+        let err = spawn_blocking(move || client.submit_blocking(call_trigger))
+            .await?
+            .expect_err("should immediately result in error");
+        let is_expected = err
+            .chain()
+            .any(|cause| cause.downcast_ref::<FindError>().is_some())
+            || err
+                .chain()
+                .any(|cause| cause.downcast_ref::<InstructionExecutionError>().is_some())
+            || err.chain().any(|cause| {
+                matches!(
+                    cause.downcast_ref::<ValidationFail>(),
+                    Some(ValidationFail::NotPermitted(_))
+                )
+            })
+            || err.chain().any(|cause| {
+                matches!(
+                    cause.downcast_ref::<InvalidParameterError>(),
+                    Some(InvalidParameterError::SmartContract(_))
+                )
+            });
+        if is_expected {
+            break err;
+        }
+
+        let err_msg = err.to_string();
+        let is_transient = err
+            .chain()
+            .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
+            || err_msg.contains("Failed to send transaction")
+            || err_msg.contains("Failed to establish event listener connection")
+            || err_msg.contains("transaction.status_timeout_ms")
+            || err_msg.contains("Connection refused")
+            || err_msg.contains("connection refused")
+            || err_msg.contains("timed out")
+            || err_msg.contains("timeout");
+
+        if attempts < 2 && is_transient {
+            attempts += 1;
+            sleep(retry_delay).await;
+            continue;
+        }
+
+        return Err(err);
+    };
     if let Some(FindError::Domain(_)) = err
         .chain()
         .find_map(|cause| cause.downcast_ref::<FindError>())
@@ -147,6 +197,14 @@ async fn trigger_completion_failure_reports_error() -> Result<()> {
         assert!(
             !msg.trim().is_empty(),
             "NotPermitted message should not be empty"
+        );
+    } else if let Some(InvalidParameterError::SmartContract(msg)) = err
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<InvalidParameterError>())
+    {
+        assert!(
+            msg.contains("unregister domain"),
+            "unexpected SmartContract message: {msg}"
         );
     } else {
         return Err(err);

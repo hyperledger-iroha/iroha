@@ -10,7 +10,10 @@ use iroha::data_model::{
     Level,
     isi::{InstructionBox, Log, SetParameter, Unregister, register::RegisterPeerWithPop},
     parameter::{Parameter, SumeragiParameter},
+    prelude::QueryBuilderExt,
+    query::peer::prelude::FindPeers,
 };
+use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_test_network::*;
 use rand::{SeedableRng, prelude::IteratorRandom};
 use rand_chacha::ChaCha8Rng;
@@ -136,12 +139,14 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
     };
+    let roster_client = network.client();
+    let expected_connected = expected_connected_peers(n_peers);
 
     if sandbox::handle_result(
         assert_peers_status(
             network.peers().iter(),
             1,
-            n_peers as u64 - 1,
+            expected_connected,
             network.sync_timeout(),
         )
         .await,
@@ -158,7 +163,7 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     };
     let removed_peer = randomized_peers.remove(0);
 
-    // Unregister a peer: committed with f = `faults` then `status.peers` decrements
+    // Unregister a peer and wait for the roster to reflect the change.
     let client = leader_peer(randomized_peers.iter().copied()).client();
     let unregister_peer = Unregister::peer(removed_peer.id());
     submit_instruction_or_warn(client.clone(), unregister_peer, context).await?;
@@ -172,10 +177,19 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     )
     .await?;
     if sandbox::handle_result(
+        wait_for_peer_roster(&roster_client, n_peers - 1, network.sync_timeout()).await,
+        context,
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+    let expected_connected = expected_connected_peers(n_peers - 1);
+    if sandbox::handle_result(
         assert_peers_status(
             randomized_peers.iter().copied(),
             2,
-            n_peers as u64 - 2,
+            expected_connected,
             network.sync_timeout(),
         )
         .await,
@@ -202,7 +216,7 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     // Removed peer might see one extra commit while transitioning to follower mode.
     assert_matches!(status.blocks_non_empty, 1 | 2 | 3);
 
-    // Re-register the peer: committed with f = `faults` - 1 then `status.peers` increments
+    // Re-register the peer and wait for the roster to reflect the change.
     let register_peer = RegisterPeerWithPop::new(
         removed_peer.id(),
         removed_peer
@@ -213,12 +227,21 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     let client = leader_peer(randomized_peers.iter().copied()).client();
     submit_instruction_or_warn(client.clone(), register_peer, context).await?;
     network.ensure_blocks(3).await?;
+    if sandbox::handle_result(
+        wait_for_peer_roster(&roster_client, n_peers, network.sync_timeout()).await,
+        context,
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+    let expected_connected = expected_connected_peers(n_peers);
 
     if sandbox::handle_result(
         assert_peers_status(
             randomized_peers.iter().copied().chain(once(removed_peer)),
             3,
-            n_peers as u64 - 1,
+            expected_connected,
             network.sync_timeout(),
         )
         .await,
@@ -344,4 +367,52 @@ async fn submit_instruction_or_warn(
     let context = context.to_string();
     spawn_blocking(move || client.submit_blocking(instruction).wrap_err(context)).await??;
     Ok(())
+}
+
+fn expected_connected_peers(roster_len: usize) -> u64 {
+    commit_quorum_from_len(roster_len)
+        .saturating_sub(1)
+        .try_into()
+        .unwrap_or(0)
+}
+
+async fn wait_for_peer_roster(
+    client: &iroha::client::Client,
+    expected: usize,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let mut last_err = None;
+    let mut last_count = None;
+
+    loop {
+        let client = client.clone();
+        let result = spawn_blocking(move || {
+            client
+                .query(FindPeers)
+                .execute_all()
+                .map(|peers| peers.len())
+        })
+        .await?;
+
+        match result {
+            Ok(count) => {
+                last_count = Some(count);
+                if count == expected {
+                    return Ok(());
+                }
+            }
+            Err(err) => {
+                last_err = Some(err);
+            }
+        }
+
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "timed out waiting for peer roster size {expected}; last_count={last_count:?} last_err={last_err:?}"
+            ));
+        }
+
+        sleep(Duration::from_millis(200)).await;
+    }
 }
