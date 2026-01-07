@@ -342,6 +342,9 @@ fn is_public_ipv6(addr: Ipv6Addr) -> bool {
     {
         return false;
     }
+    if let Some(v4) = addr.to_ipv4() {
+        return is_public_ipv4(v4);
+    }
     let seg0 = addr.segments()[0];
     if (seg0 & 0xffc0) == 0xfec0 {
         return false;
@@ -633,10 +636,13 @@ mod tests {
         assert!(!is_public_geo_host("127.0.0.1"));
         assert!(!is_public_geo_host("10.0.0.1"));
         assert!(!is_public_geo_host("::1"));
+        assert!(!is_public_geo_host("::ffff:127.0.0.1"));
+        assert!(!is_public_geo_host("::ffff:10.0.0.1"));
         assert!(!is_public_geo_host("localhost"));
         assert!(!is_public_geo_host("192.0.2.1"));
         assert!(!is_public_geo_host("2001:db8::1"));
         assert!(is_public_geo_host("8.8.8.8"));
+        assert!(is_public_geo_host("::ffff:8.8.8.8"));
         assert!(is_public_geo_host("example.com"));
     }
 

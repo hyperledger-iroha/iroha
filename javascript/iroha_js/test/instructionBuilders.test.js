@@ -957,6 +957,22 @@ test("buildCastZkBallotInstruction normalizes lock hint aliases", () => {
   assert.equal(parsed.durationBlocks, undefined);
 });
 
+test("buildCastZkBallotInstruction canonicalizes public input ordering", () => {
+  const instruction = buildCastZkBallotInstruction({
+    electionId: "ref-4",
+    proof: Buffer.from([0x05]),
+    publicInputs: {
+      tally: "aye",
+      meta: { z: 1, a: 2 },
+      badge: "voter",
+    },
+  });
+  assert.equal(
+    instruction.CastZkBallot.public_inputs_json,
+    '{"badge":"voter","meta":{"a":2,"z":1},"tally":"aye"}',
+  );
+});
+
 test("buildCastZkBallotInstruction rejects non-object public inputs", () => {
   assert.throws(
     () =>

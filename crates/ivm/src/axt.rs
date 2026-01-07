@@ -261,6 +261,11 @@ impl AxtPolicy for SnapshotAxtPolicy {
         {
             return Err(VMError::PermissionDenied);
         }
+        if let Some(requested) = usage.handle.max_clock_skew_ms
+            && u64::from(requested) > self.max_clock_skew_ms
+        {
+            return Err(VMError::PermissionDenied);
+        }
         let expiry_slot = expiry_slot_with_skew(
             usage.handle.expiry_slot,
             self.slot_length_ms,
@@ -950,6 +955,51 @@ mod tests {
                 amount: amount.into(),
             },
         }
+    }
+
+    #[test]
+    fn snapshot_policy_rejects_excess_skew_request() {
+        let dsid = DataSpaceId::new(8);
+        let entry = ModelAxtPolicyEntry {
+            manifest_root: [0xAB; 32],
+            target_lane: LaneId::new(0),
+            min_handle_era: 1,
+            min_sub_nonce: 1,
+            current_slot: 10,
+        };
+        let entries = vec![iroha_data_model::nexus::AxtPolicyBinding {
+            dsid,
+            policy: entry,
+        }];
+        let snapshot = ModelAxtPolicySnapshot {
+            version: ModelAxtPolicySnapshot::compute_version(&entries),
+            entries,
+        };
+        let policy = SnapshotAxtPolicy::new_with_timing(
+            &snapshot,
+            NonZeroU64::new(10).expect("slot length"),
+            5,
+        );
+
+        let binding = [0x11; 32];
+        let mut handle = sample_handle(dsid, binding, 25, None);
+        handle.manifest_view_root = entry.manifest_root.to_vec();
+        handle.target_lane = entry.target_lane;
+        handle.handle_era = entry.min_handle_era;
+        handle.sub_nonce = entry.min_sub_nonce;
+        handle.max_clock_skew_ms = Some(6);
+        let intent = sample_intent(dsid, "1");
+        let usage = HandleUsage {
+            handle,
+            intent,
+            proof: None,
+            amount: 1,
+        };
+
+        assert!(matches!(
+            policy.allow_handle(&usage),
+            Err(VMError::PermissionDenied)
+        ));
     }
 
     #[test]

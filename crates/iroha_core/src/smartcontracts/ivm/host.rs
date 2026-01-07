@@ -1860,9 +1860,10 @@ impl CoreHost {
         let expiry_with_skew = proof
             .expiry_slot
             .map(|slot| self.axt_expiry_slot_with_skew(slot, None));
-        let proof_with_skew = ProofBlob {
+        // Keep the recorded proof expiry as provided; skew is only applied to cache/slot checks.
+        let proof_for_state = ProofBlob {
             payload: proof.payload.clone(),
-            expiry_slot: expiry_with_skew,
+            expiry_slot: proof.expiry_slot,
         };
 
         let digest: [u8; 32] = Hash::new(&proof.payload).into();
@@ -1906,7 +1907,7 @@ impl CoreHost {
         }
         if cache_hit_valid {
             let state = self.axt_state.as_mut().expect("axt_state checked above");
-            state.record_proof(dsid, Some(proof_with_skew.clone()), current_slot)?;
+            state.record_proof(dsid, Some(proof_for_state.clone()), None)?;
             return Ok(());
         }
         if cache_hit_invalid {
@@ -1960,7 +1961,7 @@ impl CoreHost {
         }
 
         let state = self.axt_state.as_mut().expect("axt_state checked above");
-        state.record_proof(dsid, Some(proof_with_skew), current_slot)?;
+        state.record_proof(dsid, Some(proof_for_state), None)?;
         self.cache_proof_entry(
             dsid,
             digest,
@@ -2480,6 +2481,9 @@ impl CoreHost {
             );
             return Err(ivm::VMError::PermissionDenied);
         }
+        let intent_ptr = vm.register(11);
+        let intent_tlv = Self::expect_tlv(vm, intent_ptr, PointerType::NoritoBytes)?;
+        let intent: RemoteSpendIntent = Self::decode_header_or_bare(intent_tlv.payload)?;
         let (state_binding, dsid_expected, has_touch) = {
             let state_ref = self.axt_state.as_ref().expect("axt_state checked above");
             (
@@ -2498,9 +2502,6 @@ impl CoreHost {
             return Err(ivm::VMError::PermissionDenied);
         }
 
-        let intent_ptr = vm.register(11);
-        let intent_tlv = Self::expect_tlv(vm, intent_ptr, PointerType::NoritoBytes)?;
-        let intent: RemoteSpendIntent = Self::decode_header_or_bare(intent_tlv.payload)?;
         if !dsid_expected {
             self.record_axt_reject(
                 AxtRejectReason::Descriptor,
@@ -3833,6 +3834,48 @@ mod pointer_abi_tests {
         assert_eq!(ctx.reason, AxtRejectReason::Descriptor);
         assert_eq!(ctx.dataspace, Some(other));
         assert!(ctx.lane.is_none());
+    }
+
+    #[test]
+    fn axt_verify_ds_proof_records_raw_expiry() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(8);
+        let manifest_root = [0x21; 32];
+        let descriptor = axt::AxtDescriptor {
+            dsids: vec![dsid],
+            touches: Vec::new(),
+        };
+        let snapshot = make_policy_snapshot(dsid, manifest_root, 12);
+        let mut timing = iroha_config::parameters::actual::NexusAxt::default();
+        timing.max_clock_skew_ms = 1;
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority)
+            .with_axt_policy_snapshot(&snapshot)
+            .with_axt_timing(timing);
+        let mut vm = IVM::new(10_000);
+        begin_axt_envelope(&mut host, &mut vm, &descriptor);
+
+        let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &norito_blob(&dsid));
+        let proof = ProofBlob {
+            payload: manifest_root.to_vec(),
+            expiry_slot: Some(11),
+        };
+        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &norito_blob(&proof));
+        vm.set_register(10, ds_ptr);
+        vm.set_register(11, proof_ptr);
+
+        assert_eq!(
+            host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+            Ok(0)
+        );
+        let recorded = host
+            .axt_state
+            .as_ref()
+            .expect("axt_state present")
+            .proofs()
+            .get(&dsid)
+            .expect("proof recorded");
+        assert_eq!(recorded.expiry_slot, Some(11));
     }
 
     #[test]

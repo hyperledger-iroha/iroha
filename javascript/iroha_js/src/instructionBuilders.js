@@ -1483,7 +1483,57 @@ function normalizeJsonPayload(value, name) {
     }
   }
   const normalized = normalizeZkBallotPublicInputs(payload, name);
-  return JSON.stringify(normalized);
+  return canonicalJsonStringify(normalized, name);
+}
+
+function canonicalJsonStringify(value, name) {
+  return JSON.stringify(canonicalizeJsonValue(value, name, new Set()));
+}
+
+function canonicalizeJsonValue(value, name, stack) {
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      fail(ValidationErrorCode.INVALID_JSON_VALUE, `${name} must not contain non-finite numbers`, name);
+    }
+    return value;
+  }
+  if (typeof value === "bigint") {
+    fail(ValidationErrorCode.INVALID_JSON_VALUE, `${name} must not contain BigInt values`, name);
+  }
+  if (typeof value === "function" || typeof value === "symbol") {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => canonicalizeJsonValue(entry, name, stack));
+  }
+  if (value && typeof value === "object") {
+    if (typeof value.toJSON === "function") {
+      return canonicalizeJsonValue(value.toJSON(), name, stack);
+    }
+    if (stack.has(value)) {
+      fail(
+        ValidationErrorCode.INVALID_JSON_VALUE,
+        `${name} must not contain circular references`,
+        name,
+      );
+    }
+    stack.add(value);
+    const result = {};
+    const keys = Object.keys(value).sort();
+    for (const key of keys) {
+      const entry = value[key];
+      if (entry === undefined || typeof entry === "function" || typeof entry === "symbol") {
+        continue;
+      }
+      result[key] = canonicalizeJsonValue(entry, name, stack);
+    }
+    stack.delete(value);
+    return result;
+  }
+  return value;
 }
 
 function normalizeZkBallotPublicInputs(value, name) {
