@@ -486,11 +486,27 @@ fn normalize_zk_ballot_public_inputs(value: &mut JsonValue) -> BridgeResult<()> 
     if any && !(has_owner && has_amount && has_duration) {
         return Err(BridgeError::Governance);
     }
+    ensure_zk_public_input_owner_canonical(map)?;
     Ok(())
 }
 
 fn reject_zk_public_input_key(map: &JsonMap, key: &str, _canonical: &str) -> BridgeResult<()> {
     if map.contains_key(key) {
+        return Err(BridgeError::Governance);
+    }
+    Ok(())
+}
+
+fn ensure_zk_public_input_owner_canonical(map: &JsonMap) -> BridgeResult<()> {
+    let Some(value) = map.get("owner") else {
+        return Ok(());
+    };
+    if matches!(value, JsonValue::Null) {
+        return Ok(());
+    }
+    let owner = value.as_str().ok_or(BridgeError::Governance)?;
+    let canonical = AccountId::canonicalize(owner).map_err(|_| BridgeError::Governance)?;
+    if canonical != owner {
         return Err(BridgeError::Governance);
     }
     Ok(())
@@ -11056,6 +11072,21 @@ mod tests {
             map.get("nullifier").and_then(JsonValue::as_str),
             Some(nullifier_expected.as_str())
         );
+    }
+
+    #[test]
+    fn zk_ballot_public_inputs_rejects_noncanonical_owner() {
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let keypair = KeyPair::from_seed(vec![0xCC; 32], Algorithm::Ed25519);
+        let account = AccountId::new(domain, keypair.public_key().clone());
+        let address_hex = account.to_canonical_hex().expect("canonical hex");
+        let noncanonical = format!("{address_hex}@{}", account.domain());
+        let mut map = JsonMap::new();
+        map.insert("owner".to_owned(), JsonValue::from(noncanonical));
+        map.insert("amount".to_owned(), JsonValue::from("10"));
+        map.insert("duration_blocks".to_owned(), JsonValue::from(64u64));
+        let mut value = JsonValue::Object(map);
+        assert!(normalize_zk_ballot_public_inputs(&mut value).is_err());
     }
 
     #[test]

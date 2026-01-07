@@ -93,7 +93,7 @@ Manifests القدرات وUAID
 
    `--reason` يملأ `entries[*].notes` للسجلات التي لم تذكر ملاحظات المشغل.
 
-3. **انتهاء** المانيفستات او **الغاء** UAIDs عند الطلب. كلا الامرين يقبل `--uaid uaid:<hex>` وid عددي للـ dataspace:
+3. **انتهاء** المانيفستات او **الغاء** UAIDs عند الطلب. كلا الامرين يقبل `--uaid uaid:<hex>` او digest hex مكون من 64 خانة (LSB=1) وid عددي للـ dataspace:
 
    ```bash
    iroha space-directory manifest expire \

@@ -12,6 +12,7 @@ public final class UaidJsonParserTests {
 
   public static void main(final String[] args) {
     parsesPortfolioPayload();
+    rejectsInvalidUaidLsb();
     rejectsFractionalEpoch();
     System.out.println("[IrohaAndroid] UaidJsonParserTests passed.");
   }
@@ -90,5 +91,24 @@ public final class UaidJsonParserTests {
       thrown = true;
     }
     assert thrown : "expected non-integer epochs to be rejected";
+  }
+
+  private static void rejectsInvalidUaidLsb() {
+    final String json =
+        """
+        {
+          "uaid": "uaid:%s",
+          "totals": { "accounts": 1, "positions": 1 },
+          "dataspaces": []
+        }
+        """
+            .formatted("10".repeat(32));
+    boolean thrown = false;
+    try {
+      UaidJsonParser.parsePortfolio(json.getBytes(StandardCharsets.UTF_8));
+    } catch (Exception ex) {
+      thrown = true;
+    }
+    assert thrown : "expected UAID LSB violations to be rejected";
   }
 }

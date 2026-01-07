@@ -104,7 +104,7 @@ transport exposes typed helpers in `org.hyperledger.iroha.android.nexus`:
   you filter by dataspace, status (`active`, `inactive`, `all`), paging offsets,
   and `address_format`.
 - `UaidLiteral.canonicalize(literal, context)` normalises user input with the
-  `uaid:` prefix and 64‑hex enforcement so controllers can be pasted in any
+  `uaid:` prefix and 64‑hex (LSB=1) enforcement so controllers can be pasted in any
   casing.
 
 Example:

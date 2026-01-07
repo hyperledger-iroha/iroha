@@ -63,7 +63,12 @@ impl FromStr for UniversalAccountId {
     type Err = iroha_crypto::error::ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Hash::from_str(s).map(Self::from_hash)
+        let trimmed = s.trim();
+        let hex_literal = match trimmed.get(..5) {
+            Some(prefix) if prefix.eq_ignore_ascii_case("uaid:") => trimmed[5..].trim(),
+            _ => trimmed,
+        };
+        Hash::from_str(hex_literal).map(Self::from_hash)
     }
 }
 
@@ -436,15 +441,20 @@ fn parse_uaid_value(value: &Value) -> Result<UniversalAccountId, json::Error> {
             message: "uaid must be a string".into(),
         });
     };
-    let suffix = text
-        .strip_prefix("uaid:")
-        .ok_or_else(|| json::Error::InvalidField {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(json::Error::InvalidField {
             field: "uaid".into(),
-            message: "uaid must start with `uaid:`".into(),
-        })?;
-    let hash = Hash::from_str(suffix).map_err(|err| json::Error::InvalidField {
+            message: "uaid must be a non-empty string".into(),
+        });
+    }
+    let hex_literal = match trimmed.get(..5) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("uaid:") => trimmed[5..].trim(),
+        _ => trimmed,
+    };
+    let hash = Hash::from_str(hex_literal).map_err(|err| json::Error::InvalidField {
         field: "uaid".into(),
-        message: format!("invalid UAID hash: {err}"),
+        message: format!("uaid must be `uaid:<hex>` or 64-hex digest: {err}"),
     })?;
     Ok(UniversalAccountId::from_hash(hash))
 }
@@ -955,6 +965,8 @@ pub enum DenyReason {
 mod tests {
     use std::{fs, path::Path};
 
+    #[cfg(feature = "json")]
+    use norito::json::JsonDeserialize;
     use proptest::prelude::*;
 
     use super::*;
@@ -965,6 +977,64 @@ mod tests {
 
     fn sample_name(value: &str) -> Name {
         value.parse().expect("valid name")
+    }
+
+    #[test]
+    fn uaid_from_str_accepts_literal_and_hex() {
+        let uaid = sample_uaid();
+        let hex = uaid.as_hash().to_string();
+
+        let parsed_hex = UniversalAccountId::from_str(&hex).expect("hex uaid must parse");
+        let parsed_literal =
+            UniversalAccountId::from_str(&format!("uaid:{hex}")).expect("uaid literal must parse");
+        let parsed_upper =
+            UniversalAccountId::from_str(&format!("UAID:{hex}")).expect("upper literal must parse");
+        let parsed_display = uaid
+            .to_string()
+            .parse::<UniversalAccountId>()
+            .expect("display uaid must parse");
+
+        assert_eq!(parsed_hex, uaid);
+        assert_eq!(parsed_literal, uaid);
+        assert_eq!(parsed_upper, uaid);
+        assert_eq!(parsed_display, uaid);
+    }
+
+    #[test]
+    fn uaid_from_str_trims_after_prefix() {
+        let uaid = sample_uaid();
+        let hex = uaid.as_hash().to_string();
+        let literal = format!("  uaid:  {hex}  ");
+
+        let parsed = UniversalAccountId::from_str(&literal).expect("uaid literal must parse");
+
+        assert_eq!(parsed, uaid);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn manifest_json_accepts_raw_hex_or_prefixed_uaid() {
+        let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/space_directory/capability/cbdc_wholesale.manifest.json");
+        let fixture = fs::read_to_string(&fixture_path).expect("read fixture JSON");
+        let expected = cbdc_manifest_fixture();
+        let uaid_hex = expected.uaid.as_hash().to_string();
+        let variants = [
+            uaid_hex.clone(),
+            format!("UAID:{}", uaid_hex.to_uppercase()),
+        ];
+
+        for literal in variants {
+            let mut value: norito::json::Value =
+                norito::json::from_str(&fixture).expect("parse manifest JSON");
+            let norito::json::Value::Object(map) = &mut value else {
+                panic!("fixture manifest JSON must be an object");
+            };
+            map.insert("uaid".into(), norito::json::Value::String(literal));
+            let parsed = AssetPermissionManifest::json_from_value(&value)
+                .expect("parse manifest JSON with UAID variant");
+            assert_eq!(parsed.uaid, expected.uaid);
+        }
     }
 
     fn manifest_with_entries(

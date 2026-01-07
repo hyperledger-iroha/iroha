@@ -1408,9 +1408,10 @@ Each helper normalises/validates the response payloads:
   entries, and optional dataspace filters (set `dataspaceId` to restrict the
   snapshot).
 
-The helpers automatically canonicalise the UAID literal (`uaid:<hex>`) and throw
-when the supplied identifier is malformed, ensuring automation scripts surface
-clear diagnostics long before the request reaches Torii.
+The helpers automatically canonicalise UAID literals (`uaid:<hex>` or raw
+64-character hex digests with LSB=1) and throw when the supplied identifier is
+malformed, ensuring automation scripts surface clear diagnostics long before the
+request reaches Torii.
 
 ### Publishing & revoking manifests
 
@@ -1957,6 +1958,8 @@ const proposalTx = buildProposeDeployContractTransaction({
   privateKey,
 });
 
+const zkOwner = "ih58...@default"; // canonical IH58 account id for ZK public inputs
+
 const zkBallotTx = buildCastZkBallotTransaction({
   chainId: "test-chain",
   authority,
@@ -1964,7 +1967,7 @@ const zkBallotTx = buildCastZkBallotTransaction({
     electionId: "referendum-1",
     proof: Buffer.from(proofBytes),
     publicInputs: {
-      owner: authority,
+      owner: zkOwner,
       amount: "5000",
       duration_blocks: 7_200,
       direction: "Aye",
@@ -2687,7 +2690,7 @@ without provisioning infrastructure.
 - `IROHA_TORII_INTEGRATION_ISO_VOPRF` — optional hex string forwarded to the alias VOPRF helper coverage (defaults to `deadbeef`); useful when replaying captured transcripts that require specific blinded elements.
 - `IROHA_TORII_INTEGRATION_SORAFS_ENABLED` — set to `1` to run the optional SoraFS registry/storage smoke test (lists manifests/aliases/replication orders and fetches the storage state). Leave unset/`0` when SoraFS endpoints are disabled on the target node.
 - `IROHA_TORII_INTEGRATION_SORAFS_POR_WEEK` — optional ISO week label such as `2026-W05`. When set alongside `IROHA_TORII_INTEGRATION_SORAFS_ENABLED=1`, the suite fetches the PoR weekly report for that week to exercise the Norito export path.
-- `IROHA_TORII_INTEGRATION_UAID` — optional canonical UAID literal (for example `uaid:0f4d…`). When provided, the integration suite exercises the UAID portfolio/bindings/manifests endpoints so cross-dataspace APIs stay covered.
+- `IROHA_TORII_INTEGRATION_UAID` — optional UAID literal (`uaid:<hex>` or raw 64-hex digest, LSB=1). When provided, the integration suite exercises the UAID portfolio/bindings/manifests endpoints so cross-dataspace APIs stay covered.
 - `IROHA_TORII_INTEGRATION_UAID_DATASPACE` — optional dataspace id (non-negative integer) used to scope the UAID manifest request when `IROHA_TORII_INTEGRATION_UAID` is set. Leave unset to fetch manifests across every dataspace.
 - `IROHA_TORII_INTEGRATION_SNS_SUFFIX` — optional SNS suffix id (u16) used to fetch the suffix policy snapshot. Supply alongside `IROHA_TORII_INTEGRATION_URL` to exercise the SNS policy smoke test.
 - `IROHA_TORII_INTEGRATION_SNS_SELECTOR` — optional canonical name selector (for example `wonderland.sora`) used to fetch an SNS registration record.
@@ -3220,13 +3223,14 @@ if (!ballot.accepted) {
   console.warn("ballot rejected:", ballot.reason);
 }
 
+const zkOwner = "ih58...@default"; // canonical IH58 account id for ZK public inputs
 await torii.governanceSubmitZkBallot({
   authority,
   chainId: "00000000-0000-0000-0000-000000000000",
   electionId: "ref-zk",
   proof: Buffer.from(proofBytes),
   public: {
-    owner: authority,
+    owner: zkOwner,
     amount: "5000",
     duration_blocks: 7_200,
     direction: "Aye",

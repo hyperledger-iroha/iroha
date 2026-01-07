@@ -6,7 +6,7 @@ use iroha_data_model::prelude::{AssetId, Burn, InstructionBox, Mint, Numeric, Tr
 use norito::codec::{Decode, Encode};
 
 const FIXTURE_ASSET_ID: &str =
-    "rose##ED0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland";
+    "rose##ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland";
 
 #[derive(Debug)]
 struct InstructionFixture {

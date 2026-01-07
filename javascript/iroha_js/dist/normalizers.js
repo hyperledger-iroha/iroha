@@ -3,6 +3,7 @@ import {
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,
+  AccountAddressFormat,
   DEFAULT_DOMAIN_NAME,
   canonicalizeDomainLabel,
 } from "./address.js";
@@ -329,6 +330,91 @@ export function normalizeAccountId(value, name) {
   }
   validateAccountDomainSelector(normalizedSignatory, canonicalDomain, name);
   return `${normalizedSignatory}@${canonicalDomain}`;
+}
+
+export function ensureCanonicalAccountId(value, name) {
+  const raw = assertString(value, name).trim();
+  if (raw.length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+  }
+  const atIndex = raw.lastIndexOf("@");
+  if (atIndex === -1) {
+    fail(
+      ValidationErrorCode.INVALID_ACCOUNT_ID,
+      `${name} must include a domain suffix using '@'`,
+      name,
+    );
+  }
+  const signatory = raw.slice(0, atIndex);
+  const domain = raw.slice(atIndex + 1).trim();
+  if (signatory.length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_ACCOUNT_ID,
+      `${name} must include characters before '@'`,
+      name,
+    );
+  }
+  if (domain.length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_ACCOUNT_ID,
+      `${name} must include a domain after '@'`,
+      name,
+    );
+  }
+
+  let canonicalDomain;
+  try {
+    canonicalDomain = canonicalizeDomainLabel(domain);
+  } catch (error) {
+    if (error instanceof AccountAddressError) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_ACCOUNT_ID,
+        error.message,
+        name,
+        error,
+      );
+    }
+    throw error;
+  }
+  if (domain !== canonicalDomain) {
+    fail(
+      ValidationErrorCode.INVALID_ACCOUNT_ID,
+      `${name} must use canonical account id form`,
+      name,
+    );
+  }
+
+  let parsed;
+  try {
+    parsed = AccountAddress.parseAny(signatory, undefined, canonicalDomain);
+  } catch (error) {
+    if (error instanceof AccountAddressError) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_ACCOUNT_ID,
+        `${name} must be a canonical account id`,
+        name,
+        error,
+      );
+    }
+    throw error;
+  }
+  if (parsed.format !== AccountAddressFormat.IH58) {
+    fail(
+      ValidationErrorCode.INVALID_ACCOUNT_ID,
+      `${name} must be a canonical account id`,
+      name,
+    );
+  }
+  const canonicalSignatory = parsed.address.toIH58();
+  const canonicalId = `${canonicalSignatory}@${canonicalDomain}`;
+  if (raw !== canonicalId) {
+    fail(
+      ValidationErrorCode.INVALID_ACCOUNT_ID,
+      `${name} must use canonical account id form`,
+      name,
+    );
+  }
+  return canonicalId;
 }
 
 function validateAccountDomainSelector(signatory, domain, name) {

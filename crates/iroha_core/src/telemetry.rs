@@ -8228,8 +8228,13 @@ impl Actor {
                 };
                 block_index += 1;
 
-                let block_txs_rejected = block.errors().count() as u64;
-                let block_txs_all = block.external_transactions().count() as u64;
+                let block_external_txs = block.external_transactions().len();
+                let block_txs_rejected = block
+                    .results()
+                    .take(block_external_txs)
+                    .filter(|result| result.is_err())
+                    .count() as u64;
+                let block_txs_all = block_external_txs as u64;
                 let block_txs_approved = block_txs_all.saturating_sub(block_txs_rejected);
 
                 inc_blocks += 1;
@@ -8375,8 +8380,7 @@ impl BlockCommitReport {
         } else {
             let now = time_source.get_unix_time();
             let created_at = block_header.creation_time();
-            debug_assert!(now >= created_at);
-            now - created_at
+            now.checked_sub(created_at).unwrap_or(Duration::ZERO)
         };
         Self {
             #[cfg(debug_assertions)]
@@ -8464,10 +8468,13 @@ mod tests {
     use iroha_data_model::{
         ChainId, Level,
         account::AccountId,
-        asset::AssetDefinitionId,
+        asset::{AssetDefinitionId, AssetId},
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        events::data::space_directory::{SpaceDirectoryEvent, SpaceDirectoryManifestRevoked},
-        isi::Log,
+        events::{
+            data::space_directory::{SpaceDirectoryEvent, SpaceDirectoryManifestRevoked},
+            time::{ExecutionTime, TimeEventFilter},
+        },
+        isi::{InstructionBox, Log, Register, Transfer},
         nexus::{
             AssetPermissionManifest, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot,
             DataSpaceId, DataSpaceMetadata, LaneConfig, LaneId, ManifestVersion,
@@ -8476,6 +8483,7 @@ mod tests {
         oracle::KeyedHash,
         peer::{Peer, PeerId},
         prelude::TransactionBuilder,
+        trigger::prelude::{Action, Repeats, Trigger, TriggerId},
     };
     #[cfg(feature = "telemetry")]
     use iroha_data_model::{
@@ -8515,6 +8523,14 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(100), telemetry.metrics())
             .await
             .expect("metrics() should not hang when the actor channel is closed");
+    }
+
+    #[tokio::test]
+    async fn commit_time_clamps_when_block_created_in_future() {
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_000));
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 2_000, 0);
+        let report = BlockCommitReport::new(&header, &time_source);
+        assert_eq!(report.commit_time, Duration::ZERO);
     }
 
     #[test]
@@ -11399,7 +11415,13 @@ mod tests {
             }
         }
 
-        fn create_block(&self) -> NewBlock {
+        fn accepted_transaction<I>(
+            &self,
+            instructions: impl IntoIterator<Item = I>,
+        ) -> AcceptedTransaction<'static>
+        where
+            I: Into<InstructionBox>,
+        {
             let (max_clock_drift, tx_limits) = {
                 let params = &self.state.view().world.parameters;
                 (params.sumeragi().max_clock_drift(), params.transaction())
@@ -11410,21 +11432,29 @@ mod tests {
                 self.account_id.clone(),
                 &self.time_source,
             )
-            .with_instructions([Log::new(Level::DEBUG, "meow".to_string())])
+            .with_instructions(instructions)
             .sign(self.account_keypair.private_key());
             let crypto_cfg = self.state.crypto();
-            let tx = AcceptedTransaction::accept(
+            AcceptedTransaction::accept(
                 tx,
                 &self.chain_id,
                 max_clock_drift,
                 tx_limits,
                 crypto_cfg.as_ref(),
             )
-            .unwrap();
-            BlockBuilder::new_with_time_source(vec![tx], self.time_source.clone())
+            .unwrap()
+        }
+
+        fn build_block(&self, transactions: Vec<AcceptedTransaction<'static>>) -> NewBlock {
+            BlockBuilder::new_with_time_source(transactions, self.time_source.clone())
                 .chain(0, self.state.view().latest_block().as_deref())
                 .sign(&self.leader_private_key)
                 .unpack(|_| {})
+        }
+
+        fn create_block(&self) -> NewBlock {
+            let tx = self.accepted_transaction([Log::new(Level::DEBUG, "meow".to_string())]);
+            self.build_block(vec![tx])
         }
 
         fn commit_block(&self, block: NewBlock) -> CommittedBlock {
@@ -11782,6 +11812,67 @@ mod tests {
         assert_eq!(metrics.last_commit_time_ms.get(), 170 - CORRECTION);
         assert_eq!(metrics.slot_duration_ms_latest.get(), 170 - CORRECTION);
         assert_eq!(metrics.slot_duration_ms.get_sample_count(), 3);
+    }
+
+    #[tokio::test]
+    async fn tx_counters_ignore_time_trigger_failures() {
+        let sut = SystemUnderTest::new();
+
+        let trigger_id: TriggerId = "telemetry_time_trigger".parse().expect("trigger id");
+        let missing_def: AssetDefinitionId = "ghost#ghost".parse().expect("asset definition id");
+        let missing_asset = AssetId::new(missing_def, sut.account_id.clone());
+        let action = Action::new(
+            [Transfer::asset_numeric(
+                missing_asset,
+                1_u32,
+                sut.account_id.clone(),
+            )],
+            Repeats::Indefinitely,
+            sut.account_id.clone(),
+            TimeEventFilter::new(ExecutionTime::PreCommit),
+        );
+        let trigger = Trigger::new(trigger_id, action);
+
+        let register_tx = sut.accepted_transaction([Register::trigger(trigger)]);
+        let register_block = sut.build_block(vec![register_tx]);
+        sut.mock_time_handle.advance(Duration::from_millis(100));
+        let register_block = sut.commit_block(register_block);
+        sut.report_commit_block(&register_block.as_ref().header())
+            .await;
+
+        let metrics = sut.telemetry.metrics().await;
+        let base_accepted = metrics.txs.with_label_values(&["accepted"]).get();
+        let base_rejected = metrics.txs.with_label_values(&["rejected"]).get();
+        let base_total = metrics.txs.with_label_values(&["total"]).get();
+
+        let tx = sut.accepted_transaction([Log::new(Level::INFO, "ok".to_string())]);
+        let block = sut.build_block(vec![tx]);
+        sut.mock_time_handle.advance(Duration::from_millis(150));
+        let block = sut.commit_block(block);
+        let mut errors = block.as_ref().errors();
+        let (idx, _) = errors
+            .next()
+            .expect("time trigger should fail in telemetry test");
+        assert_eq!(idx, 1, "time trigger failure should follow external tx");
+        assert!(errors.next().is_none(), "only time trigger should fail");
+        sut.report_commit_block(&block.as_ref().header()).await;
+
+        let metrics = sut.telemetry.metrics().await;
+        let accepted = metrics.txs.with_label_values(&["accepted"]).get();
+        let rejected = metrics.txs.with_label_values(&["rejected"]).get();
+        let total = metrics.txs.with_label_values(&["total"]).get();
+
+        assert_eq!(
+            rejected, base_rejected,
+            "time trigger failures should not bump rejected tx count"
+        );
+        assert_eq!(
+            accepted,
+            base_accepted + 1,
+            "external tx should be accepted"
+        );
+        assert_eq!(total, accepted + rejected);
+        assert!(total > base_total);
     }
 
     #[tokio::test]

@@ -1149,6 +1149,7 @@ impl Actor {
         }
         let topology = crate::sumeragi::network_topology::Topology::new(roster);
         let retry_window = self.rebroadcast_cooldown();
+        let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
         let now = Instant::now();
         let signers = BTreeSet::new();
         let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
@@ -1158,11 +1159,12 @@ impl Actor {
             key.1,
             key.2,
             crate::sumeragi::consensus::Phase::Commit,
+            super::MissingBlockPriority::Background,
             &signers,
             &topology,
             now,
             retry_window,
-            None,
+            view_change_window,
             self.config.missing_block_signer_fallback_attempts,
         );
         self.pending.missing_block_requests = requests;
@@ -1367,7 +1369,11 @@ impl Actor {
                     .rbc
                     .session_roster_sources
                     .insert(key, RbcRosterSource::Network);
-                self.subsystems.da_rbc.rbc.persisted_full_sessions.remove(&key);
+                self.subsystems
+                    .da_rbc
+                    .rbc
+                    .persisted_full_sessions
+                    .remove(&key);
                 self.subsystems
                     .da_rbc
                     .rbc
@@ -1787,6 +1793,23 @@ impl Actor {
                 return Ok(());
             }
             self.clear_rbc_session_roster(&key);
+            if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
+                session.ready_signatures.clear();
+                session.sent_ready = false;
+                session.delivered = false;
+                session.deliver_sender = None;
+                session.deliver_signature = None;
+            }
+            self.subsystems
+                .da_rbc
+                .rbc
+                .payload_rebroadcast_last_sent
+                .remove(&key);
+            self.subsystems
+                .da_rbc
+                .rbc
+                .ready_rebroadcast_last_sent
+                .remove(&key);
             let max_bytes = self.pending_rbc_caps().1;
             let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
                 let pending = self.pending_rbc_slot(key);
@@ -1820,6 +1843,10 @@ impl Actor {
                     1,
                     u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
                 );
+            }
+            if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
+                self.update_rbc_status_entry(key, &session, false);
+                self.persist_rbc_session(key, &session);
             }
             self.publish_rbc_backlog_snapshot();
             return Ok(());
@@ -2077,21 +2104,6 @@ impl Actor {
                 defer_reason,
             );
         }
-        if let Some(expected) = session.expected_chunk_root {
-            if expected != deliver.chunk_root {
-                session.invalid = true;
-                invalidate = true;
-                ignored = true;
-                warn!(
-                    height = key.1,
-                    view = key.2,
-                    sender = deliver.sender,
-                    ?expected,
-                    observed = ?deliver.chunk_root,
-                    "ignoring RBC DELIVER due to chunk-root mismatch"
-                );
-            }
-        }
         if !session.is_invalid() {
             match evaluate_deliver_acceptance(session, deliver_quorum) {
                 DeliverAcceptance::DeferReady {
@@ -2299,6 +2311,23 @@ impl Actor {
                 return Ok(());
             }
             self.clear_rbc_session_roster(&key);
+            if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
+                session.ready_signatures.clear();
+                session.sent_ready = false;
+                session.delivered = false;
+                session.deliver_sender = None;
+                session.deliver_signature = None;
+            }
+            self.subsystems
+                .da_rbc
+                .rbc
+                .payload_rebroadcast_last_sent
+                .remove(&key);
+            self.subsystems
+                .da_rbc
+                .rbc
+                .ready_rebroadcast_last_sent
+                .remove(&key);
             let max_bytes = self.pending_rbc_caps().1;
             let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
                 let pending = self.pending_rbc_slot(key);
@@ -2330,6 +2359,10 @@ impl Actor {
                     1,
                     u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
                 );
+            }
+            if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
+                self.update_rbc_status_entry(key, &session, false);
+                self.persist_rbc_session(key, &session);
             }
             self.publish_rbc_backlog_snapshot();
             return Ok(());
@@ -2383,6 +2416,26 @@ impl Actor {
                 );
             }
             return Ok(());
+        }
+        if let Some(expected) = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .and_then(|session| session.expected_chunk_root)
+        {
+            if expected != deliver.chunk_root {
+                warn!(
+                    height = deliver.height,
+                    view = deliver.view,
+                    sender = deliver.sender,
+                    ?expected,
+                    observed = ?deliver.chunk_root,
+                    "dropping RBC DELIVER with mismatched chunk root"
+                );
+                return Ok(());
+            }
         }
         let deliver_quorum = self.rbc_deliver_quorum(&topology);
         let (ignored, first_deliver, delivered_bytes, invalidate, defer_reason) = {
@@ -2790,6 +2843,61 @@ impl Actor {
         #[cfg(feature = "telemetry")]
         self.telemetry.inc_rbc_store_evictions(removed.len() as u64);
         self.publish_rbc_backlog_snapshot();
+    }
+
+    pub(super) fn prune_stale_rbc_sessions(&mut self, now: SystemTime) -> bool {
+        let ttl = self.config.rbc_session_ttl;
+        if ttl == Duration::ZERO || self.subsystems.da_rbc.rbc.sessions.is_empty() {
+            return false;
+        }
+        let stale_keys = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .status_handle
+            .stale_keys(ttl, now);
+        if stale_keys.is_empty() {
+            return false;
+        }
+
+        for key in &stale_keys {
+            self.subsystems.da_rbc.rbc.sessions.remove(key);
+            self.subsystems.da_rbc.rbc.pending.remove(key);
+            self.clear_rbc_session_roster(key);
+            self.subsystems.da_rbc.rbc.status_handle.remove(key);
+            self.subsystems
+                .da_rbc
+                .rbc
+                .payload_rebroadcast_last_sent
+                .remove(key);
+            self.subsystems
+                .da_rbc
+                .rbc
+                .ready_rebroadcast_last_sent
+                .remove(key);
+            self.subsystems
+                .da_rbc
+                .rbc
+                .persisted_full_sessions
+                .remove(key);
+            self.subsystems.da_rbc.rbc.persist_inflight.remove(key);
+        }
+
+        let chunk_store = if self.ensure_rbc_chunk_store() {
+            self.subsystems.da_rbc.rbc.chunk_store.as_ref()
+        } else {
+            None
+        };
+        if let Some(store) = chunk_store {
+            for key in &stale_keys {
+                if let Err(err) = store.remove(key) {
+                    warn!(?err, ?key, "failed to remove stale RBC session from store");
+                }
+            }
+        }
+
+        self.publish_rbc_backlog_snapshot();
+        true
     }
 
     pub(super) fn update_rbc_store_pressure(&self, pressure: StorePressure) {

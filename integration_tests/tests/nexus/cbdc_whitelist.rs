@@ -53,11 +53,23 @@ fn load_cbdc_profile() -> Result<(Value, PathBuf)> {
 }
 
 fn parse_uaid(value: &str) -> Result<UniversalAccountId> {
-    let suffix = value
-        .strip_prefix("uaid:")
-        .ok_or_else(|| eyre!("UAID {value} must start with 'uaid:'"))?;
-    let hash = Hash::from_str(suffix).wrap_err_with(|| format!("invalid UAID hash in {value}"))?;
-    Ok(UniversalAccountId::from_hash(hash))
+    UniversalAccountId::from_str(value).wrap_err_with(|| {
+        format!("invalid UAID literal {value} (expected `uaid:<hex>` or 64-hex digest)")
+    })
+}
+
+#[test]
+fn parse_uaid_accepts_raw_or_prefixed() {
+    let hash = Hash::new(b"cbdc-whitelist-uaid");
+    let hex = hash.to_string();
+    let prefixed = format!("uaid:{hex}");
+    let expected = UniversalAccountId::from_hash(hash);
+
+    let parsed_raw = parse_uaid(&hex).expect("parse raw UAID");
+    let parsed_prefixed = parse_uaid(&prefixed).expect("parse prefixed UAID");
+
+    assert_eq!(parsed_raw, expected);
+    assert_eq!(parsed_prefixed, expected);
 }
 
 fn parse_numeric(value: &Value, context: &str) -> Result<Numeric> {

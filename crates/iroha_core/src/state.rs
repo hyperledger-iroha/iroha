@@ -10768,7 +10768,17 @@ impl State {
             crate::smartcontracts::ivm::host::CoreHost::derive_axt_policy_snapshot_from_directory(
                 &self.view(),
             );
-        let snap = snapshot.as_mut()?;
+        let Some(snap) = snapshot.as_mut() else {
+            let mut block = self.world.axt_policies.block();
+            let mut tx = block.transaction();
+            let stale: Vec<_> = tx.view().iter().map(|(dsid, _)| *dsid).collect();
+            for dsid in stale {
+                tx.remove(dsid);
+            }
+            tx.apply();
+            block.commit();
+            return None;
+        };
 
         let mut block = self.world.axt_policies.block();
         let mut tx = block.transaction();
@@ -10780,7 +10790,9 @@ impl State {
 
         for binding in &mut snap.entries {
             if let Some(prev) = existing.get(&binding.dsid) {
-                if prev.manifest_root == binding.policy.manifest_root {
+                if prev.manifest_root == binding.policy.manifest_root
+                    && prev.target_lane == binding.policy.target_lane
+                {
                     binding.policy.min_handle_era =
                         binding.policy.min_handle_era.max(prev.min_handle_era);
                     binding.policy.min_sub_nonce =
@@ -10937,6 +10949,17 @@ impl State {
             let mut bindings = UaidDataspaceBindings::default();
             for (dataspace, record) in manifests.iter() {
                 if !record.is_active() {
+                    continue;
+                }
+                let digest = record.manifest_hash.as_ref();
+                let is_zero_sentinel = digest[..Hash::LENGTH - 1].iter().all(|byte| *byte == 0)
+                    && digest[Hash::LENGTH - 1] == 1;
+                if is_zero_sentinel {
+                    warn!(
+                        %uaid,
+                        dataspace_id = dataspace.as_u64(),
+                        "Skipping UAID binding migration for Space Directory manifest with zeroed hash"
+                    );
                     continue;
                 }
                 for account_id in &accounts {
@@ -13268,15 +13291,23 @@ pub trait StateReadOnly: WorldStateSnapshot {
         NonZeroUsize::new(self.height()).and_then(|height| self.kura().get_block(height))
     }
 
-    /// Load all blocks in the block chain from disc
+    /// Load all blocks in the block chain from disk, skipping missing Kura entries.
     fn all_blocks(
         &self,
         start: NonZeroUsize,
     ) -> impl DoubleEndedIterator<Item = Arc<SignedBlock>> + '_ {
-        (start.get()..=self.height()).map(|height| {
-            NonZeroUsize::new(height)
-                .and_then(|height| self.kura().get_block(height))
-                .expect("INTERNAL BUG: Failed to load block")
+        (start.get()..=self.height()).filter_map(|height| {
+            let height = NonZeroUsize::new(height)?;
+            match self.kura().get_block(height) {
+                Some(block) => Some(block),
+                None => {
+                    warn!(
+                        height = height.get(),
+                        "missing block in Kura; skipping entry"
+                    );
+                    None
+                }
+            }
         })
     }
 
@@ -23264,6 +23295,104 @@ mod tests {
     }
 
     #[test]
+    fn axt_policy_snapshot_ignores_zero_manifest_hash_sentinel() {
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::zero-manifest-snapshot"));
+        let dataspace = DataSpaceId::new(21);
+        let lane_id = LaneId::new(5);
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(6_u32),
+            vec![LaneConfig {
+                id: lane_id,
+                dataspace_id: dataspace,
+                alias: "lane5".into(),
+                description: None,
+                visibility: iroha_data_model::nexus::LaneVisibility::Public,
+                lane_type: None,
+                governance: None,
+                settlement: None,
+                storage: iroha_data_model::nexus::LaneStorageProfile::FullReplica,
+                proof_scheme: DaProofScheme::default(),
+                metadata: BTreeMap::new(),
+            }],
+        )
+        .expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
+
+        let domain_id: DomainId = "zero-snapshot".parse().expect("domain id");
+        let keypair = KeyPair::random();
+        let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
+        let account = Account::new(account_id.clone())
+            .with_uaid(Some(uaid))
+            .build(&account_id);
+        let domain = Domain::new(domain_id).build(&account_id);
+
+        let mut world = World::with([domain], [account], []);
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::V1,
+            uaid,
+            dataspace,
+            issued_ms: 0,
+            activation_epoch: 1,
+            expiry_epoch: Some(4),
+            entries: Vec::new(),
+        };
+        let mut record = SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(1);
+        record.manifest_hash = Hash::prehashed([0; Hash::LENGTH]);
+        let digest = record.manifest_hash.as_ref();
+        assert!(
+            digest[..Hash::LENGTH - 1].iter().all(|byte| *byte == 0)
+                && digest[Hash::LENGTH - 1] == 1,
+            "test setup must install a zeroed manifest hash sentinel"
+        );
+        let mut set = SpaceDirectoryManifestSet::default();
+        set.upsert(record);
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(world, kura, query_handle);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.lane_config = lane_config;
+        }
+
+        let snapshot = CoreHost::axt_policy_snapshot_from_state(&state.view());
+        assert!(snapshot.is_none(), "sentinel manifests must be ignored");
+    }
+
+    #[test]
+    fn axt_policy_refresh_clears_stale_entries_when_snapshot_missing() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::new(), kura, query_handle);
+
+        let dsid = DataSpaceId::new(31);
+        let policy = AxtPolicyEntry {
+            manifest_root: [0x77; 32],
+            target_lane: LaneId::new(2),
+            min_handle_era: 1,
+            min_sub_nonce: 1,
+            current_slot: 1,
+        };
+        state.set_axt_policy(dsid, policy);
+
+        let snapshot = state.refresh_axt_policies_from_directory();
+        assert!(
+            snapshot.is_none(),
+            "no snapshot should be derived without manifests"
+        );
+
+        let view = state.world.axt_policies.view();
+        assert!(
+            view.get(&dsid).is_none(),
+            "stale policy entries must be cleared"
+        );
+    }
+
+    #[test]
     fn state_block_axt_policy_snapshot_reads_block_scope() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -24079,6 +24208,98 @@ mod tests {
 
         assert_eq!(entry.min_handle_era, 3);
         assert_eq!(entry.min_sub_nonce, 5);
+    }
+
+    #[test]
+    fn axt_policy_refresh_resets_minimums_on_lane_change() {
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::lane-change"));
+        let dataspace = DataSpaceId::new(21);
+        let old_lane = LaneId::new(4);
+        let new_lane = LaneId::new(7);
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(8_u32),
+            vec![LaneConfig {
+                id: new_lane,
+                dataspace_id: dataspace,
+                alias: "lane7".into(),
+                description: None,
+                visibility: iroha_data_model::nexus::LaneVisibility::Public,
+                lane_type: None,
+                governance: None,
+                settlement: None,
+                storage: iroha_data_model::nexus::LaneStorageProfile::FullReplica,
+                proof_scheme: DaProofScheme::default(),
+                metadata: BTreeMap::new(),
+            }],
+        )
+        .expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
+
+        let domain_id: DomainId = "lane-change".parse().expect("domain id");
+        let keypair = KeyPair::random();
+        let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
+        let account = Account::new(account_id.clone())
+            .with_uaid(Some(uaid))
+            .build(&account_id);
+        let domain = Domain::new(domain_id).build(&account_id);
+
+        let mut world = World::with([domain], [account], []);
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::V1,
+            uaid,
+            dataspace,
+            issued_ms: 0,
+            activation_epoch: 1,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let mut record = SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(1);
+        let mut set = SpaceDirectoryManifestSet::default();
+        set.upsert(record.clone());
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+
+        let mut manifest_root = [0u8; 32];
+        manifest_root.copy_from_slice(record.manifest_hash.as_ref());
+        {
+            let mut block = world.axt_policies.block();
+            let mut tx = block.transaction();
+            tx.insert(
+                dataspace,
+                AxtPolicyEntry {
+                    manifest_root,
+                    target_lane: old_lane,
+                    min_handle_era: 4,
+                    min_sub_nonce: 7,
+                    current_slot: 0,
+                },
+            );
+            tx.apply();
+            block.commit();
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(world, kura, query_handle);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.lane_config = lane_config;
+        }
+
+        let snapshot = state
+            .refresh_axt_policies_from_directory()
+            .expect("snapshot exists");
+        let entry = snapshot
+            .entries
+            .first()
+            .expect("policy entry should be present")
+            .policy;
+
+        assert_eq!(entry.target_lane, new_lane);
+        assert_eq!(entry.min_handle_era, 1);
+        assert_eq!(entry.min_sub_nonce, 0);
     }
 
     #[test]
@@ -27589,6 +27810,34 @@ mod tests {
                 .collect::<Vec<_>>(),
             &[8, 9, 10]
         );
+    }
+
+    #[tokio::test]
+    async fn all_blocks_skips_missing_kura_entries() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura.clone(), query_handle);
+
+        for height in 1..=3_u64 {
+            let block = new_dummy_block_with_payload(|header| {
+                header.set_height(NonZeroU64::new(height).unwrap());
+            });
+
+            let mut state_block = state.block(block.as_ref().header());
+            let _events = state_block.apply(&block, Vec::new());
+            state_block.commit().unwrap();
+
+            if height != 2 {
+                kura.store_block(block).expect("store block");
+            }
+        }
+
+        let heights: Vec<_> = state
+            .view()
+            .all_blocks(nonzero!(1_usize))
+            .map(|block| block.header().height().get())
+            .collect();
+        assert_eq!(heights, vec![1, 3]);
     }
 
     #[test]

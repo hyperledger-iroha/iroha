@@ -87,10 +87,10 @@ impl Actor {
             }
             let (vote_count, quorum_reached) =
                 if pending.commit_qc_seen || commit_qc_cached {
-                (0, true)
-            } else {
-                self.commit_vote_quorum_status_for_block(*hash, pending.height, pending.view)
-            };
+                    (0, true)
+                } else {
+                    self.commit_vote_quorum_status_for_block(*hash, pending.height, pending.view)
+                };
             if missing_quorum_stale(pending_age, quorum_timeout, quorum_reached) {
                 if !pending.reschedule_due(now, quorum_reschedule_cooldown) {
                     reschedule_backoff_skipped = reschedule_backoff_skipped.saturating_add(1);

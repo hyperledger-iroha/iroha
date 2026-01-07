@@ -231,13 +231,14 @@ if (!ballot.accepted) {
   console.warn("ballot rejected", ballot.reason);
 }
 
+const zkOwner = "ih58...@default"; // canonical IH58 account id for ZK public inputs
 await torii.governanceSubmitZkBallot({
   authority,
   chainId: "00000000-0000-0000-0000-000000000000",
   electionId: "ref-zk",
   proof: Buffer.alloc(96, 0xcd),
   public: {
-    owner: authority,
+    owner: zkOwner,
     amount: "5000",
     duration_blocks: 7_200,
     direction: "Aye",

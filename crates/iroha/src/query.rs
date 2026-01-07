@@ -678,10 +678,12 @@ mod query_errors_handling {
 
         match decode_query_response(&response) {
             Err(QueryError::Other(inner)) => {
-                let msg = inner.to_string();
+                let messages: Vec<String> = inner.chain().map(|cause| cause.to_string()).collect();
                 assert!(
-                    msg.contains("JSON decode error"),
-                    "error message should mention JSON decode failure: {msg}"
+                    messages
+                        .iter()
+                        .any(|message| message.contains("JSON decode error")),
+                    "error message should mention JSON decode failure: {messages:?}"
                 );
             }
             other => panic!("decode must fail with QueryError::Other, got {other:?}"),

@@ -764,7 +764,8 @@ mod tests {
             get_metrics_periodic_timeout(&url, tx).await;
         });
 
-        let timeout = TELEMETRY_UNSUPPORTED_CHECK_INTERVAL + GET_STATUS_INTERVAL + GET_STATUS_INTERVAL;
+        let timeout =
+            TELEMETRY_UNSUPPORTED_CHECK_INTERVAL + GET_STATUS_INTERVAL + GET_STATUS_INTERVAL;
         let update = tokio::time::timeout(timeout, rx.recv())
             .await
             .expect("telemetry update timeout")

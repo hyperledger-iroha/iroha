@@ -92,7 +92,7 @@ Space Directory 操作は 2 つの形で提供される。1) バイナリ内 CLI
 
    `--reason` は `entries[*].notes` の欠落を補完する。
 
-3. **Expire** 寿命到達のマニフェスト、または **Revoke** UAID を要求に応じて実行。どちらも `--uaid uaid:<hex>` と数値 dataspace id を受ける:
+3. **Expire** 寿命到達のマニフェスト、または **Revoke** UAID を要求に応じて実行。どちらも `--uaid uaid:<hex>` または 64 文字の hex digest (LSB=1) と数値 dataspace id を受ける:
 
    ```bash
    iroha space-directory manifest expire \

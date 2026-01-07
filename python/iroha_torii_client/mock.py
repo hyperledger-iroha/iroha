@@ -14,6 +14,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, Iterable, List, Mapping, Optional
 from urllib.parse import parse_qs, urlparse
 
+from .client import ToriiClient
+
 __all__ = ["ToriiMockServer", "main"]
 
 
@@ -643,6 +645,10 @@ class _MockState:
                 raise ValueError(
                     "lock hints must include owner, amount, duration_blocks"
                 )
+            ToriiClient._ensure_governance_owner_canonical(
+                public_inputs.get("owner"),
+                context="zk ballot public inputs",
+            )
         entry = self.gov_referenda.get(election_id)
         if entry is None or entry.get("ballot_zk") is None:
             raise KeyError("governance zk ballot not configured")

@@ -37,6 +37,7 @@ function validate_manifest() {
   local manifest_path="$1"
   python3 - "$manifest_path" <<'PY'
 import json
+import string
 import sys
 from pathlib import Path
 
@@ -114,6 +115,7 @@ function validate_capabilities() {
   local cap_dir="$1"
   python3 - "$cap_dir" <<'PY'
 import json
+import string
 import sys
 from pathlib import Path
 
@@ -128,8 +130,24 @@ if not manifests:
 for manifest in manifests:
     with manifest.open("r", encoding="utf-8") as fh:
         data = json.load(fh)
-    if not isinstance(data.get("uaid"), str) or not data["uaid"].startswith("uaid:"):
+    uaid_value = data.get("uaid")
+    if not isinstance(uaid_value, str):
         raise SystemExit(f"[cbdc] capability {manifest} missing uaid")
+    uaid_literal = uaid_value.strip()
+    if not uaid_literal:
+        raise SystemExit(f"[cbdc] capability {manifest} missing uaid")
+    if uaid_literal.lower().startswith("uaid:"):
+        uaid_hex = uaid_literal[5:].strip()
+    else:
+        uaid_hex = uaid_literal
+    if len(uaid_hex) != 64 or any(ch not in string.hexdigits for ch in uaid_hex):
+        raise SystemExit(
+            f"[cbdc] capability {manifest} uaid must be `uaid:<hex>` or 64 hex characters"
+        )
+    if int(uaid_hex[-1], 16) % 2 == 0:
+        raise SystemExit(
+            f"[cbdc] capability {manifest} uaid must have least significant bit set to 1"
+        )
     if not isinstance(data.get("dataspace"), int):
         raise SystemExit(f"[cbdc] capability {manifest} missing dataspace")
     activation_epoch = data.get("activation_epoch")

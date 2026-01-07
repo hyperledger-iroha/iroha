@@ -26675,10 +26675,10 @@ fn canonicalize_uaid_literal(raw: &str) -> Result<String> {
     if trimmed.is_empty() {
         return Err(uaid_parse_error("empty_literal"));
     }
-    let hex_portion = trimmed
-        .strip_prefix("uaid:")
-        .or_else(|| trimmed.strip_prefix("UAID:"))
-        .unwrap_or(trimmed);
+    let hex_portion = match trimmed.get(..5) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("uaid:") => trimmed[5..].trim(),
+        _ => trimmed,
+    };
     if hex_portion.len() != 64 {
         return Err(uaid_parse_error("invalid_length"));
     }
@@ -26709,6 +26709,15 @@ mod uaid_parsing_tests {
     #[test]
     fn parses_trimmed_prefixed_literal() {
         let literal = format!("  UAID:{}  ", SAMPLE_UAID_HEX.to_uppercase());
+        let parsed = parse_uaid_literal(&literal).expect("parse UAID literal");
+        let expected_hash = Hash::from_str(SAMPLE_UAID_HEX).expect("decode UAID hash");
+        let expected = UniversalAccountId::from_hash(expected_hash);
+        assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn parses_mixed_case_prefix() {
+        let literal = format!("  UaId:  {}  ", SAMPLE_UAID_HEX.to_uppercase());
         let parsed = parse_uaid_literal(&literal).expect("parse UAID literal");
         let expected_hash = Hash::from_str(SAMPLE_UAID_HEX).expect("decode UAID hash");
         let expected = UniversalAccountId::from_hash(expected_hash);
