@@ -4,7 +4,7 @@ This roadmap enumerates the outstanding efforts required to ship the optional
 NPoS Sumeragi mode and keep the broader Nexus transition on track. For every task listed here we are preparing the first public release, so teams can design and implement with a clean slate. Completed
 items continue to live in `status.md`; only tasks that still need engineering
 work appear here.
-Latest sync: Governance ZK ballot hint formats are standardized to `root_hint`/`nullifier` across public inputs and BallotProof hex strings (optional `0x`/`blake2b32:` prefixes) with deprecated alias keys rejected, SDK/CLI/bridge updates, and refreshed docs; RBC INIT/READY/DELIVER now bind roster hashes and INIT rebroadcasts go out even without cached chunks; RBC persistence now derives missing roster snapshots and READY rebroadcasts enforce roster-hash matching; DA gate now accepts local payload hashes; asset integration tests re-run (decimal/quantity/exchange) passed; integration-test revalidation still pending (see `status.md` for details).
+Latest sync: Governance ZK ballot hint formats are standardized to `root_hint`/`nullifier` across public inputs and BallotProof hex strings (optional `0x`/`blake2b32:` prefixes) with deprecated alias keys rejected, SDK/CLI/bridge updates, and refreshed docs; RBC INIT/READY/DELIVER now bind roster hashes and INIT rebroadcasts go out even without cached chunks; RBC persistence now derives missing roster snapshots and READY rebroadcasts enforce roster-hash matching; DA gate now requires RBC payload evidence (local payload match no longer clears availability); asset integration tests re-run (decimal/quantity/exchange) passed; `cargo test -p iroha_core` still timing out after 3h; integration-test revalidation still pending (see `status.md` for details).
 
 The repository now serves two release lines:
 - **Iroha 2** — the self-hosted deployment track for organisations running
@@ -168,6 +168,18 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [ ] Remove Norito toggles and length/offset decode paths (update `norito.md`).
  - [x] Standardize Norito length-prefix flag scoping (COMPACT_LEN/COMPACT_SEQ_LEN/VARINT_OFFSETS) and update the spec/docs.
  - [x] Sweep docs/translations for remaining references and clean up tooling flags.
+
+15. **SUMERAGI-UNIFIED-QC — Merge commit + execution certificates into a single QC** (Consensus/Sumeragi, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈳 Not Started, target TBD)
+ - [ ] Define unified `QC`/`QcVote` types (rename Commit*), add `parent_state_root` + `post_state_root`, update Norito schema, and bump `PROTO_VERSION`.
+ - [ ] Update vote preimage/signing rules to include roots for all phases (zero roots for non-Commit) and refresh signature tests/fixtures.
+ - [ ] Remove ExecVote/ExecutionQC wire messages and handlers; decide ExecWitness scope (pipeline-only) and update `BlockMessage`/event plumbing.
+ - [ ] Move execution-root computation to the pre-vote path (validation/witness capture), store roots with pending blocks, and require roots to emit commit votes.
+ - [ ] Refactor QC aggregation/validation to verify roots + signers, and remove exec_vote_log/execution_qc_cache tracking and telemetry.
+ - [ ] Evidence updates: drop DoubleExecVote, treat conflicting roots as double-commit evidence, and update evidence validation/tests.
+ - [ ] Storage updates: remove `exec_qcs`/`exec_roots`, persist QC roots for audit/bridge, update tiered storage segments/snapshots.
+ - [ ] Block sync + bridge: adapt QC derivation/validation and finality proof paths to the unified QC layout (roots included).
+ - [ ] Config cleanup: remove `require_execution_qc`/`require_wsv_exec_qc`, collapse ProofPolicy to QC (+ optional ZK), update defaults.
+ - [ ] Docs/telemetry/tests: update pipeline + sumeragi docs, evidence API, status/metrics fields, and add unit/integration coverage; run `cargo test --workspace`.
 
 17. **BRIDGE-RECEIPTS-TYPED — Replace bridge log stub with typed events** (Core/Executor/CLI, Line: Shared, Owner: Core Protocol WG, Priority: Medium, Status: 🈴 Completed, target TBD)
  - [x] Emit typed Data/event payloads for bridge receipts (remove log stub).

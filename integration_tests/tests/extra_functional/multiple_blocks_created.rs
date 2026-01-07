@@ -25,10 +25,10 @@ async fn multiple_blocks_created() -> Result<()> {
     // Given
     let builder = NetworkBuilder::new()
         .with_peers(4)
+        .with_default_pipeline_time()
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(NonZero::new(N_MAX_TXS_PER_BLOCK).expect("valid")),
-        )))
-        .with_pipeline_time(Duration::from_secs(1));
+        )));
     let Some(network) =
         sandbox::start_network_async_or_skip(builder, stringify!(multiple_blocks_created)).await?
     else {
@@ -62,7 +62,7 @@ async fn multiple_blocks_created() -> Result<()> {
             <_>::default(),
         );
         let submit_res: eyre::Result<()> =
-            spawn_blocking(move || client.submit_transaction(&tx).map(|_| ()))
+            spawn_blocking(move || client.submit_transaction_blocking(&tx).map(|_| ()))
                 .await
                 .map_err(eyre::Report::from)?;
         if sandbox::handle_result(submit_res, stringify!(multiple_blocks_created))?.is_none() {
@@ -111,7 +111,7 @@ async fn multiple_blocks_created() -> Result<()> {
                 <_>::default(),
             );
             submit_handles.push(spawn_blocking(move || {
-                client.submit_transaction(&tx).map(|_| ())
+                client.submit_transaction_blocking(&tx).map(|_| ())
             }));
         }
 
