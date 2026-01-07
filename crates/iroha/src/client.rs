@@ -8227,7 +8227,10 @@ where
                             }
                             PipelineEventBox::Block(block_event) => {
                                 if Some(block_event.header().height()) == block_height
-                                    && *block_event.status() == BlockStatus::Applied
+                                    && matches!(
+                                        block_event.status(),
+                                        BlockStatus::Applied | BlockStatus::Committed
+                                    )
                                 {
                                     debug!(
                                         %hash,
@@ -10930,7 +10933,7 @@ mod tests {
     fn get_uaid_bindings_parses_payload() {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
-        let uaid_hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let uaid_hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab";
         let payload = format!(
             r#"{{
   "uaid":"uaid:{uaid_hex}",
@@ -11014,7 +11017,7 @@ mod tests {
         assert_eq!(result.manifests.len(), 1);
         let record = &result.manifests[0];
         assert_eq!(record.status, UaidManifestStatus::Active);
-        assert_eq!(record.manifest.entries.len(), 1);
+        assert_eq!(record.manifest.entries.len(), 2);
         assert_eq!(record.lifecycle.activated_epoch, Some(4097));
         assert_eq!(record.manifest_hash, manifest_hash);
 
