@@ -2557,11 +2557,7 @@ impl CoreHost {
             );
             return Err(ivm::VMError::PermissionDenied);
         }
-        if handle
-            .scope
-            .iter()
-            .all(|scope| scope != &intent.op.kind)
-        {
+        if handle.scope.iter().all(|scope| scope != &intent.op.kind) {
             self.record_axt_reject(
                 AxtRejectReason::PolicyDenied,
                 Some(intent.asset_dsid),
@@ -2589,19 +2585,15 @@ impl CoreHost {
             return Err(ivm::VMError::PermissionDenied);
         }
 
-        let amount = intent
-            .op
-            .amount
-            .parse::<u128>()
-            .map_err(|_| {
-                self.record_axt_reject(
-                    AxtRejectReason::Budget,
-                    Some(intent.asset_dsid),
-                    Some(handle.target_lane),
-                    "intent amount is not a valid u128",
-                );
-                ivm::VMError::NoritoInvalid
-            })?;
+        let amount = intent.op.amount.parse::<u128>().map_err(|_| {
+            self.record_axt_reject(
+                AxtRejectReason::Budget,
+                Some(intent.asset_dsid),
+                Some(handle.target_lane),
+                "intent amount is not a valid u128",
+            );
+            ivm::VMError::NoritoInvalid
+        })?;
         if amount == 0 {
             self.record_axt_reject(
                 AxtRejectReason::Budget,
@@ -2641,15 +2633,16 @@ impl CoreHost {
             None
         } else {
             let proof_tlv = Self::expect_tlv(vm, proof_ptr, PointerType::ProofBlob)?;
-            let blob: ProofBlob = Self::decode_header_or_bare(proof_tlv.payload).map_err(|err| {
-                self.record_axt_reject(
-                    AxtRejectReason::Proof,
-                    Some(intent.asset_dsid),
-                    Some(handle.target_lane),
-                    "proof payload failed to decode",
-                );
-                err
-            })?;
+            let blob: ProofBlob =
+                Self::decode_header_or_bare(proof_tlv.payload).map_err(|err| {
+                    self.record_axt_reject(
+                        AxtRejectReason::Proof,
+                        Some(intent.asset_dsid),
+                        Some(handle.target_lane),
+                        "proof payload failed to decode",
+                    );
+                    err
+                })?;
             Some(blob)
         };
         if let Some(blob) = proof.as_ref() {
@@ -4015,10 +4008,7 @@ mod pointer_abi_tests {
         let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&manifest));
         vm.set_register(10, ds_ptr);
         vm.set_register(11, manifest_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
-            Ok(0)
-        );
+        assert_eq!(host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm), Ok(0));
 
         let binding = axt::compute_binding(&descriptor).expect("binding");
         let handle = AssetHandle {
@@ -4093,10 +4083,7 @@ mod pointer_abi_tests {
         let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&manifest));
         vm.set_register(10, ds_ptr);
         vm.set_register(11, manifest_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
-            Ok(0)
-        );
+        assert_eq!(host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm), Ok(0));
 
         let binding = axt::compute_binding(&descriptor).expect("binding");
         let handle = AssetHandle {
@@ -4171,10 +4158,7 @@ mod pointer_abi_tests {
         let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&manifest));
         vm.set_register(10, ds_ptr);
         vm.set_register(11, manifest_ptr);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm),
-            Ok(0)
-        );
+        assert_eq!(host.syscall(ivm_sys::SYSCALL_AXT_TOUCH, &mut vm), Ok(0));
 
         let handle = AssetHandle {
             scope: vec!["transfer".into()],

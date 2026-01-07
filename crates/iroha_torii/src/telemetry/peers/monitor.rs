@@ -708,9 +708,7 @@ mod tests {
             }
         });
 
-        let url: ToriiUrl = format!("http://{addr}")
-            .parse()
-            .expect("valid torii url");
+        let url: ToriiUrl = format!("http://{addr}").parse().expect("valid torii url");
         let (tx, _rx) = mpsc::channel(1);
         let result = tokio::time::timeout(
             GET_STATUS_INTERVAL + Duration::from_secs(2),

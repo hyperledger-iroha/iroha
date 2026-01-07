@@ -13,7 +13,7 @@ use iroha_core::{
 };
 use iroha_data_model::{
     block::BlockHeader,
-    events::data::{governance::GovernanceEvent, DataEvent},
+    events::data::{DataEvent, governance::GovernanceEvent},
     isi::governance::CastPlainBallot,
     permission::Permission,
     prelude::Grant,

@@ -2720,12 +2720,12 @@ mod attestation {
     use norito::json::{Map as JsonMap, Value as JsonValue};
     #[cfg(test)]
     use once_cell::sync::OnceCell;
+    #[cfg(test)]
+    use p256::ecdsa::signature::hazmat::PrehashSigner as _;
     use p256::ecdsa::{
         Signature as P256Signature, VerifyingKey,
         signature::{DigestVerifier, hazmat::PrehashVerifier as _},
     };
-    #[cfg(test)]
-    use p256::ecdsa::signature::hazmat::PrehashSigner as _;
     #[cfg(test)]
     use p256::ecdsa::{SigningKey, signature::DigestSigner};
     #[cfg(test)]

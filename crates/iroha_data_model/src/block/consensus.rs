@@ -1955,7 +1955,7 @@ mod tests {
     }
 
     fn roster_hash(roster: &[PeerId]) -> Hash {
-        Hash::new(&roster.encode())
+        Hash::new(&roster.to_vec().encode())
     }
 
     fn sample_commit_certificate_ref() -> CommitCertificateRef {
@@ -2281,6 +2281,7 @@ mod tests {
             height: 5,
             view: 1,
             epoch: 0,
+            roster_hash: Hash::prehashed([0xAA; Hash::LENGTH]),
             chunk_root: Hash::prehashed([0u8; Hash::LENGTH]),
             sender: 2,
             signature: vec![9, 9, 9],

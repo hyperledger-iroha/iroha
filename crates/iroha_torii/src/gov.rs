@@ -316,9 +316,7 @@ fn hint_present(map: &json::Map, key: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn normalize_zk_ballot_public_inputs(
-    map: &mut json::Map<String, json::Value>,
-) -> Result<(), String> {
+fn normalize_zk_ballot_public_inputs(map: &mut json::Map) -> Result<(), String> {
     normalize_zk_public_input_alias(map, "durationBlocks", "duration_blocks")?;
     normalize_zk_public_input_alias(map, "nullifierHex", "nullifier_hex")?;
     normalize_zk_public_input_alias(map, "rootHintHex", "root_hint")?;
@@ -329,7 +327,7 @@ fn normalize_zk_ballot_public_inputs(
 }
 
 fn normalize_zk_public_input_alias(
-    map: &mut json::Map<String, json::Value>,
+    map: &mut json::Map,
     alias: &str,
     canonical: &str,
 ) -> Result<(), String> {
@@ -346,7 +344,7 @@ fn normalize_zk_public_input_alias(
 }
 
 fn canonicalize_hex32_public_input(
-    map: &mut json::Map<String, json::Value>,
+    map: &mut json::Map,
     key: &str,
     label: &str,
 ) -> Result<(), String> {
@@ -359,8 +357,8 @@ fn canonicalize_hex32_public_input(
     let raw = value
         .as_str()
         .ok_or_else(|| format!("{label} must be 32-byte hex"))?;
-    let canonical = canonicalize_hex32_value(raw)
-        .ok_or_else(|| format!("{label} must be 32-byte hex"))?;
+    let canonical =
+        canonicalize_hex32_value(raw).ok_or_else(|| format!("{label} must be 32-byte hex"))?;
     *value = json::Value::String(canonical);
     Ok(())
 }
@@ -488,10 +486,7 @@ pub async fn handle_gov_ballot_zk_v1(
         let Some(canonical) = canonicalize_hex32_value(rh) else {
             return Ok(ballot_rejection("root_hint must be 32-byte hex"));
         };
-        pub_map.insert(
-            "root_hint".into(),
-            norito::json::Value::from(canonical),
-        );
+        pub_map.insert("root_hint".into(), norito::json::Value::from(canonical));
     }
     if let Some(owner) = &body.owner {
         pub_map.insert("owner".into(), norito::json::Value::from(owner.clone()));
@@ -515,10 +510,7 @@ pub async fn handle_gov_ballot_zk_v1(
         let Some(canonical) = canonicalize_hex32_value(nullifier_hex) else {
             return Ok(ballot_rejection("nullifier must be 32-byte hex"));
         };
-        pub_map.insert(
-            "nullifier_hex".into(),
-            norito::json::Value::from(canonical),
-        );
+        pub_map.insert("nullifier_hex".into(), norito::json::Value::from(canonical));
     }
     let public_inputs_json = norito::json::to_json(&norito::json::Value::Object(pub_map))
         .unwrap_or_else(|_| "{}".into());
@@ -2710,7 +2702,10 @@ mod tests {
         assert!(!hint_present(&map, "owner"));
         map.insert("owner".to_string(), json::Value::Null);
         assert!(!hint_present(&map, "owner"));
-        map.insert("owner".to_string(), json::Value::String("alice".to_string()));
+        map.insert(
+            "owner".to_string(),
+            json::Value::String("alice".to_string()),
+        );
         assert!(hint_present(&map, "owner"));
     }
 
@@ -3296,7 +3291,10 @@ mod tests {
     #[test]
     fn normalize_zk_ballot_public_inputs_maps_aliases_and_canonicalizes_hex() {
         let mut map = norito::json::Map::new();
-        map.insert("durationBlocks".to_string(), norito::json::Value::from(10u64));
+        map.insert(
+            "durationBlocks".to_string(),
+            norito::json::Value::from(10u64),
+        );
         let root_raw = format!("0x{}", "Aa".repeat(32));
         map.insert(
             "rootHintHex".to_string(),
@@ -3373,31 +3371,33 @@ mod tests {
             0,
             0,
         );
-        let mut sblock = state.block(header);
-        let mut stx = sblock.transaction();
-        stx.world.governance_referenda_mut().insert(
-            rid.clone(),
-            GovernanceReferendumRecord {
-                h_start: 1,
-                h_end: 10,
-                status: GovernanceReferendumStatus::Open,
-                mode: GovernanceReferendumMode::Plain,
-            },
-        );
-        let mut locks = GovernanceLocksForReferendum::default();
-        locks.locks.insert(
-            ALICE_ID.clone(),
-            GovernanceLockRecord {
-                owner: ALICE_ID.clone(),
-                amount: 9,
-                slashed: 0,
-                expiry_height: 100,
-                direction: 0,
-                duration_blocks: 4,
-            },
-        );
-        stx.world.governance_locks_mut().insert(rid.clone(), locks);
-        stx.apply();
+        {
+            let mut sblock = state.block(header);
+            let mut stx = sblock.transaction();
+            stx.world.governance_referenda_mut().insert(
+                rid.clone(),
+                GovernanceReferendumRecord {
+                    h_start: 1,
+                    h_end: 10,
+                    status: GovernanceReferendumStatus::Open,
+                    mode: GovernanceReferendumMode::Plain,
+                },
+            );
+            let mut locks = GovernanceLocksForReferendum::default();
+            locks.locks.insert(
+                ALICE_ID.clone(),
+                GovernanceLockRecord {
+                    owner: ALICE_ID.clone(),
+                    amount: 9,
+                    slashed: 0,
+                    expiry_height: 100,
+                    direction: 0,
+                    duration_blocks: 4,
+                },
+            );
+            stx.world.governance_locks_mut().insert(rid.clone(), locks);
+            stx.apply();
+        }
 
         let res = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))
             .await
