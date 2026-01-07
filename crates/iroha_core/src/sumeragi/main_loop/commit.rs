@@ -1785,8 +1785,16 @@ impl Actor {
                     continue;
                 }
             }
-            let (payload_hash, aborted) = match self.pending.pending_blocks.get(&hash) {
-                Some(snapshot) => (snapshot.payload_hash, snapshot.aborted),
+            let (aborted, payload_available) = match self.pending.pending_blocks.get(&hash) {
+                Some(snapshot) => {
+                    let payload_available = da_enabled
+                        && Self::payload_available_for_da(
+                            &self.subsystems.da_rbc.rbc.sessions,
+                            &self.subsystems.da_rbc.rbc.status_handle,
+                            snapshot,
+                        );
+                    (snapshot.aborted, payload_available)
+                }
                 None => continue,
             };
             let kura_has_block = self.kura.get_block_height_by_hash(hash).is_some();
@@ -1829,15 +1837,8 @@ impl Actor {
             let roster_len = topology.as_ref().len();
             let min_votes_for_commit = self.commit_min_votes(&topology);
 
-            let delivered = da_enabled
-                && Self::ensure_block_matches_rbc_payload(
-                    &self.subsystems.da_rbc.rbc.sessions,
-                    &self.subsystems.da_rbc.rbc.status_handle,
-                    &hash,
-                    pending_height,
-                    &payload_hash,
-                );
-            let missing_local_data = da_enabled && !delivered;
+            let missing_local_data = da_enabled && !payload_available;
+            let delivered = payload_available;
 
             let mut emit_precommit = false;
             let mut abort_due_to_kura = false;
@@ -2797,6 +2798,23 @@ impl Actor {
         Hash::new(&payload_bytes) == *payload_hash
     }
 
+    fn payload_available_for_da(
+        sessions: &BTreeMap<super::rbc_store::SessionKey, RbcSession>,
+        handle: &rbc_status::Handle,
+        pending: &PendingBlock,
+    ) -> bool {
+        if Self::ensure_block_matches_rbc_payload(
+            sessions,
+            handle,
+            &pending.block.hash(),
+            pending.height,
+            &pending.payload_hash,
+        ) {
+            return true;
+        }
+        Self::local_payload_matches_hash(&pending.block, &pending.payload_hash)
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
     pub(super) fn compute_da_gate_status(
@@ -2899,12 +2917,10 @@ impl Actor {
     fn refresh_da_gate_status(&mut self, pending: &mut PendingBlock) -> DaGateStatus {
         let da_enabled = self.runtime_da_enabled();
         let missing_local_data = da_enabled
-            && !Self::ensure_block_matches_rbc_payload(
+            && !Self::payload_available_for_da(
                 &self.subsystems.da_rbc.rbc.sessions,
                 &self.subsystems.da_rbc.rbc.status_handle,
-                &pending.block.hash(),
-                pending.height,
-                &pending.payload_hash,
+                pending,
             );
         let lane_config = self.state.nexus_snapshot().lane_config.clone();
         let telemetry = {
@@ -4540,6 +4556,32 @@ mod tests {
     }
 
     #[test]
+    fn payload_available_for_da_accepts_local_payload_without_rbc() {
+        let block = sample_block(2, 0);
+        let payload_hash = Hash::new(super::super::proposals::block_payload_bytes(&block));
+        let pending = PendingBlock::new(block, payload_hash, 2, 0);
+        let sessions = BTreeMap::new();
+        let handle = rbc_status::Handle::new();
+
+        assert!(Actor::payload_available_for_da(
+            &sessions, &handle, &pending
+        ));
+    }
+
+    #[test]
+    fn payload_available_for_da_rejects_mismatched_payload_without_rbc() {
+        let block = sample_block(2, 0);
+        let payload_hash = Hash::new(b"mismatch");
+        let pending = PendingBlock::new(block, payload_hash, 2, 0);
+        let sessions = BTreeMap::new();
+        let handle = rbc_status::Handle::new();
+
+        assert!(!Actor::payload_available_for_da(
+            &sessions, &handle, &pending
+        ));
+    }
+
+    #[test]
     fn block_sync_update_attaches_cached_qcs() {
         let block = sample_block(4, 0);
         let block_hash = block.hash();
@@ -4898,12 +4940,9 @@ mod tests {
         let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
         let roster_hash = super::rbc::rbc_roster_hash(&roster);
 
-        let (init, chunks) = super::super::Actor::rbc_payload_bundle(
-            (block_hash, 5, 0),
-            &session,
-            &roster,
-        )
-        .expect("bundle");
+        let (init, chunks) =
+            super::super::Actor::rbc_payload_bundle((block_hash, 5, 0), &session, &roster)
+                .expect("bundle");
 
         assert_eq!(init.block_hash, block_hash);
         assert_eq!(init.total_chunks, 2);
@@ -4918,6 +4957,27 @@ mod tests {
     }
 
     #[test]
+    fn rbc_payload_bundle_allows_empty_chunks() {
+        let block = sample_block(7, 0);
+        let block_hash = block.hash();
+        let payload_hash = Hash::prehashed([0x55; 32]);
+        let chunk_root = Hash::prehashed([0x66; 32]);
+        let session = RbcSession::test_new(2, Some(payload_hash), Some(chunk_root), 0);
+        let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+
+        let (init, chunks) =
+            super::super::Actor::rbc_payload_bundle((block_hash, 7, 0), &session, &roster)
+                .expect("bundle");
+
+        assert_eq!(init.total_chunks, 2);
+        assert_eq!(init.chunk_root, chunk_root);
+        assert!(
+            chunks.is_empty(),
+            "missing cached chunks should still emit INIT"
+        );
+    }
+
+    #[test]
     fn rbc_ready_bundle_clones_all_readies() {
         let block = sample_block(6, 0);
         let block_hash = block.hash();
@@ -4929,18 +4989,13 @@ mod tests {
         let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
         let roster_hash = super::rbc::rbc_roster_hash(&roster);
 
-        let readies = super::super::Actor::rbc_ready_bundle(
-            (block_hash, 6, 0),
-            &session,
-            roster_hash,
-        )
-        .expect("ready set");
+        let readies =
+            super::super::Actor::rbc_ready_bundle((block_hash, 6, 0), &session, roster_hash)
+                .expect("ready set");
         let senders: BTreeSet<_> = readies.iter().map(|ready| ready.sender).collect();
 
         assert_eq!(senders, BTreeSet::from([0, 2]));
         assert!(readies.iter().all(|ready| ready.chunk_root == chunk_root));
-        assert!(readies
-            .iter()
-            .all(|ready| ready.roster_hash == roster_hash));
+        assert!(readies.iter().all(|ready| ready.roster_hash == roster_hash));
     }
 }

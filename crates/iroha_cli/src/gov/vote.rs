@@ -71,13 +71,13 @@ fn resolve_vote_mode(
     }
 }
 
-fn hint_present(map: &json::Map<String, json::Value>, key: &str) -> bool {
+fn hint_present(map: &json::Map, key: &str) -> bool {
     map.get(key)
         .map(|value| !matches!(value, json::Value::Null))
         .unwrap_or(false)
 }
 
-fn ensure_lock_hints_complete(map: &json::Map<String, json::Value>) -> Result<()> {
+fn ensure_lock_hints_complete(map: &json::Map) -> Result<()> {
     let has_owner = hint_present(map, "owner");
     let has_amount = hint_present(map, "amount");
     let has_duration = hint_present(map, "duration_blocks");
@@ -90,7 +90,7 @@ fn ensure_lock_hints_complete(map: &json::Map<String, json::Value>) -> Result<()
     Ok(())
 }
 
-fn normalize_public_input_aliases(map: &mut json::Map<String, json::Value>) -> Result<()> {
+fn normalize_public_input_aliases(map: &mut json::Map) -> Result<()> {
     normalize_public_input_alias(map, "durationBlocks", "duration_blocks")?;
     normalize_public_input_alias(map, "nullifierHex", "nullifier_hex")?;
     normalize_public_input_alias(map, "rootHintHex", "root_hint")?;
@@ -100,7 +100,7 @@ fn normalize_public_input_aliases(map: &mut json::Map<String, json::Value>) -> R
     Ok(())
 }
 
-fn canonicalize_public_input_hex(map: &mut json::Map<String, json::Value>, key: &str) -> Result<()> {
+fn canonicalize_public_input_hex(map: &mut json::Map, key: &str) -> Result<()> {
     let Some(value) = map.get_mut(key) else {
         return Ok(());
     };
@@ -116,7 +116,7 @@ fn canonicalize_public_input_hex(map: &mut json::Map<String, json::Value>, key: 
 }
 
 fn normalize_public_input_alias(
-    map: &mut json::Map<String, json::Value>,
+    map: &mut json::Map,
     alias: &str,
     canonical: &str,
 ) -> Result<()> {

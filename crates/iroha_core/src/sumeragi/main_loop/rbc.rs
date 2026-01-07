@@ -16,13 +16,12 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use iroha_logger::prelude::*;
-use iroha_version::codec::DecodeVersioned;
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use sha2::{Digest, Sha256};
 
 use super::{
-    Actor, DataspaceAllocation, InvalidSigKind, InvalidSigOutcome, LaneAllocation, PipelinePhase,
-    RBC_MAX_TOTAL_CHUNKS, RbcSession,
+    Actor, DataspaceAllocation, InvalidSigKind, InvalidSigOutcome, LaneAllocation,
+    MissingBlockFetchDecision, PipelinePhase, RBC_MAX_TOTAL_CHUNKS, RbcSession,
     pending_rbc::{
         PENDING_RBC_STASH_LIMIT, PendingChunkOutcome, PendingRbcDropReason, PendingRbcMessages,
     },
@@ -35,7 +34,7 @@ use crate::{
         consensus::{
             RbcChunk, RbcDeliver, RbcInit, RbcReady, rbc_deliver_preimage, rbc_ready_preimage,
         },
-        message::{BlockCreated, BlockMessage},
+        message::BlockMessage,
         rbc_status,
         rbc_store::{ChunkStore, PersistOutcome, PersistedSession, SessionKey, StorePressure},
         status,
@@ -50,7 +49,6 @@ pub(super) struct RbcSessionPlan {
     pub(super) init: RbcInit,
     pub(super) chunks: Vec<RbcChunk>,
     pub(super) roster: Vec<PeerId>,
-    pub(super) roster_hash: Hash,
 }
 
 #[derive(Clone, Debug)]
@@ -481,8 +479,7 @@ impl Actor {
         if roster.is_empty() {
             warn!(
                 height,
-                view,
-                "skipping RBC plan: empty commit roster snapshot"
+                view, "skipping RBC plan: empty commit roster snapshot"
             );
             return Ok(None);
         }
@@ -542,7 +539,6 @@ impl Actor {
             init,
             chunks,
             roster,
-            roster_hash,
         };
 
         let duplicate_plan = if self.config.debug_rbc_duplicate_inits {
@@ -623,7 +619,6 @@ impl Actor {
                     },
                     chunks: dup_chunks,
                     roster: dup_roster.clone(),
-                    roster_hash: dup_roster_hash,
                 })
             }
         } else {
@@ -1109,8 +1104,9 @@ impl Actor {
         Some(payload)
     }
 
-    /// Ingest a block reconstructed purely from an RBC payload when the original `BlockCreated`
-    /// broadcast was missed. This keeps peers that only saw RBC traffic from stalling availability tracking.
+    /// Request a missing `BlockCreated` once the full RBC payload is available.
+    /// The RBC payload contains canonical block payload bytes, so we still need
+    /// the signed header from peers to pass validation and vote.
     pub(super) fn recover_block_from_rbc_session(&mut self, key: SessionKey) {
         if self.pending.pending_blocks.contains_key(&key.0) {
             return;
@@ -1141,63 +1137,72 @@ impl Actor {
                 return;
             }
         }
-
-        let cursor = payload.as_slice();
-        let block = match SignedBlock::decode_all_versioned(cursor) {
-            Ok(block) => block,
-            Err(err) => {
-                warn!(
-                    ?err,
-                    height = key.1,
-                    view = key.2,
-                    "failed to decode block from delivered RBC payload"
-                );
-                return;
-            }
-        };
-        if block.hash() != key.0 {
-            warn!(
-                block = %block.hash(),
-                expected = %key.0,
+        let roster = self.ensure_rbc_session_roster(key);
+        if roster.is_empty() {
+            debug!(
                 height = key.1,
                 view = key.2,
-                "RBC payload block hash mismatch; rejecting reconstructed block"
+                block = %key.0,
+                "skipping missing BlockCreated fetch: empty roster"
             );
             return;
         }
-        let header = block.header();
-        let height = header.height().get();
-        let view = u64::from(header.view_change_index());
-        if height != key.1 || view != key.2 {
-            warn!(
-                block_height = height,
-                block_view = view,
-                session_height = key.1,
-                session_view = key.2,
-                "RBC payload metadata mismatches session key; rejecting reconstructed block"
-            );
-            return;
-        }
+        let topology = crate::sumeragi::network_topology::Topology::new(roster);
+        let retry_window = self.rebroadcast_cooldown();
+        let now = Instant::now();
+        let signers = BTreeSet::new();
+        let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
+        let decision = super::plan_missing_block_fetch(
+            &mut requests,
+            key.0,
+            key.1,
+            &signers,
+            &topology,
+            now,
+            retry_window,
+            self.config.missing_block_signer_fallback_attempts,
+        );
+        self.pending.missing_block_requests = requests;
+        let dwell = self
+            .pending
+            .missing_block_requests
+            .get(&key.0)
+            .map(|stats| now.saturating_duration_since(stats.first_seen))
+            .unwrap_or_default();
+        let targets_len = match &decision {
+            MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
+            _ => 0,
+        };
+        self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
 
-        let block_msg = BlockCreated::from(&block);
-        match self.handle_block_created(block_msg) {
-            Ok(()) => {
+        match decision {
+            MissingBlockFetchDecision::Requested {
+                targets,
+                target_kind,
+            } => {
+                self.request_missing_block(key.0, &targets);
                 info!(
-                    height,
-                    view,
+                    height = key.1,
+                    view = key.2,
                     block = %key.0,
-                    "ingested block from delivered RBC payload after missing BlockCreated"
+                    targets = ?targets,
+                    target_kind = target_kind.label(),
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms = dwell.as_millis(),
+                    "requested missing BlockCreated after RBC delivery"
                 );
             }
-            Err(err) => {
+            MissingBlockFetchDecision::NoTargets => {
                 warn!(
-                    ?err,
-                    height,
-                    view,
+                    height = key.1,
+                    view = key.2,
                     block = %key.0,
-                    "failed to ingest block reconstructed from RBC payload"
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms = dwell.as_millis(),
+                    "missing BlockCreated fetch deferred: no targets available"
                 );
             }
+            MissingBlockFetchDecision::Backoff => {}
         }
     }
 
@@ -2168,9 +2173,7 @@ impl Actor {
                 if accepted {
                     debug!(
                         ?key,
-                        pending_chunks,
-                        pending_bytes,
-                        "stashed RBC DELIVER: roster hash mismatch"
+                        pending_chunks, pending_bytes, "stashed RBC DELIVER: roster hash mismatch"
                     );
                 } else {
                     warn!(
@@ -2327,8 +2330,8 @@ impl Actor {
         if self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
             self.record_phase_sample(PipelinePhase::Commit, deliver.height, deliver.view);
         }
-        // If the block header never arrived (missed `BlockCreated`), rebuild it from the delivered
-        // RBC payload so availability tracking and votes can proceed.
+        // If the block header never arrived (missed `BlockCreated`), request it from peers once
+        // the full RBC payload is delivered so validation and votes can proceed.
         self.recover_block_from_rbc_session(key);
         if should_process_commit_after_deliver(first_deliver) {
             self.process_commit_candidates();

@@ -4665,10 +4665,7 @@ fn normalize_zk_ballot_public_inputs_json(raw: String, context: &str) -> napi::R
     })
 }
 
-fn normalize_zk_ballot_public_inputs(
-    value: &mut json::Value,
-    context: &str,
-) -> napi::Result<()> {
+fn normalize_zk_ballot_public_inputs(value: &mut json::Value, context: &str) -> napi::Result<()> {
     let map = match value {
         json::Value::Object(map) => map,
         other => {
@@ -4691,7 +4688,9 @@ fn normalize_zk_ballot_public_inputs(
     if any && !(has_owner && has_amount && has_duration) {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
-            format!("{context} must include owner, amount, and duration_blocks when providing lock hints"),
+            format!(
+                "{context} must include owner, amount, and duration_blocks when providing lock hints"
+            ),
         ));
     }
     Ok(())
@@ -8669,8 +8668,8 @@ mod tests {
         let mut outer = json::Map::new();
         outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
 
-        let instruction = value_to_instruction(json::Value::Object(outer))
-            .expect("deserialize CastZkBallot");
+        let instruction =
+            value_to_instruction(json::Value::Object(outer)).expect("deserialize CastZkBallot");
         let ballot = instruction
             .as_any()
             .downcast_ref::<CastZkBallot>()
@@ -8703,8 +8702,8 @@ mod tests {
         let mut outer = json::Map::new();
         outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
 
-        let instruction = value_to_instruction(json::Value::Object(outer))
-            .expect("deserialize CastZkBallot");
+        let instruction =
+            value_to_instruction(json::Value::Object(outer)).expect("deserialize CastZkBallot");
         let ballot = instruction
             .as_any()
             .downcast_ref::<CastZkBallot>()

@@ -2431,8 +2431,7 @@ pub(crate) mod valid {
                                 None,
                             ));
                         }
-                    } else if !touch.manifest.read.is_empty() || !touch.manifest.write.is_empty()
-                    {
+                    } else if !touch.manifest.read.is_empty() || !touch.manifest.write.is_empty() {
                         return Err(make_env_error(
                             envelope_lane,
                             AxtRejectReason::Descriptor,
@@ -2477,13 +2476,7 @@ pub(crate) mod valid {
                             None,
                         )
                     })?;
-                    validate_proof(
-                        &proof.proof,
-                        proof.dsid,
-                        policy,
-                        policy.current_slot,
-                        None,
-                    )?;
+                    validate_proof(&proof.proof, proof.dsid, policy, policy.current_slot, None)?;
                     if proofs_by_ds
                         .insert(proof.dsid, proof.proof.clone())
                         .is_some()
@@ -2632,12 +2625,8 @@ pub(crate) mod valid {
                             None,
                         ));
                     }
-                    let intent_amount = fragment
-                        .intent
-                        .op
-                        .amount
-                        .parse::<u128>()
-                        .map_err(|_| {
+                    let intent_amount =
+                        fragment.intent.op.amount.parse::<u128>().map_err(|_| {
                             make_env_error(
                                 envelope_lane,
                                 AxtRejectReason::Budget,

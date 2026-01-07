@@ -12,7 +12,7 @@ use iroha_core::{
 };
 use iroha_data_model::{
     block::BlockHeader,
-    events::data::{governance::GovernanceEvent, DataEvent},
+    events::data::{DataEvent, governance::GovernanceEvent},
 };
 
 #[test]
@@ -58,18 +58,22 @@ fn zk_referendum_auto_close_defers_decision_without_tally() {
     let header2 = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut sblock2 = state.block(header2);
     let events = sblock2.world.take_external_events();
-    let has_closed = events.iter().any(|event| matches!(
-        event.as_data_event(),
-        Some(DataEvent::Governance(GovernanceEvent::ReferendumClosed(_)))
-    ));
+    let has_closed = events.iter().any(|event| {
+        matches!(
+            event.as_data_event(),
+            Some(DataEvent::Governance(GovernanceEvent::ReferendumClosed(_)))
+        )
+    });
     assert!(has_closed, "expected ReferendumClosed at h_end");
 
-    let has_decision = events.iter().any(|event| matches!(
-        event.as_data_event(),
-        Some(DataEvent::Governance(
-            GovernanceEvent::ProposalApproved(_) | GovernanceEvent::ProposalRejected(_)
-        ))
-    ));
+    let has_decision = events.iter().any(|event| {
+        matches!(
+            event.as_data_event(),
+            Some(DataEvent::Governance(
+                GovernanceEvent::ProposalApproved(_) | GovernanceEvent::ProposalRejected(_)
+            ))
+        )
+    });
     assert!(
         !has_decision,
         "unexpected decision without finalized zk tally"

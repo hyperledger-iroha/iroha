@@ -11855,11 +11855,13 @@ impl State {
                         false
                     };
                     if decision_approve {
-                        wtx.emit_events(Some(governance_events::GovernanceEvent::ProposalApproved(
-                            governance_events::GovernanceProposalApproved {
-                                id: prop_id_opt.unwrap_or([0u8; 32]),
-                            },
-                        )));
+                        wtx.emit_events(Some(
+                            governance_events::GovernanceEvent::ProposalApproved(
+                                governance_events::GovernanceProposalApproved {
+                                    id: prop_id_opt.unwrap_or([0u8; 32]),
+                                },
+                            ),
+                        ));
                         if let Some(pid) = prop_id_opt {
                             if let Some(mut rec) = wtx.governance_proposals.get(&pid).cloned() {
                                 rec.status = super::state::GovernanceProposalStatus::Approved;
@@ -11867,11 +11869,13 @@ impl State {
                             }
                         }
                     } else {
-                        wtx.emit_events(Some(governance_events::GovernanceEvent::ProposalRejected(
-                            governance_events::GovernanceProposalRejected {
-                                id: prop_id_opt.unwrap_or([0u8; 32]),
-                            },
-                        )));
+                        wtx.emit_events(Some(
+                            governance_events::GovernanceEvent::ProposalRejected(
+                                governance_events::GovernanceProposalRejected {
+                                    id: prop_id_opt.unwrap_or([0u8; 32]),
+                                },
+                            ),
+                        ));
                         if let Some(pid) = prop_id_opt {
                             if let Some(mut rec) = wtx.governance_proposals.get(&pid).cloned() {
                                 rec.status = super::state::GovernanceProposalStatus::Rejected;

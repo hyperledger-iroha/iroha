@@ -119,7 +119,7 @@ fn sample_chunk_with_len(idx: u32, len: usize) -> crate::sumeragi::consensus::Rb
 }
 
 fn roster_hash(roster: &[PeerId]) -> Hash {
-    Hash::new(&roster.encode())
+    Hash::new(&roster.to_vec().encode())
 }
 
 fn pending_session_key(height: u64) -> SessionKey {
@@ -8661,7 +8661,13 @@ async fn handle_rbc_deliver_stashes_on_roster_hash_mismatch() {
         .rebroadcast_stalled_rbc_payloads(Instant::now());
     assert!(progress);
     assert!(
-        !harness.actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .contains_key(&key),
         "pending deliver should be flushed after roster update"
     );
     let stored = harness
@@ -9077,6 +9083,50 @@ async fn handle_rbc_deliver_uses_activation_height_mode_tag() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn recover_block_from_rbc_session_requests_missing_block_created() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let block = sample_block(height, u32::try_from(view).expect("view fits u32"), None);
+    let block_hash = block.hash();
+    let key = (block_hash, height, view);
+
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        1024,
+        actor.epoch_for_height(height),
+    )
+    .expect("session");
+    session.test_set_delivered(true);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .session_rosters
+        .insert(key, actor.effective_commit_topology());
+
+    actor.recover_block_from_rbc_session(key);
+
+    let request = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("missing-block request recorded");
+    assert_eq!(
+        request.height, height,
+        "missing-block request should record the delivered payload height"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_init_rejects_epoch_mismatch() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
@@ -9120,8 +9170,7 @@ async fn handle_rbc_init_rejects_roster_hash_mismatch() {
 
     let height = 4u64;
     let view = 0u64;
-    let block_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD5; 32]));
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD5; 32]));
     let key = (block_hash, height, view);
     let epoch = actor.epoch_for_height(height);
     let roster = actor.effective_commit_topology();
@@ -9143,7 +9192,12 @@ async fn handle_rbc_init_rejects_roster_hash_mismatch() {
         "mismatched roster hash should be rejected"
     );
     assert!(
-        !actor.subsystems.da_rbc.rbc.session_rosters.contains_key(&key),
+        !actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .session_rosters
+            .contains_key(&key),
         "mismatched roster hash should not be cached"
     );
 
@@ -9157,8 +9211,7 @@ async fn handle_rbc_init_rejects_duplicate_roster() {
 
     let height = 4u64;
     let view = 0u64;
-    let block_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD6; 32]));
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD6; 32]));
     let key = (block_hash, height, view);
     let epoch = actor.epoch_for_height(height);
     let mut roster = actor.effective_commit_topology();
@@ -9182,7 +9235,12 @@ async fn handle_rbc_init_rejects_duplicate_roster() {
         "duplicate roster should be rejected"
     );
     assert!(
-        !actor.subsystems.da_rbc.rbc.session_rosters.contains_key(&key),
+        !actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .session_rosters
+            .contains_key(&key),
         "duplicate roster should not be cached"
     );
 
@@ -10487,12 +10545,7 @@ fn manifest_gate_skips_when_da_disabled() {
     let digest = ManifestDigest::new(*blake3_hash(content).as_bytes());
     let block = block_with_da_commitment(digest);
     let payload_hash = Hash::new(block.encode());
-    let mut pending = PendingBlock::new(
-        block,
-        payload_hash,
-        2,
-        0,
-    );
+    let mut pending = PendingBlock::new(block, payload_hash, 2, 0);
 
     let lane_config = LaneConfigSnapshot::default();
     let mut cache = super::ManifestSpoolCache::default();

@@ -448,7 +448,7 @@ mod tests {
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::BlockHeader;
 
-    use super::{Actor, PendingRbcMessages};
+    use super::Actor;
     use crate::sumeragi::rbc_store::SessionKey;
 
     #[test]
@@ -461,8 +461,14 @@ mod tests {
         let mut pending = BTreeMap::new();
         let now = Instant::now();
         {
-            let (slot, evictions) =
-                Actor::take_pending_rbc_slot(&mut pending, None, key, 4, Duration::from_secs(5), now);
+            let (slot, evictions) = Actor::take_pending_rbc_slot(
+                &mut pending,
+                None,
+                key,
+                4,
+                Duration::from_secs(5),
+                now,
+            );
             assert!(evictions.is_empty());
             assert_eq!(slot.pending_chunks(), 0);
         }
