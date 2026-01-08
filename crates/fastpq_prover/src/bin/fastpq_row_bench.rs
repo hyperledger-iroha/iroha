@@ -12,9 +12,7 @@ use std::{
 };
 
 use clap::Parser;
-use fastpq_prover::{
-    OperationKind, RowUsage, StateTransition, Trace, TransitionBatch, build_trace,
-};
+use fastpq_prover::{OperationKind, RowUsage, StateTransition, TransitionBatch};
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
@@ -33,6 +31,7 @@ const DEFAULT_BURN_ROWS: usize = 32;
 const DEFAULT_ROLE_GRANT_ROWS: usize = 8;
 const DEFAULT_ROLE_REVOKE_ROWS: usize = 8;
 const DEFAULT_META_SET_ROWS: usize = 16;
+const ACCOUNT_POOL_SIZE: usize = 256;
 
 /// Capture row-usage summaries for synthetic FASTPQ batches.
 #[derive(Debug, Parser)]
@@ -90,8 +89,8 @@ fn run() -> Result<(), Box<dyn Error>> {
         )
         .into());
     }
-    let batch = build_synthetic_batch(&args.parameter, &counts, args.seed);
-    let trace = build_trace(&batch)?;
+    let batch = build_synthetic_batch(&args.parameter, &counts, args.seed, false);
+    let trace = trace_summary(&batch);
     let summary = summary_value(&args.parameter, &counts, &trace);
     write_summary(&summary, args.output.as_deref(), args.pretty)?;
     Ok(())
@@ -124,7 +123,7 @@ fn write_json<W: Write>(value: &Value, writer: &mut W, pretty: bool) -> Result<(
     result.map_err(|error| -> Box<dyn Error> { Box::new(error) })
 }
 
-fn summary_value(parameter: &str, counts: &ScenarioCounts, trace: &Trace) -> Value {
+fn summary_value(parameter: &str, counts: &ScenarioCounts, trace: &TraceSummary) -> Value {
     let usage = &trace.row_usage;
     // Row counts are bounded by CLI inputs (default ≤ 65k) so casting to f64 is precise enough.
     #[allow(clippy::cast_precision_loss)]
@@ -201,6 +200,51 @@ fn log2(value: usize) -> Option<u32> {
     Some(usize::BITS - value.leading_zeros() - 1)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TraceSummary {
+    rows: usize,
+    padded_len: usize,
+    row_usage: RowUsage,
+}
+
+fn trace_summary(batch: &TransitionBatch) -> TraceSummary {
+    let rows = batch.transitions.len();
+    let padded_len = rows.max(1).next_power_of_two();
+    let mut usage = RowUsage {
+        total_rows: rows,
+        ..RowUsage::default()
+    };
+    for transition in &batch.transitions {
+        match transition.operation {
+            OperationKind::Transfer => {
+                usage.transfer_rows = usage.transfer_rows.saturating_add(1);
+            }
+            OperationKind::Mint => {
+                usage.mint_rows = usage.mint_rows.saturating_add(1);
+            }
+            OperationKind::Burn => {
+                usage.burn_rows = usage.burn_rows.saturating_add(1);
+            }
+            OperationKind::RoleGrant { .. } => {
+                usage.role_grant_rows = usage.role_grant_rows.saturating_add(1);
+                usage.permission_rows = usage.permission_rows.saturating_add(1);
+            }
+            OperationKind::RoleRevoke { .. } => {
+                usage.role_revoke_rows = usage.role_revoke_rows.saturating_add(1);
+                usage.permission_rows = usage.permission_rows.saturating_add(1);
+            }
+            OperationKind::MetaSet => {
+                usage.meta_set_rows = usage.meta_set_rows.saturating_add(1);
+            }
+        }
+    }
+    TraceSummary {
+        rows,
+        padded_len,
+        row_usage: usage,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 #[allow(clippy::struct_field_names)] // explicit *_rows suffix keeps CLI semantics clear
 struct ScenarioCounts {
@@ -236,7 +280,12 @@ impl From<&Args> for ScenarioCounts {
     }
 }
 
-fn build_synthetic_batch(parameter: &str, counts: &ScenarioCounts, seed: u64) -> TransitionBatch {
+fn build_synthetic_batch(
+    parameter: &str,
+    counts: &ScenarioCounts,
+    seed: u64,
+    include_transcripts: bool,
+) -> TransitionBatch {
     let mut batch = TransitionBatch::new(parameter, fastpq_prover::PublicInputs::default());
     batch.transitions.reserve(counts.total_rows());
     batch.public_inputs.dsid = seed_dsid(seed);
@@ -246,12 +295,18 @@ fn build_synthetic_batch(parameter: &str, counts: &ScenarioCounts, seed: u64) ->
     batch.public_inputs.tx_set_hash = seed_root(seed ^ 0xC3C3_C3C3_C3C3_C3C3);
     let mut generator = RowGenerator::new(seed);
     let transfer_pairs = counts.transfer_rows / 2;
-    let mut transcripts = Vec::with_capacity(transfer_pairs);
+    let mut transcripts = if include_transcripts {
+        Vec::with_capacity(transfer_pairs)
+    } else {
+        Vec::new()
+    };
     for _ in 0..transfer_pairs {
-        let (transcript, sender, receiver) = generator.next_transfer_pair();
+        let (transcript, sender, receiver) = generator.next_transfer_pair(include_transcripts);
         batch.push(sender);
         batch.push(receiver);
-        transcripts.push(transcript);
+        if let Some(transcript) = transcript {
+            transcripts.push(transcript);
+        }
     }
     for _ in 0..counts.mint_rows {
         batch.push(generator.next_mint());
@@ -268,7 +323,7 @@ fn build_synthetic_batch(parameter: &str, counts: &ScenarioCounts, seed: u64) ->
     for _ in 0..counts.meta_set_rows {
         batch.push(generator.next_meta_set());
     }
-    if !transcripts.is_empty() {
+    if include_transcripts && !transcripts.is_empty() {
         batch.metadata.insert(
             TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
             to_bytes(&transcripts).expect("encode transcripts"),
@@ -285,10 +340,25 @@ struct RowGenerator {
     grant_index: usize,
     revoke_index: usize,
     meta_index: usize,
+    sender_accounts: Vec<AccountId>,
+    receiver_accounts: Vec<AccountId>,
 }
 
 impl RowGenerator {
     fn new(seed: u64) -> Self {
+        let domain = DomainId::from_str("lane").expect("domain id");
+        let mut sender_accounts = Vec::with_capacity(ACCOUNT_POOL_SIZE);
+        let mut receiver_accounts = Vec::with_capacity(ACCOUNT_POOL_SIZE);
+        for idx in 0..ACCOUNT_POOL_SIZE {
+            sender_accounts.push(deterministic_account(
+                &format!("bench_sender_{idx:04}"),
+                &domain,
+            ));
+            receiver_accounts.push(deterministic_account(
+                &format!("bench_receiver_{idx:04}"),
+                &domain,
+            ));
+        }
         Self {
             seed,
             transfer_index: 0,
@@ -297,17 +367,21 @@ impl RowGenerator {
             grant_index: 0,
             revoke_index: 0,
             meta_index: 0,
+            sender_accounts,
+            receiver_accounts,
         }
     }
 
-    fn next_transfer_pair(&mut self) -> (TransferTranscript, StateTransition, StateTransition) {
+    fn next_transfer_pair(
+        &mut self,
+        include_transcript: bool,
+    ) -> (Option<TransferTranscript>, StateTransition, StateTransition) {
         let pair_idx = self.transfer_index;
         self.transfer_index = self.transfer_index.wrapping_add(1);
         let asset_group = pair_idx % 128;
         let asset_id = format!("bench_asset_{asset_group}#lane");
-        let domain = DomainId::from_str("lane").expect("domain id");
-        let from_account = deterministic_account(&format!("sender_{pair_idx:05}"), &domain);
-        let to_account = deterministic_account(&format!("receiver_{pair_idx:05}"), &domain);
+        let from_account = self.sender_accounts[pair_idx % self.sender_accounts.len()].clone();
+        let to_account = self.receiver_accounts[pair_idx % self.receiver_accounts.len()].clone();
         let asset_definition = AssetDefinitionId::from_str(&asset_id).expect("asset definition");
         let rotation = u32::try_from(pair_idx % 31).expect("rotation fits in u32") + 1;
         let base = 1_000_000_u64
@@ -318,29 +392,34 @@ impl RowGenerator {
         let from_post = base.saturating_sub(amount);
         let to_pre = base / 2;
         let to_post = to_pre.saturating_add(amount);
-        let delta = TransferDeltaTranscript {
-            from_account: from_account.clone(),
-            to_account: to_account.clone(),
-            asset_definition: asset_definition.clone(),
-            amount: Numeric::from(amount),
-            from_balance_before: Numeric::from(from_pre),
-            from_balance_after: Numeric::from(from_post),
-            to_balance_before: Numeric::from(to_pre),
-            to_balance_after: Numeric::from(to_post),
-            from_merkle_proof: None,
-            to_merkle_proof: None,
-        };
-        let mut payload = Vec::with_capacity(32);
-        payload.extend_from_slice(b"fastpq-row-bench");
-        payload.extend_from_slice(&self.seed.to_le_bytes());
-        payload.extend_from_slice(&(pair_idx as u64).to_le_bytes());
-        let batch_hash = Hash::new(payload);
-        let digest = fastpq_prover::gadgets::transfer::compute_poseidon_digest(&delta, &batch_hash);
-        let transcript = TransferTranscript {
-            batch_hash,
-            deltas: vec![delta],
-            authority_digest: Hash::new(b"authority"),
-            poseidon_preimage_digest: Some(digest),
+        let transcript = if include_transcript {
+            let delta = TransferDeltaTranscript {
+                from_account: from_account.clone(),
+                to_account: to_account.clone(),
+                asset_definition: asset_definition.clone(),
+                amount: Numeric::from(amount),
+                from_balance_before: Numeric::from(from_pre),
+                from_balance_after: Numeric::from(from_post),
+                to_balance_before: Numeric::from(to_pre),
+                to_balance_after: Numeric::from(to_post),
+                from_merkle_proof: None,
+                to_merkle_proof: None,
+            };
+            let mut payload = Vec::with_capacity(32);
+            payload.extend_from_slice(b"fastpq-row-bench");
+            payload.extend_from_slice(&self.seed.to_le_bytes());
+            payload.extend_from_slice(&(pair_idx as u64).to_le_bytes());
+            let batch_hash = Hash::new(payload);
+            let digest =
+                fastpq_prover::gadgets::transfer::compute_poseidon_digest(&delta, &batch_hash);
+            Some(TransferTranscript {
+                batch_hash,
+                deltas: vec![delta],
+                authority_digest: Hash::new(b"authority"),
+                poseidon_preimage_digest: Some(digest),
+            })
+        } else {
+            None
         };
         let sender = StateTransition::new(
             format!("asset/{}/{}", asset_definition, from_account).into_bytes(),
@@ -458,6 +537,7 @@ fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fastpq_prover::build_trace;
 
     #[test]
     fn scenario_count_totals_match_batch_rows() {
@@ -469,8 +549,26 @@ mod tests {
             role_revoke_rows: 1,
             meta_set_rows: 2,
         };
-        let batch = build_synthetic_batch("fastpq-lane-balanced", &counts, 99);
+        let batch = build_synthetic_batch("fastpq-lane-balanced", &counts, 99, false);
         assert_eq!(batch.transitions.len(), counts.total_rows());
+    }
+
+    #[test]
+    fn trace_summary_matches_build_trace() {
+        let counts = ScenarioCounts {
+            transfer_rows: 4,
+            mint_rows: 2,
+            burn_rows: 1,
+            meta_set_rows: 1,
+            role_grant_rows: 0,
+            role_revoke_rows: 0,
+        };
+        let batch = build_synthetic_batch("fastpq-lane-balanced", &counts, 42, true);
+        let summary = trace_summary(&batch);
+        let trace = build_trace(&batch).expect("trace");
+        assert_eq!(summary.rows, trace.rows);
+        assert_eq!(summary.padded_len, trace.padded_len);
+        assert_eq!(summary.row_usage, trace.row_usage);
     }
 
     #[test]
@@ -483,10 +581,10 @@ mod tests {
             role_revoke_rows: 0,
             meta_set_rows: 0,
         };
-        let batch = build_synthetic_batch("fastpq-lane-balanced", &counts, 7);
-        let trace = build_trace(&batch).expect("trace");
-        assert_eq!(trace.rows, counts.total_rows());
-        assert_eq!(trace.row_usage.transfer_rows, counts.transfer_rows);
-        assert_eq!(trace.padded_len, 65_536);
+        let batch = build_synthetic_batch("fastpq-lane-balanced", &counts, 7, false);
+        let summary = trace_summary(&batch);
+        assert_eq!(summary.rows, counts.total_rows());
+        assert_eq!(summary.row_usage.transfer_rows, counts.transfer_rows);
+        assert_eq!(summary.padded_len, 65_536);
     }
 }

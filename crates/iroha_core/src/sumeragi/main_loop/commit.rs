@@ -1752,9 +1752,7 @@ impl Actor {
         let should_rebuild_qcs = now.saturating_duration_since(self.last_qc_rebuild) >= cooldown;
         if enable_qc_pipeline && should_rebuild_qcs {
             self.last_qc_rebuild = now;
-            if !active_commit_topology.is_empty() {
-                self.rebuild_qcs_from_cached_votes(&active_commit_topology);
-            }
+            self.rebuild_qcs_from_cached_votes(&active_commit_topology);
         }
 
         let mut pending_hashes: Vec<_> = self
@@ -3062,7 +3060,7 @@ impl Actor {
         }
     }
 
-    fn block_sync_update_targets_for_peers(
+    pub(super) fn block_sync_update_targets_for_peers(
         local_peer: &PeerId,
         gossip_limit: usize,
         peers: &[PeerId],
@@ -3253,16 +3251,6 @@ impl Actor {
         qc: crate::sumeragi::consensus::QcHeaderRef,
         topology_peers: &[PeerId],
     ) -> Option<crate::sumeragi::consensus::Qc> {
-        if topology_peers.is_empty() {
-            debug!(
-                height = qc.height,
-                view = qc.view,
-                phase = ?qc.phase,
-                block = %qc.subject_block_hash,
-                "skipping QC materialization: empty commit topology"
-            );
-            return None;
-        }
         let key = (
             qc.phase,
             qc.subject_block_hash,
@@ -3272,6 +3260,20 @@ impl Actor {
         );
         if let Some(existing) = self.qc_cache.get(&key).cloned() {
             return Some(existing);
+        }
+        if topology_peers.is_empty() {
+            if let Some(recovered) = self.recover_highest_qc_from_kura(&qc) {
+                self.qc_cache.insert(key, recovered.clone());
+                return Some(recovered);
+            }
+            debug!(
+                height = qc.height,
+                view = qc.view,
+                phase = ?qc.phase,
+                block = %qc.subject_block_hash,
+                "skipping QC materialization: empty commit topology"
+            );
+            return None;
         }
         let topology = super::network_topology::Topology::new(topology_peers.to_vec());
         self.try_form_qc_from_votes(

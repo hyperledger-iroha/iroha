@@ -1255,8 +1255,8 @@ impl TieredStateBackend {
 
         let (value_hash, _json_len) =
             compute_json_hash(value).wrap_err("failed to encode value for tiered snapshot")?;
-        let value_size_bytes = compute_hot_bytes(value)
-            .wrap_err("failed to compute WSV hot-tier size estimate")?;
+        let value_size_bytes =
+            compute_hot_bytes(value).wrap_err("failed to compute WSV hot-tier size estimate")?;
 
         let meta = self
             .entries

@@ -46,7 +46,7 @@ IROHA_DIR="${IROHA_DIR:-"$(cd "${SCRIPT_DIR}/.." && pwd)"}"
 OUT_DIR="/tmp/iroha-localnet"
 PEERS=4
 SEED="Iroha"
-BUILD_LINE="${IROHA_BUILD_LINE:-iroha3}"
+BUILD_LINE="iroha3"
 BASE_API_PORT=29080
 BASE_P2P_PORT=33337
 BIND_HOST="127.0.0.1"
@@ -229,6 +229,7 @@ CLI_BIN="${IROHA_CLI_BIN:-"$TARGET_DIR/$PROFILE/iroha"}"
 echo "Generating localnet in $OUT_DIR..."
 KAGAMI_ARGS=(
   localnet
+  --build-line "$BUILD_LINE"
   --out-dir "$OUT_DIR"
   --peers "$PEERS"
   --seed "$SEED"
@@ -246,7 +247,7 @@ fi
 if [[ -n "$COMMIT_TIME_MS" ]]; then
   KAGAMI_ARGS+=(--commit-time-ms "$COMMIT_TIME_MS")
 fi
-IROHA_BUILD_LINE="$BUILD_LINE" "$KAGAMI_BIN" "${KAGAMI_ARGS[@]}"
+"$KAGAMI_BIN" "${KAGAMI_ARGS[@]}"
 
 if [[ -n "$TELEMETRY_PROFILE" ]]; then
   echo "Setting telemetry_profile=${TELEMETRY_PROFILE} in peer configs..."
@@ -283,11 +284,24 @@ if [[ -z "${RUST_LOG:-}" && "$PROFILE" == "debug" ]]; then
 fi
 IROHAD_BIN="$IROHAD_BIN" ./start.sh
 
+format_host_for_url() {
+  local host="$1"
+  if [[ "$host" == \[*\] ]]; then
+    printf '%s' "$host"
+  elif [[ "$host" == *:* ]]; then
+    printf '[%s]' "$host"
+  else
+    printf '%s' "$host"
+  fi
+}
+
+PUBLIC_HOST_URL="$(format_host_for_url "$PUBLIC_HOST")"
+
 echo "Waiting for network to be ready..."
 READY=false
 for ((i = 1; i <= TIMEOUT_SECS; i++)); do
   if curl -sf --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
-    "http://$PUBLIC_HOST:$BASE_API_PORT/status" >/dev/null 2>&1; then
+    "http://$PUBLIC_HOST_URL:$BASE_API_PORT/status" >/dev/null 2>&1; then
     READY=true
     break
   fi
@@ -302,7 +316,7 @@ fi
 
 echo "Network is ready:"
 curl -sf --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
-  "http://$PUBLIC_HOST:$BASE_API_PORT/status" || true
+  "http://$PUBLIC_HOST_URL:$BASE_API_PORT/status" || true
 
 CFG="$OUT_DIR/client.toml"
 if [[ "$SKIP_ASSET_REGISTER" != true ]]; then
