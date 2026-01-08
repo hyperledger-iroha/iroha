@@ -87,7 +87,7 @@ LaneConfigEntry {
   - `lane_{id:03}_merge` — merge-ledger сегмент, записывающий reduced state roots и settlement artefacts.
   - Глобальные сегменты (consensus evidence, telemetria caches) остаются shared, потому что они lane-neutral; их ключи не содержат lane prefixes.
 - Runtime следит за обновлениями каталога lanes: новые lanes получают свои block и merge-ledger директории автоматически под `kura/blocks/` и `kura/merge_ledger/`, а retired lanes архивируются под `kura/retired/{blocks,merge_ledger}/lane_{id:03}_*`.
-- Tiered-state snapshots следуют тому же lifecycle; каждая lane пишет в `cold_store_root/lanes/lane_{id:03}_{slug}` и retirement перемещает дерево в `cold_store_root/retired/lanes/`.
+- Tiered-state snapshots следуют тому же lifecycle; каждая lane пишет в `<cold_root>/lanes/lane_{id:03}_{slug}`, где `<cold_root>` — `cold_store_root` (или `da_store_root`, если `cold_store_root` не задан), и retirement перемещает дерево в `<cold_root>/retired/lanes/`.
 - **Key prefixes** — 4-байтовый префикс из `LaneId` всегда добавляется к MV-encoded ключам. Host-specific hashing не используется, порядок одинаков на всех узлах.
 - **Block log layout** — block data, index и hashes лежат под `kura/blocks/lane_{id:03}_{slug}/`. Merge-ledger journals используют тот же slug (`kura/merge/lane_{id:03}_{slug}.log`), изолируя recovery flows по lanes.
 - **Retention policy** — public lanes хранят полные block bodies; commitment-only lanes могут компактировать старые bodies после checkpoints, поскольку commitments являются авторитетными. Confidential lanes держат ciphertext journals в выделенных сегментах, чтобы не блокировать другие workloads.

@@ -90,8 +90,7 @@ pub fn start(cfg: &Fastpq) -> Option<(FastpqLaneHandle, tokio::task::JoinHandle<
     let task = tokio::spawn(async move {
         while let Some(job) = rx.recv().await {
             let engine = Arc::clone(&engine);
-            if let Err(err) =
-                tokio::task::spawn_blocking(move || process_job(&engine, &job)).await
+            if let Err(err) = tokio::task::spawn_blocking(move || process_job(&engine, &job)).await
             {
                 warn!(?err, "fastpq lane: prover task panicked");
             }

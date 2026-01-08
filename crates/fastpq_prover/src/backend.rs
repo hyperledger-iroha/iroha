@@ -1319,12 +1319,13 @@ pub fn sample_queries(
 pub fn open_queries(evaluations: &[u64], indices: &[usize]) -> Result<Vec<(u32, u64)>> {
     let mut openings = Vec::with_capacity(indices.len());
     for &index in indices {
-        let value = evaluations.get(index).copied().ok_or_else(|| {
-            Error::QueryIndexOutOfRange {
+        let value = evaluations
+            .get(index)
+            .copied()
+            .ok_or_else(|| Error::QueryIndexOutOfRange {
                 index,
                 len: evaluations.len(),
-            }
-        })?;
+            })?;
         let compact_index =
             u32::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?;
         openings.push((compact_index, value));
@@ -1606,8 +1607,8 @@ mod tests {
     fn merkle_paths_rejects_out_of_range_indices() {
         let evaluations = vec![1u64, 2, 3, 4];
         let leaves = hash_lde_leaves(&evaluations, 8).expect("hash leaves");
-        let err =
-            merkle_paths_for_queries(&leaves, &[4], 8, evaluations.len()).expect_err("out of range");
+        let err = merkle_paths_for_queries(&leaves, &[4], 8, evaluations.len())
+            .expect_err("out of range");
         assert!(matches!(
             err,
             Error::QueryIndexOutOfRange { index: 4, len: 4 }

@@ -595,10 +595,9 @@ mod tests {
         ));
         batch.sort();
         let ordering = ordering::ordering_hash(&batch).expect("ordering");
-        let permission_hashes =
-            collect_permission_hashes(&batch).expect("permission hashes");
-        let public_io = build_public_io(&batch, ordering, permission_hashes.clone())
-            .expect("public io");
+        let permission_hashes = collect_permission_hashes(&batch).expect("permission hashes");
+        let public_io =
+            build_public_io(&batch, ordering, permission_hashes.clone()).expect("public io");
         assert_eq!(
             public_io.perm_root,
             perm_root_from_permission_hashes(&permission_hashes)

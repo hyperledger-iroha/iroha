@@ -380,7 +380,6 @@ impl NexusProfile {
         let mut raw_table: Table = toml::from_str(&config_str)
             .map_err(|err| eyre!("failed to parse embedded nexus config: {err}"))?;
         normalize_lane_metadata(&mut raw_table);
-        raw_table.remove("streaming");
         let default_p2p_addr = canonical_addr_literal("127.0.0.1:1337")?;
         let default_torii_addr = canonical_addr_literal("127.0.0.1:8080")?;
         // Provide safe defaults for required network addresses and drop unsupported nested sections

@@ -494,9 +494,7 @@ pub fn verify_transcripts(
     if !transfer_rows.is_empty() {
         let remaining = transfer_rows.values().map(VecDeque::len).sum::<usize>();
         return Err(Error::TransferInvariant {
-            details: format!(
-                "transfer transcripts did not cover {remaining} transfer row(s)"
-            ),
+            details: format!("transfer transcripts did not cover {remaining} transfer row(s)"),
         });
     }
     Ok(())

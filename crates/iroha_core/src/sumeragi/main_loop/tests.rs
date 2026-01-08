@@ -1493,7 +1493,9 @@ async fn observer_local_indices_are_none() {
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     assert!(
-        actor.local_validator_index_for_topology(&topology).is_none(),
+        actor
+            .local_validator_index_for_topology(&topology)
+            .is_none(),
         "observer should not report a validator index for topology"
     );
 
@@ -9054,16 +9056,10 @@ async fn handle_rbc_ready_refreshes_derived_roster_on_mismatch() {
     let epoch = actor.epoch_for_height(key.1);
     let payload = b"payload".to_vec();
     let payload_hash = Hash::new(&payload);
-    let session =
-        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
-            .expect("session");
+    let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
     let chunk_root = session.expected_chunk_root.expect("chunk root");
-    actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .sessions
-        .insert(key, session);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
     let roster_a = actor.effective_commit_topology();
     assert!(roster_a.len() > 1, "test requires multiple peers");
@@ -9087,8 +9083,7 @@ async fn handle_rbc_ready_refreshes_derived_roster_on_mismatch() {
 
     let topology = super::network_topology::Topology::new(roster_b.clone());
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(key.1);
-    let signature_topology =
-        super::topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+    let signature_topology = super::topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
     let local_peer = actor.common_config.peer.id().clone();
     let (sender_idx, signer_peer) = signature_topology
         .as_ref()
@@ -9989,13 +9984,9 @@ async fn recover_block_from_rbc_session_requests_missing_block_created() {
 
     let payload_bytes = super::proposals::block_payload_bytes(&block);
     let payload_hash = Hash::new(&payload_bytes);
-    let mut session = Actor::build_rbc_session_from_payload(
-        &payload_bytes,
-        payload_hash,
-        1024,
-        epoch,
-    )
-    .expect("session");
+    let mut session =
+        Actor::build_rbc_session_from_payload(&payload_bytes, payload_hash, 1024, epoch)
+            .expect("session");
     session.test_set_delivered(true);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
     actor.record_rbc_session_roster(
@@ -10033,13 +10024,9 @@ async fn recover_block_from_rbc_session_marks_invalid_on_payload_hash_mismatch()
 
     let payload_bytes = super::proposals::block_payload_bytes(&block);
     let payload_hash = Hash::new(&payload_bytes);
-    let mut session = Actor::build_rbc_session_from_payload(
-        &payload_bytes,
-        payload_hash,
-        1024,
-        epoch,
-    )
-    .expect("session");
+    let mut session =
+        Actor::build_rbc_session_from_payload(&payload_bytes, payload_hash, 1024, epoch)
+            .expect("session");
     session.payload_hash = Some(Hash::prehashed([0xEE; 32]));
     session.test_set_delivered(true);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
@@ -10528,8 +10515,8 @@ async fn handle_rbc_init_ignores_payload_hash_mismatch_for_existing_session() {
 
     let payload = b"payload".to_vec();
     let payload_hash = Hash::new(&payload);
-    let session =
-        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch).expect("session");
+    let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
     let expected_digests = session
         .expected_chunk_digests
         .clone()
@@ -11058,12 +11045,7 @@ async fn handle_rbc_ready_sets_expected_chunk_root_when_missing() {
     let payload_hash = Hash::prehashed([0x11; 32]);
     let session = RbcSession::test_new(1, Some(payload_hash), None, epoch);
 
-    actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .sessions
-        .insert(key, session);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
     let roster = actor.effective_commit_topology();
     actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
@@ -11202,9 +11184,8 @@ async fn handle_rbc_deliver_sets_expected_chunk_root_when_missing() {
     let payload = b"payload".to_vec();
     let payload_hash = Hash::new(&payload);
     let epoch = actor.epoch_for_height(key.1);
-    let mut session =
-        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
-            .expect("session");
+    let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
     session.expected_chunk_root = None;
 
     let roster = actor.effective_commit_topology();
@@ -11218,12 +11199,7 @@ async fn handle_rbc_deliver_sets_expected_chunk_root_when_missing() {
         );
     }
 
-    actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .sessions
-        .insert(key, session);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
     let deliver = {
         let session = actor
@@ -30736,15 +30712,18 @@ async fn commit_qc_uses_exec_roots_from_view_votes() {
     let chain_id = actor.chain_id.clone();
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
 
-    let block = block_with_txs(height, u32::try_from(view).expect("view fits u32"), None, vec![
-        sample_transaction(),
-    ]);
+    let block = block_with_txs(
+        height,
+        u32::try_from(view).expect("view fits u32"),
+        None,
+        vec![sample_transaction()],
+    );
     let block_hash = block.hash();
     let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
-    actor
-        .pending
-        .pending_blocks
-        .insert(block_hash, PendingBlock::new(block, payload_hash, height, view));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
     actor.locked_qc = None;
 
     let signature_topology =
@@ -30753,7 +30732,12 @@ async fn commit_qc_uses_exec_roots_from_view_votes() {
     let parent_state_root = Hash::prehashed([0x11; 32]);
     let post_state_root = Hash::prehashed([0x22; 32]);
 
-    for (idx, _) in signature_topology.as_ref().iter().enumerate().take(required) {
+    for (idx, _) in signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .take(required)
+    {
         let mut vote = crate::sumeragi::consensus::Vote {
             phase: crate::sumeragi::consensus::Phase::Commit,
             block_hash,

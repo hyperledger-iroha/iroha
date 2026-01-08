@@ -1525,7 +1525,7 @@ impl ChaosState {
         let trigger_id: TriggerId = format!("ivm_trigger_{}", self.bump_trigger())
             .parse()
             .map_err(|_| eyre!("failed to parse ivm trigger id"))?;
-        let bytecode = smart_contracts::ivm_artifact("artifact_v1_3_mode00_vlen0_cycles0_abi0")?;
+        let bytecode = smart_contracts::ivm_artifact("artifact_v1_7_mode00_vlen0_cycles0_abi1")?;
         let action = Action::new(
             bytecode,
             Repeats::Exactly(1),
