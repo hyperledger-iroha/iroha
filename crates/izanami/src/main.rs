@@ -98,6 +98,9 @@ fn merge_with_overrides(
     if is_cli_source(matches, "max_inflight") {
         base.max_inflight = overrides.max_inflight;
     }
+    if is_cli_source(matches, "workload_profile") {
+        base.workload_profile = overrides.workload_profile;
+    }
     if is_cli_source(matches, "log_filter") {
         base.log_filter.clone_from(&overrides.log_filter);
     }

@@ -181,12 +181,15 @@ mod tests {
         let mut store = ConfidentialComputeStore::default();
         let policy = policy(1);
         let rec = record(0, 1, 2);
+        let mut conflict = rec.clone();
+        conflict.storage_ticket = StorageTicketId::new([0x44; 32]);
         let loc = DaCommitmentLocation {
             block_height: 5,
             index_in_bundle: 0,
         };
 
         assert!(store.insert(&rec, loc, &policy));
+        assert!(!store.insert(&conflict, loc, &policy));
         assert!(!store.insert(&rec, loc, &policy));
         assert_eq!(store.all_sorted().count(), 1);
         let fetched = store

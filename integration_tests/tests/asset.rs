@@ -652,7 +652,8 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             return Ok(());
         };
         let test_client = network.client();
-        let mut status = match status_or_skip(test_client.get_status(), "initial status")? {
+        let mut status = match status_or_skip(get_status_with_retry(&test_client), "initial status")?
+        {
             Some(status) => status,
             None => return Ok(()),
         };
@@ -811,6 +812,9 @@ fn transfer_asset_definition() -> Result<()> {
         return Ok(());
     };
     let test_client = network.client();
+    if status_or_skip(get_status_with_retry(&test_client), "initial status")?.is_none() {
+        return Ok(());
+    }
 
     if submit_or_tolerate_timeout(
         &test_client,

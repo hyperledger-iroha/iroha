@@ -3,13 +3,14 @@
 use std::{
     borrow::Cow,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use color_eyre::{Result, eyre::eyre};
+use futures::FutureExt;
 use iroha_data_model::prelude::*;
 use iroha_genesis::GenesisBlock;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
@@ -20,7 +21,7 @@ use rand::{
 };
 use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore},
-    task::{JoinHandle, spawn_blocking},
+    task::{JoinHandle, JoinSet, spawn_blocking},
     time::{self, MissedTickBehavior},
 };
 use toml::Table;
@@ -120,7 +121,11 @@ impl IzanamiRunner {
             state,
             genesis,
             recipes,
-        } = instructions::prepare_state(account_qty, config.nexus.as_ref())?;
+        } = instructions::prepare_state(
+            account_qty,
+            config.nexus.as_ref(),
+            config.workload_profile,
+        )?;
         let base_domain = state.base_domain().clone();
 
         let builder = make_network_builder(&config, genesis);
@@ -150,10 +155,12 @@ impl IzanamiRunner {
         );
         let genesis = Arc::new(self.network.genesis());
         let metrics = Arc::new(Metrics::default());
+        let submission_counter = Arc::new(AtomicU64::new(0));
 
         let faulty_handles =
             self.spawn_fault_tasks(&config_layers, &genesis, &run_control, &mut rng);
-        let load_handles = self.spawn_load_supervisors(&metrics, &run_control, &mut rng);
+        let load_handles =
+            self.spawn_load_supervisors(&metrics, &run_control, &mut rng, &submission_counter);
 
         let target_result = if let Some(target_blocks) = self.config.target_blocks {
             wait_for_target_blocks(
@@ -267,6 +274,7 @@ impl IzanamiRunner {
         metrics: &Arc<Metrics>,
         run_control: &Arc<RunControl>,
         rng: &mut StdRng,
+        submission_counter: &Arc<AtomicU64>,
     ) -> Vec<JoinHandle<()>> {
         let peers = self.peers.clone();
         let workload = Arc::clone(&self.workload);
@@ -275,12 +283,14 @@ impl IzanamiRunner {
         let interval = Duration::from_secs_f64(1.0 / self.config.tps);
         let metrics = Arc::clone(metrics);
         let run_control = Arc::clone(run_control);
+        let submission_counter = Arc::clone(submission_counter);
         let handle = tokio::spawn(async move {
             let mut ticker = time::interval(interval);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-            let mut submissions: Vec<JoinHandle<()>> = Vec::new();
+            let mut submissions = JoinSet::new();
             while !run_control.should_stop() {
                 ticker.tick().await;
+                drain_ready_submissions(&mut submissions);
                 if run_control.should_stop() {
                     break;
                 }
@@ -306,15 +316,26 @@ impl IzanamiRunner {
                 };
                 let peer = peer.clone();
                 let metrics = Arc::clone(&metrics);
-                submissions.push(tokio::spawn(async move {
-                    submit_plan(&peer, &plan, permit, &metrics).await;
-                }));
+                let submission_counter = Arc::clone(&submission_counter);
+                submissions.spawn(async move {
+                    submit_plan(&peer, &plan, permit, &metrics, &submission_counter).await;
+                });
             }
-            for handle in submissions {
-                let _ = handle.await;
+            while let Some(result) = submissions.join_next().await {
+                let _ = result;
             }
         });
         vec![handle]
+    }
+}
+
+fn drain_ready_submissions(submissions: &mut JoinSet<()>) {
+    while let Some(joined) = submissions.join_next().now_or_never() {
+        if let Some(result) = joined {
+            let _ = result;
+        } else {
+            break;
+        }
     }
 }
 
@@ -430,11 +451,22 @@ async fn wait_for_target_blocks(
     }
 }
 
+static SUBMISSION_METADATA_KEY: OnceLock<Name> = OnceLock::new();
+
+fn submission_metadata(counter: &AtomicU64) -> Metadata {
+    let key = SUBMISSION_METADATA_KEY
+        .get_or_init(|| "izanami_submission_id".parse().expect("valid metadata key"));
+    let mut metadata = Metadata::default();
+    metadata.insert(key.clone(), counter.fetch_add(1, Ordering::Relaxed));
+    metadata
+}
+
 async fn submit_plan(
     peer: &NetworkPeer,
     plan: &TransactionPlan,
     _permit: OwnedSemaphorePermit,
     metrics: &Arc<Metrics>,
+    submission_counter: &Arc<AtomicU64>,
 ) {
     let peer = peer.clone();
     let signer = plan.signer.clone();
@@ -442,10 +474,14 @@ async fn submit_plan(
     let plan_label = plan.label;
     let expect_success = plan.expect_success;
     let metrics = Arc::clone(metrics);
+    let submission_counter = Arc::clone(submission_counter);
 
     run_submission(plan_label, expect_success, metrics, move || {
         let client = peer.client_for(&signer.id, signer.key_pair.private_key().clone());
-        client.submit_all_blocking(instructions).map(|_| ())
+        let metadata = submission_metadata(&submission_counter);
+        client
+            .submit_all_blocking_with_metadata(instructions, metadata)
+            .map(|_| ())
     })
     .await;
 }
@@ -541,6 +577,7 @@ mod tests {
     use super::*;
     use crate::config::{
         DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, FaultToggles, NexusProfile,
+        WorkloadProfile,
     };
 
     fn allow_net_for_tests() -> bool {
@@ -577,6 +614,7 @@ mod tests {
             seed: Some(42),
             tps: 1.0,
             max_inflight: 4,
+            workload_profile: WorkloadProfile::Stable,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
@@ -588,7 +626,7 @@ mod tests {
             state: _,
             genesis,
             recipes: _,
-        } = instructions::prepare_state(account_qty, None)?;
+        } = instructions::prepare_state(account_qty, None, config.workload_profile)?;
         let mut builder = make_network_builder(&config, genesis);
         builder = builder.with_config_layer(|layer| {
             layer.write(["sumeragi", "consensus_mode"], "npos");
@@ -639,6 +677,7 @@ mod tests {
             seed: Some(7),
             tps: 1.0,
             max_inflight: 4,
+            workload_profile: WorkloadProfile::Stable,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
@@ -648,7 +687,11 @@ mod tests {
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos {
             state: _, genesis, ..
-        } = instructions::prepare_state(account_qty, config.nexus.as_ref())?;
+        } = instructions::prepare_state(
+            account_qty,
+            config.nexus.as_ref(),
+            config.workload_profile,
+        )?;
         let builder = make_network_builder(&config, genesis);
 
         let network = match builder.start().await {
@@ -788,6 +831,19 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drain_ready_submissions_clears_completed_tasks() {
+        let mut set = JoinSet::new();
+        set.spawn(async {});
+        set.spawn(async {});
+
+        tokio::task::yield_now().await;
+        assert_eq!(set.len(), 2);
+
+        drain_ready_submissions(&mut set);
+        assert_eq!(set.len(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn wait_for_target_blocks_reaches_target() -> Result<()> {
         if !allow_net_for_tests() {
             return Ok(());
@@ -807,6 +863,7 @@ mod tests {
             seed: Some(9),
             tps: 1.0,
             max_inflight: 4,
+            workload_profile: WorkloadProfile::Stable,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
@@ -818,7 +875,7 @@ mod tests {
             state: _,
             genesis,
             recipes: _,
-        } = instructions::prepare_state(account_qty, None)?;
+        } = instructions::prepare_state(account_qty, None, config.workload_profile)?;
         let builder = make_network_builder(&config, genesis);
 
         let network = match builder.start().await {
@@ -863,6 +920,7 @@ mod tests {
             seed: Some(5),
             tps: 0.1,
             max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
@@ -924,6 +982,25 @@ mod tests {
     }
 
     #[test]
+    fn submission_metadata_increments_counter() {
+        let counter = AtomicU64::new(0);
+        let meta_a = submission_metadata(&counter);
+        let meta_b = submission_metadata(&counter);
+        assert_eq!(counter.load(Ordering::Relaxed), 2);
+        let key = SUBMISSION_METADATA_KEY
+            .get_or_init(|| "izanami_submission_id".parse().expect("valid metadata key"));
+        let value_a = meta_a
+            .get(key)
+            .and_then(|value| value.try_into_any::<u64>().ok())
+            .expect("first metadata entry should decode");
+        let value_b = meta_b
+            .get(key)
+            .and_then(|value| value.try_into_any::<u64>().ok())
+            .expect("second metadata entry should decode");
+        assert_ne!(value_a, value_b, "each submission should be unique");
+    }
+
+    #[test]
     fn make_network_builder_applies_pipeline_time() -> Result<()> {
         init_instruction_registry();
         let pipeline_time = Duration::from_millis(300);
@@ -939,6 +1016,7 @@ mod tests {
             seed: Some(17),
             tps: 1.0,
             max_inflight: 4,
+            workload_profile: WorkloadProfile::Stable,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
@@ -946,7 +1024,8 @@ mod tests {
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos { genesis, .. } = instructions::prepare_state(account_qty, None)?;
+        let PreparedChaos { genesis, .. } =
+            instructions::prepare_state(account_qty, None, config.workload_profile)?;
         let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             make_network_builder(&config, genesis).build()
         })) {
@@ -988,6 +1067,7 @@ mod tests {
             seed: Some(13),
             tps: 0.5,
             max_inflight: 2,
+            workload_profile: WorkloadProfile::Stable,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
@@ -1030,6 +1110,7 @@ mod tests {
             seed: Some(23),
             tps: 1.0,
             max_inflight: 4,
+            workload_profile: WorkloadProfile::Stable,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
@@ -1037,8 +1118,11 @@ mod tests {
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos { genesis, .. } =
-            instructions::prepare_state(account_qty, config.nexus.as_ref())?;
+        let PreparedChaos { genesis, .. } = instructions::prepare_state(
+            account_qty,
+            config.nexus.as_ref(),
+            config.workload_profile,
+        )?;
         let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             make_network_builder(&config, genesis).build()
         })) {

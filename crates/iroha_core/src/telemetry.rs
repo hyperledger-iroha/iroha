@@ -4367,10 +4367,15 @@ pub struct StreamingTelemetry {
 }
 
 #[cfg(feature = "telemetry")]
-impl std::fmt::Debug for StreamingTelemetry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for StreamingTelemetry {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let parity_buckets_len = match self.parity_buckets.try_lock() {
+            Ok(guard) => guard.len(),
+            Err(_) => 0,
+        };
         f.debug_struct("StreamingTelemetry")
             .field("enabled", &self.enabled.load(Ordering::Relaxed))
+            .field("parity_buckets_len", &parity_buckets_len)
             .field("rekeys_total", &self.rekeys_total.load(Ordering::Relaxed))
             .field(
                 "gck_rotations_total",
@@ -10734,6 +10739,17 @@ mod tests {
                 .get(),
             1
         );
+    }
+
+    #[test]
+    #[cfg(feature = "telemetry")]
+    fn streaming_telemetry_debug_includes_counters() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StreamingTelemetry::new(metrics, true);
+        let rendered = format!("{telemetry:?}");
+        assert!(rendered.contains("StreamingTelemetry"));
+        assert!(rendered.contains("rekeys_total"));
+        assert!(rendered.contains("gck_rotations_total"));
     }
 
     #[test]

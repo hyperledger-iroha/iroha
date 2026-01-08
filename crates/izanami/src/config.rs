@@ -3,7 +3,7 @@
 
 use std::{ops::RangeInclusive, sync::OnceLock, time::Duration};
 
-use clap::{Args, Parser};
+use clap::{Args, Parser, ValueEnum};
 use color_eyre::{Result, eyre::eyre};
 use humantime::parse_duration;
 use iroha_config::{
@@ -61,6 +61,9 @@ pub struct IzanamiArgs {
     /// Upper bound on the number of concurrently in-flight transactions submitted by Izanami.
     #[arg(long, default_value_t = 32)]
     pub max_inflight: usize,
+    /// Workload profile controlling which recipes are scheduled.
+    #[arg(long, value_enum, default_value_t = WorkloadProfile::Stable)]
+    pub workload_profile: WorkloadProfile,
     /// Tracing filter passed to `tracing-subscriber` (overridden by `RUST_LOG` if set).
     #[arg(long, default_value = "info")]
     pub log_filter: String,
@@ -76,6 +79,21 @@ pub struct IzanamiArgs {
     /// Enable Nexus/Sora multi-lane defaults from `defaults/nexus/config.toml`.
     #[arg(long)]
     pub nexus: bool,
+}
+
+/// Workload profiles for recipe selection.
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum WorkloadProfile {
+    /// Favor deterministic, execution-safe recipes for long runs.
+    Stable,
+    /// Include intentionally invalid recipes for chaos coverage.
+    Chaos,
+}
+
+impl Default for WorkloadProfile {
+    fn default() -> Self {
+        Self::Stable
+    }
 }
 
 pub const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(15);
@@ -201,6 +219,7 @@ pub struct ChaosConfig {
     pub seed: Option<u64>,
     pub tps: f64,
     pub max_inflight: usize,
+    pub workload_profile: WorkloadProfile,
     pub fault_interval: RangeInclusive<Duration>,
     pub log_filter: String,
     pub faults: FaultToggles,
@@ -254,6 +273,13 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
         if args.tps <= 0.0 {
             return Err(eyre!("tps must be positive"));
         }
+        if !args.tps.is_finite() {
+            return Err(eyre!("tps must be finite"));
+        }
+        let interval = Duration::from_secs_f64(1.0 / args.tps);
+        if interval.is_zero() {
+            return Err(eyre!("tps too high for timer resolution"));
+        }
         if args.max_inflight == 0 {
             return Err(eyre!("max_inflight must be greater than zero"));
         }
@@ -278,6 +304,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             seed,
             tps,
             max_inflight,
+            workload_profile,
             log_filter,
             fault_interval_min,
             fault_interval_max,
@@ -303,6 +330,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             seed,
             tps,
             max_inflight,
+            workload_profile,
             fault_interval: fault_interval_min..=fault_interval_max,
             log_filter,
             faults: toggles,
@@ -338,6 +366,7 @@ impl IzanamiArgs {
             seed: cfg.seed,
             tps: cfg.tps,
             max_inflight: cfg.max_inflight,
+            workload_profile: cfg.workload_profile,
             log_filter: cfg.log_filter.clone(),
             fault_interval_min: min,
             fault_interval_max: max,
@@ -684,6 +713,7 @@ mod tests {
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(2),
@@ -713,6 +743,7 @@ mod tests {
             seed: Some(42),
             tps: 1.0,
             max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
             log_filter: "warn".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
@@ -738,6 +769,7 @@ mod tests {
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
@@ -768,6 +800,7 @@ mod tests {
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
@@ -792,6 +825,7 @@ mod tests {
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
@@ -804,6 +838,68 @@ mod tests {
         assert!(
             err.to_string().contains("progress_interval"),
             "error should mention progress_interval: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_rejects_non_finite_tps() {
+        let args = IzanamiArgs {
+            tui: false,
+            allow_net: true,
+            peers: 1,
+            faulty: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            seed: None,
+            tps: f64::NAN,
+            max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
+            log_filter: "info".to_string(),
+            fault_interval_min: Duration::from_secs(1),
+            fault_interval_max: Duration::from_secs(1),
+            faults: FaultArgs::default(),
+            nexus: false,
+        };
+        let Err(err) = ChaosConfig::try_from(args) else {
+            panic!("non-finite tps should fail");
+        };
+        assert!(
+            err.to_string().contains("tps must be finite"),
+            "error should mention finite tps: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_rejects_tps_too_high_for_timer() {
+        let args = IzanamiArgs {
+            tui: false,
+            allow_net: true,
+            peers: 1,
+            faulty: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            seed: None,
+            tps: f64::MAX,
+            max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
+            log_filter: "info".to_string(),
+            fault_interval_min: Duration::from_secs(1),
+            fault_interval_max: Duration::from_secs(1),
+            faults: FaultArgs::default(),
+            nexus: false,
+        };
+        let Err(err) = ChaosConfig::try_from(args) else {
+            panic!("tps too high for timer resolution should fail");
+        };
+        assert!(
+            err.to_string().contains("tps too high"),
+            "error should mention timer resolution: {err}"
         );
     }
 }

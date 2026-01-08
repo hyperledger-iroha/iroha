@@ -240,12 +240,12 @@ fn peer_start_timeout_env() -> Duration {
     read_env_duration("IROHA_TEST_PEER_START_TIMEOUT_MS", sync_timeout_env())
 }
 
-const CLIENT_STATUS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(300);
-const CLIENT_TTL_DEFAULT: Duration = Duration::from_secs(600);
+const CLIENT_STATUS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(600);
+const CLIENT_TTL_DEFAULT: Duration = Duration::from_secs(1200);
 const CLIENT_TTL_MIN_SLACK: Duration = Duration::from_secs(120);
 
 fn client_status_timeout_env() -> Duration {
-    // Default 300s; override with IROHA_TEST_CLIENT_STATUS_TIMEOUT_SECS or *_MS
+    // Default 600s; override with IROHA_TEST_CLIENT_STATUS_TIMEOUT_SECS or *_MS
     let secs = read_env_duration(
         "IROHA_TEST_CLIENT_STATUS_TIMEOUT_SECS",
         Duration::from_secs(0),

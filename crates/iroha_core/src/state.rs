@@ -22476,18 +22476,69 @@ mod tests {
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 1);
         let signed_block = iroha_data_model::block::builder::BlockBuilder::new(header)
-            .build_with_signature(0, kp_b.private_key());
+            .build_with_signature(1, kp_b.private_key());
 
         let mut state_block = state.block(signed_block.header());
         let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
         let committed = valid.commit_unchecked().unpack(|_| {});
+        let signers_bitmap = signer_bitmap(&[0, 1], roster.len());
+        let zero_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
+        let height = committed.as_ref().header().height().get();
+        let view = u64::from(committed.as_ref().header().view_change_index());
+        let vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            block_hash: committed.as_ref().hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height,
+            view,
+            epoch: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let preimage = crate::sumeragi::consensus::vote_preimage(
+            &super::DEFAULT_TEST_CHAIN_ID,
+            crate::sumeragi::consensus::PERMISSIONED_TAG,
+            &vote,
+        );
+        let signatures: Vec<Vec<u8>> = [kp_a, kp_b]
+            .iter()
+            .map(|kp| {
+                Signature::new(kp.private_key(), &preimage)
+                    .payload()
+                    .to_vec()
+            })
+            .collect();
+        let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
+        let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&sig_refs)
+            .expect("aggregate commit QC signatures");
+        let commit_cert = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: committed.as_ref().hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height,
+            view,
+            epoch: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: aggregate_signature,
+            },
+        };
+        status::record_commit_qc(commit_cert);
         let _ = state_block.apply_without_execution(&committed, roster);
         state_block.commit().expect("commit");
 
         let certs = status::commit_qc_history();
         let cert = certs.first().expect("commit certificate recorded");
         assert_eq!(cert.height, committed.as_ref().header().height().get());
-        assert_eq!(cert.aggregate.signers_bitmap, vec![0b0000_0010]);
+        assert_eq!(cert.aggregate.signers_bitmap, signers_bitmap);
         let view = state.view();
         let stored = view.world().commit_qcs().get(&committed.as_ref().hash());
         assert_eq!(
@@ -24911,10 +24962,21 @@ mod tests {
             },
         );
 
-        let binding = AxtBinding::new([0x91; 32]);
         let descriptor = AxtDescriptor {
             dsids: vec![dsid],
-            touches: Vec::new(),
+            touches: vec![AxtTouchSpec {
+                dsid,
+                read: Vec::new(),
+                write: Vec::new(),
+            }],
+        };
+        let binding = descriptor.binding().expect("descriptor binding");
+        let touch_fragment = AxtTouchFragment {
+            dsid,
+            manifest: TouchManifest {
+                read: Vec::new(),
+                write: Vec::new(),
+            },
         };
         let proof_fragment = AxtProofFragment {
             dsid,
@@ -24962,7 +25024,7 @@ mod tests {
             binding,
             lane,
             descriptor,
-            touches: Vec::new(),
+            touches: vec![touch_fragment],
             proofs: vec![proof_fragment],
             handles: vec![handle_fragment.clone()],
             commit_height: Some(1),

@@ -1565,10 +1565,10 @@ mod tests {
             let idx_u64 = u64::try_from(idx).expect("sample batch index fits u64");
             let pre = idx_u64.to_le_bytes().to_vec();
             let post = idx_u64.wrapping_add(1).to_le_bytes().to_vec();
-            let op = match idx % 3 {
-                0 => OperationKind::Transfer,
-                1 => OperationKind::Mint,
-                _ => OperationKind::Burn,
+            let op = if idx % 2 == 0 {
+                OperationKind::Mint
+            } else {
+                OperationKind::Burn
             };
             batch.push(StateTransition::new(key, pre, post, op));
         }

@@ -16,6 +16,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::BlockHeader;
 use iroha_logger::prelude::*;
 use norito::codec::{Decode, Encode};
+use norito::{decode_from_bytes, to_bytes};
 
 use super::status::{DataspaceRbcSnapshot, LaneRbcSnapshot};
 use crate::panic_hook;
@@ -426,7 +427,8 @@ impl DiskStore {
             })
             .collect();
         entries.sort_by_key(|stored| stored.updated_at_ms);
-        let encoded = <Vec<StoredEntry> as Encode>::encode(&entries);
+        let encoded =
+            to_bytes(&entries).map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
         let tmp = temp_store_path(&self.file);
         {
             let mut file = fs::OpenOptions::new()
@@ -549,8 +551,7 @@ fn read_store_bytes(path: &Path) -> io::Result<Option<Vec<u8>>> {
 
 fn decode_entries(buf: &[u8]) -> Result<Vec<StoredEntry>, norito::Error> {
     let _suppressor = panic_hook::ScopedSuppressor::new();
-    let mut cursor = buf;
-    <Vec<StoredEntry> as Decode>::decode(&mut cursor)
+    decode_from_bytes(buf)
 }
 
 fn promote_temp_store(tmp_path: &Path, main_path: &Path) {
@@ -667,7 +668,7 @@ mod tests {
 
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::BlockHeader;
-    use norito::codec::Encode;
+    use norito::to_bytes;
     use tempfile::tempdir;
 
     use super::*;
@@ -704,7 +705,7 @@ mod tests {
             summary: summary.clone(),
             updated_at_ms: 42,
         };
-        let encoded = <Vec<StoredEntry> as Encode>::encode(&vec![entry]);
+        let encoded = to_bytes(&vec![entry]).expect("encode RBC status store");
         let file = dir.path().join(FILE_NAME);
         let tmp = temp_store_path(&file);
         fs::write(&tmp, encoded).expect("write temp store");

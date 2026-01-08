@@ -509,11 +509,11 @@ mod tests {
         assert_eq!(template.perm_root, [0u8; 32]);
         assert_eq!(
             template.old_root,
-            crate::sumeragi::exec::parent_state_from_witness(&witness).into()
+            <[u8; 32]>::from(crate::sumeragi::exec::parent_state_from_witness(&witness))
         );
         assert_eq!(
             template.new_root,
-            crate::sumeragi::exec::post_state_from_witness(&witness).into()
+            <[u8; 32]>::from(crate::sumeragi::exec::post_state_from_witness(&witness))
         );
     }
 
