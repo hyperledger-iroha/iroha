@@ -23,7 +23,7 @@ cuando se inicia una red Iroha. El archivo es un objeto JSON con estos campos:
   incorporado.
 - `ivm_dir`: directorio que contiene las librerías de bytecode de IVM. Si se
   omite, el valor por defecto es `"."`.
-- `consensus_mode`: modo de consenso anunciado en el manifest. Requerido; usa `"Npos"` para Iroha3 (por defecto) y `"Permissioned"` para Iroha2.
+- `consensus_mode`: modo de consenso anunciado en el manifest. Requerido; usa `"Npos"` para el dataspace público de Sora Nexus y `"Permissioned"` o `"Npos"` para otros dataspaces Iroha3. Iroha2 usa `"Permissioned"` por defecto.
 - `transactions`: lista de transacciones de génesis que se ejecutan
   secuencialmente. Cada entrada puede contener:
   - `parameters`: parámetros iniciales de la red.
@@ -161,7 +161,7 @@ cargo run -p iroha_cli --features sm -- \
      el bloque de génesis; debe ser un multihash reconocido por
      `iroha_crypto::Algorithm` (incluidos los GOST TC26 cuando se compila con
      el feature correspondiente).
-   - En Iroha3, `--consensus-mode npos` es obligatorio y no se admiten cutovers escalonados; en Iroha2 el modo por defecto es `permissioned`.
+   - En el dataspace público de Sora Nexus, `--consensus-mode npos` es obligatorio y no se admiten cutovers escalonados; otros dataspaces Iroha3 pueden usar `permissioned` o `npos`. En Iroha2 el modo por defecto es `permissioned`.
 
 2. Validar mientras editas:
 
@@ -249,7 +249,7 @@ misma transacción.
 
 - Partir de una plantilla generada con Kagami:
   - Sólo ISI integrados:  
-    `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (Iroha3 por defecto; usa `--consensus-mode permissioned` para Iroha2)
+    `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (dataspace público de Sora Nexus; usa `--consensus-mode permissioned` para Iroha2 o Iroha3 privado)
   - Con actualización opcional de executor: añadir `--executor <path/to/executor.to>`
 - `<PK>` es cualquier multihash reconocido por `iroha_crypto::Algorithm`,
   incluidos los variantes GOST TC26 cuando Kagami se compila con

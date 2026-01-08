@@ -23,9 +23,7 @@ use iroha_data_model::{
         BlockHeader,
         consensus::{LaneBlockCommitment, SumeragiMembershipStatus, ValidatorIndex},
     },
-    consensus::{
-        Qc, ConsensusKeyRecord, ValidatorElectionOutcome, ValidatorSetCheckpoint,
-    },
+    consensus::{ConsensusKeyRecord, Qc, ValidatorElectionOutcome, ValidatorSetCheckpoint},
     isi::settlement::{SettlementAtomicity, SettlementExecutionOrder},
     nexus::{LaneId, LaneRelayEnvelope, LaneRelayError},
     peer::PeerId,
@@ -39,6 +37,7 @@ use crate::{
     governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook},
     queue::BackpressureState,
     sumeragi::da::{GateReason, GateSatisfaction},
+    sumeragi::stake_snapshot::CommitStakeSnapshot,
     telemetry::TxGossipSnapshot,
 };
 
@@ -2687,6 +2686,8 @@ pub struct PrecommitSignerRecord {
     pub mode_tag: String,
     /// Ordered validator set used when forming the QC.
     pub validator_set: Vec<PeerId>,
+    /// Stake snapshot aligned to the validator set (NPoS only).
+    pub stake_snapshot: Option<CommitStakeSnapshot>,
 }
 
 fn precommit_signer_history_slot() -> &'static Mutex<VecDeque<PrecommitSignerRecord>> {
@@ -2940,8 +2941,7 @@ fn da_gate_snapshot() -> DaGateSnapshot {
 
 fn block_sync_roster_snapshot() -> BlockSyncRosterSnapshot {
     BlockSyncRosterSnapshot {
-        commit_qc_hint_total: BLOCK_SYNC_ROSTER_COMMIT_CERT_HINT_TOTAL
-            .load(Ordering::Relaxed),
+        commit_qc_hint_total: BLOCK_SYNC_ROSTER_COMMIT_CERT_HINT_TOTAL.load(Ordering::Relaxed),
         checkpoint_hint_total: BLOCK_SYNC_ROSTER_CHECKPOINT_HINT_TOTAL.load(Ordering::Relaxed),
         commit_qc_history_total: BLOCK_SYNC_ROSTER_COMMIT_CERT_HISTORY_TOTAL
             .load(Ordering::Relaxed),
@@ -5404,8 +5404,8 @@ mod tests {
             consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         },
         consensus::{
-            Qc, ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole,
-            ConsensusKeyStatus, ValidatorSetCheckpoint,
+            ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus, Qc,
+            ValidatorSetCheckpoint,
         },
         name::Name,
         nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneStorageProfile, LaneVisibility},
@@ -5420,7 +5420,7 @@ mod tests {
         ManifestGateKind, PrecommitSignerRecord, WorkerLoopStage, WorkerQueueKind,
     };
     use crate::governance::manifest::{GovernanceHooks, GovernanceRules, RuntimeUpgradeHook};
-    use crate::sumeragi::consensus::{QcAggregate, PERMISSIONED_TAG, Phase};
+    use crate::sumeragi::consensus::{PERMISSIONED_TAG, Phase, QcAggregate};
 
     #[test]
     fn locked_qc_updates_monotonically() {
@@ -5940,6 +5940,7 @@ mod tests {
             bls_aggregate_signature: vec![1],
             mode_tag: PERMISSIONED_TAG.to_string(),
             validator_set,
+            stake_snapshot: None,
         });
         assert!(!super::precommit_signer_history().is_empty());
 

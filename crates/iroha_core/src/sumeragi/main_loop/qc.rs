@@ -12,6 +12,13 @@ struct QcSignerSnapshot {
     total_signers: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommittedQcDecision {
+    Continue,
+    RecordOnly,
+    Drop,
+}
+
 impl Actor {
     pub(super) fn request_missing_block(
         &self,
@@ -499,7 +506,7 @@ impl Actor {
         epoch: u64,
         topology: super::network_topology::Topology,
     ) {
-        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
         let required = signature_topology.min_votes_for_commit();
         let voting_len = signature_topology.as_ref().len();
@@ -511,7 +518,9 @@ impl Actor {
                     || qc_voting_signer_count(existing, voting_len),
                     QcSignerTally::voting_len,
                 );
-            if existing.phase == phase && existing_signers >= required {
+            if existing.phase == phase
+                && (matches!(consensus_mode, ConsensusMode::Npos) || existing_signers >= required)
+            {
                 return;
             }
         }
@@ -540,6 +549,45 @@ impl Actor {
             &signature_topology,
             required,
         );
+        let quorum_met = match consensus_mode {
+            ConsensusMode::Permissioned => snapshot.voting_signers >= required,
+            ConsensusMode::Npos => {
+                let signer_peers =
+                    match signer_peers_for_topology(&snapshot.signers, &signature_topology) {
+                        Ok(peers) => peers,
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                height,
+                                view,
+                                phase = ?phase,
+                                block = ?block_hash,
+                                "skipping QC aggregation: failed to map signers to peers"
+                            );
+                            return;
+                        }
+                    };
+                let state_view = self.state.view();
+                match super::stake_snapshot::stake_quorum_reached_for_peers(
+                    &state_view,
+                    topology.as_ref(),
+                    &signer_peers,
+                ) {
+                    Ok(result) => result,
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            height,
+                            view,
+                            phase = ?phase,
+                            block = ?block_hash,
+                            "skipping QC aggregation: stake quorum check failed"
+                        );
+                        return;
+                    }
+                }
+            }
+        };
         let block_known = self.block_known_locally(block_hash);
         let deferred = self.qc_missing_block_defer(
             phase,
@@ -548,6 +596,8 @@ impl Actor {
             view,
             &snapshot.signers,
             &signature_topology,
+            consensus_mode,
+            quorum_met,
             required,
             block_known,
             snapshot.voting_signers,
@@ -557,17 +607,32 @@ impl Actor {
             return;
         }
 
-        if snapshot.voting_signers < required {
-            iroha_logger::info!(
-                height,
-                view,
-                phase = ?phase,
-                block = ?block_hash,
-                voting_signers = snapshot.voting_signers,
-                total_signers = snapshot.total_signers,
-                required,
-                "not enough votes collected for QC"
-            );
+        if !quorum_met {
+            match consensus_mode {
+                ConsensusMode::Permissioned => {
+                    iroha_logger::info!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = ?block_hash,
+                        voting_signers = snapshot.voting_signers,
+                        total_signers = snapshot.total_signers,
+                        required,
+                        "not enough votes collected for QC"
+                    );
+                }
+                ConsensusMode::Npos => {
+                    iroha_logger::info!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = ?block_hash,
+                        voting_signers = snapshot.voting_signers,
+                        total_signers = snapshot.total_signers,
+                        "not enough stake collected for QC"
+                    );
+                }
+            }
             return;
         }
         if !self.precommit_qc_extends_locked(phase, block_hash, height, view, epoch) {
@@ -772,23 +837,40 @@ impl Actor {
         view: u64,
         signers: &BTreeSet<ValidatorIndex>,
         signature_topology: &super::network_topology::Topology,
+        consensus_mode: ConsensusMode,
+        quorum_met: bool,
         required: usize,
         block_known: bool,
         voting_signers: usize,
         total_signers: usize,
     ) -> bool {
-        if !block_known && voting_signers >= required {
+        if !block_known && quorum_met {
             crate::sumeragi::status::inc_qc_quorum_without_qc();
-            warn!(
-                height,
-                view,
-                phase = ?phase,
-                block = ?block_hash,
-                voting_signers,
-                total_signers,
-                required,
-                "quorum of votes observed but block payload missing; deferring QC aggregation"
-            );
+            match consensus_mode {
+                ConsensusMode::Permissioned => {
+                    warn!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = ?block_hash,
+                        voting_signers,
+                        total_signers,
+                        required,
+                        "quorum of votes observed but block payload missing; deferring QC aggregation"
+                    );
+                }
+                ConsensusMode::Npos => {
+                    warn!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = ?block_hash,
+                        voting_signers,
+                        total_signers,
+                        "stake quorum observed but block payload missing; deferring QC aggregation"
+                    );
+                }
+            }
         }
 
         let deferred = if block_known {
@@ -849,7 +931,12 @@ impl Actor {
             return;
         }
         let topology = super::network_topology::Topology::new(commit_topology.to_vec());
-        let required = topology.min_votes_for_commit();
+        let height = u64::try_from(self.state.view().height()).unwrap_or(0);
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        let required = match consensus_mode {
+            ConsensusMode::Permissioned => topology.min_votes_for_commit(),
+            ConsensusMode::Npos => 1,
+        };
         if required == 0 {
             return;
         }
@@ -962,13 +1049,13 @@ impl Actor {
         }
     }
 
-    pub(super) fn qc_for_committed_height(
+    fn qc_for_committed_height(
         &self,
         qc: &crate::sumeragi::consensus::Qc,
         committed_height: u64,
-    ) -> bool {
+    ) -> CommittedQcDecision {
         if qc.height > committed_height {
-            return false;
+            return CommittedQcDecision::Continue;
         }
         if let Ok(height_usize) = usize::try_from(qc.height)
             && let Some(nz_height) = NonZeroUsize::new(height_usize)
@@ -984,19 +1071,18 @@ impl Actor {
                     incoming_hash = %qc.subject_block_hash,
                     "dropping QC for already committed height with divergent hash"
                 );
-                return true;
+                return CommittedQcDecision::Drop;
             }
-        } else {
-            info!(
-                height = qc.height,
-                view = qc.view,
-                committed_height,
-                hash = %qc.subject_block_hash,
-                "dropping QC for already committed height with unknown block"
-            );
-            return true;
+            return CommittedQcDecision::RecordOnly;
         }
-        true
+        info!(
+            height = qc.height,
+            view = qc.view,
+            committed_height,
+            hash = %qc.subject_block_hash,
+            "dropping QC for already committed height with unknown block"
+        );
+        CommittedQcDecision::Drop
     }
 
     pub(super) fn should_skip_precommit_on_empty_block(
@@ -1374,18 +1460,32 @@ impl Actor {
             return Ok(());
         }
         let topology = super::network_topology::Topology::new(commit_topology.clone());
+        let stake_snapshot = match consensus_mode {
+            ConsensusMode::Permissioned => None,
+            ConsensusMode::Npos => {
+                CommitStakeSnapshot::from_roster(self.state.view().world(), topology.as_ref())
+            }
+        };
         let (validation, evidence) = validate_qc_with_evidence(
             &self.vote_log,
             &qc,
             &topology,
             &self.common_config.chain,
+            consensus_mode,
+            stake_snapshot.as_ref(),
             mode_tag,
             prf_seed,
         );
         let validation = match validation {
             Ok(outcome) => outcome,
             Err(err) => {
-                if let Some(outcome) = self.recover_qc_from_aggregate(&qc, &topology, &err) {
+                if let Some(outcome) = self.recover_qc_from_aggregate(
+                    &qc,
+                    &topology,
+                    consensus_mode,
+                    stake_snapshot.as_ref(),
+                    &err,
+                ) {
                     outcome
                 } else {
                     record_qc_validation_error(self.telemetry_handle(), &err);
@@ -1428,6 +1528,7 @@ impl Actor {
                     roster_len: topology.as_ref().len(),
                     mode_tag: mode_tag.to_string(),
                     validator_set: topology.as_ref().to_vec(),
+                    stake_snapshot: stake_snapshot.clone(),
                 },
             );
         }
@@ -1450,8 +1551,29 @@ impl Actor {
         let committed_height = self.state.view().height();
         let committed_height_u64 = u64::try_from(committed_height).unwrap_or(u64::MAX);
         self.drop_missing_lock_if_unknown(&qc);
-        if self.qc_for_committed_height(&qc, committed_height_u64) {
-            return Ok(());
+        match self.qc_for_committed_height(&qc, committed_height_u64) {
+            CommittedQcDecision::Continue => {}
+            CommittedQcDecision::RecordOnly => {
+                if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+                    let stake_snapshot = self
+                        .state
+                        .commit_roster_snapshot_for_block(qc.height, qc.subject_block_hash)
+                        .and_then(|snapshot| snapshot.stake_snapshot);
+                    let checkpoint = ValidatorSetCheckpoint::new(
+                        qc.height,
+                        qc.subject_block_hash,
+                        qc.validator_set.clone(),
+                        qc.aggregate.signers_bitmap.clone(),
+                        qc.aggregate.bls_aggregate_signature.clone(),
+                        qc.validator_set_hash_version,
+                        None,
+                    );
+                    self.state
+                        .record_commit_roster(&qc, &checkpoint, stake_snapshot);
+                }
+                return Ok(());
+            }
+            CommittedQcDecision::Drop => return Ok(()),
         }
 
         let block_known = self.block_known_locally(qc.subject_block_hash);
@@ -1617,6 +1739,8 @@ impl Actor {
         &self,
         qc: &crate::sumeragi::consensus::Qc,
         topology: &super::network_topology::Topology,
+        consensus_mode: ConsensusMode,
+        stake_snapshot: Option<&CommitStakeSnapshot>,
         err: &QcValidationError,
     ) -> Option<QcValidationOutcome> {
         let QcValidationError::MissingVotes { .. } = err else {
@@ -1630,6 +1754,14 @@ impl Actor {
         }
         let roster_len = topology.as_ref().len();
         let parsed_signers = qc_signer_indices(qc, roster_len, roster_len).ok()?;
+        if matches!(consensus_mode, ConsensusMode::Npos) {
+            let snapshot = stake_snapshot?;
+            let signer_peers = signer_peers_for_topology(&parsed_signers.voting, topology).ok()?;
+            match stake_quorum_reached_for_snapshot(snapshot, topology.as_ref(), &signer_peers) {
+                Ok(true) => {}
+                _ => return None,
+            }
+        }
         info!(
             height = qc.height,
             view = qc.view,

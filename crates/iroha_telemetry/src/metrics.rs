@@ -5433,12 +5433,8 @@ fn build_sumeragi_status(metrics: &Metrics) -> SumeragiConsensusStatus {
         commit_qc_height: metrics.sumeragi_commit_qc_height.get(),
         commit_qc_view: metrics.sumeragi_commit_qc_view.get(),
         commit_qc_epoch: metrics.sumeragi_commit_qc_epoch.get(),
-        commit_qc_signatures_total: metrics
-            .sumeragi_commit_qc_signatures_total
-            .get(),
-        commit_qc_validator_set_len: metrics
-            .sumeragi_commit_qc_validator_set_len
-            .get(),
+        commit_qc_signatures_total: metrics.sumeragi_commit_qc_signatures_total.get(),
+        commit_qc_validator_set_len: metrics.sumeragi_commit_qc_validator_set_len.get(),
         gossip_fallback_total: metrics.sumeragi_gossip_fallback_total.get(),
         block_created_dropped_by_lock_total: metrics
             .sumeragi_block_created_dropped_by_lock_total

@@ -85,12 +85,11 @@ impl Actor {
                 prevote_timeouts.push((key, pending_age, qc_any));
                 continue;
             }
-            let (vote_count, quorum_reached) =
-                if pending.commit_qc_seen || commit_qc_cached {
-                    (0, true)
-                } else {
-                    self.commit_vote_quorum_status_for_block(*hash, pending.height, pending.view)
-                };
+            let (vote_count, quorum_reached) = if pending.commit_qc_seen || commit_qc_cached {
+                (0, true)
+            } else {
+                self.commit_vote_quorum_status_for_block(*hash, pending.height, pending.view)
+            };
             if missing_quorum_stale(pending_age, quorum_timeout, quorum_reached) {
                 if !pending.reschedule_due(now, quorum_reschedule_cooldown) {
                     reschedule_backoff_skipped = reschedule_backoff_skipped.saturating_add(1);
@@ -326,18 +325,16 @@ impl Actor {
             if !keep_commit_qc {
                 self.clean_rbc_sessions_for_block(block_hash, height);
             }
-            self.qc_cache
-                .retain(|(phase, qc_hash, _, _, _), _| {
-                    *qc_hash != block_hash
-                        || (keep_commit_qc
-                            && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
-                });
-            self.qc_signer_tally
-                .retain(|(phase, qc_hash, _, _, _), _| {
-                    *qc_hash != block_hash
-                        || (keep_commit_qc
-                            && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
-                });
+            self.qc_cache.retain(|(phase, qc_hash, _, _, _), _| {
+                *qc_hash != block_hash
+                    || (keep_commit_qc
+                        && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
+            });
+            self.qc_signer_tally.retain(|(phase, qc_hash, _, _, _), _| {
+                *qc_hash != block_hash
+                    || (keep_commit_qc
+                        && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
+            });
         } else {
             // Keep the pending block and cached certificates so late commit certificates
             // can still finalize it.
@@ -405,8 +402,11 @@ impl Actor {
                 height,
                 view,
                 expected_epoch,
+                self.state.as_ref(),
+                self.config.consensus_mode,
             );
-            if super::block_sync_update_has_roster(&update) {
+            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+            if super::block_sync_update_has_roster(&update, consensus_mode) {
                 for peer in topology_peers {
                     self.schedule_background(BackgroundRequest::Post {
                         peer: peer.clone(),

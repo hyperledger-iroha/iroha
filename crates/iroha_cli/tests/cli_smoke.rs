@@ -36,7 +36,13 @@ use iroha_data_model::{
     soranet::incentives::{RelayBondLedgerEntryV1, RelayEpochMetricsV1, RelayRewardInstructionV1},
 };
 use iroha_primitives::numeric::Numeric;
-use norito::{decode_from_bytes, derive::NoritoSerialize, json, json::{Map, Value}, to_bytes};
+use norito::{
+    decode_from_bytes,
+    derive::NoritoSerialize,
+    json,
+    json::{Map, Value},
+    to_bytes,
+};
 use sorafs_orchestrator::treasury::{LedgerTransferRecord, TransferKind};
 fn cli_binary() -> &'static str {
     env!("CARGO_BIN_EXE_iroha")
@@ -152,8 +158,7 @@ fn encode_ledger_export(export: &TestLedgerExport) -> Vec<u8> {
     const SCHEMA_OFFSET: usize = 4 + 1 + 1;
     const SCHEMA_LEN: usize = 16;
     let mut bytes = to_bytes(export).expect("encode ledger export");
-    let schema =
-        norito::core::schema_hash_for_name("iroha::commands::sorafs::LedgerExportFile");
+    let schema = norito::core::schema_hash_for_name("iroha::commands::sorafs::LedgerExportFile");
     bytes[SCHEMA_OFFSET..SCHEMA_OFFSET + SCHEMA_LEN].copy_from_slice(&schema);
     bytes
 }

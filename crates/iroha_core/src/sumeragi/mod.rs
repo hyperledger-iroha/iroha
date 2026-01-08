@@ -269,9 +269,7 @@ mod tests {
     use iroha_data_model::{
         block::{
             BlockHeader, BlockSignature, SignedBlock,
-            consensus::{
-                ConsensusBlockHeader, LaneBlockCommitment, Proposal, RbcChunk,
-            },
+            consensus::{ConsensusBlockHeader, LaneBlockCommitment, Proposal, RbcChunk},
         },
         consensus::VrfEpochRecord,
         nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
@@ -2131,6 +2129,7 @@ mod tests {
             roster: vec![PeerId::new(KeyPair::random().public_key().clone())],
             roster_hash: Hash::prehashed([0x14; 32]),
             total_chunks: 1,
+            chunk_digests: vec![[5u8; 32]],
             payload_hash: Hash::prehashed([4u8; 32]),
             chunk_root: Hash::prehashed([5u8; 32]),
         });

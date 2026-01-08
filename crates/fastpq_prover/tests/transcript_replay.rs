@@ -4,7 +4,9 @@
 use std::{convert::TryFrom, env, fs, path::Path};
 
 #[cfg(feature = "fastpq-gpu")]
-use fastpq_prover::{OperationKind, Proof, Prover, StateTransition, TransitionBatch, verify};
+use fastpq_prover::{
+    OperationKind, Proof, Prover, PublicInputs, StateTransition, TransitionBatch, verify,
+};
 #[cfg(feature = "fastpq-gpu")]
 use norito::core::to_bytes;
 
@@ -13,27 +15,17 @@ const FIXTURE_NAME: &str = "stage4_balanced_preview.bin";
 
 #[cfg(feature = "fastpq-gpu")]
 fn annotate_batch(batch: &mut TransitionBatch) {
-    batch.metadata.insert("dsid".into(), [0x11u8; 16].to_vec());
-    batch
-        .metadata
-        .insert("slot".into(), (42u64).to_le_bytes().to_vec());
-    batch
-        .metadata
-        .insert("old_root".into(), [0xAAu8; 32].to_vec());
-    batch
-        .metadata
-        .insert("new_root".into(), [0xBBu8; 32].to_vec());
-    batch
-        .metadata
-        .insert("perm_root".into(), [0xCCu8; 32].to_vec());
-    batch
-        .metadata
-        .insert("tx_set_hash".into(), [0xDDu8; 32].to_vec());
+    batch.public_inputs.dsid = [0x11; 16];
+    batch.public_inputs.slot = 42;
+    batch.public_inputs.old_root = [0xAA; 32];
+    batch.public_inputs.new_root = [0xBB; 32];
+    batch.public_inputs.perm_root = [0xCC; 32];
+    batch.public_inputs.tx_set_hash = [0xDD; 32];
 }
 
 #[cfg(feature = "fastpq-gpu")]
 fn preview_fixture_batch(rows: usize) -> TransitionBatch {
-    let mut batch = TransitionBatch::new("fastpq-lane-balanced");
+    let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
     for idx in 0..rows {
         let key = format!("asset/xor/account/{idx:04}").into_bytes();
         let idx_u64 = u64::try_from(idx).expect("sample row index fits u64");

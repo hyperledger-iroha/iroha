@@ -309,16 +309,16 @@ use iroha_data_model as dm;
 use iroha_data_model::{
     account,
     block::consensus::{
-        SumeragiBlockSyncRosterStatus, SumeragiQcStatus,
-        SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
-        SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
-        SumeragiDataspaceCommitment, SumeragiKuraStoreStatus, SumeragiLaneCommitment,
-        SumeragiLaneGovernance, SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
-        SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
-        SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiRbcEvictedSession,
-        SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
-        SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus, SumeragiWorkerLoopStatus,
-        SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
+        SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus,
+        SumeragiConsensusCapsStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
+        SumeragiDaGateStatus, SumeragiDataspaceCommitment, SumeragiKuraStoreStatus,
+        SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
+        SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus,
+        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
+        SumeragiQcStatus, SumeragiRbcEvictedSession, SumeragiRbcStoreStatus,
+        SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
+        SumeragiViewChangeCauseStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
+        SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
     },
     domain::DomainId,
     events::{
@@ -3589,11 +3589,9 @@ pub async fn handle_v1_bridge_finality(
                     iroha_data_model::query::error::QueryExecutionFail::NotFound,
                 ))
             }
-            iroha_core::bridge::BridgeFinalityError::QcHashMismatch { .. } => {
-                Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-                    "{err:?}"
-                )))
-            }
+            iroha_core::bridge::BridgeFinalityError::QcHashMismatch { .. } => Error::Query(
+                iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
+            ),
         })?;
 
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
@@ -3631,11 +3629,9 @@ pub async fn handle_v1_bridge_finality_bundle(
                     iroha_data_model::query::error::QueryExecutionFail::NotFound,
                 ))
             }
-            iroha_core::bridge::BridgeFinalityError::QcHashMismatch { .. } => {
-                Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-                    "{err:?}"
-                )))
-            }
+            iroha_core::bridge::BridgeFinalityError::QcHashMismatch { .. } => Error::Query(
+                iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
+            ),
         })?;
 
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
@@ -4234,9 +4230,7 @@ pub async fn handle_v1_sumeragi_evidence_list(
         let kind_opt = match kind_s {
             "DoublePrepare" | "DoublePrevote" => Some(EvidenceKind::DoublePrepare),
             "DoubleCommit" | "DoublePrecommit" => Some(EvidenceKind::DoubleCommit),
-            "InvalidQc" | "InvalidQC" => {
-                Some(EvidenceKind::InvalidQc)
-            }
+            "InvalidQc" | "InvalidQC" => Some(EvidenceKind::InvalidQc),
             "InvalidProposal" => Some(EvidenceKind::InvalidProposal),
             "Censorship" => Some(EvidenceKind::Censorship),
             _ => None,
@@ -19322,10 +19316,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                 .map(|hash| Value::from(format!("{hash}")))
                 .unwrap_or(Value::Null),
         ),
-        json_entry(
-            "validator_set_len",
-            snap.commit_qc.validator_set_len,
-        ),
+        json_entry("validator_set_len", snap.commit_qc.validator_set_len),
         json_entry("signatures_total", snap.commit_qc.signatures_total),
     ]);
     let commit_quorum = json_object(vec![
@@ -19912,14 +19903,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                             json_entry("view", qc.view),
                             json_entry("epoch", qc.epoch),
                             json_entry("subject_block_hash", format!("{}", qc.subject_block_hash)),
-                            json_entry(
-                                "parent_state_root",
-                                format!("{}", qc.parent_state_root),
-                            ),
-                            json_entry(
-                                "post_state_root",
-                                format!("{}", qc.post_state_root),
-                            ),
+                            json_entry("parent_state_root", format!("{}", qc.parent_state_root)),
+                            json_entry("post_state_root", format!("{}", qc.post_state_root)),
                             json_entry(
                                 "signers_bitmap",
                                 Value::Array(
@@ -20737,15 +20722,11 @@ mod status_tests {
             Some(format!("{block_hash}").as_str())
         );
         assert_eq!(
-            commit_qc
-                .get("validator_set_hash")
-                .and_then(Value::as_str),
+            commit_qc.get("validator_set_hash").and_then(Value::as_str),
             Some(format!("{validator_set_hash}").as_str())
         );
         assert_eq!(
-            commit_qc
-                .get("signatures_total")
-                .and_then(Value::as_u64),
+            commit_qc.get("signatures_total").and_then(Value::as_u64),
             Some(3)
         );
 
@@ -21698,9 +21679,7 @@ pub async fn handle_v1_sumeragi_status(
             block_sync_roster: SumeragiBlockSyncRosterStatus {
                 commit_qc_hint_total: snap.block_sync_roster.commit_qc_hint_total,
                 checkpoint_hint_total: snap.block_sync_roster.checkpoint_hint_total,
-                commit_qc_history_total: snap
-                    .block_sync_roster
-                    .commit_qc_history_total,
+                commit_qc_history_total: snap.block_sync_roster.commit_qc_history_total,
                 checkpoint_history_total: snap.block_sync_roster.checkpoint_history_total,
                 roster_sidecar_total: snap.block_sync_roster.roster_sidecar_total,
                 commit_roster_journal_total: snap.block_sync_roster.commit_roster_journal_total,

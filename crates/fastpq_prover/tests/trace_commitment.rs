@@ -7,7 +7,7 @@ use std::{
 
 use fastpq_isi::CANONICAL_PARAMETER_SETS;
 use fastpq_prover::{
-    OperationKind, StateTransition, TransitionBatch, ordering_hash, trace_commitment,
+    OperationKind, PublicInputs, StateTransition, TransitionBatch, ordering_hash, trace_commitment,
 };
 use iroha_crypto::Hash;
 use norito::{decode_from_bytes, json};
@@ -38,13 +38,13 @@ fn load_fixture(name: &str) -> TransitionBatch {
 }
 
 fn build_fixture(name: &str) -> TransitionBatch {
-    let mut batch = TransitionBatch::new("fastpq-lane-balanced");
-    batch.metadata.insert("dsid".into(), vec![0xAA; 16]);
-    batch.metadata.insert("slot".into(), u64_bytes(42));
-    batch.metadata.insert("old_root".into(), vec![0x11; 32]);
-    batch.metadata.insert("new_root".into(), vec![0x22; 32]);
-    batch.metadata.insert("perm_root".into(), vec![0x33; 32]);
-    batch.metadata.insert("tx_set_hash".into(), vec![0x44; 32]);
+    let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+    batch.public_inputs.dsid = [0xAA; 16];
+    batch.public_inputs.slot = 42;
+    batch.public_inputs.old_root = [0x11; 32];
+    batch.public_inputs.new_root = [0x22; 32];
+    batch.public_inputs.perm_root = [0x33; 32];
+    batch.public_inputs.tx_set_hash = [0x44; 32];
 
     match name {
         "transfer" => {

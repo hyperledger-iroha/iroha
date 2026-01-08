@@ -20,7 +20,8 @@ use iroha_genesis::RawGenesisTransaction;
 use crate::{
     Outcome, RunArgs,
     genesis::{
-        GenesisProfile, ProfileDefaults, parse_vrf_seed_hex, profile_defaults, resolve_vrf_seed,
+        GenesisProfile, ProfileDefaults, parse_vrf_seed_hex, profile_defaults,
+        profile_requires_npos, resolve_vrf_seed,
     },
     tui,
 };
@@ -34,7 +35,7 @@ pub struct Args {
     /// Path to the genesis manifest (JSON).
     #[clap(long, value_name = "PATH")]
     genesis: PathBuf,
-    /// Optional VRF seed (hex, 32 bytes). Required for testus/nexus profiles.
+    /// Optional VRF seed (hex, 32 bytes). Required for NPoS testus/nexus manifests.
     #[clap(long, value_name = "HEX")]
     vrf_seed_hex: Option<String>,
 }
@@ -99,21 +100,40 @@ fn verify_manifest(
     let params = normalized.effective_parameters();
     let sumeragi: SumeragiParameters = params.sumeragi().clone();
 
-    enforce_mode(profile, &normalized)?;
+    let mode = enforce_mode(profile, &normalized)?;
     enforce_da_enabled(&sumeragi)?;
     enforce_collectors(&sumeragi, &defaults)?;
     enforce_gas_limit(&params)?;
 
-    let npos_params = resolve_npos_params(&params)?;
-    let expected_seed = resolve_vrf_seed(profile, manifest.chain_id(), vrf_seed_override)?;
-    let seed_hex = hex::encode_upper(expected_seed);
-    if npos_params.epoch_seed() != expected_seed {
+    let next_mode = sumeragi.next_mode();
+    let activation_height = sumeragi.mode_activation_height();
+    if next_mode.is_some() || activation_height.is_some() {
         return Err(eyre!(
-            "VRF seed mismatch: expected {} but manifest carries {}",
-            seed_hex,
-            hex::encode_upper(npos_params.epoch_seed())
+            "staged cutovers are not supported for Iroha3 profiles; remove next_mode/mode_activation_height"
         ));
     }
+    let wants_npos = matches!(mode, SumeragiConsensusMode::Npos)
+        || matches!(next_mode, Some(SumeragiConsensusMode::Npos));
+    if !wants_npos && vrf_seed_override.is_some() {
+        return Err(eyre!(
+            "`--vrf-seed-hex` applies only to NPoS consensus manifests"
+        ));
+    }
+    let seed_hex = if wants_npos {
+        let npos_params = resolve_npos_params(&params)?;
+        let expected_seed = resolve_vrf_seed(profile, manifest.chain_id(), vrf_seed_override)?;
+        let seed_hex = hex::encode_upper(expected_seed);
+        if npos_params.epoch_seed() != expected_seed {
+            return Err(eyre!(
+                "VRF seed mismatch: expected {} but manifest carries {}",
+                seed_hex,
+                hex::encode_upper(npos_params.epoch_seed())
+            ));
+        }
+        seed_hex
+    } else {
+        "n/a".to_owned()
+    };
 
     let peers_with_pops = collect_topology(manifest)?;
     let unique_peers: HashSet<_> = peers_with_pops.iter().collect();
@@ -166,9 +186,9 @@ fn enforce_mode(
     let mode = manifest.consensus_mode().ok_or_else(|| {
         eyre!("consensus_mode missing; call with_consensus_meta() during generation")
     })?;
-    if mode != SumeragiConsensusMode::Npos {
+    if profile_requires_npos(profile) && mode != SumeragiConsensusMode::Npos {
         return Err(eyre!(
-            "profile {:?} requires NPoS consensus but manifest advertises {:?}",
+            "profile {:?} targets the public dataspace; expected NPoS but manifest advertises {:?}",
             profile,
             mode
         ));
@@ -330,6 +350,23 @@ mod tests {
     }
 
     #[test]
+    fn verify_allows_permissioned_dev_profile() {
+        let seed = derive_vrf_seed_from_chain(&ChainId::from("iroha3-dev.local"));
+        let peer = generate_peer_pop();
+        let manifest = build_manifest_with_profile(
+            GenesisProfile::Iroha3Dev,
+            SumeragiConsensusMode::Permissioned,
+            seed,
+            std::slice::from_ref(&peer),
+        );
+
+        let report =
+            verify_manifest(&manifest, GenesisProfile::Iroha3Dev, None).expect("verify manifest");
+        assert_eq!(report.peer_count, 1);
+        assert_eq!(report.vrf_seed_hex, "n/a");
+    }
+
+    #[test]
     fn verify_requires_seed_for_testus_profile() {
         let seed = [7u8; 32];
         let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
@@ -383,6 +420,39 @@ mod tests {
             .expect_err("missing PoP should fail");
         assert!(
             err.to_string().contains("missing `pop_hex`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_staged_cutover() {
+        let defaults = profile_defaults(GenesisProfile::Iroha3Dev);
+        let seed = derive_vrf_seed_from_chain(&defaults.chain_id);
+        let peer = generate_peer_pop();
+        let builder =
+            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
+        let manifest = crate::genesis::generate_default(
+            builder,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+            None,
+            SumeragiConsensusMode::Npos,
+            Some(SumeragiConsensusMode::Npos),
+            Some(10),
+            Some(&defaults),
+            Some(seed),
+            BuildLine::Iroha3,
+        )
+        .expect("generate staged manifest")
+        .into_builder()
+        .next_transaction()
+        .set_topology(vec![GenesisTopologyEntry::new(PeerId::new(peer.0), peer.1)])
+        .build_raw();
+
+        let err = verify_manifest(&manifest, GenesisProfile::Iroha3Dev, Some(seed))
+            .expect_err("staged cutover should be rejected");
+        assert!(
+            err.to_string()
+                .contains("staged cutovers are not supported"),
             "unexpected error: {err}"
         );
     }

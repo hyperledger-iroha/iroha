@@ -134,8 +134,7 @@ pub fn check_double_vote(v1: &Vote, v2: &Vote) -> Option<Evidence> {
         let conflicts = if v1.block_hash != v2.block_hash {
             true
         } else if v1.phase == Phase::Commit && v2.phase == Phase::Commit {
-            v1.parent_state_root != v2.parent_state_root
-                || v1.post_state_root != v2.post_state_root
+            v1.parent_state_root != v2.parent_state_root || v1.post_state_root != v2.post_state_root
         } else {
             false
         };
@@ -449,10 +448,7 @@ pub fn validate_evidence(
             EvidenceKind::DoublePrepare | EvidenceKind::DoubleCommit,
             EvidencePayload::DoubleVote { v1, v2 },
         ) => validate_double_vote(evidence.kind, v1, v2, context),
-        (
-            EvidenceKind::InvalidQc,
-            EvidencePayload::InvalidQc { .. },
-        ) => Ok(()),
+        (EvidenceKind::InvalidQc, EvidencePayload::InvalidQc { .. }) => Ok(()),
         (EvidenceKind::InvalidProposal, EvidencePayload::InvalidProposal { proposal, .. }) => {
             validate_invalid_proposal(proposal)
         }
@@ -603,7 +599,7 @@ mod tests {
 
     use super::{
         super::consensus::{
-            QcAggregate, ConsensusBlockHeader, Phase, Proposal, Qc, QcHeaderRef, Vote,
+            ConsensusBlockHeader, Phase, Proposal, Qc, QcAggregate, QcHeaderRef, Vote,
         },
         *,
     };
@@ -675,7 +671,6 @@ mod tests {
             let signature = Signature::new(keypair.private_key(), &preimage);
             vote.bls_sig = signature.payload().to_vec();
         }
-
     }
 
     fn test_context() -> EvidenceTestContext {
@@ -1059,8 +1054,9 @@ mod tests {
     #[test]
     fn double_vote_detects_commit_root_mismatch() {
         let ctx = test_context();
-        let subject =
-            HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x22; 32]));
+        let subject = HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+            [0x22; 32],
+        ));
         let parent_root = iroha_crypto::Hash::prehashed([0xA1; 32]);
         let post_root = iroha_crypto::Hash::prehashed([0xA2; 32]);
         let other_post_root = iroha_crypto::Hash::prehashed([0xA3; 32]);
@@ -2586,8 +2582,7 @@ mod tests {
                 bls_aggregate_signature: Vec::new(),
             },
         };
-        let ev = check_invalid_commit_qc_shape(&qc)
-            .expect("empty bitmap must produce evidence");
+        let ev = check_invalid_commit_qc_shape(&qc).expect("empty bitmap must produce evidence");
         assert!(matches!(ev.kind, EvidenceKind::InvalidQc));
     }
 

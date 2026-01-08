@@ -69,6 +69,12 @@ pub fn profile_defaults(profile: GenesisProfile) -> ProfileDefaults {
     }
 }
 
+/// Whether the profile targets the public Sora Nexus dataspace (NPoS-only).
+#[must_use]
+pub fn profile_requires_npos(profile: GenesisProfile) -> bool {
+    matches!(profile, GenesisProfile::Iroha3Nexus)
+}
+
 /// Parse a hex-encoded VRF seed into the fixed 32-byte array required by `SumeragiNposParameters`.
 ///
 /// # Errors
@@ -164,5 +170,12 @@ mod tests {
         )
         .expect("override should be accepted");
         assert_eq!(resolved, override_seed);
+    }
+
+    #[test]
+    fn profile_requires_npos_only_for_nexus() {
+        assert!(!profile_requires_npos(GenesisProfile::Iroha3Dev));
+        assert!(!profile_requires_npos(GenesisProfile::Iroha3Testus));
+        assert!(profile_requires_npos(GenesisProfile::Iroha3Nexus));
     }
 }

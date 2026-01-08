@@ -7742,19 +7742,13 @@ impl Telemetry {
     /// Record the latest commit certificate summary (best-effort).
     pub fn set_commit_qc_summary(&self, cert: &Qc) {
         if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_commit_qc_height
-                .set(cert.height);
+            self.metrics.sumeragi_commit_qc_height.set(cert.height);
             self.metrics.sumeragi_commit_qc_view.set(cert.view);
-            self.metrics
-                .sumeragi_commit_qc_epoch
-                .set(cert.epoch);
-            self.metrics
-                .sumeragi_commit_qc_signatures_total
-                .set(
-                    u64::try_from(crate::sumeragi::consensus::qc_signer_count(cert))
-                        .unwrap_or(u64::MAX),
-                );
+            self.metrics.sumeragi_commit_qc_epoch.set(cert.epoch);
+            self.metrics.sumeragi_commit_qc_signatures_total.set(
+                u64::try_from(crate::sumeragi::consensus::qc_signer_count(cert))
+                    .unwrap_or(u64::MAX),
+            );
             self.metrics
                 .sumeragi_commit_qc_validator_set_len
                 .set(u64::try_from(cert.validator_set.len()).unwrap_or(u64::MAX));
@@ -8580,14 +8574,8 @@ mod tests {
         assert_eq!(metrics.sumeragi_commit_qc_height.get(), 42);
         assert_eq!(metrics.sumeragi_commit_qc_view.get(), 7);
         assert_eq!(metrics.sumeragi_commit_qc_epoch.get(), 1);
-        assert_eq!(
-            metrics.sumeragi_commit_qc_signatures_total.get(),
-            0
-        );
-        assert_eq!(
-            metrics.sumeragi_commit_qc_validator_set_len.get(),
-            2
-        );
+        assert_eq!(metrics.sumeragi_commit_qc_signatures_total.get(), 0);
+        assert_eq!(metrics.sumeragi_commit_qc_validator_set_len.get(), 2);
     }
 
     #[test]

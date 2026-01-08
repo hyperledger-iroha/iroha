@@ -977,9 +977,16 @@ pub fn merkle_paths_for_queries(
     leaves: &[u64],
     query_indices: &[usize],
     arity: u32,
+    evaluation_len: usize,
 ) -> Result<Vec<Vec<u64>>> {
-    if leaves.is_empty() {
-        return Ok(vec![Vec::new(); query_indices.len()]);
+    if query_indices.is_empty() {
+        return Ok(Vec::new());
+    }
+    if evaluation_len == 0 || leaves.is_empty() {
+        return Err(Error::QueryIndexOutOfRange {
+            index: query_indices[0],
+            len: evaluation_len,
+        });
     }
     let chunk_size = lde_chunk_size(arity).max(1);
     let levels = build_merkle_levels(leaves)?;
@@ -989,7 +996,19 @@ pub fn merkle_paths_for_queries(
     let leaf_count = leaf_level.len();
     let mut paths = Vec::with_capacity(query_indices.len());
     for &query_index in query_indices {
-        let mut leaf_index = (query_index / chunk_size).min(leaf_count.saturating_sub(1));
+        if query_index >= evaluation_len {
+            return Err(Error::QueryIndexOutOfRange {
+                index: query_index,
+                len: evaluation_len,
+            });
+        }
+        let mut leaf_index = query_index / chunk_size;
+        if leaf_index >= leaf_count {
+            return Err(Error::QueryIndexOutOfRange {
+                index: query_index,
+                len: evaluation_len,
+            });
+        }
         let mut path = Vec::with_capacity(levels.len().saturating_sub(1));
         for level in levels.iter().take(levels.len().saturating_sub(1)) {
             let sibling_idx = if leaf_index % 2 == 0 {
@@ -1300,10 +1319,12 @@ pub fn sample_queries(
 pub fn open_queries(evaluations: &[u64], indices: &[usize]) -> Result<Vec<(u32, u64)>> {
     let mut openings = Vec::with_capacity(indices.len());
     for &index in indices {
-        let value = evaluations
-            .get(index)
-            .copied()
-            .unwrap_or_else(|| *evaluations.last().unwrap_or(&0));
+        let value = evaluations.get(index).copied().ok_or_else(|| {
+            Error::QueryIndexOutOfRange {
+                index,
+                len: evaluations.len(),
+            }
+        })?;
         let compact_index =
             u32::try_from(index).map_err(|_| Error::QueryIndexOverflow { index })?;
         openings.push((compact_index, value));
@@ -1399,8 +1420,12 @@ impl Backend for StarkBackend {
             &mut transcript,
         );
         let query_openings = open_queries(&lde_values, &query_indices)?;
-        let query_paths =
-            merkle_paths_for_queries(&lde_hashes, &query_indices, self.config.params.fri.arity)?;
+        let query_paths = merkle_paths_for_queries(
+            &lde_hashes,
+            &query_indices,
+            self.config.params.fri.arity,
+            lde_values.len(),
+        )?;
 
         let trace_rows = u32::try_from(trace.rows)
             .map_err(|_| Error::TraceLengthOverflow { rows: trace.rows })?;
@@ -1530,10 +1555,10 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::{OperationKind, StateTransition};
+    use crate::{OperationKind, PublicInputs, StateTransition};
 
     fn sample_batch(rows: usize) -> TransitionBatch {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced");
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         for idx in 0..rows {
             let key = format!("asset/xor/account/{idx:04}").into_bytes();
             let idx_u64 = u64::try_from(idx).expect("sample batch index fits u64");
@@ -1566,6 +1591,27 @@ mod tests {
         assert_ne!(a, 0);
         assert_ne!(b, 0);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn open_queries_rejects_out_of_range() {
+        let err = open_queries(&[10u64, 11u64], &[2]).expect_err("out-of-range query");
+        assert!(matches!(
+            err,
+            Error::QueryIndexOutOfRange { index: 2, len: 2 }
+        ));
+    }
+
+    #[test]
+    fn merkle_paths_rejects_out_of_range_indices() {
+        let evaluations = vec![1u64, 2, 3, 4];
+        let leaves = hash_lde_leaves(&evaluations, 8).expect("hash leaves");
+        let err =
+            merkle_paths_for_queries(&leaves, &[4], 8, evaluations.len()).expect_err("out of range");
+        assert!(matches!(
+            err,
+            Error::QueryIndexOutOfRange { index: 4, len: 4 }
+        ));
     }
 
     #[test]

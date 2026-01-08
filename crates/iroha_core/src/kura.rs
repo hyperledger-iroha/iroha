@@ -5026,7 +5026,7 @@ mod tests {
         smartcontracts::Registrable,
         state::State,
         sumeragi::{
-            consensus::{QcAggregate, PERMISSIONED_TAG, Phase},
+            consensus::{PERMISSIONED_TAG, Phase, QcAggregate},
             network_topology::Topology,
         },
     };
@@ -8109,9 +8109,7 @@ mod tests {
         assert_eq!(got.block_hash, block_hash);
         assert_eq!(got.format_label(), "roster.snapshot.v1");
         assert_eq!(
-            got.commit_qc
-                .as_ref()
-                .map(|c| c.validator_set_hash),
+            got.commit_qc.as_ref().map(|c| c.validator_set_hash),
             Some(HashOf::new(&roster))
         );
         assert!(got.stake_snapshot.is_none());

@@ -9,9 +9,7 @@ use iroha_core::{
     kura::Kura,
     query::{insert_evidence_record_for_test, store::LiveQueryStore},
     state::{State as CoreState, World},
-    sumeragi::consensus::{
-        QcAggregate, Qc, Evidence, EvidenceKind, EvidencePayload, Phase,
-    },
+    sumeragi::consensus::{Evidence, EvidenceKind, EvidencePayload, Phase, Qc, QcAggregate},
     telemetry::StateTelemetry,
 };
 use iroha_crypto::{Hash, HashOf};

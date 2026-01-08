@@ -11073,13 +11073,13 @@ mod tests {
     #[test]
     fn lane_relay_helper_threads_commit_qc_and_rbc_bytes() {
         use iroha_crypto::{Hash, HashOf};
+        use iroha_data_model::consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1};
         use iroha_data_model::{
             block::consensus::{LaneBlockCommitment, LaneSettlementReceipt},
             da::commitment::DaCommitmentBundle,
             nexus::{DataSpaceId, LaneId},
             peer::PeerId,
         };
-        use iroha_data_model::consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1};
 
         let da_hash: Option<HashOf<DaCommitmentBundle>> = Some(HashOf::from_untyped_unchecked(
             Hash::prehashed([0xAB; Hash::LENGTH]),
@@ -11175,13 +11175,13 @@ mod tests {
     #[test]
     fn lane_relay_envelopes_attach_manifest_roots() {
         use iroha_crypto::{Hash, HashOf};
+        use iroha_data_model::consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1};
         use iroha_data_model::{
             block::consensus::{LaneBlockCommitment, LaneSettlementReceipt},
             da::commitment::DaCommitmentBundle,
             nexus::{DataSpaceId, LaneId},
             peer::PeerId,
         };
-        use iroha_data_model::consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1};
 
         let da_hash: Option<HashOf<DaCommitmentBundle>> = Some(HashOf::from_untyped_unchecked(
             Hash::prehashed([0xAB; Hash::LENGTH]),

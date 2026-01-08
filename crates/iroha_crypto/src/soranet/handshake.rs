@@ -417,13 +417,11 @@ fn validate_capability_payload(ty: u16, value: &[u8]) -> Result<(), HarnessError
 
 fn parse_required_flag(ty: u16, value: &mut [u8]) -> bool {
     match ty {
-        CAPABILITY_SUITE_LIST => {
-            value.first_mut().is_some_and(|first| {
-                let required = (*first & 0x80) != 0;
-                *first &= 0x7F;
-                required
-            })
-        }
+        CAPABILITY_SUITE_LIST => value.first_mut().is_some_and(|first| {
+            let required = (*first & 0x80) != 0;
+            *first &= 0x7F;
+            required
+        }),
         CAPABILITY_PQKEM | CAPABILITY_PQSIG | CAPABILITY_CONSTANT_RATE => value
             .get(1)
             .is_some_and(|flags| (flags & CAPABILITY_REQUIRED_FLAG) != 0),

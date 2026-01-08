@@ -434,15 +434,7 @@ pub fn transcripts_to_witnesses(
                     details: "transfer transcript must contain at least one delta".into(),
                 });
             }
-            let authority_digest =
-                transcript
-                    .authority_digest
-                    .ok_or_else(|| Error::TransferInvariant {
-                        details: format!(
-                            "authority digest missing for transfer batch {}",
-                            transcript.batch_hash
-                        ),
-                    })?;
+            let authority_digest = transcript.authority_digest;
             let mut deltas = Vec::with_capacity(transcript.deltas.len());
             for delta in &transcript.deltas {
                 let snapshot = BalanceSnapshot::from_delta(delta)?;
@@ -498,6 +490,14 @@ pub fn verify_transcripts(
             enforce_poseidon_policy(transcript, &poseidon_digest)?;
             ensure_transfer_rows(&mut transfer_rows, transitions, delta, &snapshot)?;
         }
+    }
+    if !transfer_rows.is_empty() {
+        let remaining = transfer_rows.values().map(VecDeque::len).sum::<usize>();
+        return Err(Error::TransferInvariant {
+            details: format!(
+                "transfer transcripts did not cover {remaining} transfer row(s)"
+            ),
+        });
     }
     Ok(())
 }
@@ -772,6 +772,20 @@ mod tests {
         assert!(matches!(err, Error::TransferInvariant { .. }));
     }
 
+    #[test]
+    fn verify_transcripts_rejects_unmatched_transfer_rows() {
+        let transcript = sample_transcript();
+        let mut transitions = sample_transitions(&transcript);
+        transitions.push(StateTransition::new(
+            b"asset/extra/row".to_vec(),
+            0u64.to_le_bytes().to_vec(),
+            1u64.to_le_bytes().to_vec(),
+            OperationKind::Transfer,
+        ));
+        let err = verify_transcripts(&transitions, &[transcript]).expect_err("extra row fails");
+        assert!(matches!(err, Error::TransferInvariant { .. }));
+    }
+
     fn sample_transcript() -> TransferTranscript {
         use iroha_test_samples::{ALICE_ID, BOB_ID};
         let alice = (*ALICE_ID).clone();
@@ -794,7 +808,7 @@ mod tests {
         TransferTranscript {
             batch_hash,
             deltas: vec![delta],
-            authority_digest: Some(Hash::new(b"authority")),
+            authority_digest: Hash::new(b"authority"),
             poseidon_preimage_digest: Some(digest),
         }
     }
@@ -819,15 +833,6 @@ mod tests {
                 [sender, receiver]
             })
             .collect()
-    }
-
-    #[test]
-    fn transcripts_to_witnesses_require_authority_digest() {
-        let mut transcript = sample_transcript();
-        transcript.authority_digest = None;
-        let err =
-            transcripts_to_witnesses(&[transcript]).expect_err("missing authority digest fails");
-        assert!(matches!(err, Error::TransferInvariant { .. }));
     }
 
     #[test]

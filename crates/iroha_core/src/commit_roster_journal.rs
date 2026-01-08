@@ -286,10 +286,7 @@ impl CommitRosterJournal {
         validator_checkpoint: ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) {
-        let key = (
-            commit_qc.height,
-            commit_qc.subject_block_hash,
-        );
+        let key = (commit_qc.height, commit_qc.subject_block_hash);
         match self.entries.entry(key) {
             Entry::Occupied(mut entry) => {
                 if entry.get().commit_qc.view <= commit_qc.view {
@@ -440,7 +437,7 @@ mod tests {
 
     use super::*;
     use crate::sumeragi::{
-        consensus::{QcAggregate, PERMISSIONED_TAG, Phase},
+        consensus::{PERMISSIONED_TAG, Phase, QcAggregate},
         stake_snapshot::CommitStakeSnapshotEntry,
     };
 

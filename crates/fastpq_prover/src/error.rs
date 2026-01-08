@@ -111,6 +111,14 @@ pub enum Error {
         /// Index sampled by the transcript that cannot be represented.
         index: usize,
     },
+    /// Query index fell outside the evaluation domain.
+    #[error("query index {index} out of bounds (len {len})")]
+    QueryIndexOutOfRange {
+        /// Index sampled by the transcript.
+        index: usize,
+        /// Length of the evaluation domain.
+        len: usize,
+    },
     /// Internal payload length exceeded the supported 64-bit representation.
     #[error("payload length {length} exceeds 64-bit bound")]
     PayloadLengthOverflow {

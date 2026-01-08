@@ -598,7 +598,7 @@ mod tests {
         let transcript = TransferTranscript {
             batch_hash,
             deltas: vec![delta.clone()],
-            authority_digest: None,
+            authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
             poseidon_preimage_digest: None,
         };
         record_fastpq_transcript(&transcript);

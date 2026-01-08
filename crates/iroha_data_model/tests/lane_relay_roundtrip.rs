@@ -7,7 +7,8 @@ use iroha_data_model::{
     block::{
         BlockHeader,
         consensus::{
-            CertPhase, LaneBlockCommitment, LaneSettlementReceipt, Qc, QcAggregate, PERMISSIONED_TAG,
+            CertPhase, LaneBlockCommitment, LaneSettlementReceipt, PERMISSIONED_TAG, Qc,
+            QcAggregate,
         },
     },
     da::commitment,
@@ -87,10 +88,9 @@ fn lane_relay_envelope_roundtrips_and_verifies_hash() {
     let settlement = sample_settlement();
     let qc = sample_qc(header.hash());
     let manifest_root = Some([0x44; 32]);
-    let envelope =
-        LaneRelayEnvelope::new(header, Some(qc.clone()), da_hash, settlement.clone(), 0)
-    .expect("construct envelope")
-    .with_manifest_root(manifest_root);
+    let envelope = LaneRelayEnvelope::new(header, Some(qc.clone()), da_hash, settlement.clone(), 0)
+        .expect("construct envelope")
+        .with_manifest_root(manifest_root);
 
     let bytes = norito::to_bytes(&envelope).expect("encode envelope");
     let archived = norito::from_bytes::<LaneRelayEnvelope>(&bytes).expect("archive envelope");
@@ -145,11 +145,8 @@ fn lane_relay_envelope_rejects_qc_height_mismatch() {
 
     let mut envelope =
         LaneRelayEnvelope::new(header, Some(sample_qc(header.hash())), None, settlement, 0)
-    .expect("construct envelope");
-    let qc_ref = envelope
-        .qc
-        .as_mut()
-        .expect("qc present in envelope");
+            .expect("construct envelope");
+    let qc_ref = envelope.qc.as_mut().expect("qc present in envelope");
     qc_ref.height += 1;
     assert_eq!(
         envelope.verify().unwrap_err(),

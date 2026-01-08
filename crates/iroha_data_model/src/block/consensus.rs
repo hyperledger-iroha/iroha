@@ -1697,6 +1697,8 @@ pub struct RbcInit {
     pub roster_hash: Hash,
     /// Total chunk count for the payload.
     pub total_chunks: u32,
+    /// SHA-256 digests for each chunk (indexed by chunk position).
+    pub chunk_digests: Vec<[u8; 32]>,
     /// Payload hash commitment (optional, when leader is also proposer).
     pub payload_hash: Hash,
     /// Merkle root of chunk digests for integrity proofs.
@@ -1884,7 +1886,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for LaneSettlementReceipt {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, KeyPair, MerkleTree};
     use norito::core::DecodeFromSlice;
 
     use super::*;
@@ -1952,6 +1954,11 @@ mod tests {
     fn sample_rbc_init() -> RbcInit {
         let roster = sample_roster();
         let roster_hash = roster_hash(&roster);
+        let chunk_digests = vec![[0x11; 32], [0x22; 32], [0x33; 32]];
+        let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(chunk_digests.clone())
+            .root()
+            .map(Hash::from)
+            .expect("chunk root");
         RbcInit {
             block_hash: dummy_hash(),
             height: 6,
@@ -1960,8 +1967,9 @@ mod tests {
             roster,
             roster_hash,
             total_chunks: 3,
+            chunk_digests,
             payload_hash: Hash::new(b"payload_hash"),
-            chunk_root: Hash::new(b"chunk_root"),
+            chunk_root,
         }
     }
 

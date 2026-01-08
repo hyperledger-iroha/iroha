@@ -22,10 +22,10 @@ use iroha_config::parameters::actual::{
 #[cfg(test)]
 use iroha_crypto::HashOf;
 pub use iroha_data_model::block::consensus::{
-    CertPhase, Qc, QcAggregate, QcRef, QcVote, ConsensusBlockHeader, ConsensusGenesisParams,
-    Evidence, EvidenceKind, EvidencePayload, ExecKv, ExecWitness, ExecWitnessMsg, Height, NPOS_TAG,
-    NposGenesisParams, PERMISSIONED_TAG, PROTO_VERSION, Proposal, RbcChunk, RbcDeliver, RbcInit,
-    RbcReady, Reconfig, ValidatorIndex, View, VrfCommit, VrfReveal,
+    CertPhase, ConsensusBlockHeader, ConsensusGenesisParams, Evidence, EvidenceKind,
+    EvidencePayload, ExecKv, ExecWitness, ExecWitnessMsg, Height, NPOS_TAG, NposGenesisParams,
+    PERMISSIONED_TAG, PROTO_VERSION, Proposal, Qc, QcAggregate, QcRef, QcVote, RbcChunk,
+    RbcDeliver, RbcInit, RbcReady, Reconfig, ValidatorIndex, View, VrfCommit, VrfReveal,
 };
 
 // Transitional aliases to reduce churn while the QC terminology is removed.

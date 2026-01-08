@@ -16,7 +16,7 @@ use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use eyre::{Result, eyre};
 use iroha_config::parameters::actual::{
     AdaptiveObservability, Common as CommonConfig, ConsensusMode, DaManifestPolicy,
-    LaneConfig as LaneConfigSnapshot, Sumeragi as SumeragiConfig,
+    LaneConfig as LaneConfigSnapshot, NodeRole, Sumeragi as SumeragiConfig,
 };
 use iroha_crypto::{Hash, HashOf, MerkleTree, PrivateKey, Signature};
 use iroha_data_model::{
@@ -41,7 +41,6 @@ use iroha_data_model::{
 };
 use iroha_logger::prelude::*;
 use iroha_p2p::{Broadcast, Post, Priority, UpdateTopology};
-use iroha_primitives::numeric::{Numeric, NumericSpec};
 use iroha_primitives::time::TimeSource;
 #[cfg(all(test, feature = "telemetry"))]
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
@@ -72,7 +71,7 @@ use super::{
     exec::{parent_state_from_witness, post_state_from_witness},
     penalties::PenaltyApplier,
     rbc_status,
-    stake_snapshot::{CommitStakeSnapshot, stake_map_from_world},
+    stake_snapshot::{CommitStakeSnapshot, stake_quorum_reached_for_snapshot},
     *,
 };
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
@@ -475,6 +474,10 @@ pub(crate) enum QcValidationError {
     InvalidSignature { signer: ValidatorIndex },
     #[error("QC signer {signer} not present in block signatures")]
     SignerMissingFromBlock { signer: ValidatorIndex },
+    #[error("QC is missing a stake snapshot required for NPoS quorum checks")]
+    StakeSnapshotUnavailable,
+    #[error("QC does not reach stake quorum")]
+    StakeQuorumMissing,
 }
 
 impl QcValidationError {
@@ -491,6 +494,8 @@ impl QcValidationError {
             Self::SubjectMismatch { .. } => "subject_mismatch",
             Self::InvalidSignature { .. } => "invalid_signature",
             Self::SignerMissingFromBlock { .. } => "signer_missing_from_block",
+            Self::StakeSnapshotUnavailable => "stake_snapshot_unavailable",
+            Self::StakeQuorumMissing => "stake_quorum_missing",
         }
     }
 }
@@ -641,9 +646,10 @@ fn qc_validation_error_to_evidence(
                 reason: qc_validation_reason(err).to_owned(),
             },
         }),
-        QcValidationError::InsufficientSigners { .. } | QcValidationError::MissingVotes { .. } => {
-            None
-        }
+        QcValidationError::InsufficientSigners { .. }
+        | QcValidationError::MissingVotes { .. }
+        | QcValidationError::StakeSnapshotUnavailable
+        | QcValidationError::StakeQuorumMissing => None,
     }
 }
 
@@ -670,13 +676,24 @@ fn validate_qc_with_evidence(
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
     chain_id: &ChainId,
+    consensus_mode: ConsensusMode,
+    stake_snapshot: Option<&CommitStakeSnapshot>,
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
 ) -> (
     Result<QcValidationOutcome, QcValidationError>,
     Option<crate::sumeragi::consensus::Evidence>,
 ) {
-    match validate_qc_against_votes(vote_log, qc, topology, chain_id, mode_tag, prf_seed) {
+    match validate_qc_against_votes(
+        vote_log,
+        qc,
+        topology,
+        chain_id,
+        consensus_mode,
+        stake_snapshot,
+        mode_tag,
+        prf_seed,
+    ) {
         Ok(outcome) => (Ok(outcome), None),
         Err(err) => (Err(err), qc_validation_error_to_evidence(qc, &err)),
     }
@@ -738,6 +755,25 @@ fn parse_signers_bitmap(
         }
     }
     Ok(parsed)
+}
+
+fn signer_peers_for_topology(
+    signers: &BTreeSet<ValidatorIndex>,
+    topology: &super::network_topology::Topology,
+) -> Result<BTreeSet<PeerId>, QcValidationError> {
+    let roster_len = topology.as_ref().len();
+    let mut peers = BTreeSet::new();
+    for signer in signers {
+        let idx = usize::try_from(*signer).unwrap_or(usize::MAX);
+        let Some(peer) = topology.as_ref().get(idx) else {
+            return Err(QcValidationError::SignerOutOfBounds {
+                signer: idx,
+                topology_len: roster_len,
+            });
+        };
+        peers.insert(peer.clone());
+    }
+    Ok(peers)
 }
 
 fn normalize_signer_indices_to_canonical(
@@ -1000,6 +1036,8 @@ pub(crate) fn validate_block_sync_qc(
     block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
     block_view: u64,
     chain_id: &ChainId,
+    consensus_mode: ConsensusMode,
+    stake_snapshot: Option<&CommitStakeSnapshot>,
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
 ) -> Result<(BTreeSet<crate::sumeragi::consensus::ValidatorIndex>, usize), QcValidationError> {
@@ -1014,11 +1052,32 @@ pub(crate) fn validate_block_sync_qc(
         return Err(QcValidationError::ValidatorSetMismatch);
     }
     let parsed_signers = qc_signer_indices(qc, roster_len, voting_len)?;
-    if parsed_signers.voting.len() < required {
-        return Err(QcValidationError::InsufficientSigners {
-            collected: parsed_signers.voting.len(),
-            required,
-        });
+    let stake_snapshot = match consensus_mode {
+        ConsensusMode::Permissioned => None,
+        ConsensusMode::Npos => {
+            Some(stake_snapshot.ok_or(QcValidationError::StakeSnapshotUnavailable)?)
+        }
+    };
+    match consensus_mode {
+        ConsensusMode::Permissioned => {
+            if parsed_signers.voting.len() < required {
+                return Err(QcValidationError::InsufficientSigners {
+                    collected: parsed_signers.voting.len(),
+                    required,
+                });
+            }
+        }
+        ConsensusMode::Npos => {
+            let snapshot = stake_snapshot
+                .as_ref()
+                .ok_or(QcValidationError::StakeSnapshotUnavailable)?;
+            let signer_peers = signer_peers_for_topology(&parsed_signers.voting, topology)?;
+            match stake_quorum_reached_for_snapshot(snapshot, topology.as_ref(), &signer_peers) {
+                Ok(true) => {}
+                Ok(false) => return Err(QcValidationError::StakeQuorumMissing),
+                Err(_) => return Err(QcValidationError::StakeSnapshotUnavailable),
+            }
+        }
     }
     if !qc_aggregate_consistent(qc, topology, chain_id, mode_tag) {
         return Err(QcValidationError::AggregateMismatch);
@@ -1027,7 +1086,20 @@ pub(crate) fn validate_block_sync_qc(
         topology_for_view(topology, qc.height, block_view, mode_tag, prf_seed);
     let normalized_block_signers =
         normalize_signer_indices_to_canonical(block_signers, &block_signature_topology, topology);
-    if normalized_block_signers.len() >= required {
+    let block_quorum_met = match consensus_mode {
+        ConsensusMode::Permissioned => normalized_block_signers.len() >= required,
+        ConsensusMode::Npos => {
+            let snapshot = stake_snapshot
+                .as_ref()
+                .ok_or(QcValidationError::StakeSnapshotUnavailable)?;
+            let signer_peers = signer_peers_for_topology(&normalized_block_signers, topology)?;
+            match stake_quorum_reached_for_snapshot(snapshot, topology.as_ref(), &signer_peers) {
+                Ok(result) => result,
+                Err(_) => return Err(QcValidationError::StakeSnapshotUnavailable),
+            }
+        }
+    };
+    if block_quorum_met {
         if let Some(missing) = parsed_signers
             .voting
             .iter()
@@ -1050,26 +1122,14 @@ fn derive_block_sync_qc_from_signers(
     parent_state_root: Hash,
     post_state_root: Hash,
     commit_topology: &[PeerId],
+    consensus_mode: ConsensusMode,
+    stake_snapshot: Option<&CommitStakeSnapshot>,
     mode_tag: &str,
     block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
     aggregate_signature: Vec<u8>,
 ) -> Option<crate::sumeragi::consensus::Qc> {
     let roster_len = commit_topology.len();
     if roster_len == 0 {
-        return None;
-    }
-    let min_votes = if roster_len > 3 {
-        ((roster_len.saturating_sub(1)) / 3) * 2 + 1
-    } else {
-        roster_len
-    };
-    if block_signers.len() < min_votes {
-        warn!(
-            incoming_hash = %block_hash,
-            block_signers = block_signers.len(),
-            min_votes,
-            "dropping derived block sync QC: insufficient commit signatures"
-        );
         return None;
     }
     if block_signers.iter().any(|idx| {
@@ -1091,6 +1151,56 @@ fn derive_block_sync_qc_from_signers(
             "dropping derived block sync QC: missing aggregate signature"
         );
         return None;
+    }
+    match consensus_mode {
+        ConsensusMode::Permissioned => {
+            let min_votes = if roster_len > 3 {
+                ((roster_len.saturating_sub(1)) / 3) * 2 + 1
+            } else {
+                roster_len
+            };
+            if block_signers.len() < min_votes {
+                warn!(
+                    incoming_hash = %block_hash,
+                    block_signers = block_signers.len(),
+                    min_votes,
+                    "dropping derived block sync QC: insufficient commit signatures"
+                );
+                return None;
+            }
+        }
+        ConsensusMode::Npos => {
+            let snapshot = stake_snapshot?;
+            let mut signer_peers = BTreeSet::new();
+            for signer in block_signers {
+                let Ok(idx) = usize::try_from(*signer) else {
+                    return None;
+                };
+                let Some(peer) = commit_topology.get(idx) else {
+                    return None;
+                };
+                signer_peers.insert(peer.clone());
+            }
+            match stake_quorum_reached_for_snapshot(snapshot, commit_topology, &signer_peers) {
+                Ok(true) => {}
+                Ok(false) => {
+                    warn!(
+                        incoming_hash = %block_hash,
+                        block_signers = block_signers.len(),
+                        "dropping derived block sync QC: insufficient stake quorum"
+                    );
+                    return None;
+                }
+                Err(_) => {
+                    warn!(
+                        incoming_hash = %block_hash,
+                        block_signers = block_signers.len(),
+                        "dropping derived block sync QC: stake snapshot unavailable"
+                    );
+                    return None;
+                }
+            }
+        }
     }
     let mut signers_bitmap = vec![0u8; roster_len.div_ceil(8)];
     for signer in block_signers {
@@ -1140,10 +1250,22 @@ fn tally_qc_against_votes(
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
     chain_id: &ChainId,
+    consensus_mode: ConsensusMode,
+    stake_snapshot: Option<&CommitStakeSnapshot>,
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
 ) -> Result<QcSignerTally, QcValidationError> {
-    validate_qc_against_votes(vote_log, qc, topology, chain_id, mode_tag, prf_seed).map(
+    validate_qc_against_votes(
+        vote_log,
+        qc,
+        topology,
+        chain_id,
+        consensus_mode,
+        stake_snapshot,
+        mode_tag,
+        prf_seed,
+    )
+    .map(
         |QcValidationOutcome {
              signers,
              present_signers,
@@ -1161,6 +1283,8 @@ fn tally_qc_against_block_signers(
     block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
     block_view: u64,
     chain_id: &ChainId,
+    consensus_mode: ConsensusMode,
+    stake_snapshot: Option<&CommitStakeSnapshot>,
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
 ) -> Result<QcSignerTally, QcValidationError> {
@@ -1170,6 +1294,8 @@ fn tally_qc_against_block_signers(
         block_signers,
         block_view,
         chain_id,
+        consensus_mode,
+        stake_snapshot,
         mode_tag,
         prf_seed,
     )?;
@@ -1196,6 +1322,8 @@ fn validate_qc_against_votes(
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
     chain_id: &ChainId,
+    consensus_mode: ConsensusMode,
+    stake_snapshot: Option<&CommitStakeSnapshot>,
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
 ) -> Result<QcValidationOutcome, QcValidationError> {
@@ -1210,11 +1338,24 @@ fn validate_qc_against_votes(
         return Err(QcValidationError::ValidatorSetMismatch);
     }
     let parsed_signers = qc_signer_indices(qc, roster_len, voting_len)?;
-    if parsed_signers.voting.len() < required {
-        return Err(QcValidationError::InsufficientSigners {
-            collected: parsed_signers.voting.len(),
-            required,
-        });
+    match consensus_mode {
+        ConsensusMode::Permissioned => {
+            if parsed_signers.voting.len() < required {
+                return Err(QcValidationError::InsufficientSigners {
+                    collected: parsed_signers.voting.len(),
+                    required,
+                });
+            }
+        }
+        ConsensusMode::Npos => {
+            let snapshot = stake_snapshot.ok_or(QcValidationError::StakeSnapshotUnavailable)?;
+            let signer_peers = signer_peers_for_topology(&parsed_signers.voting, topology)?;
+            match stake_quorum_reached_for_snapshot(snapshot, topology.as_ref(), &signer_peers) {
+                Ok(true) => {}
+                Ok(false) => return Err(QcValidationError::StakeQuorumMissing),
+                Err(_) => return Err(QcValidationError::StakeSnapshotUnavailable),
+            }
+        }
     }
 
     if !qc_aggregate_consistent(qc, topology, chain_id, mode_tag) {
@@ -1426,10 +1567,26 @@ fn validate_block_for_voting(
 
     match validation {
         Ok((_validated, mut state_block)) => {
-            let roots = state_block.take_exec_witness().map(|witness| StateRoots {
-                parent_state_root: parent_state_from_witness(&witness),
-                post_state_root: post_state_from_witness(&witness),
-            });
+            let roots = match state_block.take_exec_witness() {
+                Some(witness) => Some(StateRoots {
+                    parent_state_root: parent_state_from_witness(&witness),
+                    post_state_root: post_state_from_witness(&witness),
+                }),
+                None => {
+                    let header = _validated.as_ref().header();
+                    warn!(
+                        height = header.height(),
+                        view = header.view_change_index(),
+                        block = %_validated.as_ref().hash(),
+                        "missing exec witness for vote roots; using empty roots"
+                    );
+                    let empty = Hash::new([]);
+                    Some(StateRoots {
+                        parent_state_root: empty,
+                        post_state_root: empty,
+                    })
+                }
+            };
             drop(state_block);
             Ok(roots)
         }
@@ -3272,132 +3429,38 @@ enum RosterValidationError {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum StakeQuorumError {
-    MissingStake,
-    SignerOutOfRoster,
-    Overflow,
-    ZeroTotal,
-    SnapshotMismatch,
-}
-
 fn apply_roster_selection_to_block_sync_update(
     update: &mut super::message::BlockSyncUpdate,
     selection: &BlockSyncRosterSelection,
 ) {
-    update
-        .commit_qc
-        .clone_from(&selection.commit_qc);
+    update.commit_qc.clone_from(&selection.commit_qc);
     update
         .validator_checkpoint
         .clone_from(&selection.checkpoint);
     update.stake_snapshot.clone_from(&selection.stake_snapshot);
 }
 
-fn block_sync_update_has_roster(update: &super::message::BlockSyncUpdate) -> bool {
-    update.commit_qc.is_some()
-}
-
-fn stake_quorum_reached_for_peers(
-    view: &StateView<'_>,
-    roster: &[PeerId],
-    signers: &BTreeSet<PeerId>,
-) -> Result<bool, StakeQuorumError> {
-    let mut stake_map = stake_map_from_world(view.world());
-    if stake_map.is_empty() {
-        for peer in roster {
-            stake_map.insert(peer.clone(), Numeric::from(1_u64));
-        }
+fn block_sync_update_has_roster(
+    update: &super::message::BlockSyncUpdate,
+    consensus_mode: ConsensusMode,
+) -> bool {
+    if matches!(consensus_mode, ConsensusMode::Permissioned) {
+        // Permissioned networks can always derive the roster from trusted peers.
+        return true;
     }
-
-    let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
-    let mut total = Numeric::from(0_u64);
-    for peer in roster {
-        let Some(stake) = stake_map.get(peer) else {
-            return Err(StakeQuorumError::MissingStake);
+    if update.commit_qc.is_some() {
+        return match consensus_mode {
+            ConsensusMode::Permissioned => true,
+            ConsensusMode::Npos => update.stake_snapshot.is_some(),
         };
-        total = total
-            .checked_add(stake.clone())
-            .ok_or(StakeQuorumError::Overflow)?;
     }
-    if total.is_zero() {
-        return Err(StakeQuorumError::ZeroTotal);
-    }
-
-    let mut signed = Numeric::from(0_u64);
-    for peer in signers {
-        if !roster_set.contains(peer) {
-            return Err(StakeQuorumError::SignerOutOfRoster);
-        }
-        let Some(stake) = stake_map.get(peer) else {
-            return Err(StakeQuorumError::MissingStake);
+    if update.validator_checkpoint.is_some() {
+        return match consensus_mode {
+            ConsensusMode::Permissioned => true,
+            ConsensusMode::Npos => update.stake_snapshot.is_some(),
         };
-        signed = signed
-            .checked_add(stake.clone())
-            .ok_or(StakeQuorumError::Overflow)?;
     }
-
-    let signed_scaled = signed
-        .checked_mul(Numeric::from(3_u64), NumericSpec::default())
-        .ok_or(StakeQuorumError::Overflow)?;
-    let total_scaled = total
-        .checked_mul(Numeric::from(2_u64), NumericSpec::default())
-        .ok_or(StakeQuorumError::Overflow)?;
-    Ok(signed_scaled >= total_scaled)
-}
-
-fn stake_quorum_reached_for_snapshot(
-    snapshot: &CommitStakeSnapshot,
-    roster: &[PeerId],
-    signers: &BTreeSet<PeerId>,
-) -> Result<bool, StakeQuorumError> {
-    if !snapshot.matches_roster(roster) {
-        return Err(StakeQuorumError::SnapshotMismatch);
-    }
-    let mut stake_map: BTreeMap<PeerId, Numeric> = BTreeMap::new();
-    for entry in &snapshot.entries {
-        let entry_stake = stake_map
-            .entry(entry.peer_id.clone())
-            .or_insert_with(|| entry.stake.clone());
-        if entry.stake > *entry_stake {
-            *entry_stake = entry.stake.clone();
-        }
-    }
-
-    let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
-    let mut total = Numeric::from(0_u64);
-    for peer in roster {
-        let Some(stake) = stake_map.get(peer) else {
-            return Err(StakeQuorumError::MissingStake);
-        };
-        total = total
-            .checked_add(stake.clone())
-            .ok_or(StakeQuorumError::Overflow)?;
-    }
-    if total.is_zero() {
-        return Err(StakeQuorumError::ZeroTotal);
-    }
-
-    let mut signed = Numeric::from(0_u64);
-    for peer in signers {
-        if !roster_set.contains(peer) {
-            return Err(StakeQuorumError::SignerOutOfRoster);
-        }
-        let Some(stake) = stake_map.get(peer) else {
-            return Err(StakeQuorumError::MissingStake);
-        };
-        signed = signed
-            .checked_add(stake.clone())
-            .ok_or(StakeQuorumError::Overflow)?;
-    }
-
-    let signed_scaled = signed
-        .checked_mul(Numeric::from(3_u64), NumericSpec::default())
-        .ok_or(StakeQuorumError::Overflow)?;
-    let total_scaled = total
-        .checked_mul(Numeric::from(2_u64), NumericSpec::default())
-        .ok_or(StakeQuorumError::Overflow)?;
-    Ok(signed_scaled >= total_scaled)
+    false
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3544,30 +3607,29 @@ fn selection_from_roster_artifacts(
     mode_tag: &'static str,
 ) -> Option<BlockSyncRosterSelection> {
     let expected_epoch = epoch_for_height_from_state(state, block_height, consensus_mode);
-    let validated_cert =
-        commit_qc.and_then(|cert| {
-            match validate_commit_qc_roster(
-                cert,
-                block_hash,
-                block_height,
-                block_view,
-                consensus_mode,
-                stake_snapshot,
-                expected_epoch,
-                &state.chain_id,
-                mode_tag,
-            ) {
-                Ok(roster) => Some((roster, cert)),
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        block = %block_hash,
-                        "rejecting commit certificate roster hint"
-                    );
-                    None
-                }
+    let validated_cert = commit_qc.and_then(|cert| {
+        match validate_commit_qc_roster(
+            cert,
+            block_hash,
+            block_height,
+            block_view,
+            consensus_mode,
+            stake_snapshot,
+            expected_epoch,
+            &state.chain_id,
+            mode_tag,
+        ) {
+            Ok(roster) => Some((roster, cert)),
+            Err(err) => {
+                warn!(
+                    ?err,
+                    block = %block_hash,
+                    "rejecting commit certificate roster hint"
+                );
+                None
             }
-        });
+        }
+    });
     let epoch = match (consensus_mode, validated_cert.as_ref()) {
         (ConsensusMode::Npos, Some((_roster, cert))) => cert.epoch,
         (ConsensusMode::Npos, None) => expected_epoch,
@@ -3993,25 +4055,11 @@ fn validate_commit_qc_roster(
             }
         }
         ConsensusMode::Npos => {
-            if let Some(snapshot) = stake_snapshot {
-                match stake_quorum_reached_for_snapshot(
-                    snapshot,
-                    &cert.validator_set,
-                    &signer_peers,
-                ) {
-                    Ok(true) => {}
-                    Ok(false) => return Err(RosterValidationError::StakeQuorumMissing),
-                    Err(_) => return Err(RosterValidationError::StakeSnapshotUnavailable),
-                }
-            } else {
-                // Dev-friendly fallback: treat missing stake snapshots like permissioned quorum.
-                let required = super::network_topology::commit_quorum_from_len(roster_len).max(1);
-                if signer_indices.len() < required {
-                    return Err(RosterValidationError::CommitQuorumMissing {
-                        votes: signer_indices.len(),
-                        required,
-                    });
-                }
+            let snapshot = stake_snapshot.ok_or(RosterValidationError::StakeSnapshotUnavailable)?;
+            match stake_quorum_reached_for_snapshot(snapshot, &cert.validator_set, &signer_peers) {
+                Ok(true) => {}
+                Ok(false) => return Err(RosterValidationError::StakeQuorumMissing),
+                Err(_) => return Err(RosterValidationError::StakeSnapshotUnavailable),
             }
         }
     }
@@ -4414,6 +4462,8 @@ impl Actor {
                     record.parent_state_root,
                     record.post_state_root,
                     roster,
+                    consensus_mode,
+                    record.stake_snapshot.as_ref(),
                     mode_tag,
                     &record.signers,
                     record.bls_aggregate_signature,
@@ -4452,15 +4502,17 @@ impl Actor {
             self.epoch_for_height(height),
             consensus_mode,
         ) {
-            super::status::record_commit_qc(cert.clone());
-            let sidecar = crate::kura::RosterSidecar::new_v1(
-                block.header().height().get(),
-                block.hash(),
-                Some(cert),
+            let checkpoint = ValidatorSetCheckpoint::new(
+                cert.height,
+                cert.subject_block_hash,
+                cert.validator_set.clone(),
+                cert.aggregate.signers_bitmap.clone(),
+                cert.aggregate.bls_aggregate_signature.clone(),
+                cert.validator_set_hash_version,
                 None,
-                stake_snapshot,
             );
-            self.kura.write_roster_metadata(&sidecar);
+            self.state
+                .record_commit_roster(&cert, &checkpoint, stake_snapshot);
         }
     }
 
@@ -4510,9 +4562,36 @@ impl Actor {
         }
         let roster = self.rbc_roster_for_session(key);
         if !roster.is_empty() {
-            self.record_rbc_session_roster(key, roster.clone(), RbcRosterSource::Derived);
+            let (consensus_mode, _, _) = self.consensus_context_for_height(key.1);
+            let source = match consensus_mode {
+                ConsensusMode::Permissioned => RbcRosterSource::Network,
+                ConsensusMode::Npos => RbcRosterSource::Derived,
+            };
+            self.record_rbc_session_roster(key, roster.clone(), source);
         }
         roster
+    }
+
+    fn refresh_derived_rbc_session_roster(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+    ) -> Option<(Vec<PeerId>, bool)> {
+        let existing_source = self
+            .rbc_session_roster_source(key)
+            .unwrap_or(RbcRosterSource::Derived);
+        if existing_source.is_authoritative() {
+            return None;
+        }
+        let roster = self.rbc_roster_for_session(key);
+        if roster.is_empty() {
+            return None;
+        }
+        let existing_roster = self.rbc_session_roster(key);
+        let updated = existing_roster != roster;
+        if updated {
+            self.record_rbc_session_roster(key, roster.clone(), RbcRosterSource::Derived);
+        }
+        Some((roster, updated))
     }
 
     fn record_rbc_session_roster(
@@ -4610,6 +4689,41 @@ impl Actor {
                         view = key.2,
                         "conflicting authoritative RBC roster snapshot; keeping the first"
                     );
+                } else if !source.is_authoritative() && !existing_source.is_authoritative() {
+                    debug!(
+                        block = %key.0,
+                        height = key.1,
+                        view = key.2,
+                        "refreshing derived RBC roster snapshot"
+                    );
+                    entry.insert(roster);
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .session_roster_sources
+                        .insert(key, source);
+                    if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
+                        session.ready_signatures.clear();
+                        session.sent_ready = false;
+                        session.delivered = false;
+                        session.deliver_sender = None;
+                        session.deliver_signature = None;
+                    }
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .payload_rebroadcast_last_sent
+                        .remove(&key);
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .ready_rebroadcast_last_sent
+                        .remove(&key);
+                    if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
+                        self.update_rbc_status_entry(key, &session, false);
+                        self.persist_rbc_session(key, &session);
+                    }
+                    self.publish_rbc_backlog_snapshot();
                 }
             }
         }
@@ -4673,7 +4787,13 @@ impl Actor {
         block_view: u64,
         topology: &super::network_topology::Topology,
     ) -> Option<QcSignerTally> {
-        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
+        let stake_snapshot = match consensus_mode {
+            ConsensusMode::Permissioned => None,
+            ConsensusMode::Npos => {
+                CommitStakeSnapshot::from_roster(self.state.view().world(), topology.as_ref())
+            }
+        };
         let key = Self::qc_tally_key(qc);
         if let Some(tally) = self.qc_signer_tally.get(&key) {
             return Some(tally.clone());
@@ -4684,6 +4804,8 @@ impl Actor {
             qc,
             topology,
             &self.common_config.chain,
+            consensus_mode,
+            stake_snapshot.as_ref(),
             mode_tag,
             prf_seed,
         );
@@ -4712,6 +4834,8 @@ impl Actor {
                         block_signers,
                         block_view,
                         &self.common_config.chain,
+                        consensus_mode,
+                        stake_snapshot.as_ref(),
                         mode_tag,
                         prf_seed,
                     ) {
@@ -5094,24 +5218,22 @@ impl Actor {
         let evidence_height = subject_height.unwrap_or(fallback_height);
         let (consensus_mode, mode_tag, prf_seed) =
             self.consensus_context_for_height(evidence_height);
-        let topology_peers =
-            match &evidence.payload {
-                crate::sumeragi::consensus::EvidencePayload::DoubleVote { v1, .. } => self
-                    .roster_for_vote_with_mode(v1.block_hash, v1.height, v1.view, consensus_mode),
-                crate::sumeragi::consensus::EvidencePayload::InvalidQc {
-                    certificate,
-                    ..
-                } => self.roster_for_vote_with_mode(
+        let topology_peers = match &evidence.payload {
+            crate::sumeragi::consensus::EvidencePayload::DoubleVote { v1, .. } => {
+                self.roster_for_vote_with_mode(v1.block_hash, v1.height, v1.view, consensus_mode)
+            }
+            crate::sumeragi::consensus::EvidencePayload::InvalidQc { certificate, .. } => self
+                .roster_for_vote_with_mode(
                     certificate.subject_block_hash,
                     certificate.height,
                     certificate.view,
                     consensus_mode,
                 ),
-                crate::sumeragi::consensus::EvidencePayload::InvalidProposal { .. }
-                | crate::sumeragi::consensus::EvidencePayload::Censorship { .. } => {
-                    self.effective_commit_topology()
-                }
-            };
+            crate::sumeragi::consensus::EvidencePayload::InvalidProposal { .. }
+            | crate::sumeragi::consensus::EvidencePayload::Censorship { .. } => {
+                self.effective_commit_topology()
+            }
+        };
         if topology_peers.is_empty() {
             debug!(
                 evidence_kind = ?evidence.kind,
@@ -6764,13 +6886,7 @@ impl Actor {
         session: &RbcSession,
     ) -> Option<RbcReady> {
         let commit_topology = self.rbc_session_roster(key);
-        let roster_source = self
-            .rbc_session_roster_source(key)
-            .unwrap_or(RbcRosterSource::Derived);
         if commit_topology.is_empty() {
-            return None;
-        }
-        if !roster_source.is_authoritative() {
             return None;
         }
         let roster_hash = rbc::rbc_roster_hash(&commit_topology);
@@ -6780,7 +6896,9 @@ impl Actor {
         let sender = self.local_validator_index_for_topology(&signature_topology)?;
 
         let (block_hash, height, view_idx) = key;
-        let chunk_root = session.expected_chunk_root?;
+        let chunk_root = session
+            .expected_chunk_root
+            .or_else(|| session.chunk_root())?;
         let mut ready = RbcReady {
             block_hash,
             height,
@@ -6804,13 +6922,7 @@ impl Actor {
         session: &RbcSession,
     ) -> Option<RbcDeliver> {
         let commit_topology = self.rbc_session_roster(key);
-        let roster_source = self
-            .rbc_session_roster_source(key)
-            .unwrap_or(RbcRosterSource::Derived);
         if commit_topology.is_empty() {
-            return None;
-        }
-        if !roster_source.is_authoritative() {
             return None;
         }
         let roster_hash = rbc::rbc_roster_hash(&commit_topology);
@@ -6820,7 +6932,9 @@ impl Actor {
         let sender = self.local_validator_index_for_topology(&signature_topology)?;
 
         let (block_hash, height, view_idx) = key;
-        let chunk_root = session.expected_chunk_root?;
+        let chunk_root = session
+            .expected_chunk_root
+            .or_else(|| session.chunk_root())?;
         let mut deliver = RbcDeliver {
             block_hash,
             height,
@@ -6913,6 +7027,10 @@ impl Actor {
         }
         let roster_hash = rbc::rbc_roster_hash(&roster);
         let payload_hash = session.payload_hash()?;
+        let chunk_digests = session
+            .expected_chunk_digests
+            .clone()
+            .or_else(|| session.all_chunk_digests())?;
         let chunk_root = session
             .expected_chunk_root
             .or_else(|| session.chunk_root())?;
@@ -6924,6 +7042,7 @@ impl Actor {
             roster,
             roster_hash,
             total_chunks: session.total_chunks(),
+            chunk_digests,
             payload_hash,
             chunk_root,
         })
@@ -6946,22 +7065,11 @@ impl Actor {
             }
 
             let commit_topology = self.rbc_session_roster(key);
-            let roster_source = self
-                .rbc_session_roster_source(key)
-                .unwrap_or(RbcRosterSource::Derived);
             if commit_topology.is_empty() {
                 debug!(
                     height = key.1,
                     view = key.2,
                     "deferring RBC READY until commit roster is available"
-                );
-                return Ok(None);
-            }
-            if !roster_source.is_authoritative() {
-                debug!(
-                    height = key.1,
-                    view = key.2,
-                    "deferring RBC READY until commit roster is authoritative"
                 );
                 return Ok(None);
             }
@@ -6986,17 +7094,9 @@ impl Actor {
                 }
             }
 
-            if session.expected_chunk_root.is_none() {
-                debug!(
-                    height = key.1,
-                    view = key.2,
-                    "deferring RBC READY until chunk root is available"
-                );
-                return Ok(None);
-            }
-
-            if let Some(expected_root) = session.expected_chunk_root {
-                if let Some(computed_root) = session.chunk_root() {
+            let computed_root = session.chunk_root();
+            match (session.expected_chunk_root, computed_root) {
+                (Some(expected_root), Some(computed_root)) => {
                     if computed_root != expected_root {
                         session.invalid = true;
                         invalidated = true;
@@ -7010,6 +7110,18 @@ impl Actor {
                         return Ok(None);
                     }
                 }
+                (None, Some(computed_root)) => {
+                    session.expected_chunk_root = Some(computed_root);
+                }
+                (None, None) => {
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        "deferring RBC READY until chunk root is available"
+                    );
+                    return Ok(None);
+                }
+                (Some(_), None) => {}
             }
 
             if let Some(ready) = self.build_rbc_ready(key, &session) {
@@ -7213,6 +7325,10 @@ impl Actor {
             return None;
         }
         let payload_hash = session.payload_hash()?;
+        let chunk_digests = session
+            .expected_chunk_digests
+            .clone()
+            .or_else(|| session.all_chunk_digests())?;
         let chunk_root = session
             .expected_chunk_root
             .or_else(|| session.chunk_root())?;
@@ -7238,6 +7354,7 @@ impl Actor {
             roster: roster.to_vec(),
             roster_hash,
             total_chunks: session.total_chunks(),
+            chunk_digests,
             payload_hash,
             chunk_root,
         };
@@ -7369,10 +7486,7 @@ impl Actor {
             return false;
         }
         let roster = self.rbc_session_roster(key);
-        let roster_source = self
-            .rbc_session_roster_source(key)
-            .unwrap_or(RbcRosterSource::Derived);
-        if roster.is_empty() || !roster_source.is_authoritative() {
+        if roster.is_empty() {
             return false;
         }
         if let Err(err) = self.flush_pending_rbc(key) {
@@ -7464,15 +7578,22 @@ impl Actor {
             let topology = super::network_topology::Topology::new(roster.clone());
             let required = self.rbc_deliver_quorum(&topology);
             let ready_count = session.ready_signatures.len();
-            if ready_count >= required {
+            let total_chunks = session.total_chunks();
+            let missing_chunks = total_chunks != 0 && session.received_chunks() < total_chunks;
+            let ready_quorum = ready_count >= required;
+            if ready_quorum && !missing_chunks {
                 continue;
             }
-            let payload_bundle = if self.rbc_payload_rebroadcast_due(&key, now, payload_cooldown) {
+            let should_rebroadcast_payload = missing_chunks || !ready_quorum;
+            let payload_bundle = if should_rebroadcast_payload
+                && self.rbc_payload_rebroadcast_due(&key, now, payload_cooldown)
+            {
                 Self::rbc_payload_bundle(key, session, &roster)
             } else {
                 None
             };
-            let ready_bundle = if !session.ready_signatures.is_empty()
+            let ready_bundle = if !ready_quorum
+                && !session.ready_signatures.is_empty()
                 && self.rbc_ready_rebroadcast_due(&key, now, ready_cooldown)
             {
                 Self::rbc_ready_bundle(key, session, roster_hash)
@@ -7505,18 +7626,6 @@ impl Actor {
 
         let commit_topology = self.rbc_session_roster(key);
         if commit_topology.is_empty() {
-            self.subsystems.da_rbc.rbc.sessions.insert(key, session);
-            return Ok(());
-        }
-        let roster_source = self
-            .rbc_session_roster_source(key)
-            .unwrap_or(RbcRosterSource::Derived);
-        if !roster_source.is_authoritative() {
-            debug!(
-                height = key.1,
-                view = key.2,
-                "deferring RBC DELIVER until commit roster is authoritative"
-            );
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
@@ -7557,27 +7666,29 @@ impl Actor {
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
-        if let (Some(expected_root), Some(computed_root)) =
-            (session.expected_chunk_root, session.chunk_root())
-        {
-            if expected_root != computed_root {
-                session.invalid = true;
-                warn!(
-                    height = key.1,
-                    view = key.2,
-                    block = %key.0,
-                    ?expected_root,
-                    ?computed_root,
-                    "RBC chunk-root mismatch detected; refusing to emit DELIVER"
-                );
-                self.subsystems.da_rbc.rbc.sessions.insert(key, session);
-                self.clear_pending_rbc(&key);
-                if let Some(updated) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
-                    self.update_rbc_status_entry(key, &updated, false);
-                    self.persist_rbc_session(key, &updated);
+        if let Some(computed_root) = session.chunk_root() {
+            if let Some(expected_root) = session.expected_chunk_root {
+                if expected_root != computed_root {
+                    session.invalid = true;
+                    warn!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        ?expected_root,
+                        ?computed_root,
+                        "RBC chunk-root mismatch detected; refusing to emit DELIVER"
+                    );
+                    self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+                    self.clear_pending_rbc(&key);
+                    if let Some(updated) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
+                        self.update_rbc_status_entry(key, &updated, false);
+                        self.persist_rbc_session(key, &updated);
+                    }
+                    self.publish_rbc_backlog_snapshot();
+                    return Ok(());
                 }
-                self.publish_rbc_backlog_snapshot();
-                return Ok(());
+            } else {
+                session.expected_chunk_root = Some(computed_root);
             }
         }
 
@@ -8628,8 +8739,9 @@ impl PhaseTracker {
     }
 }
 
-/// Return `true` when we have observed a delivered RBC payload that matches the given
-/// block hash, height, and payload digest without being marked invalid.
+/// Return `true` when we have observed a delivered RBC payload with a complete
+/// chunk set that matches the given block hash, height, and payload digest without
+/// being marked invalid.
 fn rbc_payload_matches(
     sessions: &BTreeMap<super::rbc_store::SessionKey, RbcSession>,
     handle: &rbc_status::Handle,
@@ -8669,6 +8781,14 @@ pub(crate) enum RbcSessionError {
         /// Hard cap enforced by the implementation.
         max_chunks: u32,
     },
+    /// Chunk digest count mismatched the advertised chunk count.
+    #[error("RBC chunk digest count mismatch: expected {total_chunks}, observed {observed}")]
+    DigestCountMismatch {
+        /// Reported chunk count in the RBC session.
+        total_chunks: u32,
+        /// Observed digest count.
+        observed: usize,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -8677,6 +8797,7 @@ pub(crate) struct RbcSession {
     total_chunks: u32,
     payload_hash: Option<Hash>,
     expected_chunk_root: Option<Hash>,
+    expected_chunk_digests: Option<Vec<[u8; 32]>>,
     epoch: u64,
     chunks: Vec<Option<RbcChunkEntry>>,
     received_chunks: u32,
@@ -8696,6 +8817,7 @@ impl RbcSession {
         total_chunks: u32,
         payload_hash: Option<Hash>,
         expected_chunk_root: Option<Hash>,
+        expected_chunk_digests: Option<Vec<[u8; 32]>>,
         epoch: u64,
     ) -> Result<Self, RbcSessionError> {
         if total_chunks > RBC_MAX_TOTAL_CHUNKS {
@@ -8704,11 +8826,20 @@ impl RbcSession {
                 max_chunks: RBC_MAX_TOTAL_CHUNKS,
             });
         }
+        if let Some(ref digests) = expected_chunk_digests {
+            if digests.len() != usize::try_from(total_chunks).unwrap_or(usize::MAX) {
+                return Err(RbcSessionError::DigestCountMismatch {
+                    total_chunks,
+                    observed: digests.len(),
+                });
+            }
+        }
         let capacity = usize::try_from(total_chunks).unwrap_or(RBC_MAX_TOTAL_CHUNKS as usize);
         Ok(Self {
             total_chunks,
             payload_hash,
             expected_chunk_root,
+            expected_chunk_digests,
             epoch,
             chunks: vec![None; capacity],
             received_chunks: 0,
@@ -8731,7 +8862,7 @@ impl RbcSession {
         expected_chunk_root: Option<Hash>,
         epoch: u64,
     ) -> Self {
-        Self::new(total_chunks, payload_hash, expected_chunk_root, epoch)
+        Self::new(total_chunks, payload_hash, expected_chunk_root, None, epoch)
             .expect("test configuration should respect RBC chunk cap")
     }
 
@@ -8850,6 +8981,7 @@ impl RbcSession {
     pub(crate) fn delivered_payload_matches(&self, payload_hash: &Hash) -> bool {
         self.delivered
             && !self.is_invalid()
+            && self.received_chunks == self.total_chunks
             && matches!(self.payload_hash(), Some(hash) if &hash == payload_hash)
     }
 
@@ -8920,6 +9052,11 @@ impl RbcSession {
             })
             .collect();
 
+        let chunk_digests = self
+            .expected_chunk_digests
+            .clone()
+            .or_else(|| self.all_chunk_digests())
+            .unwrap_or_default();
         let computed_root = self.chunk_root();
         let now_ms = TimeSource::new_system()
             .now()
@@ -8936,6 +9073,7 @@ impl RbcSession {
             view: key.2,
             epoch: self.epoch,
             total_chunks: self.total_chunks,
+            chunk_digests,
             payload_hash: self.payload_hash,
             expected_chunk_root: self.expected_chunk_root,
             computed_chunk_root: computed_root,
@@ -8966,8 +9104,10 @@ impl RbcSession {
 
         let PersistedSession {
             total_chunks,
+            chunk_digests,
             payload_hash,
             expected_chunk_root,
+            computed_chunk_root,
             invalid,
             ready_signatures,
             delivered,
@@ -8978,6 +9118,7 @@ impl RbcSession {
             epoch,
             ..
         } = persisted.clone();
+        let expected_chunk_root = expected_chunk_root.or(computed_chunk_root);
 
         if total_chunks > RBC_MAX_TOTAL_CHUNKS {
             return Err(PersistedLoadError::TooManyChunks {
@@ -9022,6 +9163,27 @@ impl RbcSession {
             }
         }
 
+        let expected_chunk_digests = if !chunk_digests.is_empty() {
+            if chunk_digests.len() != usize::try_from(total_chunks).unwrap_or(usize::MAX) {
+                return Err(PersistedLoadError::DigestCountMismatch {
+                    total_chunks,
+                    observed: chunk_digests.len(),
+                });
+            }
+            Some(chunk_digests)
+        } else if received_chunks == total_chunks {
+            let mut digests = Vec::with_capacity(data.len());
+            for entry in &data {
+                let entry = entry
+                    .as_ref()
+                    .expect("received_chunks == total_chunks implies all chunk slots filled");
+                digests.push(entry.digest);
+            }
+            Some(digests)
+        } else {
+            None
+        };
+
         let ready_signatures = ready_signatures
             .into_iter()
             .map(|sig| ReadySignature {
@@ -9030,16 +9192,29 @@ impl RbcSession {
             })
             .collect();
 
-        let mut session = Self::new(total_chunks, payload_hash, expected_chunk_root, epoch)
-            .map_err(|err| match err {
-                RbcSessionError::TooManyChunks {
-                    total_chunks,
-                    max_chunks,
-                } => PersistedLoadError::TooManyChunks {
-                    total_chunks,
-                    max_chunks,
-                },
-            })?;
+        let mut session = Self::new(
+            total_chunks,
+            payload_hash,
+            expected_chunk_root,
+            expected_chunk_digests,
+            epoch,
+        )
+        .map_err(|err| match err {
+            RbcSessionError::TooManyChunks {
+                total_chunks,
+                max_chunks,
+            } => PersistedLoadError::TooManyChunks {
+                total_chunks,
+                max_chunks,
+            },
+            RbcSessionError::DigestCountMismatch {
+                total_chunks,
+                observed,
+            } => PersistedLoadError::DigestCountMismatch {
+                total_chunks,
+                observed,
+            },
+        })?;
         session.chunks = data;
         session.received_chunks = received_chunks;
         session.ready_signatures = ready_signatures;
@@ -9048,6 +9223,7 @@ impl RbcSession {
         session.deliver_sender = deliver_sender;
         session.deliver_signature = deliver_signature;
         session.invalid = invalid;
+        session.drop_mismatched_chunks();
         session.recovered_from_disk = true;
         Ok(session)
     }
@@ -9106,16 +9282,60 @@ impl RbcSession {
         self.note_chunk(idx, bytes, Some(sender));
     }
 
+    fn drop_mismatched_chunks(&mut self) -> usize {
+        let Some(expected) = self.expected_chunk_digests.as_ref() else {
+            return 0;
+        };
+        if expected.len() != self.chunks.len() {
+            self.invalid = true;
+            return 0;
+        }
+
+        let mut dropped = 0usize;
+        for (idx, slot) in self.chunks.iter_mut().enumerate() {
+            let Some(entry) = slot.as_ref() else {
+                continue;
+            };
+            if expected[idx] != entry.digest {
+                *slot = None;
+                dropped = dropped.saturating_add(1);
+            }
+        }
+
+        if dropped > 0 {
+            self.received_chunks = self
+                .chunks
+                .iter()
+                .filter(|entry| entry.is_some())
+                .count()
+                .try_into()
+                .unwrap_or(u32::MAX);
+        }
+
+        dropped
+    }
+
     fn note_chunk(&mut self, idx: u32, bytes: Vec<u8>, _sender: Option<u32>) {
         if idx >= self.total_chunks {
             return;
         }
+        let mut hasher = Sha256::new();
+        sha2::digest::Update::update(&mut hasher, &bytes);
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&hasher.finalize());
+
+        if let Some(expected) = self.expected_chunk_digests.as_ref() {
+            let Some(expected_digest) = expected.get(idx as usize) else {
+                self.invalid = true;
+                return;
+            };
+            if expected_digest != &digest {
+                return;
+            }
+        }
+
         let slot = &mut self.chunks[idx as usize];
         if slot.is_none() {
-            let mut hasher = Sha256::new();
-            sha2::digest::Update::update(&mut hasher, &bytes);
-            let mut digest = [0u8; 32];
-            digest.copy_from_slice(&hasher.finalize());
             *slot = Some(RbcChunkEntry { bytes, digest });
             self.received_chunks = self.received_chunks.saturating_add(1);
         }
@@ -9168,6 +9388,14 @@ pub enum PersistedLoadError {
         total_chunks: u32,
         /// Hard cap enforced at runtime.
         max_chunks: u32,
+    },
+    /// Persisted chunk digest list length mismatched the chunk count.
+    #[error("persisted RBC digest count mismatch: expected {total_chunks}, observed {observed}")]
+    DigestCountMismatch {
+        /// Persisted chunk count.
+        total_chunks: u32,
+        /// Observed digest count.
+        observed: usize,
     },
 }
 

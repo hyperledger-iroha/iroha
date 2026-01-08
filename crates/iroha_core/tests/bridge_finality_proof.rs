@@ -27,7 +27,7 @@ use iroha_data_model::{
     ChainId,
     block::{BlockHeader, builder::BlockBuilder},
     bridge::BridgeFinalityProof,
-    consensus::{QcAggregate, Qc, VALIDATOR_SET_HASH_VERSION_V1},
+    consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
     peer::PeerId,
 };
 

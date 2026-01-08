@@ -363,21 +363,12 @@ mod tests {
 
     #[test]
     fn pending_block_state_roots_reset_on_replace_and_abort() {
-        let mut pending = PendingBlock::new(
-            sample_block(1),
-            Hash::prehashed([0x11; Hash::LENGTH]),
-            1,
-            0,
-        );
+        let mut pending =
+            PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
         pending.parent_state_root = Some(Hash::prehashed([0x22; Hash::LENGTH]));
         pending.post_state_root = Some(Hash::prehashed([0x33; Hash::LENGTH]));
 
-        pending.replace_block(
-            sample_block(2),
-            Hash::prehashed([0x44; Hash::LENGTH]),
-            2,
-            0,
-        );
+        pending.replace_block(sample_block(2), Hash::prehashed([0x44; Hash::LENGTH]), 2, 0);
         assert!(pending.parent_state_root.is_none());
         assert!(pending.post_state_root.is_none());
 

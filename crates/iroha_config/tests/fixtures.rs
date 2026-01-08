@@ -830,7 +830,7 @@ fn minimal_config_snapshot() {
                 control_msg_channel_cap: 1024,
                 consensus_mode: Permissioned,
                 mode_flip_enabled: true,
-                da_enabled: false,
+                da_enabled: true,
                 da_quorum_timeout_multiplier: 3,
                 da_availability_timeout_multiplier: 2,
                 da_availability_timeout_floor: 2s,

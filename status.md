@@ -1,6 +1,32 @@
 # Status
 
 ## Latest Updates
+- Sumeragi/RBC: refresh derived roster snapshots on READY/DELIVER roster-hash mismatches, reset READY/DELIVER state on derived-roster changes, and add coverage.
+- Tests: not run (not requested).
+- Sumeragi/RBC: accept persisted sessions when both manifests lack git commit hashes, adopt computed chunk roots on persisted-session rebuild, and set expected chunk roots from READY/DELIVER when missing; add coverage.
+- Tests: not run (not requested).
+- Sumeragi/RBC: allow READY/DELIVER emission and validation with derived rosters when roster hashes match (stash mismatches until INIT), use computed chunk roots for local READY/DELIVER emission, and flush pending RBC once a roster is cached; update docs/tests.
+- Tests: not run (not requested).
+- Sumeragi/NPoS: enforce stake-quorum validation for commit and block-sync QCs, require stake snapshots for NPoS QC validation, propagate stake snapshots through precommit signer records, and add NPoS stake-quorum coverage; update Sumeragi docs accordingly.
+- Tests: not run (not requested).
+- Sumeragi/QC: accept block-sync commit votes for already known blocks even when no roster hints are attached, and add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi/RBC: bind per-chunk digests into INIT, validate cached chunks on INIT/hydration, drop mismatches on load, require delivered payload matches only when the chunk set is complete, and ignore conflicting INITs instead of poisoning live sessions; add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi/QC: persist commit certificates into world storage, commit-roster journals, and roster sidecars at commit time; accept late commit QCs for committed/known blocks; and add regression coverage for committed-height QC handling and block-sync updates.
+- Tests: not run (not requested).
+- Sumeragi/RBC: avoid evicting pending stashes for active sessions when the pending session cap is hit; drop new pending frames instead, record session-cap drops, and add coverage/docs.
+- Tests: not run (not requested).
+- Block sync: require stake snapshots for NPoS roster metadata in share batches (drop incomplete hints), align fetch-pending roster checks with consensus mode, and add NPoS roster-metadata tests.
+- Tests: not run (not requested).
+- Kagami/localnet: enforce NPoS only for the Sora Nexus public dataspace (other Iroha3 dataspaces can be permissioned or NPoS), relax profile verification to allow permissioned dev/testus manifests, block staged cutovers in profile verification, fix unseeded localnet account key reuse, adjust swarm/validation handling, update localnet defaults, and refresh genesis/sumeragi/kagami profile docs + README guidance.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 120s: waiting for build directory lock); `CARGO_TARGET_DIR=target/codex-kagami cargo test -p iroha_kagami` (timed out after 300s during compilation; warning: `private_interfaces` in `crates/iroha_core/src/sumeragi/main_loop/qc.rs`).
+- Sumeragi/DA: default `da_enabled=true` in config/data-model to match v3 DA/RBC requirements, and update docs/tests accordingly.
+- Tests: not run (not requested).
+- Sumeragi/RBC: keep payload rebroadcasts active when READY quorum is reached but chunks are still missing; add coverage and update docs.
+- Tests: not run (not requested).
+- Block sync: avoid decode panics on invalid GetBlocksAfter/ShareBlocks payloads, validate block sequences at handling time, and add regression coverage.
+- Tests: not run (not requested).
 - Sumeragi/RBC: represent empty payloads as a single chunk, invalidate recovered sessions on payload-hash mismatch, clear pending stash on chunk-root mismatch, and reset READY/DELIVER state when authoritative rosters override derived; add regression coverage.
 - Tests: not run (not requested).
 - Sumeragi/RBC: require authoritative rosters before handling READY/DELIVER, stash unverified frames, retain delivered chunk bytes for sampling (no compaction), and reject zero `rbc_chunk_max_bytes`; update docs/tests/metrics accordingly.
@@ -9,7 +35,7 @@
 - Tests: not run (not requested).
 - CLI smoke fixes: align council/sumeragi summary expectations, keep ledger export schema hashing keyed to the iroha binary, and enrich ledger export schema-mismatch errors; drop unused imports in client/space-directory.
 - Tests: `cargo test -p iroha_cli --test cli_smoke`; `cargo test -p iroha_cli ledger_export_schema_mismatch_reports_expected_and_actual`.
-- Sumeragi/DA: treat local BlockCreated payloads as available for the DA gate (missing_local_data clears without waiting on RBC delivery), and only broadcast BlockSyncUpdate when a verifiable commit QC is attached; otherwise fall back to BlockCreated for precommit-vote/reschedule rebroadcasts; refresh docs and unit tests accordingly.
+- Sumeragi/DA: treat local BlockCreated payloads as available for the DA gate (missing_local_data clears without waiting on RBC delivery), and only broadcast BlockSyncUpdate when a verifiable commit QC or validator checkpoint is attached (NPoS requires a matching stake snapshot); otherwise fall back to BlockCreated for precommit-vote/reschedule rebroadcasts; refresh docs and unit tests accordingly.
 - Tests: not run (not requested).
 - Offline balance proofs: reject invalid blinding/scalar byte lengths instead of panicking; add regression coverage for compute/builder paths.
 - Tests: not run (not requested).
