@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use fastpq_prover::{OperationKind, PublicInputs, StateTransition, TransitionBatch};
 use iroha_crypto::Hash;
 use iroha_data_model::{
+    DataSpaceId,
     account::AccountId,
     asset::id::AssetDefinitionId,
     block::{BlockHeader, consensus::ExecWitness},
@@ -14,7 +15,6 @@ use iroha_data_model::{
         FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript,
         TransferTranscript, TransferTranscriptBundle,
     },
-    DataSpaceId,
 };
 use iroha_primitives::numeric::Numeric;
 use iroha_zkp_halo2::poseidon;
@@ -434,7 +434,10 @@ mod tests {
     use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr};
 
     use iroha_data_model::{
-        block::{BlockHeader, consensus::{ExecKv, ExecWitness}},
+        block::{
+            BlockHeader,
+            consensus::{ExecKv, ExecWitness},
+        },
         fastpq::{TransferTranscript, TransferTranscriptBundle},
     };
     use iroha_primitives::numeric::Numeric;
@@ -534,9 +537,12 @@ mod tests {
     #[test]
     fn batch_from_transcripts_builds_transfer_rows() {
         let transcript = sample_transcript();
-        let batch =
-            batch_from_transcripts("fastpq-lane-balanced", sample_public_inputs(), [&transcript])
-                .unwrap();
+        let batch = batch_from_transcripts(
+            "fastpq-lane-balanced",
+            sample_public_inputs(),
+            [&transcript],
+        )
+        .unwrap();
         assert_eq!(batch.transitions.len(), 2);
         let delta = &transcript.deltas[0];
         let sender_key = format!("asset/{}/{}", delta.asset_definition, delta.from_account);
@@ -594,12 +600,9 @@ mod tests {
     #[test]
     fn batches_from_bundles_add_metadata() {
         let bundle = sample_bundle(Hash::prehashed([0x33; 32]));
-        let batches = batches_from_bundles(
-            FASTPQ_CANONICAL_PARAMETER_SET,
-            sample_template(),
-            [&bundle],
-        )
-        .expect("batches");
+        let batches =
+            batches_from_bundles(FASTPQ_CANONICAL_PARAMETER_SET, sample_template(), [&bundle])
+                .expect("batches");
         assert_eq!(batches.len(), 1);
         let batch = &batches[0];
         let entry_hex = batch
@@ -623,12 +626,9 @@ mod tests {
         let bundle_a = sample_bundle(Hash::prehashed([0x41; 32]));
         let bundle_b = sample_bundle(Hash::prehashed([0x42; 32]));
         let bundles = [&bundle_a, &bundle_b];
-        let built = batches_from_bundles(
-            FASTPQ_CANONICAL_PARAMETER_SET,
-            sample_template(),
-            bundles,
-        )
-        .expect("batches");
+        let built =
+            batches_from_bundles(FASTPQ_CANONICAL_PARAMETER_SET, sample_template(), bundles)
+                .expect("batches");
         let witness = ExecWitness {
             reads: Vec::new(),
             writes: Vec::new(),
@@ -724,12 +724,9 @@ mod tests {
         let bundle = sample_bundle(Hash::prehashed([0x24; 32]));
         let mut map = BTreeMap::new();
         map.insert(bundle.entry_hash, bundle.transcripts.clone());
-        let batches = dto_batches_from_transcripts(
-            FASTPQ_CANONICAL_PARAMETER_SET,
-            sample_template(),
-            &map,
-        )
-        .expect("dto");
+        let batches =
+            dto_batches_from_transcripts(FASTPQ_CANONICAL_PARAMETER_SET, sample_template(), &map)
+                .expect("dto");
         assert_eq!(batches.len(), 1);
         let entry_hex = hex::encode(
             batches[0]

@@ -20,12 +20,12 @@ translator: manual
 ## 現状実装
 
 - `TieredStateBackend`（`crates/iroha_core/src/state/tiered.rs`）は各コミット済みブロック後に WSV を走査し、キーを最終更新時刻でランク付けし、設定されたホット容量を超えたエントリをオンディスクのコールド階層へ退避します。コールドペイロードは Norito で書き出され、キーのハッシュ・値のフィンガープリント・退避パスを記録したスナップショットマニフェスト（`manifest.json`）を伴います。
-- ランタイム設定は `iroha_config.parameters.tiered_state` に配置されます（`enabled`, `hot_retained_keys`, `hot_retained_bytes`, `hot_retained_grace_snapshots`, `cold_store_root`, `max_snapshots`, `max_cold_bytes`）。ノードは起動時に `State::set_tiered_backend` を通して適用し、デフォルトビルドではオペレーターが opt-in するまで無効のままです。
+- ランタイム設定は `iroha_config.parameters.tiered_state` に配置されます（`enabled`, `hot_retained_keys`, `hot_retained_bytes`, `hot_retained_grace_snapshots`, `cold_store_root`, `da_store_root`, `max_snapshots`, `max_cold_bytes`）。ノードは起動時に `State::set_tiered_backend` を通して適用し、デフォルトビルドではオペレーターが opt-in するまで無効のままです。`cold_store_root` が未設定の場合はスナップショットを `da_store_root` に保存し、読み込みは両方のルートを参照します。`cold_store_root` または `da_store_root` を変更すると、インメモリのティアリングメタデータとスナップショットカウンタがリセットされます。
 - `hot_retained_bytes` は決定論的な Norito ペイロードのサイズ（WSV のインメモリサイズ見積もり）に基づくホット階層バイト上限です。grace 保持がある場合は一時的に上限を超えることがあり、超過はテレメトリで可視化されます。
 - `hot_retained_grace_snapshots` は新規にホットになったエントリを短期間ピン留めし、ランキング変動によるホット／コールドの churn を抑えます。
 - 値ハッシュが変わらない場合、コールドペイロードは前回スナップショットのシャードを再利用し、再エンコードを避けます。
 - `max_cold_bytes` はコールドストレージの合計サイズが上限を超えた場合に最古のスナップショットを剪定し、最新のスナップショットは保持します。
-- `StateBlock::commit` はワールドステートの書き込みロックを保持しながら設定済みコールドルート配下に新しいスナップショットを記録し、`max_snapshots` に従って古いディレクトリを剪定します。これにより、ピア間でマニフェストが決定的に一致します。
+- `StateBlock::commit` はワールドステートの書き込みロックを保持しながら設定済みのプライマリコールドルート（`cold_store_root` または `da_store_root`）配下に新しいスナップショットを記録し、`max_snapshots` に従って古いディレクトリを剪定します。これにより、ピア間でマニフェストが決定的に一致します。
 
 ## 次のステップ
 

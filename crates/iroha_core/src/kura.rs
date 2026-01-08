@@ -8,13 +8,13 @@ use std::{
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::{
-        Arc,
-        OnceLock,
+        Arc, OnceLock,
         mpsc::{self, RecvTimeoutError},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use crate::telemetry::StateTelemetry;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_config::{
     kura::{FsyncMode, InitMode},
@@ -39,7 +39,6 @@ use iroha_data_model::{
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
 use iroha_logger::prelude::*;
-use crate::telemetry::StateTelemetry;
 #[cfg(test)]
 use iroha_primitives::time::TimeSource;
 #[cfg(test)]
@@ -5063,10 +5062,10 @@ mod tests {
         transaction::TransactionBuilder,
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
+    use iroha_telemetry::metrics::Metrics;
     use iroha_test_samples::{
         SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
     };
-    use iroha_telemetry::metrics::Metrics;
     use iroha_version::codec::EncodeVersioned;
     use nonzero_ext::nonzero;
     use tempfile::TempDir;

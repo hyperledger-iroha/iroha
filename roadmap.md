@@ -229,7 +229,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 - [x] Surface operator-facing warnings/telemetry when caps trigger.
 - [ ] Implement live hot-tier eviction using measured WSV memory usage (not snapshot size estimates).
 - [x] Wire dedicated SoraVPN spool caps for Iroha 3 (budgets now map to `streaming.soravpn`).
-- [ ] Wire DA-backed cold/WSV retrieval for Iroha 3 while keeping Iroha 2 full-replica behavior.
+- [x] Wire DA-backed cold/WSV retrieval for Iroha 3 while keeping Iroha 2 full-replica behavior.
  - [x] Add operator guidance + metrics for sizing `nexus.storage` budgets and monitoring cap pressure.
  - [x] Portal SoraFS node operations runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
  - [x] Portal SoraFS node storage design translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.

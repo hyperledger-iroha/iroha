@@ -7,7 +7,9 @@
 
 use std::{env, time::Instant};
 
-use fastpq_prover::{OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch, verify};
+use fastpq_prover::{
+    OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch, verify,
+};
 use norito::core::to_bytes;
 
 const PARAMETER_SET: &str = "fastpq-lane-balanced";

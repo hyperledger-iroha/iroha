@@ -115,7 +115,7 @@ mod tests {
 
     #[test]
     fn ivm_artifact_loads() {
-        let artifact = ivm_artifact("artifact_v1_3_mode00_vlen0_cycles0_abi0")
+        let artifact = ivm_artifact("artifact_v1_7_mode00_vlen0_cycles0_abi1")
             .expect("artifact should be readable");
         assert!(artifact.size_bytes() > 0);
     }

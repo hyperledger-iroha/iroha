@@ -13134,6 +13134,7 @@ impl State {
             cfg.hot_retained_bytes.get(),
             cfg.hot_retained_grace_snapshots,
             cfg.cold_store_root.clone(),
+            cfg.da_store_root.clone(),
             cfg.max_snapshots,
             cfg.max_cold_bytes.get(),
         );
@@ -14205,18 +14206,18 @@ impl<'state> StateBlock<'state> {
         if self.exec_witness.is_none() {
             let mut witness = crate::sumeragi::witness::drain_exec_witness();
             if witness.fastpq_batches.is_empty() && !witness.fastpq_transcripts.is_empty() {
-                let template = crate::fastpq::public_inputs_template_from_block(
-                    &self._curr_block,
-                    &witness,
-                );
+                let template =
+                    crate::fastpq::public_inputs_template_from_block(&self._curr_block, &witness);
                 match crate::fastpq::batches_from_bundles(
                     crate::fastpq::FASTPQ_CANONICAL_PARAMETER_SET,
                     template,
                     witness.fastpq_transcripts.iter(),
                 ) {
                     Ok(batches) => {
-                        witness.fastpq_batches =
-                            batches.iter().map(crate::fastpq::transition_batch_to_dto).collect();
+                        witness.fastpq_batches = batches
+                            .iter()
+                            .map(crate::fastpq::transition_batch_to_dto)
+                            .collect();
                     }
                     Err(err) => {
                         iroha_logger::warn!(
@@ -14414,7 +14415,7 @@ impl<'state> StateBlock<'state> {
             };
             if let Some(manifest) = manifest {
                 let hot_bytes = manifest.hot_entries.iter().fold(0u64, |acc, entry| {
-                    acc.saturating_add(u64::try_from(entry.value_size_bytes).unwrap_or(u64::MAX))
+                    acc.saturating_add(u64::try_from(entry.value_size_bytes()).unwrap_or(u64::MAX))
                 });
                 crate::telemetry::record_state_tiered_snapshot(
                     &state_ref.telemetry,
@@ -19589,7 +19590,7 @@ mod tests {
         let cold_root = temp_dir.path().join("cold");
         std::fs::write(&cold_root, b"blocker file").expect("blocker file");
         *state.tiered_backend.get_mut() =
-            TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), 1, 0);
+            TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
 
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
             additions: vec![LaneConfig {
@@ -19652,6 +19653,7 @@ mod tests {
             hot_retained_grace_snapshots:
                 iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
             cold_store_root: Some(temp_file.path().to_path_buf()),
+            da_store_root: None,
             max_snapshots: 1,
             max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
         });

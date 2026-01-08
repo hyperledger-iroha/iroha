@@ -4367,6 +4367,20 @@ pub struct StreamingTelemetry {
 }
 
 #[cfg(feature = "telemetry")]
+impl std::fmt::Debug for StreamingTelemetry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamingTelemetry")
+            .field("enabled", &self.enabled.load(Ordering::Relaxed))
+            .field("rekeys_total", &self.rekeys_total.load(Ordering::Relaxed))
+            .field(
+                "gck_rotations_total",
+                &self.gck_rotations_total.load(Ordering::Relaxed),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "telemetry")]
 impl StreamingTelemetry {
     /// Construct a streaming telemetry handle backed by the shared metrics registry.
     pub fn new(metrics: Arc<Metrics>, enabled: bool) -> Self {

@@ -568,7 +568,9 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
 
         let numeric_values = matches!(
             transition.operation,
-            crate::OperationKind::Transfer | crate::OperationKind::Mint | crate::OperationKind::Burn
+            crate::OperationKind::Transfer
+                | crate::OperationKind::Mint
+                | crate::OperationKind::Burn
         );
         let (_value_old, _value_new, delta_signed, pre_value_u64) = if numeric_values {
             let pre_value_u64 = decode_u64_le(&transition.pre_value)?;

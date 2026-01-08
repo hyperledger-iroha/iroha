@@ -8,7 +8,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt, fs,
-    io::{BufWriter, Write},
+    io::{BufWriter, ErrorKind, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -40,6 +40,8 @@ pub struct TieredStateBackend {
     hot_retained_grace_snapshots: u64,
     /// Optional on-disk spill root for cold shards.
     cold_store_root: Option<PathBuf>,
+    /// Optional on-disk spill root for DA-backed cold shards.
+    da_store_root: Option<PathBuf>,
     /// Number of snapshot directories to retain (0 = keep all).
     max_snapshots: usize,
     /// Optional cold-tier byte budget across snapshots (0 = unlimited).
@@ -85,6 +87,7 @@ impl TieredStateBackend {
         hot_retained_bytes: u64,
         hot_retained_grace_snapshots: u64,
         cold_store_root: Option<PathBuf>,
+        da_store_root: Option<PathBuf>,
         max_snapshots: usize,
         max_cold_bytes: u64,
     ) -> Self {
@@ -94,6 +97,7 @@ impl TieredStateBackend {
             hot_retained_bytes,
             hot_retained_grace_snapshots,
             cold_store_root,
+            da_store_root,
             max_snapshots,
             max_cold_bytes,
             snapshot_counter: 0,
@@ -102,7 +106,7 @@ impl TieredStateBackend {
             last_manifest: None,
         };
         if backend.enabled {
-            backend.ensure_cold_root().ok();
+            backend.ensure_cold_roots().ok();
             let _ = backend.seed_snapshot_counter_if_needed();
         }
         backend
@@ -121,12 +125,12 @@ impl TieredStateBackend {
             return Ok(());
         }
 
-        let Some(root) = self.cold_store_root.clone() else {
+        let Some(root) = self.primary_cold_root().cloned() else {
             self.snapshot_counter_seeded = true;
             return Ok(());
         };
 
-        self.ensure_cold_root()
+        self.ensure_cold_roots()
             .wrap_err("failed to prepare cold tier root directory")?;
         self.recover_snapshot_artifacts(&root)?;
 
@@ -282,15 +286,15 @@ impl TieredStateBackend {
 
         if self.hot_retained_keys == 0
             && self.hot_retained_bytes == 0
-            && self.cold_store_root.is_none()
+            && self.primary_cold_root().is_none()
         {
             return Ok(None);
         }
 
-        let Some(root) = self.cold_store_root.clone() else {
+        let Some(root) = self.primary_cold_root().cloned() else {
             if self.hot_retained_keys > 0 || self.hot_retained_bytes > 0 {
                 iroha_logger::warn!(
-                    "tiered-state: hot tier limit set but cold_store_root missing; skipping snapshot"
+                    "tiered-state: hot tier limit set but cold_store_root/da_store_root missing; skipping snapshot"
                 );
             }
             return Ok(None);
@@ -512,7 +516,7 @@ impl TieredStateBackend {
 
     #[allow(clippy::too_many_lines)]
     fn execute_snapshot_plan(&mut self, mut plan: TieredSnapshotPlan, world: &World) -> Result<()> {
-        self.ensure_cold_root()
+        self.ensure_cold_roots()
             .wrap_err("failed to prepare cold tier root directory")?;
 
         let staging_dir = plan.snapshot_dir.with_extension("staging");
@@ -724,10 +728,20 @@ impl TieredStateBackend {
         self.max_cold_bytes
     }
 
+    fn cold_roots(&self) -> impl Iterator<Item = &PathBuf> {
+        self.cold_store_root.iter().chain(self.da_store_root.iter())
+    }
+
+    fn primary_cold_root(&self) -> Option<&PathBuf> {
+        self.cold_store_root
+            .as_ref()
+            .or(self.da_store_root.as_ref())
+    }
+
     /// Returns true when tiering is enabled and a cold tier is configured.
     #[must_use]
     pub fn is_cold_tier_enabled(&self) -> bool {
-        self.enabled && self.cold_store_root.is_some()
+        self.enabled && self.primary_cold_root().is_some()
     }
 
     /// Returns whether tiering is enabled.
@@ -744,7 +758,7 @@ impl TieredStateBackend {
 
     /// Return the total cold-tier bytes currently stored on disk.
     pub fn cold_store_bytes(&self) -> Result<Option<u64>> {
-        let Some(root) = self.cold_store_root.as_ref() else {
+        let Some(root) = self.primary_cold_root() else {
             return Ok(None);
         };
         if !root.exists() {
@@ -769,6 +783,30 @@ impl TieredStateBackend {
         Ok(Some(total))
     }
 
+    /// Load a cold payload from the configured cold roots.
+    pub fn read_cold_payload(
+        &self,
+        snapshot_index: u64,
+        entry: &TieredManifestEntry,
+    ) -> Result<Option<Vec<u8>>> {
+        let Some(rel_path) = entry.spill_path.as_ref() else {
+            return Ok(None);
+        };
+        for root in self.cold_roots() {
+            let path = root.join(format!("{snapshot_index:020}")).join(rel_path);
+            match fs::read(&path) {
+                Ok(bytes) => return Ok(Some(bytes)),
+                Err(err) if err.kind() == ErrorKind::NotFound => continue,
+                Err(err) => {
+                    return Err(err).wrap_err_with(|| {
+                        format!("failed to read cold payload {path}", path = path.display())
+                    });
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// Update configuration knobs at runtime.
     pub fn reconfigure(
         &mut self,
@@ -777,16 +815,19 @@ impl TieredStateBackend {
         hot_retained_bytes: u64,
         hot_retained_grace_snapshots: u64,
         cold_store_root: Option<PathBuf>,
+        da_store_root: Option<PathBuf>,
         max_snapshots: usize,
         max_cold_bytes: u64,
     ) {
-        let cold_root_changed = self.cold_store_root != cold_store_root;
+        let cold_root_changed =
+            self.cold_store_root != cold_store_root || self.da_store_root != da_store_root;
         let grace_changed = self.hot_retained_grace_snapshots != hot_retained_grace_snapshots;
         self.enabled = enabled;
         self.hot_retained_keys = hot_retained_keys;
         self.hot_retained_bytes = hot_retained_bytes;
         self.hot_retained_grace_snapshots = hot_retained_grace_snapshots;
         self.cold_store_root = cold_store_root;
+        self.da_store_root = da_store_root;
         self.max_snapshots = max_snapshots;
         self.max_cold_bytes = max_cold_bytes;
         if grace_changed {
@@ -804,7 +845,7 @@ impl TieredStateBackend {
             return;
         }
         if cold_root_changed {
-            if let Err(err) = self.ensure_cold_root() {
+            if let Err(err) = self.ensure_cold_roots() {
                 iroha_logger::warn!(
                     ?err,
                     "tiered-state: failed to prepare cold tier root after reconfigure"
@@ -823,10 +864,10 @@ impl TieredStateBackend {
             return Ok(());
         }
 
-        let Some(root) = self.cold_store_root.clone() else {
+        let Some(root) = self.primary_cold_root().cloned() else {
             return Ok(());
         };
-        self.ensure_cold_root()?;
+        self.ensure_cold_roots()?;
 
         let mut previous_map = BTreeMap::new();
         for entry in previous.entries() {
@@ -889,7 +930,7 @@ impl TieredStateBackend {
         if !self.enabled {
             return Ok(());
         }
-        let Some(root) = self.cold_store_root.clone() else {
+        let Some(root) = self.primary_cold_root().cloned() else {
             return Ok(());
         };
         if migrations.is_empty() {
@@ -992,8 +1033,8 @@ impl TieredStateBackend {
         Ok(())
     }
 
-    fn ensure_cold_root(&self) -> Result<()> {
-        if let Some(root) = &self.cold_store_root {
+    fn ensure_cold_roots(&self) -> Result<()> {
+        for root in self.cold_store_root.iter().chain(self.da_store_root.iter()) {
             fs::create_dir_all(root).wrap_err_with(|| {
                 format!(
                     "failed to create cold tier root {path}",
@@ -1255,8 +1296,8 @@ impl TieredStateBackend {
 
         let (value_hash, _json_len) =
             compute_json_hash(value).wrap_err("failed to encode value for tiered snapshot")?;
-        let value_size_bytes = compute_hot_bytes(value)
-            .wrap_err("failed to compute WSV hot-tier size estimate")?;
+        let value_size_bytes =
+            compute_hot_bytes(value).wrap_err("failed to compute WSV hot-tier size estimate")?;
 
         let meta = self
             .entries
@@ -2021,6 +2062,14 @@ pub struct TieredManifestEntry {
     spill_bytes: Option<u64>,
 }
 
+impl TieredManifestEntry {
+    /// Returns the deterministic payload size for the entry.
+    #[must_use]
+    pub fn value_size_bytes(&self) -> usize {
+        self.value_size_bytes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, num::NonZeroU32};
@@ -2101,7 +2150,7 @@ mod tests {
     fn snapshot_failure_leaves_existing_snapshot_intact() {
         let temp = tempdir().expect("tmpdir");
         let root = temp.path().to_path_buf();
-        let mut backend = TieredStateBackend::new(true, 0, 0, 0, Some(root.clone()), 0, 0);
+        let mut backend = TieredStateBackend::new(true, 0, 0, 0, Some(root.clone()), None, 0, 0);
 
         let existing_dir = root.join(format!("{:020}", 1_u64));
         fs::create_dir_all(&existing_dir).expect("create existing snapshot");
@@ -2145,7 +2194,7 @@ mod tests {
     fn persists_cold_entries_and_prunes_old_snapshots() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
-            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), 1, 0);
+            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 1, 0);
         let mut world = World::default();
 
         let qc1 = dummy_qc(1);
@@ -2160,6 +2209,7 @@ mod tests {
         assert_eq!(manifest.total_entries, 2);
         assert_eq!(manifest.cold_entries.len(), 1);
         assert_eq!(manifest.hot_entries.len(), 1);
+        assert!(manifest.hot_entries[0].value_size_bytes() > 0);
         assert!(manifest.cold_bytes_total > 0);
         assert!(manifest.cold_entries[0].spill_bytes.is_some());
 
@@ -2207,10 +2257,51 @@ mod tests {
     }
 
     #[test]
+    fn da_store_root_used_when_cold_root_missing() {
+        let temp = tempdir().expect("tmpdir");
+        let da_root = temp.path().join("da");
+        let mut backend = TieredStateBackend::new(true, 1, 0, 0, None, Some(da_root.clone()), 0, 0);
+        let mut world = World::default();
+
+        let qc1 = dummy_qc(1);
+        let qc2 = dummy_qc(2);
+        world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
+        world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("snapshot recorded");
+        let manifest = backend.last_manifest().expect("manifest recorded");
+        assert_eq!(manifest.total_entries, 2);
+        assert_eq!(manifest.cold_entries.len(), 1);
+
+        let snapshot_dir = da_root.join(format!("{:020}", manifest.snapshot_index));
+        assert!(snapshot_dir.exists(), "snapshot directory should exist");
+
+        let cold_entry = &manifest.cold_entries[0];
+        let spill_path = cold_entry
+            .spill_path
+            .as_ref()
+            .expect("cold entry has spill path");
+        let payload_path = snapshot_dir.join(spill_path);
+        assert!(
+            payload_path.exists(),
+            "cold payload should be stored under da root"
+        );
+
+        let encoded = backend
+            .read_cold_payload(manifest.snapshot_index, cold_entry)
+            .expect("read cold payload")
+            .expect("payload present");
+        let decoded: Qc = json::from_slice(&encoded).expect("cold payload decodes");
+        assert!(decoded == qc1 || decoded == qc2);
+    }
+
+    #[test]
     fn hot_byte_budget_demotes_entries_to_cold() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
-            TieredStateBackend::new(true, 0, 1, 0, Some(temp.path().to_path_buf()), 0, 0);
+            TieredStateBackend::new(true, 0, 1, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
 
         let qc1 = dummy_qc(1);
@@ -2233,7 +2324,7 @@ mod tests {
     fn hot_grace_snapshots_keep_recent_hot_entry() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
-            TieredStateBackend::new(true, 1, 0, 1, Some(temp.path().to_path_buf()), 0, 0);
+            TieredStateBackend::new(true, 1, 0, 1, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
 
         let qc1 = dummy_qc(1);
@@ -2277,7 +2368,7 @@ mod tests {
     fn hot_grace_allows_budget_overflow_for_previous_hot_entries() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
-            TieredStateBackend::new(true, 2, 0, 1, Some(temp.path().to_path_buf()), 0, 0);
+            TieredStateBackend::new(true, 2, 0, 1, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
 
         let qc1 = dummy_qc(1);
@@ -2289,7 +2380,7 @@ mod tests {
             .record_world_snapshot(&world)
             .expect("first snapshot");
 
-        backend.reconfigure(true, 1, 0, 1, Some(temp.path().to_path_buf()), 0, 0);
+        backend.reconfigure(true, 1, 0, 1, Some(temp.path().to_path_buf()), None, 0, 0);
         backend
             .record_world_snapshot(&world)
             .expect("second snapshot");
@@ -2302,8 +2393,16 @@ mod tests {
     #[test]
     fn tiered_backend_reports_budget_limits_and_cold_bytes() {
         let temp = tempdir().expect("tmpdir");
-        let mut backend =
-            TieredStateBackend::new(true, 1, 256, 0, Some(temp.path().to_path_buf()), 0, 512);
+        let mut backend = TieredStateBackend::new(
+            true,
+            1,
+            256,
+            0,
+            Some(temp.path().to_path_buf()),
+            None,
+            0,
+            512,
+        );
 
         assert_eq!(backend.hot_retained_bytes(), 256);
         assert_eq!(backend.max_cold_bytes(), 512);
@@ -2332,7 +2431,7 @@ mod tests {
     fn cold_payload_reuse_is_recorded_for_unchanged_entries() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
-            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), 0, 0);
+            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
 
         let qc1 = dummy_qc(1);
@@ -2387,7 +2486,7 @@ mod tests {
     fn prune_snapshots_to_cold_byte_budget() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
-            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), 0, 1);
+            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 0, 1);
         let mut world = World::default();
 
         let qc1 = dummy_qc(1);
@@ -2436,7 +2535,7 @@ mod tests {
         fs::create_dir_all(root.join("lanes")).expect("lanes dir");
         fs::create_dir_all(root.join("retired")).expect("retired dir");
 
-        let mut backend = TieredStateBackend::new(true, 0, 0, 0, Some(root.clone()), 0, 0);
+        let mut backend = TieredStateBackend::new(true, 0, 0, 0, Some(root.clone()), None, 0, 0);
         let world = World::default();
 
         backend.record_world_snapshot(&world).expect("snapshot");
@@ -2474,7 +2573,7 @@ mod tests {
         let lanes_root = root.join("lanes");
         fs::create_dir_all(&lanes_root).expect("lanes dir");
 
-        let backend = TieredStateBackend::new(false, 0, 0, 0, None, 0, 0);
+        let backend = TieredStateBackend::new(false, 0, 0, 0, None, None, 0, 0);
         backend
             .recover_snapshot_artifacts(&root)
             .expect("recover artifacts");
@@ -2500,7 +2599,7 @@ mod tests {
     fn reconfigure_clears_entries_on_cold_root_change() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
-            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), 0, 0);
+            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
         let qc = dummy_qc(1);
         world.commit_qcs.insert(qc.subject_block_hash, qc);
@@ -2511,7 +2610,47 @@ mod tests {
         assert!(!backend.entries.is_empty());
 
         let new_root = tempdir().expect("tmpdir");
-        backend.reconfigure(true, 1, 0, 0, Some(new_root.path().to_path_buf()), 0, 0);
+        backend.reconfigure(
+            true,
+            1,
+            0,
+            0,
+            Some(new_root.path().to_path_buf()),
+            None,
+            0,
+            0,
+        );
+
+        assert!(backend.entries.is_empty());
+        assert_eq!(backend.snapshot_counter, 0);
+        assert!(backend.last_manifest().is_none());
+    }
+
+    #[test]
+    fn reconfigure_clears_entries_on_da_root_change() {
+        let temp = tempdir().expect("tmpdir");
+        let da_root = temp.path().join("da");
+        let mut backend = TieredStateBackend::new(true, 1, 0, 0, None, Some(da_root), 0, 0);
+        let mut world = World::default();
+        let qc = dummy_qc(1);
+        world.commit_qcs.insert(qc.subject_block_hash, qc);
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("snapshot recorded");
+        assert!(!backend.entries.is_empty());
+
+        let new_root = tempdir().expect("tmpdir");
+        backend.reconfigure(
+            true,
+            1,
+            0,
+            0,
+            None,
+            Some(new_root.path().to_path_buf()),
+            0,
+            0,
+        );
 
         assert!(backend.entries.is_empty());
         assert_eq!(backend.snapshot_counter, 0);
@@ -2521,7 +2660,8 @@ mod tests {
     #[test]
     fn prune_old_snapshots_ignores_lane_and_retired_dirs() {
         let temp = tempdir().expect("tmpdir");
-        let backend = TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), 1, 0);
+        let backend =
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 1, 0);
 
         let snapshot1 = temp.path().join(format!("{:020}", 1_u64));
         let snapshot2 = temp.path().join(format!("{:020}", 2_u64));
@@ -2553,7 +2693,7 @@ mod tests {
     fn reconcile_lane_geometry_manages_lane_directories() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
-            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), 4, 0);
+            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 4, 0);
 
         let lane_count = NonZeroU32::new(4).expect("lane count");
         let lane0 = LaneConfig::default();
@@ -2613,7 +2753,7 @@ mod tests {
     fn lane_snapshot_dirs_relabel_on_alias_change() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
-            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), 1, 0);
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 1, 0);
 
         let initial_catalog = LaneCatalog::new(
             nonzero!(1_u32),

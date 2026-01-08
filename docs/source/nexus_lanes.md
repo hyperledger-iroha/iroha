@@ -82,7 +82,7 @@ LaneConfigEntry {
   - `lane_{id:03}_merge` — merge-ledger segment recording reduced state roots and settlement artefacts.
   - Global segments (consensus evidence, telemetry caches) remain shared because they are lane-neutral; their keys do not include lane prefixes.
 - Runtime watches lane catalog updates: newly added lanes have their block and merge-ledger directories provisioned automatically under `kura/blocks/` and `kura/merge_ledger/`, while retired lanes are archived under `kura/retired/{blocks,merge_ledger}/lane_{id:03}_*`.
-- Tiered-state snapshots mirror the same lifecycle; each lane writes to `cold_store_root/lanes/lane_{id:03}_{slug}` and retirements migrate the directory tree to `cold_store_root/retired/lanes/`.
+- Tiered-state snapshots mirror the same lifecycle; each lane writes under `<cold_root>/lanes/lane_{id:03}_{slug}` where `<cold_root>` is `cold_store_root` (or `da_store_root` when `cold_store_root` is unset), and retirements migrate the directory tree to `<cold_root>/retired/lanes/`.
 - **Key prefixes** — the 4-byte prefix computed from `LaneId` is always prepended to MV encoded keys. No host-specific hashing is used, so ordering is identical across nodes.
 - **Block log layout** — block data, index, hashes, and the durable count marker (`blocks.count.norito`) are nested under `kura/blocks/lane_{id:03}_{slug}/`. Merge-ledger journals reuse the same slug (`kura/merge/lane_{id:03}_{slug}.log`), keeping per-lane recovery flows isolated.
 - **Retention policy** — public lanes retain full block bodies; commitment-only lanes may compact older bodies after checkpoints because commitments are authoritative. Confidential lanes keep ciphertext journals in dedicated segments to avoid blocking other workloads.

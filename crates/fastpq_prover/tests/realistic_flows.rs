@@ -1,6 +1,8 @@
 //! FASTPQ proof smoke tests covering realistic governance and remittance scenarios.
 
-use fastpq_prover::{OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch, verify};
+use fastpq_prover::{
+    OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch, verify,
+};
 
 fn annotate_inputs(batch: &mut TransitionBatch, slot: u64) {
     batch.public_inputs.dsid = [0x3D; 16];
