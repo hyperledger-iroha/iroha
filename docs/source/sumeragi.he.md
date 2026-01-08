@@ -42,7 +42,7 @@ translator: manual
 - מכיוון שרק שני גבהים פתוחים בו-זמנית, אספנים, RBC וטלמטריה יכולים לצנר עבודה ללא סכנת קומיטים מתפצלים. האינווריאנטים מיושמים ב-`sumeragi::main_loop`: ‏`ensure_locked_qc_allows` מגן על הרכבת הצעות, בלוקים ממתינים נשמרים בזיכרון והקומיט משחרר `locked_qc` רק לאחר תצפית ב-commit certificate ילד תואם.
 
 ### פייסמייקר (שינויי View)
-- ב-v1 בוטל מרווח ההצבעה של Observers ב-View 0: עמיתי צפייה אינם מצביעים כלל ב-View 0. בטיימאאוט מקומי הם מבקשים שינוי View ללא הרחבה לפני הרוטציה. התזמונים נשלטים על ידי `SumeragiParameters` השרשרתיים (`BlockTimeMs`,‏ `CommitTimeMs`) – הצעת לידר סביב שליש זמן הצינור וקומיט צפוי סביב שני שלישים.
+- ב-v1 בוטל מרווח ההצבעה של Observers ב-View 0: עמיתי צפייה אינם מצביעים כלל ב-View 0. בטיימאאוט מקומי הם מבקשים שינוי View ללא הרחבה לפני הרוטציה. התזמונים נשלטים על ידי פרמטרים on-chain: ב-permissioned משתמשים ב-`SumeragiParameters` (`BlockTimeMs`,‏ `CommitTimeMs`), וב‑NPoS ב-`sumeragi_npos_parameters` (`block_time_ms`, `timeouts.timeout_commit_ms`) – הצעת לידר סביב שליש זמן הצינור וקומיט צפוי סביב שני שלישים.
 
 ### פרמטרים K / r
 - בקונפיג: ‏`sumeragi.collectors_k: usize` (מספר אספנים לגובה, ברירת מחדל 1) ו-`sumeragi.collectors_redundant_send_r: u8` (פיזור שליחות עודפות, ברירת מחדל 1).
@@ -162,9 +162,9 @@ translator: manual
 - `docs/source/grafana_sumeragi_overview.json` — דשבורד Grafana מוכן המציג סטיות בגובה commit certificate, מוני דרופ ונתוני VRF.
 
 **ספי התרעה**
-- זמני availability evidence: אם `sumeragi_qc_last_latency_ms{kind="availability"}` חוצה `0.6 * CommitTimeMs` פעמיים או שה-P95 עובר `0.7 * CommitTimeMs`.
+- זמני availability evidence: אם `sumeragi_qc_last_latency_ms{kind="availability"}` חוצה `0.6 * commit_time_ms` פעמיים או שה-P95 עובר `0.7 * commit_time_ms` (permissioned: `CommitTimeMs`, ‏NPoS: `timeouts.timeout_commit_ms`).
 - קיפאון הצבעות: `sum(rate(sumeragi_da_votes_ingested_total[2m])) == 0` בזמן ש-`sumeragi_rbc_backlog_sessions_pending > 0`.
-- עדי ביצוע: `collect_witness_ms` או P95 של `sumeragi_phase_latency_ms{phase="collect_witness"}` עולים על `0.75 * CommitTimeMs`, או נותרים אפס ≥3 סבבים למרות בלוקים חדשים.
+- עדי ביצוע: `collect_witness_ms` או P95 של `sumeragi_phase_latency_ms{phase="collect_witness"}` עולים על `0.75 * commit_time_ms` (permissioned: `CommitTimeMs`, ‏NPoS: `timeouts.timeout_commit_ms`), או נותרים אפס ≥3 סבבים למרות בלוקים חדשים.
 - פיזור אספנים: `collect_aggregator_ms` > `0.5 * sumeragi.npos.timeouts.aggregator_ms` בשלושה סבבים, ‎`sumeragi_redundant_sends_total` > `redundant_send_r`, ‎`rate(sumeragi_gossip_fallback_total[5m]) > 0`, או ‎`increase(block_created_*[5m]) > 0`/`increase(pacemaker_backpressure_deferrals_total[5m]) > 0`.
 
 מדדי השליחה העודפת (`sumeragi_redundant_sends_total`) עולים כאשר DA משדר מחדש מטעני RBC. הבדיקה `npos_redundant_send_retries_update_metrics` מבטיחה שדשבורדים תואמים לציפיות.

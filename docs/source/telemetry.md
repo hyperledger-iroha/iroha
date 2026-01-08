@@ -1032,22 +1032,22 @@ series are exposed behind the `metrics` capability and default to `0` in
 single-lane mode so dashboards can be provisioned early.
 
 Key metrics:
-- `nexus_scheduler_lane_teu_capacity{lane_id}` (gauge) — per-lane TEU cap.
-- `nexus_scheduler_lane_teu_slot_committed{lane_id}` (gauge) — TEU used during
+- `nexus_scheduler_lane_teu_capacity{lane}` (gauge) — per-lane TEU cap.
+- `nexus_scheduler_lane_teu_slot_committed{lane}` (gauge) — TEU used during
   the most recent slot.
-- `nexus_scheduler_lane_teu_slot_breakdown{lane_id,bucket}` (gauge) — stacked
+- `nexus_scheduler_lane_teu_slot_breakdown{lane,bucket}` (gauge) — stacked
   view of floor/headroom/must-serve/circuit-breaker consumption.
-- `nexus_scheduler_lane_teu_deferral_total{lane_id,reason}` (counter) — TEU
+- `nexus_scheduler_lane_teu_deferral_total{lane,reason}` (counter) — TEU
   deferred because the lane hit a cap, quota, or envelope limit.
-- `nexus_scheduler_dataspace_teu_backlog{lane_id,dataspace_id}` (gauge) — queued
+- `nexus_scheduler_dataspace_teu_backlog{lane,dataspace}` (gauge) — queued
   TEU demand remaining after scheduling.
-- `nexus_scheduler_dataspace_age_slots{lane_id,dataspace_id}` (gauge) — slots
+- `nexus_scheduler_dataspace_age_slots{lane,dataspace}` (gauge) — slots
   since the dataspace was last served.
-- `nexus_scheduler_starvation_bound_slots{lane_id}` (gauge) — configured
+- `nexus_scheduler_starvation_bound_slots{lane}` (gauge) — configured
   starvation bound applied to the lane.
-- `nexus_scheduler_must_serve_truncations_total{lane_id}` (counter) — truncated
+- `nexus_scheduler_must_serve_truncations_total{lane}` (counter) — truncated
   must-serve slices.
-- `nexus_scheduler_lane_trigger_level{lane_id}` (gauge) — current circuit-breaker tier.
+- `nexus_scheduler_lane_trigger_level{lane}` (gauge) — current circuit-breaker tier.
 
 The `/status` endpoint mirrors these gauges and now ships richer per-lane
 pipeline summaries via `nexus_scheduler_lane_teu_status` responses. Each lane

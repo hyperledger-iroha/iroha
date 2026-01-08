@@ -8999,6 +8999,14 @@ pub mod isi {
                 Parameter::Sumeragi(iroha_data_model::parameter::SumeragiParameter::NextMode(
                     next_mode,
                 )) => {
+                    if state_transaction.nexus.enabled {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "Nexus networks do not support staged consensus cutovers; remove sumeragi.next_mode/mode_activation_height"
+                                    .to_owned(),
+                            ),
+                        ));
+                    }
                     let params_view = state_transaction.world.parameters.get();
                     // Avoid redundant updates when the requested mode is already staged.
                     if params_view.sumeragi().next_mode() == Some(next_mode) {
@@ -9025,6 +9033,14 @@ pub mod isi {
                 Parameter::Sumeragi(
                     iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(height),
                 ) => {
+                    if state_transaction.nexus.enabled {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "Nexus networks do not support staged consensus cutovers; remove sumeragi.next_mode/mode_activation_height"
+                                    .to_owned(),
+                            ),
+                        ));
+                    }
                     let params_view = state_transaction.world.parameters.get();
                     if params_view.sumeragi().next_mode().is_none() {
                         return Err(InstructionExecutionError::InvalidParameter(
@@ -12020,7 +12036,8 @@ pub mod isi {
         fn mode_activation_height_requires_next_mode_in_same_block() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let mut state = State::new(World::default(), kura, query_handle);
+            state.nexus.get_mut().enabled = false;
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12037,6 +12054,31 @@ pub mod isi {
             match err {
                 Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => assert!(
                     msg.contains("mode_activation_height requires next_mode"),
+                    "unexpected error message: {msg}"
+                ),
+                other => panic!("unexpected error type: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn next_mode_rejected_when_nexus_enabled() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let next_mode = SetParameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
+                SumeragiConsensusMode::Npos,
+            )));
+            let err = next_mode
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("nexus should reject staged consensus cutovers");
+            match err {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => assert!(
+                    msg.contains("Nexus networks do not support staged consensus cutovers"),
                     "unexpected error message: {msg}"
                 ),
                 other => panic!("unexpected error type: {other:?}"),
@@ -12092,7 +12134,8 @@ pub mod isi {
         fn next_mode_without_activation_height_rejected_at_commit() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let mut state = State::new(World::default(), kura, query_handle);
+            state.nexus.get_mut().enabled = false;
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12119,7 +12162,8 @@ pub mod isi {
         fn next_mode_and_activation_height_commit_in_same_block() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let mut state = State::new(World::default(), kura, query_handle);
+            state.nexus.get_mut().enabled = false;
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12155,7 +12199,8 @@ pub mod isi {
         fn mode_activation_height_requires_future_block() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let mut state = State::new(World::default(), kura, query_handle);
+            state.nexus.get_mut().enabled = false;
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());

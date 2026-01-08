@@ -206,6 +206,8 @@ impl Root {
             self.tiered_state.da_store_root =
                 Some(PathBuf::from(defaults::tiered_state::DEFAULT_DA_STORE_ROOT));
         }
+        // Sora Nexus public dataspace always runs on the global NPoS ring.
+        self.sumeragi.consensus_mode = ConsensusMode::Npos;
 
         let catalog = &self.nexus.lane_catalog;
         let is_default_catalog = catalog.lane_count().get() == 1
@@ -444,6 +446,11 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         root.apply_sora_profile();
 
         assert!(root.nexus.enabled, "Sora profile must enable Nexus runtime");
+        assert_eq!(
+            root.sumeragi.consensus_mode,
+            ConsensusMode::Npos,
+            "Sora profile must force NPoS consensus"
+        );
         assert!(
             root.sumeragi.da_enabled,
             "Sora profile must enable data availability"
@@ -511,6 +518,11 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         root.apply_sora_profile();
 
         assert!(root.nexus.enabled, "Sora profile must enable Nexus runtime");
+        assert_eq!(
+            root.sumeragi.consensus_mode,
+            ConsensusMode::Npos,
+            "Sora profile must force NPoS consensus"
+        );
         assert!(
             root.sumeragi.da_enabled,
             "Sora profile must enable data availability"

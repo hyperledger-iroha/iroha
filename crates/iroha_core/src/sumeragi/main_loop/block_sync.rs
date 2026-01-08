@@ -400,6 +400,7 @@ impl Actor {
             signature_quorum_met,
             candidate_qc_present,
             commit_cert_present,
+            selection.checkpoint.is_some(),
             requested_missing_block,
             block_height,
             local_height,

@@ -12,7 +12,7 @@ Overview
 ### NPoS mode configuration (operators)
 
 2. **Choose the roster source.** `sumeragi.use_stake_snapshot_roster = true` tells the validator to hydrate the epoch roster from the staking snapshot provider (required for production NPoS). Leaving it `false` continues to mirror `trusted_peers` so small devnets can stage upgrades without the staking sidecar. When no public-lane stake records exist, NPoS treats every roster peer as equal stake for quorum checks; once stake records exist, every roster peer must have stake data.
-3. **Define epoch cadence.** `sumeragi.epoch_length_blocks` controls how long a validator set lives. Within each epoch, `sumeragi.npos.vrf.commit_window_blocks` and `.reveal_window_blocks` fence the VRF commit/reveal RPCs, and the on-chain `sumeragi.block_time_ms` target informs telemetry dashboards and the pacemaker expectation (keep `sumeragi.npos.block_time` aligned as a bootstrap fallback). When `sumeragi_npos_parameters` is present on-chain (genesis or governance), its `epoch_length_blocks` and VRF commit/reveal windows are authoritative and override the local config values.
+3. **Define epoch cadence.** `sumeragi.epoch_length_blocks` controls how long a validator set lives. Within each epoch, `sumeragi.npos.vrf.commit_window_blocks` and `.reveal_window_blocks` fence the VRF commit/reveal RPCs, and the on-chain `sumeragi_npos_parameters.block_time_ms` target informs telemetry dashboards and the pacemaker expectation (keep `sumeragi.npos.block_time` aligned as a bootstrap fallback). When `sumeragi_npos_parameters` is present on-chain (genesis or governance), its `block_time_ms`, pacemaker timeouts, collector fan-out, `epoch_length_blocks`, VRF commit/reveal windows, and election/reconfig knobs are authoritative and override the local config values.
 4. **Calibrate collector fan-out.**
    - `sumeragi.npos.k_aggregators` decides how many collectors assemble votes per slot.
    - `sumeragi.npos.redundant_send_r` caps how many additional collectors a validator targets when local timeouts expire.
@@ -162,7 +162,7 @@ Message Flow (steady state)
 - Set B validators: vote/sign under the same rules as Set A; routing/collection still prioritizes Set A for throughput, but any quorum of validators is accepted.
 - Receivers: verify `CommitCertificate`, update highest/locked commit certificate tracking (`highest_qc`/`locked_qc` fields), and attempt commit whenever the certificate and block payload are present. If a certificate arrives before the payload, peers request the missing block via block sync (signer-first with topology fallback), retry with backoff on tick, and force a view change after the missing-payload window so consensus does not stall indefinitely. Missing-block fetches can also come from RBC reconstruction or missing-parent detection; consensus-priority requests override background windows, but background requests can still trigger a view change when a one-block gap persists.
 - Missing-parent recovery: if a block arrives ahead of local height and its parent is unknown, peers request the parent immediately and sweep pending gaps; when the gap is exactly one height the request arms the view-change window, while larger gaps keep retrying without forcing a view change while the node catches up.
-- Block-sync updates: peers gossip `BlockSyncUpdate` payloads to a capped fanout (`block_gossip_size`) after commits and for vote/backfill so stragglers and observers can sync without relying on full broadcast. Updates are only broadcast when they carry verifiable roster metadata (commit QC or validator checkpoint; in NPoS the roster evidence must include a matching stake snapshot); otherwise the sender falls back to `BlockCreated` payload broadcasts to avoid dropped updates. Receivers apply backpressure when the block queue is full instead of dropping updates so commit certificate evidence is not lost. Attached availability evidence, prepare/new-view certificates, and commit certificates are only applied when their height and block hash match the payload; mismatches are ignored.
+- Block-sync updates: peers gossip `BlockSyncUpdate` payloads to a capped fanout (`block_gossip_size`) after commits and for vote/backfill so stragglers and observers can sync without relying on full broadcast. Updates are only broadcast when they carry verifiable roster metadata (commit QC or validator checkpoint; in NPoS the roster evidence must include a matching stake snapshot); otherwise the sender falls back to `BlockCreated` payload broadcasts to avoid dropped updates. Receivers only apply block-sync payloads when they include commit evidence (commit quorum signatures, a commit QC/certificate, or a validator checkpoint), except for explicit missing-block requests for the next height that carry at least one valid signer. Receivers apply backpressure when the block queue is full instead of dropping updates so commit certificate evidence is not lost. Attached availability evidence, prepare/new-view certificates, and commit certificates are only applied when their height and block hash match the payload; mismatches are ignored.
 - Availability votes: peers gossip `AvailabilityVote` frames to a capped fanout (`block_gossip_size`) so availability evidence can converge without full broadcast when collector routing is sparse.
 - View-change counters: `view_change_suggest_total` increments when the local node triggers a view change (timeouts, missing payloads, validation rejects). `view_change_install_total` increments when the node installs a higher view for a height after observing higher-view traffic or its own triggers; `view_change_index` reports the currently tracked view.
 
@@ -173,7 +173,7 @@ Commit rule (commit certificate)
 - Commit QCs always bind `parent_state_root` and `post_state_root`; there is no separate execution QC gate. Data Availability evidence is external and never blocks commit.
 
 Pacemaker (view changes)
-- View‑0 voting follows the same rules for Set A and Set B validators. On local timeout in view 0, nodes suggest a view change (no widen‑before‑rotate). Timing is driven by on‑chain `SumeragiParameters` (`BlockTimeMs` and `CommitTimeMs`), with leader proposal roughly at 1/3 and expected commit at 2/3 of the pipeline time.
+- View‑0 voting follows the same rules for Set A and Set B validators. On local timeout in view 0, nodes suggest a view change (no widen‑before‑rotate). Timing is driven by on‑chain parameters: permissioned uses `SumeragiParameters` (`BlockTimeMs`/`CommitTimeMs`), NPoS uses `sumeragi_npos_parameters` (`block_time_ms` + `timeouts.timeout_commit_ms`), with leader proposal roughly at 1/3 and expected commit at 2/3 of the pipeline time.
 - View-change proofs advance once `f+1` validators raise suspicion (commit failure or quorum timeout); a full commit quorum is not required for a view change.
 
 K / r Parameters
@@ -198,10 +198,10 @@ Genesis manifests now seed `Sumeragi::NextMode` and the `sumeragi_npos_parameter
 
 ### Kagami NPoS devnets (local + Docker)
 
-- The public Sora Nexus dataspace requires NPoS and disallows staged cutovers; other Iroha3 dataspaces may use permissioned or NPoS but still must omit `--next-consensus-mode`/`--mode-activation-height`.
+- Sora profile localnets use NPoS for the global merge ledger and disallow staged cutovers; run permissioned Iroha3 localnets without `--sora-profile`.
 - Bare-metal (Iroha3 NPoS): `kagami localnet --peers 4 --out-dir ./npos-local --consensus-mode npos --seed demo` writes genesis/configs/start scripts with BLS keys/PoPs and a stable NPoS fingerprint; start with `./npos-local/start.sh`.
 - Sora Nexus localnet: `kagami localnet --sora-profile nexus --peers 4 --out-dir ./sora-nexus-local` generates a 4-node NPoS localnet and starts `irohad --sora` for Nexus dataspaces.
-- Sora dataspace localnet: `kagami localnet --sora-profile dataspace --consensus-mode permissioned --peers 4 --out-dir ./sora-ds-local` keeps Sora multi-lane defaults while letting you pick permissioned/NPoS consensus.
+- Sora dataspace localnet: `kagami localnet --sora-profile dataspace --peers 4 --out-dir ./sora-ds-local` keeps Sora multi-lane defaults under NPoS; use `--consensus-mode permissioned` only without `--sora-profile`.
 - Bare-metal (Iroha2 staged cutover): `kagami localnet --build-line iroha2 --peers 4 --out-dir ./npos-local --consensus-mode permissioned --next-consensus-mode npos --mode-activation-height 5 --seed demo` stages a permissioned→NPoS cutover at height 5 and keeps the advertised fingerprint on the permissioned mode until activation.
 - Localnet defaults to a fast 1s pipeline (block/commit split) and bumps redundant-send fanout when DA is enabled; override with `--block-time-ms`, `--commit-time-ms`, or `--redundant-send-r` if you need slower timings. When only one of the block/commit values is set, Kagami mirrors it to the other to keep the pipeline balanced; set both to decouple them.
 - Docker Compose: point `--config-dir` at the same localnet output and run `kagami swarm --peers 4 --config-dir ./npos-local --image hyperledger/iroha:dev --out-file docker-compose.npos.yml --consensus-mode npos --no-banner --print` to emit a Compose file that re-signs genesis in-container with `GENESIS_CONSENSUS_MODE` overrides (add the `GENESIS_NEXT_CONSENSUS_MODE`/`GENESIS_MODE_ACTIVATION_HEIGHT` pair only on Iroha2 staged networks).
@@ -273,7 +273,7 @@ Notes
 - Persisted RBC sessions include the authoritative roster snapshot so restarts validate READY/DELIVER against the original topology even if the live roster changes; derived fallback rosters are not persisted.
 - Vote/certificate signature checks use the roster snapshot tied to the block when available, falling back to the live commit topology so roster changes do not invalidate late votes or certificates.
 - When the commit topology changes at block commit, the node clears pending consensus caches (pending blocks, vote logs, RBC sessions, DA bundles) so stale votes from the old roster cannot stall the pipeline.
-- Parameters `BlockTimeMs` / `CommitTimeMs` are controlled on‑chain via `SumeragiParameter` and affect pacing but not semantics.
+- Permissioned timing uses on‑chain `SumeragiParameters` (`BlockTimeMs`/`CommitTimeMs`); NPoS timing uses on‑chain `sumeragi_npos_parameters` (`block_time_ms` + `timeouts.timeout_commit_ms`). Both affect pacing but not semantics.
 - DA-enabled runs derive the quorum timeout as `3 * (block_time + 4 * commit_time)` to leave headroom for RBC/availability-evidence propagation on slower hosts.
 - Availability timeouts use `2 * max(quorum_timeout, 2s)` in DA mode to tolerate payload hydration before logging/rebroadcast; consensus does not reschedule on DA evidence.
 - Stale-view guards drop old-view consensus traffic, but RBC payload messages and BlockCreated payloads are still accepted while DA is enabled (even across view changes) so availability can clear without waiting for perfectly synchronized views.
@@ -415,7 +415,7 @@ links for runbooks or incident retrospectives.
 Stalled collectors or slow witness acknowledgements manifest as missing
 availability-evidence records, prolonged DA collection, or `collect_witness_ms`
 spikes. Operators should wire the following telemetry to detect and triage
-issues before commits approach the configured `CommitTimeMs` deadline.
+issues before commits approach the configured commit-time budget (permissioned `CommitTimeMs` or NPoS `timeouts.timeout_commit_ms`).
 
 **Key dashboards**
 - `sum(rate(sumeragi_da_votes_ingested_by_collector[1m])) by (collector_idx)` —
@@ -456,16 +456,18 @@ issues before commits approach the configured `CommitTimeMs` deadline.
 
 **Alert thresholds**
 - Availability evidence latency: alert when `sumeragi_qc_last_latency_ms` for
-  `kind="availability"` exceeds `0.6 * CommitTimeMs` for two consecutive
-  windows, or when the histogram P95 crosses `0.7 * CommitTimeMs`.
+  `kind="availability"` exceeds `0.6 * commit_time_ms` for two consecutive
+  windows, or when the histogram P95 crosses `0.7 * commit_time_ms`
+  (permissioned `CommitTimeMs`, NPoS `timeouts.timeout_commit_ms`).
 - Vote ingress stagnation: alert when
   `sum(rate(sumeragi_da_votes_ingested_total[2m])) == 0` while
   `sumeragi_rbc_backlog_sessions_pending > 0` (collectors are not making
   progress despite active RBC sessions).
 - Witness latency: alert when `collect_witness_ms` or the P95 of
   `sumeragi_phase_latency_ms{phase="collect_witness"}` exceeds
-  `0.75 * CommitTimeMs`, or when it remains zero for ≥3 consecutive rounds while
-  new blocks arrive (no witnesses delivered).
+  `0.75 * commit_time_ms` (permissioned `CommitTimeMs`, NPoS
+  `timeouts.timeout_commit_ms`), or when it remains zero for ≥3 consecutive
+  rounds while new blocks arrive (no witnesses delivered).
 - Collector fan-out: alert when `collect_aggregator_ms` exceeds
   `0.5 * sumeragi.npos.timeouts.aggregator_ms` for three consecutive rounds, or
   when redundant sends occur more than `redundant_send_r` times in a single view

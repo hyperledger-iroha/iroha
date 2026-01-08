@@ -24,8 +24,8 @@ use iroha_data_model::{
     account::AccountId,
     block::{BlockHeader, SignedBlock, consensus::SumeragiMembershipStatus},
     consensus::{
-        VALIDATOR_SET_HASH_VERSION_V1, ValidatorElectionOutcome, ValidatorElectionParameters,
-        ValidatorSetCheckpoint, VrfEpochRecord, VrfLateRevealRecord, VrfParticipantRecord,
+        VALIDATOR_SET_HASH_VERSION_V1, ValidatorElectionOutcome, ValidatorSetCheckpoint,
+        VrfEpochRecord, VrfLateRevealRecord, VrfParticipantRecord,
     },
     da::{
         commitment::DaCommitmentRecord,
@@ -937,14 +937,7 @@ fn rotate_topology_for_mode(
 ) {
     match mode_tag {
         PERMISSIONED_TAG => {
-            if let Ok(view_usize) = usize::try_from(view) {
-                topology.nth_rotation(view_usize);
-            } else {
-                warn!(
-                    view,
-                    "skipping topology rotation for {context}: view index exceeds usize"
-                );
-            }
+            topology.nth_rotation(view);
         }
         NPOS_TAG => {
             if let Some(seed) = prf_seed {
@@ -1855,12 +1848,25 @@ fn block_sync_quorum_available(
     signature_quorum_met: bool,
     candidate_qc_present: bool,
     commit_cert_present: bool,
-    _missing_block_requested: bool,
-    _block_height: u64,
-    _local_height: u64,
+    checkpoint_present: bool,
+    missing_block_requested: bool,
+    block_height: u64,
+    local_height: u64,
 ) -> bool {
-    // Missing-block fetches still require some signed evidence unless a QC/cert is present.
-    commit_cert_present || candidate_qc_present || signature_quorum_met || block_signers > 0
+    // Require commit evidence unless we explicitly requested the next missing payload.
+    if commit_cert_present || candidate_qc_present || signature_quorum_met || checkpoint_present {
+        return true;
+    }
+
+    if !missing_block_requested {
+        return false;
+    }
+
+    if block_signers == 0 {
+        return false;
+    }
+
+    block_height <= local_height.saturating_add(1)
 }
 
 fn send_missing_block_request(
@@ -2251,7 +2257,7 @@ impl Actor {
 
 #[derive(Debug)]
 struct NewViewEntry {
-    senders: BTreeSet<ValidatorIndex>,
+    senders: BTreeSet<PeerId>,
     highest_qc: crate::sumeragi::consensus::QcHeaderRef,
 }
 
@@ -2274,10 +2280,25 @@ impl NewViewEntry {
         }
     }
 
-    fn count_with_local(&self, local: Option<ValidatorIndex>) -> usize {
+    #[cfg(test)]
+    fn count_with_local(&self, local: Option<&PeerId>) -> usize {
         let mut count = self.senders.len();
-        if let Some(idx) = local {
-            if !self.senders.contains(&idx) {
+        if let Some(peer) = local {
+            if !self.senders.contains(peer) {
+                count = count.saturating_add(1);
+            }
+        }
+        count
+    }
+
+    fn count_in_roster(&self, roster: &BTreeSet<PeerId>, local: Option<&PeerId>) -> usize {
+        let mut count = self
+            .senders
+            .iter()
+            .filter(|peer| roster.contains(*peer))
+            .count();
+        if let Some(peer) = local {
+            if roster.contains(peer) && !self.senders.contains(peer) {
                 count = count.saturating_add(1);
             }
         }
@@ -2416,7 +2437,7 @@ impl NewViewTracker {
         &mut self,
         height: u64,
         view: u64,
-        sender: ValidatorIndex,
+        sender: PeerId,
         highest_qc: crate::sumeragi::consensus::QcHeaderRef,
     ) -> usize {
         let entry = self
@@ -2436,7 +2457,7 @@ impl NewViewTracker {
     }
 
     #[cfg(test)]
-    fn count_with_local(&self, height: u64, view: u64, local: Option<ValidatorIndex>) -> usize {
+    fn count_with_local(&self, height: u64, view: u64, local: Option<&PeerId>) -> usize {
         self.entries
             .get(&(height, view))
             .map_or(0, |entry| entry.count_with_local(local))
@@ -2472,19 +2493,29 @@ impl NewViewTracker {
     fn select_with_quorum(
         &mut self,
         required: usize,
-        local: Option<ValidatorIndex>,
+        local: Option<&PeerId>,
+        roster: &[PeerId],
     ) -> Option<NewViewSelection> {
-        self.highest_entry_mut(|_, _, entry| entry.count_with_local(local) >= required)
-            .map(|(key, entry)| {
-                if let Some(idx) = local {
-                    entry.senders.insert(idx);
+        if roster.is_empty() {
+            return None;
+        }
+        let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
+        self.highest_entry_mut(|_, _, entry| {
+            entry.count_in_roster(&roster_set, local) >= required
+        })
+        .map(|(key, entry)| {
+            let quorum = entry.count_in_roster(&roster_set, local);
+            if let Some(peer) = local {
+                if roster_set.contains(peer) {
+                    entry.senders.insert(peer.clone());
                 }
-                NewViewSelection {
-                    key,
-                    highest_qc: entry.highest_qc,
-                    quorum: entry.senders.len(),
-                }
-            })
+            }
+            NewViewSelection {
+                key,
+                highest_qc: entry.highest_qc,
+                quorum,
+            }
+        })
     }
 }
 
@@ -3446,27 +3477,16 @@ fn apply_roster_selection_to_block_sync_update(
     update.stake_snapshot.clone_from(&selection.stake_snapshot);
 }
 
+// Block sync updates are only verifiable when they carry roster evidence.
 fn block_sync_update_has_roster(
     update: &super::message::BlockSyncUpdate,
     consensus_mode: ConsensusMode,
 ) -> bool {
-    if matches!(consensus_mode, ConsensusMode::Permissioned) {
-        // Permissioned networks can always derive the roster from trusted peers.
-        return true;
+    let has_roster_hint = update.commit_qc.is_some() || update.validator_checkpoint.is_some();
+    match consensus_mode {
+        ConsensusMode::Permissioned => has_roster_hint,
+        ConsensusMode::Npos => has_roster_hint && update.stake_snapshot.is_some(),
     }
-    if update.commit_qc.is_some() {
-        return match consensus_mode {
-            ConsensusMode::Permissioned => true,
-            ConsensusMode::Npos => update.stake_snapshot.is_some(),
-        };
-    }
-    if update.validator_checkpoint.is_some() {
-        return match consensus_mode {
-            ConsensusMode::Permissioned => true,
-            ConsensusMode::Npos => update.stake_snapshot.is_some(),
-        };
-    }
-    false
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3527,14 +3547,7 @@ fn signature_topology_for_roster(
     let mut topology = super::network_topology::Topology::new(roster.to_vec());
     match mode_tag {
         PERMISSIONED_TAG => {
-            if let Ok(view_usize) = usize::try_from(view) {
-                topology.nth_rotation(view_usize);
-            } else {
-                warn!(
-                    view,
-                    "skipping topology rotation for roster signatures: view exceeds usize"
-                );
-            }
+            topology.nth_rotation(view);
         }
         NPOS_TAG => {
             if let Some(seed) = prf_seed {
@@ -5354,17 +5367,16 @@ impl Actor {
         let rbc_manifest = super::rbc_store::SoftwareManifest::current();
         let backpressure_gate = BackpressureGate::new(queue.backpressure_handle().subscribe());
         let now = Instant::now();
-        let block_time = {
-            let view = state.view();
-            view.world.parameters().sumeragi().block_time()
-        };
-        let qc_rebuild_cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
-        let initial_qc_rebuild = now.checked_sub(qc_rebuild_cooldown).unwrap_or(now);
-        let commit_pipeline_cooldown = qc_rebuild_cooldown;
-        let initial_commit_pipeline_run = now.checked_sub(commit_pipeline_cooldown).unwrap_or(now);
         let mut pending_roster_activation: Option<(u64, Vec<PeerId>)> = None;
         let mut roster_to_install_now: Option<Vec<PeerId>> = None;
-        let (consensus_mode, npos_collectors, epoch_manager, epoch_params) = {
+        let (
+            consensus_mode,
+            npos_collectors,
+            epoch_manager,
+            epoch_params,
+            pacemaker_timeouts,
+            pacemaker_block_time,
+        ) = {
             let view = state.view();
             let commit_topology = derive_active_topology(
                 &view,
@@ -5372,6 +5384,16 @@ impl Actor {
                 common_config.peer.id(),
             );
             let mode = super::effective_consensus_mode(&view, config.consensus_mode);
+            let pacemaker_timeouts = if matches!(mode, ConsensusMode::Npos) {
+                super::resolve_npos_timeouts(&view, &config.npos)
+            } else {
+                config.npos.timeouts
+            };
+            let pacemaker_block_time = if matches!(mode, ConsensusMode::Npos) {
+                super::resolve_npos_block_time(&view, &config.npos)
+            } else {
+                view.world.parameters().sumeragi().block_time()
+            };
             let mut collectors = if matches!(mode, ConsensusMode::Npos) {
                 super::load_npos_collector_config(&view)
             } else {
@@ -5446,8 +5468,19 @@ impl Actor {
             } else {
                 None
             };
-            (mode, collectors, manager, epoch_params)
+            (
+                mode,
+                collectors,
+                manager,
+                epoch_params,
+                pacemaker_timeouts,
+                pacemaker_block_time,
+            )
         };
+        let qc_rebuild_cooldown = pacemaker_block_time.max(REBROADCAST_COOLDOWN_FLOOR);
+        let initial_qc_rebuild = now.checked_sub(qc_rebuild_cooldown).unwrap_or(now);
+        let commit_pipeline_cooldown = qc_rebuild_cooldown;
+        let initial_commit_pipeline_run = now.checked_sub(commit_pipeline_cooldown).unwrap_or(now);
         if let Some(manager) = epoch_manager.as_ref() {
             if let Some(params) = epoch_params {
                 super::status::set_epoch_parameters(
@@ -5597,8 +5630,11 @@ impl Actor {
 
         let genesis_account = Self::determine_genesis_account(state.as_ref())?;
         let lane_relay = LaneRelayBroadcaster::new(network.clone());
-        let npos_timeouts = config.npos.timeouts;
-        let pacemaker_base_interval = pacemaker_base_interval(block_time, &config);
+        let pacemaker_base_interval = pacemaker_base_interval_with_propose_timeout(
+            pacemaker_block_time,
+            pacemaker_timeouts.propose,
+            &config,
+        );
         let collector_redundant_limit = match consensus_mode {
             ConsensusMode::Permissioned => {
                 let view = state.view();
@@ -5730,7 +5766,7 @@ impl Actor {
             epoch_roster_provider,
             background_post_tx,
             phase_tracker: PhaseTracker::new(now),
-            phase_ema: PhaseEma::new(&npos_timeouts),
+            phase_ema: PhaseEma::new(&pacemaker_timeouts),
             evidence_store: EvidenceStore::new(),
             invalid_sig_log: InvalidSigThrottle::default(),
             genesis_account,
@@ -5814,9 +5850,7 @@ impl Actor {
         let (consensus_mode, _, prf_seed) = self.consensus_context_for_height(height);
         match consensus_mode {
             ConsensusMode::Permissioned => {
-                let view_usize = usize::try_from(view)
-                    .map_err(|_| eyre!("view {view} exceeds platform limits"))?;
-                topology.nth_rotation(view_usize);
+                topology.nth_rotation(view);
                 Ok(topology.leader_index())
             }
             ConsensusMode::Npos => {
@@ -6861,6 +6895,20 @@ impl Actor {
         }
     }
 
+    fn block_time_for_mode(&self, view: &StateView<'_>, mode: ConsensusMode) -> Duration {
+        match mode {
+            ConsensusMode::Permissioned => view.world.parameters().sumeragi().block_time(),
+            ConsensusMode::Npos => super::resolve_npos_block_time(view, &self.config.npos),
+        }
+    }
+
+    fn commit_timeout_for_mode(&self, view: &StateView<'_>, mode: ConsensusMode) -> Duration {
+        match mode {
+            ConsensusMode::Permissioned => view.world.parameters().sumeragi().commit_time(),
+            ConsensusMode::Npos => super::resolve_npos_timeouts(view, &self.config.npos).commit,
+        }
+    }
+
     fn is_observer(&self) -> bool {
         matches!(self.config.role, NodeRole::Observer)
     }
@@ -7783,8 +7831,8 @@ impl Actor {
     fn commit_quorum_timeout(&self) -> Duration {
         let view = self.state.view();
         let params = view.world.parameters().sumeragi();
-        let block_time = params.block_time();
-        let commit_time = params.commit_time();
+        let block_time = self.block_time_for_mode(&view, self.consensus_mode);
+        let commit_time = self.commit_timeout_for_mode(&view, self.consensus_mode);
         let da_enabled = params.da_enabled();
         drop(view);
 
@@ -7798,23 +7846,22 @@ impl Actor {
 
     fn rebroadcast_cooldown(&self) -> Duration {
         let view = self.state.view();
-        let block_time = view.world.parameters().sumeragi().block_time();
+        let block_time = self.block_time_for_mode(&view, self.consensus_mode);
         drop(view);
         rebroadcast_cooldown_from_block_time(block_time)
     }
 
     fn payload_rebroadcast_cooldown(&self) -> Duration {
         let view = self.state.view();
-        let block_time = view.world.parameters().sumeragi().block_time();
+        let block_time = self.block_time_for_mode(&view, self.consensus_mode);
         drop(view);
         payload_rebroadcast_cooldown_from_block_time(block_time)
     }
 
     fn quorum_timeout(&self, da_enabled: bool) -> Duration {
         let view = self.state.view();
-        let params = view.world.parameters().sumeragi();
-        let block_time = params.block_time();
-        let commit_time = params.commit_time();
+        let block_time = self.block_time_for_mode(&view, self.consensus_mode);
+        let commit_time = self.commit_timeout_for_mode(&view, self.consensus_mode);
         drop(view);
 
         commit_quorum_timeout_from_durations(
@@ -7907,7 +7954,7 @@ impl Actor {
             let view = self.state.view();
             (
                 view.height() as u64,
-                view.world().parameters().sumeragi().block_time(),
+                self.block_time_for_mode(&view, self.consensus_mode),
             )
         };
         let child_height = lock.height.saturating_add(1);
@@ -8383,8 +8430,12 @@ fn active_round_height(
     )
 }
 
-fn pacemaker_base_interval(block_time: Duration, config: &SumeragiConfig) -> Duration {
-    let propose_seed = config.npos.timeouts.propose;
+fn pacemaker_base_interval_with_propose_timeout(
+    block_time: Duration,
+    propose_timeout: Duration,
+    config: &SumeragiConfig,
+) -> Duration {
+    let propose_seed = propose_timeout;
     let rtt_mul = config.npos.pacemaker_rtt_floor_multiplier.max(1);
     let propose_floor = saturating_mul_duration(propose_seed, rtt_mul);
     let max_backoff = config.npos.pacemaker_max_backoff;

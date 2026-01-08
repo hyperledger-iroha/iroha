@@ -1045,8 +1045,7 @@ impl Actor {
         trace!(?now, "pacemaker evaluating NEW_VIEW gating");
         let prev_attempt = self.subsystems.propose.last_pacemaker_attempt.replace(now);
         let view_snapshot = self.state.view();
-        let topology_peers = self.effective_commit_topology_from_view(&view_snapshot);
-        let local_index = self.local_validator_index(&view_snapshot);
+        let mut topology_peers = self.effective_commit_topology_from_view(&view_snapshot);
         let pending_queue_len = self.queue.tx_len();
         let active_pending = self.active_pending_blocks_len();
         let view_height = view_snapshot.height();
@@ -1066,6 +1065,20 @@ impl Actor {
             None
         };
         let da_enabled = self.runtime_da_enabled();
+        let committed_qc = self.latest_committed_qc();
+        let precommit_qc = precommit_qc_for_view_change(self.highest_qc, committed_qc);
+        let tracked_height = active_round_height(self.highest_qc, committed_qc, committed_height);
+
+        if topology_peers.is_empty() {
+            if let Some(qc) = precommit_qc.as_ref().or(committed_qc.as_ref()) {
+                if let Some(roster) = self.roster_from_commit_qc_history_roll_forward(
+                    tracked_height,
+                    Some(qc.subject_block_hash),
+                ) {
+                    topology_peers = roster;
+                }
+            }
+        }
 
         if topology_peers.is_empty() {
             if pending_queue_len > 0 {
@@ -1082,7 +1095,9 @@ impl Actor {
 
         let mut topology = super::network_topology::Topology::new(topology_peers);
         let mut required = topology.min_votes_for_view_change();
-        let local_idx = local_index;
+        let local_peer_id = self.common_config.peer.id().clone();
+        let local_idx = self.local_validator_index_for_topology(&topology);
+        let local_peer = local_idx.map(|_| local_peer_id.clone());
 
         if da_enabled && pending_queue_len == 0 && empty_child_ctx.is_none() {
             trace!(
@@ -1095,9 +1110,6 @@ impl Actor {
         // `online_peers` counts only remote validators; include the local node if it is part of
         // the commit topology so we do not stall when exactly `required` validators are up.
         let online_total = online_peers + usize::from(local_idx.is_some());
-        let committed_qc = self.latest_committed_qc();
-        let precommit_qc = precommit_qc_for_view_change(self.highest_qc, committed_qc);
-        let tracked_height = active_round_height(self.highest_qc, committed_qc, committed_height);
         let mut view_age = self.phase_tracker.view_age(tracked_height, now);
         if view_age.is_none() {
             self.phase_tracker.start_new_round(tracked_height, now);
@@ -1176,7 +1188,7 @@ impl Actor {
         }
 
         if required == 1 && topology.as_ref().len() == 1 {
-            if let Some(local_idx) = local_idx {
+            if let Some(local_peer) = local_peer.as_ref() {
                 if let Some(qc) = precommit_qc {
                     // Seed NEW_VIEW tracker so single-validator networks can progress.
                     if self.highest_qc.is_none_or(|current| {
@@ -1191,7 +1203,7 @@ impl Actor {
                     self.subsystems.propose.new_view_tracker.record(
                         qc.height.saturating_add(1),
                         0,
-                        local_idx,
+                        local_peer.clone(),
                         qc,
                     );
                 }
@@ -1236,7 +1248,7 @@ impl Actor {
             .subsystems
             .propose
             .new_view_tracker
-            .select_with_quorum(required, local_idx);
+            .select_with_quorum(required, local_peer.as_ref(), topology.as_ref());
         if pending_queue_len > 0 {
             if let Some((forced_height, forced_view)) =
                 self.subsystems.propose.forced_view_after_timeout

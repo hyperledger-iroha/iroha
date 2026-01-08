@@ -12,6 +12,18 @@
 - Storage budgets: add `tiered_state.da_store_root` fallback for cold WSV snapshots, read cold payloads across cold/DA roots, add DA-root snapshot tests, and refresh state-tiering/config/Nexus-lane docs (localized) plus roadmap.
 - Tests: `cargo fmt --all` (warns about unstable rustfmt options on stable).
 - Tests: `cargo test --workspace` failed during compile: missing `FastpqPublicInputsTemplate`/`batches_from_bundles`/`transition_batch_to_dto`/`authority_digest` imports in `crates/iroha_core/src/fastpq/lane.rs`, ambiguous `.into()` in `crates/iroha_core/src/fastpq/mod.rs`, and `evidence_epoch` arg mismatch in `crates/iroha_core/src/sumeragi/penalties.rs`.
+- Sumeragi/NPoS: make mode-aware timing use NPoS block/commit timeouts across pacemaker/rebroadcast/commit paths, include `epoch_seed` in the genesis consensus fingerprint payload, and add unit coverage + docs updates.
+- Tests: `cargo test --workspace` (timed out after 5m while waiting for build dir lock; rerun recommended).
+- Sumeragi/block sync: treat validator checkpoints as commit evidence for block-sync quorum gating (so trimmed signatures still sync) and add unit coverage.
+- Tests: not run (not requested).
+- Kagami/localnet: require NPoS when `--sora-profile` is set, enable Nexus only for Sora profiles, and add localnet validation/config coverage; refresh Kagami profile + Sumeragi guidance.
+- Tests: `cargo test -p iroha_kagami validate_localnet_options_rejects_permissioned_on_sora_dataspace -- --nocapture` (timed out: build dir lock); `CARGO_TARGET_DIR=target/codex-kagami cargo test -p iroha_kagami localnet::tests -- --nocapture` (timed out after 120s during compilation).
+- Sumeragi: require roster evidence for permissioned block-sync updates, tighten block-sync acceptance to commit evidence or explicit missing-block responses, and make view-rotation deterministic across large view indices; add coverage for quorum gating and large-view rotations.
+- Tests: not run (not requested).
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 30m during integration tests; warning: `mochi-ui-egui` has unused `MissingQc` variant).
+- Kagami/localnet TUI: prompt for consensus mode on Iroha3 when not targeting Sora Nexus, while keeping Nexus locked to NPoS; tests `CARGO_TARGET_DIR=target/codex-kagami cargo test -p iroha_kagami localnet_tui::tests -- --nocapture` (pass).
+- Kagami/localnet: document the public `SoraProfile` enum/variants to satisfy missing-docs lint.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 20m during test execution; warning: `mochi-ui-egui` has unused `MissingQc` variant).
 - State: seed commit QC before `apply_without_execution` and align AXT envelope descriptor bindings/touch manifests for replay-ledger validation; tests `cargo test -p iroha_core --lib state::tests::apply_without_execution_canonicalizes_commit_roster_signatures -- --nocapture` and `cargo test -p iroha_core --lib state::tests::axt_replay_ledger_persisted_from_block_rejects_reuse_on_validation -- --nocapture` (pass).
 - FASTPQ: speed up row-bench summaries by avoiding full trace builds unless needed, reuse deterministic account pools, and add a trace-summary parity check for small batches.
 - Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test -p fastpq_prover` (pass); `cargo test --workspace` (failed: `crates/iroha_kagami/src/localnet.rs` missing docs for `SoraProfile` enum/variants; warning: `mochi-ui-egui` has unused `MissingQc` variant).
@@ -20,6 +32,12 @@
 - Sumeragi: prefer per-block snapshot rosters when requesting missing parents for BlockCreated gaps (fall back to active roster for gap sweeps); add coverage for empty-active roster fetches.
 - Tests: not run (not requested).
 - Sumeragi: rebuild cached QCs even when the active commit roster is empty; add commit-pipeline coverage for empty-roster QC rebuilds.
+- Tests: not run (not requested).
+- Sumeragi: let the pacemaker bootstrap proposals from commit-QC rosters when the active topology is empty, and add coverage.
+- Tests: not run (not requested).
+- Sumeragi: record NEW_VIEW senders by peer ID (avoid view-rotation index mismatches) and refresh pacemaker/new-view tracker coverage.
+- Tests: not run (not requested).
+- Sumeragi: missing-block retries fall back to active rosters when commit/QC rosters are empty (avoid panic on empty validator sets) and add a far-height retry regression test.
 - Tests: not run (not requested).
 - DA ingest: derive replay fingerprints from canonical manifest templates (zeroed `storage_ticket`/`issued_at_unix`) for all requests, align storage tickets with the canonical fingerprint, and regenerate DA ingest fixtures.
 - Tests: `cargo test -p iroha_torii regenerate_da_ingest_fixtures -- --ignored` (timed out after ~5m while filtering other test binaries; regeneration test passed).
@@ -1821,3 +1839,5 @@
 - Torii now rejects ZK ballot public-input aliases and canonicalizes `root_hint`/`nullifier` hints (including V1 endpoints), rejecting conflicts or invalid hex with new unit tests.
 - Retried trigger-failure submission in the notification integration test on transient Torii/consensus errors before asserting expected failure types.
 - Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 600s; compile finished; test `events::notification::trigger_completion_failure_reports_error` still running).
+- Sumeragi NEW_VIEW quorum selection now filters senders against the active roster (only counts local if it is in-roster), with coverage for non-roster senders.
+- Sumeragi now rejects NEW_VIEW votes with mismatched highest QC hashes/heights before recording, with regressions for invalid highest fields.

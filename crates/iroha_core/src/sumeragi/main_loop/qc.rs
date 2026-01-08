@@ -277,7 +277,8 @@ impl Actor {
             };
             let expected_epoch = self.epoch_for_height(stats_snapshot.height);
             let mut signers = BTreeSet::new();
-            let topology = if let Some(qc) = super::cached_qc_for(
+            let mut roster: Option<Vec<PeerId>> = None;
+            if let Some(qc) = super::cached_qc_for(
                 &self.qc_cache,
                 crate::sumeragi::consensus::Phase::Commit,
                 block_hash,
@@ -295,25 +296,35 @@ impl Actor {
                     expected_epoch,
                 )
             }) {
-                let topology = super::network_topology::Topology::new(qc.validator_set.clone());
-                let roster_len = topology.as_ref().len();
-                match super::qc_signer_indices(&qc, roster_len, roster_len) {
-                    Ok(parsed) => {
-                        signers = parsed.voting;
+                if qc.validator_set.is_empty() {
+                    warn!(
+                        height = stats_snapshot.height,
+                        view = stats_snapshot.view,
+                        phase = ?stats_snapshot.phase,
+                        block = ?block_hash,
+                        "skipping QC roster for missing-block retry: empty validator set"
+                    );
+                } else {
+                    let roster_len = qc.validator_set.len();
+                    match super::qc_signer_indices(&qc, roster_len, roster_len) {
+                        Ok(parsed) => {
+                            signers = parsed.voting;
+                        }
+                        Err(err) => {
+                            warn!(
+                                height = stats_snapshot.height,
+                                view = stats_snapshot.view,
+                                phase = ?stats_snapshot.phase,
+                                block = ?block_hash,
+                                ?err,
+                                "failed to parse QC signer bitmap for missing-block retry"
+                            );
+                        }
                     }
-                    Err(err) => {
-                        warn!(
-                            height = stats_snapshot.height,
-                            view = stats_snapshot.view,
-                            phase = ?stats_snapshot.phase,
-                            block = ?block_hash,
-                            ?err,
-                            "failed to parse QC signer bitmap for missing-block retry"
-                        );
-                    }
+                    roster = Some(qc.validator_set.clone());
                 }
-                topology
-            } else {
+            }
+            if roster.is_none() {
                 let (consensus_mode, _, _) =
                     self.consensus_context_for_height(stats_snapshot.height);
                 let commit_topology = if matches!(
@@ -334,8 +345,18 @@ impl Actor {
                         consensus_mode,
                     )
                 };
-                super::network_topology::Topology::new(commit_topology)
-            };
+                if commit_topology.is_empty() {
+                    let active = self.effective_commit_topology();
+                    if !active.is_empty() {
+                        roster = Some(active);
+                    }
+                } else {
+                    roster = Some(commit_topology);
+                }
+            }
+            let topology = roster
+                .filter(|roster| !roster.is_empty())
+                .map(super::network_topology::Topology::new);
 
             let retry_window = self
                 .pending
@@ -349,20 +370,39 @@ impl Actor {
                 .get(&block_hash)
                 .map(|stats| stats.view_change_window)
                 .unwrap_or(stats_snapshot.view_change_window);
-            let decision = super::plan_missing_block_fetch(
-                &mut self.pending.missing_block_requests,
-                block_hash,
-                stats_snapshot.height,
-                stats_snapshot.view,
-                stats_snapshot.phase,
-                stats_snapshot.priority,
-                &signers,
-                &topology,
-                now,
-                retry_window,
-                view_change_window,
-                self.config.missing_block_signer_fallback_attempts,
-            );
+            let decision = if let Some(ref topology) = topology {
+                super::plan_missing_block_fetch(
+                    &mut self.pending.missing_block_requests,
+                    block_hash,
+                    stats_snapshot.height,
+                    stats_snapshot.view,
+                    stats_snapshot.phase,
+                    stats_snapshot.priority,
+                    &signers,
+                    topology,
+                    now,
+                    retry_window,
+                    view_change_window,
+                    self.config.missing_block_signer_fallback_attempts,
+                )
+            } else {
+                let retry_due = super::touch_missing_block_request(
+                    &mut self.pending.missing_block_requests,
+                    block_hash,
+                    stats_snapshot.height,
+                    stats_snapshot.view,
+                    stats_snapshot.phase,
+                    stats_snapshot.priority,
+                    now,
+                    retry_window,
+                    view_change_window,
+                );
+                if retry_due {
+                    MissingBlockFetchDecision::NoTargets
+                } else {
+                    MissingBlockFetchDecision::Backoff
+                }
+            };
 
             let (dwell, since_last_request, attempts) =
                 self.pending.missing_block_requests.get(&block_hash).map_or(
@@ -1352,6 +1392,7 @@ impl Actor {
         &mut self,
         qc: &crate::sumeragi::consensus::Qc,
         signers: &[ValidatorIndex],
+        topology: &super::network_topology::Topology,
     ) {
         let Some(highest) = qc.highest_qc else {
             warn!(
@@ -1382,11 +1423,25 @@ impl Actor {
             );
             return;
         }
+        let roster = topology.as_ref();
         for signer in signers {
-            self.subsystems
-                .propose
-                .new_view_tracker
-                .record(qc.height, qc.view, *signer, highest);
+            let Some(peer) = usize::try_from(*signer)
+                .ok()
+                .and_then(|idx| roster.get(idx))
+            else {
+                warn!(
+                    signer = ?signer,
+                    roster_len = roster.len(),
+                    "skipping NEW_VIEW signer outside topology"
+                );
+                continue;
+            };
+            self.subsystems.propose.new_view_tracker.record(
+                qc.height,
+                qc.view,
+                peer.clone(),
+                highest,
+            );
         }
     }
 
@@ -1792,7 +1847,7 @@ impl Actor {
                 self.process_precommit_qc(&qc, block_known, false)
             }
             crate::sumeragi::consensus::Phase::NewView => {
-                self.process_new_view_qc(&qc, &signer_indices);
+                self.process_new_view_qc(&qc, &signer_indices, &topology);
                 true
             }
         };

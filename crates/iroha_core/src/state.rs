@@ -15333,9 +15333,7 @@ pub fn replay_blocks_from_kura_range(
         match effective_mode {
             ConsensusMode::Permissioned => {
                 if view > 0 {
-                    let view_usize = usize::try_from(view)
-                        .map_err(|_| eyre!("view_change_index {view} exceeds platform limits"))?;
-                    block_topology.nth_rotation(view_usize);
+                    block_topology.nth_rotation(view);
                 }
             }
             ConsensusMode::Npos => {

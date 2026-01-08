@@ -112,7 +112,7 @@ impl Actor {
                         }
                         let block_time = {
                             let state_view = self.state.view();
-                            state_view.world.parameters().sumeragi().block_time()
+                            self.block_time_for_mode(&state_view, consensus_mode)
                         };
                         let cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
                         if self.block_sync_rebroadcast_log.allow(
@@ -166,45 +166,47 @@ impl Actor {
                 }
             }
             Phase::NewView => {
-                if let Some(highest) = vote.highest_qc {
-                    if highest.phase != Phase::Commit {
-                        debug!(
-                            height = vote.height,
-                            view = vote.view,
-                            signer = vote.signer,
-                            highest_height = highest.height,
-                            highest_view = highest.view,
-                            phase = ?highest.phase,
-                            "ignoring NEW_VIEW highest certificate with non-commit phase"
-                        );
-                    } else {
-                        let count = self.subsystems.propose.new_view_tracker.record(
-                            vote.height,
-                            vote.view,
-                            vote.signer,
-                            highest,
-                        );
-                        crate::sumeragi::new_view_stats::note_receipt(
-                            vote.height,
-                            vote.view,
-                            vote.signer,
-                        );
-                        debug!(
-                            height = vote.height,
-                            view = vote.view,
-                            signer = vote.signer,
-                            count,
-                            "recorded NEW_VIEW vote"
-                        );
-                    }
-                } else {
+                let Some(highest) = vote.highest_qc else {
                     debug!(
                         height = vote.height,
                         view = vote.view,
                         signer = vote.signer,
-                        "NEW_VIEW vote missing highest certificate reference"
+                        "skipping NEW_VIEW vote missing highest certificate reference"
                     );
-                }
+                    return;
+                };
+                let signer_peer = usize::try_from(vote.signer)
+                    .ok()
+                    .and_then(|idx| signature_topology.as_ref().get(idx))
+                    .cloned();
+                let Some(signer_peer) = signer_peer else {
+                    warn!(
+                        height = vote.height,
+                        view = vote.view,
+                        signer = vote.signer,
+                        roster_len = signature_topology.as_ref().len(),
+                        "dropping NEW_VIEW vote: signer index out of range"
+                    );
+                    return;
+                };
+                let count = self.subsystems.propose.new_view_tracker.record(
+                    vote.height,
+                    vote.view,
+                    signer_peer,
+                    highest,
+                );
+                crate::sumeragi::new_view_stats::note_receipt(
+                    vote.height,
+                    vote.view,
+                    vote.signer,
+                );
+                debug!(
+                    height = vote.height,
+                    view = vote.view,
+                    signer = vote.signer,
+                    count,
+                    "recorded NEW_VIEW vote"
+                );
                 self.try_form_qc_from_votes(
                     vote.phase,
                     vote.block_hash,
@@ -406,6 +408,53 @@ impl Actor {
                         "suppressing repeated invalid vote signature log"
                     );
                 }
+                return false;
+            }
+        }
+        if vote.phase == Phase::NewView {
+            // NEW_VIEW votes sign only the block hash, so highest QC fields must be checked here.
+            let Some(highest) = vote.highest_qc else {
+                debug!(
+                    height = vote.height,
+                    view = vote.view,
+                    signer = vote.signer,
+                    "dropping NEW_VIEW vote missing highest certificate reference"
+                );
+                return false;
+            };
+            if highest.phase != Phase::Commit {
+                debug!(
+                    height = vote.height,
+                    view = vote.view,
+                    signer = vote.signer,
+                    highest_height = highest.height,
+                    highest_view = highest.view,
+                    phase = ?highest.phase,
+                    "dropping NEW_VIEW vote with non-commit highest certificate"
+                );
+                return false;
+            }
+            if highest.subject_block_hash != vote.block_hash {
+                warn!(
+                    height = vote.height,
+                    view = vote.view,
+                    signer = vote.signer,
+                    block_hash = %vote.block_hash,
+                    highest_hash = %highest.subject_block_hash,
+                    "dropping NEW_VIEW vote with mismatched highest block hash"
+                );
+                return false;
+            }
+            let expected_height = highest.height.saturating_add(1);
+            if vote.height != expected_height {
+                warn!(
+                    height = vote.height,
+                    view = vote.view,
+                    signer = vote.signer,
+                    highest_height = highest.height,
+                    expected_height,
+                    "dropping NEW_VIEW vote with mismatched height"
+                );
                 return false;
             }
         }

@@ -64,7 +64,10 @@ impl<'a> PenaltyApplier<'a> {
 
     pub(crate) fn apply_vrf_penalties(&self, current_height: u64) -> PenaltyOutcome {
         let mut outcome = PenaltyOutcome::default();
-        let activation_lag = self.config.npos.reconfig.activation_lag_blocks;
+        let activation_lag = {
+            let view = self.state.view();
+            crate::sumeragi::resolve_npos_activation_lag_blocks(&view, &self.config.npos)
+        };
         let view = self.state.world.vrf_epochs.view();
         let mut due_records: Vec<VrfEpochRecord> = Vec::new();
         for (_epoch, record) in view.iter() {
@@ -136,7 +139,10 @@ impl<'a> PenaltyApplier<'a> {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn apply_consensus_penalties(&self, current_height: u64) -> Result<PenaltyOutcome> {
         let mut outcome = PenaltyOutcome::default();
-        let activation_lag = self.config.npos.reconfig.activation_lag_blocks;
+        let activation_lag = {
+            let view = self.state.view();
+            crate::sumeragi::resolve_npos_activation_lag_blocks(&view, &self.config.npos)
+        };
         let evidence_view = self.state.world.consensus_evidence.view();
         let mut pending: Vec<(Vec<u8>, EvidenceRecord)> = Vec::new();
         for (key, record) in evidence_view.iter() {
