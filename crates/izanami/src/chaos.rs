@@ -331,7 +331,11 @@ fn seeded_rng_from_seed(seed: Option<u64>) -> StdRng {
 fn min_peer_height(peers: &[NetworkPeer]) -> u64 {
     peers
         .iter()
-        .map(|peer| peer.best_effort_block_height().map(|height| height.total).unwrap_or(0))
+        .map(|peer| {
+            peer.best_effort_block_height()
+                .map(|height| height.total)
+                .unwrap_or(0)
+        })
         .min()
         .unwrap_or(0)
 }
@@ -536,7 +540,7 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        FaultToggles, NexusProfile, DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT,
+        DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, FaultToggles, NexusProfile,
     };
 
     fn allow_net_for_tests() -> bool {

@@ -8,8 +8,8 @@ use norito::codec::{Decode, Encode};
 use tracing::warn;
 
 use crate::config::{
-    ChaosConfig, FaultArgs, FaultToggles, IzanamiArgs, DEFAULT_PROGRESS_INTERVAL,
-    DEFAULT_PROGRESS_TIMEOUT,
+    ChaosConfig, DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, FaultArgs, FaultToggles,
+    IzanamiArgs,
 };
 
 const APP_DIR: &str = "izanami";
@@ -166,12 +166,7 @@ pub fn store_config(config: &ChaosConfig) -> Result<()> {
 
 #[cfg(all(unix, target_os = "linux"))]
 mod tests {
-    use std::{
-        env,
-        fs,
-        os::unix::fs::PermissionsExt,
-        path::PathBuf,
-    };
+    use std::{env, fs, os::unix::fs::PermissionsExt, path::PathBuf};
 
     use super::*;
 

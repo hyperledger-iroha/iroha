@@ -2873,7 +2873,7 @@ pub mod message {
         };
 
         fn test_chain_config() -> (ChainId, String) {
-            (ChainId::from("test-chain"), "test-mode".to_owned())
+            (ChainId::from("test-chain"), PERMISSIONED_TAG.to_owned())
         }
 
         fn state_with_consensus_keys(

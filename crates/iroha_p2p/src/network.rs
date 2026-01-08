@@ -1290,6 +1290,55 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         .await
     }
 
+    /// Construct a closed network handle for tests that cannot bind sockets.
+    ///
+    /// The returned handle drops all outgoing messages and reports no online peers.
+    #[must_use]
+    pub fn closed_for_tests() -> Self {
+        let (subscribe_tx, _subscribe_rx) =
+            mpsc::unbounded_channel::<mpsc::Sender<PeerMessage<T>>>();
+        let (update_topology_tx, update_topology_rx) =
+            mpsc::unbounded_channel::<message::UpdateTopology>();
+        let (update_peers_tx, update_peers_rx) = mpsc::unbounded_channel::<message::UpdatePeers>();
+        let (update_trusted_tx, update_trusted_rx) =
+            mpsc::unbounded_channel::<message::UpdateTrustedPeers>();
+        let (update_acl_tx, update_acl_rx) = mpsc::unbounded_channel::<message::UpdateAcl>();
+        let (update_handshake_tx, update_handshake_rx) =
+            mpsc::unbounded_channel::<message::UpdateHandshake>();
+        let (update_consensus_caps_tx, update_consensus_caps_rx) =
+            mpsc::unbounded_channel::<message::UpdateConsensusCaps>();
+        let (service_message_tx, _service_message_rx) =
+            mpsc::channel::<ServiceMessage<WireMessage<T>>>(1);
+        let (network_message_high_sender, _network_message_high_rx) =
+            net_channel::channel_with_capacity(1);
+        let (network_message_low_sender, _network_message_low_rx) =
+            net_channel::channel_with_capacity(1);
+        let (_online_peers_tx, online_peers_receiver) = watch::channel(HashSet::new());
+
+        drop(update_topology_rx);
+        drop(update_peers_rx);
+        drop(update_trusted_rx);
+        drop(update_acl_rx);
+        drop(update_handshake_rx);
+        drop(update_consensus_caps_rx);
+
+        Self {
+            subscribe_to_peers_messages_sender: subscribe_tx,
+            online_peers_receiver,
+            update_topology_sender: update_topology_tx,
+            update_peers_sender: update_peers_tx,
+            update_trusted_peers_sender: update_trusted_tx,
+            update_acl_sender: update_acl_tx,
+            update_handshake_sender: update_handshake_tx,
+            update_consensus_caps_sender: update_consensus_caps_tx,
+            service_message_sender: service_message_tx,
+            network_message_high_sender,
+            network_message_low_sender,
+            _key_exchange: core::marker::PhantomData::<K>,
+            _encryptor: core::marker::PhantomData::<E>,
+        }
+    }
+
     /// Launch the P2P runtime with pluggable Noise/TLS capability overrides.
     ///
     /// Use this entrypoint when tests or specialised deployments need to force

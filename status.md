@@ -1,6 +1,23 @@
 # Status
 
 ## Latest Updates
+- State: seed commit QC before `apply_without_execution` and align AXT envelope descriptor bindings/touch manifests for replay-ledger validation; tests `cargo test -p iroha_core --lib state::tests::apply_without_execution_canonicalizes_commit_roster_signatures -- --nocapture` and `cargo test -p iroha_core --lib state::tests::axt_replay_ledger_persisted_from_block_rejects_reuse_on_validation -- --nocapture` (pass).
+- FASTPQ: speed up row-bench summaries by avoiding full trace builds unless needed, reuse deterministic account pools, and add a trace-summary parity check for small batches.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test -p fastpq_prover` (pass); `cargo test --workspace` (failed: `crates/iroha_kagami/src/localnet.rs` missing docs for `SoraProfile` enum/variants; warning: `mochi-ui-egui` has unused `MissingQc` variant).
+- Kagami/localnet: add `--sora-profile` (dataspace/nexus) presets, enforce Iroha3 + 4+ peers for Sora localnets, and pass `--sora` in start scripts; update localnet docs/tests.
+- Tests: not run (not requested).
+- Sumeragi: prefer per-block snapshot rosters when requesting missing parents for BlockCreated gaps (fall back to active roster for gap sweeps); add coverage for empty-active roster fetches.
+- Tests: not run (not requested).
+- Sumeragi: rebuild cached QCs even when the active commit roster is empty; add commit-pipeline coverage for empty-roster QC rebuilds.
+- Tests: not run (not requested).
+- DA ingest: derive replay fingerprints from canonical manifest templates (zeroed `storage_ticket`/`issued_at_unix`) for all requests, align storage tickets with the canonical fingerprint, and regenerate DA ingest fixtures.
+- Tests: `cargo test -p iroha_torii regenerate_da_ingest_fixtures -- --ignored` (timed out after ~5m while filtering other test binaries; regeneration test passed).
+- Kagami/localnet: add explicit `--build-line` selection, reject zero block/commit overrides, export the build line in generated start scripts, and fix IPv6 readiness URLs in the deploy script; update localnet docs and scripts accordingly.
+- Tests: not run (not requested).
+- Sumeragi: allow `materialize_qc_for_header` to recover commit QCs from precommit-signer records even when the commit topology is empty; add coverage for empty-roster recovery.
+- Tests: not run (not requested).
+- FASTPQ: refresh stage2/trace fixtures and trace-commitment goldens after transcript-aware batches and deterministic account identifiers.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `FASTPQ_UPDATE_FIXTURES=1 cargo test -p fastpq_prover --test trace_commitment --test proof_fixture --test backend_regression` (trace_commitment failed until goldens updated); `cargo test -p fastpq_prover --test trace_commitment -- --nocapture` (pass).
 - Sumeragi: use per-block commit rosters when rebuilding QCs, rebroadcasting votes, and re-evaluating votes after BlockCreated; broadcast QCs to the block-specific roster and add snapshot-roster coverage for QC rebuilds, QC broadcasts, precommit block-sync updates, vote rebroadcasts, and BlockCreated handling.
 - Tests: not run (not requested).
 - FASTPQ: require transfer batches to include transfer transcript metadata, add transcript-aware synthetic generators (row bench + fixtures), and expose the shared poseidon preimage digest helper for transcript construction; update gadget docs accordingly.

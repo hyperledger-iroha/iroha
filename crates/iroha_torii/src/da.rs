@@ -926,14 +926,27 @@ pub async fn handler_post_da_ingest(
         })?;
     }
 
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-
-    let fingerprint = compute_fingerprint(&request, canonical.as_slice());
-    let lane_epoch = LaneEpoch::new(request.lane_id, request.epoch);
-    let replay_key = ReplayKey::new(lane_epoch, request.sequence, fingerprint);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO);
+    let queued_at_secs = now.as_secs();
+    let chunk_store = build_chunk_store(&request, canonical.as_slice());
+    let manifest = resolve_manifest(
+        &request,
+        &chunk_store,
+        canonical.as_slice(),
+        &metadata,
+        &enforced_retention,
+        queued_at_secs,
+        &app.da_ingest.rent_policy,
+    )
+    .map_err(|(status, message)| {
+        ResponseError::from(build_error_response(status, &message, format))
+    })?;
+
+    let fingerprint = manifest.fingerprint;
+    let lane_epoch = LaneEpoch::new(request.lane_id, request.epoch);
+    let replay_key = ReplayKey::new(lane_epoch, request.sequence, fingerprint);
 
     let outcome = app.da_replay_cache.insert(replay_key, Instant::now());
 
@@ -945,20 +958,6 @@ pub async fn handler_post_da_ingest(
                 }
             }
             let duplicate = matches!(outcome, ReplayInsertOutcome::Duplicate { .. });
-            let queued_at_secs = now.as_secs();
-            let manifest = resolve_manifest(
-                &request,
-                &chunk_store,
-                canonical.as_slice(),
-                &metadata,
-                &enforced_retention,
-                queued_at_secs,
-                &fingerprint,
-                &app.da_ingest.rent_policy,
-            )
-            .map_err(|(status, message)| {
-                ResponseError::from(build_error_response(status, &message, format))
-            })?;
             let (rent_gib, rent_months) =
                 rent_usage_from_request(request.total_size, &enforced_retention);
             record_da_rent_quote_metrics(
@@ -1786,15 +1785,16 @@ fn lane_proof_scheme(
     }
 }
 
-fn compute_fingerprint(request: &DaIngestRequest, canonical_payload: &[u8]) -> ReplayFingerprint {
-    if let Some(manifest) = &request.norito_manifest {
-        return ReplayFingerprint::from_hash(blake3_hash(manifest));
-    }
-
-    let mut hasher = Blake3Hasher::new();
-    hasher.update(canonical_payload);
-    hasher.update(request.client_blob_id.as_bytes());
-    ReplayFingerprint::from_hash(hasher.finalize())
+fn manifest_fingerprint(
+    manifest: &DaManifestV1,
+) -> Result<ReplayFingerprint, (StatusCode, String)> {
+    let encoded = to_bytes(manifest).map_err(|err| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to encode DA manifest for fingerprint: {err}"),
+        )
+    })?;
+    Ok(ReplayFingerprint::from_hash(blake3_hash(&encoded)))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2379,6 +2379,7 @@ struct ManifestArtifacts {
     blob_hash: BlobDigest,
     chunk_root: BlobDigest,
     storage_ticket: StorageTicketId,
+    fingerprint: ReplayFingerprint,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2389,12 +2390,10 @@ fn resolve_manifest(
     metadata: &ExtraMetadata,
     enforced_retention: &RetentionPolicy,
     queued_at_unix: u64,
-    fingerprint: &ReplayFingerprint,
     rent_policy: &DaRentPolicyV1,
 ) -> Result<ManifestArtifacts, (StatusCode, String)> {
     let blob_hash = BlobDigest::from_hash(*chunk_store.payload_digest());
     let chunk_root = BlobDigest::new(*chunk_store.por_tree().root());
-    let storage_ticket = StorageTicketId::new(*fingerprint.as_bytes());
     let total_stripes = (chunk_store.chunks().len() as u32)
         .div_ceil(u32::from(request.erasure_profile.data_shards));
     let shards_per_stripe = u32::from(request.erasure_profile.data_shards)
@@ -2412,7 +2411,7 @@ fn resolve_manifest(
         )
     })?;
 
-    let manifest = if let Some(bytes) = &request.norito_manifest {
+    let manifest_template = if let Some(bytes) = &request.norito_manifest {
         let archived = from_bytes::<DaManifestV1>(bytes).map_err(|err| {
             warn!(?err, "failed to decode DA manifest");
             (
@@ -2452,12 +2451,13 @@ fn resolve_manifest(
 
         DaManifestV1 {
             version: manifest.version,
-            storage_ticket,
+            storage_ticket: StorageTicketId::default(),
             total_stripes: total_stripes_full,
             shards_per_stripe,
             metadata: metadata.clone(),
             rent_quote,
             ipa_commitment,
+            issued_at_unix: 0,
             ..manifest
         }
     } else {
@@ -2471,7 +2471,7 @@ fn resolve_manifest(
             codec: request.codec.clone(),
             blob_hash,
             chunk_root,
-            storage_ticket,
+            storage_ticket: StorageTicketId::default(),
             total_size: request.total_size,
             chunk_size: request.chunk_size,
             total_stripes: total_stripes_full,
@@ -2482,10 +2482,17 @@ fn resolve_manifest(
             chunks: chunk_commitments.clone(),
             ipa_commitment,
             metadata: metadata.clone(),
-            issued_at_unix: queued_at_unix,
+            issued_at_unix: 0,
         }
     };
 
+    let fingerprint = manifest_fingerprint(&manifest_template)?;
+    let storage_ticket = StorageTicketId::new(*fingerprint.as_bytes());
+    let manifest = DaManifestV1 {
+        storage_ticket,
+        issued_at_unix: queued_at_unix,
+        ..manifest_template
+    };
     let encoded =
         to_bytes(&manifest).map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
     let manifest_hash = BlobDigest::from_hash(blake3_hash(&encoded));
@@ -2497,6 +2504,7 @@ fn resolve_manifest(
         blob_hash,
         chunk_root,
         storage_ticket,
+        fingerprint,
     })
 }
 
@@ -5544,7 +5552,6 @@ mod tests {
         )
         .expect("tagging succeeds");
 
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let rent_policy = DaRentPolicyV1::default();
         let manifest = resolve_manifest(
             &request,
@@ -5553,7 +5560,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             0,
-            &fingerprint,
             &rent_policy,
         )
         .expect("manifest");
@@ -5776,7 +5782,6 @@ mod tests {
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
         let metadata =
             encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let rent_policy = DaRentPolicyV1::default();
         let manifest = resolve_manifest(
             &request,
@@ -5785,7 +5790,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1,
-            &fingerprint,
             &rent_policy,
         )
         .expect("manifest");
@@ -5810,7 +5814,6 @@ mod tests {
 
         let canonical = normalize_payload(&request).expect("normalize payload");
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let metadata = encrypt_governance_metadata(&request.metadata, None, None)
             .expect("metadata encryption");
         let rent_policy = DaRentPolicyV1::default();
@@ -5821,7 +5824,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_800_000,
-            &fingerprint,
             &rent_policy,
         )
         .expect("resolve manifest for sampling")
@@ -5906,30 +5908,84 @@ mod tests {
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
     }
 
+    fn fingerprint_for_request(request: &DaIngestRequest) -> ReplayFingerprint {
+        let canonical = normalize_payload(request).expect("normalize payload");
+        let chunk_store = build_chunk_store(request, canonical.as_slice());
+        let rent_policy = DaRentPolicyV1::default();
+        resolve_manifest(
+            request,
+            &chunk_store,
+            canonical.as_slice(),
+            &request.metadata,
+            &request.retention_policy,
+            0,
+            &rent_policy,
+        )
+        .expect("manifest")
+        .fingerprint
+    }
+
     #[test]
-    fn compute_fingerprint_uses_payload_and_client_id() {
+    fn fingerprint_changes_with_client_blob_id() {
         let request = sample_request();
-        let canonical = normalize_payload(&request).expect("normalize payload");
         let mut other = request.clone();
         other.client_blob_id = BlobDigest::from_hash(blake3::hash(b"different"));
-        let other_canonical = normalize_payload(&other).expect("normalize payload");
         assert_ne!(
-            compute_fingerprint(&request, canonical.as_slice()),
-            compute_fingerprint(&other, other_canonical.as_slice())
+            fingerprint_for_request(&request),
+            fingerprint_for_request(&other)
         );
     }
 
     #[test]
-    fn compute_fingerprint_prefers_manifest_when_present() {
+    fn fingerprint_ignores_manifest_storage_ticket_and_timestamp() {
         let mut request = sample_request();
-        let baseline = {
-            let canonical = normalize_payload(&request).expect("normalize payload");
-            compute_fingerprint(&request, canonical.as_slice())
-        };
-        request.norito_manifest = Some(vec![1, 2, 3, 4]);
-        let canonical = normalize_payload(&request).expect("normalize payload with manifest");
-        let manifest = compute_fingerprint(&request, canonical.as_slice());
-        assert_ne!(baseline, manifest);
+        let canonical = normalize_payload(&request)
+            .expect("normalize payload")
+            .into_vec();
+        let chunk_store = build_chunk_store(&request, canonical.as_slice());
+        let rent_policy = DaRentPolicyV1::default();
+        let baseline_manifest = resolve_manifest(
+            &request,
+            &chunk_store,
+            canonical.as_slice(),
+            &request.metadata,
+            &request.retention_policy,
+            7,
+            &rent_policy,
+        )
+        .expect("manifest");
+        request.norito_manifest =
+            Some(to_bytes(&baseline_manifest.manifest).expect("encode baseline manifest"));
+
+        let baseline = resolve_manifest(
+            &request,
+            &chunk_store,
+            canonical.as_slice(),
+            &request.metadata,
+            &request.retention_policy,
+            7,
+            &rent_policy,
+        )
+        .expect("manifest with provided bytes");
+
+        let mut tampered = baseline.manifest.clone();
+        tampered.storage_ticket = StorageTicketId::new([0xAB; 32]);
+        tampered.issued_at_unix = 123_456;
+        request.norito_manifest = Some(to_bytes(&tampered).expect("encode manifest"));
+
+        let manifest = resolve_manifest(
+            &request,
+            &chunk_store,
+            canonical.as_slice(),
+            &request.metadata,
+            &request.retention_policy,
+            7,
+            &rent_policy,
+        )
+        .expect("manifest with provided bytes");
+
+        assert_eq!(baseline.fingerprint, manifest.fingerprint);
+        assert_eq!(manifest.manifest.issued_at_unix, 7);
     }
 
     #[test]
@@ -5947,7 +6003,6 @@ mod tests {
         let canonical = normalize_payload(&request).expect("normalize payload");
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
         let metadata = request.metadata.clone();
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let rent_policy = DaRentPolicyV1::default();
         let manifest = resolve_manifest(
             &request,
@@ -5956,7 +6011,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             0,
-            &fingerprint,
             &rent_policy,
         )
         .expect("manifest");
@@ -5980,7 +6034,6 @@ mod tests {
         let canonical = normalize_payload(&request).expect("normalize payload");
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
         let metadata = request.metadata.clone();
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let rent_policy = DaRentPolicyV1::default();
         let manifest = resolve_manifest(
             &request,
@@ -5989,7 +6042,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1,
-            &fingerprint,
             &rent_policy,
         )
         .expect("manifest");
@@ -6375,7 +6427,6 @@ mod tests {
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
         let metadata =
             encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let rent_policy = DaRentPolicyV1::default();
         let manifest = resolve_manifest(
             &request,
@@ -6384,7 +6435,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1,
-            &fingerprint,
             &rent_policy,
         )
         .expect("manifest");
@@ -6432,7 +6482,6 @@ mod tests {
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
         let metadata =
             encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let rent_policy = DaRentPolicyV1::default();
         let manifest = resolve_manifest(
             &request,
@@ -6441,7 +6490,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1,
-            &fingerprint,
             &rent_policy,
         )
         .expect("manifest");
@@ -6489,7 +6537,6 @@ mod tests {
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
         let metadata =
             encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let rent_policy = DaRentPolicyV1::default();
         let manifest = resolve_manifest(
             &request,
@@ -6498,7 +6545,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1,
-            &fingerprint,
             &rent_policy,
         )
         .expect("manifest");
@@ -6550,7 +6596,6 @@ mod tests {
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
         let metadata =
             encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let rent_policy = DaRentPolicyV1::default();
         let manifest = resolve_manifest(
             &request,
@@ -6559,7 +6604,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1,
-            &fingerprint,
             &rent_policy,
         )
         .expect("manifest");
@@ -6587,7 +6631,6 @@ mod tests {
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
         let metadata =
             encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let rent_policy = DaRentPolicyV1::default();
         let manifest = resolve_manifest(
             &request,
@@ -6596,7 +6639,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1,
-            &fingerprint,
             &rent_policy,
         )
         .expect("manifest");
@@ -6733,7 +6775,6 @@ mod tests {
         let request = sample_request();
         let canonical = normalize_payload(&request).expect("normalize payload");
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let metadata = encrypt_governance_metadata(&request.metadata, None, None)
             .expect("metadata encryption");
         let rent_policy = DaRentPolicyV1::default();
@@ -6744,7 +6785,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_000_000,
-            &fingerprint,
             &rent_policy,
         )
         .expect("resolve manifest");
@@ -6839,7 +6879,6 @@ mod tests {
         request.norito_manifest = Some(to_bytes(&manifest).expect("encode manifest"));
 
         let canonical = normalize_payload(&request).expect("normalize payload with manifest");
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let metadata = encrypt_governance_metadata(&request.metadata, None, None)
             .expect("metadata encryption");
         let rent_policy = DaRentPolicyV1::default();
@@ -6850,7 +6889,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_000_123,
-            &fingerprint,
             &rent_policy,
         )
         .expect("resolve provided manifest");
@@ -6887,7 +6925,6 @@ mod tests {
         let request = sample_request();
         let canonical = normalize_payload(&request).expect("normalize payload");
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let metadata = encrypt_governance_metadata(&request.metadata, None, None)
             .expect("metadata encryption");
         let rent_policy = DaRentPolicyV1::default();
@@ -6898,7 +6935,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_000_555,
-            &fingerprint,
             &rent_policy,
         )
         .expect("manifest");
@@ -6910,7 +6946,7 @@ mod tests {
             request.epoch,
             request.sequence,
             &manifest.storage_ticket,
-            &fingerprint,
+            &manifest.fingerprint,
         )
         .expect("persist manifest")
         .expect("spool path");
@@ -6924,7 +6960,7 @@ mod tests {
             request.epoch,
             request.sequence,
             &manifest.storage_ticket,
-            &fingerprint,
+            &manifest.fingerprint,
         )
         .expect("persist manifest idempotent")
         .expect("spool path");
@@ -6938,7 +6974,6 @@ mod tests {
         let request = sample_request();
         let canonical = normalize_payload(&request).expect("normalize payload");
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let metadata = encrypt_governance_metadata(&request.metadata, None, None)
             .expect("metadata encryption");
         let rent_policy = DaRentPolicyV1::default();
@@ -6949,7 +6984,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_000_777,
-            &fingerprint,
             &rent_policy,
         )
         .expect("manifest");
@@ -6969,7 +7003,7 @@ mod tests {
             request.epoch,
             request.sequence,
             &manifest.storage_ticket,
-            &fingerprint,
+            &manifest.fingerprint,
         )
         .expect("persist commitment")
         .expect("spool path");
@@ -6985,7 +7019,7 @@ mod tests {
             request.epoch,
             request.sequence,
             &manifest.storage_ticket,
-            &fingerprint,
+            &manifest.fingerprint,
         )
         .expect("persist commitment idempotent")
         .expect("spool path");
@@ -6997,7 +7031,6 @@ mod tests {
         let request = sample_request();
         let canonical = normalize_payload(&request).expect("normalize payload");
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let metadata = encrypt_governance_metadata(&request.metadata, None, None)
             .expect("metadata encryption");
         let rent_policy = DaRentPolicyV1::default();
@@ -7008,7 +7041,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_500_000,
-            &fingerprint,
             &rent_policy,
         )
         .expect("manifest");
@@ -7058,7 +7090,6 @@ mod tests {
         let request = sample_request();
         let canonical = normalize_payload(&request).expect("normalize payload");
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let metadata = encrypt_governance_metadata(&request.metadata, None, None)
             .expect("metadata encryption");
         let rent_policy = DaRentPolicyV1::default();
@@ -7069,7 +7100,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_500_000,
-            &fingerprint,
             &rent_policy,
         )
         .expect("manifest");
@@ -7109,7 +7139,6 @@ mod tests {
         let request = sample_request();
         let canonical = normalize_payload(&request).expect("normalize payload");
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let metadata = encrypt_governance_metadata(&request.metadata, None, None)
             .expect("metadata encryption");
         let rent_policy = DaRentPolicyV1::default();
@@ -7120,7 +7149,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_600_000,
-            &fingerprint,
             &rent_policy,
         )
         .expect("manifest");
@@ -7154,7 +7182,7 @@ mod tests {
             request.epoch,
             request.sequence,
             &manifest.storage_ticket,
-            &fingerprint,
+            &manifest.fingerprint,
         )
         .expect("persist record")
         .expect("spool path");
@@ -7170,7 +7198,7 @@ mod tests {
             request.epoch,
             request.sequence,
             &manifest.storage_ticket,
-            &fingerprint,
+            &manifest.fingerprint,
         )
         .expect("persist record idempotent")
         .expect("spool path");
@@ -7184,7 +7212,6 @@ mod tests {
         let request = sample_request();
         let canonical = normalize_payload(&request).expect("normalize payload");
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let metadata = encrypt_governance_metadata(&request.metadata, None, None)
             .expect("metadata encryption");
         let rent_policy = DaRentPolicyV1::default();
@@ -7195,7 +7222,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_600_000,
-            &fingerprint,
             &rent_policy,
         )
         .expect("manifest");
@@ -7230,7 +7256,7 @@ mod tests {
             request.epoch,
             request.sequence,
             &manifest.storage_ticket,
-            &fingerprint,
+            &manifest.fingerprint,
         )
         .expect("persist schedule entry")
         .expect("schedule path");
@@ -7260,7 +7286,6 @@ mod tests {
         ));
         let canonical = normalize_payload(&request).expect("normalize payload");
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let metadata = encrypt_governance_metadata(&request.metadata, None, None)
             .expect("metadata encryption");
         let rent_policy = DaRentPolicyV1::default();
@@ -7271,7 +7296,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_700_123,
-            &fingerprint,
             &rent_policy,
         )
         .expect("manifest");
@@ -7295,7 +7319,7 @@ mod tests {
             request.epoch,
             request.sequence,
             &manifest.storage_ticket,
-            &fingerprint,
+            &manifest.fingerprint,
         )
         .expect("persist pin")
         .expect("path");
@@ -7534,7 +7558,6 @@ mod tests {
         let request = sample_request();
         let canonical = normalize_payload(&request).expect("normalize payload");
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let metadata = encrypt_governance_metadata(&request.metadata, None, None)
             .expect("metadata encryption");
         let rent_policy = DaRentPolicyV1::default();
@@ -7545,7 +7568,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_000_111,
-            &fingerprint,
             &rent_policy,
         )
         .expect("resolve manifest with parity");
@@ -7586,7 +7608,6 @@ mod tests {
         let request = sample_request();
         let canonical = normalize_payload(&request).expect("normalize payload");
         let chunk_store = build_chunk_store(&request, canonical.as_slice());
-        let fingerprint = compute_fingerprint(&request, canonical.as_slice());
         let metadata = encrypt_governance_metadata(&request.metadata, None, None)
             .expect("metadata encryption");
         let rent_policy = DaRentPolicyV1::from_components(750_000, 1_500, 250, 125, 2_000);
@@ -7597,7 +7618,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_001_000,
-            &fingerprint,
             &rent_policy,
         )
         .expect("resolve manifest with custom rent policy");
@@ -7616,7 +7636,6 @@ mod tests {
             .expect("normalize payload")
             .into_vec();
         let chunk_store = build_chunk_store(&request, canonical_bytes.as_slice());
-        let fingerprint = compute_fingerprint(&request, canonical_bytes.as_slice());
         let metadata = encrypt_governance_metadata(&request.metadata, None, None)
             .expect("metadata encryption");
         let enforced = RetentionPolicy {
@@ -7635,7 +7654,6 @@ mod tests {
             &metadata,
             &enforced,
             1_701_000_555,
-            &fingerprint,
             &rent_policy,
         )
         .expect("resolve manifest with enforced retention");
@@ -7695,7 +7713,6 @@ mod tests {
         let chunk_store = build_chunk_store(&request, canonical_bytes.as_slice());
         let metadata = encrypt_governance_metadata(&request.metadata, None, None)
             .expect("metadata encryption");
-        let fingerprint = compute_fingerprint(&request, canonical_bytes.as_slice());
         let rent_policy = DaRentPolicyV1::default();
         let artifacts = resolve_manifest(
             &request,
@@ -7704,7 +7721,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_000_600,
-            &fingerprint,
             &rent_policy,
         )
         .expect("resolve manifest");
@@ -7724,7 +7740,6 @@ mod tests {
             &metadata,
             &strict_policy,
             1_701_000_601,
-            &fingerprint,
             &rent_policy,
         )
         .expect_err("mismatched retention policy must be rejected");
@@ -7738,7 +7753,6 @@ mod tests {
             .expect("normalize payload")
             .into_vec();
         let chunk_store = build_chunk_store(&request, canonical_bytes.as_slice());
-        let fingerprint = compute_fingerprint(&request, canonical_bytes.as_slice());
         let metadata = encrypt_governance_metadata(&request.metadata, None, None)
             .expect("metadata encryption");
         let rent_policy = DaRentPolicyV1::default();
@@ -7749,7 +7763,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_000_222,
-            &fingerprint,
             &rent_policy,
         )
         .expect("resolve manifest");
@@ -7763,7 +7776,6 @@ mod tests {
         first_parity.parity = false;
 
         request.norito_manifest = Some(to_bytes(&tampered).expect("encode tampered manifest"));
-        let fingerprint = compute_fingerprint(&request, canonical_bytes.as_slice());
         let err = match resolve_manifest(
             &request,
             &chunk_store,
@@ -7771,7 +7783,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_000_333,
-            &fingerprint,
             &rent_policy,
         ) {
             Ok(_) => panic!("manifest with mismatched parity flag must be rejected"),
@@ -7787,7 +7798,6 @@ mod tests {
             .expect("normalize payload")
             .into_vec();
         let chunk_store = build_chunk_store(&request, canonical_bytes.as_slice());
-        let fingerprint = compute_fingerprint(&request, canonical_bytes.as_slice());
         let metadata = encrypt_governance_metadata(&request.metadata, None, None)
             .expect("metadata encryption");
         let rent_policy = DaRentPolicyV1::default();
@@ -7798,7 +7808,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_000_920,
-            &fingerprint,
             &rent_policy,
         )
         .expect("resolve manifest");
@@ -7806,7 +7815,6 @@ mod tests {
         let mut tampered = artifacts.manifest.clone();
         tampered.ipa_commitment = BlobDigest::new([0xAB; 32]);
         request.norito_manifest = Some(to_bytes(&tampered).expect("encode tampered manifest"));
-        let fingerprint = compute_fingerprint(&request, canonical_bytes.as_slice());
         let err = resolve_manifest(
             &request,
             &chunk_store,
@@ -7814,7 +7822,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_000_921,
-            &fingerprint,
             &rent_policy,
         )
         .expect_err("manifest with mismatched ipa commitment must be rejected");
@@ -8026,7 +8033,7 @@ mod tests {
             context.request.epoch,
             context.request.sequence,
             &context.artifacts.storage_ticket,
-            &context.fingerprint,
+            &context.artifacts.fingerprint,
         )
         .expect("persist manifest")
         .expect("spool path");
@@ -8087,7 +8094,6 @@ mod tests {
             .expect("streaming ingest succeeds");
         let metadata =
             encrypt_governance_metadata(&request.metadata, None, None).expect("encrypt metadata");
-        let fingerprint = compute_fingerprint(&request, canonical_payload.as_slice());
         let rent_policy = DaRentPolicyV1::default();
         let manifest = resolve_manifest(
             &request,
@@ -8096,7 +8102,6 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_000_999,
-            &fingerprint,
             &rent_policy,
         )
         .expect("resolve manifest");
@@ -8165,7 +8170,6 @@ mod tests {
 
     struct ManifestFixtureContext {
         request: DaIngestRequest,
-        fingerprint: ReplayFingerprint,
         artifacts: ManifestArtifacts,
     }
 
@@ -8175,7 +8179,6 @@ mod tests {
         let chunk_store = build_chunk_store(&request, canonical_payload.as_slice());
         let metadata =
             encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
-        let fingerprint = compute_fingerprint(&request, canonical_payload.as_slice());
         let rent_policy = DaRentPolicyV1::default();
         let artifacts = resolve_manifest(
             &request,
@@ -8184,16 +8187,11 @@ mod tests {
             &metadata,
             &request.retention_policy,
             1_701_000_999,
-            &fingerprint,
             &rent_policy,
         )
         .expect("resolve manifest");
 
-        ManifestFixtureContext {
-            request,
-            fingerprint,
-            artifacts,
-        }
+        ManifestFixtureContext { request, artifacts }
     }
     const METRIC_ASSERT_EPSILON: f64 = 1e-6;
 

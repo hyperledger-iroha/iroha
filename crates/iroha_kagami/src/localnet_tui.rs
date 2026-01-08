@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     io::{BufWriter, Write},
     num::NonZeroU16,
     path::PathBuf,
@@ -6,18 +7,35 @@ use std::{
 
 use clap::Args as ClapArgs;
 use color_eyre::eyre::WrapErr as _;
-use inquire::{Confirm, CustomType, Text};
+use inquire::{Confirm, CustomType, Select, Text};
 use iroha_data_model::parameter::system::SumeragiConsensusMode;
 use iroha_test_samples::ALICE_ID;
 
 use crate::{
     Outcome, RunArgs,
-    genesis::build_line_from_env,
     localnet::{
-        AssetSpec, DEFAULT_BIND_HOST, DEFAULT_PUBLIC_HOST, LocalnetOptions, generate_localnet,
+        AssetSpec, BuildLineArg, DEFAULT_BIND_HOST, DEFAULT_PUBLIC_HOST, LocalnetOptions,
+        SoraProfile, generate_localnet,
     },
     tui,
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SoraProfileChoice {
+    None,
+    Dataspace,
+    Nexus,
+}
+
+impl fmt::Display for SoraProfileChoice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SoraProfileChoice::None => write!(f, "none (single-lane)"),
+            SoraProfileChoice::Dataspace => write!(f, "dataspace (multi-lane defaults)"),
+            SoraProfileChoice::Nexus => write!(f, "Sora Nexus (public dataspace)"),
+        }
+    }
+}
 
 /// Interactive TUI to generate a bare-metal local network (no Docker).
 #[derive(ClapArgs, Debug, Clone)]
@@ -30,6 +48,32 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
             .prompt()?
             .try_into()
             .map_err(|_| color_eyre::eyre::eyre!("peer count must be > 0"))?;
+        let build_line = Select::new(
+            "Build line?",
+            vec![BuildLineArg::Iroha3, BuildLineArg::Iroha2],
+        )
+        .with_starting_cursor(0)
+        .prompt()?;
+        let build_line = iroha_version::BuildLine::from(build_line);
+        let sora_profile = if build_line.is_iroha3() {
+            let choice = Select::new(
+                "Sora profile?",
+                vec![
+                    SoraProfileChoice::None,
+                    SoraProfileChoice::Dataspace,
+                    SoraProfileChoice::Nexus,
+                ],
+            )
+            .with_starting_cursor(0)
+            .prompt()?;
+            match choice {
+                SoraProfileChoice::None => None,
+                SoraProfileChoice::Dataspace => Some(SoraProfile::Dataspace),
+                SoraProfileChoice::Nexus => Some(SoraProfile::Nexus),
+            }
+        } else {
+            None
+        };
         let seed = if Confirm::new("Use a deterministic seed?")
             .with_default(true)
             .prompt()?
@@ -76,13 +120,14 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
             }
         }
 
-        let build_line = build_line_from_env();
         let consensus_mode = if build_line.is_iroha3() {
             SumeragiConsensusMode::Npos
         } else {
             SumeragiConsensusMode::Permissioned
         };
         let opts = LocalnetOptions {
+            build_line,
+            sora_profile,
             peers,
             seed,
             bind_host: DEFAULT_BIND_HOST.to_string(),

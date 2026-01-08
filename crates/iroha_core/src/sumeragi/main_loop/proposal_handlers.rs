@@ -512,7 +512,13 @@ impl Actor {
         }
         let expected_height = committed_height.saturating_add(1);
         if height > expected_height {
-            let commit_topology = self.effective_commit_topology();
+            let active_commit_topology = self.effective_commit_topology();
+            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+            let mut commit_topology =
+                self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+            if commit_topology.is_empty() {
+                commit_topology = active_commit_topology.clone();
+            }
             let expected_usize = usize::try_from(expected_height).ok();
             let actual_usize = usize::try_from(height).ok();
             if let Some(parent_hash) = block.header().prev_block_hash() {
@@ -529,7 +535,11 @@ impl Actor {
                 );
             }
             if height > expected_height.saturating_add(1) {
-                self.request_missing_parents_for_gap(&commit_topology, None, "block_created_gap");
+                self.request_missing_parents_for_gap(
+                    &active_commit_topology,
+                    None,
+                    "block_created_gap",
+                );
             }
         }
         if self.pending.pending_blocks.contains_key(&block_hash) {

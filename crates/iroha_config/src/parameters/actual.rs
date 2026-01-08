@@ -561,8 +561,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             PathBuf::from(defaults::streaming::soravpn::PROVISION_SPOOL_DIR)
         );
         assert_eq!(
-            config.provision_spool_max_bytes,
-            defaults::streaming::soravpn::PROVISION_SPOOL_MAX_BYTES
+            config.provision_spool_max_bytes.get(),
+            defaults::streaming::soravpn::PROVISION_SPOOL_MAX_BYTES.get()
         );
     }
 }

@@ -24,15 +24,17 @@ use iroha_version::BuildLine;
 
 use crate::{
     Outcome, RunArgs,
-    genesis::{
-        ConsensusPolicy, build_line_from_env, generate_default, validate_consensus_mode_for_line,
-    },
+    genesis::{ConsensusPolicy, generate_default, validate_consensus_mode_for_line},
     tui,
 };
 
 /// User-facing options for generating a bare-metal localnet.
 #[derive(Debug, Clone)]
 pub struct LocalnetOptions {
+    /// Build line selector (Iroha2 vs Iroha3).
+    pub build_line: BuildLine,
+    /// Optional Sora profile selector (multi-lane / dataspace defaults).
+    pub sora_profile: Option<SoraProfile>,
     /// Number of peers to create (deterministic ordering).
     pub peers: NonZeroU16,
     /// Optional seed to make key/port generation reproducible.
@@ -171,6 +173,68 @@ impl From<ConsensusModeArg> for SumeragiConsensusMode {
     }
 }
 
+/// SORA network profiles that influence localnet defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoraProfile {
+    /// Dataspace-oriented defaults.
+    Dataspace,
+    /// Public dataspace (Nexus) defaults.
+    Nexus,
+}
+
+impl SoraProfile {
+    fn consensus_policy(self) -> ConsensusPolicy {
+        match self {
+            SoraProfile::Dataspace => ConsensusPolicy::Any,
+            SoraProfile::Nexus => ConsensusPolicy::PublicDataspace,
+        }
+    }
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SoraProfileArg {
+    #[value(alias = "dataspaces")]
+    Dataspace,
+    #[value(alias = "public", alias = "sora-nexus", alias = "nexus-public")]
+    Nexus,
+}
+
+impl From<SoraProfileArg> for SoraProfile {
+    fn from(value: SoraProfileArg) -> Self {
+        match value {
+            SoraProfileArg::Dataspace => SoraProfile::Dataspace,
+            SoraProfileArg::Nexus => SoraProfile::Nexus,
+        }
+    }
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BuildLineArg {
+    #[value(alias = "i2", alias = "2")]
+    Iroha2,
+    #[value(alias = "i3", alias = "3")]
+    Iroha3,
+}
+
+impl From<BuildLineArg> for BuildLine {
+    fn from(value: BuildLineArg) -> Self {
+        match value {
+            BuildLineArg::Iroha2 => BuildLine::Iroha2,
+            BuildLineArg::Iroha3 => BuildLine::Iroha3,
+        }
+    }
+}
+
+impl std::fmt::Display for BuildLineArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            BuildLineArg::Iroha2 => "iroha2",
+            BuildLineArg::Iroha3 => "iroha3",
+        };
+        f.write_str(label)
+    }
+}
+
 const CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 const GENESIS_SEED: &[u8; 7] = b"genesis";
 /// Localnet uses larger channel caps to keep DA/RBC traffic from dropping at 1s block times.
@@ -202,6 +266,8 @@ const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MULTIPLIER: u64 = 10;
 const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MIN_MS: u64 = 5_000;
 /// Upper bound for localnet commit inflight timeout to prevent long stalls.
 const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MAX_MS: u64 = 15_000;
+/// Minimum peer count for Sora profile localnets (multi-lane/dataspace defaults).
+const LOCALNET_SORA_MIN_PEERS: u16 = 4;
 const STREAM_ID_PUBLIC: &str =
     "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
 const STREAM_ID_PRIVATE: &str =
@@ -220,6 +286,13 @@ pub struct Args {
     /// Optional UTF-8 seed for deterministic keys.
     #[arg(long, short)]
     seed: Option<String>,
+    /// Select the build line (`iroha2` or `iroha3`) for DA/RBC defaults.
+    #[arg(long, value_enum, value_name = "LINE", default_value_t = BuildLineArg::Iroha3)]
+    build_line: BuildLineArg,
+    /// Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS).
+    /// Requires `--build-line iroha3` and at least 4 peers.
+    #[arg(long, value_enum, value_name = "PROFILE")]
+    sora_profile: Option<SoraProfileArg>,
     /// Host to bind P2P and Torii listeners to (host/IP only, no port).
     #[arg(long, default_value = DEFAULT_BIND_HOST, value_name = "HOST")]
     bind_host: String,
@@ -244,12 +317,12 @@ pub struct Args {
     /// Override the consensus block time (milliseconds) in generated manifests/configs.
     /// Leave unset to use the fast localnet pipeline defaults. If only one of
     /// `--block-time-ms`/`--commit-time-ms` is supplied, Kagami mirrors it to the other.
-    #[arg(long, value_name = "MILLISECONDS")]
+    #[arg(long, value_name = "MILLISECONDS", value_parser = clap::value_parser!(u64).range(1..))]
     block_time_ms: Option<u64>,
     /// Override the consensus commit timeout (milliseconds) in generated manifests/configs.
     /// Leave unset to use the fast localnet pipeline defaults. If only one of
     /// `--block-time-ms`/`--commit-time-ms` is supplied, Kagami mirrors it to the other.
-    #[arg(long, value_name = "MILLISECONDS")]
+    #[arg(long, value_name = "MILLISECONDS", value_parser = clap::value_parser!(u64).range(1..))]
     commit_time_ms: Option<u64>,
     /// Override redundant send fanout (r) for block payload dissemination.
     #[arg(long, value_name = "COUNT")]
@@ -268,7 +341,8 @@ pub struct Args {
 
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
-        let build_line = build_line_from_env();
+        let build_line = BuildLine::from(self.build_line);
+        let sora_profile = self.sora_profile.map(SoraProfile::from);
         let consensus_mode = self.consensus_mode.map_or_else(
             || {
                 if build_line.is_iroha3() {
@@ -280,6 +354,8 @@ impl<T: Write> RunArgs<T> for Args {
             SumeragiConsensusMode::from,
         );
         let opts = LocalnetOptions {
+            build_line,
+            sora_profile,
             peers: self.peers,
             seed: self.seed,
             bind_host: self.bind_host,
@@ -334,14 +410,20 @@ struct BlsEntry {
 /// # Errors
 /// Returns an error if port ranges are invalid or if config, genesis, or script files cannot be written.
 pub fn generate_localnet<T: Write>(opts: &LocalnetOptions, writer: &mut BufWriter<T>) -> Outcome {
-    let build_line = build_line_from_env();
-    generate_localnet_with_line(opts, build_line, writer)
+    generate_localnet_with_line(opts, writer)
 }
 
-fn validate_localnet_options(
-    opts: &LocalnetOptions,
-    build_line: BuildLine,
-) -> Result<ResolvedHosts> {
+fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
+    if let Some(block_ms) = opts.block_time_ms
+        && block_ms == 0
+    {
+        return Err(eyre!("`--block-time-ms` must be greater than zero"));
+    }
+    if let Some(commit_ms) = opts.commit_time_ms
+        && commit_ms == 0
+    {
+        return Err(eyre!("`--commit-time-ms` must be greater than zero"));
+    }
     match (opts.next_consensus_mode, opts.mode_activation_height) {
         (Some(_), None) => {
             return Err(eyre!(
@@ -374,11 +456,24 @@ fn validate_localnet_options(
             "`--mode-activation-height` must be greater than zero"
         ));
     }
+    if opts.sora_profile.is_some() {
+        if !opts.build_line.is_iroha3() {
+            return Err(eyre!("`--sora-profile` requires `--build-line iroha3`"));
+        }
+        if opts.peers.get() < LOCALNET_SORA_MIN_PEERS {
+            return Err(eyre!(
+                "`--sora-profile` requires at least {LOCALNET_SORA_MIN_PEERS} peers"
+            ));
+        }
+    }
+    let consensus_policy = opts
+        .sora_profile
+        .map_or(ConsensusPolicy::Any, SoraProfile::consensus_policy);
     validate_consensus_mode_for_line(
-        build_line,
+        opts.build_line,
         opts.consensus_mode,
         opts.next_consensus_mode,
-        ConsensusPolicy::Any,
+        consensus_policy,
     )?;
 
     let bind = CanonicalHost::parse(&opts.bind_host, "--bind-host")?;
@@ -390,10 +485,10 @@ fn validate_localnet_options(
 #[allow(clippy::too_many_lines)]
 fn generate_localnet_with_line<T: Write>(
     opts: &LocalnetOptions,
-    build_line: BuildLine,
     writer: &mut BufWriter<T>,
 ) -> Outcome {
-    let hosts = validate_localnet_options(opts, build_line)?;
+    let build_line = opts.build_line;
+    let hosts = validate_localnet_options(opts)?;
     validate_port_ranges(opts.peers, opts.base_api_port, opts.base_p2p_port)?;
     fs::create_dir_all(&opts.out_dir).wrap_err("failed to create output directory for localnet")?;
     let out_dir = fs::canonicalize(&opts.out_dir).wrap_err_with(|| {
@@ -486,7 +581,12 @@ fn generate_localnet_with_line<T: Write>(
     tui::success("Peer configs written");
 
     tui::status("Writing start/stop scripts");
-    write_scripts(&out_dir, opts.peers.get())?;
+    write_scripts(
+        &out_dir,
+        opts.peers.get(),
+        build_line,
+        opts.sora_profile.is_some(),
+    )?;
 
     tui::status("Copying rANS tables");
     copy_rans_tables(&out_dir)?;
@@ -1061,15 +1161,26 @@ fn default_irohad_bin_paths() -> (PathBuf, PathBuf) {
     )
 }
 
-fn write_scripts(out_dir: &Path, peers: u16) -> Result<()> {
+fn write_scripts(
+    out_dir: &Path,
+    peers: u16,
+    build_line: BuildLine,
+    sora_profile_enabled: bool,
+) -> Result<()> {
     let start = out_dir.join("start.sh");
     let stop = out_dir.join("stop.sh");
     let (default_irohad_debug, default_irohad_release) = default_irohad_bin_paths();
     let mut start_file = BufWriter::new(File::create(&start)?);
+    let sora_flag = if sora_profile_enabled { "--sora " } else { "" };
     writeln!(start_file, "#!/usr/bin/env bash")?;
     writeln!(start_file, "set -euo pipefail")?;
     writeln!(start_file, "DIR=$(cd \"$(dirname \"$0\")\" && pwd)")?;
     writeln!(start_file, "cd \"$DIR\"")?;
+    writeln!(
+        start_file,
+        "export IROHA_BUILD_LINE=\"{}\"",
+        build_line.as_str()
+    )?;
     writeln!(
         start_file,
         "DEFAULT_IROHAD_BIN_DEBUG=\"{}\"",
@@ -1108,7 +1219,7 @@ fn write_scripts(out_dir: &Path, peers: u16) -> Result<()> {
     writeln!(start_file, "  mkdir -p \"$SNAPSHOT_STORE_DIR\"")?;
     writeln!(
         start_file,
-        "  SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" RUST_LOG=${{RUST_LOG:-info}} \"$IROHAD_BIN\" --config \"$DIR/peer${{i}}.toml\" > \"$DIR/peer${{i}}.log\" 2>&1 &"
+        "  SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" RUST_LOG=${{RUST_LOG:-info}} \"$IROHAD_BIN\" {sora_flag}--config \"$DIR/peer${{i}}.toml\" > \"$DIR/peer${{i}}.log\" 2>&1 &"
     )?;
     writeln!(start_file, "  echo $! > \"$DIR/peer${{i}}.pid\"")?;
     writeln!(
@@ -1241,6 +1352,8 @@ mod tests {
     fn generated_configs_parse_with_current_schema() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("kagami-config-compat".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -1269,6 +1382,8 @@ mod tests {
     fn generated_configs_for_user_localnet_parse() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
             seed: Some("Iroha".to_owned()),
             bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
@@ -1301,6 +1416,8 @@ mod tests {
     fn generated_peer_config_includes_required_addr_literals() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("kagami-addr-literals".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -1365,6 +1482,8 @@ mod tests {
     fn generated_peer_configs_include_peer_telemetry_urls() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("kagami-peer-telemetry".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -1421,6 +1540,8 @@ mod tests {
     fn generated_configs_set_localnet_channel_caps() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("kagami-channel-caps".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -1548,6 +1669,8 @@ mod tests {
     fn generated_genesis_handshake_meta_decodes() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
             seed: Some("Iroha".to_owned()),
             bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
@@ -1609,6 +1732,8 @@ mod tests {
     fn localnet_overrides_keep_da_enabled() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("localnet-da-enabled".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -1646,6 +1771,8 @@ mod tests {
     fn default_pipeline_time_injected_when_unset() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("default-pipeline-time".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -1680,6 +1807,8 @@ mod tests {
     fn block_time_override_mirrors_commit_time() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
             peers: NonZeroU16::new(2).expect("non-zero"),
             seed: Some("block-time-commit-default".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -1713,6 +1842,8 @@ mod tests {
     fn npos_localnet_includes_mode_activation() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha2,
+            sora_profile: None,
             peers: NonZeroU16::new(3).expect("non-zero"),
             seed: Some("npos-localnet".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -1730,7 +1861,7 @@ mod tests {
             mode_activation_height: Some(5),
         };
 
-        generate_localnet_with_line(&opts, BuildLine::Iroha2, &mut BufWriter::new(Vec::new()))
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
             .expect("generate npos localnet files");
 
         let genesis_path = temp.path().join("genesis.json");
@@ -1769,6 +1900,8 @@ mod tests {
     fn staged_cutover_preserves_permissioned_manifest_mode() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha2,
+            sora_profile: None,
             peers: NonZeroU16::new(3).expect("non-zero"),
             seed: Some("localnet-staged-cutover".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -1786,7 +1919,7 @@ mod tests {
             mode_activation_height: Some(7),
         };
 
-        generate_localnet_with_line(&opts, BuildLine::Iroha2, &mut BufWriter::new(Vec::new()))
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
             .expect("generate staged localnet");
 
         let genesis_path = temp.path().join("genesis.json");
@@ -1885,7 +2018,7 @@ mod tests {
     }
 
     #[test]
-    fn build_line_env_controls_da_rbc_in_generated_artifacts() {
+    fn build_line_controls_da_rbc_in_generated_artifacts() {
         fn assert_for_line(build_line: BuildLine, expected: bool) {
             let temp = tempfile::tempdir().expect("tmp dir");
             let consensus_mode = if build_line.is_iroha3() {
@@ -1894,6 +2027,8 @@ mod tests {
                 SumeragiConsensusMode::Permissioned
             };
             let opts = LocalnetOptions {
+                build_line,
+                sora_profile: None,
                 peers: NonZeroU16::new(2).expect("non-zero"),
                 seed: Some(format!("da-rbc-{build_line:?}")),
                 bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -1911,7 +2046,7 @@ mod tests {
                 mode_activation_height: None,
             };
 
-            generate_localnet_with_line(&opts, build_line, &mut BufWriter::new(Vec::new()))
+            generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
                 .expect("generate localnet files");
 
             let peer_cfg: toml::Value = toml::from_str(
@@ -1972,6 +2107,8 @@ mod tests {
     #[test]
     fn rejects_overflowing_port_ranges() {
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
             peers: NonZeroU16::new(3).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -1999,6 +2136,8 @@ mod tests {
     #[test]
     fn rejects_overlapping_port_ranges() {
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
             peers: NonZeroU16::new(2).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -2026,6 +2165,8 @@ mod tests {
     #[test]
     fn rejects_zero_ports() {
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
             peers: NonZeroU16::new(1).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -2053,6 +2194,8 @@ mod tests {
     #[test]
     fn validate_localnet_options_rejects_missing_next_mode() {
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha2,
+            sora_profile: None,
             peers: NonZeroU16::new(1).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -2069,8 +2212,7 @@ mod tests {
             next_consensus_mode: None,
             mode_activation_height: Some(1),
         };
-        let err = validate_localnet_options(&opts, BuildLine::Iroha2)
-            .expect_err("missing next mode should fail");
+        let err = validate_localnet_options(&opts).expect_err("missing next mode should fail");
         assert!(
             err.to_string().contains("--next-consensus-mode"),
             "unexpected error: {err}"
@@ -2078,8 +2220,151 @@ mod tests {
     }
 
     #[test]
+    fn validate_localnet_options_rejects_zero_block_time() {
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            peers: NonZeroU16::new(1).unwrap(),
+            seed: None,
+            bind_host: DEFAULT_BIND_HOST.to_string(),
+            public_host: DEFAULT_PUBLIC_HOST.to_string(),
+            base_api_port: 28080,
+            base_p2p_port: 28337,
+            out_dir: PathBuf::from("unused"),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: Some(0),
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+        let err = validate_localnet_options(&opts).expect_err("zero block time should fail");
+        assert!(
+            err.to_string().contains("--block-time-ms"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_localnet_options_rejects_zero_commit_time() {
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            peers: NonZeroU16::new(1).unwrap(),
+            seed: None,
+            bind_host: DEFAULT_BIND_HOST.to_string(),
+            public_host: DEFAULT_PUBLIC_HOST.to_string(),
+            base_api_port: 28080,
+            base_p2p_port: 28337,
+            out_dir: PathBuf::from("unused"),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: Some(0),
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+        let err = validate_localnet_options(&opts).expect_err("zero commit time should fail");
+        assert!(
+            err.to_string().contains("--commit-time-ms"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_localnet_options_rejects_sora_profile_on_iroha2() {
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha2,
+            sora_profile: Some(SoraProfile::Dataspace),
+            peers: NonZeroU16::new(4).unwrap(),
+            seed: None,
+            bind_host: DEFAULT_BIND_HOST.to_string(),
+            public_host: DEFAULT_PUBLIC_HOST.to_string(),
+            base_api_port: 28080,
+            base_p2p_port: 28337,
+            out_dir: PathBuf::from("unused"),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+        let err = validate_localnet_options(&opts).expect_err("sora profile should require iroha3");
+        assert!(
+            err.to_string().contains("--build-line iroha3"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_localnet_options_rejects_sora_profile_with_too_few_peers() {
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: Some(SoraProfile::Dataspace),
+            peers: NonZeroU16::new(3).unwrap(),
+            seed: None,
+            bind_host: DEFAULT_BIND_HOST.to_string(),
+            public_host: DEFAULT_PUBLIC_HOST.to_string(),
+            base_api_port: 28080,
+            base_p2p_port: 28337,
+            out_dir: PathBuf::from("unused"),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+        let err =
+            validate_localnet_options(&opts).expect_err("sora profile should enforce min peers");
+        assert!(
+            err.to_string().contains("at least 4 peers"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_localnet_options_rejects_permissioned_on_sora_nexus() {
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: Some(SoraProfile::Nexus),
+            peers: NonZeroU16::new(4).unwrap(),
+            seed: None,
+            bind_host: DEFAULT_BIND_HOST.to_string(),
+            public_host: DEFAULT_PUBLIC_HOST.to_string(),
+            base_api_port: 28080,
+            base_p2p_port: 28337,
+            out_dir: PathBuf::from("unused"),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+        let err = validate_localnet_options(&opts).expect_err("sora nexus should require NPoS");
+        assert!(
+            err.to_string().contains("public dataspace requires"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn validate_localnet_options_allows_permissioned_on_iroha3() {
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
             peers: NonZeroU16::new(1).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -2096,13 +2381,14 @@ mod tests {
             next_consensus_mode: None,
             mode_activation_height: None,
         };
-        validate_localnet_options(&opts, BuildLine::Iroha3)
-            .expect("permissioned should be allowed on Iroha3");
+        validate_localnet_options(&opts).expect("permissioned should be allowed on Iroha3");
     }
 
     #[test]
     fn validate_localnet_options_rejects_staged_cutover_on_iroha3() {
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
             peers: NonZeroU16::new(1).unwrap(),
             seed: None,
             bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -2119,7 +2405,7 @@ mod tests {
             next_consensus_mode: Some(SumeragiConsensusMode::Npos),
             mode_activation_height: Some(1),
         };
-        let err = validate_localnet_options(&opts, BuildLine::Iroha3)
+        let err = validate_localnet_options(&opts)
             .expect_err("staged cutover should be rejected on Iroha3");
         assert!(
             err.to_string().contains("staged consensus cutovers"),
@@ -2145,6 +2431,8 @@ mod tests {
         let _guard = DirGuard { prev: previous };
 
         let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
             peers: NonZeroU16::new(1).unwrap(),
             seed: Some("absolute-paths".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2194,7 +2482,7 @@ mod tests {
     #[test]
     fn start_and_stop_scripts_are_executable() {
         let temp = tempfile::tempdir().expect("tmp dir");
-        write_scripts(temp.path(), 1).expect("write scripts");
+        write_scripts(temp.path(), 1, BuildLine::Iroha3, false).expect("write scripts");
 
         let start_path = temp.path().join("start.sh");
         let stop_path = temp.path().join("stop.sh");
@@ -2228,6 +2516,25 @@ mod tests {
         assert!(
             start_contents.lines().any(|line| line == expected_release),
             "start script should set release default"
+        );
+        assert!(
+            start_contents
+                .lines()
+                .any(|line| line == "export IROHA_BUILD_LINE=\"iroha3\""),
+            "start script should export build line"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn start_script_includes_sora_flag_when_enabled() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        write_scripts(temp.path(), 1, BuildLine::Iroha3, true).expect("write scripts");
+        let start_contents =
+            fs::read_to_string(temp.path().join("start.sh")).expect("read start script");
+        assert!(
+            start_contents.contains(" --sora --config "),
+            "start script should include --sora when profile enabled"
         );
     }
 
