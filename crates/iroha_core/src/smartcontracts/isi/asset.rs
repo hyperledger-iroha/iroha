@@ -12,8 +12,6 @@ use iroha_logger::prelude::*;
 use iroha_telemetry::metrics;
 
 use super::prelude::*;
-use crate::fastpq;
-
 /// ISI module contains all instructions related to assets:
 /// - minting/burning assets
 /// - update metadata
@@ -319,12 +317,7 @@ pub mod isi {
             )?;
             let delta =
                 apply_transfer_delta(state_transaction, &source_id, &destination_id, &amount)?;
-            let authority_digest = fastpq::authority_digest(authority);
-            let poseidon_digest = state_transaction
-                .tx_call_hash
-                .as_ref()
-                .map(|batch_hash| fastpq::poseidon_preimage_digest(&delta, batch_hash));
-            state_transaction.record_transfer_transcript(delta, authority_digest, poseidon_digest);
+            state_transaction.record_transfer_transcript(authority, delta);
 
             #[allow(clippy::float_arithmetic)]
             #[cfg(feature = "telemetry")]
@@ -358,7 +351,6 @@ pub mod isi {
                     "transfer asset batch requires at least one entry".into(),
                 ));
             }
-            let authority_digest = fastpq::authority_digest(authority);
             let mut deltas = Vec::with_capacity(self.entries().len());
             for entry in self.entries() {
                 let source_id =
@@ -391,7 +383,7 @@ pub mod isi {
                     }),
                 ]);
             }
-            state_transaction.record_transfer_transcripts(deltas, authority_digest, None);
+            state_transaction.record_transfer_transcripts(authority, deltas);
             Ok(())
         }
     }

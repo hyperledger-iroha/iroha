@@ -9,8 +9,9 @@ use std::{
 };
 
 use eyre::Result;
-use iroha_config::parameters::actual::{
-    Common as CommonConfig, ConsensusMode, Sumeragi as SumeragiConfig,
+use iroha_config::parameters::{
+    actual::{Common as CommonConfig, ConsensusMode, Sumeragi as SumeragiConfig},
+    defaults::sumeragi::EPOCH_LENGTH_BLOCKS,
 };
 use iroha_crypto::{Algorithm, Hash as CryptoHash, HashOf, PublicKey};
 use iroha_data_model::{
@@ -147,6 +148,104 @@ pub struct NposEpochParams {
     pub reveal_deadline_offset: u64,
 }
 
+/// Snapshot of epoch boundaries derived from finalized VRF records.
+#[derive(Clone, Debug)]
+pub(crate) struct EpochScheduleSnapshot {
+    finalized: Vec<(u64, u64)>,
+    last_finalized_epoch: Option<u64>,
+    last_finalized_end: u64,
+    fallback_epoch_length: u64,
+}
+
+impl EpochScheduleSnapshot {
+    pub(crate) fn from_world_with_fallback(
+        world: &impl WorldReadOnly,
+        fallback_epoch_length: u64,
+    ) -> Self {
+        let mut finalized = Vec::new();
+        let mut last_end = 0;
+        for (epoch, record) in world.vrf_epochs().iter() {
+            if !record.finalized || record.updated_at_height == 0 {
+                continue;
+            }
+            if record.updated_at_height < last_end {
+                iroha_logger::warn!(
+                    epoch = record.epoch,
+                    observed = record.updated_at_height,
+                    expected = last_end,
+                    "ignoring non-monotonic VRF epoch end height"
+                );
+                break;
+            }
+            finalized.push((*epoch, record.updated_at_height));
+            last_end = record.updated_at_height;
+        }
+
+        let fallback_epoch_length = world
+            .sumeragi_npos_parameters()
+            .map(|params| params.epoch_length_blocks())
+            .or_else(|| world.vrf_epochs().iter().last().map(|(_, record)| record.epoch_length))
+            .unwrap_or(fallback_epoch_length)
+            .max(1);
+        let last_finalized_epoch = finalized.last().map(|(epoch, _)| *epoch);
+        let last_finalized_end = finalized.last().map(|(_, end)| *end).unwrap_or(0);
+
+        Self {
+            finalized,
+            last_finalized_epoch,
+            last_finalized_end,
+            fallback_epoch_length,
+        }
+    }
+
+    pub(crate) fn from_world(world: &impl WorldReadOnly) -> Self {
+        Self::from_world_with_fallback(world, EPOCH_LENGTH_BLOCKS)
+    }
+
+    pub(crate) fn last_finalized_end(&self) -> u64 {
+        self.last_finalized_end
+    }
+
+    pub(crate) fn epoch_for_height(&self, height: u64) -> u64 {
+        if height == 0 {
+            return 0;
+        }
+        for (epoch, end_height) in &self.finalized {
+            if height <= *end_height {
+                return *epoch;
+            }
+        }
+        let fallback_len = self.fallback_epoch_length.max(1);
+        match self.last_finalized_epoch {
+            None => height.saturating_sub(1) / fallback_len,
+            Some(last_epoch) => {
+                let start = self.last_finalized_end.saturating_add(1);
+                if height < start {
+                    last_epoch
+                } else {
+                    let offset = height.saturating_sub(start);
+                    last_epoch.saturating_add(1 + offset / fallback_len)
+                }
+            }
+        }
+    }
+
+    pub(crate) fn is_epoch_boundary(&self, height: u64) -> bool {
+        if height == 0 {
+            return false;
+        }
+        if self.finalized.iter().any(|(_, end)| *end == height) {
+            return true;
+        }
+        let start = self.last_finalized_end.saturating_add(1);
+        if height < start {
+            return false;
+        }
+        let offset = height.saturating_sub(start);
+        (offset + 1) % self.fallback_epoch_length.max(1) == 0
+    }
+}
+
 /// Attempt to load `NPoS` collector configuration (PRF seed + tunables) from the given state view.
 pub fn load_npos_collector_config(view: &StateView<'_>) -> Option<NposCollectorConfig> {
     let params = view.world.sumeragi_npos_parameters()?;
@@ -227,6 +326,11 @@ fn next_epoch_seed_from_record(record: &VrfEpochRecord) -> [u8; 32] {
     out
 }
 
+/// Resolve the epoch index for a height using finalized VRF epoch boundaries when available.
+pub(crate) fn epoch_for_height_from_world(world: &impl WorldReadOnly, height: u64) -> u64 {
+    EpochScheduleSnapshot::from_world(world).epoch_for_height(height)
+}
+
 /// Resolve the `NPoS` PRF seed for the epoch containing `height`.
 pub fn npos_seed_for_height(view: &StateView<'_>, height: u64) -> [u8; 32] {
     npos_seed_for_height_from_world(&view.world, view.chain_id(), height)
@@ -239,18 +343,15 @@ pub(crate) fn npos_seed_for_height_from_world(
     height: u64,
 ) -> [u8; 32] {
     if let Some(params) = world.sumeragi_npos_parameters() {
-        let epoch_len = params.epoch_length_blocks();
-        if epoch_len > 0 && height > 0 {
-            let epoch = (height - 1) / epoch_len;
-            if let Some(record) = world.vrf_epochs().get(&epoch) {
-                return record.seed;
-            }
-            if let Some((_last_epoch, record)) = world.vrf_epochs().iter().last() {
-                if record.finalized && epoch == record.epoch.saturating_add(1) {
-                    // Crash recovery: derive the next-epoch seed if the in-progress snapshot
-                    // was not persisted before restart.
-                    return next_epoch_seed_from_record(record);
-                }
+        let epoch = epoch_for_height_from_world(world, height);
+        if let Some(record) = world.vrf_epochs().get(&epoch) {
+            return record.seed;
+        }
+        if let Some((_last_epoch, record)) = world.vrf_epochs().iter().last() {
+            if record.finalized && epoch == record.epoch.saturating_add(1) {
+                // Crash recovery: derive the next-epoch seed if the in-progress snapshot
+                // was not persisted before restart.
+                return next_epoch_seed_from_record(record);
             }
         }
         return params.epoch_seed();
@@ -273,7 +374,7 @@ mod tests {
         },
         consensus::VrfEpochRecord,
         nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
-        parameter::system::{SumeragiConsensusMode, SumeragiNposParameters},
+        parameter::{Parameter, system::{SumeragiConsensusMode, SumeragiNposParameters}},
         peer::PeerId,
     };
 
@@ -289,6 +390,57 @@ mod tests {
 
     fn backdate(now: Instant, duration: Duration) -> Instant {
         now.checked_sub(duration).unwrap_or(now)
+    }
+
+    fn vrf_record(epoch: u64, end_height: u64, epoch_length: u64, finalized: bool) -> VrfEpochRecord {
+        VrfEpochRecord {
+            epoch,
+            seed: [u8::try_from(epoch).unwrap_or(0xAA); 32],
+            epoch_length,
+            commit_deadline_offset: 1,
+            reveal_deadline_offset: 2,
+            roster_len: 0,
+            finalized,
+            updated_at_height: end_height,
+            participants: Vec::new(),
+            late_reveals: Vec::new(),
+            committed_no_reveal: Vec::new(),
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        }
+    }
+
+    #[test]
+    fn epoch_schedule_uses_finalized_boundaries() {
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state =
+            State::new_for_testing(World::new(), Arc::clone(&kura), LiveQueryStore::start_test());
+        {
+            let mut world = state.world.block();
+            let params = SumeragiNposParameters {
+                epoch_length_blocks: 12,
+                ..SumeragiNposParameters::default()
+            };
+            world
+                .parameters
+                .set_parameter(Parameter::Custom(params.into_custom_parameter()));
+            world.vrf_epochs.insert(0, vrf_record(0, 10, 10, true));
+            world.vrf_epochs.insert(1, vrf_record(1, 22, 12, true));
+            world.commit();
+        }
+
+        let view = state.view();
+        let schedule = EpochScheduleSnapshot::from_world(view.world());
+        assert_eq!(schedule.epoch_for_height(1), 0);
+        assert_eq!(schedule.epoch_for_height(10), 0);
+        assert_eq!(schedule.epoch_for_height(11), 1);
+        assert_eq!(schedule.epoch_for_height(22), 1);
+        assert_eq!(schedule.epoch_for_height(23), 2);
+        assert!(schedule.is_epoch_boundary(10));
+        assert!(schedule.is_epoch_boundary(22));
+        assert!(!schedule.is_epoch_boundary(21));
     }
 
     #[test]

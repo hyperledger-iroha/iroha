@@ -14203,7 +14203,29 @@ impl<'state> StateBlock<'state> {
     /// Capture the execution witness accumulated during this block's execution.
     pub fn capture_exec_witness(&mut self) {
         if self.exec_witness.is_none() {
-            let witness = crate::sumeragi::witness::drain_exec_witness();
+            let mut witness = crate::sumeragi::witness::drain_exec_witness();
+            if witness.fastpq_batches.is_empty() && !witness.fastpq_transcripts.is_empty() {
+                let template = crate::fastpq::public_inputs_template_from_block(
+                    &self._curr_block,
+                    &witness,
+                );
+                match crate::fastpq::batches_from_bundles(
+                    crate::fastpq::FASTPQ_CANONICAL_PARAMETER_SET,
+                    template,
+                    witness.fastpq_transcripts.iter(),
+                ) {
+                    Ok(batches) => {
+                        witness.fastpq_batches =
+                            batches.iter().map(crate::fastpq::transition_batch_to_dto).collect();
+                    }
+                    Err(err) => {
+                        iroha_logger::warn!(
+                            ?err,
+                            "failed to build FASTPQ batches for exec witness"
+                        );
+                    }
+                }
+            }
             self.exec_witness = Some(witness);
         } else {
             let _ = crate::sumeragi::witness::drain_exec_witness();
@@ -14376,11 +14398,29 @@ impl<'state> StateBlock<'state> {
         }
         #[cfg(feature = "telemetry")]
         {
-            if let Some(manifest) = tiered_backend.lock().last_manifest().cloned() {
+            let (manifest, hot_limit, cold_limit, cold_store_bytes) = {
+                let backend = tiered_backend.lock();
+                let manifest = backend.last_manifest().cloned();
+                let hot_limit = backend.hot_retained_bytes();
+                let cold_limit = backend.max_cold_bytes();
+                let cold_store_bytes = match backend.cold_store_bytes() {
+                    Ok(value) => value,
+                    Err(err) => {
+                        warn!(?err, "tiered-state: failed to measure cold store bytes");
+                        None
+                    }
+                };
+                (manifest, hot_limit, cold_limit, cold_store_bytes)
+            };
+            if let Some(manifest) = manifest {
+                let hot_bytes = manifest.hot_entries.iter().fold(0u64, |acc, entry| {
+                    acc.saturating_add(u64::try_from(entry.value_size_bytes).unwrap_or(u64::MAX))
+                });
                 crate::telemetry::record_state_tiered_snapshot(
                     &state_ref.telemetry,
                     manifest.snapshot_index,
                     manifest.hot_entries.len(),
+                    hot_bytes,
                     manifest.cold_entries.len(),
                     manifest.cold_bytes_total,
                     manifest.hot_promotions,
@@ -14390,6 +14430,20 @@ impl<'state> StateBlock<'state> {
                     manifest.cold_reused_entries,
                     manifest.cold_reused_bytes,
                 );
+                state_ref
+                    .telemetry
+                    .record_storage_budget_usage("wsv_hot", hot_bytes, hot_limit);
+                if hot_limit > 0 && manifest.hot_grace_overflow_bytes > 0 {
+                    state_ref.telemetry.inc_storage_budget_exceeded("wsv_hot");
+                }
+                if let Some(cold_used) = cold_store_bytes {
+                    state_ref
+                        .telemetry
+                        .record_storage_budget_usage("wsv_cold", cold_used, cold_limit);
+                    if cold_limit > 0 && cold_used > cold_limit {
+                        state_ref.telemetry.inc_storage_budget_exceeded("wsv_cold");
+                    }
+                }
             }
         }
         Ok(())
@@ -14959,13 +15013,20 @@ mod transfer_transcript_tests {
             from_merkle_proof: None,
             to_merkle_proof: None,
         };
-        tx.record_transfer_transcript(delta, crate::fastpq::authority_digest(&ALICE_ID), None);
+        let expected_poseidon = crate::fastpq::poseidon_preimage_digest(&delta, &call_hash);
+        tx.record_transfer_transcript(&ALICE_ID, delta);
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
         let entry = transcripts
             .get(&call_hash)
             .expect("transcripts recorded for call hash");
         assert_eq!(entry.len(), 1);
+        let transcript = &entry[0];
+        assert_eq!(
+            transcript.authority_digest,
+            crate::fastpq::authority_digest(&ALICE_ID)
+        );
+        assert_eq!(transcript.poseidon_preimage_digest, Some(expected_poseidon));
     }
 
     #[test]
@@ -14990,10 +15051,6 @@ mod transfer_transcript_tests {
             from_merkle_proof: None,
             to_merkle_proof: None,
         };
-        tx.record_transfer_transcript(delta, crate::fastpq::authority_digest(&ALICE_ID), None);
-        tx.apply();
-        let transcripts = block.drain_transfer_transcripts();
-        assert_eq!(transcripts.len(), 1);
         let expected = {
             let mut buf = Vec::new();
             buf.extend_from_slice(b"iroha:fastpq:v1:synthetic|");
@@ -15001,10 +15058,21 @@ mod transfer_transcript_tests {
             buf.extend_from_slice(&0u64.to_be_bytes());
             iroha_crypto::Hash::new(buf)
         };
+        let expected_poseidon = crate::fastpq::poseidon_preimage_digest(&delta, &expected);
+        tx.record_transfer_transcript(&ALICE_ID, delta);
+        tx.apply();
+        let transcripts = block.drain_transfer_transcripts();
+        assert_eq!(transcripts.len(), 1);
         let entry = transcripts
             .get(&expected)
             .expect("transcripts recorded under synthetic hash");
         assert_eq!(entry.len(), 1);
+        let transcript = &entry[0];
+        assert_eq!(
+            transcript.authority_digest,
+            crate::fastpq::authority_digest(&ALICE_ID)
+        );
+        assert_eq!(transcript.poseidon_preimage_digest, Some(expected_poseidon));
     }
 
     #[test]
@@ -15041,11 +15109,7 @@ mod transfer_transcript_tests {
             from_merkle_proof: None,
             to_merkle_proof: None,
         };
-        tx.record_transfer_transcripts(
-            vec![delta_a.clone(), delta_b.clone()],
-            crate::fastpq::authority_digest(&ALICE_ID),
-            None,
-        );
+        tx.record_transfer_transcripts(&ALICE_ID, vec![delta_a.clone(), delta_b.clone()]);
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
         assert_eq!(transcripts.len(), 1);
@@ -15053,6 +15117,10 @@ mod transfer_transcript_tests {
         assert_eq!(entry.len(), 1);
         let transcript = &entry[0];
         assert_eq!(transcript.deltas, vec![delta_a, delta_b]);
+        assert_eq!(
+            transcript.authority_digest,
+            crate::fastpq::authority_digest(&ALICE_ID)
+        );
         assert!(transcript.poseidon_preimage_digest.is_none());
     }
 }
@@ -17123,31 +17191,33 @@ impl StateTransaction<'_, '_> {
     /// Record a transfer delta so the FASTPQ prover can consume a structured transcript.
     pub fn record_transfer_transcript(
         &mut self,
+        authority: &AccountId,
         delta: TransferDeltaTranscript,
-        authority_digest: Hash,
-        poseidon_digest: Option<Hash>,
     ) {
-        self.record_transfer_transcripts(vec![delta], authority_digest, poseidon_digest);
+        self.record_transfer_transcripts(authority, vec![delta]);
     }
 
     /// Record a multi-delta transfer transcript so the FASTPQ prover can consume batch witnesses.
     pub fn record_transfer_transcripts(
         &mut self,
+        authority: &AccountId,
         mut deltas: Vec<TransferDeltaTranscript>,
-        authority_digest: Hash,
-        poseidon_digest: Option<Hash>,
     ) {
         if deltas.is_empty() {
             return;
         }
-        let poseidon_digest = if deltas.len() > 1 {
-            None
-        } else {
-            poseidon_digest
-        };
         let batch_hash = self
             .tx_call_hash
             .unwrap_or_else(|| self.ensure_synthetic_batch_hash_with(|_| {}));
+        let authority_digest = crate::fastpq::authority_digest(authority);
+        let poseidon_digest = if deltas.len() > 1 {
+            None
+        } else {
+            Some(crate::fastpq::poseidon_preimage_digest(
+                &deltas[0],
+                &batch_hash,
+            ))
+        };
         let transcript = TransferTranscript {
             batch_hash,
             deltas: core::mem::take(&mut deltas),
@@ -25753,6 +25823,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut state_block = state.block(header);
 
+        let _guard = crate::sumeragi::witness::exec_witness_guard();
         crate::sumeragi::witness::start_block();
         let asset_id = AssetId::from_str("rose#wonderland#alice@wonderland").unwrap();
         crate::sumeragi::witness::record_write_asset(

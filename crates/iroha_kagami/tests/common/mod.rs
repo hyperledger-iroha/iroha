@@ -62,7 +62,14 @@ pub fn minimal_manifest_with_topology(
     let mut tx_map = norito::json::Map::new();
     let topo_entries = topology
         .iter()
-        .map(|peer| norito::json::value::to_value(peer).expect("serialize peer id"))
+        .map(|peer| {
+            let mut entry = norito::json::Map::new();
+            entry.insert(
+                "peer".to_string(),
+                norito::json::value::to_value(peer).expect("serialize peer id"),
+            );
+            norito::json::Value::Object(entry)
+        })
         .collect();
     tx_map.insert(
         "topology".to_string(),
@@ -78,6 +85,10 @@ pub fn minimal_manifest_with_topology(
     root.insert(
         "ivm_dir".to_string(),
         norito::json::Value::String(ivm_dir.into().display().to_string()),
+    );
+    root.insert(
+        "consensus_mode".to_string(),
+        norito::json::Value::String("Permissioned".to_string()),
     );
     root.insert(
         "transactions".to_string(),

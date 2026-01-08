@@ -232,7 +232,7 @@ Backpressure & Telemetry
 - See `docs/source/telemetry.md` and the README “Consensus metrics (Sumeragi)” section for metric names and example PromQL.
 
 Consensus Parameter Advert (pinning)
-- At startup and when collector plans refresh, nodes broadcast a compact `ConsensusParams` advert carrying `(collectors_k, redundant_send_r)` plus the current membership snapshot `{ height, view, epoch, view_hash }`. The epoch is derived from the advertised height (`epoch_for_height`) so replays across an epoch boundary stay deterministic.
+- At startup and when collector plans refresh, nodes broadcast a compact `ConsensusParams` advert carrying `(collectors_k, redundant_send_r)` plus the current membership snapshot `{ height, view, epoch, view_hash }`. The epoch is derived from the advertised height using the finalized VRF epoch schedule so epoch-length changes do not invalidate historical messages and replays across epoch boundaries remain deterministic.
 - Receivers verify the advert against their effective parameters and membership view hash. Mismatches increment the Prometheus counter `sumeragi_membership_mismatch_total{peer,height,view}` and mark the offending peer in `sumeragi_membership_mismatch_active{peer}` so operators can wire alerts directly. Any mismatch is logged and flagged locally; consensus semantics are unchanged. Effective values are taken from on‑chain `SumeragiParameters` when present (preferred over local config).
 
 Configuration (example)

@@ -17,11 +17,11 @@ impl Actor {
         let epoch_params = super::load_npos_epoch_params(&view, &self.config);
         let height = view.height() as u64;
         let epoch_seed_for_height = super::npos_seed_for_height(&view, height);
-        let target_epoch = if epoch_params.epoch_length_blocks > 0 && height > 0 {
-            (height - 1) / epoch_params.epoch_length_blocks
-        } else {
-            0
-        };
+        let schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
+            view.world(),
+            epoch_params.epoch_length_blocks,
+        );
+        let target_epoch = schedule.epoch_for_height(height);
         let record_for_target_epoch = view.world().vrf_epochs().get(&target_epoch).cloned();
         let mut manager = EpochManager::new_from_chain(&self.common_config.chain);
         manager.set_params(

@@ -9,7 +9,7 @@
 use core::str::FromStr as _;
 use std::{
     collections::BTreeMap,
-    sync::{Mutex, OnceLock},
+    sync::{Mutex, MutexGuard, OnceLock},
 };
 
 use iroha_crypto::Hash;
@@ -17,19 +17,15 @@ use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     domain::DomainId,
-    fastpq::{FastpqTransitionBatch, TransferTranscript, TransferTranscriptBundle},
+    fastpq::{TransferTranscript, TransferTranscriptBundle},
     name::Name,
     nft::NftId,
 };
-use iroha_logger::warn;
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
 
 use super::consensus::{ExecKv, ExecWitness};
-use crate::{
-    fastpq::{self, FASTPQ_CANONICAL_PARAMETER_SET},
-    state::{StateBlock, WorldReadOnly},
-};
+use crate::state::{StateBlock, WorldReadOnly};
 
 #[derive(Default)]
 struct BlockWitness {
@@ -39,9 +35,21 @@ struct BlockWitness {
 }
 
 static SLOT: OnceLock<Mutex<BlockWitness>> = OnceLock::new();
+static EXEC_WITNESS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn slot() -> &'static Mutex<BlockWitness> {
     SLOT.get_or_init(|| Mutex::new(BlockWitness::default()))
+}
+
+fn exec_witness_lock() -> &'static Mutex<()> {
+    EXEC_WITNESS_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+/// Hold exclusive access to the global witness recorder for the duration of a block execution.
+pub fn exec_witness_guard() -> MutexGuard<'static, ()> {
+    exec_witness_lock()
+        .lock()
+        .expect("exec witness guard lock poisoned")
 }
 
 /// Start a new witness capture for the current block (clears previous data).
@@ -72,13 +80,12 @@ pub fn drain_exec_witness() -> ExecWitness {
     g.reads.clear();
     g.writes.clear();
     let fastpq_map = std::mem::take(&mut g.fastpq_transcripts);
-    let fastpq_batches = convert_fastpq_batches(&fastpq_map);
     let fastpq_transcripts = map_to_bundles(fastpq_map);
     ExecWitness {
         reads,
         writes,
         fastpq_transcripts,
-        fastpq_batches,
+        fastpq_batches: Vec::new(),
     }
 }
 
@@ -100,21 +107,6 @@ fn map_ref_to_bundles(
             transcripts: transcripts.clone(),
         })
         .collect()
-}
-
-fn convert_fastpq_batches(
-    map: &BTreeMap<Hash, Vec<TransferTranscript>>,
-) -> Vec<FastpqTransitionBatch> {
-    match fastpq::dto_batches_from_transcripts(FASTPQ_CANONICAL_PARAMETER_SET, map) {
-        Ok(batches) => batches,
-        Err(err) => {
-            warn!(
-                ?err,
-                "failed to convert FASTPQ transcripts into transition batches; dropping field"
-            );
-            Vec::new()
-        }
-    }
 }
 
 fn key_sep() -> u8 {
@@ -496,31 +488,27 @@ pub fn snapshot_exec_witness() -> ExecWitness {
         });
     }
     let fastpq_transcripts = map_ref_to_bundles(&g.fastpq_transcripts);
-    let fastpq_batches = convert_fastpq_batches(&g.fastpq_transcripts);
     ExecWitness {
         reads,
         writes,
         fastpq_transcripts,
-        fastpq_batches,
+        fastpq_batches: Vec::new(),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::LazyLock;
+    use std::time::Duration;
 
     use iroha_test_samples::ALICE_ID;
 
     use super::*;
     // The SMT helpers live under the sumeragi module.
-    use crate::fastpq;
     use crate::sumeragi::smt::{KvPair, compute_post_state_root};
-
-    static TEST_LOCK: LazyLock<std::sync::Mutex<()>> = LazyLock::new(|| std::sync::Mutex::new(()));
 
     #[test]
     fn parity_same_witness_twice_same_root() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = exec_witness_guard();
         // First run
         start_block();
         // Simulate asset balance read+write
@@ -578,7 +566,7 @@ mod tests {
         use iroha_primitives::numeric::Numeric;
         use iroha_test_samples::{ALICE_ID, BOB_ID};
 
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = exec_witness_guard();
         start_block();
         let asset =
             AssetDefinitionId::from_str("rose#wonderland").expect("valid asset definition id");
@@ -611,18 +599,27 @@ mod tests {
             .expect("transcript recorded");
         assert_eq!(stored.transcripts.len(), 1);
         assert_eq!(stored.transcripts[0], transcript);
-        assert_eq!(witness.fastpq_batches.len(), 1);
-        let batch = fastpq::transition_batch_from_dto(&witness.fastpq_batches[0]);
-        assert_eq!(
-            hex::encode(
-                batch
-                    .metadata
-                    .get(fastpq::ENTRY_HASH_METADATA_KEY)
-                    .expect("entry hash metadata")
-            ),
-            hex::encode(batch_hash.as_ref())
-        );
+        assert!(witness.fastpq_batches.is_empty());
         assert!(witness.reads.is_empty());
         assert!(witness.writes.is_empty());
+    }
+
+    #[test]
+    fn exec_witness_guard_serializes_block_access() {
+        let guard = exec_witness_guard();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let _guard = exec_witness_guard();
+            tx.send(()).expect("send guard signal");
+        });
+
+        assert!(
+            rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "guard should prevent concurrent access"
+        );
+        drop(guard);
+        rx.recv_timeout(Duration::from_secs(1))
+            .expect("guard should release");
+        handle.join().expect("thread joins");
     }
 }
