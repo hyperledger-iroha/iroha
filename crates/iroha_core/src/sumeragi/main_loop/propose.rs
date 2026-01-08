@@ -1244,11 +1244,11 @@ impl Actor {
             "pacemaker NEW_VIEW snapshot before selection"
         );
 
-        let mut candidate = self
-            .subsystems
-            .propose
-            .new_view_tracker
-            .select_with_quorum(required, local_peer.as_ref(), topology.as_ref());
+        let mut candidate = self.subsystems.propose.new_view_tracker.select_with_quorum(
+            required,
+            local_peer.as_ref(),
+            topology.as_ref(),
+        );
         if pending_queue_len > 0 {
             if let Some((forced_height, forced_view)) =
                 self.subsystems.propose.forced_view_after_timeout

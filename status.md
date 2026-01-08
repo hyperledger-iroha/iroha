@@ -1,6 +1,24 @@
 # Status
 
 ## Latest Updates
+- Integration tests/assets: disable Nexus in the asset test network builder (permissioned) and add a status-retry helper to avoid Torii readiness stalls.
+- Tests: `cargo test -p integration_tests --test asset client_add_asset_with_decimal_should_increase_asset_amount -- --nocapture`; `cargo test -p integration_tests --test asset client_add_asset_quantity_to_existing_asset_should_increase_asset_amount -- --nocapture`; `cargo test -p integration_tests --test asset client_add_big_asset_quantity_to_existing_asset_amount -- --nocapture`; `cargo test -p integration_tests --test asset fail_if_dont_satisfy_spec -- --nocapture`; `cargo test -p integration_tests --test asset find_rate_and_make_exchange_isi_should_succeed -- --nocapture`; `cargo test -p integration_tests --test asset transfer_asset_definition -- --nocapture` (all pass).
+- Izanami: write `sumeragi.consensus_mode` into the Nexus profile config layer so NPoS mode propagates through overrides.
+- Tests: `cargo test -p izanami` (timed out: waiting for build directory lock).
+- Izanami: wake load/fault loops promptly on stop signals to avoid waiting for long intervals; add stop-notify coverage for fault loop.
+- Tests: not run (not requested).
+- Test network: assert the default builder config layer disables Nexus (`nexus.enabled=false`) to keep permissioned test nets runnable; add unit coverage.
+- Izanami: ensure Nexus profile forces `sumeragi.consensus_mode = "npos"` and add coverage.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` failed in `iroha_core` tests (missing NPoS parameter import + pacemaker helper), fixes applied; rerun skipped per request.
+- Izanami: fix TUI CLI override detection for fault toggles (arg-id mismatch) and add coverage.
+- Tests: `cargo test -p izanami` (timed out: waiting for build directory lock).
+- Izanami: reject ultra-low TPS values that would overflow timer intervals; add regression coverage.
+- Tests: `cargo test -p izanami`.
+- Sumeragi/QC: group commit votes by execution roots before quorum/aggregation to avoid invalid QC signatures when roots diverge; add unit coverage for root-group selection.
+- Izanami: add stable/chaos workload profiles, unique submission metadata, and permission/signing fixes to reduce rejected transactions in long runs.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` failed in `integration_tests` config tests due to Nexus requiring global NPoS; warning: `mochi-ui-egui` has unused `MissingQc` variant.
+- Izanami: clamp fault-loop sleep to the remaining deadline to avoid overshooting run duration; add bounded-delay tests.
+- Tests: `cargo test -p izanami`.
 - Test network: bump default client status timeout to 600s and TTL to 1200s to reduce tx confirmation timeouts during slow integration runs.
 - Tests: not run (not requested).
 - Izanami: drain completed submission tasks to avoid unbounded join-handle growth; add coverage for the drain helper.

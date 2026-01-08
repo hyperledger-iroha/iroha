@@ -110,16 +110,16 @@ fn merge_with_overrides(
     if is_cli_source(matches, "fault_interval_max") {
         base.fault_interval_max = overrides.fault_interval_max;
     }
-    if is_cli_source(matches, "fault-enable-network-latency") {
+    if is_cli_source(matches, "network_latency") {
         base.faults.network_latency = overrides.faults.network_latency;
     }
-    if is_cli_source(matches, "fault-enable-network-partition") {
+    if is_cli_source(matches, "network_partition") {
         base.faults.network_partition = overrides.faults.network_partition;
     }
-    if is_cli_source(matches, "fault-enable-cpu-stress") {
+    if is_cli_source(matches, "cpu_stress") {
         base.faults.cpu_stress = overrides.faults.cpu_stress;
     }
-    if is_cli_source(matches, "fault-enable-disk-saturation") {
+    if is_cli_source(matches, "disk_saturation") {
         base.faults.disk_saturation = overrides.faults.disk_saturation;
     }
     if is_cli_source(matches, "nexus") {
@@ -243,5 +243,32 @@ mod tests {
         assert_eq!(merged.target_blocks, persisted.target_blocks);
         assert_eq!(merged.progress_interval, persisted.progress_interval);
         assert_eq!(merged.progress_timeout, persisted.progress_timeout);
+    }
+
+    #[test]
+    fn tui_cli_overrides_fault_toggles() {
+        let defaults = config::IzanamiArgs::defaults();
+        let mut persisted = defaults.clone();
+        persisted.tui = false;
+        persisted.faults = config::FaultArgs {
+            network_latency: false,
+            network_partition: false,
+            cpu_stress: false,
+            disk_saturation: false,
+        };
+
+        let (cli_args, matches) = parse_cli_arguments(vec![
+            "izanami".to_string(),
+            "--tui".to_string(),
+            "--fault-enable-network-latency".to_string(),
+            "--fault-enable-cpu-stress".to_string(),
+        ]);
+
+        let merged = merge_with_overrides(persisted, &cli_args, &matches);
+
+        assert!(merged.faults.network_latency);
+        assert!(merged.faults.cpu_stress);
+        assert!(!merged.faults.network_partition);
+        assert!(!merged.faults.disk_saturation);
     }
 }

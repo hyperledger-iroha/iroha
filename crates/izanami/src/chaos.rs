@@ -20,7 +20,7 @@ use rand::{
     seq::{IndexedRandom, SliceRandom},
 };
 use tokio::{
-    sync::{OwnedSemaphorePermit, Semaphore},
+    sync::{Notify, OwnedSemaphorePermit, Semaphore},
     task::{JoinHandle, JoinSet, spawn_blocking},
     time::{self, MissedTickBehavior},
 };
@@ -77,6 +77,7 @@ fn select_fault_targets(peers_len: usize, faulty_peers: usize, rng: &mut StdRng)
 #[derive(Clone)]
 struct RunControl {
     stop: Arc<AtomicBool>,
+    stop_notify: Arc<Notify>,
     deadline: Instant,
 }
 
@@ -84,6 +85,7 @@ impl RunControl {
     fn new(deadline: Instant) -> Self {
         Self {
             stop: Arc::new(AtomicBool::new(false)),
+            stop_notify: Arc::new(Notify::new()),
             deadline,
         }
     }
@@ -94,10 +96,15 @@ impl RunControl {
 
     fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+        self.stop_notify.notify_waiters();
     }
 
     fn should_stop(&self) -> bool {
         self.stop.load(Ordering::Relaxed) || Instant::now() >= self.deadline
+    }
+
+    fn stop_notifier(&self) -> Arc<Notify> {
+        Arc::clone(&self.stop_notify)
     }
 }
 
@@ -249,6 +256,7 @@ impl IzanamiRunner {
             let genesis = Arc::clone(genesis);
             let base_domain = self.base_domain.clone();
             let stop = Arc::clone(&run_control.stop);
+            let stop_notify = run_control.stop_notifier();
             let cfg = fault_cfg.clone();
             let seed = rng.next_u64();
             handles.push(tokio::spawn(async move {
@@ -259,6 +267,7 @@ impl IzanamiRunner {
                     config_layers,
                     base_domain,
                     stop,
+                    stop_notify,
                     deadline,
                     seed,
                 )
@@ -283,13 +292,19 @@ impl IzanamiRunner {
         let interval = Duration::from_secs_f64(1.0 / self.config.tps);
         let metrics = Arc::clone(metrics);
         let run_control = Arc::clone(run_control);
+        let stop_notify = run_control.stop_notifier();
+        let deadline = run_control.deadline();
         let submission_counter = Arc::clone(submission_counter);
         let handle = tokio::spawn(async move {
             let mut ticker = time::interval(interval);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
             let mut submissions = JoinSet::new();
             while !run_control.should_stop() {
-                ticker.tick().await;
+                tokio::select! {
+                    _ = ticker.tick() => {},
+                    _ = stop_notify.notified() => break,
+                    _ = time::sleep_until(deadline.into()) => break,
+                }
                 drain_ready_submissions(&mut submissions);
                 if run_control.should_stop() {
                     break;

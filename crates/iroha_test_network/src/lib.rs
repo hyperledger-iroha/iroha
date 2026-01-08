@@ -2931,6 +2931,11 @@ impl NetworkBuilder {
             );
             builder.sumeragi_da_enabled = Some(value);
         }
+        let mut default_layer = Table::new();
+        let mut writer = TomlWriter::new(&mut default_layer);
+        writer.write(["nexus", "enabled"], false);
+        apply_debug_rbc_defaults(&mut default_layer);
+        builder.config_layers.push(default_layer);
         builder
     }
 
@@ -7200,6 +7205,18 @@ exit 0
         assert!(
             entries.contains(&"::1/128"),
             "IPv6 loopback should bypass pre-auth gating"
+        );
+    }
+
+    #[test]
+    fn default_builder_disables_nexus() {
+        let NetworkBuilder { config_layers, .. } = NetworkBuilder::new();
+        let disabled = config_layers
+            .iter()
+            .any(|layer| read_bool(layer, &["nexus", "enabled"]) == Some(false));
+        assert!(
+            disabled,
+            "default NetworkBuilder must set nexus.enabled=false"
         );
     }
 
