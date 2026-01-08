@@ -48,7 +48,7 @@ pub use backend::{
 pub use backend::{
     compute_lookup_grand_product, hash_lde_leaves, lde_chunk_size, merkle_paths_for_queries,
 };
-pub use batch::{OperationKind, StateTransition, TransitionBatch};
+pub use batch::{OperationKind, PublicInputs, StateTransition, TransitionBatch};
 pub use digest::trace_commitment;
 pub use error::{Error, Result};
 pub use fastpq_cuda::{CudaBackendError, fastpq_fft, fastpq_ifft, fastpq_lde};

@@ -402,8 +402,11 @@ impl Actor {
                 height,
                 view,
                 expected_epoch,
+                self.state.as_ref(),
+                self.config.consensus_mode,
             );
-            if super::block_sync_update_has_roster(&update) {
+            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+            if super::block_sync_update_has_roster(&update, consensus_mode) {
                 for peer in topology_peers {
                     self.schedule_background(BackgroundRequest::Post {
                         peer: peer.clone(),

@@ -24,7 +24,7 @@ Iroha. الملف عبارة عن كائن JSON يحتوي الحقول التا
   غيابه، لا يتم إجراء upgrade ويُستخدم الـ executor المدمج.
 - `ivm_dir`: دليل يحتوي على مكتبات bytecode الخاص بـ IVM. القيمة
   الافتراضية `"."` إذا لم يُذكر.
-- `consensus_mode`: وضع الإجماع المُعلن في الـ manifest. مطلوب؛ استخدم `"Npos"` لـ Iroha3 (افتراضيًا) و `"Permissioned"` لـ Iroha2.
+- `consensus_mode`: وضع الإجماع المُعلن في الـ manifest. مطلوب؛ استخدم `"Npos"` للـ dataspace العام في Sora Nexus و `"Permissioned"` أو `"Npos"` لبقية dataspaces في Iroha3. في Iroha2 الافتراضي `"Permissioned"`.
 - `transactions`: قائمة بمعاملات genesis تُنفَّذ تسلسليًا. يمكن أن تحتوي
   كلّ واحدة على:
   - `parameters`: معاملات الشبكة الابتدائية.
@@ -162,7 +162,7 @@ cargo run -p iroha_cli --features sm -- \
      genesis block؛ يجب أن يكون multihash مدعومًا في
      `iroha_crypto::Algorithm` (بما في ذلك متغيّرات GOST TC26 عند
      تفعيل الـ feature المناسب).
-   - في Iroha3، `--consensus-mode npos` مطلوب ولا يوجد دعم للقطع المرحلي؛ في Iroha2 الوضع الافتراضي هو `permissioned`.
+   - في الـ dataspace العام لـ Sora Nexus، `--consensus-mode npos` مطلوب ولا يوجد دعم للقطع المرحلي؛ dataspaces أخرى في Iroha3 يمكنها استخدام `permissioned` أو `npos`. في Iroha2 الوضع الافتراضي هو `permissioned`.
 
 2. التحقق أثناء التحرير:
 
@@ -245,7 +245,7 @@ cargo run -p iroha_cli --features sm -- \
 
 - البدء من قالب يُولّده Kagami:
   - ISI مدمجة فقط:  
-    `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (افتراضي Iroha3؛ استخدم `--consensus-mode permissioned` لـ Iroha2)
+    `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (dataspace العام لـ Sora Nexus؛ استخدم `--consensus-mode permissioned` لـ Iroha2 أو Iroha3 الخاص)
   - مع upgrade اختياري للـ executor: إضافة `--executor <path/to/executor.to>`
 - `<PK>` هو أي multihash مدعوم في `iroha_crypto::Algorithm`، بما في ذلك
   متغيرات GOST TC26 عندما يُبنى Kagami مع `--features gost` (مثل

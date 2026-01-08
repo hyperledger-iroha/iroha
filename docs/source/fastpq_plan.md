@@ -160,6 +160,9 @@ Derivations follow Appendix A. CI harness produces malformed proofs and fails i
 
 Deletion is encoded by zero value limbs; absent keys use zero leaf + neighbour witness.
 
+`FastpqTransitionBatch.public_inputs` is the canonical carrier for `dsid`, `slot`, and root commitments;
+batch metadata is reserved for entry hash/transcript count bookkeeping.
+
 ## Encoding Hashes
 - Ordering hash: Poseidon2 (tag `fastpq:v1:ordering`).
 - Batch artifact hash: BLAKE2b over `PublicIO || proof.commitments` (tag `fastpq:v1:artifact`).
@@ -238,8 +241,9 @@ Deletion is encoded by zero value limbs; absent keys use zero leaf + neighbour w
 4. Capture row-usage telemetry from a real ExecWitness so dashboards can chart transfer gadget
    adoption. Fetch a witness from Torii
   (`iroha_cli audit witness --binary --out exec.witness`) and decode it with
-  `iroha_cli audit witness --decode exec.witness --fastpq-parameter fastpq-lane-balanced`
-  (FASTPQ batches emit by default; pass `--no-fastpq-batches` only if you need to trim the output).
+  `iroha_cli audit witness --decode exec.witness` (optionally add
+  `--fastpq-parameter fastpq-lane-balanced` to assert the expected parameter set; FASTPQ batches
+  emit by default; pass `--no-fastpq-batches` only if you need to trim the output).
    Every batch entry now emits a `row_usage` object (`total_rows`, `transfer_rows`,
    `non_transfer_rows`, per-selector counts, and `transfer_ratio`). Archive that JSON snippet
    reprocessing raw transcripts.【crates/iroha_cli/src/audit.rs:209】 Compare the new capture against

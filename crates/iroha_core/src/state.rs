@@ -10261,12 +10261,109 @@ impl State {
         Some(snapshot)
     }
 
-    fn record_commit_roster(
+    fn upsert_commit_qc_in_world(&self, commit_qc: &Qc) {
+        let mut commit_qcs = self.world.commit_qcs.block();
+        let should_update = match commit_qcs.get(&commit_qc.subject_block_hash) {
+            Some(existing) => {
+                if existing.height != commit_qc.height {
+                    warn!(
+                        height = commit_qc.height,
+                        block = %commit_qc.subject_block_hash,
+                        existing_height = existing.height,
+                        "overwriting commit QC with mismatched height in world storage"
+                    );
+                }
+                existing.view <= commit_qc.view
+            }
+            None => true,
+        };
+        if !should_update {
+            return;
+        }
+        commit_qcs.insert(commit_qc.subject_block_hash, commit_qc.clone());
+        commit_qcs.commit();
+    }
+
+    fn record_commit_roster_internal(
         &self,
         commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
-    ) {
+        update_world: bool,
+    ) -> bool {
+        if !matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+            warn!(
+                height = commit_qc.height,
+                view = commit_qc.view,
+                phase = ?commit_qc.phase,
+                "skipping commit roster record for non-commit certificate"
+            );
+            return false;
+        }
+        if checkpoint.height != commit_qc.height
+            || checkpoint.block_hash != commit_qc.subject_block_hash
+        {
+            warn!(
+                height = commit_qc.height,
+                view = commit_qc.view,
+                block = %commit_qc.subject_block_hash,
+                checkpoint_height = checkpoint.height,
+                checkpoint_block = %checkpoint.block_hash,
+                "skipping commit roster record: checkpoint metadata mismatch"
+            );
+            return false;
+        }
+        if checkpoint.validator_set_hash_version != commit_qc.validator_set_hash_version
+            || checkpoint.validator_set_hash != commit_qc.validator_set_hash
+            || checkpoint.validator_set != commit_qc.validator_set
+            || checkpoint.signers_bitmap != commit_qc.aggregate.signers_bitmap
+            || checkpoint.bls_aggregate_signature != commit_qc.aggregate.bls_aggregate_signature
+        {
+            warn!(
+                height = commit_qc.height,
+                view = commit_qc.view,
+                block = %commit_qc.subject_block_hash,
+                "skipping commit roster record: checkpoint does not match commit certificate"
+            );
+            return false;
+        }
+        let mut stake_snapshot = stake_snapshot;
+        if stake_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| !snapshot.matches_roster(&commit_qc.validator_set))
+        {
+            warn!(
+                height = commit_qc.height,
+                view = commit_qc.view,
+                block = %commit_qc.subject_block_hash,
+                "skipping commit roster stake snapshot: roster mismatch"
+            );
+            stake_snapshot = None;
+        }
+        let existing_snapshot = self
+            .commit_roster_journal
+            .read()
+            .get(commit_qc.height, commit_qc.subject_block_hash);
+        if let Some(snapshot) = existing_snapshot.as_ref() {
+            if snapshot.commit_qc.view > commit_qc.view {
+                debug!(
+                    height = commit_qc.height,
+                    view = commit_qc.view,
+                    block = %commit_qc.subject_block_hash,
+                    existing_view = snapshot.commit_qc.view,
+                    "skipping commit roster record for older certificate view"
+                );
+                return false;
+            }
+        }
+        let stake_snapshot = stake_snapshot.or_else(|| {
+            existing_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.stake_snapshot.clone())
+        });
+        if update_world {
+            self.upsert_commit_qc_in_world(commit_qc);
+        }
         status::record_commit_qc(commit_qc.clone());
         status::record_validator_checkpoint(checkpoint.clone());
         let sidecar_snapshot = stake_snapshot.clone();
@@ -10279,6 +10376,28 @@ impl State {
             sidecar_snapshot,
         );
         self.kura.write_roster_metadata(&sidecar);
+        true
+    }
+
+    /// Record commit-roster artifacts in status caches, world storage, journal, and sidecar.
+    ///
+    /// Returns `true` when the roster entry is accepted or `false` when skipped.
+    pub(crate) fn record_commit_roster(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+    ) -> bool {
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true)
+    }
+
+    fn record_commit_roster_without_world(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+    ) -> bool {
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, false)
     }
 
     fn restore_commit_roster_history(&self) {
@@ -10290,6 +10409,7 @@ impl State {
         for snapshot in &snapshots {
             status::record_commit_qc(snapshot.commit_qc.clone());
             status::record_validator_checkpoint(snapshot.validator_checkpoint.clone());
+            self.upsert_commit_qc_in_world(&snapshot.commit_qc);
         }
         debug!(restored, "restored commit rosters from journal");
     }
@@ -12042,7 +12162,13 @@ impl State {
         let commit_topology = self.commit_topology.view();
         let prev_commit_topology = self.prev_commit_topology.view();
         let nexus = self.nexus_snapshot();
-        let _view_lock = self.view_lock.read();
+        let _view_lock = match self.view_lock.try_read() {
+            Some(guard) => Some(guard),
+            None => {
+                warn!("state view lock contended; returning unlocked view");
+                None
+            }
+        };
         StateView {
             world,
             block_hashes,
@@ -14077,7 +14203,29 @@ impl<'state> StateBlock<'state> {
     /// Capture the execution witness accumulated during this block's execution.
     pub fn capture_exec_witness(&mut self) {
         if self.exec_witness.is_none() {
-            let witness = crate::sumeragi::witness::drain_exec_witness();
+            let mut witness = crate::sumeragi::witness::drain_exec_witness();
+            if witness.fastpq_batches.is_empty() && !witness.fastpq_transcripts.is_empty() {
+                let template = crate::fastpq::public_inputs_template_from_block(
+                    &self._curr_block,
+                    &witness,
+                );
+                match crate::fastpq::batches_from_bundles(
+                    crate::fastpq::FASTPQ_CANONICAL_PARAMETER_SET,
+                    template,
+                    witness.fastpq_transcripts.iter(),
+                ) {
+                    Ok(batches) => {
+                        witness.fastpq_batches =
+                            batches.iter().map(crate::fastpq::transition_batch_to_dto).collect();
+                    }
+                    Err(err) => {
+                        iroha_logger::warn!(
+                            ?err,
+                            "failed to build FASTPQ batches for exec witness"
+                        );
+                    }
+                }
+            }
             self.exec_witness = Some(witness);
         } else {
             let _ = crate::sumeragi::witness::drain_exec_witness();
@@ -14424,8 +14572,23 @@ impl<'state> StateBlock<'state> {
                         commit_cert.validator_set_hash_version,
                         None,
                     );
-                    self.state_ref
-                        .record_commit_roster(&commit_cert, &checkpoint, stake_snapshot);
+                    let recorded = self.state_ref.record_commit_roster_without_world(
+                        &commit_cert,
+                        &checkpoint,
+                        stake_snapshot,
+                    );
+                    if recorded {
+                        let should_update =
+                            match self.world.commit_qcs.get(&commit_cert.subject_block_hash) {
+                                Some(existing) => existing.view <= commit_cert.view,
+                                None => true,
+                            };
+                        if should_update {
+                            self.world
+                                .commit_qcs
+                                .insert(commit_cert.subject_block_hash, commit_cert.clone());
+                        }
+                    }
                 }
             } else {
                 warn!(
@@ -14850,13 +15013,20 @@ mod transfer_transcript_tests {
             from_merkle_proof: None,
             to_merkle_proof: None,
         };
-        tx.record_transfer_transcript(delta, None, None);
+        let expected_poseidon = crate::fastpq::poseidon_preimage_digest(&delta, &call_hash);
+        tx.record_transfer_transcript(&ALICE_ID, delta);
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
         let entry = transcripts
             .get(&call_hash)
             .expect("transcripts recorded for call hash");
         assert_eq!(entry.len(), 1);
+        let transcript = &entry[0];
+        assert_eq!(
+            transcript.authority_digest,
+            crate::fastpq::authority_digest(&ALICE_ID)
+        );
+        assert_eq!(transcript.poseidon_preimage_digest, Some(expected_poseidon));
     }
 
     #[test]
@@ -14881,10 +15051,6 @@ mod transfer_transcript_tests {
             from_merkle_proof: None,
             to_merkle_proof: None,
         };
-        tx.record_transfer_transcript(delta, None, None);
-        tx.apply();
-        let transcripts = block.drain_transfer_transcripts();
-        assert_eq!(transcripts.len(), 1);
         let expected = {
             let mut buf = Vec::new();
             buf.extend_from_slice(b"iroha:fastpq:v1:synthetic|");
@@ -14892,10 +15058,21 @@ mod transfer_transcript_tests {
             buf.extend_from_slice(&0u64.to_be_bytes());
             iroha_crypto::Hash::new(buf)
         };
+        let expected_poseidon = crate::fastpq::poseidon_preimage_digest(&delta, &expected);
+        tx.record_transfer_transcript(&ALICE_ID, delta);
+        tx.apply();
+        let transcripts = block.drain_transfer_transcripts();
+        assert_eq!(transcripts.len(), 1);
         let entry = transcripts
             .get(&expected)
             .expect("transcripts recorded under synthetic hash");
         assert_eq!(entry.len(), 1);
+        let transcript = &entry[0];
+        assert_eq!(
+            transcript.authority_digest,
+            crate::fastpq::authority_digest(&ALICE_ID)
+        );
+        assert_eq!(transcript.poseidon_preimage_digest, Some(expected_poseidon));
     }
 
     #[test]
@@ -14932,7 +15109,7 @@ mod transfer_transcript_tests {
             from_merkle_proof: None,
             to_merkle_proof: None,
         };
-        tx.record_transfer_transcripts(vec![delta_a.clone(), delta_b.clone()], None, None);
+        tx.record_transfer_transcripts(&ALICE_ID, vec![delta_a.clone(), delta_b.clone()]);
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
         assert_eq!(transcripts.len(), 1);
@@ -14940,6 +15117,10 @@ mod transfer_transcript_tests {
         assert_eq!(entry.len(), 1);
         let transcript = &entry[0];
         assert_eq!(transcript.deltas, vec![delta_a, delta_b]);
+        assert_eq!(
+            transcript.authority_digest,
+            crate::fastpq::authority_digest(&ALICE_ID)
+        );
         assert!(transcript.poseidon_preimage_digest.is_none());
     }
 }
@@ -17010,31 +17191,33 @@ impl StateTransaction<'_, '_> {
     /// Record a transfer delta so the FASTPQ prover can consume a structured transcript.
     pub fn record_transfer_transcript(
         &mut self,
+        authority: &AccountId,
         delta: TransferDeltaTranscript,
-        authority_digest: Option<Hash>,
-        poseidon_digest: Option<Hash>,
     ) {
-        self.record_transfer_transcripts(vec![delta], authority_digest, poseidon_digest);
+        self.record_transfer_transcripts(authority, vec![delta]);
     }
 
     /// Record a multi-delta transfer transcript so the FASTPQ prover can consume batch witnesses.
     pub fn record_transfer_transcripts(
         &mut self,
+        authority: &AccountId,
         mut deltas: Vec<TransferDeltaTranscript>,
-        authority_digest: Option<Hash>,
-        poseidon_digest: Option<Hash>,
     ) {
         if deltas.is_empty() {
             return;
         }
-        let poseidon_digest = if deltas.len() > 1 {
-            None
-        } else {
-            poseidon_digest
-        };
         let batch_hash = self
             .tx_call_hash
             .unwrap_or_else(|| self.ensure_synthetic_batch_hash_with(|_| {}));
+        let authority_digest = crate::fastpq::authority_digest(authority);
+        let poseidon_digest = if deltas.len() > 1 {
+            None
+        } else {
+            Some(crate::fastpq::poseidon_preimage_digest(
+                &deltas[0],
+                &batch_hash,
+            ))
+        };
         let transcript = TransferTranscript {
             batch_hash,
             deltas: core::mem::take(&mut deltas),
@@ -22263,6 +22446,13 @@ mod tests {
             checkpoints.iter().any(|chk| chk == &checkpoint),
             "checkpoint should be restored from journal"
         );
+        let view = state.view();
+        let stored = view.world().commit_qcs().get(&block_hash);
+        assert_eq!(
+            stored,
+            Some(&commit_cert),
+            "commit certificate should be restored into world storage"
+        );
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
     }
@@ -22296,6 +22486,13 @@ mod tests {
         let cert = certs.first().expect("commit certificate recorded");
         assert_eq!(cert.height, committed.as_ref().header().height().get());
         assert_eq!(cert.aggregate.signers_bitmap, vec![0b0000_0010]);
+        let view = state.view();
+        let stored = view.world().commit_qcs().get(&committed.as_ref().hash());
+        assert_eq!(
+            stored,
+            Some(cert),
+            "commit certificate should be recorded in world storage"
+        );
 
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -22390,6 +22587,16 @@ mod tests {
             sidecar.roster_snapshot().as_deref(),
             Some(commit_cert.validator_set.as_slice()),
             "roster snapshot should match commit certificate"
+        );
+        let view = state.view();
+        let stored = view
+            .world()
+            .commit_qcs()
+            .get(&commit_cert.subject_block_hash);
+        assert_eq!(
+            stored,
+            Some(&commit_cert),
+            "commit certificate should be recorded in world storage"
         );
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();

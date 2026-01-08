@@ -24,7 +24,9 @@ use iroha_version::BuildLine;
 
 use crate::{
     Outcome, RunArgs,
-    genesis::{build_line_from_env, generate_default, validate_consensus_mode_for_line},
+    genesis::{
+        ConsensusPolicy, build_line_from_env, generate_default, validate_consensus_mode_for_line,
+    },
     tui,
 };
 
@@ -372,7 +374,12 @@ fn validate_localnet_options(
             "`--mode-activation-height` must be greater than zero"
         ));
     }
-    validate_consensus_mode_for_line(build_line, opts.consensus_mode, opts.next_consensus_mode)?;
+    validate_consensus_mode_for_line(
+        build_line,
+        opts.consensus_mode,
+        opts.next_consensus_mode,
+        ConsensusPolicy::Any,
+    )?;
 
     let bind = CanonicalHost::parse(&opts.bind_host, "--bind-host")?;
     let public = CanonicalHost::parse(&opts.public_host, "--public-host")?;
@@ -411,7 +418,7 @@ fn generate_localnet_with_line<T: Write>(
     let redundant_send_r = resolve_localnet_redundant_send_r(opts.redundant_send_r, da_rbc_enabled);
     let commit_inflight_timeout_ms =
         localnet_commit_inflight_timeout_ms(block_time_ms, commit_time_ms);
-    let (genesis_public_key, genesis_private) = generate_key_pair(seed_bytes, GENESIS_SEED);
+    let (genesis_public_key, genesis_private) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
     let mut genesis = generate_raw_genesis(
         genesis_public_key.clone(),
         opts.consensus_mode,
@@ -862,7 +869,7 @@ fn extend_genesis(
     let mut builder = genesis.into_builder().next_transaction();
 
     for idx in 0..extra_accounts {
-        let (pk, _) = generate_key_pair(seed_bytes, &format!("acct{idx}").into_bytes());
+        let (pk, _) = generate_account_key_pair(seed_bytes, &format!("acct{idx}").into_bytes());
         let domain_id: DomainId = "wonderland"
             .parse()
             .expect("default genesis must include wonderland domain");
@@ -964,7 +971,7 @@ fn write_genesis(
     Ok(())
 }
 
-fn generate_key_pair(
+fn generate_genesis_key_pair(
     base_seed: Option<&[u8]>,
     extra_seed: &[u8],
 ) -> (iroha_crypto::PublicKey, ExposedPrivateKey) {
@@ -985,6 +992,22 @@ fn generate_key_pair(
         iroha_crypto::Algorithm::default(),
     )
     .into_parts();
+    (public_key, ExposedPrivateKey(private_key))
+}
+
+fn generate_account_key_pair(
+    base_seed: Option<&[u8]>,
+    extra_seed: &[u8],
+) -> (iroha_crypto::PublicKey, ExposedPrivateKey) {
+    let (public_key, private_key) = match base_seed {
+        Some(seed) => iroha_crypto::KeyPair::from_seed(
+            seed.iter().chain(extra_seed).copied().collect::<Vec<_>>(),
+            iroha_crypto::Algorithm::default(),
+        )
+        .into_parts(),
+        None => iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::default())
+            .into_parts(),
+    };
     (public_key, ExposedPrivateKey(private_key))
 }
 
@@ -1202,7 +1225,7 @@ mod tests {
 
     use iroha_config::{base::toml::TomlSource, parameters::actual};
     use iroha_data_model::{
-        block::decode_framed_signed_block,
+        block::{consensus::PROTO_VERSION, decode_framed_signed_block},
         isi::SetParameter,
         parameter::{
             Parameter,
@@ -1497,6 +1520,22 @@ mod tests {
         assert_eq!(commit_ms, Some(2_500));
     }
 
+    #[test]
+    fn genesis_key_defaults_to_real_keypair_when_unseeded() {
+        let (public_key, _) = generate_genesis_key_pair(None, GENESIS_SEED);
+        assert_eq!(
+            public_key,
+            REAL_GENESIS_ACCOUNT_KEYPAIR.public_key().clone()
+        );
+    }
+
+    #[test]
+    fn extra_account_keys_are_unique_when_unseeded() {
+        let (first, _) = generate_account_key_pair(None, b"acct0");
+        let (second, _) = generate_account_key_pair(None, b"acct1");
+        assert_ne!(first, second);
+    }
+
     #[derive(Debug, Clone, JsonDeserialize, PartialEq, Eq)]
     struct ConsensusHandshakeMetaTest {
         mode: String,
@@ -1557,7 +1596,7 @@ mod tests {
 
         let meta = found.expect("handshake metadata must be present");
         assert!(
-            meta.wire_proto_versions.contains(&1),
+            meta.wire_proto_versions.contains(&PROTO_VERSION),
             "missing expected wire proto version"
         );
         assert!(
@@ -2039,7 +2078,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_localnet_options_rejects_permissioned_on_iroha3() {
+    fn validate_localnet_options_allows_permissioned_on_iroha3() {
         let opts = LocalnetOptions {
             peers: NonZeroU16::new(1).unwrap(),
             seed: None,
@@ -2057,12 +2096,8 @@ mod tests {
             next_consensus_mode: None,
             mode_activation_height: None,
         };
-        let err = validate_localnet_options(&opts, BuildLine::Iroha3)
-            .expect_err("permissioned should be rejected on Iroha3");
-        assert!(
-            err.to_string().contains("Iroha3 requires"),
-            "unexpected error: {err}"
-        );
+        validate_localnet_options(&opts, BuildLine::Iroha3)
+            .expect("permissioned should be allowed on Iroha3");
     }
 
     #[test]

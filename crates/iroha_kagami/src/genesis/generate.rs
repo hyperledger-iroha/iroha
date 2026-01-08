@@ -26,7 +26,8 @@ use iroha_version::BuildLine;
 use crate::{
     Outcome, RunArgs,
     genesis::profile::{
-        GenesisProfile, ProfileDefaults, parse_vrf_seed_hex, profile_defaults, resolve_vrf_seed,
+        GenesisProfile, ProfileDefaults, parse_vrf_seed_hex, profile_defaults,
+        profile_requires_npos, resolve_vrf_seed,
     },
     tui,
 };
@@ -40,7 +41,8 @@ pub struct Args {
     /// Optional explicit chain id (overrides profile default).
     #[clap(long, value_name = "CHAIN_ID")]
     chain_id: Option<ChainId>,
-    /// Optional VRF seed (hex, 32 bytes). Required for `iroha3-testus`/`iroha3-nexus` profiles.
+    /// Optional VRF seed (hex, 32 bytes). Required for `iroha3-testus`/`iroha3-nexus`
+    /// when NPoS is selected; ignored for permissioned manifests.
     #[clap(long, value_name = "HEX")]
     vrf_seed_hex: Option<String>,
     /// Optional path (relative to output) to the executor bytecode file (.to).
@@ -59,7 +61,8 @@ pub struct Args {
     #[clap(long, value_name = "U64")]
     ivm_gas_limit_per_block: Option<u64>,
     /// Select the consensus mode snapshot to seed in the genesis parameters
-    /// (Iroha3 requires NPoS; Iroha2 defaults to Permissioned).
+    /// (public dataspace requires NPoS; other Iroha3 dataspaces may use permissioned or NPoS;
+    /// Iroha2 defaults to permissioned).
     #[clap(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
     /// Optional future consensus mode to stage behind `--mode-activation-height`
@@ -250,20 +253,15 @@ fn apply_profile_overrides(
         ));
     }
 
-    if !matches!(consensus_mode, SumeragiConsensusMode::Npos) {
+    if profile_requires_npos(profile) && !matches!(consensus_mode, SumeragiConsensusMode::Npos) {
         return Err(color_eyre::eyre::eyre!(
-            "profile {profile:?} requires `--consensus-mode npos` (or omit the flag)"
+            "profile {profile:?} targets the public dataspace; use `--consensus-mode npos`"
         ));
     }
 
     if let Some(next) = next_consensus_mode {
-        if next != SumeragiConsensusMode::Npos {
-            return Err(color_eyre::eyre::eyre!(
-                "profile {profile:?} requires NPoS consensus; remove `--next-consensus-mode {next:?}` override"
-            ));
-        }
         return Err(color_eyre::eyre::eyre!(
-            "profile {profile:?} enables NPoS immediately; remove `--next-consensus-mode` to avoid staging a cutover"
+            "profile {profile:?} disallows staged cutovers; remove `--next-consensus-mode {next:?}`"
         ));
     }
 
@@ -276,12 +274,18 @@ fn apply_profile_overrides(
     }
 
     let chain = defaults.chain_id.clone();
-    let profile_vrf_seed = Some(resolve_vrf_seed(profile, &chain, vrf_seed_override)?);
+    let wants_npos_seed = matches!(consensus_mode, SumeragiConsensusMode::Npos)
+        || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
+    let profile_vrf_seed = if wants_npos_seed {
+        Some(resolve_vrf_seed(profile, &chain, vrf_seed_override)?)
+    } else {
+        None
+    };
 
     Ok(ResolvedGenesisSettings {
         chain,
-        consensus_mode: SumeragiConsensusMode::Npos,
-        next_consensus_mode: None,
+        consensus_mode,
+        next_consensus_mode,
         profile_vrf_seed,
     })
 }
@@ -417,17 +421,31 @@ fn validate_vrf_seed_usage(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsensusPolicy {
+    /// Allow either permissioned or NPoS consensus.
+    Any,
+    /// Require NPoS (public dataspace rule).
+    PublicDataspace,
+}
+
 pub(crate) fn validate_consensus_mode_for_line(
     build_line: BuildLine,
-    _consensus_mode: SumeragiConsensusMode,
+    consensus_mode: SumeragiConsensusMode,
     next_consensus_mode: Option<SumeragiConsensusMode>,
+    policy: ConsensusPolicy,
 ) -> color_eyre::Result<()> {
-    if build_line.is_iroha3() {
-        if next_consensus_mode.is_some() {
-            return Err(color_eyre::eyre::eyre!(
-                "Iroha3 does not support staged consensus cutovers; drop `--next-consensus-mode`"
-            ));
-        }
+    if matches!(policy, ConsensusPolicy::PublicDataspace)
+        && consensus_mode != SumeragiConsensusMode::Npos
+    {
+        return Err(color_eyre::eyre::eyre!(
+            "public dataspace requires `--consensus-mode npos` (permissioned is private-only)"
+        ));
+    }
+    if build_line.is_iroha3() && next_consensus_mode.is_some() {
+        return Err(color_eyre::eyre::eyre!(
+            "Iroha3 does not support staged consensus cutovers; drop `--next-consensus-mode`"
+        ));
     }
     Ok(())
 }
@@ -503,7 +521,16 @@ impl<T: Write> RunArgs<T> for Args {
         validate_vrf_seed_usage(resolved_vrf_seed, consensus_mode, next_consensus_mode)?;
 
         let summary_chain = chain.clone();
-        validate_consensus_mode_for_line(build_line, consensus_mode, next_consensus_mode)?;
+        let consensus_policy = match profile {
+            Some(profile) if profile_requires_npos(profile) => ConsensusPolicy::PublicDataspace,
+            _ => ConsensusPolicy::Any,
+        };
+        validate_consensus_mode_for_line(
+            build_line,
+            consensus_mode,
+            next_consensus_mode,
+            consensus_policy,
+        )?;
         let builder = match executor {
             Some(path) => GenesisBuilder::new(chain, path, ivm_dir),
             None => GenesisBuilder::new_without_executor(chain, ivm_dir),
@@ -800,7 +827,7 @@ mod da_tests {
 mod profile_cli_tests {
     use std::io::{BufWriter, Write};
 
-    use iroha_data_model::parameter::system::SumeragiNposParameters;
+    use iroha_data_model::parameter::system::{SumeragiConsensusMode, SumeragiNposParameters};
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
 
     use super::*;
@@ -835,12 +862,12 @@ mod profile_cli_tests {
 
     #[test]
     fn profile_rejects_permissioned_mode() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Dev);
+        let mut args = base_profile_args(GenesisProfile::Iroha3Nexus);
         args.consensus_mode = Some(ConsensusModeArg::Permissioned);
 
-        let err = run_and_parse(args).expect_err("profile should demand NPoS");
+        let err = run_and_parse(args).expect_err("public dataspace should demand NPoS");
         assert!(
-            err.to_string().contains("requires `--consensus-mode npos`"),
+            err.to_string().contains("public dataspace"),
             "unexpected error: {err}"
         );
     }
@@ -853,8 +880,20 @@ mod profile_cli_tests {
 
         let err = run_and_parse(args).expect_err("staged cutover should be rejected");
         assert!(
-            err.to_string().contains("enables NPoS immediately"),
+            err.to_string().contains("disallows staged cutovers"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn dev_profile_allows_permissioned_mode() {
+        let mut args = base_profile_args(GenesisProfile::Iroha3Dev);
+        args.consensus_mode = Some(ConsensusModeArg::Permissioned);
+
+        let manifest = run_and_parse(args).expect("permissioned should be accepted");
+        assert_eq!(
+            manifest.consensus_mode(),
+            Some(SumeragiConsensusMode::Permissioned)
         );
     }
 
@@ -1037,6 +1076,29 @@ mod helper_tests {
     }
 
     #[test]
+    fn apply_profile_overrides_allows_permissioned_mode_for_dev() {
+        let profile = GenesisProfile::Iroha3Dev;
+        let defaults = profile_defaults(profile);
+        let overrides = apply_profile_overrides(
+            profile,
+            None,
+            SumeragiConsensusMode::Permissioned,
+            None,
+            None,
+            None,
+            &defaults,
+        )
+        .expect("permissioned dev profile should succeed");
+
+        assert_eq!(overrides.chain, defaults.chain_id);
+        assert_eq!(
+            overrides.consensus_mode,
+            SumeragiConsensusMode::Permissioned
+        );
+        assert!(overrides.profile_vrf_seed.is_none());
+    }
+
+    #[test]
     fn resolve_profile_settings_uses_chain_override_when_no_profile() {
         let chain_id = ChainId::from("explicit-chain");
         let resolved = resolve_profile_settings(
@@ -1075,6 +1137,27 @@ mod helper_tests {
         assert_eq!(resolved.consensus_mode, SumeragiConsensusMode::Npos);
         assert!(resolved.next_consensus_mode.is_none());
         assert!(resolved.profile_vrf_seed.is_some());
+    }
+
+    #[test]
+    fn resolve_profile_settings_allows_permissioned_without_seed() {
+        let profile = GenesisProfile::Iroha3Dev;
+        let defaults = profile_defaults(profile);
+        let resolved = resolve_profile_settings(
+            Some(profile),
+            None,
+            Some(&defaults),
+            SumeragiConsensusMode::Permissioned,
+            None,
+            None,
+            None,
+        )
+        .expect("permissioned profile settings should resolve");
+
+        assert_eq!(resolved.chain, defaults.chain_id);
+        assert_eq!(resolved.consensus_mode, SumeragiConsensusMode::Permissioned);
+        assert!(resolved.next_consensus_mode.is_none());
+        assert!(resolved.profile_vrf_seed.is_none());
     }
 
     #[test]
@@ -1177,15 +1260,29 @@ mod helper_tests {
     }
 
     #[test]
-    fn validate_consensus_mode_for_line_rejects_permissioned_on_iroha3() {
+    fn validate_consensus_mode_for_line_allows_permissioned_on_iroha3_without_policy() {
+        assert!(
+            validate_consensus_mode_for_line(
+                BuildLine::Iroha3,
+                SumeragiConsensusMode::Permissioned,
+                None,
+                ConsensusPolicy::Any
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn validate_consensus_mode_for_line_requires_npos_for_public_dataspace() {
         let err = validate_consensus_mode_for_line(
             BuildLine::Iroha3,
             SumeragiConsensusMode::Permissioned,
             None,
+            ConsensusPolicy::PublicDataspace,
         )
-        .expect_err("iroha3 should require npos");
+        .expect_err("public dataspace should require npos");
         assert!(
-            err.to_string().contains("consensus-mode npos"),
+            err.to_string().contains("public dataspace"),
             "unexpected error: {err}"
         );
     }
@@ -1196,6 +1293,7 @@ mod helper_tests {
             BuildLine::Iroha3,
             SumeragiConsensusMode::Npos,
             Some(SumeragiConsensusMode::Npos),
+            ConsensusPolicy::Any,
         )
         .expect_err("iroha3 should reject staged cutover");
         assert!(
@@ -1207,8 +1305,13 @@ mod helper_tests {
     #[test]
     fn validate_consensus_mode_for_line_allows_npos_on_iroha3() {
         assert!(
-            validate_consensus_mode_for_line(BuildLine::Iroha3, SumeragiConsensusMode::Npos, None)
-                .is_ok()
+            validate_consensus_mode_for_line(
+                BuildLine::Iroha3,
+                SumeragiConsensusMode::Npos,
+                None,
+                ConsensusPolicy::PublicDataspace
+            )
+            .is_ok()
         );
     }
 }
@@ -1295,9 +1398,7 @@ pub fn build_line_from_env() -> BuildLine {
 
 #[allow(dead_code)]
 fn apply_da_rbc_policy_for_line(params: &mut Parameters, line: BuildLine) {
-    if line.is_iroha3() {
-        params.sumeragi.da_enabled = true;
-    }
+    params.sumeragi.da_enabled = line.is_iroha3();
 }
 
 #[cfg(test)]
@@ -1313,7 +1414,7 @@ mod tests {
         let mut params_i2 = Parameters::default();
         params_i2.sumeragi.da_enabled = true;
         apply_da_rbc_policy_for_line(&mut params_i2, BuildLine::Iroha2);
-        assert!(params_i2.sumeragi.da_enabled);
+        assert!(!params_i2.sumeragi.da_enabled);
     }
 
     #[test]

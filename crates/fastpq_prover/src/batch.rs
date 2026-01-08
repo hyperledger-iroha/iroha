@@ -5,6 +5,46 @@ use std::collections::BTreeMap;
 use norito::json::{JsonDeserialize, JsonSerialize};
 use norito::{NoritoDeserialize, NoritoSerialize};
 
+/// Public inputs supplied by the host for a FASTPQ batch.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
+pub struct PublicInputs {
+    /// Data-space identifier (little-endian UUID bytes).
+    pub dsid: [u8; 16],
+    /// Slot timestamp (nanoseconds since epoch).
+    pub slot: u64,
+    /// Sparse Merkle tree root before executing the batch.
+    pub old_root: [u8; 32],
+    /// Sparse Merkle tree root after executing the batch.
+    pub new_root: [u8; 32],
+    /// Permission table commitment for this slot.
+    pub perm_root: [u8; 32],
+    /// Transaction set hash recorded by the scheduler.
+    pub tx_set_hash: [u8; 32],
+}
+
+impl Default for PublicInputs {
+    fn default() -> Self {
+        Self {
+            dsid: [0; 16],
+            slot: 0,
+            old_root: [0; 32],
+            new_root: [0; 32],
+            perm_root: [0; 32],
+            tx_set_hash: [0; 32],
+        }
+    }
+}
+
 /// A single key-value transition touched by a transaction batch.
 #[derive(
     Debug,
@@ -133,6 +173,8 @@ impl OperationKind {
 pub struct TransitionBatch {
     /// Canonical parameter set name expected for this proof.
     pub parameter: String,
+    /// Public inputs committed by the prover and replayed by the verifier.
+    pub public_inputs: PublicInputs,
     /// Deterministic, sorted transitions used to build the trace.
     pub transitions: Vec<StateTransition>,
     /// Optional metadata for higher-level schedulers (keyed map to keep the
@@ -142,9 +184,10 @@ pub struct TransitionBatch {
 
 impl TransitionBatch {
     /// Create an empty batch for the given parameter set name.
-    pub fn new(parameter: impl Into<String>) -> Self {
+    pub fn new(parameter: impl Into<String>, public_inputs: PublicInputs) -> Self {
         Self {
             parameter: parameter.into(),
+            public_inputs,
             transitions: Vec::new(),
             metadata: BTreeMap::new(),
         }
@@ -178,7 +221,7 @@ mod tests {
 
     #[test]
     fn sort_orders_by_key() {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced");
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         batch.push(StateTransition::new(
             b"b".to_vec(),
             vec![],
@@ -198,7 +241,7 @@ mod tests {
 
     #[test]
     fn sort_respects_operation_rank() {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced");
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         batch.push(StateTransition::new(
             b"key".to_vec(),
             vec![0],

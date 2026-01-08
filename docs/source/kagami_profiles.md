@@ -3,11 +3,12 @@
 Kagami ships presets for Iroha 3 networks so operators can stamp deterministic
 genesis manifests without juggling per-network knobs.
 
-- Profiles: `iroha3-dev` (chain `iroha3-dev.local`, collectors k=1 r=1, VRF seed derived from chain id), `iroha3-testus` (chain `iroha3-testus`, collectors k=3 r=2, requires `--vrf-seed-hex`), `iroha3-nexus` (chain `iroha3-nexus`, collectors k=5 r=2, requires `--vrf-seed-hex`).
-- Generation: `cargo run -p iroha_kagami -- genesis generate --profile <profile> --ivm-dir . --genesis-public-key <pk> --consensus-mode npos [--vrf-seed-hex <hex>]`. Kagami pins DA/RBC on the Iroha3 line and emits a summary (chain, collectors, DA/RBC, VRF seed, fingerprint).
-- Verification: `cargo run -p iroha_kagami -- verify --profile <profile> --genesis <path> [--vrf-seed-hex <hex>]` replays profile expectations (chain id, DA/RBC, collectors, VRF seed rules, PoP coverage, consensus fingerprint) and reports a compact summary.
+- Profiles: `iroha3-dev` (chain `iroha3-dev.local`, collectors k=1 r=1, VRF seed derived from the chain id when NPoS is selected), `iroha3-testus` (chain `iroha3-testus`, collectors k=3 r=2, requires `--vrf-seed-hex` when NPoS is selected), `iroha3-nexus` (chain `iroha3-nexus`, collectors k=5 r=2, requires `--vrf-seed-hex` when NPoS is selected).
+- Consensus: the public Sora Nexus dataspace requires NPoS and disallows staged cutovers; other Iroha3 dataspaces may use permissioned or NPoS but still cannot stage cutovers.
+- Generation: `cargo run -p iroha_kagami -- genesis generate --profile <profile> --ivm-dir . --genesis-public-key <pk> --consensus-mode <npos|permissioned> [--vrf-seed-hex <hex>]`. Use `--consensus-mode npos` for Nexus; `--vrf-seed-hex` is only valid for NPoS (required for testus/nexus). Kagami pins DA/RBC on the Iroha3 line and emits a summary (chain, collectors, DA/RBC, VRF seed, fingerprint).
+- Verification: `cargo run -p iroha_kagami -- verify --profile <profile> --genesis <path> [--vrf-seed-hex <hex>]` replays profile expectations (chain id, DA/RBC, collectors, PoP coverage, consensus fingerprint). Supply `--vrf-seed-hex` only when verifying an NPoS manifest for testus/nexus.
 - Sample bundles: pre-generated bundles live under `defaults/kagami/iroha3-{dev,testus,nexus}/` (genesis.json, config.toml, docker-compose.yml, verify.txt, README). Regenerate with `cargo xtask kagami-profiles [--profile <name>|all] [--out <dir>] [--kagami <bin>]`.
-- Mochi: `mochi`/`mochi-genesis` accept `--genesis-profile <profile>` and `--vrf-seed-hex <hex>`, forward them to Kagami, and print the same Kagami summary to stdout/stderr when a profile is used.
+- Mochi: `mochi`/`mochi-genesis` accept `--genesis-profile <profile>` and `--vrf-seed-hex <hex>` (NPoS only), forward them to Kagami, and print the same Kagami summary to stdout/stderr when a profile is used.
 
 The bundles embed BLS PoPs alongside topology entries so `kagami verify` succeeds
 out of the box; adjust the trusted peers/ports in the configs as needed for local

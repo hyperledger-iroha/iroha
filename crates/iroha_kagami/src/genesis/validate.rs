@@ -11,7 +11,7 @@ use iroha_genesis::{ManifestCrypto, RawGenesisTransaction, genesis_instructions_
 
 use crate::{
     Outcome, RunArgs,
-    genesis::{build_line_from_env, validate_consensus_mode_for_line},
+    genesis::{ConsensusPolicy, build_line_from_env, validate_consensus_mode_for_line},
     tui,
 };
 
@@ -30,11 +30,17 @@ struct Offense {
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         tui::status("Validating genesis manifest");
+        let bytes = fs::read(&self.genesis_file)?;
+        let json: norito::json::Value = norito::json::from_slice(&bytes)?;
+        let consensus_mode = json.get("consensus_mode");
+        if consensus_mode.is_none() || consensus_mode.is_some_and(|value| value.is_null()) {
+            return Err(eyre!(
+                "genesis manifest missing consensus_mode; regenerate with `kagami genesis generate --consensus-mode <mode>`"
+            ));
+        }
         let manifest = RawGenesisTransaction::from_path(&self.genesis_file)
             .wrap_err("genesis manifest failed structural validation")?;
         validate_consensus_manifest(&manifest, build_line_from_env())?;
-        let bytes = fs::read(&self.genesis_file)?;
-        let json: norito::json::Value = norito::json::from_slice(&bytes)?;
 
         let offenses = collect_offenses_from_value(&json);
 
@@ -67,7 +73,7 @@ fn validate_consensus_manifest(
     let params = manifest.effective_parameters();
     let next_mode = params.sumeragi().next_mode();
     let mode_activation_height = params.sumeragi().mode_activation_height();
-    validate_consensus_mode_for_line(build_line, consensus_mode, next_mode)?;
+    validate_consensus_mode_for_line(build_line, consensus_mode, next_mode, ConsensusPolicy::Any)?;
     if next_mode.is_some() ^ mode_activation_height.is_some() {
         return Err(eyre!(
             "genesis manifest must set both `next_mode` and `mode_activation_height`, or neither"
@@ -241,7 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn run_rejects_permissioned_on_iroha3() {
+    fn run_accepts_permissioned_on_iroha3() {
         let manifest = r#"{
             "chain": "0",
             "executor": null,
@@ -260,13 +266,8 @@ mod tests {
         };
 
         let mut sink = BufWriter::new(Vec::<u8>::new());
-        let err = args
-            .run(&mut sink)
-            .expect_err("permissioned consensus should be rejected on Iroha3");
-        assert!(
-            err.to_string().contains("Iroha3 requires"),
-            "unexpected error: {err}"
-        );
+        args.run(&mut sink)
+            .expect("permissioned consensus should be allowed on Iroha3");
     }
 
     #[test]

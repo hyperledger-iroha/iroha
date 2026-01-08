@@ -24,7 +24,7 @@ suivants :
   intégré est utilisé.
 - `ivm_dir` : répertoire contenant les bibliothèques de bytecode IVM. Par
   défaut `"."` si omis.
-- `consensus_mode` : mode de consensus annoncé dans le manifest. Requis ; utilisez `"Npos"` pour Iroha3 (par défaut) et `"Permissioned"` pour Iroha2.
+- `consensus_mode` : mode de consensus annoncé dans le manifest. Requis ; utilisez `"Npos"` pour le dataspace public de Sora Nexus et `"Permissioned"` ou `"Npos"` pour les autres dataspaces Iroha3. Iroha2 utilise `"Permissioned"` par défaut.
 - `transactions` : liste de transactions de genesis exécutées séquentiellement.
   Chaque entrée peut contenir :
   - `parameters` : paramètres initiaux du réseau.
@@ -165,7 +165,7 @@ cargo run -p iroha_cli --features sm -- \
      bloc de genesis ; elle doit être un multihash reconnu par
      `iroha_crypto::Algorithm` (y compris les variantes GOST TC26 lorsque le
      build inclut le feature correspondant).
-   - Sur Iroha3, `--consensus-mode npos` est obligatoire et les basculements planifiés ne sont pas pris en charge ; sur Iroha2, le mode par défaut est `permissioned`.
+   - Sur le dataspace public de Sora Nexus, `--consensus-mode npos` est obligatoire et les basculements planifiés ne sont pas pris en charge ; les autres dataspaces Iroha3 peuvent utiliser `permissioned` ou `npos`. Sur Iroha2, le mode par défaut est `permissioned`.
 
 2. Valider pendant l’édition :
 
@@ -254,7 +254,7 @@ dans la même transaction.
 
 - Partir d’un template généré par Kagami :
   - ISI intégrées uniquement :  
-    `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (Iroha3 par défaut ; utilisez `--consensus-mode permissioned` pour Iroha2)
+    `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (dataspace public de Sora Nexus ; utilisez `--consensus-mode permissioned` pour Iroha2 ou Iroha3 privé)
   - Avec upgrade d’exécuteur (optionnel) : ajouter `--executor <path/to/executor.to>`
 - `<PK>` est n’importe quel multihash reconnu par `iroha_crypto::Algorithm`,
   y compris les variantes GOST TC26 lorsque Kagami est compilé avec

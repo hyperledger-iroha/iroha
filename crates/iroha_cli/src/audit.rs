@@ -73,7 +73,7 @@ pub struct WitnessArgs {
     /// - regex-like syntax `/.../` (treated as a glob pattern inside the slashes)
     #[arg(long, value_name = "PREFIXES", requires = "decode")]
     filter: Option<String>,
-    /// Include FASTPQ transition batches derived from the transcripts when decoding (enabled by default).
+    /// Include FASTPQ transition batches recorded in the witness when decoding (enabled by default).
     #[arg(
         long,
         action = ArgAction::SetTrue,
@@ -88,7 +88,7 @@ pub struct WitnessArgs {
         overrides_with = "fastpq_batches"
     )]
     no_fastpq_batches: bool,
-    /// Parameter set name used when building FASTPQ batches (default: `fastpq-lane-balanced`).
+    /// Expected FASTPQ parameter set name; errors if batches use a different value.
     #[arg(
         long,
         value_name = "NAME",
@@ -200,27 +200,19 @@ impl WitnessArgs {
     }
 
     fn collect_fastpq_batches(&self, witness: &ExecWitness) -> Result<Vec<norito::json::Value>> {
-        if !witness.fastpq_batches.is_empty() {
-            return witness
-                .fastpq_batches
-                .iter()
-                .map(|dto| {
-                    let batch = fastpq::transition_batch_from_dto(dto);
-                    Self::transition_batch_to_json(&batch)
-                })
-                .collect();
+        let batches = fastpq::batches_from_exec_witness(witness)?;
+        if !self.fastpq_parameter.is_empty() {
+            for batch in &batches {
+                if batch.parameter != self.fastpq_parameter {
+                    return Err(eyre::eyre!(
+                        "FASTPQ batch parameter `{}` does not match expected `{}`",
+                        batch.parameter,
+                        self.fastpq_parameter
+                    ));
+                }
+            }
         }
-        let batches =
-            fastpq::batches_from_exec_witness(witness, self.fastpq_parameter_or_default())?;
         batches.iter().map(Self::transition_batch_to_json).collect()
-    }
-
-    fn fastpq_parameter_or_default(&self) -> &str {
-        if self.fastpq_parameter.is_empty() {
-            fastpq::FASTPQ_CANONICAL_PARAMETER_SET
-        } else {
-            &self.fastpq_parameter
-        }
     }
 
     fn transition_batch_to_json(batch: &TransitionBatch) -> Result<norito::json::Value> {
@@ -232,6 +224,10 @@ impl WitnessArgs {
             .collect::<Result<Vec<_>>>()?;
         let mut fields = vec![
             ("parameter", json_value(&batch.parameter)?),
+            (
+                "public_inputs",
+                Self::public_inputs_json(&batch.public_inputs)?,
+            ),
             ("transitions", json_array(transitions)?),
             ("metadata", Self::metadata_json(&batch.metadata)?),
             ("row_usage", row_usage_json(trace.row_usage)?),
@@ -262,6 +258,17 @@ impl WitnessArgs {
                 json_value(&Self::hex(&transition.post_value))?,
             ),
             ("operation", Self::operation_json(&transition.operation)?),
+        ])
+    }
+
+    fn public_inputs_json(inputs: &fastpq_prover::PublicInputs) -> Result<norito::json::Value> {
+        json_object(vec![
+            ("dsid_hex", json_value(&Self::hex(&inputs.dsid))?),
+            ("slot", json_value(&inputs.slot)?),
+            ("old_root_hex", json_value(&Self::hex(&inputs.old_root))?),
+            ("new_root_hex", json_value(&Self::hex(&inputs.new_root))?),
+            ("perm_root_hex", json_value(&Self::hex(&inputs.perm_root))?),
+            ("tx_set_hash_hex", json_value(&Self::hex(&inputs.tx_set_hash))?),
         ])
     }
 

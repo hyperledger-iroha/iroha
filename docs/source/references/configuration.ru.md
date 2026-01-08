@@ -77,6 +77,9 @@ translation_last_reviewed: 2025-12-28
     - `padding_budget_ms` (по умолчанию: `25`): бюджет низколатентного padding в миллисекундах на цепочку; `null` отключает дополнительный padding.
     - `access_kind` (по умолчанию: `authenticated`): выходная политика (`authenticated` или `read-only`).
     - `channel_salt` (по умолчанию: `iroha.soranet.channel.seed.v1`): доменная строка, хэшируемая с идентификаторами stream/route для получения слепых channel‑IDs.
+  - `soravpn`: настройки локального provisioning spool SoraVPN для streaming маршрутов.
+    - `provision_spool_dir` (по умолчанию: `./storage/streaming/soravpn_routes`): каталог spool для подготовки обновлений маршрутов SoraVPN для локальных VPN узлов.
+    - `provision_spool_max_bytes` (по умолчанию: `0`, без ограничения): максимальный объём на диске для provisioning spool SoraVPN.
   - `sync` (по умолчанию: observe‑only): политика sync‑enforcement аудио/видео для NSC‑28b.
     - `enabled` (по умолчанию: `false`): установите `true`, когда валидатор должен начать оценку drift‑отчётов.
     - `observe_only` (по умолчанию: `true`): при `true` нарушения логируются и экспортируются в телеметрию, но сегменты принимаются; установите `false` для жёсткого отказа.

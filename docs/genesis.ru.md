@@ -23,7 +23,7 @@ translation_last_reviewed: 2025-11-14
   встроенный executor.
 - `ivm_dir` — каталог, содержащий IVM‑библиотеки байткода. По умолчанию `"."`
   при отсутствии поля.
-- `consensus_mode` — объявляемый в manifest режим консенсуса. Обязателен; используйте `"Npos"` для Iroha3 (по умолчанию) и `"Permissioned"` для Iroha2.
+- `consensus_mode` — объявляемый в manifest режим консенсуса. Обязателен; используйте `"Npos"` для публичного dataspace Sora Nexus, а для других Iroha3 dataspaces допустимы `"Permissioned"` или `"Npos"`. В Iroha2 по умолчанию используется `"Permissioned"`.
 - `transactions` — список транзакций генезиса, выполняемых последовательно.
   Каждая запись может содержать:
   - `parameters` — начальные сетевые параметры.
@@ -161,7 +161,7 @@ cargo run -p iroha_cli --features sm -- \
      genesis‑блока; это должен быть multihash, поддерживаемый
      `iroha_crypto::Algorithm` (включая варианты GOST TC26 при сборке с
      соответствующим feature).
-   - В Iroha3 `--consensus-mode npos` обязателен, а плановые cutover’ы не поддерживаются; в Iroha2 режим по умолчанию — `permissioned`.
+   - В публичном dataspace Sora Nexus `--consensus-mode npos` обязателен, а плановые cutover’ы не поддерживаются; в других Iroha3 dataspaces разрешены `permissioned` или `npos`. В Iroha2 режим по умолчанию — `permissioned`.
 
 2. Валидировать во время редактирования:
 
@@ -246,7 +246,7 @@ Kagami и код узла обеспечивают такой порядок, ч
 
 - Начать с template’а, генерируемого Kagami:
   - Только встроенные ISI:  
-    `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (Iroha3 по умолчанию; используйте `--consensus-mode permissioned` для Iroha2)
+    `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (публичный dataspace Sora Nexus; используйте `--consensus-mode permissioned` для Iroha2 или private Iroha3)
   - С опциональным upgrade’ом executor’а: добавить `--executor <path/to/executor.to>`
 - `<PK>` — любой multihash, поддерживаемый `iroha_crypto::Algorithm`,
   включая варианты GOST TC26 при сборке Kagami с `--features gost`

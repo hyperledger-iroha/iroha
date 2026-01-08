@@ -5732,7 +5732,6 @@ impl Sumeragi {
             } else {
                 true
             };
-
         let da_caps_ok = if da_max_commitments_per_block == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)

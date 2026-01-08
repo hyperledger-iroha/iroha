@@ -1,11 +1,51 @@
 # Status
 
 ## Latest Updates
+- Storage budgets: split SoraVPN spool caps into dedicated `streaming.soravpn` config, apply Nexus budget clamps separately, and update Nexus-lanes/config-reference docs (including localized copies).
+- Tests: not run (not requested).
+- Maintenance: resolve merge conflicts in `crates/iroha_core/src/sumeragi/main_loop/tests.rs` and `status.md`.
+- Tests: not run (not requested).
 - Izanami: add target-block progress monitoring with stall detection, optional pipeline-time override, and coordinated stop control; extend CLI/TUI/config defaults; skip persistence on permission errors and add guard tests.
 - Tests: `cargo test -p izanami` (failed: missing IVM artifact fixture `crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_3_mode00_vlen0_cycles0_abi0.to`; embedded Nexus config rejected `nexus.storage.weights`).
 - Izanami run: `cargo run -p izanami -- --allow-net --peers 4 --faulty 0 --pipeline-time 200ms --target-blocks 2000 --progress-interval 5s --progress-timeout 60s --duration 20m --tps 30 --max-inflight 128` (failed: loopback port bind denied `127.0.0.1:30000`).
 - Tests: fix NFT missing-domain matchers to avoid partial moves and align RBC test epoch usage to resolve borrow conflicts during compilation.
 - Tests: `cargo test -p iroha_core --lib exec_witness_guard_serializes_block_access -- --nocapture`.
+- Sumeragi/NPoS: derive epochs from finalized VRF epoch records to keep epoch-length changes consistent across message validation, seed selection, penalties, and startup alignment; add epoch schedule unit coverage; update sumeragi docs.
+- Tests: `cargo test -p iroha_core epoch_schedule_uses_finalized_boundaries -- --nocapture` (timed out after 120s during compilation; errors in `crates/iroha_core/src/fastpq/lane.rs` and `crates/iroha_core/src/fastpq/mod.rs` about missing imports/ambiguous `Into`).
+- FASTPQ: moved DSID/slot/root/perm/tx-set inputs into `FastpqTransitionBatch.public_inputs`, built batches during exec-witness capture, enforced authority + poseidon digests in state, tightened transcript/query validation in the prover, refreshed CLI audit output + FASTPQ docs, and added public-inputs template coverage.
+- Tests: not run (not requested).
+- Kagami/localnet/FASTPQ: align DA policy with build line (Iroha2 disables), fix genesis embed-pop inputs, adjust consensus metadata wiring + handshake expectation, and make FASTPQ batches carry public inputs with required authority digests; fix RBC READY stash borrowing and fastpq prover trace handling.
+- Tests: `CARGO_TARGET_DIR=target/codex-kagami cargo test -p iroha_kagami`.
+- Sumeragi: honor `NodeRole::Observer` by skipping proposal assembly, local votes/QC aggregation, and RBC rebroadcast emissions; add observer-gating unit coverage.
+- Tests: not run (not requested).
+- Maintenance: resolve merge conflicts in Sumeragi RBC/block-sync/commit paths plus `status.md` and `roadmap.md`.
+- Tests: not run (not requested).
+- Sumeragi/RBC: refresh derived roster snapshots on READY/DELIVER roster-hash mismatches, reset READY/DELIVER state on derived-roster changes, and add coverage.
+- Tests: not run (not requested).
+- Sumeragi/RBC: accept persisted sessions when both manifests lack git commit hashes, adopt computed chunk roots on persisted-session rebuild, and set expected chunk roots from READY/DELIVER when missing; add coverage.
+- Tests: not run (not requested).
+- Sumeragi/RBC: allow READY/DELIVER emission and validation with derived rosters when roster hashes match (stash mismatches until INIT), use computed chunk roots for local READY/DELIVER emission, and flush pending RBC once a roster is cached; update docs/tests.
+- Tests: not run (not requested).
+- Sumeragi/NPoS: enforce stake-quorum validation for commit and block-sync QCs, require stake snapshots for NPoS QC validation, propagate stake snapshots through precommit signer records, and add NPoS stake-quorum coverage; update Sumeragi docs accordingly.
+- Tests: not run (not requested).
+- Sumeragi/QC: accept block-sync commit votes for already known blocks even when no roster hints are attached, and add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi/RBC: bind per-chunk digests into INIT, validate cached chunks on INIT/hydration, drop mismatches on load, require delivered payload matches only when the chunk set is complete, and ignore conflicting INITs instead of poisoning live sessions; add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi/QC: persist commit certificates into world storage, commit-roster journals, and roster sidecars at commit time; accept late commit QCs for committed/known blocks; and add regression coverage for committed-height QC handling and block-sync updates.
+- Tests: not run (not requested).
+- Sumeragi/RBC: avoid evicting pending stashes for active sessions when the pending session cap is hit; drop new pending frames instead, record session-cap drops, and add coverage/docs.
+- Tests: not run (not requested).
+- Block sync: require stake snapshots for NPoS roster metadata in share batches (drop incomplete hints), align fetch-pending roster checks with consensus mode, and add NPoS roster-metadata tests.
+- Tests: not run (not requested).
+- Kagami/localnet: enforce NPoS only for the Sora Nexus public dataspace (other Iroha3 dataspaces can be permissioned or NPoS), relax profile verification to allow permissioned dev/testus manifests, block staged cutovers in profile verification, fix unseeded localnet account key reuse, adjust swarm/validation handling, update localnet defaults, and refresh genesis/sumeragi/kagami profile docs + README guidance.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 120s: waiting for build directory lock); `CARGO_TARGET_DIR=target/codex-kagami cargo test -p iroha_kagami` (timed out after 300s during compilation; warning: `private_interfaces` in `crates/iroha_core/src/sumeragi/main_loop/qc.rs`).
+- Sumeragi/DA: default `da_enabled=true` in config/data-model to match v3 DA/RBC requirements, and update docs/tests accordingly.
+- Tests: not run (not requested).
+- Sumeragi/RBC: keep payload rebroadcasts active when READY quorum is reached but chunks are still missing; add coverage and update docs.
+- Tests: not run (not requested).
+- Block sync: avoid decode panics on invalid GetBlocksAfter/ShareBlocks payloads, validate block sequences at handling time, and add regression coverage.
+- Tests: not run (not requested).
 - Sumeragi: serialize exec-witness capture across block validation/commit to prevent cross-block witness mixing that can break execution-root QCs; add guard coverage and align witness tests to the shared guard.
 - Tests: not run (not requested).
 - Storage budgets: wire Kura budget telemetry + warnings, attach daemon telemetry to Kura, and document budget metrics/guidance in Nexus lanes.
@@ -24,7 +64,7 @@
 - Tests: not run (not requested).
 - CLI smoke fixes: align council/sumeragi summary expectations, keep ledger export schema hashing keyed to the iroha binary, and enrich ledger export schema-mismatch errors; drop unused imports in client/space-directory.
 - Tests: `cargo test -p iroha_cli --test cli_smoke`; `cargo test -p iroha_cli ledger_export_schema_mismatch_reports_expected_and_actual`.
-- Sumeragi/DA: treat local BlockCreated payloads as available for the DA gate (missing_local_data clears without waiting on RBC delivery), and only broadcast BlockSyncUpdate when a verifiable commit QC is attached; otherwise fall back to BlockCreated for precommit-vote/reschedule rebroadcasts; refresh docs and unit tests accordingly.
+- Sumeragi/DA: treat local BlockCreated payloads as available for the DA gate (missing_local_data clears without waiting on RBC delivery), and only broadcast BlockSyncUpdate when a verifiable commit QC or validator checkpoint is attached (NPoS requires a matching stake snapshot); otherwise fall back to BlockCreated for precommit-vote/reschedule rebroadcasts; refresh docs and unit tests accordingly.
 - Tests: not run (not requested).
 - Offline balance proofs: reject invalid blinding/scalar byte lengths instead of panicking; add regression coverage for compute/builder paths.
 - Tests: not run (not requested).

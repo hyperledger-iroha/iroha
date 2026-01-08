@@ -79,6 +79,9 @@ translation_last_reviewed: 2025-12-28
     - `padding_budget_ms` (افتراضي: `25`): ميزانية حشو منخفضة الكمون بالملي ثانية؛ `null` يعطّل الحشو الإضافي.
     - `access_kind` (افتراضي: `authenticated`): وضع الخروج المطبق عند التجسير (`authenticated` أو `read-only`).
     - `channel_salt` (افتراضي: `iroha.soranet.channel.seed.v1`): سلسلة نطاق تُهش مع معرفات stream/route لاشتقاق معرّفات قنوات مُعمّاة.
+  - `soravpn`: إعدادات spool التزويد المحلي لـ SoraVPN لمسارات streaming.
+    - `provision_spool_dir` (افتراضي: `./storage/streaming/soravpn_routes`): مجلد spool المستخدم لتهيئة تحديثات مسارات SoraVPN لعُقد VPN المحلية.
+    - `provision_spool_max_bytes` (افتراضي: `0`، بلا حد): الحد الأقصى لمساحة القرص الخاصة بـ spool تزويد SoraVPN.
   - `sync` (افتراضي: observe-only): سياسة فرض تزامن الصوت/الفيديو لـ NSC‑28b.
     - `enabled` (افتراضي: `false`): اضبطها على `true` عندما يجب على المُصدّق بدء تقييم تقارير الانجراف.
     - `observe_only` (افتراضي: `true`): عند `true` تُسجل الانتهاكات وتُصدّر عبر التلغرافيا لكن تُقبل المقاطع؛ اضبط `false` لرفضها.

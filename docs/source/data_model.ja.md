@@ -74,7 +74,7 @@ translator: manual
 - `SignedTransaction`: `ChainId` を含みリプレイ耐性を提供。
 - `BlockHeader` / `Block`: ブロックメタデータとトランザクション集合。
 - `SignedBlock`: `signatures: BTreeSet<BlockSignature)`、`BlockPayload { header, transactions }`、そして `BlockResult` を保持する。`BlockResult` には `time_triggers`、エントリ／結果の Merkle 木、`transaction_results` に加えて `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>` が含まれ、FASTPQ 転送トランスクリプトがブロック結果として永続化される。
-- Torii から配信される `ExecWitness` には `fastpq_transcripts` に加えて `fastpq_batches: Vec<FastpqTransitionBatch>` も含まれ、外部プローバーはホスト側で再エンコードすることなく正規化済みの FASTPQ 行を取得できる。
+- Torii から配信される `ExecWitness` には `fastpq_transcripts` に加えて、`public_inputs`（dsid / slot / old/new ルート / perm_root / tx_set_hash）を内包した `fastpq_batches: Vec<FastpqTransitionBatch>` も含まれ、外部プローバーはホスト側で再エンコードすることなく正規化済みの FASTPQ 行を取得できる。
 - ユーティリティ: `presigned`, `set_transaction_results(...)`, `set_transaction_results_with_transcripts(...)`, `header()`, `signatures()`, `hash()`, `add_signature()`, `replace_signatures()`。
 
 ## イベント

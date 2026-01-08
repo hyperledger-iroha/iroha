@@ -19,6 +19,8 @@ impl Actor {
                 height,
                 view,
                 expected_epoch,
+                self.state.as_ref(),
+                self.config.consensus_mode,
             );
         }
         self.schedule_background(BackgroundRequest::Post { peer, msg });
@@ -81,7 +83,12 @@ impl Actor {
                 return Ok(());
             }
         }
-        if self.kura.get_block_height_by_hash(block_hash).is_some() {
+        let block_known = self.kura.get_block_height_by_hash(block_hash).is_some();
+        let has_roster_hint = incoming_qc.is_some()
+            || validator_checkpoint.is_some()
+            || stake_snapshot.is_some()
+            || !commit_votes.is_empty();
+        if block_known && !has_roster_hint {
             info!(
                 hash = ?block_hash,
                 height = block_height,
@@ -110,6 +117,31 @@ impl Actor {
             (consensus_mode, mode_tag, prf_seed, local_height)
         };
         let expected_epoch = self.epoch_for_height(block_height);
+        let mut commit_votes = commit_votes;
+        let mut process_commit_votes = |actor: &mut Actor| {
+            let mut dropped_votes = 0usize;
+            for vote in commit_votes.drain(..) {
+                if vote.phase != crate::sumeragi::consensus::Phase::Commit
+                    || vote.block_hash != block_hash
+                    || vote.height != block_height
+                    || vote.view != block_view
+                    || vote.epoch != expected_epoch
+                {
+                    dropped_votes = dropped_votes.saturating_add(1);
+                    continue;
+                }
+                actor.handle_vote(vote);
+            }
+            if dropped_votes > 0 {
+                debug!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    dropped_votes,
+                    "dropping mismatched commit votes from block sync update"
+                );
+            }
+        };
         let persisted_roster = persisted_roster_for_block(
             self.state.as_ref(),
             &self.kura,
@@ -158,6 +190,12 @@ impl Actor {
             if let Some(telemetry) = self.telemetry_handle() {
                 telemetry.note_block_sync_roster_drop("missing");
             }
+            if block_known {
+                self.clear_missing_block_request(
+                    &block_hash,
+                    MissingBlockClearReason::PayloadAvailable,
+                );
+            }
             return Ok(());
         };
         super::status::inc_block_sync_roster_source(selection.source.as_str());
@@ -176,33 +214,33 @@ impl Actor {
         if let Some(checkpoint) = selection.checkpoint.clone() {
             super::status::record_validator_checkpoint(checkpoint);
         }
-        if let (Some(cert), Some(checkpoint)) =
-            (selection.commit_qc.as_ref(), selection.checkpoint.as_ref())
-        {
-            {
-                let mut journal = self.state.commit_roster_journal.write();
-                journal.upsert(
-                    cert.clone(),
-                    checkpoint.clone(),
-                    selection.stake_snapshot.clone(),
-                );
-                if let Err(err) = journal.persist() {
-                    warn!(
-                        ?err,
-                        height = block_height,
-                        block = %block_hash,
-                        "failed to persist commit roster journal from block sync"
-                    );
-                }
-            }
-            let sidecar = crate::kura::RosterSidecar::new_v1(
-                block_height,
-                block_hash,
-                Some(cert.clone()),
-                Some(checkpoint.clone()),
-                selection.stake_snapshot.clone(),
+        if let Some(cert) = selection.commit_qc.as_ref() {
+            let checkpoint = selection.checkpoint.clone().unwrap_or_else(|| {
+                ValidatorSetCheckpoint::new(
+                    cert.height,
+                    cert.subject_block_hash,
+                    cert.validator_set.clone(),
+                    cert.aggregate.signers_bitmap.clone(),
+                    cert.aggregate.bls_aggregate_signature.clone(),
+                    cert.validator_set_hash_version,
+                    None,
+                )
+            });
+            self.state
+                .record_commit_roster(cert, &checkpoint, selection.stake_snapshot.clone());
+        }
+        if block_known {
+            info!(
+                hash = ?block_hash,
+                height = block_height,
+                "skipping block sync update for already known block"
             );
-            self.kura.write_roster_metadata(&sidecar);
+            process_commit_votes(self);
+            self.clear_missing_block_request(
+                &block_hash,
+                MissingBlockClearReason::PayloadAvailable,
+            );
+            return Ok(());
         }
         let had_incoming_qc = incoming_qc.is_some();
         let block_signers_result = {
@@ -272,9 +310,18 @@ impl Actor {
             }
         };
         let commit_quorum = topology.min_votes_for_commit().max(1);
-        let mut candidate_qc = incoming_qc
-            .or_else(|| selection.commit_qc.clone())
-            .or_else(|| crate::block_sync::BlockSynchronizer::block_sync_qc_for(&block));
+        let mut candidate_qc = {
+            let state_view = self.state.view();
+            incoming_qc
+                .or_else(|| selection.commit_qc.clone())
+                .or_else(|| {
+                    crate::block_sync::BlockSynchronizer::block_sync_qc_for(
+                        &state_view,
+                        self.config.consensus_mode,
+                        &block,
+                    )
+                })
+        };
         candidate_qc = candidate_qc.and_then(|qc| {
             if qc.height != block_height {
                 warn!(
@@ -335,7 +382,7 @@ impl Actor {
                     signer_peers.insert(peer.clone());
                 }
                 if let Some(snapshot) = selection.stake_snapshot.as_ref() {
-                    super::stake_quorum_reached_for_snapshot(
+                    super::stake_snapshot::stake_quorum_reached_for_snapshot(
                         snapshot,
                         &selection.roster,
                         &signer_peers,
@@ -392,6 +439,8 @@ impl Actor {
                 &block_signers,
                 block_view,
                 &self.common_config.chain,
+                consensus_mode,
+                stake_snapshot.as_ref(),
                 mode_tag,
                 prf_seed,
             ) {
@@ -433,6 +482,8 @@ impl Actor {
                     &block_signers,
                     block_view,
                     &self.common_config.chain,
+                    consensus_mode,
+                    stake_snapshot.as_ref(),
                     mode_tag,
                     prf_seed,
                 )
@@ -463,15 +514,65 @@ impl Actor {
                     &self.common_config.chain,
                     mode_tag,
                 ) {
-                    let qc_signers = qc_signer_count(&qc);
-                    info!(
-                        hash = %block_hash,
-                        height = block_height,
-                        view = block_view,
-                        qc_signers,
-                        "accepting block sync QC validated from aggregate signature despite local validation failure"
-                    );
-                    incoming_qc = Some(qc);
+                    let stake_quorum_ok = match consensus_mode {
+                        ConsensusMode::Permissioned => true,
+                        ConsensusMode::Npos => {
+                            let mut ok = false;
+                            if let Some(snapshot) = stake_snapshot.as_ref() {
+                                let roster_len = topology.as_ref().len();
+                                match super::qc_signer_indices(&qc, roster_len, roster_len) {
+                                    Ok(parsed) => match super::signer_peers_for_topology(
+                                        &parsed.voting,
+                                        &topology,
+                                    ) {
+                                        Ok(signer_peers) => {
+                                            ok = super::stake_snapshot::stake_quorum_reached_for_snapshot(
+                                                snapshot,
+                                                topology.as_ref(),
+                                                &signer_peers,
+                                            )
+                                            .unwrap_or(false);
+                                        }
+                                        Err(_) => {
+                                            warn!(
+                                                height = block_height,
+                                                view = block_view,
+                                                block = %block_hash,
+                                                "dropping block sync QC: signer mapping failed"
+                                            );
+                                        }
+                                    },
+                                    Err(_) => {
+                                        warn!(
+                                            height = block_height,
+                                            view = block_view,
+                                            block = %block_hash,
+                                            "dropping block sync QC: invalid signer bitmap"
+                                        );
+                                    }
+                                }
+                            } else {
+                                warn!(
+                                    height = block_height,
+                                    view = block_view,
+                                    block = %block_hash,
+                                    "dropping block sync QC: missing stake snapshot"
+                                );
+                            }
+                            ok
+                        }
+                    };
+                    if stake_quorum_ok {
+                        let qc_signers = qc_signer_count(&qc);
+                        info!(
+                            hash = %block_hash,
+                            height = block_height,
+                            view = block_view,
+                            qc_signers,
+                            "accepting block sync QC validated from aggregate signature despite local validation failure"
+                        );
+                        incoming_qc = Some(qc);
+                    }
                 }
             }
         }
@@ -568,28 +669,7 @@ impl Actor {
                 );
             }
         }
-        let mut dropped_votes = 0usize;
-        for vote in commit_votes {
-            if vote.phase != crate::sumeragi::consensus::Phase::Commit
-                || vote.block_hash != block_hash
-                || vote.height != block_height
-                || vote.view != block_view
-                || vote.epoch != expected_epoch
-            {
-                dropped_votes = dropped_votes.saturating_add(1);
-                continue;
-            }
-            self.handle_vote(vote);
-        }
-        if dropped_votes > 0 {
-            debug!(
-                height = block_height,
-                view = block_view,
-                block = %block_hash,
-                dropped_votes,
-                "dropping mismatched commit votes from block sync update"
-            );
-        }
+        process_commit_votes(self);
 
         let qc_to_apply = if ready_for_qc {
             incoming_qc.take()
@@ -660,6 +740,8 @@ impl Actor {
                     &block_signers,
                     block_view,
                     &self.common_config.chain,
+                    consensus_mode,
+                    stake_snapshot.as_ref(),
                     mode_tag,
                     prf_seed,
                 ) {
@@ -680,6 +762,7 @@ impl Actor {
                                 roster_len: topology.as_ref().len(),
                                 mode_tag: mode_tag.to_string(),
                                 validator_set: topology.as_ref().to_vec(),
+                                stake_snapshot: stake_snapshot.clone(),
                             },
                         );
                         self.note_validated_qc_tally(&qc, tally.clone());
@@ -764,6 +847,8 @@ impl Actor {
                     &topology,
                     &block_signers,
                     allow_nonextending_qc,
+                    consensus_mode,
+                    stake_snapshot.clone(),
                     mode_tag,
                     prf_seed,
                 );
@@ -784,6 +869,8 @@ impl Actor {
         topology: &super::network_topology::Topology,
         block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
         allow_nonextending_qc: bool,
+        consensus_mode: ConsensusMode,
+        stake_snapshot: Option<super::stake_snapshot::CommitStakeSnapshot>,
         mode_tag: &str,
         prf_seed: Option<[u8; 32]>,
     ) {
@@ -838,6 +925,8 @@ impl Actor {
             block_signers,
             block_view,
             &self.common_config.chain,
+            consensus_mode,
+            stake_snapshot.as_ref(),
             mode_tag,
             prf_seed,
         ) {
@@ -855,6 +944,7 @@ impl Actor {
                         roster_len: topology.as_ref().len(),
                         mode_tag: mode_tag.to_string(),
                         validator_set: topology.as_ref().to_vec(),
+                        stake_snapshot: stake_snapshot.clone(),
                     },
                 );
                 self.note_validated_qc_tally(&qc, tally.clone());
@@ -944,9 +1034,11 @@ impl Actor {
                     block_height,
                     block_view,
                     expected_epoch,
+                    self.state.as_ref(),
+                    self.config.consensus_mode,
                 );
-                let has_roster =
-                    update.commit_qc.is_some() || update.validator_checkpoint.is_some();
+                let (consensus_mode, _, _) = self.consensus_context_for_height(block_height);
+                let has_roster = super::block_sync_update_has_roster(&update, consensus_mode);
                 let has_cached_qc = update.commit_qc.is_some() || !update.commit_votes.is_empty();
                 if !has_roster && !has_cached_qc {
                     let msg = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
@@ -990,9 +1082,11 @@ impl Actor {
                     block_height,
                     block_view,
                     expected_epoch,
+                    self.state.as_ref(),
+                    self.config.consensus_mode,
                 );
-                let has_roster =
-                    update.commit_qc.is_some() || update.validator_checkpoint.is_some();
+                let (consensus_mode, _, _) = self.consensus_context_for_height(block_height);
+                let has_roster = super::block_sync_update_has_roster(&update, consensus_mode);
                 let has_cached_qc = update.commit_qc.is_some() || !update.commit_votes.is_empty();
                 if !has_roster && !has_cached_qc {
                     let msg = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
@@ -1031,9 +1125,11 @@ impl Actor {
                     block_height,
                     block_view,
                     expected_epoch,
+                    self.state.as_ref(),
+                    self.config.consensus_mode,
                 );
-                let has_roster =
-                    update.commit_qc.is_some() || update.validator_checkpoint.is_some();
+                let (consensus_mode, _, _) = self.consensus_context_for_height(block_height);
+                let has_roster = super::block_sync_update_has_roster(&update, consensus_mode);
                 let has_cached_qc = update.commit_qc.is_some() || !update.commit_votes.is_empty();
                 let msg = if !has_roster && !has_cached_qc {
                     BlockMessage::BlockCreated(super::message::BlockCreated::from(block))
