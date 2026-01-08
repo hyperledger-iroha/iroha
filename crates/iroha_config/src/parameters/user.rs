@@ -8041,6 +8041,8 @@ pub struct Streaming {
     pub feature_bits: WithOrigin<u32>,
     /// Optional overrides for SoraNet circuit integration defaults.
     pub soranet: Option<WithOrigin<StreamingSoranet>>,
+    /// Optional overrides for SoraVPN provisioning spools.
+    pub soravpn: Option<WithOrigin<StreamingSoravpn>>,
     /// Optional overrides for audio/video sync enforcement.
     pub sync: Option<WithOrigin<StreamingSync>>,
     /// Optional codec overrides (CABAC gating, trellis scopes, rANS tables).
@@ -8094,6 +8096,11 @@ impl ReadConfigTrait for Streaming {
             .value_optional()
             .finish_with_origin();
 
+        let soravpn = reader
+            .read_parameter::<StreamingSoravpn>(["soravpn"])
+            .value_optional()
+            .finish_with_origin();
+
         let sync = reader
             .read_parameter::<StreamingSync>(["sync"])
             .value_optional()
@@ -8113,6 +8120,7 @@ impl ReadConfigTrait for Streaming {
             session_store_dir: session_store_dir.unwrap(),
             feature_bits: feature_bits.unwrap(),
             soranet: soranet.unwrap(),
+            soravpn: soravpn.unwrap(),
             sync: sync.unwrap(),
             codec: codec.unwrap(),
         })
@@ -8127,6 +8135,7 @@ impl Streaming {
         emitter: &mut Emitter<ParseError>,
     ) -> Option<actual::Streaming> {
         let soranet_overrides = self.soranet.clone().map(WithOrigin::into_tuple);
+        let soravpn_overrides = self.soravpn.clone().map(WithOrigin::into_tuple);
         let sync_overrides = self.sync.clone().map(WithOrigin::into_tuple);
         let codec_overrides = self.codec.clone().map(WithOrigin::into_tuple);
         let streaming_identity = self.resolve_identity(identity, emitter)?;
@@ -8155,12 +8164,17 @@ impl Streaming {
             Some((overrides, _origin)) => overrides.parse(emitter)?,
             None => actual::StreamingSoranet::from_defaults(),
         };
+        let soravpn = match soravpn_overrides {
+            Some((overrides, _origin)) => overrides.parse(emitter)?,
+            None => actual::StreamingSoravpn::from_defaults(),
+        };
 
         Some(actual::Streaming {
             key_material,
             session_store_dir: store_dir,
             feature_bits,
             soranet,
+            soravpn,
             sync: match sync_overrides {
                 Some((sync_cfg, _origin)) => sync_cfg.parse(emitter)?,
                 None => actual::StreamingSync::from_defaults(),
@@ -8547,6 +8561,65 @@ impl StreamingSoranet {
     }
 }
 
+/// SoraVPN provisioning spools surfaced in user configuration.
+#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+pub struct StreamingSoravpn {
+    #[config(default = "PathBuf::from(defaults::streaming::soravpn::PROVISION_SPOOL_DIR)")]
+    /// Directory where SoraVPN route updates are spooled for local VPN nodes.
+    pub provision_spool_dir: WithOrigin<PathBuf>,
+    /// Maximum on-disk footprint for the SoraVPN provision spool (0 = unlimited).
+    #[config(default = "defaults::streaming::soravpn::PROVISION_SPOOL_MAX_BYTES")]
+    pub provision_spool_max_bytes: WithOrigin<Bytes<u64>>,
+}
+
+impl StreamingSoravpn {
+    /// Convert user-supplied overrides into runtime defaults.
+    pub fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::StreamingSoravpn> {
+        let mut config = actual::StreamingSoravpn::from_defaults();
+        let (spool_dir, spool_origin) = self.provision_spool_dir.into_tuple();
+        if spool_dir.as_os_str().is_empty() {
+            emitter.emit(
+                Report::new(ParseError::InvalidStreamingConfig)
+                    .attach("streaming.soravpn.provision_spool_dir must not be empty")
+                    .attach(ConfigValueAndOrigin::new(
+                        spool_dir.to_string_lossy().into_owned(),
+                        spool_origin,
+                    )),
+            );
+            return None;
+        }
+        config.provision_spool_dir = spool_dir;
+        let (spool_max_bytes, _spool_max_origin) = self.provision_spool_max_bytes.into_tuple();
+        config.provision_spool_max_bytes = spool_max_bytes;
+
+        Some(config)
+    }
+}
+
+#[cfg(test)]
+mod streaming_soravpn_tests {
+    use super::*;
+
+    #[test]
+    fn streaming_soravpn_rejects_empty_spool_dir() {
+        let mut emitter = Emitter::<ParseError>::new();
+        let config = StreamingSoravpn {
+            provision_spool_dir: WithOrigin::inline(PathBuf::new()),
+            provision_spool_max_bytes: WithOrigin::inline(Bytes(0)),
+        };
+
+        assert!(config.parse(&mut emitter).is_none());
+        let err = emitter
+            .into_result()
+            .expect_err("empty spool dir must be rejected");
+        let debug = format!("{err:?}");
+        assert!(
+            debug.contains("streaming.soravpn.provision_spool_dir"),
+            "unexpected error payload: {debug}"
+        );
+    }
+}
+
 /// Cryptography configuration (user view).
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Crypto {
@@ -8823,7 +8896,7 @@ pub struct NexusStorage {
     /// Aggregate on-disk storage budget for Nexus-enabled nodes (bytes).
     #[config(default = "defaults::nexus::storage::MAX_DISK_USAGE_BYTES")]
     pub max_disk_usage_bytes: Bytes<u64>,
-    /// WSV hot-tier serialized payload budget (bytes).
+    /// WSV hot-tier deterministic payload size budget (bytes).
     #[config(default = "defaults::nexus::storage::MAX_WSV_MEMORY_BYTES")]
     pub max_wsv_memory_bytes: Bytes<u64>,
     /// Budget weights for dividing the disk cap across subsystems.

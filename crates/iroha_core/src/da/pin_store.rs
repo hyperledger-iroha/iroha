@@ -40,7 +40,7 @@ impl DaPinStore {
     /// Insert a pin intent with its originating block location, updating alias mapping if present.
     ///
     /// Returns `true` when the intent was newly inserted and `false` when it was
-    /// dropped due to a duplicate `(lane, epoch, sequence, ticket)` key.
+    /// dropped due to a duplicate `(lane, epoch, sequence)` key.
     pub fn insert(&mut self, intent: DaPinIntent, location: DaCommitmentLocation) -> bool {
         self.insert_with_location(DaPinIntentWithLocation { intent, location })
     }

@@ -20,8 +20,8 @@ use iroha_config::parameters::{
         BlockSync, DaManifestPolicy, DataspaceGossip, DataspaceGossipFallback, FraudRiskBand,
         LaneProfile, NexusStorage, OfflineProofMode, OperatorAuthLockout, OperatorTokenFallback,
         OperatorTokenSource, OracleChangeThresholds, OracleEconomics, OracleGovernance,
-        OracleTwitterBinding, Root as Config, SoranetVpn, Streaming, StreamingSoranetAccessKind,
-        StreamingSync, ToriiOperatorAuth, TransactionGossiper,
+        OracleTwitterBinding, Root as Config, SoranetVpn, Streaming, StreamingSoravpn,
+        StreamingSoranetAccessKind, StreamingSync, ToriiOperatorAuth, TransactionGossiper,
     },
     defaults,
     user::{Root as UserConfig, ToriiSoranetPrivacyIngest},
@@ -1783,6 +1783,10 @@ fn minimal_config_snapshot() {
                     access_kind: Authenticated,
                     channel_salt: "iroha.soranet.channel.seed.v1",
                     provision_spool_dir: "./storage/streaming/soranet_routes",
+                    provision_spool_max_bytes: Bytes(0),
+                },
+                soravpn: StreamingSoravpn {
+                    provision_spool_dir: "./storage/streaming/soravpn_routes",
                     provision_spool_max_bytes: Bytes(0),
                 },
                 sync: StreamingSync {

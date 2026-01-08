@@ -841,6 +841,16 @@ pub mod streaming {
         }
     }
 
+    /// Defaults applied to SoraVPN local provisioning spools.
+    pub mod soravpn {
+        use iroha_config_base::util::Bytes;
+
+        /// Directory used to spool SoraVPN route updates before VPN nodes ingest them.
+        pub const PROVISION_SPOOL_DIR: &str = "./storage/streaming/soravpn_routes";
+        /// Maximum on-disk footprint for the SoraVPN provision spool (0 = unlimited).
+        pub const PROVISION_SPOOL_MAX_BYTES: Bytes<u64> = Bytes(0);
+    }
+
     /// Defaults applied to the streaming audio/video sync enforcement gate.
     pub mod sync {
         /// Enable sync enforcement gate (disabled by default until rollout).
@@ -1637,7 +1647,7 @@ pub mod nexus {
 
         /// Aggregate on-disk budget for Iroha3 storage (bytes).
         pub const MAX_DISK_USAGE_BYTES: Bytes<u64> = Bytes(256 * 1024 * 1024 * 1024);
-        /// WSV hot-tier serialized payload budget (bytes).
+        /// WSV hot-tier deterministic payload size budget (bytes).
         pub const MAX_WSV_MEMORY_BYTES: Bytes<u64> = Bytes(8 * 1024 * 1024 * 1024);
         /// Budget share for Kura block storage (basis points).
         pub const KURA_BLOCKS_BPS: u16 = 3_000;

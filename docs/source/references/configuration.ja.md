@@ -66,6 +66,7 @@ translator: manual
   - `debug_tie_break` / `debug_tx_eval` はデバッグ用 overlay トレース。
 - `[norito]`: Norito シリアライズ調整。
 - `[streaming]`: Norito streaming の control‑plane 鍵設定。
+- `[streaming.soravpn]`: SoraVPN のローカルプロビジョニングスプール設定（`provision_spool_dir`, `provision_spool_max_bytes`）。
 - `[relay]` と `exit_routing.*` は上記の通り。
 ノート
 - ハードウェアアクセラレーションはデフォルトで自動です。最初の使用時に golden self‑tests が実行され、ミスマッチがあれば無効化されます。

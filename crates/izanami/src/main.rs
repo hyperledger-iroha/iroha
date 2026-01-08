@@ -77,6 +77,18 @@ fn merge_with_overrides(
     if is_cli_source(matches, "duration") {
         base.duration = overrides.duration;
     }
+    if is_cli_source(matches, "pipeline_time") {
+        base.pipeline_time = overrides.pipeline_time;
+    }
+    if is_cli_source(matches, "target_blocks") {
+        base.target_blocks = overrides.target_blocks;
+    }
+    if is_cli_source(matches, "progress_interval") {
+        base.progress_interval = overrides.progress_interval;
+    }
+    if is_cli_source(matches, "progress_timeout") {
+        base.progress_timeout = overrides.progress_timeout;
+    }
     if is_cli_source(matches, "seed") {
         base.seed = overrides.seed;
     }
@@ -165,6 +177,10 @@ mod tests {
         persisted.peers = defaults.peers + 5;
         persisted.faulty = defaults.faulty + 1;
         persisted.duration = Duration::from_secs(300);
+        persisted.pipeline_time = Some(Duration::from_secs(4));
+        persisted.target_blocks = Some(256);
+        persisted.progress_interval = Duration::from_secs(9);
+        persisted.progress_timeout = Duration::from_secs(90);
         persisted.seed = Some(13);
         persisted.tps = defaults.tps + 1.0;
         persisted.max_inflight = defaults.max_inflight + 10;
@@ -186,6 +202,10 @@ mod tests {
         assert_eq!(merged.peers, defaults.peers);
         assert_eq!(merged.faulty, persisted.faulty);
         assert_eq!(merged.duration, persisted.duration);
+        assert_eq!(merged.pipeline_time, persisted.pipeline_time);
+        assert_eq!(merged.target_blocks, persisted.target_blocks);
+        assert_eq!(merged.progress_interval, persisted.progress_interval);
+        assert_eq!(merged.progress_timeout, persisted.progress_timeout);
         assert_eq!(merged.seed, persisted.seed);
         assert!((merged.tps - persisted.tps).abs() <= f64::EPSILON);
         assert_eq!(merged.max_inflight, persisted.max_inflight);
@@ -199,6 +219,10 @@ mod tests {
         let defaults = config::IzanamiArgs::defaults();
         let mut persisted = defaults.clone();
         persisted.max_inflight = defaults.max_inflight * 2;
+        persisted.pipeline_time = Some(Duration::from_secs(11));
+        persisted.target_blocks = Some(42);
+        persisted.progress_interval = Duration::from_secs(5);
+        persisted.progress_timeout = Duration::from_secs(50);
 
         let max_inflight_arg = defaults.max_inflight.to_string();
         let (cli_args, matches) = parse_cli_arguments(vec![
@@ -212,5 +236,9 @@ mod tests {
 
         assert_eq!(merged.max_inflight, defaults.max_inflight);
         assert_eq!(merged.peers, persisted.peers);
+        assert_eq!(merged.pipeline_time, persisted.pipeline_time);
+        assert_eq!(merged.target_blocks, persisted.target_blocks);
+        assert_eq!(merged.progress_interval, persisted.progress_interval);
+        assert_eq!(merged.progress_timeout, persisted.progress_timeout);
     }
 }

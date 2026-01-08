@@ -224,11 +224,12 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Portal SoraFS orchestrator configuration guide translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
 
 25. **NEXUS-STORAGE-BUDGETS — Enforce global storage budgets + DA offload** (Storage/Core, Line: Iroha 3, Owner: Nexus Core WG, Priority: High, Status: 🈺 In Progress, target TBD)
- - [x] Add Nexus storage budget configuration with per-component weight splits, clamp Kura/WSV cold tier/SoraFS/SoraNet spool caps, and wire defaults into the Nexus profile config.
- - [x] Account for merge-ledger + sidecar + roster journal bytes (including queued blocks + retired lanes) in Kura budget enforcement.
- - [x] Surface operator-facing warnings/telemetry when caps trigger.
- - [ ] Implement live hot-tier eviction using measured WSV memory usage (not snapshot size estimates).
- - [ ] Wire dedicated SoraVPN spool caps and DA-backed cold/Wsv retrieval for Iroha 3 while keeping Iroha 2 full-replica behavior (SoraVPN budget currently folds into SoraNet spool caps).
+- [x] Add Nexus storage budget configuration with per-component weight splits, clamp Kura/WSV cold tier/SoraFS/SoraNet spool caps, and wire defaults into the Nexus profile config.
+- [x] Account for merge-ledger + sidecar + roster journal bytes (including queued blocks + retired lanes) in Kura budget enforcement.
+- [x] Surface operator-facing warnings/telemetry when caps trigger.
+- [ ] Implement live hot-tier eviction using measured WSV memory usage (not snapshot size estimates).
+- [x] Wire dedicated SoraVPN spool caps for Iroha 3 (budgets now map to `streaming.soravpn`).
+- [ ] Wire DA-backed cold/WSV retrieval for Iroha 3 while keeping Iroha 2 full-replica behavior.
  - [x] Add operator guidance + metrics for sizing `nexus.storage` budgets and monitoring cap pressure.
  - [x] Portal SoraFS node operations runbook translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
  - [x] Portal SoraFS node storage design translations completed across all locales in `docs/portal/docs` and `docs/portal/i18n`.
