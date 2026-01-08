@@ -13,7 +13,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 
-use crate::config::{ChaosConfig, IzanamiArgs};
+use crate::config::{ChaosConfig, IzanamiArgs, WorkloadProfile};
 
 const HELP_TEXT: &str = "↑/↓ or Tab/Shift+Tab move  •  Enter edit/run  •  Esc/q exit";
 
@@ -67,6 +67,7 @@ enum Field {
     Seed,
     Tps,
     MaxInflight,
+    WorkloadProfile,
     LogFilter,
     FaultMin,
     FaultMax,
@@ -88,6 +89,7 @@ impl Field {
             Field::Seed => "Seed",
             Field::Tps => "Tx/s Target",
             Field::MaxInflight => "Max Inflight",
+            Field::WorkloadProfile => "Workload Profile",
             Field::LogFilter => "Log Filter",
             Field::FaultMin => "Fault Interval Min",
             Field::FaultMax => "Fault Interval Max",
@@ -109,6 +111,7 @@ impl Field {
             Field::Seed,
             Field::Tps,
             Field::MaxInflight,
+            Field::WorkloadProfile,
             Field::LogFilter,
             Field::FaultMin,
             Field::FaultMax,
@@ -469,6 +472,9 @@ impl App {
                     .trim()
                     .parse()
                     .map_err(|_| "TPS must be a positive number".to_string())?;
+                if !v.is_finite() {
+                    return Err("TPS must be finite".into());
+                }
                 if v <= 0.0 {
                     return Err("TPS must be positive".into());
                 }
@@ -483,6 +489,18 @@ impl App {
                     return Err("Max inflight must be greater than zero".into());
                 }
                 self.args.max_inflight = v;
+            }
+            Field::WorkloadProfile => {
+                let normalized = buffer.trim().to_ascii_lowercase();
+                self.args.workload_profile = match normalized.as_str() {
+                    "stable" | "s" => WorkloadProfile::Stable,
+                    "chaos" | "c" => WorkloadProfile::Chaos,
+                    other => {
+                        return Err(format!(
+                            "Workload profile must be stable/chaos (received `{other}`)"
+                        ));
+                    }
+                };
             }
             Field::LogFilter => {
                 self.args.log_filter = buffer.trim().to_string();
@@ -580,6 +598,10 @@ impl App {
                 .map_or_else(|| "(unset)".to_string(), |s| s.to_string()),
             Field::Tps => format!("{:.2}", self.args.tps),
             Field::MaxInflight => self.args.max_inflight.to_string(),
+            Field::WorkloadProfile => match self.args.workload_profile {
+                WorkloadProfile::Stable => "stable".to_string(),
+                WorkloadProfile::Chaos => "chaos".to_string(),
+            },
             Field::LogFilter => self.args.log_filter.clone(),
             Field::FaultMin => format_duration(self.args.fault_interval_min).to_string(),
             Field::FaultMax => format_duration(self.args.fault_interval_max).to_string(),
@@ -609,6 +631,10 @@ impl App {
             Field::AllowNet => self.args.allow_net.to_string(),
             Field::Tps => self.args.tps.to_string(),
             Field::MaxInflight => self.args.max_inflight.to_string(),
+            Field::WorkloadProfile => match self.args.workload_profile {
+                WorkloadProfile::Stable => "stable".to_string(),
+                WorkloadProfile::Chaos => "chaos".to_string(),
+            },
             Field::LogFilter => self.args.log_filter.clone(),
             Field::FaultMin => format_duration(self.args.fault_interval_min).to_string(),
             Field::FaultMax => format_duration(self.args.fault_interval_max).to_string(),
@@ -624,4 +650,22 @@ impl App {
 enum Outcome {
     Run(ChaosConfig),
     Exit,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_input_rejects_non_finite_tps() {
+        let args = IzanamiArgs::defaults();
+        let mut app = App::new(args);
+        let err = app
+            .apply_input(Field::Tps, "nan")
+            .expect_err("non-finite tps should be rejected");
+        assert!(
+            err.contains("TPS must be finite"),
+            "unexpected error: {err}"
+        );
+    }
 }

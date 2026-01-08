@@ -31,8 +31,9 @@ impl LaneEpoch {
     }
 }
 
-/// Blake3 fingerprint of the manifest payload. The ingest path computes this over the
-/// canonical Norito manifest before de-duplicating entries.
+/// Blake3 fingerprint used for DA replay detection. The ingest path computes this over a
+/// canonical Norito manifest template with `storage_ticket` and `issued_at_unix` zeroed
+/// before de-duplicating entries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ReplayFingerprint([u8; blake3::OUT_LEN]);
 

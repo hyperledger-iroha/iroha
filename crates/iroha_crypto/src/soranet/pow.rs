@@ -10,7 +10,9 @@ use std::{
 use blake3::hash;
 use norito::{
     codec::{decode_adaptive, encode_adaptive},
+    decode_from_bytes,
     derive::{NoritoDeserialize, NoritoSerialize},
+    to_bytes,
 };
 use rand::{CryptoRng, RngCore};
 use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa, verify_mldsa};
@@ -557,7 +559,7 @@ impl TicketRevocationStore {
         if bytes.is_empty() {
             return Ok(());
         }
-        let snapshot: TicketRevocationSnapshot = decode_adaptive(&bytes)
+        let snapshot: TicketRevocationSnapshot = decode_from_bytes(&bytes)
             .map_err(|err| TicketRevocationStoreError::Parse(err.to_string()))?;
         for entry in snapshot.entries {
             let expires_at = UNIX_EPOCH + Duration::from_secs(entry.expires_at_secs);
@@ -592,7 +594,8 @@ impl TicketRevocationStore {
                 })
                 .collect(),
         };
-        let buf = encode_adaptive(&snapshot);
+        let buf =
+            to_bytes(&snapshot).map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
         let tmp_path = path.with_extension("tmp");
         fs::write(&tmp_path, buf).map_err(|err| TicketRevocationStoreError::Io(err.to_string()))?;
         fs::rename(&tmp_path, path).map_err(|err| TicketRevocationStoreError::Io(err.to_string()))

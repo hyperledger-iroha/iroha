@@ -323,8 +323,6 @@ pub struct DaCommitmentKey {
     pub epoch: u64,
     /// Monotonic sequence inside `(lane_id, epoch)`.
     pub sequence: u64,
-    /// Storage ticket tying the blob to `SoraFS` replication state.
-    pub storage_ticket: StorageTicketId,
 }
 
 impl DaCommitmentKey {
@@ -335,7 +333,6 @@ impl DaCommitmentKey {
             lane_id: record.lane_id,
             epoch: record.epoch,
             sequence: record.sequence,
-            storage_ticket: record.storage_ticket,
         }
     }
 }

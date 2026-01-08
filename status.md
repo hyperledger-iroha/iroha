@@ -1,9 +1,40 @@
 # Status
 
 ## Latest Updates
+- Test network: bump default client status timeout to 600s and TTL to 1200s to reduce tx confirmation timeouts during slow integration runs.
+- Tests: not run (not requested).
+- Izanami: drain completed submission tasks to avoid unbounded join-handle growth; add coverage for the drain helper.
+- Tests: `cargo test -p izanami` (timed out after 120s; `chaos::tests::make_network_builder_applies_pipeline_time` and `chaos::tests::nexus_profile_wires_rbc_da_and_config_layer` still running).
+- Izanami: reject non-finite or timer-invalid TPS values to avoid zero-interval panics; add config + TUI coverage.
+- Tests: `cargo test -p izanami`.
+- Izanami: persist pipeline/target/progress settings in config snapshots with Norito defaults for legacy payloads; add roundtrip + legacy decode tests.
+- Tests: `cargo test -p izanami`.
 - Storage budgets: add `tiered_state.da_store_root` fallback for cold WSV snapshots, read cold payloads across cold/DA roots, add DA-root snapshot tests, and refresh state-tiering/config/Nexus-lane docs (localized) plus roadmap.
 - Tests: `cargo fmt --all` (warns about unstable rustfmt options on stable).
 - Tests: `cargo test --workspace` failed during compile: missing `FastpqPublicInputsTemplate`/`batches_from_bundles`/`transition_batch_to_dto`/`authority_digest` imports in `crates/iroha_core/src/fastpq/lane.rs`, ambiguous `.into()` in `crates/iroha_core/src/fastpq/mod.rs`, and `evidence_epoch` arg mismatch in `crates/iroha_core/src/sumeragi/penalties.rs`.
+- State: seed commit QC before `apply_without_execution` and align AXT envelope descriptor bindings/touch manifests for replay-ledger validation; tests `cargo test -p iroha_core --lib state::tests::apply_without_execution_canonicalizes_commit_roster_signatures -- --nocapture` and `cargo test -p iroha_core --lib state::tests::axt_replay_ledger_persisted_from_block_rejects_reuse_on_validation -- --nocapture` (pass).
+- FASTPQ: speed up row-bench summaries by avoiding full trace builds unless needed, reuse deterministic account pools, and add a trace-summary parity check for small batches.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test -p fastpq_prover` (pass); `cargo test --workspace` (failed: `crates/iroha_kagami/src/localnet.rs` missing docs for `SoraProfile` enum/variants; warning: `mochi-ui-egui` has unused `MissingQc` variant).
+- Kagami/localnet: add `--sora-profile` (dataspace/nexus) presets, enforce Iroha3 + 4+ peers for Sora localnets, and pass `--sora` in start scripts; update localnet docs/tests.
+- Tests: not run (not requested).
+- Sumeragi: prefer per-block snapshot rosters when requesting missing parents for BlockCreated gaps (fall back to active roster for gap sweeps); add coverage for empty-active roster fetches.
+- Tests: not run (not requested).
+- Sumeragi: rebuild cached QCs even when the active commit roster is empty; add commit-pipeline coverage for empty-roster QC rebuilds.
+- Tests: not run (not requested).
+- DA ingest: derive replay fingerprints from canonical manifest templates (zeroed `storage_ticket`/`issued_at_unix`) for all requests, align storage tickets with the canonical fingerprint, and regenerate DA ingest fixtures.
+- Tests: `cargo test -p iroha_torii regenerate_da_ingest_fixtures -- --ignored` (timed out after ~5m while filtering other test binaries; regeneration test passed).
+- Kagami/localnet: add explicit `--build-line` selection, reject zero block/commit overrides, export the build line in generated start scripts, and fix IPv6 readiness URLs in the deploy script; update localnet docs and scripts accordingly.
+- Tests: not run (not requested).
+- Sumeragi: allow `materialize_qc_for_header` to recover commit QCs from precommit-signer records even when the commit topology is empty; add coverage for empty-roster recovery.
+- Tests: not run (not requested).
+- FASTPQ: refresh stage2/trace fixtures and trace-commitment goldens after transcript-aware batches and deterministic account identifiers.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `FASTPQ_UPDATE_FIXTURES=1 cargo test -p fastpq_prover --test trace_commitment --test proof_fixture --test backend_regression` (trace_commitment failed until goldens updated); `cargo test -p fastpq_prover --test trace_commitment -- --nocapture` (pass).
+- Sumeragi: use per-block commit rosters when rebuilding QCs, rebroadcasting votes, and re-evaluating votes after BlockCreated; broadcast QCs to the block-specific roster and add snapshot-roster coverage for QC rebuilds, QC broadcasts, precommit block-sync updates, vote rebroadcasts, and BlockCreated handling.
+- Tests: not run (not requested).
+- FASTPQ: require transfer batches to include transfer transcript metadata, add transcript-aware synthetic generators (row bench + fixtures), and expose the shared poseidon preimage digest helper for transcript construction; update gadget docs accordingly.
+- Tests: not run (not requested).
+- Sumeragi: reschedule/pacemaker now uses per-block commit rosters for quorum reschedules and prevote-timeout rebroadcasts (fallback to active roster when unavailable); add coverage to assert snapshot roster targeting.
+- Tests: not run (not requested).
 - Storage budgets: split SoraVPN spool caps into dedicated `streaming.soravpn` config, apply Nexus budget clamps separately, and update Nexus-lanes/config-reference docs (including localized copies).
 - Tests: not run (not requested).
 - Maintenance: resolve merge conflicts in `crates/iroha_core/src/sumeragi/main_loop/tests.rs` and `status.md`.
@@ -1778,7 +1809,8 @@
 - Kura disk-usage accounting now includes sidecar temp/debug files by summing block-store and pipeline directories, with a regression covering extra files.
 - Synced merge-ledger truncation and tiered snapshot pruning roots to harden crash consistency after pruning.
 - Aligned NPoS epoch manager initialization to the current height when no VRF record exists (mode flip + startup) and added epoch alignment tests.
-- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options); `cargo test --workspace` (timed out after 600s; warnings about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450` and dead_code in `crates/norito/src/core.rs:6792`).
+- Streaming telemetry now implements `Debug` without depending on `Metrics` and includes counters in the output (added coverage to ensure debug rendering is stable).
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options); `cargo test --workspace` (timed out after 600s while compiling; warning about unused `MissingQc` in `mochi/mochi-ui-egui/src/main.rs:10917`).
 - Fixed invalid-proposal evidence to carry the pending view when commit quorum failures occur, with coverage asserting the recorded proposal view.
 - Standardized ZK ballot public-input validation across Torii, CLI, and the JS SDK (Torii client + instruction builders) and refreshed the JS governance ballot examples.
 - Normalized Android CastZkBallot public inputs (canonical JSON, alias rejection, full lock hints) with new regression coverage, and clarified governance docs that partial lock hints are rejected.

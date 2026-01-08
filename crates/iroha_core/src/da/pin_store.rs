@@ -23,7 +23,7 @@ pub struct DaPinStore {
     by_manifest: BTreeMap<ManifestDigest, DaPinIntentWithLocation>,
     by_lane_epoch: BTreeMap<(u32, u64, u64), DaPinIntentWithLocation>,
     by_location: BTreeMap<(u64, u32), DaPinIntentWithLocation>,
-    seen_keys: BTreeSet<(u32, u64, u64, StorageTicketId)>,
+    seen_keys: BTreeSet<(u32, u64, u64)>,
 }
 
 impl DaPinStore {
@@ -40,7 +40,7 @@ impl DaPinStore {
     /// Insert a pin intent with its originating block location, updating alias mapping if present.
     ///
     /// Returns `true` when the intent was newly inserted and `false` when it was
-    /// dropped due to a duplicate `(lane, epoch, sequence, ticket)` key.
+    /// dropped due to a duplicate `(lane, epoch, sequence)` key.
     pub fn insert(&mut self, intent: DaPinIntent, location: DaCommitmentLocation) -> bool {
         self.insert_with_location(DaPinIntentWithLocation { intent, location })
     }
@@ -50,12 +50,7 @@ impl DaPinStore {
     /// Returns `true` when the intent was newly inserted.
     pub fn insert_with_location(&mut self, entry: DaPinIntentWithLocation) -> bool {
         let DaPinIntentWithLocation { intent, location } = entry;
-        let key = (
-            intent.lane_id.as_u32(),
-            intent.epoch,
-            intent.sequence,
-            intent.storage_ticket,
-        );
+        let key = (intent.lane_id.as_u32(), intent.epoch, intent.sequence);
         if !self.seen_keys.insert(key) {
             return false;
         }
@@ -240,6 +235,7 @@ mod tests {
         let first = located(sample_intent(3, 4, Some("alias-dup")), 9, 0);
         let mut second = first.clone();
         second.intent.manifest_hash = ManifestDigest::new([0xAA; 32]);
+        second.intent.storage_ticket = StorageTicketId::new([0xBB; 32]);
         second.location.index_in_bundle = 1;
 
         assert!(store.insert_with_location(first.clone()));
@@ -251,6 +247,10 @@ mod tests {
         assert_eq!(
             stored.location.index_in_bundle,
             first.location.index_in_bundle
+        );
+        assert!(
+            store.get_by_ticket(&second.intent.storage_ticket).is_none(),
+            "conflicting ticket should be ignored"
         );
     }
 }

@@ -46,7 +46,14 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::{
-    account::CanModifyAccountMetadata, nexus::CanPublishSpaceDirectoryManifest,
+    account::{CanModifyAccountMetadata, CanRegisterAccount},
+    asset::CanModifyAssetMetadataWithDefinition,
+    asset_definition::{CanModifyAssetDefinitionMetadata, CanRegisterAssetDefinition},
+    domain::{CanModifyDomainMetadata, CanRegisterDomain},
+    nexus::CanPublishSpaceDirectoryManifest,
+    nft::CanRegisterNft,
+    role::CanManageRoles,
+    trigger::CanRegisterTrigger,
 };
 use norito::{
     codec::Encode as NoritoEncode,
@@ -56,6 +63,7 @@ use rand::{Rng, RngCore, rngs::StdRng, seq::IndexedRandom};
 use sorafs_manifest::pin_registry::ReplicationOrderV1;
 use tokio::sync::Mutex;
 
+use crate::config::WorkloadProfile;
 use crate::smart_contracts;
 
 /// Record describing an account and its signing material.
@@ -114,6 +122,7 @@ pub struct PreparedChaos {
 pub fn prepare_state(
     account_count: usize,
     nexus: Option<&crate::config::NexusProfile>,
+    workload_profile: WorkloadProfile,
 ) -> Result<PreparedChaos> {
     let effective_accounts = account_count.max(3);
     let base_domain: DomainId = "chaosnet"
@@ -123,11 +132,10 @@ pub fn prepare_state(
 
     let treasury_key = KeyPair::random();
     let treasury_id = AccountId::new(base_domain.clone(), treasury_key.public_key().clone());
-    let treasury_uaid = UniversalAccountId::from_hash(Hash::new(b"izanami-chaos-treasury-uaid"));
     let treasury = AccountRecord {
         id: treasury_id,
         key_pair: treasury_key,
-        uaid: Some(treasury_uaid),
+        uaid: None,
     };
 
     let mut users = Vec::with_capacity(effective_accounts);
@@ -147,38 +155,6 @@ pub fn prepare_state(
     let asset_nft_id: AssetDefinitionId = format!("chaos_collectible#{domain_name}")
         .parse()
         .map_err(|_| eyre!("failed to form nft asset id"))?;
-
-    let mut genesis_tx = Vec::new();
-    genesis_tx.push(InstructionBox::from(Register::domain(Domain::new(
-        base_domain.clone(),
-    ))));
-    genesis_tx.push(InstructionBox::from(Register::asset_definition(
-        AssetDefinition::numeric(asset_numeric_id.clone()),
-    )));
-    genesis_tx.push(InstructionBox::from(Register::asset_definition(
-        AssetDefinition::numeric(asset_nft_id.clone()).mintable_once(),
-    )));
-
-    genesis_tx.push(InstructionBox::from(Register::account(
-        account_from_record(&treasury),
-    )));
-    for account in &users {
-        genesis_tx.push(InstructionBox::from(Register::account(
-            account_from_record(account),
-        )));
-    }
-    genesis_tx.push(InstructionBox::from(Grant::account_permission(
-        CanPublishSpaceDirectoryManifest {
-            dataspace: DataSpaceId::GLOBAL,
-        },
-        treasury.id.clone(),
-    )));
-    let initial_float: Numeric = 1_000_000_000_u64.into();
-    let treasury_asset_id = AssetId::new(asset_numeric_id.clone(), treasury.id.clone());
-    genesis_tx.push(InstructionBox::from(Mint::asset_numeric(
-        initial_float,
-        treasury_asset_id.clone(),
-    )));
 
     let dataspaces: Vec<DataSpaceId> = nexus
         .map(|profile| {
@@ -211,6 +187,96 @@ pub fn prepare_state(
         })
         .unwrap_or_else(|| vec![LaneId::SINGLE]);
 
+    let mut genesis_tx = Vec::new();
+    genesis_tx.push(InstructionBox::from(Register::domain(Domain::new(
+        base_domain.clone(),
+    ))));
+    genesis_tx.push(InstructionBox::from(Register::asset_definition(
+        AssetDefinition::numeric(asset_numeric_id.clone()),
+    )));
+    genesis_tx.push(InstructionBox::from(Register::asset_definition(
+        AssetDefinition::numeric(asset_nft_id.clone()).mintable_once(),
+    )));
+
+    genesis_tx.push(InstructionBox::from(Register::account(
+        account_from_record(&treasury),
+    )));
+    for account in &users {
+        genesis_tx.push(InstructionBox::from(Register::account(
+            account_from_record(account),
+        )));
+    }
+    genesis_tx.push(InstructionBox::from(Grant::account_permission(
+        CanRegisterDomain,
+        treasury.id.clone(),
+    )));
+    genesis_tx.push(InstructionBox::from(Grant::account_permission(
+        CanModifyDomainMetadata {
+            domain: base_domain.clone(),
+        },
+        treasury.id.clone(),
+    )));
+    genesis_tx.push(InstructionBox::from(Grant::account_permission(
+        CanRegisterAccount {
+            domain: base_domain.clone(),
+        },
+        treasury.id.clone(),
+    )));
+    genesis_tx.push(InstructionBox::from(Grant::account_permission(
+        CanRegisterAssetDefinition {
+            domain: base_domain.clone(),
+        },
+        treasury.id.clone(),
+    )));
+    genesis_tx.push(InstructionBox::from(Grant::account_permission(
+        CanRegisterNft {
+            domain: base_domain.clone(),
+        },
+        treasury.id.clone(),
+    )));
+    genesis_tx.push(InstructionBox::from(Grant::account_permission(
+        CanModifyAssetDefinitionMetadata {
+            asset_definition: asset_numeric_id.clone(),
+        },
+        treasury.id.clone(),
+    )));
+    genesis_tx.push(InstructionBox::from(Grant::account_permission(
+        CanModifyAssetDefinitionMetadata {
+            asset_definition: asset_nft_id.clone(),
+        },
+        treasury.id.clone(),
+    )));
+    genesis_tx.push(InstructionBox::from(Grant::account_permission(
+        CanModifyAssetMetadataWithDefinition {
+            asset_definition: asset_numeric_id.clone(),
+        },
+        treasury.id.clone(),
+    )));
+    genesis_tx.push(InstructionBox::from(Grant::account_permission(
+        CanManageRoles,
+        treasury.id.clone(),
+    )));
+    genesis_tx.push(InstructionBox::from(Grant::account_permission(
+        CanRegisterTrigger {
+            authority: treasury.id.clone(),
+        },
+        treasury.id.clone(),
+    )));
+    for dataspace in &dataspaces {
+        genesis_tx.push(InstructionBox::from(Grant::account_permission(
+            CanPublishSpaceDirectoryManifest {
+                dataspace: *dataspace,
+            },
+            treasury.id.clone(),
+        )));
+    }
+    let initial_float: Numeric = 1_000_000_000_u64.into();
+    let treasury_asset_id = AssetId::new(asset_numeric_id.clone(), treasury.id.clone());
+    genesis_tx.push(InstructionBox::from(Mint::asset_numeric(
+        initial_float,
+        treasury_asset_id.clone(),
+    )));
+
     let mut state = ChaosState::new(
         base_domain.clone(),
         treasury,
@@ -221,9 +287,16 @@ pub fn prepare_state(
         lanes,
     );
     state.asset_instances.insert(treasury_asset_id);
-    let mut recipes = BASE_RECIPES.to_vec();
+    let mut recipes = match workload_profile {
+        WorkloadProfile::Stable => BASE_RECIPES_STABLE.to_vec(),
+        WorkloadProfile::Chaos => BASE_RECIPES_CHAOS.to_vec(),
+    };
     if nexus.is_some() {
-        recipes.extend_from_slice(NEXUS_RECIPES);
+        let extra = match workload_profile {
+            WorkloadProfile::Stable => NEXUS_RECIPES_STABLE,
+            WorkloadProfile::Chaos => NEXUS_RECIPES_CHAOS,
+        };
+        recipes.extend_from_slice(extra);
     }
     Ok(PreparedChaos {
         state,
@@ -331,7 +404,37 @@ pub(crate) enum RecipeKind {
     CompleteReplicationOrder,
 }
 
-const BASE_RECIPES: &[RecipeKind] = &[
+const BASE_RECIPES_STABLE: &[RecipeKind] = &[
+    RecipeKind::RegisterDomain,
+    RecipeKind::RegisterAssetDefinition,
+    RecipeKind::RegisterAccount,
+    RecipeKind::RegisterNft,
+    RecipeKind::MintAsset,
+    RecipeKind::TransferAsset,
+    RecipeKind::TransferNft,
+    RecipeKind::BurnAsset,
+    RecipeKind::SetAccountKeyValue,
+    RecipeKind::RemoveAccountKeyValue,
+    RecipeKind::SetDomainKeyValue,
+    RecipeKind::RemoveDomainKeyValue,
+    RecipeKind::SetAssetDefinitionKeyValue,
+    RecipeKind::RemoveAssetDefinitionKeyValue,
+    RecipeKind::SetAssetInstanceKeyValue,
+    RecipeKind::RemoveAssetInstanceKeyValue,
+    RecipeKind::RegisterRole,
+    RecipeKind::RegisterTimeTrigger,
+    RecipeKind::RegisterDataTrigger,
+    RecipeKind::RegisterPipelineTrigger,
+    RecipeKind::SetTriggerKeyValue,
+    RecipeKind::RemoveTriggerKeyValue,
+    RecipeKind::MintTriggerRepetitions,
+    RecipeKind::BurnTriggerRepetitions,
+    RecipeKind::ExecuteTrigger,
+    RecipeKind::DeployIvmContract,
+    RecipeKind::DeployKotodamaContract,
+];
+
+const BASE_RECIPES_CHAOS: &[RecipeKind] = &[
     RecipeKind::RegisterDomain,
     RecipeKind::RegisterAssetDefinition,
     RecipeKind::RegisterAccount,
@@ -371,7 +474,9 @@ const BASE_RECIPES: &[RecipeKind] = &[
     RecipeKind::ExpireSpaceDirectoryManifest,
 ];
 
-const NEXUS_RECIPES: &[RecipeKind] = &[
+const NEXUS_RECIPES_STABLE: &[RecipeKind] = &[];
+
+const NEXUS_RECIPES_CHAOS: &[RecipeKind] = &[
     RecipeKind::RegisterPublicLaneValidator,
     RecipeKind::BondPublicLaneStake,
     RecipeKind::SchedulePublicLaneUnbond,
@@ -769,7 +874,7 @@ impl ChaosState {
                 key,
                 value,
             ))],
-            signer: self.treasury.clone(),
+            signer: target,
             expect_success: true,
         })
     }
@@ -790,7 +895,7 @@ impl ChaosState {
         Ok(TransactionPlan {
             label: "remove_account_kv",
             instructions,
-            signer: self.treasury.clone(),
+            signer: target,
             expect_success: true,
         })
     }
@@ -1015,72 +1120,44 @@ impl ChaosState {
         })
     }
 
-    fn plan_register_nft(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
+    fn plan_register_nft(&mut self, _rng: &mut StdRng) -> Result<TransactionPlan> {
         let suffix = self.bump_nft();
         let domain_name = self.base_domain.name().to_string();
         let nft_id: NftId = format!("chaos_nft_{suffix}${domain_name}")
             .parse()
             .map_err(|_| eyre!("failed to parse nft id"))?;
-        let owner = self.random_user(rng)?.clone();
         let nft = Nft::new(nft_id.clone(), Metadata::default());
-        self.nft_holdings.insert(nft_id.clone(), owner.id.clone());
+        self.nft_holdings
+            .insert(nft_id.clone(), self.treasury.id.clone());
         Ok(TransactionPlan {
             label: "register_nft",
             instructions: vec![InstructionBox::from(Register::nft(nft))],
-            signer: owner,
+            signer: self.treasury.clone(),
             expect_success: true,
         })
     }
 
     fn plan_transfer_nft(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        if self.nft_holdings.is_empty() {
-            // Prime the state by registering an NFT owned by treasury and transferring it.
-            let suffix = self.bump_nft();
-            let domain_name = self.base_domain.name().to_string();
-            let nft_id: NftId = format!("chaos_nft_{suffix}${domain_name}")
-                .parse()
-                .map_err(|_| eyre!("failed to parse fallback nft id"))?;
-            let receiver = self.random_user_except(rng, &self.treasury.id)?;
-            let nft = Nft::new(nft_id.clone(), Metadata::default());
-            let instructions = vec![
-                InstructionBox::from(Register::nft(nft)),
-                InstructionBox::from(Transfer::nft(
-                    self.treasury.id.clone(),
-                    nft_id.clone(),
-                    receiver.id.clone(),
-                )),
-            ];
-            self.nft_holdings.insert(nft_id, receiver.id.clone());
-            return Ok(TransactionPlan {
-                label: "transfer_nft",
-                instructions,
-                signer: self.treasury.clone(),
-                expect_success: true,
-            });
-        }
-
-        let (nft_id, owner_id) = self
-            .nft_holdings
-            .iter()
-            .map(|(id, owner)| (id.clone(), owner.clone()))
-            .collect::<Vec<_>>()
-            .choose(rng)
-            .cloned()
-            .ok_or_else(|| eyre!("no nft holdings available"))?;
-        let current_owner = self
-            .account_by_id(&owner_id)
-            .ok_or_else(|| eyre!("nft owner account missing"))?;
-        let new_owner = self.random_user_except(rng, &owner_id)?;
-        self.nft_holdings
-            .insert(nft_id.clone(), new_owner.id.clone());
+        let suffix = self.bump_nft();
+        let domain_name = self.base_domain.name().to_string();
+        let nft_id: NftId = format!("chaos_nft_{suffix}${domain_name}")
+            .parse()
+            .map_err(|_| eyre!("failed to parse nft id"))?;
+        let receiver = self.random_user_except(rng, &self.treasury.id)?;
+        let nft = Nft::new(nft_id.clone(), Metadata::default());
+        let instructions = vec![
+            InstructionBox::from(Register::nft(nft)),
+            InstructionBox::from(Transfer::nft(
+                self.treasury.id.clone(),
+                nft_id.clone(),
+                receiver.id.clone(),
+            )),
+        ];
+        self.nft_holdings.insert(nft_id, receiver.id.clone());
         Ok(TransactionPlan {
             label: "transfer_nft",
-            instructions: vec![InstructionBox::from(Transfer::nft(
-                current_owner.id.clone(),
-                nft_id,
-                new_owner.id.clone(),
-            ))],
-            signer: current_owner,
+            instructions,
+            signer: self.treasury.clone(),
             expect_success: true,
         })
     }
@@ -2166,11 +2243,12 @@ impl ChaosState {
 
 #[cfg(test)]
 mod tests {
+    use iroha_data_model::isi::{RemoveKeyValueBox, SetKeyValueBox};
     use rand::SeedableRng;
     use tokio::runtime::Builder;
 
     use super::*;
-    use crate::config::NexusProfile;
+    use crate::config::{NexusProfile, WorkloadProfile};
 
     #[test]
     fn json_pair_builds_object() {
@@ -2182,7 +2260,7 @@ mod tests {
 
     #[test]
     fn prepare_state_builds_genesis() {
-        let prepared = prepare_state(4, None).expect("state prepared");
+        let prepared = prepare_state(4, None, WorkloadProfile::Stable).expect("state prepared");
         assert!(!prepared.genesis.is_empty());
         assert!(!prepared.genesis[0].is_empty());
         assert!(prepared.state.users.len() >= 3);
@@ -2194,7 +2272,7 @@ mod tests {
     fn nexus_profile_injects_additional_recipes() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { recipes, .. } =
-            prepare_state(3, Some(&profile)).expect("state prepared");
+            prepare_state(3, Some(&profile), WorkloadProfile::Chaos).expect("state prepared");
         assert!(
             recipes
                 .iter()
@@ -2207,7 +2285,7 @@ mod tests {
     fn produce_plan_for_all_recipes() {
         let PreparedChaos {
             mut state, recipes, ..
-        } = prepare_state(3, None).expect("state prepared");
+        } = prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(7);
         for kind in recipes {
             let plan = state.produce_plan(kind, &mut rng).expect("plan builds");
@@ -2220,7 +2298,8 @@ mod tests {
 
     #[test]
     fn workload_engine_grant_role_never_duplicates_memberships() {
-        let PreparedChaos { state, recipes, .. } = prepare_state(4, None).expect("state prepared");
+        let PreparedChaos { state, recipes, .. } =
+            prepare_state(4, None, WorkloadProfile::Stable).expect("state prepared");
         let engine = WorkloadEngine::new(state, recipes);
         let mut rng = StdRng::seed_from_u64(17);
         let runtime = Builder::new_current_thread()
@@ -2274,7 +2353,7 @@ mod tests {
     fn publish_manifest_tracks_dataspaces() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { mut state, .. } =
-            prepare_state(2, Some(&profile)).expect("state prepared");
+            prepare_state(2, Some(&profile), WorkloadProfile::Stable).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(99);
         let plan = state
             .plan_publish_space_manifest(&mut rng)
@@ -2293,7 +2372,7 @@ mod tests {
     fn staking_recipes_track_validator_registry() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, Some(&profile)).expect("state prepared");
+            prepare_state(3, Some(&profile), WorkloadProfile::Stable).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(31);
         let plan = state
             .plan_register_public_validator(&mut rng)
@@ -2312,7 +2391,7 @@ mod tests {
     fn replication_orders_are_tracked() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { mut state, .. } =
-            prepare_state(2, Some(&profile)).expect("state prepared");
+            prepare_state(2, Some(&profile), WorkloadProfile::Stable).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(45);
         let plan = state
             .plan_issue_replication_order(&mut rng)
@@ -2326,7 +2405,8 @@ mod tests {
 
     #[test]
     fn dvp_settlement_plan_builds() {
-        let PreparedChaos { mut state, .. } = prepare_state(3, None).expect("state prepared");
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(77);
         let plan = state
             .plan_dvp_settlement(&mut rng)
@@ -2339,7 +2419,7 @@ mod tests {
     fn public_unbond_tracks_pending_requests() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, Some(&profile)).expect("state prepared");
+            prepare_state(3, Some(&profile), WorkloadProfile::Stable).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(51);
         let _ = state
             .plan_register_public_validator(&mut rng)
@@ -2358,7 +2438,7 @@ mod tests {
     fn public_rewards_follow_validator_registry() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, Some(&profile)).expect("state prepared");
+            prepare_state(3, Some(&profile), WorkloadProfile::Stable).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(61);
         let _ = state
             .plan_register_public_validator(&mut rng)
@@ -2372,7 +2452,8 @@ mod tests {
 
     #[test]
     fn asset_definition_register_and_unregister_moves_tracking() {
-        let PreparedChaos { mut state, .. } = prepare_state(3, None).expect("state prepared");
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(11);
         let before = state.asset_definitions_unclaimed.len();
         let register_plan = state
@@ -2397,32 +2478,39 @@ mod tests {
 
     #[test]
     fn nft_registration_and_transfer_updates_owner() {
-        let PreparedChaos { mut state, .. } = prepare_state(3, None).expect("state prepared");
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(29);
         let register_plan = state.plan_register_nft(&mut rng).expect("register nft");
         assert_eq!(register_plan.label, "register_nft");
         assert_eq!(state.nft_holdings.len(), 1, "nft holding should be tracked");
-        let (nft_id, initial_owner) = state
-            .nft_holdings
-            .iter()
-            .next()
-            .map(|(id, owner)| (id.clone(), owner.clone()))
-            .expect("nft recorded");
+        let before_ids: HashSet<NftId> = state.nft_holdings.keys().cloned().collect();
         let transfer_plan = state.plan_transfer_nft(&mut rng).expect("transfer nft");
         assert_eq!(transfer_plan.label, "transfer_nft");
-        let updated_owner = state
+        let after_ids: HashSet<NftId> = state.nft_holdings.keys().cloned().collect();
+        assert_eq!(
+            after_ids.len(),
+            before_ids.len() + 1,
+            "transfer should register a new nft entry"
+        );
+        let new_id = after_ids
+            .difference(&before_ids)
+            .next()
+            .expect("new nft id should be recorded");
+        let new_owner = state
             .nft_holdings
-            .get(&nft_id)
-            .expect("owner should remain tracked");
+            .get(new_id)
+            .expect("new owner should be tracked");
         assert_ne!(
-            updated_owner, &initial_owner,
-            "transfer should update nft owner tracking"
+            new_owner, &state.treasury.id,
+            "transfer should move newly minted nft away from treasury"
         );
     }
 
     #[test]
     fn trigger_repetition_mint_and_burn_balance() {
-        let PreparedChaos { mut state, .. } = prepare_state(3, None).expect("state prepared");
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(93);
         let mint_plan = state
             .plan_mint_trigger_repetitions(&mut rng)
@@ -2449,7 +2537,8 @@ mod tests {
 
     #[test]
     fn asset_metadata_set_and_remove_trackers() {
-        let PreparedChaos { mut state, .. } = prepare_state(3, None).expect("state prepared");
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(55);
         let tracked_before: usize = state.asset_metadata.values().map(HashSet::len).sum();
         let set_plan = state
@@ -2473,8 +2562,47 @@ mod tests {
     }
 
     #[test]
+    fn account_metadata_plans_use_account_signer() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(101);
+        let set_plan = state.plan_set_key(&mut rng).expect("set key plan");
+        let set_target = set_plan
+            .instructions
+            .iter()
+            .find_map(
+                |instr| match instr.as_any().downcast_ref::<SetKeyValueBox>() {
+                    Some(SetKeyValueBox::Account(set)) => Some(set.object.clone()),
+                    _ => None,
+                },
+            )
+            .expect("set key instruction should target an account");
+        assert_eq!(
+            set_plan.signer.id, set_target,
+            "set key plan should be signed by the account owner"
+        );
+
+        let remove_plan = state.plan_remove_key(&mut rng).expect("remove key plan");
+        let remove_target = remove_plan
+            .instructions
+            .iter()
+            .find_map(
+                |instr| match instr.as_any().downcast_ref::<RemoveKeyValueBox>() {
+                    Some(RemoveKeyValueBox::Account(remove)) => Some(remove.object.clone()),
+                    _ => None,
+                },
+            )
+            .expect("remove key instruction should target an account");
+        assert_eq!(
+            remove_plan.signer.id, remove_target,
+            "remove key plan should be signed by the account owner"
+        );
+    }
+
+    #[test]
     fn register_uaid_account_tracks_mapping() {
-        let PreparedChaos { mut state, .. } = prepare_state(3, None).expect("state prepared");
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
         let plan = state.plan_register_uaid_account();
         assert_eq!(plan.label, "register_uaid_account");
         assert!(
@@ -2488,7 +2616,8 @@ mod tests {
 
     #[test]
     fn publish_manifest_records_dataspace() {
-        let PreparedChaos { mut state, .. } = prepare_state(2, None).expect("state prepared");
+        let PreparedChaos { mut state, .. } =
+            prepare_state(2, None, WorkloadProfile::Stable).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(99);
         let plan = state
             .plan_publish_space_manifest(&mut rng)
@@ -2505,7 +2634,8 @@ mod tests {
 
     #[test]
     fn revoke_manifest_without_entry_sets_failure() {
-        let PreparedChaos { mut state, .. } = prepare_state(2, None).expect("state prepared");
+        let PreparedChaos { mut state, .. } =
+            prepare_state(2, None, WorkloadProfile::Stable).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(3);
         let plan = state
             .plan_revoke_space_manifest(&mut rng)
@@ -2518,7 +2648,8 @@ mod tests {
 
     #[test]
     fn domain_metadata_roundtrip_clears_tracking() {
-        let PreparedChaos { mut state, .. } = prepare_state(3, None).expect("state prepared");
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
         let set_plan = state.plan_set_domain_key().expect("set domain metadata");
         assert_eq!(set_plan.label, "set_domain_kv");
         assert!(

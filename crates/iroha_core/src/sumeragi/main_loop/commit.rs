@@ -1752,9 +1752,7 @@ impl Actor {
         let should_rebuild_qcs = now.saturating_duration_since(self.last_qc_rebuild) >= cooldown;
         if enable_qc_pipeline && should_rebuild_qcs {
             self.last_qc_rebuild = now;
-            if !active_commit_topology.is_empty() {
-                self.rebuild_qcs_from_cached_votes(&active_commit_topology);
-            }
+            self.rebuild_qcs_from_cached_votes(&active_commit_topology);
         }
 
         let mut pending_hashes: Vec<_> = self
@@ -2121,11 +2119,19 @@ impl Actor {
                 &self.vote_log,
                 vote,
             );
-            let topology_peers = self.effective_commit_topology();
+            let (consensus_mode, _, _) = self.consensus_context_for_height(vote.height);
+            let mut topology_peers = self.roster_for_vote_with_mode(
+                vote.block_hash,
+                vote.height,
+                vote.view,
+                consensus_mode,
+            );
+            if topology_peers.is_empty() {
+                topology_peers = self.effective_commit_topology();
+            }
             if topology_peers.is_empty() {
                 return;
             }
-            let (consensus_mode, _, _) = self.consensus_context_for_height(vote.height);
             if super::block_sync_update_has_roster(&update, consensus_mode) {
                 self.broadcast_block_sync_update(update, &topology_peers);
                 iroha_logger::info!(
@@ -2519,7 +2525,7 @@ impl Actor {
         let topology = super::network_topology::Topology::new(commit_topology.clone());
         let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
         let epoch = self.epoch_for_height(height);
-        let signers = self.qc_signers_for_votes(
+        let mut signers = self.qc_signers_for_votes(
             crate::sumeragi::consensus::Phase::Commit,
             block_hash,
             height,
@@ -2527,6 +2533,17 @@ impl Actor {
             epoch,
             &signature_topology,
         );
+        if !signers.is_empty() {
+            let (filtered, _groups) = super::qc::select_commit_root_signers(
+                &self.vote_log,
+                block_hash,
+                height,
+                view,
+                epoch,
+                &signers,
+            );
+            signers = filtered;
+        }
         let vote_count = signers.len();
         let quorum_reached = match consensus_mode {
             ConsensusMode::Permissioned => vote_count >= signature_topology.min_votes_for_commit(),
@@ -2623,12 +2640,16 @@ impl Actor {
         if votes.is_empty() {
             return 0;
         }
-        let topology_peers = self.effective_commit_topology();
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let mut topology_peers =
+            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+        if topology_peers.is_empty() {
+            topology_peers = self.effective_commit_topology();
+        }
         if topology_peers.is_empty() {
             return 0;
         }
         let topology = super::network_topology::Topology::new(topology_peers);
-        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
         self.ensure_collector_plan(&signature_topology, height, view);
         while let Some(peer) = self.next_redundant_collector() {
@@ -3050,7 +3071,7 @@ impl Actor {
         }
     }
 
-    fn block_sync_update_targets_for_peers(
+    pub(super) fn block_sync_update_targets_for_peers(
         local_peer: &PeerId,
         gossip_limit: usize,
         peers: &[PeerId],
@@ -3241,16 +3262,6 @@ impl Actor {
         qc: crate::sumeragi::consensus::QcHeaderRef,
         topology_peers: &[PeerId],
     ) -> Option<crate::sumeragi::consensus::Qc> {
-        if topology_peers.is_empty() {
-            debug!(
-                height = qc.height,
-                view = qc.view,
-                phase = ?qc.phase,
-                block = %qc.subject_block_hash,
-                "skipping QC materialization: empty commit topology"
-            );
-            return None;
-        }
         let key = (
             qc.phase,
             qc.subject_block_hash,
@@ -3260,6 +3271,20 @@ impl Actor {
         );
         if let Some(existing) = self.qc_cache.get(&key).cloned() {
             return Some(existing);
+        }
+        if topology_peers.is_empty() {
+            if let Some(recovered) = self.recover_highest_qc_from_kura(&qc) {
+                self.qc_cache.insert(key, recovered.clone());
+                return Some(recovered);
+            }
+            debug!(
+                height = qc.height,
+                view = qc.view,
+                phase = ?qc.phase,
+                block = %qc.subject_block_hash,
+                "skipping QC materialization: empty commit topology"
+            );
+            return None;
         }
         let topology = super::network_topology::Topology::new(topology_peers.to_vec());
         self.try_form_qc_from_votes(
@@ -3281,7 +3306,7 @@ impl Actor {
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
         let signature_topology =
             super::topology_for_view(&topology, qc.height, qc.view, mode_tag, prf_seed);
-        let signers = self.qc_signers_for_votes(
+        let mut signers = self.qc_signers_for_votes(
             qc.phase,
             qc.subject_block_hash,
             qc.height,
@@ -3289,6 +3314,17 @@ impl Actor {
             qc.epoch,
             &signature_topology,
         );
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) && !signers.is_empty() {
+            let (filtered, _groups) = super::qc::select_commit_root_signers(
+                &self.vote_log,
+                qc.subject_block_hash,
+                qc.height,
+                qc.view,
+                qc.epoch,
+                &signers,
+            );
+            signers = filtered;
+        }
         if signers.is_empty() {
             debug!(
                 height = qc.height,

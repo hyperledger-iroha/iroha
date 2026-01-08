@@ -30,9 +30,9 @@ use iroha::data_model::{
 use iroha_crypto::Hash;
 use iroha_torii_shared::da::sampling::build_sampling_plan;
 use norito::{
-    codec::Encode,
     decode_from_bytes,
     json::{self, Map, Number, Value},
+    to_bytes,
 };
 #[cfg(test)]
 use sorafs_car::sorafs_chunker::ChunkProfile;
@@ -215,7 +215,8 @@ impl SubmitArgs {
             &context.config().key_pair,
             manifest_bytes,
         );
-        let request_bytes = request.encode();
+        let request_bytes = to_bytes(&request)
+            .map_err(|err| eyre!("failed to encode DA request as Norito: {err}"))?;
         let request_json = norito::json::to_json_pretty(&request)
             .map_err(|err| eyre!("failed to render DA request JSON: {err}"))?;
         let artifact_root = default_artifact_root(self.artifact_dir)?;
