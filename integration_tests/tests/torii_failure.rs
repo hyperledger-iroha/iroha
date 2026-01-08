@@ -46,9 +46,7 @@ async fn torii_bind_failure_results_in_non_zero_exit() -> eyre::Result<()> {
     // start the peer; it should fail to bind Torii and exit
     if let Err(err) = peer.start(network.config_layers(), None).await {
         if let Some(reason) = sandbox::sandbox_reason(&err) {
-            eprintln!(
-                "Skipping test: environment denied loopback networking ({reason})"
-            );
+            eprintln!("Skipping test: environment denied loopback networking ({reason})");
             return Ok(());
         }
         return Err(err);

@@ -1,6 +1,16 @@
 # Status
 
 ## Latest Updates
+- Sumeragi: serialize exec-witness capture across block validation/commit to prevent cross-block witness mixing that can break execution-root QCs; add guard coverage and align witness tests to the shared guard.
+- Tests: not run (not requested).
+- Storage budgets: wire Kura budget telemetry + warnings, attach daemon telemetry to Kura, and document budget metrics/guidance in Nexus lanes.
+- Tests: not run (not requested).
+- Sumeragi: derive commit QC execution roots from view-aligned votes so aggregate signatures remain valid after view rotations; add regression coverage for view-aligned QC roots.
+- Tests: not run (not requested).
+- Sumeragi: add exec-witness fallback capture when pre-vote validation yields no roots, and add regression coverage for the fallback path to keep commit votes live.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Sumeragi/RBC: move roster lookups ahead of READY/DELIVER stash closures to resolve borrow-checker conflicts.
+- Tests: not run (not requested).
 - Sumeragi/RBC: represent empty payloads as a single chunk, invalidate recovered sessions on payload-hash mismatch, clear pending stash on chunk-root mismatch, and reset READY/DELIVER state when authoritative rosters override derived; add regression coverage.
 - Tests: not run (not requested).
 - Sumeragi/RBC: require authoritative rosters before handling READY/DELIVER, stash unverified frames, retain delivered chunk bytes for sampling (no compaction), and reject zero `rbc_chunk_max_bytes`; update docs/tests/metrics accordingly.

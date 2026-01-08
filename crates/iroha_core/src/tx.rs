@@ -608,8 +608,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         if signature_count_u64 > signature_limit {
             warn!(
                 signature_count,
-                signature_limit,
-                "rejecting transaction: signature count exceeds configured limit"
+                signature_limit, "rejecting transaction: signature count exceeds configured limit"
             );
             return Err(AcceptTransactionFail::TransactionLimit(
                 TransactionLimitError {

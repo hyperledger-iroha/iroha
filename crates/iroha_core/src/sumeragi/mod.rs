@@ -269,9 +269,7 @@ mod tests {
     use iroha_data_model::{
         block::{
             BlockHeader, BlockSignature, SignedBlock,
-            consensus::{
-                ConsensusBlockHeader, LaneBlockCommitment, Proposal, RbcChunk,
-            },
+            consensus::{ConsensusBlockHeader, LaneBlockCommitment, Proposal, RbcChunk},
         },
         consensus::VrfEpochRecord,
         nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},

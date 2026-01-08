@@ -24,6 +24,7 @@ use iroha_config::parameters::actual::{
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
 use iroha_data_model::{
     ChainId, Encode as _,
+    asset::{AssetDefinitionId, AssetId},
     block::{
         BlockHeader, BlockSignature, SignedBlock,
         builder::BlockBuilder,
@@ -48,7 +49,7 @@ use iroha_data_model::{
     trigger::DataTriggerSequence,
 };
 use iroha_primitives::time::TimeSource;
-use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
+use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID};
 use nonzero_ext::nonzero;
 use norito::to_bytes;
 
@@ -69,7 +70,7 @@ use crate::{
     query::store::LiveQueryStore,
     queue::{Queue, SingleLaneRouter},
     state::{State, StateReadOnly, World},
-    sumeragi::consensus::{QcAggregate, PERMISSIONED_TAG, Phase, QcHeaderRef, ValidatorIndex},
+    sumeragi::consensus::{PERMISSIONED_TAG, Phase, QcAggregate, QcHeaderRef, ValidatorIndex},
     tx::{AcceptTransactionFail, AcceptedTransaction},
 };
 
@@ -8856,9 +8857,8 @@ async fn maybe_emit_rbc_ready_marks_invalid_and_clears_pending_on_chunk_root_mis
     let payload = b"payload".to_vec();
     let payload_hash = Hash::new(&payload);
     let epoch = harness.actor.epoch_for_height(key.1);
-    let mut session =
-        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
-            .expect("session");
+    let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
     session.expected_chunk_root = Some(Hash::prehashed([0xAA; 32]));
 
     harness
@@ -8902,7 +8902,13 @@ async fn maybe_emit_rbc_ready_marks_invalid_and_clears_pending_on_chunk_root_mis
         .expect("session");
     assert!(stored.is_invalid());
     assert!(
-        !harness.actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .contains_key(&key),
         "pending stash should be cleared after invalidation"
     );
 
@@ -9387,7 +9393,10 @@ async fn recover_block_from_rbc_session_marks_invalid_on_payload_hash_mismatch()
         "pending stash should be cleared on mismatch"
     );
     assert!(
-        actor.pending.missing_block_requests.contains_key(&block_hash),
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
         "mismatch should still trigger missing-block recovery"
     );
 
@@ -9489,9 +9498,8 @@ async fn record_rbc_session_roster_overrides_derived_with_authoritative() {
     let payload = b"payload".to_vec();
     let payload_hash = Hash::new(&payload);
     let epoch = actor.epoch_for_height(height);
-    let mut session =
-        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
-            .expect("session");
+    let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
     session.record_ready(42, vec![0xAA]);
     session.sent_ready = true;
     session.delivered = true;
@@ -12744,10 +12752,7 @@ fn block_sync_selection_prefers_matching_commit_qc_history() {
     )
     .expect("roster selection");
 
-    assert_eq!(
-        selection.source,
-        super::BlockSyncRosterSource::QcHistory
-    );
+    assert_eq!(selection.source, super::BlockSyncRosterSource::QcHistory);
     assert_eq!(selection.roster, vec![me_peer.id().clone()]);
     assert!(selection.commit_qc.is_some());
     status::reset_commit_certs_for_tests();
@@ -12853,10 +12858,7 @@ fn block_sync_selection_prefers_paired_hints() {
         "paired hints should be tracked together"
     );
     assert_eq!(selection.roster, roster);
-    assert_eq!(
-        selection.commit_qc.as_ref(),
-        Some(&commit_qc)
-    );
+    assert_eq!(selection.commit_qc.as_ref(), Some(&commit_qc));
     assert_eq!(selection.checkpoint.as_ref(), Some(&checkpoint));
     status::reset_commit_certs_for_tests();
     status::reset_validator_checkpoints_for_tests();
@@ -12970,10 +12972,7 @@ fn block_sync_selection_uses_persisted_commit_roster_snapshot() {
         super::BlockSyncRosterSource::CommitRosterJournal
     );
     assert_eq!(selection.roster, roster);
-    assert_eq!(
-        selection.commit_qc.as_ref(),
-        Some(&commit_qc)
-    );
+    assert_eq!(selection.commit_qc.as_ref(), Some(&commit_qc));
     assert_eq!(selection.checkpoint.as_ref(), Some(&checkpoint));
     status::reset_commit_certs_for_tests();
     status::reset_validator_checkpoints_for_tests();
@@ -13911,11 +13910,10 @@ fn block_sync_roster_selection_uses_persisted_journal() {
         VALIDATOR_SET_HASH_VERSION_V1,
         None,
     );
-    state.commit_roster_journal.write().upsert(
-        commit_qc.clone(),
-        checkpoint.clone(),
-        None,
-    );
+    state
+        .commit_roster_journal
+        .write()
+        .upsert(commit_qc.clone(), checkpoint.clone(), None);
     // Simulate a restart by clearing in-memory status caches; persisted journal entries
     // should still allow roster recovery for block sync.
     super::status::reset_block_sync_counters_for_tests();
@@ -13954,10 +13952,7 @@ fn block_sync_roster_selection_uses_persisted_journal() {
         super::BlockSyncRosterSource::CommitRosterJournal
     );
     assert_eq!(selection.roster, roster);
-    assert_eq!(
-        selection.commit_qc.as_ref(),
-        Some(&commit_qc)
-    );
+    assert_eq!(selection.commit_qc.as_ref(), Some(&commit_qc));
     assert_eq!(selection.checkpoint.as_ref(), Some(&checkpoint));
 }
 
@@ -14082,10 +14077,7 @@ fn block_sync_roster_recovers_from_roster_sidecar_after_cache_reset() {
         super::BlockSyncRosterSource::RosterSidecar
     );
     assert_eq!(selection.roster, roster);
-    assert_eq!(
-        selection.commit_qc.as_ref(),
-        Some(&commit_qc)
-    );
+    assert_eq!(selection.commit_qc.as_ref(), Some(&commit_qc));
     assert_eq!(selection.checkpoint.as_ref(), Some(&checkpoint));
 }
 
@@ -14181,10 +14173,7 @@ fn block_sync_update_includes_persisted_roster_artifacts() {
         &trusted,
         me_peer.id(),
     );
-    assert_eq!(
-        update.commit_qc.as_ref(),
-        Some(&commit_qc)
-    );
+    assert_eq!(update.commit_qc.as_ref(), Some(&commit_qc));
     assert_eq!(update.validator_checkpoint.as_ref(), Some(&checkpoint));
 }
 
@@ -18642,9 +18631,7 @@ fn qc_validation_error_builds_invalid_qc_evidence() {
         evidence.kind,
         crate::sumeragi::consensus::EvidenceKind::InvalidQc
     ));
-    if let crate::sumeragi::consensus::EvidencePayload::InvalidQc {
-        reason, ..
-    } = &evidence.payload
+    if let crate::sumeragi::consensus::EvidencePayload::InvalidQc { reason, .. } = &evidence.payload
     {
         assert_eq!(reason, err.telemetry_reason());
     } else {
@@ -18658,9 +18645,8 @@ fn qc_validation_error_builds_invalid_qc_evidence() {
     let missing_signer_err = super::QcValidationError::SignerMissingFromBlock { signer: 1 };
     let missing_signer_evidence = super::qc_validation_error_to_evidence(&qc, &missing_signer_err)
         .expect("missing signer should emit invalid QC evidence");
-    if let crate::sumeragi::consensus::EvidencePayload::InvalidQc {
-        reason, ..
-    } = &missing_signer_evidence.payload
+    if let crate::sumeragi::consensus::EvidencePayload::InvalidQc { reason, .. } =
+        &missing_signer_evidence.payload
     {
         assert_eq!(reason, missing_signer_err.telemetry_reason());
     } else {
@@ -25016,6 +25002,38 @@ fn validate_block_for_voting_runs_before_votes() {
 }
 
 #[test]
+fn exec_roots_capture_fallback_uses_witness_snapshot() {
+    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let world = World::default();
+    let kura = Arc::new(Kura::blank_kura_for_testing());
+    let query = LiveQueryStore::start_test();
+    let state = State::new_for_testing(world, Arc::clone(&kura), query);
+
+    let genesis_hash = seed_genesis_block_for_state(&state);
+    let header = BlockHeader::new(nonzero!(2_u64), Some(genesis_hash), None, None, 0, 0);
+    let block_hash = header.hash();
+    let mut state_block = state.block(header);
+
+    crate::sumeragi::witness::start_block();
+    let asset_def: AssetDefinitionId = "rose#wonderland"
+        .parse()
+        .expect("asset definition id parses");
+    let asset_id = AssetId::new(asset_def, (*ALICE_ID).clone());
+    let pre = iroha_primitives::numeric::Numeric::from(1u32);
+    let post = iroha_primitives::numeric::Numeric::from(2u32);
+    crate::sumeragi::witness::record_read_asset(&asset_id, Some(&pre));
+    crate::sumeragi::witness::record_write_asset(&asset_id, &post);
+
+    let expected = crate::sumeragi::witness::snapshot_exec_witness();
+    let expected_parent = parent_state_from_witness(&expected);
+    let expected_post = post_state_from_witness(&expected);
+
+    let roots = exec_roots_for_state_block(&mut state_block, block_hash, 2, 0).expect("roots");
+    assert_eq!(roots.parent_state_root, expected_parent);
+    assert_eq!(roots.post_state_root, expected_post);
+}
+
+#[test]
 fn validation_reject_reason_label_covers_error_categories() {
     let reason_prev_hash =
         super::validation_reject_reason_label(&BlockValidationError::PrevBlockHashMismatch {
@@ -29136,6 +29154,70 @@ async fn conflicting_vote_does_not_override_first() {
         stored.block_hash, block_hash_a,
         "conflicting vote should not override the first vote"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_qc_uses_exec_roots_from_view_votes() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(1);
+    let view = 1u64;
+    let epoch = actor.epoch_for_height(height);
+    let chain_id = actor.chain_id.clone();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let block = block_with_txs(height, u32::try_from(view).expect("view fits u32"), None, vec![
+        sample_transaction(),
+    ]);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    actor
+        .pending
+        .pending_blocks
+        .insert(block_hash, PendingBlock::new(block, payload_hash, height, view));
+    actor.locked_qc = None;
+
+    let signature_topology =
+        super::topology_for_view(&topology, height, view, super::PERMISSIONED_TAG, None);
+    let required = signature_topology.min_votes_for_commit().max(1);
+    let parent_state_root = Hash::prehashed([0x11; 32]);
+    let post_state_root = Hash::prehashed([0x22; 32]);
+
+    for (idx, _) in signature_topology.as_ref().iter().enumerate().take(required) {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            parent_state_root,
+            post_state_root,
+            height,
+            view,
+            epoch,
+            highest_qc: None,
+            signer: ValidatorIndex::try_from(idx).expect("signer index fits"),
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_view(&mut vote, &chain_id, &topology, &harness.key_pairs);
+        actor.handle_vote(vote);
+    }
+
+    let key = (
+        crate::sumeragi::consensus::Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+    );
+    let qc = actor
+        .qc_cache
+        .get(&key)
+        .expect("QC formed from view-aligned votes");
+    assert_eq!(qc.parent_state_root, parent_state_root);
+    assert_eq!(qc.post_state_root, post_state_root);
 
     harness.shutdown.send();
 }

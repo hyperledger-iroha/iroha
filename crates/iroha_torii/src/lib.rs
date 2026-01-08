@@ -360,10 +360,10 @@ pub use routing::{
     handle_post_soranet_privacy_event, handle_post_soranet_privacy_share,
     handle_v1_kaigi_relay_detail, handle_v1_kaigi_relays, handle_v1_kaigi_relays_health,
     handle_v1_kaigi_relays_sse, handle_v1_sumeragi_collectors, handle_v1_sumeragi_commit_qc,
-    handle_v1_sumeragi_leader, handle_v1_sumeragi_pacemaker,
-    handle_v1_sumeragi_params, handle_v1_sumeragi_phases, handle_v1_sumeragi_qc,
-    handle_v1_sumeragi_rbc_delivered_height_view, handle_v1_sumeragi_rbc_sessions,
-    handle_v1_sumeragi_rbc_status, handle_v1_sumeragi_status, handle_v1_sumeragi_status_sse,
+    handle_v1_sumeragi_leader, handle_v1_sumeragi_pacemaker, handle_v1_sumeragi_params,
+    handle_v1_sumeragi_phases, handle_v1_sumeragi_qc, handle_v1_sumeragi_rbc_delivered_height_view,
+    handle_v1_sumeragi_rbc_sessions, handle_v1_sumeragi_rbc_status, handle_v1_sumeragi_status,
+    handle_v1_sumeragi_status_sse,
 };
 pub use runtime::{
     ActivateCancelResponse, handle_runtime_activate_upgrade, handle_runtime_cancel_upgrade,
@@ -6926,11 +6926,9 @@ async fn handler_sumeragi_commit_qcs(
         );
     }
     rate_limit_requests(&app, &key).await?;
-    Ok(
-        routing::handle_v1_sumeragi_commit_qcs(window, accept)
-            .await?
-            .into_response(),
-    )
+    Ok(routing::handle_v1_sumeragi_commit_qcs(window, accept)
+        .await?
+        .into_response())
 }
 
 #[cfg(feature = "telemetry")]
@@ -14224,7 +14222,7 @@ pub(crate) mod tests_runtime_handlers {
     use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
         block::{BlockSignature, SignedBlock},
-        consensus::{QcAggregate, Qc, VALIDATOR_SET_HASH_VERSION_V1},
+        consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
         nexus::{AxtPolicySnapshot, AxtRejectReason, DataSpaceId, LaneId},
         peer::{Peer, PeerId},
         soranet::privacy_metrics::{
@@ -15333,8 +15331,7 @@ pub(crate) mod tests_runtime_handlers {
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("bytes");
-        let certs: Vec<Qc> =
-            norito::json::from_slice(&bytes).expect("decode certs json");
+        let certs: Vec<Qc> = norito::json::from_slice(&bytes).expect("decode certs json");
         assert_eq!(certs.len(), 1);
         assert_eq!(certs[0].height, latest.height);
 
@@ -15351,8 +15348,7 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .expect("bytes");
         let archived = norito::from_bytes::<Vec<Qc>>(&norito_bytes).expect("arch");
-        let decoded: Vec<Qc> =
-            norito::core::NoritoDeserialize::deserialize(archived);
+        let decoded: Vec<Qc> = norito::core::NoritoDeserialize::deserialize(archived);
         assert!(decoded.iter().any(|c| c.height == latest.height));
         assert!(decoded.iter().any(|c| c.height == older.height));
     }

@@ -17,12 +17,7 @@ use iroha_data_model::{
 };
 use nonzero_ext::nonzero;
 
-fn seed_commit_qc_state() -> (
-    Arc<CoreState>,
-    HashOf<BlockHeader>,
-    iroha_crypto::Hash,
-    Qc,
-) {
+fn seed_commit_qc_state() -> (Arc<CoreState>, HashOf<BlockHeader>, iroha_crypto::Hash, Qc) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = Arc::new(CoreState::new_for_testing(World::default(), kura, query));
@@ -184,7 +179,6 @@ async fn sumeragi_commit_qc_endpoint_supports_norito_payload() {
         Some("application/x-norito")
     );
     let bytes = BodyExt::collect(resp.into_body()).await.unwrap().to_bytes();
-    let decoded: Option<Qc> =
-        norito::decode_from_bytes(&bytes).expect("decode commit QC Norito");
+    let decoded: Option<Qc> = norito::decode_from_bytes(&bytes).expect("decode commit QC Norito");
     assert_eq!(decoded.as_ref(), Some(&qc));
 }

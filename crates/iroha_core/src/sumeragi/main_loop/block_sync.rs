@@ -176,10 +176,9 @@ impl Actor {
         if let Some(checkpoint) = selection.checkpoint.clone() {
             super::status::record_validator_checkpoint(checkpoint);
         }
-        if let (Some(cert), Some(checkpoint)) = (
-            selection.commit_qc.as_ref(),
-            selection.checkpoint.as_ref(),
-        ) {
+        if let (Some(cert), Some(checkpoint)) =
+            (selection.commit_qc.as_ref(), selection.checkpoint.as_ref())
+        {
             {
                 let mut journal = self.state.commit_roster_journal.write();
                 journal.upsert(
@@ -948,8 +947,7 @@ impl Actor {
                 );
                 let has_roster =
                     update.commit_qc.is_some() || update.validator_checkpoint.is_some();
-                let has_cached_qc =
-                    update.commit_qc.is_some() || !update.commit_votes.is_empty();
+                let has_cached_qc = update.commit_qc.is_some() || !update.commit_votes.is_empty();
                 if !has_roster && !has_cached_qc {
                     let msg = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
                     self.send_fetch_pending_block_response(peer.clone(), msg);
@@ -995,8 +993,7 @@ impl Actor {
                 );
                 let has_roster =
                     update.commit_qc.is_some() || update.validator_checkpoint.is_some();
-                let has_cached_qc =
-                    update.commit_qc.is_some() || !update.commit_votes.is_empty();
+                let has_cached_qc = update.commit_qc.is_some() || !update.commit_votes.is_empty();
                 if !has_roster && !has_cached_qc {
                     let msg = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
                     self.send_fetch_pending_block_response(peer.clone(), msg);
@@ -1037,8 +1034,7 @@ impl Actor {
                 );
                 let has_roster =
                     update.commit_qc.is_some() || update.validator_checkpoint.is_some();
-                let has_cached_qc =
-                    update.commit_qc.is_some() || !update.commit_votes.is_empty();
+                let has_cached_qc = update.commit_qc.is_some() || !update.commit_votes.is_empty();
                 let msg = if !has_roster && !has_cached_qc {
                     BlockMessage::BlockCreated(super::message::BlockCreated::from(block))
                 } else {

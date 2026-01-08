@@ -2516,7 +2516,10 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_sumeragi_commit_qc_json(&self, hash_hex: &str) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, &format!("v1/sumeragi/commit_qc/{hash_hex}"));
+        let url = join_torii_url(
+            &self.torii_url,
+            &format!("v1/sumeragi/commit_qc/{hash_hex}"),
+        );
         let resp = self
             .default_request(HttpMethod::GET, url)
             .header("Accept", APPLICATION_NORITO)
@@ -3082,8 +3085,7 @@ mod evidence_http_tests {
     use http::StatusCode;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature};
     use iroha_data_model::block::consensus::{
-        CertPhase as Phase, QcVote as Vote, Evidence, EvidenceKind, EvidencePayload,
-        EvidenceRecord,
+        CertPhase as Phase, Evidence, EvidenceKind, EvidencePayload, EvidenceRecord, QcVote as Vote,
     };
     use iroha_test_samples::gen_account_in;
     use norito::json::Value;
@@ -3770,10 +3772,7 @@ mod evidence_http_tests {
             .collect();
         assert_eq!(params.get("limit"), Some(&"5".to_string()));
         assert_eq!(params.get("offset"), Some(&"2".to_string()));
-        assert_eq!(
-            params.get("kind"),
-            Some(&"InvalidQc".to_string())
-        );
+        assert_eq!(params.get("kind"), Some(&"InvalidQc".to_string()));
     }
 
     #[test]
@@ -9404,13 +9403,13 @@ mod tests {
             BlockHeader,
             consensus::{
                 CertPhase, LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt,
-                LaneSwapMetadata, LaneVolatilityClass, PERMISSIONED_TAG, SumeragiBlockSyncRosterStatus,
-                SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
-                SumeragiKuraStoreStatus, SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
-                SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus,
-                SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
-                SumeragiRbcStoreStatus, SumeragiStatusWire, SumeragiValidationRejectStatus,
-                SumeragiViewChangeCauseStatus,
+                LaneSwapMetadata, LaneVolatilityClass, PERMISSIONED_TAG,
+                SumeragiBlockSyncRosterStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
+                SumeragiDaGateStatus, SumeragiKuraStoreStatus, SumeragiMembershipMismatchStatus,
+                SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus,
+                SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcStatus, SumeragiQcEntry,
+                SumeragiQcSnapshot, SumeragiRbcStoreStatus, SumeragiStatusWire,
+                SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
             },
         },
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
@@ -9544,8 +9543,7 @@ mod tests {
             locked_qc_height: 11,
             locked_qc_view: 4,
             locked_qc_subject: None,
-            commit_qc:
-                iroha_data_model::block::consensus::SumeragiQcStatus::default(),
+            commit_qc: iroha_data_model::block::consensus::SumeragiQcStatus::default(),
             commit_quorum: iroha_data_model::block::consensus::SumeragiCommitQuorumStatus::default(
             ),
             view_change_proof_accepted_total: 5,
@@ -11408,8 +11406,7 @@ mod tests {
             locked_qc_height: 0,
             locked_qc_view: 0,
             locked_qc_subject: None,
-            commit_qc:
-                iroha_data_model::block::consensus::SumeragiQcStatus::default(),
+            commit_qc: iroha_data_model::block::consensus::SumeragiQcStatus::default(),
             commit_quorum: iroha_data_model::block::consensus::SumeragiCommitQuorumStatus::default(
             ),
             view_change_proof_accepted_total: 0,
@@ -11678,8 +11675,7 @@ mod tests {
             locked_qc_height: 11,
             locked_qc_view: 4,
             locked_qc_subject: None,
-            commit_qc:
-                iroha_data_model::block::consensus::SumeragiQcStatus::default(),
+            commit_qc: iroha_data_model::block::consensus::SumeragiQcStatus::default(),
             commit_quorum: iroha_data_model::block::consensus::SumeragiCommitQuorumStatus::default(
             ),
             view_change_proof_accepted_total: 5,

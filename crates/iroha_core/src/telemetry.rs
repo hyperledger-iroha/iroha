@@ -2253,6 +2253,32 @@ impl StateTelemetry {
             self.clear_nexus_cache_state();
         }
     }
+
+    /// Record the latest storage budget usage for a component.
+    pub fn record_storage_budget_usage(&self, component: &'static str, used: u64, limit: u64) {
+        if !self.is_enabled() {
+            return;
+        }
+        self.metrics
+            .storage_budget_bytes_used
+            .with_label_values(&[component])
+            .set(used);
+        self.metrics
+            .storage_budget_bytes_limit
+            .with_label_values(&[component])
+            .set(limit);
+    }
+
+    /// Record a storage budget exceed event for a component.
+    pub fn inc_storage_budget_exceeded(&self, component: &'static str) {
+        if !self.is_enabled() {
+            return;
+        }
+        self.metrics
+            .storage_budget_exceeded_total
+            .with_label_values(&[component])
+            .inc();
+    }
     /// Whether Nexus lane/dataspace metrics should be emitted.
     #[inline]
     fn nexus_lane_metrics_enabled(&self) -> bool {
@@ -4312,6 +4338,15 @@ impl Default for StateTelemetry {
     }
 }
 
+impl core::fmt::Debug for StateTelemetry {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("StateTelemetry")
+            .field("enabled", &self.enabled.load(Ordering::Relaxed))
+            .field("nexus_enabled", &self.nexus_enabled.load(Ordering::Relaxed))
+            .finish()
+    }
+}
+
 impl core::ops::Deref for StateTelemetry {
     type Target = Metrics;
 
@@ -4529,6 +4564,32 @@ impl StreamingTelemetry {
         self.emit_event("streaming_energy", &TelemetryEvent::Energy(*stats));
     }
 
+    /// Record storage budget usage for streaming components.
+    pub fn record_storage_budget_usage(&self, component: &'static str, used: u64, limit: u64) {
+        if !self.is_enabled() {
+            return;
+        }
+        self.metrics
+            .storage_budget_bytes_used
+            .with_label_values(&[component])
+            .set(used);
+        self.metrics
+            .storage_budget_bytes_limit
+            .with_label_values(&[component])
+            .set(limit);
+    }
+
+    /// Record storage budget exceed events for streaming components.
+    pub fn inc_storage_budget_exceeded(&self, component: &'static str) {
+        if !self.is_enabled() {
+            return;
+        }
+        self.metrics
+            .storage_budget_exceeded_total
+            .with_label_values(&[component])
+            .inc();
+    }
+
     /// Update the active parity bucket for the given peer.
     pub fn record_fec_parity(&self, peer: &PeerId, parity: u8) {
         if !self.is_enabled() {
@@ -4691,6 +4752,7 @@ pub fn record_state_tiered_snapshot(
     telemetry: &StateTelemetry,
     snapshot_index: u64,
     hot_entries: usize,
+    hot_bytes: u64,
     cold_entries: usize,
     cold_bytes: u64,
     hot_promotions: usize,
@@ -4709,6 +4771,7 @@ pub fn record_state_tiered_snapshot(
             .metrics
             .state_tiered_hot_entries
             .set(hot_entries as u64);
+        telemetry.metrics.state_tiered_hot_bytes.set(hot_bytes);
         telemetry
             .metrics
             .state_tiered_cold_entries
@@ -7742,19 +7805,13 @@ impl Telemetry {
     /// Record the latest commit certificate summary (best-effort).
     pub fn set_commit_qc_summary(&self, cert: &Qc) {
         if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_commit_qc_height
-                .set(cert.height);
+            self.metrics.sumeragi_commit_qc_height.set(cert.height);
             self.metrics.sumeragi_commit_qc_view.set(cert.view);
-            self.metrics
-                .sumeragi_commit_qc_epoch
-                .set(cert.epoch);
-            self.metrics
-                .sumeragi_commit_qc_signatures_total
-                .set(
-                    u64::try_from(crate::sumeragi::consensus::qc_signer_count(cert))
-                        .unwrap_or(u64::MAX),
-                );
+            self.metrics.sumeragi_commit_qc_epoch.set(cert.epoch);
+            self.metrics.sumeragi_commit_qc_signatures_total.set(
+                u64::try_from(crate::sumeragi::consensus::qc_signer_count(cert))
+                    .unwrap_or(u64::MAX),
+            );
             self.metrics
                 .sumeragi_commit_qc_validator_set_len
                 .set(u64::try_from(cert.validator_set.len()).unwrap_or(u64::MAX));
@@ -8580,14 +8637,8 @@ mod tests {
         assert_eq!(metrics.sumeragi_commit_qc_height.get(), 42);
         assert_eq!(metrics.sumeragi_commit_qc_view.get(), 7);
         assert_eq!(metrics.sumeragi_commit_qc_epoch.get(), 1);
-        assert_eq!(
-            metrics.sumeragi_commit_qc_signatures_total.get(),
-            0
-        );
-        assert_eq!(
-            metrics.sumeragi_commit_qc_validator_set_len.get(),
-            2
-        );
+        assert_eq!(metrics.sumeragi_commit_qc_signatures_total.get(), 0);
+        assert_eq!(metrics.sumeragi_commit_qc_validator_set_len.get(), 2);
     }
 
     #[test]
@@ -10645,6 +10696,30 @@ mod tests {
         record_network_metrics(&telemetry, metrics_ref);
         record_sync_metrics(&telemetry, metrics_ref);
         record_energy_metrics(&telemetry, metrics_ref);
+
+        telemetry.record_storage_budget_usage("soranet_spool", 64, 128);
+        telemetry.inc_storage_budget_exceeded("soranet_spool");
+        assert_eq!(
+            metrics
+                .storage_budget_bytes_used
+                .with_label_values(&["soranet_spool"])
+                .get(),
+            64
+        );
+        assert_eq!(
+            metrics
+                .storage_budget_bytes_limit
+                .with_label_values(&["soranet_spool"])
+                .get(),
+            128
+        );
+        assert_eq!(
+            metrics
+                .storage_budget_exceeded_total
+                .with_label_values(&["soranet_spool"])
+                .get(),
+            1
+        );
     }
 
     #[test]
@@ -11024,9 +11099,10 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
 
-        record_state_tiered_snapshot(&telemetry, 7, 3, 2, 1024, 1, 2, 3, 2048, 4, 512);
+        record_state_tiered_snapshot(&telemetry, 7, 3, 512, 2, 1024, 1, 2, 3, 2048, 4, 512);
         assert_eq!(metrics.state_tiered_last_snapshot_index.get(), 7);
         assert_eq!(metrics.state_tiered_hot_entries.get(), 3);
+        assert_eq!(metrics.state_tiered_hot_bytes.get(), 512);
         assert_eq!(metrics.state_tiered_cold_entries.get(), 2);
         assert_eq!(metrics.state_tiered_cold_bytes.get(), 1024);
         assert_eq!(metrics.state_tiered_hot_promotions.get(), 1);
@@ -11035,6 +11111,47 @@ mod tests {
         assert_eq!(metrics.state_tiered_hot_grace_overflow_bytes.get(), 2048);
         assert_eq!(metrics.state_tiered_cold_reused_entries.get(), 4);
         assert_eq!(metrics.state_tiered_cold_reused_bytes.get(), 512);
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn storage_budget_metrics_updated() {
+        use std::sync::Arc;
+
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics.clone(), true);
+
+        telemetry.record_storage_budget_usage("kura", 512, 2048);
+        telemetry.inc_storage_budget_exceeded("kura");
+
+        assert_eq!(
+            metrics
+                .storage_budget_bytes_used
+                .with_label_values(&["kura"])
+                .get(),
+            512
+        );
+        assert_eq!(
+            metrics
+                .storage_budget_bytes_limit
+                .with_label_values(&["kura"])
+                .get(),
+            2048
+        );
+        assert_eq!(
+            metrics
+                .storage_budget_exceeded_total
+                .with_label_values(&["kura"])
+                .get(),
+            1
+        );
+    }
+
+    #[test]
+    fn state_telemetry_debug_smoke() {
+        let telemetry = StateTelemetry::new(Arc::new(Metrics::default()), true);
+        let formatted = format!("{telemetry:?}");
+        assert!(formatted.contains("StateTelemetry"));
     }
 
     #[cfg(feature = "telemetry")]

@@ -791,7 +791,6 @@ impl Actor {
         }
         self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode)
     }
-
 }
 
 #[cfg(test)]

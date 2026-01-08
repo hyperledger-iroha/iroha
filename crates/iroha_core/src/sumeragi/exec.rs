@@ -4,7 +4,10 @@
 
 use iroha_crypto::Hash;
 
-use super::{consensus::ExecWitness, smt::{KvPair, compute_post_state_root}};
+use super::{
+    consensus::ExecWitness,
+    smt::{KvPair, compute_post_state_root},
+};
 
 /// Convert an `ExecWitness` into SMT `KvPair` slices and compute the `post_state_root`.
 pub fn post_state_from_witness(w: &ExecWitness) -> Hash {
@@ -96,5 +99,4 @@ mod tests {
         let post = post_state_from_witness(&witness);
         assert_ne!(parent, post);
     }
-
 }

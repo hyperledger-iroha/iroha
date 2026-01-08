@@ -434,6 +434,7 @@ impl Actor {
         signers: &BTreeSet<ValidatorIndex>,
         canonical_topology: &super::network_topology::Topology,
         aggregate_signature: Vec<u8>,
+        roots: Option<(Hash, Hash)>,
     ) -> crate::sumeragi::consensus::Qc {
         let signers_bitmap = build_signers_bitmap(signers, canonical_topology.as_ref().len());
         debug_assert!(
@@ -443,27 +444,15 @@ impl Actor {
         let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
         let (parent_state_root, post_state_root) =
             if ctx.phase == crate::sumeragi::consensus::Phase::Commit {
-                signers
-                    .iter()
-                    .find_map(|signer| {
-                        let key = (ctx.phase, ctx.height, ctx.view, ctx.epoch, *signer);
-                        self.vote_log.get(&key).and_then(|vote| {
-                            if vote.block_hash == ctx.block_hash {
-                                Some((vote.parent_state_root, vote.post_state_root))
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                    .unwrap_or_else(|| {
-                        warn!(
-                            height = ctx.height,
-                            view = ctx.view,
-                            block = %ctx.block_hash,
-                            "missing execution roots while assembling commit QC"
-                        );
-                        (zero_root, zero_root)
-                    })
+                roots.unwrap_or_else(|| {
+                    warn!(
+                        height = ctx.height,
+                        view = ctx.view,
+                        block = %ctx.block_hash,
+                        "missing execution roots while assembling commit QC"
+                    );
+                    (zero_root, zero_root)
+                })
             } else {
                 (zero_root, zero_root)
             };
@@ -656,6 +645,21 @@ impl Actor {
             return;
         }
 
+        let roots = if phase == crate::sumeragi::consensus::Phase::Commit {
+            snapshot.signers.iter().find_map(|signer| {
+                let key = (phase, height, view, epoch, *signer);
+                self.vote_log.get(&key).and_then(|vote| {
+                    if vote.block_hash == block_hash {
+                        Some((vote.parent_state_root, vote.post_state_root))
+                    } else {
+                        None
+                    }
+                })
+            })
+        } else {
+            None
+        };
+
         let qc = self.build_qc_from_signers(
             QcBuildContext {
                 phase,
@@ -669,6 +673,7 @@ impl Actor {
             &canonical_signers,
             &topology,
             aggregate_signature,
+            roots,
         );
 
         iroha_logger::info!(

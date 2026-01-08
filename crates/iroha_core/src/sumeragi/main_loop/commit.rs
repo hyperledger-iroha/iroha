@@ -1779,10 +1779,7 @@ impl Actor {
                 );
                 abort_due_to_kura = true;
             } else if kura_ready {
-                if enable_qc_pipeline
-                    && !pending.precommit_vote_sent
-                    && !pending.commit_qc_seen
-                {
+                if enable_qc_pipeline && !pending.precommit_vote_sent && !pending.commit_qc_seen {
                     emit_precommit = true;
                 }
             } else {
@@ -2051,25 +2048,24 @@ impl Actor {
         highest_qc: Option<crate::sumeragi::consensus::QcRef>,
         roots: Option<(Hash, Hash)>,
     ) -> Option<crate::sumeragi::consensus::Vote> {
-        let (parent_state_root, post_state_root) = if phase
-            == crate::sumeragi::consensus::Phase::Commit
-        {
-            match roots {
-                Some(roots) => roots,
-                None => {
-                    warn!(
-                        height,
-                        view,
-                        block = %block_hash,
-                        "missing execution roots; skipping commit vote"
-                    );
-                    return None;
+        let (parent_state_root, post_state_root) =
+            if phase == crate::sumeragi::consensus::Phase::Commit {
+                match roots {
+                    Some(roots) => roots,
+                    None => {
+                        warn!(
+                            height,
+                            view,
+                            block = %block_hash,
+                            "missing execution roots; skipping commit vote"
+                        );
+                        return None;
+                    }
                 }
-            }
-        } else {
-            let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
-            (zero_root, zero_root)
-        };
+            } else {
+                let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+                (zero_root, zero_root)
+            };
         let mut vote = crate::sumeragi::consensus::Vote {
             phase,
             block_hash,
@@ -2221,10 +2217,12 @@ impl Actor {
             .pending
             .pending_blocks
             .get(&block_hash)
-            .and_then(|pending| match (pending.parent_state_root, pending.post_state_root) {
-                (Some(parent), Some(post)) => Some((parent, post)),
-                _ => None,
-            });
+            .and_then(
+                |pending| match (pending.parent_state_root, pending.post_state_root) {
+                    (Some(parent), Some(post)) => Some((parent, post)),
+                    _ => None,
+                },
+            );
         let Some(vote) = self.build_vote(
             crate::sumeragi::consensus::Phase::Commit,
             block_hash,
@@ -3210,6 +3208,20 @@ impl Actor {
             );
             return None;
         }
+        let roots = if qc.phase == crate::sumeragi::consensus::Phase::Commit {
+            signers.iter().find_map(|signer| {
+                let key = (qc.phase, qc.height, qc.view, qc.epoch, *signer);
+                self.vote_log.get(&key).and_then(|vote| {
+                    if vote.block_hash == qc.subject_block_hash {
+                        Some((vote.parent_state_root, vote.post_state_root))
+                    } else {
+                        None
+                    }
+                })
+            })
+        } else {
+            None
+        };
         let rebuilt = self.build_qc_from_signers(
             QcBuildContext {
                 phase: qc.phase,
@@ -3223,6 +3235,7 @@ impl Actor {
             &canonical_signers,
             &topology,
             aggregate_signature,
+            roots,
         );
         self.qc_cache.insert(key, rebuilt.clone());
         Some(rebuilt)

@@ -407,12 +407,10 @@ pub fn verify_finality_proof(
 
     let certificate = &proof.commit_qc;
     if certificate.height != proof.height {
-        return Err(
-            BridgeFinalityVerificationError::QcHeightMismatch {
-                proof_height: proof.height,
-                cert_height: certificate.height,
-            },
-        );
+        return Err(BridgeFinalityVerificationError::QcHeightMismatch {
+            proof_height: proof.height,
+            cert_height: certificate.height,
+        });
     }
 
     if certificate.phase != sumeragi::consensus::Phase::Commit {
