@@ -53,6 +53,7 @@ use iroha_executor_data_model::permission::{
     nexus::CanPublishSpaceDirectoryManifest,
     nft::CanRegisterNft,
     role::CanManageRoles,
+    sorafs::{CanCompleteSorafsReplicationOrder, CanIssueSorafsReplicationOrder},
     trigger::CanRegisterTrigger,
 };
 use norito::{
@@ -267,6 +268,16 @@ pub fn prepare_state(
             CanPublishSpaceDirectoryManifest {
                 dataspace: *dataspace,
             },
+            treasury.id.clone(),
+        )));
+    }
+    if nexus.is_some() {
+        genesis_tx.push(InstructionBox::from(Grant::account_permission(
+            CanIssueSorafsReplicationOrder,
+            treasury.id.clone(),
+        )));
+        genesis_tx.push(InstructionBox::from(Grant::account_permission(
+            CanCompleteSorafsReplicationOrder,
             treasury.id.clone(),
         )));
     }
@@ -601,6 +612,12 @@ impl ChaosState {
             self.uaid_accounts.insert(uaid, record.clone());
         }
         self.users.push(record);
+    }
+
+    fn nexus_staking_expect_success(&self) -> bool {
+        // TODO: flip to true once Izanami provisions Nexus staking assets, escrow/sink accounts,
+        // and validator accounts backed by registered peers in chaos genesis.
+        false
     }
 
     fn allocate_uaid_record(&mut self) -> AccountRecord {
@@ -1808,8 +1825,8 @@ impl ChaosState {
         Ok(TransactionPlan {
             label: "register_public_lane_validator",
             instructions,
-            signer: validator,
-            expect_success: true,
+            signer: self.treasury.clone(),
+            expect_success: self.nexus_staking_expect_success(),
         })
     }
 
@@ -1857,8 +1874,8 @@ impl ChaosState {
         Ok(TransactionPlan {
             label: "bond_public_lane_stake",
             instructions,
-            signer: staker,
-            expect_success: true,
+            signer: self.treasury.clone(),
+            expect_success: self.nexus_staking_expect_success(),
         })
     }
 
@@ -1902,7 +1919,7 @@ impl ChaosState {
                 release_at_ms: release_at,
             })],
             signer: staker,
-            expect_success: true,
+            expect_success: self.nexus_staking_expect_success(),
         })
     }
 
@@ -1923,7 +1940,7 @@ impl ChaosState {
                 request_id: pending.request_id,
             })],
             signer: self.treasury.clone(),
-            expect_success: true,
+            expect_success: self.nexus_staking_expect_success(),
         })
     }
 
@@ -1959,7 +1976,7 @@ impl ChaosState {
                 metadata: Metadata::default(),
             })],
             signer: self.treasury.clone(),
-            expect_success: true,
+            expect_success: self.nexus_staking_expect_success(),
         })
     }
 
@@ -2008,7 +2025,7 @@ impl ChaosState {
                 }),
             ],
             signer: self.treasury.clone(),
-            expect_success: true,
+            expect_success: self.nexus_staking_expect_success(),
         })
     }
 
@@ -2447,7 +2464,10 @@ mod tests {
             .plan_record_public_rewards(&mut rng)
             .expect("reward plan");
         assert_eq!(plan.label, "record_public_lane_rewards");
-        assert!(plan.expect_success);
+        assert!(
+            !plan.expect_success,
+            "Nexus staking prerequisites are not provisioned in chaos genesis yet"
+        );
     }
 
     #[test]
