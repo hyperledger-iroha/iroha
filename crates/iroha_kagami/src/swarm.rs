@@ -12,7 +12,10 @@ use iroha_swarm::PeerOverride;
 
 use crate::{
     Outcome, RunArgs,
-    genesis::{build_line_from_env, ensure_npos_parameters, validate_consensus_mode_for_line},
+    genesis::{
+        ConsensusPolicy, build_line_from_env, ensure_npos_parameters,
+        validate_consensus_mode_for_line,
+    },
     localnet::ConsensusModeArg,
     tui,
 };
@@ -173,25 +176,37 @@ impl<T: Write> RunArgs<T> for Args {
 
         let consensus_mode_override = args.consensus_mode.map(SumeragiConsensusMode::from);
         let next_consensus_mode = args.next_consensus_mode.map(SumeragiConsensusMode::from);
-        let wants_npos = build_line.is_iroha3()
-            || matches!(consensus_mode_override, Some(SumeragiConsensusMode::Npos))
+        let wants_npos = matches!(consensus_mode_override, Some(SumeragiConsensusMode::Npos))
             || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
         let manifest = if wants_npos {
-            Some(ensure_npos_genesis(&args.config_dir)?)
+            ensure_npos_genesis(&args.config_dir)?
         } else {
-            None
-        };
-        if build_line.is_iroha3() {
-            let manifest = manifest
-                .as_ref()
-                .expect("Iroha3 requires NPoS genesis manifest");
-            let manifest_mode = manifest.consensus_mode().ok_or_else(|| {
+            let genesis_path = args.config_dir.join("genesis.json");
+            RawGenesisTransaction::from_path(&genesis_path).wrap_err_with(|| {
                 eyre!(
-                    "genesis manifest missing consensus_mode; regenerate with `kagami genesis generate --consensus-mode npos`"
+                    "failed to parse genesis manifest at {}",
+                    genesis_path.display()
                 )
-            })?;
-            let effective_mode = consensus_mode_override.unwrap_or(manifest_mode);
-            validate_consensus_mode_for_line(build_line, effective_mode, next_consensus_mode)?;
+            })?
+        };
+        let manifest_mode = manifest.consensus_mode().ok_or_else(|| {
+            eyre!(
+                "genesis manifest missing consensus_mode; regenerate with `kagami genesis generate --consensus-mode <mode>`"
+            )
+        })?;
+        let effective_mode = consensus_mode_override.unwrap_or(manifest_mode);
+        validate_consensus_mode_for_line(
+            build_line,
+            effective_mode,
+            next_consensus_mode,
+            ConsensusPolicy::Any,
+        )?;
+        if matches!(effective_mode, SumeragiConsensusMode::Npos)
+            || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos))
+        {
+            ensure_npos_parameters(&manifest)?;
+        }
+        if build_line.is_iroha3() {
             let params = manifest.effective_parameters();
             if params.sumeragi().next_mode().is_some()
                 || params.sumeragi().mode_activation_height().is_some()
@@ -409,11 +424,14 @@ mod tests {
     #[test]
     fn run_succeeds_without_banner() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let config_dir = temp_dir.path().join("cfg");
+        fs::create_dir_all(&config_dir).expect("create config dir");
+        write_minimal_genesis(&config_dir.join("genesis.json"));
         let args = Args {
             peers: NonZeroU16::new(1).expect("non-zero"),
             seed: None,
             healthcheck: false,
-            config_dir: temp_dir.path().to_path_buf(),
+            config_dir,
             peer_config: None,
             image: "hyperledger/iroha:dev".to_owned(),
             build: None,

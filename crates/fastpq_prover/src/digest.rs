@@ -99,21 +99,19 @@ mod tests {
 
     use super::*;
     use crate::{
-        OperationKind, Planner, StateTransition, TransitionBatch,
+        OperationKind, Planner, PublicInputs, StateTransition, TransitionBatch,
         backend::{self, ExecutionMode},
         trace::{derive_polynomial_data, hash_columns_from_coefficients},
     };
 
     fn sample_batch() -> TransitionBatch {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced");
-        batch.metadata.insert("dsid".into(), vec![0xAA; 16]);
-        batch
-            .metadata
-            .insert("slot".into(), u64::to_le_bytes(42).to_vec());
-        batch.metadata.insert("old_root".into(), vec![0x11; 32]);
-        batch.metadata.insert("new_root".into(), vec![0x22; 32]);
-        batch.metadata.insert("perm_root".into(), vec![0x33; 32]);
-        batch.metadata.insert("tx_set_hash".into(), vec![0x44; 32]);
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        batch.public_inputs.dsid = [0xAA; 16];
+        batch.public_inputs.slot = 42;
+        batch.public_inputs.old_root = [0x11; 32];
+        batch.public_inputs.new_root = [0x22; 32];
+        batch.public_inputs.perm_root = [0x33; 32];
+        batch.public_inputs.tx_set_hash = [0x44; 32];
 
         batch.push(StateTransition::new(
             b"asset/xor/alice".to_vec(),
@@ -132,13 +130,13 @@ mod tests {
     }
 
     fn build_fixture(name: &str) -> TransitionBatch {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced");
-        batch.metadata.insert("dsid".into(), vec![0xAA; 16]);
-        batch.metadata.insert("slot".into(), u64_bytes(42));
-        batch.metadata.insert("old_root".into(), vec![0x11; 32]);
-        batch.metadata.insert("new_root".into(), vec![0x22; 32]);
-        batch.metadata.insert("perm_root".into(), vec![0x33; 32]);
-        batch.metadata.insert("tx_set_hash".into(), vec![0x44; 32]);
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        batch.public_inputs.dsid = [0xAA; 16];
+        batch.public_inputs.slot = 42;
+        batch.public_inputs.old_root = [0x11; 32];
+        batch.public_inputs.new_root = [0x22; 32];
+        batch.public_inputs.perm_root = [0x33; 32];
+        batch.public_inputs.tx_set_hash = [0x44; 32];
 
         match name {
             "transfer" => {

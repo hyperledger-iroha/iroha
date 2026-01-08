@@ -1,24 +1,14 @@
 //! FASTPQ proof smoke tests covering realistic governance and remittance scenarios.
 
-use fastpq_prover::{OperationKind, Prover, StateTransition, TransitionBatch, verify};
+use fastpq_prover::{OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch, verify};
 
-fn annotate_metadata(batch: &mut TransitionBatch, slot: u64) {
-    batch.metadata.insert("dsid".into(), [0x3Du8; 16].to_vec());
-    batch
-        .metadata
-        .insert("slot".into(), slot.to_le_bytes().to_vec());
-    batch
-        .metadata
-        .insert("old_root".into(), [0x11u8; 32].to_vec());
-    batch
-        .metadata
-        .insert("new_root".into(), [0x22u8; 32].to_vec());
-    batch
-        .metadata
-        .insert("perm_root".into(), [0x33u8; 32].to_vec());
-    batch
-        .metadata
-        .insert("tx_set_hash".into(), [0x44u8; 32].to_vec());
+fn annotate_inputs(batch: &mut TransitionBatch, slot: u64) {
+    batch.public_inputs.dsid = [0x3D; 16];
+    batch.public_inputs.slot = slot;
+    batch.public_inputs.old_root = [0x11; 32];
+    batch.public_inputs.new_root = [0x22; 32];
+    batch.public_inputs.perm_root = [0x33; 32];
+    batch.public_inputs.tx_set_hash = [0x44; 32];
 }
 
 fn encode_u64(value: u64) -> Vec<u8> {
@@ -26,8 +16,8 @@ fn encode_u64(value: u64) -> Vec<u8> {
 }
 
 fn governance_batch() -> TransitionBatch {
-    let mut batch = TransitionBatch::new("fastpq-lane-balanced");
-    annotate_metadata(&mut batch, 7);
+    let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+    annotate_inputs(&mut batch, 7);
 
     batch.push(StateTransition::new(
         b"role/council@governance/permission/vote.sora".to_vec(),
@@ -55,8 +45,8 @@ fn remittance_batch() -> TransitionBatch {
     const REMIT_AMOUNT: u64 = 75_000;
     const ALICE_START: u64 = 500_000;
     const BOB_START: u64 = 120_000;
-    let mut batch = TransitionBatch::new("fastpq-lane-balanced");
-    annotate_metadata(&mut batch, 23);
+    let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+    annotate_inputs(&mut batch, 23);
 
     batch.push(StateTransition::new(
         b"asset/xor#remit/alice@remit".to_vec(),

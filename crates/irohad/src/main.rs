@@ -2079,10 +2079,9 @@ impl Iroha {
             nts_peers_rx,
             iroha_core::time::Params::from(&config.nts),
         );
-        // Observer nodes are configured with `NodeRole::Observer`; Sumeragi filters
-        // itself out of the consensus topology in that case, so observers follow the
-        // chain and serve queries without proposing or voting. Validators retain the
-        // full consensus duties.
+        // Observer nodes are configured with `NodeRole::Observer`; Sumeragi suppresses
+        // local consensus emissions in that case, so observers follow the chain and
+        // serve queries without proposing or voting. Validators retain the full duties.
 
         let net_for_relay = network.clone();
         let suppress_pow_broadcast_for_relay = suppress_pow_broadcast.clone();

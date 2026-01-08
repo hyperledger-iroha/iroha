@@ -87,13 +87,11 @@ pub fn start(cfg: &Fastpq) -> Option<(FastpqLaneHandle, tokio::task::JoinHandle<
     if GLOBAL_SENDER.set(handle.clone()).is_err() {
         return Some((GLOBAL_SENDER.get().unwrap().clone(), tokio::spawn(async {})));
     }
-    let parameter = Arc::<str>::from(FASTPQ_CANONICAL_PARAMETER_SET);
     let task = tokio::spawn(async move {
         while let Some(job) = rx.recv().await {
             let engine = Arc::clone(&engine);
-            let parameter = Arc::clone(&parameter);
             if let Err(err) =
-                tokio::task::spawn_blocking(move || process_job(&engine, &parameter, &job)).await
+                tokio::task::spawn_blocking(move || process_job(&engine, &job)).await
             {
                 warn!(?err, "fastpq lane: prover task panicked");
             }
@@ -157,7 +155,7 @@ fn map_poseidon_mode(mode: FastpqPoseidonMode) -> ProverPoseidonMode {
     }
 }
 
-fn process_job(engine: &Arc<dyn FastpqProofEngine>, parameter: &Arc<str>, job: &FastpqWitnessJob) {
+fn process_job(engine: &Arc<dyn FastpqProofEngine>, job: &FastpqWitnessJob) {
     if job.witness.fastpq_transcripts.is_empty() && job.witness.fastpq_batches.is_empty() {
         debug!(
             height = job.height,
@@ -166,7 +164,7 @@ fn process_job(engine: &Arc<dyn FastpqProofEngine>, parameter: &Arc<str>, job: &
         );
         return;
     }
-    let batches = match batches_from_exec_witness(&job.witness, parameter.as_ref()) {
+    let batches = match batches_from_exec_witness(&job.witness) {
         Ok(batches) => batches,
         Err(err) => {
             warn!(
@@ -269,11 +267,22 @@ mod tests {
             metal_debug_fused: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
         };
         let _ = start(&cfg);
+        let bundle = sample_bundle();
+        let template = super::FastpqPublicInputsTemplate {
+            dsid: [0u8; 16],
+            slot: 0,
+            old_root: [0u8; 32],
+            new_root: [0u8; 32],
+            perm_root: [0u8; 32],
+        };
+        let batches =
+            super::batches_from_bundles(FASTPQ_CANONICAL_PARAMETER_SET, template, [&bundle])
+                .expect("batches");
         let witness = ExecWitness {
             reads: Vec::new(),
             writes: Vec::new(),
-            fastpq_transcripts: vec![sample_bundle()],
-            fastpq_batches: Vec::new(),
+            fastpq_transcripts: vec![bundle],
+            fastpq_batches: batches.iter().map(super::transition_batch_to_dto).collect(),
         };
         let job = FastpqWitnessJob {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
@@ -325,7 +334,7 @@ mod tests {
                     from_merkle_proof: None,
                     to_merkle_proof: None,
                 }],
-                authority_digest: None,
+                authority_digest: super::authority_digest(&ALICE_ID),
                 poseidon_preimage_digest: None,
             }],
         }

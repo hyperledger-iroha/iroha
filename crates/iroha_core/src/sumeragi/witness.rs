@@ -17,19 +17,15 @@ use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     domain::DomainId,
-    fastpq::{FastpqTransitionBatch, TransferTranscript, TransferTranscriptBundle},
+    fastpq::{TransferTranscript, TransferTranscriptBundle},
     name::Name,
     nft::NftId,
 };
-use iroha_logger::warn;
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
 
 use super::consensus::{ExecKv, ExecWitness};
-use crate::{
-    fastpq::{self, FASTPQ_CANONICAL_PARAMETER_SET},
-    state::{StateBlock, WorldReadOnly},
-};
+use crate::state::{StateBlock, WorldReadOnly};
 
 #[derive(Default)]
 struct BlockWitness {
@@ -84,13 +80,12 @@ pub fn drain_exec_witness() -> ExecWitness {
     g.reads.clear();
     g.writes.clear();
     let fastpq_map = std::mem::take(&mut g.fastpq_transcripts);
-    let fastpq_batches = convert_fastpq_batches(&fastpq_map);
     let fastpq_transcripts = map_to_bundles(fastpq_map);
     ExecWitness {
         reads,
         writes,
         fastpq_transcripts,
-        fastpq_batches,
+        fastpq_batches: Vec::new(),
     }
 }
 
@@ -112,21 +107,6 @@ fn map_ref_to_bundles(
             transcripts: transcripts.clone(),
         })
         .collect()
-}
-
-fn convert_fastpq_batches(
-    map: &BTreeMap<Hash, Vec<TransferTranscript>>,
-) -> Vec<FastpqTransitionBatch> {
-    match fastpq::dto_batches_from_transcripts(FASTPQ_CANONICAL_PARAMETER_SET, map) {
-        Ok(batches) => batches,
-        Err(err) => {
-            warn!(
-                ?err,
-                "failed to convert FASTPQ transcripts into transition batches; dropping field"
-            );
-            Vec::new()
-        }
-    }
 }
 
 fn key_sep() -> u8 {
@@ -508,12 +488,11 @@ pub fn snapshot_exec_witness() -> ExecWitness {
         });
     }
     let fastpq_transcripts = map_ref_to_bundles(&g.fastpq_transcripts);
-    let fastpq_batches = convert_fastpq_batches(&g.fastpq_transcripts);
     ExecWitness {
         reads,
         writes,
         fastpq_transcripts,
-        fastpq_batches,
+        fastpq_batches: Vec::new(),
     }
 }
 
@@ -525,7 +504,6 @@ mod tests {
 
     use super::*;
     // The SMT helpers live under the sumeragi module.
-    use crate::fastpq;
     use crate::sumeragi::smt::{KvPair, compute_post_state_root};
 
     #[test]
@@ -608,7 +586,7 @@ mod tests {
         let transcript = TransferTranscript {
             batch_hash,
             deltas: vec![delta.clone()],
-            authority_digest: None,
+            authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
             poseidon_preimage_digest: None,
         };
         record_fastpq_transcript(&transcript);
@@ -621,17 +599,7 @@ mod tests {
             .expect("transcript recorded");
         assert_eq!(stored.transcripts.len(), 1);
         assert_eq!(stored.transcripts[0], transcript);
-        assert_eq!(witness.fastpq_batches.len(), 1);
-        let batch = fastpq::transition_batch_from_dto(&witness.fastpq_batches[0]);
-        assert_eq!(
-            hex::encode(
-                batch
-                    .metadata
-                    .get(fastpq::ENTRY_HASH_METADATA_KEY)
-                    .expect("entry hash metadata")
-            ),
-            hex::encode(batch_hash.as_ref())
-        );
+        assert!(witness.fastpq_batches.is_empty());
         assert!(witness.reads.is_empty());
         assert!(witness.writes.is_empty());
     }

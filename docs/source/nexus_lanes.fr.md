@@ -93,6 +93,17 @@ LaneConfigEntry {
 - **Politique de retention** - les lanes publiques retiennent les corps de blocs complets; les lanes a commitments seulement peuvent compacter les corps anciens apres checkpoints car les commitments font foi. Les lanes confidentielles gardent des journals chiffres dans des segments dedies pour ne pas bloquer les autres workloads.
 - **Tooling** - `cargo xtask nexus-lane-maintenance --config <path> [--compact-retired]` inspecte `<store>/blocks` et `<store>/merge_ledger` en utilisant le `LaneConfig` derive, reporte les segments actifs vs retires, et archive les repertoires/logs retires sous `<store>/retired/...` pour garder des preuves deterministes. Les utilitaires de maintenance (`kagami`, commandes admin CLI) doivent reutiliser le namespace slugge pour exposer des metriques, labels Prometheus ou archiver des segments Kura.
 
+## Budgets de stockage
+
+- `nexus.storage.max_disk_usage_bytes` définit le budget total sur disque que les nœuds Nexus doivent consommer entre Kura, snapshots WSV froids, stockage SoraFS et spools de streaming (SoraNet/SoraVPN).
+- `nexus.storage.max_wsv_memory_bytes` plafonne la couche chaude WSV en propageant le dimensionnement déterministe du payload Norito dans `tiered_state.hot_retained_bytes` ; la rétention de grâce peut temporairement dépasser le budget, mais le dépassement est observable via télémétrie (`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`).
+- `nexus.storage.disk_budget_weights` répartit le budget disque entre composants en points de base (doit sommer à 10 000). Les plafonds dérivés s’appliquent à `kura.max_disk_usage_bytes`, `tiered_state.max_cold_bytes`, `sorafs.storage.max_capacity_bytes`, `streaming.soranet.provision_spool_max_bytes` et `streaming.soravpn.provision_spool_max_bytes`.
+- L’application du budget de Kura additionne les octets du block-store sur les segments de lanes actives et retirées et inclut les blocs en file d’attente non encore persistés afin d’éviter les dépassements pendant la latence d’écriture.
+- Les spools de provisionnement SoraVPN utilisent les réglages `streaming.soravpn` et sont plafonnés indépendamment du spool de provisionnement SoraNet.
+- Les limites par composant restent actives : lorsqu’un composant a un plafond explicite non nul, le plus petit entre ce plafond et le budget Nexus dérivé est appliqué.
+- La télémétrie de budget utilise `storage_budget_bytes_used{component=...}` et `storage_budget_bytes_limit{component=...}` pour rapporter l’usage/les plafonds de `kura`, `wsv_hot`, `wsv_cold`, `soranet_spool` et `soravpn_spool` ; `storage_budget_exceeded_total{component=...}` s’incrémente lorsque l’enforcement rejette de nouvelles données et les logs émettent un avertissement opérateur.
+- Kura reporte la même comptabilité utilisée à l’admission (octets sur disque plus blocs en file d’attente, y compris les payloads merge-ledger lorsqu’ils sont présents), de sorte que les jauges reflètent la pression effective plutôt que les seuls octets persistés.
+
 ## Routage et APIs
 
 - Les endpoints REST/gRPC Torii acceptent un `lane_id` optionnel; l absence implique `lane_default`.

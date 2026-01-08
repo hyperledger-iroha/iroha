@@ -15,7 +15,7 @@ use iroha_data_model::{
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
 
 use super::{
-    build_line_from_env, ensure_npos_parameters, generate::ConsensusModeArg,
+    ConsensusPolicy, build_line_from_env, ensure_npos_parameters, generate::ConsensusModeArg,
     validate_consensus_mode_for_line,
 };
 use crate::{Outcome, RunArgs, tui};
@@ -95,7 +95,12 @@ impl<T: Write> RunArgs<T> for Args {
         let staged_next_mode = params.sumeragi().next_mode();
         let staged_activation_height = params.sumeragi().mode_activation_height();
         if build_line.is_iroha3() {
-            validate_consensus_mode_for_line(build_line, consensus_mode, next_consensus_mode)?;
+            validate_consensus_mode_for_line(
+                build_line,
+                consensus_mode,
+                next_consensus_mode,
+                ConsensusPolicy::Any,
+            )?;
             if staged_next_mode.is_some() || staged_activation_height.is_some() {
                 return Err(eyre!(
                     "Iroha3 does not support staged consensus cutovers; remove `next_mode` and `mode_activation_height` from genesis"
@@ -472,7 +477,7 @@ mod tests {
     #[test]
     fn topology_override_replaces_existing_entries() {
         use iroha_data_model::{
-            block::decode_framed_signed_block, isi::register::RegisterPeerWithPop,
+            block::decode_framed_signed_block, isi::register::RegisterBox,
             transaction::Executable,
         };
 
@@ -521,7 +526,9 @@ mod tests {
         for tx in block.external_transactions() {
             if let Executable::Instructions(instructions) = tx.instructions() {
                 for instr in instructions {
-                    if let Some(register) = instr.as_any().downcast_ref::<RegisterPeerWithPop>() {
+                    if let Some(RegisterBox::Peer(register)) =
+                        instr.as_any().downcast_ref::<RegisterBox>()
+                    {
                         registered_peers.push(register.peer.clone());
                     }
                 }
@@ -561,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn npos_sign_requires_npos_parameters() {
+    fn next_consensus_mode_rejected_on_iroha3() {
         let args = Args {
             genesis_file: minimal_genesis_file(),
             out_file: None,
@@ -578,9 +585,9 @@ mod tests {
         let mut writer = BufWriter::new(Vec::new());
         let err = args
             .run(&mut writer)
-            .expect_err("NPoS signing without parameters should fail");
+            .expect_err("Iroha3 should reject staged consensus cutovers");
         assert!(
-            err.to_string().contains("sumeragi_npos_parameters"),
+            err.to_string().contains("staged consensus cutovers"),
             "unexpected error: {err}"
         );
     }
@@ -621,8 +628,8 @@ mod tests {
             seed: None,
             algorithm: Algorithm::Ed25519,
             consensus_mode: None,
-            next_consensus_mode: Some(ConsensusModeArg::Npos),
-            mode_activation_height: Some(4),
+            next_consensus_mode: None,
+            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -631,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn sign_rejects_permissioned_on_iroha3() {
+    fn sign_accepts_permissioned_on_iroha3() {
         let args = Args {
             genesis_file: minimal_genesis_file(),
             out_file: None,
@@ -646,13 +653,8 @@ mod tests {
         };
 
         let mut writer = BufWriter::new(Vec::new());
-        let err = args
-            .run(&mut writer)
-            .expect_err("permissioned genesis should be rejected on Iroha3");
-        assert!(
-            err.to_string().contains("Iroha3 requires"),
-            "unexpected error: {err}"
-        );
+        args.run(&mut writer)
+            .expect("permissioned genesis should be allowed on Iroha3");
     }
 
     #[test]

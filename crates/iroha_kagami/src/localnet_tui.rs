@@ -12,6 +12,7 @@ use iroha_test_samples::ALICE_ID;
 
 use crate::{
     Outcome, RunArgs,
+    genesis::build_line_from_env,
     localnet::{
         AssetSpec, DEFAULT_BIND_HOST, DEFAULT_PUBLIC_HOST, LocalnetOptions, generate_localnet,
     },
@@ -75,6 +76,12 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
             }
         }
 
+        let build_line = build_line_from_env();
+        let consensus_mode = if build_line.is_iroha3() {
+            SumeragiConsensusMode::Npos
+        } else {
+            SumeragiConsensusMode::Permissioned
+        };
         let opts = LocalnetOptions {
             peers,
             seed,
@@ -88,7 +95,7 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
             block_time_ms: None,
             commit_time_ms: None,
             redundant_send_r: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
+            consensus_mode,
             next_consensus_mode: None,
             mode_activation_height: None,
         };

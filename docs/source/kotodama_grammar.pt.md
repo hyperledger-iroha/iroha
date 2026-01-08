@@ -132,7 +132,7 @@ Sintaxe
 - Gancho de upgrade: `kaizen(args...) permission(Role) { ... }`.
 
 Parâmetros e retornos
-- Argumentos são passados em registradores `r10..r17` como valores ou ponteiros INPUT (TLV Norito) conforme o ABI; argumentos adicionais derramam para a pilha.
+- Argumentos são passados em registradores `r10..r22` como valores ou ponteiros INPUT (TLV Norito) conforme o ABI; argumentos adicionais derramam para a pilha.
 - Funções retornam zero ou um escalar ou tupla. O valor de retorno principal fica em `r10` para escalar; tuplas são materializadas na pilha/OUTPUT por convenção.
 
 ## Instruções

@@ -176,8 +176,9 @@ else:
       ה-wrapper מוסיף גם `zero_fill_hotspots` (בתים, זמן מילוי, GB/s מחושבים + queue_delta) ו-`kernel_profiles` כך שאפשר לזהות צווארי בקבוק של padding, שימוש בתור וגזרת occupancy/רוחב פס של הקרנלים במבט אחד בלי לצלול ל-JSON הגולמי, ואם מספקים `--row-usage` הוא משחיל את ההוכחה לתוך `metadata.row_usage_snapshot`. בנוסף נוצר קובץ חתימה `.json.asc` שמצורף לראיות.【scripts/fastpq/wrap_benchmark.py:1】
     4. צרפו טלמטריית שימוש בשורות מתוך ExecWitness אמיתי כך שהדאשבורד יוכל להשוות בין גאדג׳ט ההעברה למסלול הישן. שלפו את ה-witness דרך Torii
       (`iroha_cli audit witness --binary --out exec.witness`) ופענחו אותו עם
-      `iroha_cli audit witness --decode exec.witness --fastpq-parameter fastpq-lane-balanced`
-      (אצוות FASTPQ נכללות כברירת מחדל; ניתן להשבית אותן רק אם צריך פלט מצומצם בעזרת `--no-fastpq-batches`).
+      `iroha_cli audit witness --decode exec.witness` (אם רוצים לאמת את הפרמטר הצפוי, הוסיפו
+      `--fastpq-parameter fastpq-lane-balanced`; אצוות FASTPQ נכללות כברירת מחדל; ניתן להשבית אותן
+      רק אם צריך פלט מצומצם בעזרת `--no-fastpq-batches`).
 
        ```bash
        python3 scripts/fastpq/check_row_usage.py \
@@ -394,6 +395,8 @@ else:
 | `ordering_hash` | 32 | Poseidon2 LE | hash של סדר השורות. |
 
 מחיקה: ערכי אפס. מפתחות חסרים: עלה אפס ועוד `neighbour_leaf`.
+
+`FastpqTransitionBatch.public_inputs` הוא הנשׂא הקנוני ל-`dsid` / `slot` ושורשי הקומיטמנט; המטא-דטה שמורה ל-entry hash ולספירת טרנסקריפטים.
 
 ## Hashing
 - hash הסידור: Poseidon2 (תג `fastpq:v1:ordering`).

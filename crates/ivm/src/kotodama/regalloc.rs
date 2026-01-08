@@ -14,8 +14,8 @@ pub struct Allocation {
     pub frame_size: usize,
 }
 
-/// Registers r10-r17 are used for argument passing.
-pub const ARG_REGS: [usize; 8] = [10, 11, 12, 13, 14, 15, 16, 17];
+/// Registers r10-r22 are used for argument passing.
+pub const ARG_REGS: [usize; 13] = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
 /// r10 also holds the first return value.
 pub const RET_REG: usize = 10;
 /// r31 acts as the stack pointer.
@@ -24,7 +24,7 @@ pub const SP_REG: usize = 31;
 pub const FP_REG: usize = 30;
 
 // Pool of allocatable registers (see policy above)
-const ALLOC_POOL: &[usize] = &[2, 3, 4, 5, 6, 7, 8, 9, 18, 19, 20, 21, 22, 23, 24];
+const ALLOC_POOL: &[usize] = &[2, 3, 4, 5, 6, 7, 8, 9, 23, 24];
 
 #[derive(Clone, Copy, Debug)]
 struct Interval {

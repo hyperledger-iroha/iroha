@@ -1163,7 +1163,7 @@ mod defaults {
             1
         }
         pub const fn da_enabled() -> bool {
-            false
+            true
         }
         pub const fn key_activation_lead_blocks() -> u64 {
             1

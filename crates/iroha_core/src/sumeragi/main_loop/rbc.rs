@@ -24,6 +24,7 @@ use super::{
     MissingBlockFetchDecision, PipelinePhase, RBC_MAX_TOTAL_CHUNKS, RbcRosterSource, RbcSession,
     pending_rbc::{
         PENDING_RBC_STASH_LIMIT, PendingChunkOutcome, PendingRbcDropReason, PendingRbcMessages,
+        rbc_deliver_stash_bytes, rbc_ready_stash_bytes,
     },
     proposals::block_payload_bytes,
 };
@@ -150,6 +151,7 @@ pub(super) struct HydrationOutcome {
     pub(super) all_chunks_present: bool,
     pub(super) payload_hash_mismatch: bool,
     pub(super) chunk_root_mismatch: bool,
+    pub(super) chunk_digest_mismatch: bool,
     pub(super) layout_mismatch: bool,
     pub(super) observed_chunks: Option<u32>,
 }
@@ -178,6 +180,28 @@ pub(super) fn apply_hydrated_payload(
         outcome.updated = true;
         outcome.layout_mismatch = true;
         return outcome;
+    }
+
+    let mut digests = Vec::with_capacity(chunk_bytes.len());
+    for chunk in &chunk_bytes {
+        let digest = Sha256::digest(chunk);
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&digest);
+        digests.push(arr);
+    }
+    if let Some(expected) = session.expected_chunk_digests.as_ref() {
+        if expected != &digests {
+            session.invalid = true;
+            outcome.chunk_digest_mismatch = true;
+        }
+    } else {
+        session.expected_chunk_digests = Some(digests.clone());
+        outcome.updated = true;
+    }
+
+    let dropped = session.drop_mismatched_chunks();
+    if dropped > 0 {
+        outcome.updated = true;
     }
 
     for (idx, chunk) in chunk_bytes.iter().enumerate() {
@@ -217,7 +241,8 @@ pub(super) fn apply_hydrated_payload(
         }
     }
 
-    if outcome.payload_hash_mismatch || outcome.chunk_root_mismatch {
+    if outcome.payload_hash_mismatch || outcome.chunk_root_mismatch || outcome.chunk_digest_mismatch
+    {
         outcome.updated = true;
     }
 
@@ -457,16 +482,21 @@ impl Actor {
             digests.push(arr);
         }
 
-        let merkle = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests);
+        let merkle = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone());
         let chunk_root = merkle
             .root()
             .map(Hash::from)
             .ok_or_else(|| eyre!("failed to compute RBC chunk root"))?;
 
         let block_hash = signed_block.hash();
-        let mut session =
-            RbcSession::new(total_chunks, Some(payload_hash), Some(chunk_root), epoch)
-                .map_err(|err| eyre!(err))?;
+        let mut session = RbcSession::new(
+            total_chunks,
+            Some(payload_hash),
+            Some(chunk_root),
+            Some(digests.clone()),
+            epoch,
+        )
+        .map_err(|err| eyre!(err))?;
         for (idx, chunk) in chunk_bytes.iter().enumerate() {
             let chunk_index = u32::try_from(idx).expect("chunk index fits within a 32-bit range");
             session.ingest_chunk(chunk_index, chunk.clone(), Some(local_validator_index));
@@ -529,6 +559,7 @@ impl Actor {
             roster: roster.clone(),
             roster_hash,
             total_chunks,
+            chunk_digests: digests.clone(),
             payload_hash,
             chunk_root,
         };
@@ -614,6 +645,7 @@ impl Actor {
                         roster: dup_roster.clone(),
                         roster_hash: dup_roster_hash,
                         total_chunks,
+                        chunk_digests: digests.clone(),
                         payload_hash,
                         chunk_root,
                     },
@@ -939,7 +971,7 @@ impl Actor {
             arr.copy_from_slice(&digest);
             digests.push(arr);
         }
-        let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests)
+        let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone())
             .root()
             .ok_or_else(|| eyre!("failed to compute chunk root"))?;
 
@@ -947,6 +979,7 @@ impl Actor {
             total_chunks,
             Some(payload_hash),
             Some(Hash::from(chunk_root)),
+            Some(digests),
             epoch,
         )
         .map_err(|err| eyre!(err))?;
@@ -1034,6 +1067,13 @@ impl Actor {
                 "hydrated payload hash mismatches RBC session; marking invalid"
             );
         }
+        if outcome.chunk_digest_mismatch {
+            warn!(
+                height = key.1,
+                view = key.2,
+                "hydrated payload chunk-digest list mismatches INIT; marking invalid"
+            );
+        }
         if outcome.chunk_root_mismatch {
             let expected_root = session.expected_chunk_root;
             let computed_root = session.chunk_root();
@@ -1058,6 +1098,7 @@ impl Actor {
         let invalidated = session.is_invalid();
         let should_update_status = outcome.updated
             || outcome.payload_hash_mismatch
+            || outcome.chunk_digest_mismatch
             || outcome.chunk_root_mismatch
             || outcome.layout_mismatch
             || invalidated;
@@ -1310,6 +1351,31 @@ impl Actor {
             );
             return Ok(());
         }
+        let expected_len = usize::try_from(init.total_chunks).unwrap_or(usize::MAX);
+        if init.chunk_digests.len() != expected_len {
+            warn!(
+                height = init.height,
+                view = init.view,
+                total_chunks = init.total_chunks,
+                digests = init.chunk_digests.len(),
+                "rejecting RBC init with mismatched chunk digest count"
+            );
+            return Ok(());
+        }
+        let computed_root =
+            MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(init.chunk_digests.clone())
+                .root()
+                .map(Hash::from);
+        if computed_root != Some(init.chunk_root) {
+            warn!(
+                height = init.height,
+                view = init.view,
+                expected = ?init.chunk_root,
+                observed = ?computed_root,
+                "rejecting RBC init with mismatched chunk digests root"
+            );
+            return Ok(());
+        }
         if init.roster.is_empty() {
             warn!(
                 height = init.height,
@@ -1339,6 +1405,52 @@ impl Actor {
                 "rejecting RBC init with mismatched roster hash"
             );
             return Ok(());
+        }
+        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
+            if let Some(expected_hash) = session.payload_hash() {
+                if expected_hash != init.payload_hash {
+                    warn!(
+                        ?expected_hash,
+                        observed = ?init.payload_hash,
+                        height = init.height,
+                        view = init.view,
+                        "dropping RBC INIT that mismatches existing payload hash"
+                    );
+                    return Ok(());
+                }
+            }
+            if session.total_chunks != init.total_chunks {
+                warn!(
+                    height = init.height,
+                    view = init.view,
+                    expected = session.total_chunks,
+                    observed = init.total_chunks,
+                    "dropping RBC INIT that mismatches existing chunk count"
+                );
+                return Ok(());
+            }
+            if let Some(expected) = session.expected_chunk_digests.as_ref() {
+                if expected != &init.chunk_digests {
+                    warn!(
+                        height = init.height,
+                        view = init.view,
+                        "dropping RBC INIT that mismatches existing chunk digests"
+                    );
+                    return Ok(());
+                }
+            }
+            if let Some(root) = session.expected_chunk_root {
+                if root != init.chunk_root {
+                    warn!(
+                        height = init.height,
+                        view = init.view,
+                        ?root,
+                        observed = ?init.chunk_root,
+                        "dropping RBC INIT that mismatches existing chunk root"
+                    );
+                    return Ok(());
+                }
+            }
         }
         let mut reset_ready_state = false;
         if let Some(existing_roster) = self.subsystems.da_rbc.rbc.session_rosters.get(&key) {
@@ -1406,43 +1518,23 @@ impl Actor {
                 session.deliver_sender = None;
                 session.deliver_signature = None;
             }
-            if let Some(expected_hash) = session.payload_hash() {
-                if expected_hash != init.payload_hash {
-                    warn!(
-                        ?expected_hash,
-                        observed = ?init.payload_hash,
-                        height = init.height,
-                        view = init.view,
-                        "RBC INIT payload hash mismatches seeded session"
-                    );
-                    session.invalid = true;
-                }
-            } else {
+            if session.payload_hash().is_none() {
                 session.payload_hash = Some(init.payload_hash);
             }
-            if session.total_chunks != init.total_chunks {
+            if session.expected_chunk_digests.is_none() {
+                session.expected_chunk_digests = Some(init.chunk_digests.clone());
+            }
+            let dropped = session.drop_mismatched_chunks();
+            if dropped > 0 {
                 warn!(
                     height = init.height,
                     view = init.view,
-                    expected = session.total_chunks,
-                    observed = init.total_chunks,
-                    "RBC INIT chunk-count mismatches seeded session"
+                    dropped,
+                    "dropping cached RBC chunks that mismatch INIT digests"
                 );
-                session.invalid = true;
             }
-            match session.expected_chunk_root {
-                Some(root) if root != init.chunk_root => {
-                    warn!(
-                        height = init.height,
-                        view = init.view,
-                        ?root,
-                        observed = ?init.chunk_root,
-                        "RBC INIT chunk-root mismatches seeded session"
-                    );
-                    session.invalid = true;
-                }
-                None => session.expected_chunk_root = Some(init.chunk_root),
-                _ => {}
+            if session.expected_chunk_root.is_none() {
+                session.expected_chunk_root = Some(init.chunk_root);
             }
             session.epoch = init.epoch;
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
@@ -1460,6 +1552,7 @@ impl Actor {
             init.total_chunks,
             Some(init.payload_hash),
             Some(init.chunk_root),
+            Some(init.chunk_digests.clone()),
             init.epoch,
         ) {
             Ok(session) => session,
@@ -1539,72 +1632,86 @@ impl Actor {
             return Ok(());
         }
         let key = Self::session_key(&chunk.block_hash, chunk.height, chunk.view);
-        let (ready_sent_before, became_complete) =
-            if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
-                let ready_sent_before = session.sent_ready;
-                let was_complete = session.total_chunks() != 0
-                    && session.received_chunks() == session.total_chunks();
-                session.ingest_chunk(chunk.idx, chunk.bytes, None);
-                let is_complete = session.total_chunks() != 0
-                    && session.received_chunks() == session.total_chunks();
-                (ready_sent_before, !was_complete && is_complete)
-            } else {
-                let (max_chunks, max_bytes) = self.pending_rbc_caps();
-                let outcome = {
-                    let pending = self.pending_rbc_slot(key);
-                    pending.push_chunk_capped(chunk, max_chunks, max_bytes, Instant::now())
-                };
-                match outcome {
-                    PendingChunkOutcome::Inserted {
+        let (ready_sent_before, became_complete) = if let Some(session) =
+            self.subsystems.da_rbc.rbc.sessions.get_mut(&key)
+        {
+            let ready_sent_before = session.sent_ready;
+            let was_complete =
+                session.total_chunks() != 0 && session.received_chunks() == session.total_chunks();
+            session.ingest_chunk(chunk.idx, chunk.bytes, None);
+            let is_complete =
+                session.total_chunks() != 0 && session.received_chunks() == session.total_chunks();
+            (ready_sent_before, !was_complete && is_complete)
+        } else {
+            let (max_chunks, max_bytes) = self.pending_rbc_caps();
+            let Some(pending) = self.pending_rbc_slot(key) else {
+                let dropped_bytes = u64::try_from(chunk.bytes.len()).unwrap_or(u64::MAX);
+                Self::record_pending_drop_counts(
+                    self.telemetry_handle(),
+                    PendingRbcDropReason::SessionLimit,
+                    1,
+                    dropped_bytes,
+                );
+                warn!(
+                    ?key,
+                    limit = PENDING_RBC_STASH_LIMIT,
+                    dropped_bytes,
+                    "dropping pending RBC chunk: stash session limit reached"
+                );
+                return Ok(());
+            };
+            let outcome = pending.push_chunk_capped(chunk, max_chunks, max_bytes, Instant::now());
+            match outcome {
+                PendingChunkOutcome::Inserted {
+                    pending_chunks,
+                    pending_bytes,
+                    evicted_chunks,
+                    evicted_bytes,
+                } => {
+                    if evicted_chunks > 0 {
+                        Self::record_pending_drop_counts(
+                            self.telemetry_handle(),
+                            PendingRbcDropReason::Cap,
+                            evicted_chunks,
+                            evicted_bytes,
+                        );
+                    }
+                    debug!(
+                        ?key,
                         pending_chunks,
                         pending_bytes,
                         evicted_chunks,
                         evicted_bytes,
-                    } => {
-                        if evicted_chunks > 0 {
-                            Self::record_pending_drop_counts(
-                                self.telemetry_handle(),
-                                PendingRbcDropReason::Cap,
-                                evicted_chunks,
-                                evicted_bytes,
-                            );
-                        }
-                        debug!(
-                            ?key,
-                            pending_chunks,
-                            pending_bytes,
-                            evicted_chunks,
-                            evicted_bytes,
-                            "stashed RBC chunk until INIT arrives"
-                        );
-                    }
-                    PendingChunkOutcome::Dropped {
+                        "stashed RBC chunk until INIT arrives"
+                    );
+                }
+                PendingChunkOutcome::Dropped {
+                    dropped_bytes,
+                    evicted_chunks,
+                    evicted_bytes,
+                } => {
+                    let dropped_chunks = evicted_chunks.saturating_add(1);
+                    let dropped_bytes_total = dropped_bytes.saturating_add(evicted_bytes);
+                    Self::record_pending_drop_counts(
+                        self.telemetry_handle(),
+                        PendingRbcDropReason::Cap,
+                        dropped_chunks,
+                        dropped_bytes_total,
+                    );
+                    warn!(
+                        ?key,
+                        max_chunks,
+                        max_bytes,
                         dropped_bytes,
                         evicted_chunks,
                         evicted_bytes,
-                    } => {
-                        let dropped_chunks = evicted_chunks.saturating_add(1);
-                        let dropped_bytes_total = dropped_bytes.saturating_add(evicted_bytes);
-                        Self::record_pending_drop_counts(
-                            self.telemetry_handle(),
-                            PendingRbcDropReason::Cap,
-                            dropped_chunks,
-                            dropped_bytes_total,
-                        );
-                        warn!(
-                            ?key,
-                            max_chunks,
-                            max_bytes,
-                            dropped_bytes,
-                            evicted_chunks,
-                            evicted_bytes,
-                            "dropping pending RBC chunk: stash limits exceeded before INIT"
-                        );
-                    }
+                        "dropping pending RBC chunk: stash limits exceeded before INIT"
+                    );
                 }
-                self.publish_rbc_backlog_snapshot();
-                return Ok(());
-            };
+            }
+            self.publish_rbc_backlog_snapshot();
+            return Ok(());
+        };
         self.maybe_emit_rbc_ready(key)?;
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &session, false);
@@ -1668,8 +1775,26 @@ impl Actor {
         let ready_view = ready.view;
         if !self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
             let max_bytes = self.pending_rbc_caps().1;
+            let ready_bytes = rbc_ready_stash_bytes(&ready);
             let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
-                let pending = self.pending_rbc_slot(key);
+                let Some(pending) = self.pending_rbc_slot(key) else {
+                    let dropped_bytes = u64::try_from(ready_bytes).unwrap_or(u64::MAX);
+                    Self::record_pending_drop_counts(
+                        self.telemetry_handle(),
+                        PendingRbcDropReason::SessionLimit,
+                        1,
+                        dropped_bytes,
+                    );
+                    warn!(
+                        ?key,
+                        limit = PENDING_RBC_STASH_LIMIT,
+                        ready_sender,
+                        ready_view,
+                        dropped_bytes,
+                        "dropping pending RBC READY: stash session limit reached before INIT"
+                    );
+                    return Ok(());
+                };
                 let (accepted, dropped_bytes) =
                     pending.push_ready_capped(ready, max_bytes, Instant::now());
                 (
@@ -1703,15 +1828,40 @@ impl Actor {
             self.publish_rbc_backlog_snapshot();
             return Ok(());
         }
-        let topology_peers = self.rbc_session_roster(key);
-        let roster_source = self
+        let mut topology_peers = self.rbc_session_roster(key);
+        let mut roster_source = self
             .rbc_session_roster_source(key)
             .unwrap_or(RbcRosterSource::Derived);
-
-        let mut stash_ready = |ready: RbcReady, reason: &'static str| {
-            let max_bytes = self.pending_rbc_caps().1;
+        fn stash_ready(
+            actor: &mut Actor,
+            key: SessionKey,
+            ready: RbcReady,
+            reason: &'static str,
+        ) -> Result<()> {
+            let ready_sender = ready.sender;
+            let ready_view = ready.view;
+            let max_bytes = actor.pending_rbc_caps().1;
+            let ready_bytes = rbc_ready_stash_bytes(&ready);
             let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
-                let pending = self.pending_rbc_slot(key);
+                let Some(pending) = actor.pending_rbc_slot(key) else {
+                    let dropped_bytes = u64::try_from(ready_bytes).unwrap_or(u64::MAX);
+                    Actor::record_pending_drop_counts(
+                        actor.telemetry_handle(),
+                        PendingRbcDropReason::SessionLimit,
+                        1,
+                        dropped_bytes,
+                    );
+                    warn!(
+                        ?key,
+                        limit = PENDING_RBC_STASH_LIMIT,
+                        reason,
+                        ready_sender,
+                        ready_view,
+                        dropped_bytes,
+                        "dropping pending RBC READY: stash session limit reached"
+                    );
+                    return Ok(());
+                };
                 let (accepted, dropped_bytes) =
                     pending.push_ready_capped(ready, max_bytes, Instant::now());
                 (
@@ -1729,39 +1879,55 @@ impl Actor {
                     ready_sender,
                     ready_view,
                     reason,
-                    "stashed RBC READY while awaiting an authoritative roster"
+                    "stashed RBC READY while awaiting roster resolution"
                 );
             } else {
                 warn!(
                     ?key,
                     max_bytes, reason, "dropping pending RBC READY: stash limits exceeded"
                 );
-                Self::record_pending_drop_counts(
-                    self.telemetry_handle(),
+                Actor::record_pending_drop_counts(
+                    actor.telemetry_handle(),
                     PendingRbcDropReason::Cap,
                     1,
                     u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
                 );
             }
-            self.publish_rbc_backlog_snapshot();
+            actor.publish_rbc_backlog_snapshot();
             Ok(())
-        };
+        }
+        if topology_peers.is_empty() && !roster_source.is_authoritative() {
+            if let Some((refreshed, _updated)) = self.refresh_derived_rbc_session_roster(key) {
+                topology_peers = refreshed;
+                roster_source = self
+                    .rbc_session_roster_source(key)
+                    .unwrap_or(RbcRosterSource::Derived);
+            }
+        }
         if topology_peers.is_empty() {
-            return stash_ready(ready, "commit roster missing");
+            stash_ready(self, key, ready, "commit roster missing")?;
+            return Ok(());
         }
-        if !roster_source.is_authoritative() {
-            return stash_ready(ready, "commit roster not authoritative");
+        let mut roster_hash = rbc_roster_hash(&topology_peers);
+        if roster_hash != ready.roster_hash && !roster_source.is_authoritative() {
+            if let Some((refreshed, _updated)) = self.refresh_derived_rbc_session_roster(key) {
+                topology_peers = refreshed;
+                roster_hash = rbc_roster_hash(&topology_peers);
+            }
         }
-        let roster_hash = rbc_roster_hash(&topology_peers);
         if roster_hash != ready.roster_hash {
-            warn!(
-                height = ready.height,
-                view = ready.view,
-                sender = ready.sender,
-                expected = ?roster_hash,
-                observed = ?ready.roster_hash,
-                "dropping RBC READY: roster hash mismatch"
-            );
+            if roster_source.is_authoritative() {
+                warn!(
+                    height = ready.height,
+                    view = ready.view,
+                    sender = ready.sender,
+                    expected = ?roster_hash,
+                    observed = ?ready.roster_hash,
+                    "dropping RBC READY: roster hash mismatch"
+                );
+                return Ok(());
+            }
+            stash_ready(self, key, ready, "commit roster hash mismatch")?;
             return Ok(());
         }
         let topology = crate::sumeragi::network_topology::Topology::new(topology_peers);
@@ -1817,24 +1983,40 @@ impl Actor {
             }
             return Ok(());
         }
-        if let Some(expected) = self
-            .subsystems
-            .da_rbc
-            .rbc
-            .sessions
-            .get(&key)
-            .and_then(|session| session.expected_chunk_root)
-        {
-            if expected != ready.chunk_root {
-                warn!(
-                    height = ready.height,
-                    view = ready.view,
-                    sender = ready.sender,
-                    ?expected,
-                    observed = ?ready.chunk_root,
-                    "dropping RBC READY with mismatched chunk root"
-                );
-                return Ok(());
+        let mut inferred_chunk_root: Option<Hash> = None;
+        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
+            match session.expected_chunk_root {
+                Some(expected) => {
+                    if expected != ready.chunk_root {
+                        warn!(
+                            height = ready.height,
+                            view = ready.view,
+                            sender = ready.sender,
+                            ?expected,
+                            observed = ?ready.chunk_root,
+                            "dropping RBC READY with mismatched chunk root"
+                        );
+                        return Ok(());
+                    }
+                }
+                None => {
+                    if let Some(computed) = session.chunk_root() {
+                        if computed != ready.chunk_root {
+                            warn!(
+                                height = ready.height,
+                                view = ready.view,
+                                sender = ready.sender,
+                                ?computed,
+                                observed = ?ready.chunk_root,
+                                "dropping RBC READY with mismatched computed chunk root"
+                            );
+                            return Ok(());
+                        }
+                        inferred_chunk_root = Some(computed);
+                    } else {
+                        inferred_chunk_root = Some(ready.chunk_root);
+                    }
+                }
             }
         }
         let mut clear_pending = false;
@@ -1851,6 +2033,11 @@ impl Actor {
                 .get_mut(&key)
                 .expect("session presence checked before validation");
             ready_count_before = session.ready_signatures.len();
+            if session.expected_chunk_root.is_none() {
+                if let Some(root) = inferred_chunk_root {
+                    session.expected_chunk_root = Some(root);
+                }
+            }
             let was_valid = !session.is_invalid();
             let recorded_ready = session.record_ready(ready.sender, ready.signature.clone());
             ready_count_after = session.ready_signatures.len();
@@ -2102,8 +2289,24 @@ impl Actor {
         let key = Self::session_key(&deliver.block_hash, deliver.height, deliver.view);
         if !self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
             let max_bytes = self.pending_rbc_caps().1;
+            let deliver_bytes = rbc_deliver_stash_bytes(&deliver);
             let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
-                let pending = self.pending_rbc_slot(key);
+                let Some(pending) = self.pending_rbc_slot(key) else {
+                    let dropped_bytes = u64::try_from(deliver_bytes).unwrap_or(u64::MAX);
+                    Self::record_pending_drop_counts(
+                        self.telemetry_handle(),
+                        PendingRbcDropReason::SessionLimit,
+                        1,
+                        dropped_bytes,
+                    );
+                    warn!(
+                        ?key,
+                        limit = PENDING_RBC_STASH_LIMIT,
+                        dropped_bytes,
+                        "dropping pending RBC DELIVER: stash session limit reached before INIT"
+                    );
+                    return Ok(());
+                };
                 let (accepted, dropped_bytes) =
                     pending.push_deliver_capped(deliver, max_bytes, Instant::now());
                 (
@@ -2133,15 +2336,37 @@ impl Actor {
             self.publish_rbc_backlog_snapshot();
             return Ok(());
         }
-        let topology_peers = self.rbc_session_roster(key);
-        let roster_source = self
+        let mut topology_peers = self.rbc_session_roster(key);
+        let mut roster_source = self
             .rbc_session_roster_source(key)
             .unwrap_or(RbcRosterSource::Derived);
-
-        let mut stash_deliver = |deliver: RbcDeliver, reason: &'static str| {
-            let max_bytes = self.pending_rbc_caps().1;
+        let mut roster_updated = false;
+        fn stash_deliver(
+            actor: &mut Actor,
+            key: SessionKey,
+            deliver: RbcDeliver,
+            reason: &'static str,
+        ) -> Result<()> {
+            let max_bytes = actor.pending_rbc_caps().1;
+            let deliver_bytes = rbc_deliver_stash_bytes(&deliver);
             let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
-                let pending = self.pending_rbc_slot(key);
+                let Some(pending) = actor.pending_rbc_slot(key) else {
+                    let dropped_bytes = u64::try_from(deliver_bytes).unwrap_or(u64::MAX);
+                    Actor::record_pending_drop_counts(
+                        actor.telemetry_handle(),
+                        PendingRbcDropReason::SessionLimit,
+                        1,
+                        dropped_bytes,
+                    );
+                    warn!(
+                        ?key,
+                        limit = PENDING_RBC_STASH_LIMIT,
+                        reason,
+                        dropped_bytes,
+                        "dropping pending RBC DELIVER: stash session limit reached"
+                    );
+                    return Ok(());
+                };
                 let (accepted, dropped_bytes) =
                     pending.push_deliver_capped(deliver, max_bytes, Instant::now());
                 (
@@ -2157,39 +2382,57 @@ impl Actor {
                     pending_chunks,
                     pending_bytes,
                     reason,
-                    "stashed RBC DELIVER while awaiting an authoritative roster"
+                    "stashed RBC DELIVER while awaiting roster resolution"
                 );
             } else {
                 warn!(
                     ?key,
                     max_bytes, reason, "dropping pending RBC DELIVER: stash limits exceeded"
                 );
-                Self::record_pending_drop_counts(
-                    self.telemetry_handle(),
+                Actor::record_pending_drop_counts(
+                    actor.telemetry_handle(),
                     PendingRbcDropReason::Cap,
                     1,
                     u64::try_from(dropped_bytes).unwrap_or(u64::MAX),
                 );
             }
-            self.publish_rbc_backlog_snapshot();
+            actor.publish_rbc_backlog_snapshot();
             Ok(())
-        };
+        }
+        if topology_peers.is_empty() && !roster_source.is_authoritative() {
+            if let Some((refreshed, updated)) = self.refresh_derived_rbc_session_roster(key) {
+                topology_peers = refreshed;
+                roster_updated |= updated;
+                roster_source = self
+                    .rbc_session_roster_source(key)
+                    .unwrap_or(RbcRosterSource::Derived);
+            }
+        }
         if topology_peers.is_empty() {
-            return stash_deliver(deliver, "commit roster missing");
+            stash_deliver(self, key, deliver, "commit roster missing")?;
+            return Ok(());
         }
-        if !roster_source.is_authoritative() {
-            return stash_deliver(deliver, "commit roster not authoritative");
+        let mut roster_hash = rbc_roster_hash(&topology_peers);
+        if roster_hash != deliver.roster_hash && !roster_source.is_authoritative() {
+            if let Some((refreshed, updated)) = self.refresh_derived_rbc_session_roster(key) {
+                topology_peers = refreshed;
+                roster_updated |= updated;
+                roster_hash = rbc_roster_hash(&topology_peers);
+            }
         }
-        let roster_hash = rbc_roster_hash(&topology_peers);
         if roster_hash != deliver.roster_hash {
-            warn!(
-                height = deliver.height,
-                view = deliver.view,
-                sender = deliver.sender,
-                expected = ?roster_hash,
-                observed = ?deliver.roster_hash,
-                "dropping RBC DELIVER: roster hash mismatch"
-            );
+            if roster_source.is_authoritative() {
+                warn!(
+                    height = deliver.height,
+                    view = deliver.view,
+                    sender = deliver.sender,
+                    expected = ?roster_hash,
+                    observed = ?deliver.roster_hash,
+                    "dropping RBC DELIVER: roster hash mismatch"
+                );
+                return Ok(());
+            }
+            stash_deliver(self, key, deliver, "commit roster hash mismatch")?;
             return Ok(());
         }
         let topology = crate::sumeragi::network_topology::Topology::new(topology_peers);
@@ -2242,24 +2485,40 @@ impl Actor {
             }
             return Ok(());
         }
-        if let Some(expected) = self
-            .subsystems
-            .da_rbc
-            .rbc
-            .sessions
-            .get(&key)
-            .and_then(|session| session.expected_chunk_root)
-        {
-            if expected != deliver.chunk_root {
-                warn!(
-                    height = deliver.height,
-                    view = deliver.view,
-                    sender = deliver.sender,
-                    ?expected,
-                    observed = ?deliver.chunk_root,
-                    "dropping RBC DELIVER with mismatched chunk root"
-                );
-                return Ok(());
+        let mut inferred_chunk_root: Option<Hash> = None;
+        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
+            match session.expected_chunk_root {
+                Some(expected) => {
+                    if expected != deliver.chunk_root {
+                        warn!(
+                            height = deliver.height,
+                            view = deliver.view,
+                            sender = deliver.sender,
+                            ?expected,
+                            observed = ?deliver.chunk_root,
+                            "dropping RBC DELIVER with mismatched chunk root"
+                        );
+                        return Ok(());
+                    }
+                }
+                None => {
+                    if let Some(computed) = session.chunk_root() {
+                        if computed != deliver.chunk_root {
+                            warn!(
+                                height = deliver.height,
+                                view = deliver.view,
+                                sender = deliver.sender,
+                                ?computed,
+                                observed = ?deliver.chunk_root,
+                                "dropping RBC DELIVER with mismatched computed chunk root"
+                            );
+                            return Ok(());
+                        }
+                        inferred_chunk_root = Some(computed);
+                    } else {
+                        inferred_chunk_root = Some(deliver.chunk_root);
+                    }
+                }
             }
         }
         let deliver_quorum = self.rbc_deliver_quorum(&topology);
@@ -2271,13 +2530,36 @@ impl Actor {
                 .sessions
                 .get_mut(&key)
                 .expect("session presence checked before validation");
+            if session.expected_chunk_root.is_none() {
+                if let Some(root) = inferred_chunk_root {
+                    session.expected_chunk_root = Some(root);
+                }
+            }
             Self::evaluate_rbc_deliver_outcome(deliver_quorum, session, key, &deliver)
         };
         if let Some(reason) = defer_reason {
             let sender = deliver.sender;
             let max_bytes = self.pending_rbc_caps().1;
+            let deliver_bytes = rbc_deliver_stash_bytes(&deliver);
             let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
-                let pending = self.pending_rbc_slot(key);
+                let Some(pending) = self.pending_rbc_slot(key) else {
+                    let dropped_bytes = u64::try_from(deliver_bytes).unwrap_or(u64::MAX);
+                    Self::record_pending_drop_counts(
+                        self.telemetry_handle(),
+                        PendingRbcDropReason::SessionLimit,
+                        1,
+                        dropped_bytes,
+                    );
+                    warn!(
+                        height = key.1,
+                        view = key.2,
+                        sender,
+                        limit = PENDING_RBC_STASH_LIMIT,
+                        dropped_bytes,
+                        "dropping deferred RBC DELIVER: stash session limit reached"
+                    );
+                    return Ok(());
+                };
                 let (accepted, dropped_bytes) =
                     pending.push_deliver_capped(deliver, max_bytes, Instant::now());
                 (
@@ -2321,6 +2603,9 @@ impl Actor {
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &session, false);
             self.persist_rbc_session(key, &session);
+        }
+        if roster_updated && self.subsystems.da_rbc.rbc.pending.contains_key(&key) {
+            self.flush_pending_rbc(key)?;
         }
         let telemetry_ref = self.telemetry_handle();
         self.publish_rbc_backlog_snapshot();

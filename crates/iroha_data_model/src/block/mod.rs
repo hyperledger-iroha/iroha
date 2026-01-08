@@ -1824,7 +1824,7 @@ mod tests {
         let transcript = TransferTranscript {
             batch_hash,
             deltas: vec![delta],
-            authority_digest: None,
+            authority_digest: Hash::prehashed([0x11; Hash::LENGTH]),
             poseidon_preimage_digest: None,
         };
 
@@ -1891,7 +1891,7 @@ mod tests {
         let transcript = TransferTranscript {
             batch_hash,
             deltas: vec![delta],
-            authority_digest: None,
+            authority_digest: Hash::prehashed([0x22; Hash::LENGTH]),
             poseidon_preimage_digest: None,
         };
         let mut transcripts = BTreeMap::new();

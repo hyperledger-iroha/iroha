@@ -37,6 +37,7 @@ use crate::{
     governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook},
     queue::BackpressureState,
     sumeragi::da::{GateReason, GateSatisfaction},
+    sumeragi::stake_snapshot::CommitStakeSnapshot,
     telemetry::TxGossipSnapshot,
 };
 
@@ -2685,6 +2686,8 @@ pub struct PrecommitSignerRecord {
     pub mode_tag: String,
     /// Ordered validator set used when forming the QC.
     pub validator_set: Vec<PeerId>,
+    /// Stake snapshot aligned to the validator set (NPoS only).
+    pub stake_snapshot: Option<CommitStakeSnapshot>,
 }
 
 fn precommit_signer_history_slot() -> &'static Mutex<VecDeque<PrecommitSignerRecord>> {
@@ -5937,6 +5940,7 @@ mod tests {
             bls_aggregate_signature: vec![1],
             mode_tag: PERMISSIONED_TAG.to_string(),
             validator_set,
+            stake_snapshot: None,
         });
         assert!(!super::precommit_signer_history().is_empty());
 

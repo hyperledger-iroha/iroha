@@ -207,7 +207,13 @@ impl Actor {
         height: u64,
         view: u64,
         epoch: u64,
+        state: &State,
+        fallback_consensus_mode: ConsensusMode,
     ) {
+        let consensus_mode = {
+            let view = state.view();
+            super::effective_consensus_mode_for_height(&view, height, fallback_consensus_mode)
+        };
         update.commit_qc = cached_qc_for(
             qc_cache,
             crate::sumeragi::consensus::Phase::Commit,
@@ -227,13 +233,37 @@ impl Actor {
                         record.parent_state_root,
                         record.post_state_root,
                         &record.validator_set,
+                        consensus_mode,
+                        record.stake_snapshot.as_ref(),
                         &record.mode_tag,
                         &record.signers,
                         record.bls_aggregate_signature.clone(),
                     ) {
                         update.commit_qc = Some(derived);
+                        if update.stake_snapshot.is_none() {
+                            update.stake_snapshot = record.stake_snapshot.clone();
+                        }
                     }
                 }
+            }
+        }
+        if matches!(consensus_mode, ConsensusMode::Npos)
+            && update.stake_snapshot.is_none()
+            && (update.commit_qc.is_some() || update.validator_checkpoint.is_some())
+        {
+            let roster = update
+                .commit_qc
+                .as_ref()
+                .map(|qc| qc.validator_set.as_slice())
+                .or_else(|| {
+                    update
+                        .validator_checkpoint
+                        .as_ref()
+                        .map(|chk| chk.validator_set.as_slice())
+                });
+            if let Some(roster) = roster {
+                update.stake_snapshot =
+                    CommitStakeSnapshot::from_roster(state.view().world(), roster);
             }
         }
         if update.commit_votes.is_empty() {
@@ -257,6 +287,8 @@ impl Actor {
     fn precommit_signer_record_from_cached_qc(
         qc: &crate::sumeragi::consensus::Qc,
         commit_topology: &[PeerId],
+        consensus_mode: ConsensusMode,
+        stake_snapshot: Option<crate::sumeragi::stake_snapshot::CommitStakeSnapshot>,
     ) -> Option<crate::sumeragi::status::PrecommitSignerRecord> {
         if commit_topology.is_empty() {
             warn!(
@@ -292,17 +324,65 @@ impl Actor {
             );
             return None;
         }
-        let required = super::network_topology::commit_quorum_from_len(roster_len).max(1);
-        if parsed.voting.len() < required {
-            warn!(
-                height = qc.height,
-                view = qc.view,
-                block = %qc.subject_block_hash,
-                signers = parsed.voting.len(),
-                required,
-                "skipping precommit signer record: cached QC below commit quorum"
-            );
-            return None;
+        let stake_snapshot = match consensus_mode {
+            ConsensusMode::Permissioned => None,
+            ConsensusMode::Npos => stake_snapshot,
+        };
+        match consensus_mode {
+            ConsensusMode::Permissioned => {
+                let required = super::network_topology::commit_quorum_from_len(roster_len).max(1);
+                if parsed.voting.len() < required {
+                    warn!(
+                        height = qc.height,
+                        view = qc.view,
+                        block = %qc.subject_block_hash,
+                        signers = parsed.voting.len(),
+                        required,
+                        "skipping precommit signer record: cached QC below commit quorum"
+                    );
+                    return None;
+                }
+            }
+            ConsensusMode::Npos => {
+                let snapshot = stake_snapshot.as_ref()?;
+                let mut signer_peers = BTreeSet::new();
+                for signer in &parsed.voting {
+                    let Ok(idx) = usize::try_from(*signer) else {
+                        return None;
+                    };
+                    let Some(peer) = commit_topology.get(idx) else {
+                        return None;
+                    };
+                    signer_peers.insert(peer.clone());
+                }
+                match super::stake_snapshot::stake_quorum_reached_for_snapshot(
+                    snapshot,
+                    commit_topology,
+                    &signer_peers,
+                ) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        warn!(
+                            height = qc.height,
+                            view = qc.view,
+                            block = %qc.subject_block_hash,
+                            signers = parsed.voting.len(),
+                            "skipping precommit signer record: cached QC below stake quorum"
+                        );
+                        return None;
+                    }
+                    Err(_) => {
+                        warn!(
+                            height = qc.height,
+                            view = qc.view,
+                            block = %qc.subject_block_hash,
+                            signers = parsed.voting.len(),
+                            "skipping precommit signer record: stake snapshot unavailable"
+                        );
+                        return None;
+                    }
+                }
+            }
         }
         Some(crate::sumeragi::status::PrecommitSignerRecord {
             block_hash: qc.subject_block_hash,
@@ -316,6 +396,7 @@ impl Actor {
             roster_len,
             mode_tag: qc.mode_tag.clone(),
             validator_set: commit_topology.to_vec(),
+            stake_snapshot,
         })
     }
 
@@ -579,8 +660,15 @@ impl Actor {
                                     Vec::new()
                                 }
                             };
-                            let (_, mode_tag, _) =
+                            let (consensus_mode, mode_tag, _) =
                                 self.consensus_context_for_height(pending_height);
+                            let stake_snapshot = match consensus_mode {
+                                ConsensusMode::Permissioned => None,
+                                ConsensusMode::Npos => CommitStakeSnapshot::from_roster(
+                                    self.state.view().world(),
+                                    topology.as_ref(),
+                                ),
+                            };
                             if let Some((parent_state_root, post_state_root)) =
                                 pending.parent_state_root.zip(pending.post_state_root)
                             {
@@ -592,6 +680,8 @@ impl Actor {
                                     parent_state_root,
                                     post_state_root,
                                     topology.as_ref(),
+                                    consensus_mode,
+                                    stake_snapshot.as_ref(),
                                     mode_tag,
                                     signers,
                                     aggregate_signature,
@@ -678,8 +768,15 @@ impl Actor {
                             .map(|qc| (qc.parent_state_root, qc.post_state_root))
                             .or_else(|| pending.parent_state_root.zip(pending.post_state_root));
                         if let Some((parent_state_root, post_state_root)) = roots {
-                            let (_, mode_tag, _) =
+                            let (consensus_mode, mode_tag, _) =
                                 self.consensus_context_for_height(pending_height);
+                            let stake_snapshot = match consensus_mode {
+                                ConsensusMode::Permissioned => None,
+                                ConsensusMode::Npos => CommitStakeSnapshot::from_roster(
+                                    self.state.view().world(),
+                                    &commit_topology,
+                                ),
+                            };
                             crate::sumeragi::status::record_precommit_signers(
                                 crate::sumeragi::status::PrecommitSignerRecord {
                                     block_hash,
@@ -693,6 +790,7 @@ impl Actor {
                                     roster_len: commit_topology.len(),
                                     mode_tag: mode_tag.to_string(),
                                     validator_set: commit_topology.clone(),
+                                    stake_snapshot,
                                 },
                             );
                         } else {
@@ -705,9 +803,20 @@ impl Actor {
                         }
                     }
                 } else if let Some(qc) = cached_qc.as_ref() {
-                    if let Some(record) =
-                        Self::precommit_signer_record_from_cached_qc(qc, &commit_topology)
-                    {
+                    let (consensus_mode, _, _) = self.consensus_context_for_height(pending_height);
+                    let stake_snapshot = match consensus_mode {
+                        ConsensusMode::Permissioned => None,
+                        ConsensusMode::Npos => CommitStakeSnapshot::from_roster(
+                            self.state.view().world(),
+                            &commit_topology,
+                        ),
+                    };
+                    if let Some(record) = Self::precommit_signer_record_from_cached_qc(
+                        qc,
+                        &commit_topology,
+                        consensus_mode,
+                        stake_snapshot,
+                    ) {
                         crate::sumeragi::status::record_precommit_signers(record);
                     }
                 }
@@ -776,12 +885,22 @@ impl Actor {
                     pending_height,
                     pending_view,
                     expected_epoch,
+                    self.state.as_ref(),
+                    self.config.consensus_mode,
                 );
                 let world_peers = {
                     let view = self.state.view();
                     view.world.peers().iter().cloned().collect::<Vec<_>>()
                 };
-                self.broadcast_block_sync_update(sync_update, &world_peers);
+                let (consensus_mode, _, _) = self.consensus_context_for_height(pending_height);
+                if super::block_sync_update_has_roster(&sync_update, consensus_mode) {
+                    self.broadcast_block_sync_update(sync_update, &world_peers);
+                } else {
+                    self.broadcast_block_created_for_block_sync(
+                        super::message::BlockCreated::from(&sync_block),
+                        &world_peers,
+                    );
+                }
                 parent_to_cleanup = pending.block.header().prev_block_hash();
                 block_hash_to_clean = Some(block_hash);
                 trace!(
@@ -1877,6 +1996,10 @@ impl Actor {
             let finalize_start = Instant::now();
             if enable_qc_pipeline && emit_precommit {
                 let parent_hash = pending.block.header().prev_block_hash();
+                let pending_roots = pending
+                    .parent_state_root
+                    .clone()
+                    .zip(pending.post_state_root.clone());
                 if self.emit_precommit_vote(
                     hash,
                     pending_height,
@@ -1884,6 +2007,7 @@ impl Actor {
                     vote_epoch,
                     &topology,
                     parent_hash,
+                    pending_roots,
                 ) {
                     pending.precommit_vote_sent = true;
                     if let Some(vote) = self.local_precommit_vote_for(
@@ -2001,7 +2125,8 @@ impl Actor {
             if topology_peers.is_empty() {
                 return;
             }
-            if super::block_sync_update_has_roster(&update) {
+            let (consensus_mode, _, _) = self.consensus_context_for_height(vote.height);
+            if super::block_sync_update_has_roster(&update, consensus_mode) {
                 self.broadcast_block_sync_update(update, &topology_peers);
                 iroha_logger::info!(
                     height = vote.height,
@@ -2094,7 +2219,11 @@ impl Actor {
         epoch: u64,
         topology: &super::network_topology::Topology,
         parent_hash: Option<HashOf<BlockHeader>>,
+        pending_roots: Option<(Hash, Hash)>,
     ) -> bool {
+        if self.is_observer() {
+            return false;
+        }
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
         let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
@@ -2213,16 +2342,17 @@ impl Actor {
             }
         }
 
-        let roots = self
-            .pending
-            .pending_blocks
-            .get(&block_hash)
-            .and_then(
-                |pending| match (pending.parent_state_root, pending.post_state_root) {
-                    (Some(parent), Some(post)) => Some((parent, post)),
-                    _ => None,
-                },
-            );
+        let roots = pending_roots.or_else(|| {
+            self.pending
+                .pending_blocks
+                .get(&block_hash)
+                .and_then(
+                    |pending| match (pending.parent_state_root, pending.post_state_root) {
+                        (Some(parent), Some(post)) => Some((parent, post)),
+                        _ => None,
+                    },
+                )
+        });
         let Some(vote) = self.build_vote(
             crate::sumeragi::consensus::Phase::Commit,
             block_hash,
@@ -2297,6 +2427,9 @@ impl Actor {
         highest_qc: crate::sumeragi::consensus::QcRef,
         topology: &super::network_topology::Topology,
     ) -> bool {
+        if self.is_observer() {
+            return false;
+        }
         let epoch = self.epoch_for_height(height);
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
@@ -2413,8 +2546,12 @@ impl Actor {
                     signer_peers.insert(peer.clone());
                 }
                 let view = self.state.view();
-                super::stake_quorum_reached_for_peers(&view, &commit_topology, &signer_peers)
-                    .unwrap_or(false)
+                super::stake_snapshot::stake_quorum_reached_for_peers(
+                    &view,
+                    &commit_topology,
+                    &signer_peers,
+                )
+                .unwrap_or(false)
             }
         };
         (vote_count, quorum_reached)
@@ -2569,6 +2706,9 @@ impl Actor {
         view: u64,
         witness: ExecWitness,
     ) {
+        if self.is_observer() {
+            return;
+        }
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let epoch = match consensus_mode {
             ConsensusMode::Permissioned => 0,
@@ -3028,6 +3168,8 @@ impl Actor {
                 block_height,
                 qc.view,
                 expected_epoch,
+                self.state.as_ref(),
+                self.config.consensus_mode,
             );
             debug!(
                 height = block_height,
@@ -3136,7 +3278,7 @@ impl Actor {
             return Some(recovered);
         }
 
-        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
         let signature_topology =
             super::topology_for_view(&topology, qc.height, qc.view, mode_tag, prf_seed);
         let signers = self.qc_signers_for_votes(
@@ -3160,16 +3302,57 @@ impl Actor {
         let required = signature_topology.min_votes_for_commit();
         let voting_len = signature_topology.as_ref().len();
         let voting_signers = super::voting_signer_count(&signers, voting_len);
-        if voting_signers < required {
-            debug!(
-                height = qc.height,
-                view = qc.view,
-                phase = ?qc.phase,
-                block = %qc.subject_block_hash,
-                voting_signers,
-                required,
-                "skipping QC materialization: quorum not reached"
-            );
+        let quorum_met = match consensus_mode {
+            ConsensusMode::Permissioned => voting_signers >= required,
+            ConsensusMode::Npos => {
+                let signer_peers =
+                    match super::signer_peers_for_topology(&signers, &signature_topology) {
+                        Ok(peers) => peers,
+                        Err(err) => {
+                            debug!(
+                                ?err,
+                                height = qc.height,
+                                view = qc.view,
+                                phase = ?qc.phase,
+                                block = %qc.subject_block_hash,
+                                "skipping QC materialization: failed to map signers"
+                            );
+                            return None;
+                        }
+                    };
+                let view = self.state.view();
+                super::stake_snapshot::stake_quorum_reached_for_peers(
+                    &view,
+                    topology.as_ref(),
+                    &signer_peers,
+                )
+                .unwrap_or(false)
+            }
+        };
+        if !quorum_met {
+            match consensus_mode {
+                ConsensusMode::Permissioned => {
+                    debug!(
+                        height = qc.height,
+                        view = qc.view,
+                        phase = ?qc.phase,
+                        block = %qc.subject_block_hash,
+                        voting_signers,
+                        required,
+                        "skipping QC materialization: quorum not reached"
+                    );
+                }
+                ConsensusMode::Npos => {
+                    debug!(
+                        height = qc.height,
+                        view = qc.view,
+                        phase = ?qc.phase,
+                        block = %qc.subject_block_hash,
+                        voting_signers,
+                        "skipping QC materialization: stake quorum not reached"
+                    );
+                }
+            }
             return None;
         }
         let aggregate_signature = match super::aggregate_vote_signatures(
@@ -3261,6 +3444,10 @@ impl Actor {
         if record.bls_aggregate_signature.is_empty() {
             return None;
         }
+        let consensus_mode = match record.mode_tag.as_str() {
+            NPOS_TAG => ConsensusMode::Npos,
+            _ => ConsensusMode::Permissioned,
+        };
         super::derive_block_sync_qc_from_signers(
             block.hash(),
             qc.height,
@@ -3269,6 +3456,8 @@ impl Actor {
             record.parent_state_root,
             record.post_state_root,
             &record.validator_set,
+            consensus_mode,
+            record.stake_snapshot.as_ref(),
             &record.mode_tag,
             &record.signers,
             record.bls_aggregate_signature,
@@ -3506,7 +3695,7 @@ impl Actor {
         height: u64,
         phase: EpochRefreshPhase,
     ) {
-        let (cfg, epoch_params, seed_for_height) = {
+        let (cfg, epoch_params, seed_for_height, epoch_schedule) = {
             let view = self.state.view();
             let cfg = super::load_npos_collector_config(&view)
                 .or(self.npos_collectors)
@@ -3517,7 +3706,11 @@ impl Actor {
                 });
             let epoch_params = super::load_npos_epoch_params(&view, &self.config);
             let seed_for_height = super::npos_seed_for_height(&view, height);
-            (cfg, epoch_params, seed_for_height)
+            let epoch_schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
+                view.world(),
+                epoch_params.epoch_length_blocks,
+            );
+            (cfg, epoch_params, seed_for_height, epoch_schedule)
         };
         let mut next_seed = seed;
         self.npos_collectors = Some(cfg);
@@ -3528,13 +3721,12 @@ impl Actor {
                 epoch_params.reveal_deadline_offset,
             );
             if matches!(phase, EpochRefreshPhase::PostCommit) {
-                let epoch_for_height = manager.epoch_for_height(height);
-                let expected_epoch =
-                    if height > 0 && height.is_multiple_of(manager.epoch_length_blocks()) {
-                        epoch_for_height.saturating_add(1)
-                    } else {
-                        epoch_for_height
-                    };
+                let epoch_for_height = epoch_schedule.epoch_for_height(height);
+                let expected_epoch = if epoch_schedule.is_epoch_boundary(height) {
+                    epoch_for_height.saturating_add(1)
+                } else {
+                    epoch_for_height
+                };
                 if manager.epoch() != expected_epoch {
                     manager.reset_epoch_state(expected_epoch, seed_for_height);
                     self.subsystems.vrf.reset();
@@ -4231,7 +4423,7 @@ mod tests {
         transaction::SignedTransaction,
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
-    use iroha_primitives::unique_vec::UniqueVec;
+    use iroha_primitives::{numeric::Numeric, unique_vec::UniqueVec};
 
     fn signers_from_bitmap(signers_bitmap: &[u8], roster_len: usize) -> Vec<usize> {
         let mut signers = Vec::new();
@@ -4543,11 +4735,18 @@ mod tests {
     }
 
     #[test]
-    fn block_sync_update_has_roster_requires_commit_qc() {
+    fn block_sync_update_has_roster_requires_stake_snapshot_in_npos() {
         let block = sample_block(4, 0);
         let mut update = super::super::message::BlockSyncUpdate::from(&block);
 
-        assert!(!super::super::block_sync_update_has_roster(&update));
+        assert!(!super::super::block_sync_update_has_roster(
+            &update,
+            ConsensusMode::Permissioned
+        ));
+        assert!(!super::super::block_sync_update_has_roster(
+            &update,
+            ConsensusMode::Npos
+        ));
 
         let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let validator_set = vec![iroha_data_model::peer::PeerId::new(
@@ -4565,20 +4764,101 @@ mod tests {
             highest_qc: None,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
+            validator_set: validator_set.clone(),
             aggregate: crate::sumeragi::consensus::QcAggregate {
                 signers_bitmap: vec![0b0000_0001],
                 bls_aggregate_signature: vec![0xAA; 96],
             },
         });
 
-        assert!(super::super::block_sync_update_has_roster(&update));
+        assert!(super::super::block_sync_update_has_roster(
+            &update,
+            ConsensusMode::Permissioned
+        ));
+        assert!(!super::super::block_sync_update_has_roster(
+            &update,
+            ConsensusMode::Npos
+        ));
+
+        update.stake_snapshot = Some(crate::sumeragi::stake_snapshot::CommitStakeSnapshot {
+            validator_set_hash: HashOf::new(&validator_set),
+            entries: validator_set
+                .iter()
+                .cloned()
+                .map(
+                    |peer_id| crate::sumeragi::stake_snapshot::CommitStakeSnapshotEntry {
+                        peer_id,
+                        stake: Numeric::from(1_u64),
+                    },
+                )
+                .collect(),
+        });
+        assert!(super::super::block_sync_update_has_roster(
+            &update,
+            ConsensusMode::Npos
+        ));
+
+        update.commit_qc = None;
+        update.stake_snapshot = None;
+        update.validator_checkpoint =
+            Some(iroha_data_model::consensus::ValidatorSetCheckpoint::new(
+                4,
+                block.hash(),
+                validator_set,
+                vec![0b0000_0001],
+                vec![0xBB; 96],
+                iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                None,
+            ));
+
+        assert!(super::super::block_sync_update_has_roster(
+            &update,
+            ConsensusMode::Permissioned
+        ));
+        assert!(!super::super::block_sync_update_has_roster(
+            &update,
+            ConsensusMode::Npos
+        ));
+
+        update.stake_snapshot = Some(crate::sumeragi::stake_snapshot::CommitStakeSnapshot {
+            validator_set_hash: HashOf::new(
+                &update
+                    .validator_checkpoint
+                    .as_ref()
+                    .expect("checkpoint present")
+                    .validator_set,
+            ),
+            entries: update
+                .validator_checkpoint
+                .as_ref()
+                .expect("checkpoint present")
+                .validator_set
+                .iter()
+                .cloned()
+                .map(
+                    |peer_id| crate::sumeragi::stake_snapshot::CommitStakeSnapshotEntry {
+                        peer_id,
+                        stake: Numeric::from(1_u64),
+                    },
+                )
+                .collect(),
+        });
+        assert!(super::super::block_sync_update_has_roster(
+            &update,
+            ConsensusMode::Npos
+        ));
     }
 
     #[test]
     fn block_sync_update_attaches_cached_qcs() {
         let block = sample_block(4, 0);
         let block_hash = block.hash();
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
         let mut update = super::super::message::BlockSyncUpdate::from(&block);
         let chain: ChainId = "block-sync-qcs".parse().expect("chain id parses");
         let signers_bitmap = vec![0b0000_0111];
@@ -4658,6 +4938,8 @@ mod tests {
             4,
             0,
             0,
+            &state,
+            ConsensusMode::Permissioned,
         );
 
         assert_eq!(update.commit_qc, Some(qc_precommit));
@@ -4671,6 +4953,12 @@ mod tests {
             .expect("chain id parses");
         let block = sample_block(7, 2);
         let block_hash = block.hash();
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
         let height = block.header().height().get();
         let view = u64::from(block.header().view_change_index());
         let epoch = 0;
@@ -4712,6 +5000,7 @@ mod tests {
                 roster_len: keypairs.len(),
                 mode_tag: super::super::PERMISSIONED_TAG.to_string(),
                 validator_set,
+                stake_snapshot: None,
             },
         );
 
@@ -4727,6 +5016,8 @@ mod tests {
             height,
             view,
             epoch,
+            &state,
+            ConsensusMode::Permissioned,
         );
 
         let qc = update
@@ -4792,8 +5083,13 @@ mod tests {
             },
         };
 
-        let record = Actor::precommit_signer_record_from_cached_qc(&qc, &validator_set)
-            .expect("record built");
+        let record = Actor::precommit_signer_record_from_cached_qc(
+            &qc,
+            &validator_set,
+            ConsensusMode::Permissioned,
+            None,
+        )
+        .expect("record built");
 
         let expected_signers: BTreeSet<_> = [0_u32, 1_u32, 2_u32].into_iter().collect();
         assert_eq!(record.block_hash, block_hash);
@@ -4853,6 +5149,7 @@ mod tests {
                 roster_len: keypairs.len(),
                 mode_tag: super::super::PERMISSIONED_TAG.to_string(),
                 validator_set,
+                stake_snapshot: None,
             },
         );
         let recovered = Actor::recover_qc_from_kura_block(&qc_header, kura.as_ref())
@@ -4930,6 +5227,8 @@ mod tests {
             4,
             0,
             0,
+            &state,
+            ConsensusMode::Permissioned,
         );
 
         assert_eq!(update.commit_votes.len(), 1);

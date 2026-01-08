@@ -1,14 +1,14 @@
 //! Stake snapshot helpers for commit-roster validation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_crypto::HashOf;
 use iroha_data_model::peer::PeerId;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, NumericSpec};
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 
-use crate::state::WorldReadOnly;
+use crate::state::{StateView, WorldReadOnly};
 
 /// Stake snapshot entry for a single validator.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -26,6 +26,16 @@ pub struct CommitStakeSnapshot {
     pub validator_set_hash: HashOf<Vec<PeerId>>,
     /// Stake entries aligned to the validator set order.
     pub entries: Vec<CommitStakeSnapshotEntry>,
+}
+
+/// Errors returned when checking stake quorum for a roster.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StakeQuorumError {
+    MissingStake,
+    SignerOutOfRoster,
+    Overflow,
+    ZeroTotal,
+    SnapshotMismatch,
 }
 
 impl CommitStakeSnapshot {
@@ -69,6 +79,110 @@ impl CommitStakeSnapshot {
     }
 }
 
+/// Determine whether 2/3 stake quorum is reached for the provided signers.
+pub(crate) fn stake_quorum_reached_for_peers(
+    view: &StateView<'_>,
+    roster: &[PeerId],
+    signers: &BTreeSet<PeerId>,
+) -> Result<bool, StakeQuorumError> {
+    let mut stake_map = stake_map_from_world(view.world());
+    if stake_map.is_empty() {
+        for peer in roster {
+            stake_map.insert(peer.clone(), Numeric::from(1_u64));
+        }
+    }
+
+    let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
+    let mut total = Numeric::from(0_u64);
+    for peer in roster {
+        let Some(stake) = stake_map.get(peer) else {
+            return Err(StakeQuorumError::MissingStake);
+        };
+        total = total
+            .checked_add(stake.clone())
+            .ok_or(StakeQuorumError::Overflow)?;
+    }
+    if total.is_zero() {
+        return Err(StakeQuorumError::ZeroTotal);
+    }
+
+    let mut signed = Numeric::from(0_u64);
+    for peer in signers {
+        if !roster_set.contains(peer) {
+            return Err(StakeQuorumError::SignerOutOfRoster);
+        }
+        let Some(stake) = stake_map.get(peer) else {
+            return Err(StakeQuorumError::MissingStake);
+        };
+        signed = signed
+            .checked_add(stake.clone())
+            .ok_or(StakeQuorumError::Overflow)?;
+    }
+
+    let signed_scaled = signed
+        .checked_mul(Numeric::from(3_u64), NumericSpec::default())
+        .ok_or(StakeQuorumError::Overflow)?;
+    let total_scaled = total
+        .checked_mul(Numeric::from(2_u64), NumericSpec::default())
+        .ok_or(StakeQuorumError::Overflow)?;
+    Ok(signed_scaled >= total_scaled)
+}
+
+/// Determine whether 2/3 stake quorum is reached for the provided signers and snapshot.
+pub(crate) fn stake_quorum_reached_for_snapshot(
+    snapshot: &CommitStakeSnapshot,
+    roster: &[PeerId],
+    signers: &BTreeSet<PeerId>,
+) -> Result<bool, StakeQuorumError> {
+    if !snapshot.matches_roster(roster) {
+        return Err(StakeQuorumError::SnapshotMismatch);
+    }
+    let mut stake_map: BTreeMap<PeerId, Numeric> = BTreeMap::new();
+    for entry in &snapshot.entries {
+        let entry_stake = stake_map
+            .entry(entry.peer_id.clone())
+            .or_insert_with(|| entry.stake.clone());
+        if entry.stake > *entry_stake {
+            *entry_stake = entry.stake.clone();
+        }
+    }
+
+    let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
+    let mut total = Numeric::from(0_u64);
+    for peer in roster {
+        let Some(stake) = stake_map.get(peer) else {
+            return Err(StakeQuorumError::MissingStake);
+        };
+        total = total
+            .checked_add(stake.clone())
+            .ok_or(StakeQuorumError::Overflow)?;
+    }
+    if total.is_zero() {
+        return Err(StakeQuorumError::ZeroTotal);
+    }
+
+    let mut signed = Numeric::from(0_u64);
+    for peer in signers {
+        if !roster_set.contains(peer) {
+            return Err(StakeQuorumError::SignerOutOfRoster);
+        }
+        let Some(stake) = stake_map.get(peer) else {
+            return Err(StakeQuorumError::MissingStake);
+        };
+        signed = signed
+            .checked_add(stake.clone())
+            .ok_or(StakeQuorumError::Overflow)?;
+    }
+
+    let signed_scaled = signed
+        .checked_mul(Numeric::from(3_u64), NumericSpec::default())
+        .ok_or(StakeQuorumError::Overflow)?;
+    let total_scaled = total
+        .checked_mul(Numeric::from(2_u64), NumericSpec::default())
+        .ok_or(StakeQuorumError::Overflow)?;
+    Ok(signed_scaled >= total_scaled)
+}
+
 /// Build a stake map keyed by peer id using the largest stake seen per peer.
 #[must_use]
 pub(super) fn stake_map_from_world(world: &impl WorldReadOnly) -> BTreeMap<PeerId, Numeric> {
@@ -90,6 +204,8 @@ pub(super) fn stake_map_from_world(world: &impl WorldReadOnly) -> BTreeMap<PeerI
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::AccountId,
@@ -241,5 +357,66 @@ mod tests {
         assert_eq!(snapshot.entries[1].peer_id, peer_b);
         assert_eq!(snapshot.entries[0].stake, Numeric::from(1_u64));
         assert_eq!(snapshot.entries[1].stake, Numeric::from(1_u64));
+    }
+
+    #[test]
+    fn stake_quorum_reached_for_snapshot_enforces_two_thirds() {
+        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_c = PeerId::new(KeyPair::random().public_key().clone());
+        let roster = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
+        let snapshot = CommitStakeSnapshot {
+            validator_set_hash: HashOf::new(&roster),
+            entries: roster
+                .iter()
+                .cloned()
+                .map(|peer_id| CommitStakeSnapshotEntry {
+                    peer_id,
+                    stake: Numeric::from(1_u64),
+                })
+                .collect(),
+        };
+        let mut signers = BTreeSet::new();
+        signers.insert(peer_a.clone());
+        signers.insert(peer_b.clone());
+        assert_eq!(
+            stake_quorum_reached_for_snapshot(&snapshot, &roster, &signers),
+            Ok(true)
+        );
+
+        let mut partial = BTreeSet::new();
+        partial.insert(peer_a);
+        assert_eq!(
+            stake_quorum_reached_for_snapshot(&snapshot, &roster, &partial),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn stake_quorum_reached_for_peers_falls_back_to_equal_weights() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
+        let view = state.view();
+
+        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_c = PeerId::new(KeyPair::random().public_key().clone());
+        let roster = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
+
+        let mut signers = BTreeSet::new();
+        signers.insert(peer_a.clone());
+        signers.insert(peer_b.clone());
+        assert_eq!(
+            stake_quorum_reached_for_peers(&view, &roster, &signers),
+            Ok(true)
+        );
+
+        let mut partial = BTreeSet::new();
+        partial.insert(peer_a);
+        assert_eq!(
+            stake_quorum_reached_for_peers(&view, &roster, &partial),
+            Ok(false)
+        );
     }
 }

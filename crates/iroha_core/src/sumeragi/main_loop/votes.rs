@@ -128,7 +128,7 @@ impl Actor {
                                 &self.vote_log,
                                 &vote,
                             );
-                            if super::block_sync_update_has_roster(&update) {
+                            if super::block_sync_update_has_roster(&update, consensus_mode) {
                                 self.broadcast_block_sync_update(update, &topology_peers);
                                 iroha_logger::info!(
                                     height = vote.height,
@@ -551,6 +551,8 @@ impl Actor {
             vote.height,
             vote.view,
             vote.epoch,
+            state,
+            self.config.consensus_mode,
         );
         update
     }
@@ -927,6 +929,8 @@ mod tests {
             vote.height,
             vote.view,
             vote.epoch,
+            &state,
+            ConsensusMode::Permissioned,
         );
 
         assert_eq!(update.commit_votes.len(), 1);

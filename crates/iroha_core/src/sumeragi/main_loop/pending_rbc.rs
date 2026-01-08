@@ -291,11 +291,14 @@ impl Actor {
         }
 
         if session_cap > 0 && pending.len() >= session_cap && !pending.contains_key(&key) {
-            if let Some(oldest) = pending
+            let oldest = pending
                 .iter()
+                .filter(|(session_key, _)| {
+                    active_sessions.map_or(true, |sessions| !sessions.contains_key(session_key))
+                })
                 .min_by_key(|(_, entry)| entry.first_seen())
-                .map(|(session_key, _)| *session_key)
-            {
+                .map(|(session_key, _)| *session_key);
+            if let Some(oldest) = oldest {
                 if let Some(removed) = pending.remove(&oldest) {
                     evictions.push(PendingRbcEviction {
                         key: oldest,
@@ -318,7 +321,7 @@ impl Actor {
         session_cap: usize,
         ttl: Duration,
         now: Instant,
-    ) -> (&'a mut PendingRbcMessages, Vec<PendingRbcEviction>) {
+    ) -> (Option<&'a mut PendingRbcMessages>, Vec<PendingRbcEviction>) {
         let evictions = Self::apply_pending_rbc_housekeeping(
             pending,
             active_sessions,
@@ -327,21 +330,25 @@ impl Actor {
             ttl,
             now,
         );
+        if session_cap > 0 && !pending.contains_key(&key) && pending.len() >= session_cap {
+            return (None, evictions);
+        }
         let pending_slot = pending
             .entry(key)
             .or_insert_with(|| PendingRbcMessages::new(now));
         pending_slot.touch(now);
-        (pending_slot, evictions)
+        (Some(pending_slot), evictions)
     }
 
-    pub(super) fn pending_rbc_slot(&mut self, key: SessionKey) -> &mut PendingRbcMessages {
+    pub(super) fn pending_rbc_slot(&mut self, key: SessionKey) -> Option<&mut PendingRbcMessages> {
         let now = Instant::now();
         let ttl = self.config.rbc_pending_ttl;
+        let session_cap = PENDING_RBC_STASH_LIMIT;
         let evictions = Self::apply_pending_rbc_housekeeping(
             &mut self.subsystems.da_rbc.rbc.pending,
             Some(&self.subsystems.da_rbc.rbc.sessions),
             key,
-            PENDING_RBC_STASH_LIMIT,
+            session_cap,
             ttl,
             now,
         );
@@ -374,6 +381,12 @@ impl Actor {
             self.publish_rbc_backlog_snapshot();
         }
 
+        if session_cap > 0
+            && !self.subsystems.da_rbc.rbc.pending.contains_key(&key)
+            && self.subsystems.da_rbc.rbc.pending.len() >= session_cap
+        {
+            return None;
+        }
         let pending_entry = self
             .subsystems
             .da_rbc
@@ -382,7 +395,7 @@ impl Actor {
             .entry(key)
             .or_insert_with(|| PendingRbcMessages::new(now));
         pending_entry.touch(now);
-        pending_entry
+        Some(pending_entry)
     }
 
     pub(super) fn clear_pending_rbc(&mut self, key: &SessionKey) {
@@ -448,8 +461,8 @@ mod tests {
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::BlockHeader;
 
-    use super::Actor;
-    use crate::sumeragi::rbc_store::SessionKey;
+    use super::{Actor, PendingRbcMessages};
+    use crate::sumeragi::{main_loop::RbcSession, rbc_store::SessionKey};
 
     #[test]
     fn take_pending_rbc_slot_inserts_entry() {
@@ -470,13 +483,59 @@ mod tests {
                 now,
             );
             assert!(evictions.is_empty());
+            let slot = slot.expect("pending slot should be available");
             assert_eq!(slot.pending_chunks(), 0);
         }
         assert!(pending.contains_key(&key));
     }
+
+    #[test]
+    fn take_pending_rbc_slot_rejects_new_entry_when_cap_reached_by_active_sessions() {
+        let key_a: SessionKey = (
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"pending-rbc-slot-a")),
+            1,
+            1,
+        );
+        let key_b: SessionKey = (
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"pending-rbc-slot-b")),
+            2,
+            1,
+        );
+        let key_c: SessionKey = (
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"pending-rbc-slot-c")),
+            3,
+            1,
+        );
+        let mut pending = BTreeMap::new();
+        let mut sessions = BTreeMap::new();
+        let now = Instant::now();
+
+        pending.insert(key_a, PendingRbcMessages::new(now));
+        pending.insert(
+            key_b,
+            PendingRbcMessages::new(now + Duration::from_millis(1)),
+        );
+        sessions.insert(key_a, RbcSession::test_new(1, None, None, 0));
+        sessions.insert(key_b, RbcSession::test_new(1, None, None, 0));
+
+        let (slot, evictions) = Actor::take_pending_rbc_slot(
+            &mut pending,
+            Some(&sessions),
+            key_c,
+            2,
+            Duration::from_secs(1),
+            now + Duration::from_millis(2),
+        );
+
+        assert!(slot.is_none());
+        assert!(evictions.is_empty());
+        assert_eq!(pending.len(), 2);
+        assert!(pending.contains_key(&key_a));
+        assert!(pending.contains_key(&key_b));
+    }
 }
 
-fn rbc_ready_stash_bytes(ready: &RbcReady) -> usize {
+pub(super) fn rbc_ready_stash_bytes(ready: &RbcReady) -> usize {
     ready
         .signature
         .len()
@@ -487,7 +546,7 @@ fn rbc_ready_stash_bytes(ready: &RbcReady) -> usize {
         .saturating_add(std::mem::size_of::<u32>())
 }
 
-fn rbc_deliver_stash_bytes(deliver: &RbcDeliver) -> usize {
+pub(super) fn rbc_deliver_stash_bytes(deliver: &RbcDeliver) -> usize {
     deliver
         .signature
         .len()
@@ -498,5 +557,6 @@ fn rbc_deliver_stash_bytes(deliver: &RbcDeliver) -> usize {
         .saturating_add(std::mem::size_of::<u32>())
 }
 
-/// Hard cap on how many pending RBC sessions we will buffer before INIT is seen.
+/// Hard cap on how many pending RBC stashes we buffer; active-session stashes are retained,
+/// and new sessions are rejected once the cap is reached.
 pub(super) const PENDING_RBC_STASH_LIMIT: usize = 256;

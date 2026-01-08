@@ -132,7 +132,7 @@ Syntaxe
 - Hook de mise à niveau : `kaizen(args...) permission(Role) { ... }`.
 
 Paramètres et retours
-- Les arguments passent dans les registres `r10..r17` comme valeurs ou pointeurs INPUT (TLV Norito) selon l’ABI ; les arguments supplémentaires sont déversés sur la pile.
+- Les arguments passent dans les registres `r10..r22` comme valeurs ou pointeurs INPUT (TLV Norito) selon l’ABI ; les arguments supplémentaires sont déversés sur la pile.
 - Les fonctions retournent zéro ou un scalaire ou un tuple. La valeur principale est dans `r10` pour un scalaire ; les tuples sont matérialisés sur la pile/OUTPUT par convention.
 
 ## Instructions

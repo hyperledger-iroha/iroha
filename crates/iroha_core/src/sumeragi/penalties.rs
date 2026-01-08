@@ -15,6 +15,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Numeric;
 use mv::storage::StorageReadOnly;
 
+use super::EpochScheduleSnapshot;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
 use crate::{
@@ -162,9 +163,13 @@ impl<'a> PenaltyApplier<'a> {
             }
             map
         };
-        let epoch_length_blocks = {
+        let epoch_schedule = {
             let view = self.state.view();
-            crate::sumeragi::load_npos_epoch_params(&view, self.config).epoch_length_blocks
+            let epoch_params = crate::sumeragi::load_npos_epoch_params(&view, self.config);
+            EpochScheduleSnapshot::from_world_with_fallback(
+                view.world(),
+                epoch_params.epoch_length_blocks,
+            )
         };
 
         let staking_cfg = {
@@ -185,11 +190,8 @@ impl<'a> PenaltyApplier<'a> {
             );
             let is_censorship =
                 matches!(record.evidence.payload, EvidencePayload::Censorship { .. });
-            let evidence_epoch = evidence_epoch(
-                &record.evidence,
-                record.recorded_at_height,
-                epoch_length_blocks,
-            );
+            let evidence_epoch =
+                evidence_epoch(&record.evidence, record.recorded_at_height, &epoch_schedule);
             let prf_seed = match consensus_mode {
                 ConsensusMode::Permissioned => None,
                 ConsensusMode::Npos => epoch_seeds.get(&evidence_epoch).copied(),
@@ -474,14 +476,6 @@ fn canonicalize_indices_for_view(
     out.into_iter().collect()
 }
 
-fn epoch_for_height(height: u64, epoch_length_blocks: u64) -> u64 {
-    if epoch_length_blocks == 0 || height == 0 {
-        0
-    } else {
-        (height - 1) / epoch_length_blocks
-    }
-}
-
 fn censorship_anchor_height(
     receipts: &[TransactionSubmissionReceipt],
     recorded_at_height: u64,
@@ -493,7 +487,11 @@ fn censorship_anchor_height(
     Some(max_receipt_height.min(recorded_at_height))
 }
 
-fn evidence_epoch(evidence: &Evidence, recorded_at_height: u64, epoch_length_blocks: u64) -> u64 {
+fn evidence_epoch(
+    evidence: &Evidence,
+    recorded_at_height: u64,
+    epoch_schedule: &EpochScheduleSnapshot,
+) -> u64 {
     match &evidence.payload {
         EvidencePayload::DoubleVote { v1, .. } => v1.epoch,
         EvidencePayload::InvalidProposal { proposal, .. } => proposal.header.epoch,
@@ -502,7 +500,7 @@ fn evidence_epoch(evidence: &Evidence, recorded_at_height: u64, epoch_length_blo
             let Some(anchor) = censorship_anchor_height(receipts, recorded_at_height) else {
                 return 0;
             };
-            epoch_for_height(anchor, epoch_length_blocks)
+            epoch_schedule.epoch_for_height(anchor)
         }
     }
 }

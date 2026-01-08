@@ -97,6 +97,17 @@ LaneConfigEntry {
 - **سياسة الاحتفاظ** - المسارات العامة تحتفظ باجسام الكتل كاملة؛ المسارات ذات الالتزامات فقط قد تضغط الاجسام القديمة بعد checkpoints لان الالتزامات هي المرجع. المسارات السرية تحتفظ بسجلات مشفرة في مقاطع مخصصة لتجنب حجب اعمال اخرى.
 - **ادوات التشغيل** - `cargo xtask nexus-lane-maintenance --config <path> [--compact-retired]` يفحص `<store>/blocks` و`<store>/merge_ledger` باستخدام `LaneConfig` المشتق، ويبلغ عن المقاطع النشطة مقابل المتقاعدة، ويؤرشف الادلة/السجلات المتقاعدة تحت `<store>/retired/...` للحفاظ على ادلة حتمية. يجب على ادوات الصيانة (`kagami`, اوامر CLI الادارية) اعادة استخدام namespace ب slug عند عرض metrics او Prometheus labels او ارشفة مقاطع Kura.
 
+## ميزانيات التخزين
+
+- `nexus.storage.max_disk_usage_bytes` يحدد ميزانية القرص الاجمالية التي يجب ان تستهلكها عقد Nexus عبر Kura ولقطات WSV الباردة وتخزين SoraFS و spools البث (SoraNet/SoraVPN).
+- `nexus.storage.max_wsv_memory_bytes` يحد طبقة WSV الساخنة عبر تمرير قياس حمولة Norito الحتمية الى `tiered_state.hot_retained_bytes`؛ قد يتجاوز الاحتفاظ المسموح الميزانية مؤقتا، لكن التجاوز مرئي عبر telemetria (`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`).
+- `nexus.storage.disk_budget_weights` يقسم ميزانية القرص بين المكونات باستخدام نقاط الاساس (يجب ان تساوي 10,000). تطبق الحدود المشتقة على `kura.max_disk_usage_bytes` و`tiered_state.max_cold_bytes` و`sorafs.storage.max_capacity_bytes` و`streaming.soranet.provision_spool_max_bytes` و`streaming.soravpn.provision_spool_max_bytes`.
+- تطبيق ميزانية Kura يجمع بايتات مخزن الكتل عبر مقاطع المسارات النشطة والمتقاعدة ويشمل الكتل في الطابور غير المحفوظة بعد لتجنب تجاوز الميزانية اثناء تاخير الكتابة.
+- spools تزويد SoraVPN تستخدم اعدادات `streaming.soravpn` وتحد بشكل مستقل عن spool تزويد SoraNet.
+- لا تزال حدود كل مكون سارية: عندما يكون للمكون حد صريح غير صفري، يتم تطبيق الاصغر بين ذلك الحد وميزانية Nexus المشتقة.
+- telemetria الميزانيات تستخدم `storage_budget_bytes_used{component=...}` و`storage_budget_bytes_limit{component=...}` للابلاغ عن الاستخدام/الحدود لـ `kura` و`wsv_hot` و`wsv_cold` و`soranet_spool` و`soravpn_spool`؛ ويزداد `storage_budget_exceeded_total{component=...}` عندما ترفض الالية بيانات جديدة وتصدر السجلات تحذيرا للمشغل.
+- Kura يبلغ نفس المحاسبة المستخدمة اثناء القبول (بايتات على القرص بالاضافة الى الكتل في الطابور، بما في ذلك حمولات merge-ledger عند وجودها)، لذا تعكس المقاييس الضغط الفعلي وليس فقط البايتات المحفوظة.
+
 ## التوجيه وواجهات API
 
 - تقبل نقاط Torii REST/gRPC قيمة `lane_id` اختيارية؛ عدم وجودها يعني `lane_default`.

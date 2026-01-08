@@ -97,6 +97,17 @@ LaneConfigEntry {
 - **מדיניות שימור** — lanes ציבוריים שומרים גופי בלוקים מלאים; lanes של commitments בלבד יכולים לדחוס גופים ישנים אחרי checkpoints כי commitments הם סמכותיים. lanes סודיים שומרים יומני ciphertext בסגמנטים ייעודיים כדי לא לחסום עומסי עבודה אחרים.
 - **כלי תפעול** — `cargo xtask nexus-lane-maintenance --config <path> [--compact-retired]` בודק את `<store>/blocks` ואת `<store>/merge_ledger` תוך שימוש ב-`LaneConfig` הנגזר, מדווח על סגמנטים פעילים מול פרושים ומארכב ספריות/יומנים פרושים תחת `<store>/retired/...` כדי לשמור על ראיות דטרמיניסטיות. כלי תחזוקה (`kagami`, פקודות CLI אדמין) צריכים לעשות שימוש מחדש ב-namespace המוכנס ל-slug בעת חשיפת מטריקות, תוויות Prometheus או ארכוב סגמנטים של Kura.
 
+## תקציבי אחסון
+
+- `nexus.storage.max_disk_usage_bytes` מגדיר את תקציב הדיסק הכולל שעל צמתים של Nexus לצרוך בין Kura, צילומי WSV קרים, אחסון SoraFS ו-spools של streaming (SoraNet/SoraVPN).
+- `nexus.storage.max_wsv_memory_bytes` מגביל את שכבת ה-WSV החמה על ידי החלת גודל payload דטרמיניסטי של Norito אל `tiered_state.hot_retained_bytes`; שמירת grace יכולה זמנית לחרוג מהתקציב, אך החריגה נראית בטלמטריה (`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`).
+- `nexus.storage.disk_budget_weights` מחלק את תקציב הדיסק בין רכיבים בנקודות בסיס (חייב להסתכם ב-10,000). התקרות המחושבות מוחלות על `kura.max_disk_usage_bytes`, `tiered_state.max_cold_bytes`, `sorafs.storage.max_capacity_bytes`, `streaming.soranet.provision_spool_max_bytes` ו-`streaming.soravpn.provision_spool_max_bytes`.
+- האכיפה של תקציב Kura מסכמת את בתים של מחסן הבלוקים על פני סגמנטים פעילים ופרושים של lanes ומכלילה בלוקים בתור שטרם נכתבו כדי להימנע מחריגה בעת השהיית כתיבה.
+- Spools של provisioning ל-SoraVPN משתמשים בהגדרות `streaming.soravpn` ומוגבלים באופן נפרד מה-SoraNet provision spool.
+- מגבלות לכל רכיב עדיין חלות: כאשר לרכיב יש תקרה מפורשת שאינה אפס, נאכפת הקטנה מבין התקרה הזו לבין תקציב Nexus המחושב.
+- טלמטריית התקציב משתמשת ב-`storage_budget_bytes_used{component=...}` וב-`storage_budget_bytes_limit{component=...}` לדיווח שימוש/תקרות עבור `kura`, `wsv_hot`, `wsv_cold`, `soranet_spool` ו-`soravpn_spool`; המונה `storage_budget_exceeded_total{component=...}` גדל כאשר האכיפה דוחה נתונים חדשים והלוגים מזהירים את המפעיל.
+- Kura מדווח את אותה חשבונאות שמשמשת בזמן admission (בתים על דיסק ועוד בלוקים בתור, כולל payloads של merge-ledger כאשר קיימים), כך שהמדדים משקפים לחץ אפקטיבי ולא רק בתים שנשמרו.
+
 ## ניתוב ו-APIs
 
 - נקודות קצה REST/gRPC של Torii מקבלות `lane_id` אופציונלי; היעדרו מרמז על `lane_default`.
