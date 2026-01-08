@@ -215,7 +215,7 @@ pub mod isi {
                 .expect_err("missing domain should be rejected");
 
             assert!(
-                matches!(err, Error::Find(FindError::Domain(id)) if id == *nft_id.domain()),
+                matches!(err, Error::Find(FindError::Domain(ref id)) if id == nft_id.domain()),
                 "expected missing-domain error, got {err:?}"
             );
         }
@@ -241,7 +241,7 @@ pub mod isi {
                 .expect_err("missing domain should be rejected");
 
             assert!(
-                matches!(err, Error::Find(FindError::Domain(id)) if id == *nft_id.domain()),
+                matches!(err, Error::Find(FindError::Domain(ref id)) if id == nft_id.domain()),
                 "expected missing-domain error, got {err:?}"
             );
         }

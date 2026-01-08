@@ -243,7 +243,7 @@ impl Handle {
             .any(|(_, entry)| entry.summary.delivered)
     }
 
-    /// Check whether a delivered session exists whose payload hash matches the provided block.
+    /// Check whether a delivered session with a complete chunk set matches the provided payload.
     pub fn delivered_payload_matches(
         &self,
         block_hash: &HashOf<BlockHeader>,
@@ -257,6 +257,7 @@ impl Handle {
             let summary = &entry.summary;
             summary.delivered
                 && !summary.invalid
+                && summary.received_chunks == summary.total_chunks
                 && matches!(summary.payload_hash, Some(hash) if &hash == payload_hash)
         })
     }
@@ -756,6 +757,44 @@ mod tests {
         assert!(!items[0].invalid);
         assert!(items[0].lane_backlog.is_empty());
         assert!(items[0].dataspace_backlog.is_empty());
+    }
+
+    #[test]
+    fn delivered_payload_matches_requires_complete_chunks() {
+        let handle = register_handle();
+        set_active(&handle);
+
+        let block_hash = hash(9);
+        let payload_hash = Hash::new(b"payload");
+        let summary = Summary {
+            block_hash,
+            height: 9,
+            view: 0,
+            total_chunks: 2,
+            received_chunks: 1,
+            ready_count: 0,
+            delivered: true,
+            payload_hash: Some(payload_hash),
+            recovered_from_disk: false,
+            invalid: false,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        handle.update(summary.clone(), SystemTime::now());
+        assert!(
+            !handle.delivered_payload_matches(&block_hash, 9, &payload_hash),
+            "incomplete chunks should not satisfy delivered payload match"
+        );
+
+        let summary = Summary {
+            received_chunks: 2,
+            ..summary
+        };
+        handle.update(summary, SystemTime::now());
+        assert!(
+            handle.delivered_payload_matches(&block_hash, 9, &payload_hash),
+            "complete chunks should satisfy delivered payload match"
+        );
     }
 
     #[test]

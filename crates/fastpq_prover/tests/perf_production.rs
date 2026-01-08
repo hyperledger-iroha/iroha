@@ -7,7 +7,7 @@
 
 use std::{env, time::Instant};
 
-use fastpq_prover::{OperationKind, Prover, StateTransition, TransitionBatch, verify};
+use fastpq_prover::{OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch, verify};
 use norito::core::to_bytes;
 
 const PARAMETER_SET: &str = "fastpq-lane-balanced";
@@ -16,7 +16,7 @@ const DEFAULT_EXPECTED_MS: f64 = 1_000.0;
 const DEFAULT_MAX_KIB: f64 = 512.0;
 
 fn synthetic_batch(rows: usize) -> TransitionBatch {
-    let mut batch = TransitionBatch::new(PARAMETER_SET);
+    let mut batch = TransitionBatch::new(PARAMETER_SET, PublicInputs::default());
     for i in 0..rows {
         let asset_id = format!("asset/{:08x}", i % 64);
         let key = format!("{asset_id}/balance/{i:08x}").into_bytes();
@@ -53,18 +53,16 @@ fn synthetic_batch(rows: usize) -> TransitionBatch {
     }
 
     batch.sort();
-    batch.metadata.insert(
-        "dsid".into(),
-        (0u8..16u8).map(|b| b.wrapping_mul(11)).collect(),
-    );
-    batch.metadata.insert(
-        "slot".into(),
-        1_726_128_000_000_000u64.to_le_bytes().to_vec(),
-    );
-    batch.metadata.insert("old_root".into(), vec![0x11; 32]);
-    batch.metadata.insert("new_root".into(), vec![0x22; 32]);
-    batch.metadata.insert("perm_root".into(), vec![0x33; 32]);
-    batch.metadata.insert("tx_set_hash".into(), vec![0x44; 32]);
+    let mut dsid = [0u8; 16];
+    for (idx, byte) in dsid.iter_mut().enumerate() {
+        *byte = (idx as u8).wrapping_mul(11);
+    }
+    batch.public_inputs.dsid = dsid;
+    batch.public_inputs.slot = 1_726_128_000_000_000;
+    batch.public_inputs.old_root = [0x11; 32];
+    batch.public_inputs.new_root = [0x22; 32];
+    batch.public_inputs.perm_root = [0x33; 32];
+    batch.public_inputs.tx_set_hash = [0x44; 32];
 
     batch
 }

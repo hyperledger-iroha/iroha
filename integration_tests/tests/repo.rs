@@ -45,8 +45,7 @@ fn quiet_network_builder() -> NetworkBuilder {
 
 fn loopback_bind_allowed() -> bool {
     static LOOPBACK_BIND_ALLOWED: OnceLock<bool> = OnceLock::new();
-    *LOOPBACK_BIND_ALLOWED
-        .get_or_init(|| std::net::TcpListener::bind(("127.0.0.1", 0)).is_ok())
+    *LOOPBACK_BIND_ALLOWED.get_or_init(|| std::net::TcpListener::bind(("127.0.0.1", 0)).is_ok())
 }
 
 fn start_test_network() -> Option<(sandbox::SerializedNetwork, tokio::runtime::Runtime)> {

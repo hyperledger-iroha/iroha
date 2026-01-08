@@ -831,8 +831,7 @@ mod tests {
                 bls_aggregate_signature: Vec::new(),
             },
         };
-        let preimage =
-            commit_vote_preimage(&chain_id.parse().expect("chain id"), &cert_template);
+        let preimage = commit_vote_preimage(&chain_id.parse().expect("chain id"), &cert_template);
         let mut sig_payloads = Vec::with_capacity(keys.len());
         for kp in keys {
             let signature = Signature::new(kp.private_key(), &preimage);

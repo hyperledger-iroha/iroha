@@ -7,22 +7,22 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use iroha_crypto::{Hash, HashOf, KeyPair};
+use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree};
 use iroha_data_model::{
     block::{
         Header as BlockHeader,
         consensus::{
-            CertPhase, QcAggregate, Qc, QcRef, QcVote, ConsensusBlockHeader,
-            ConsensusGenesisParams, Evidence, EvidenceKind, EvidencePayload, EvidenceRecord, ExecKv,
-            ExecWitness, ExecWitnessMsg, LaneBlockCommitment, LaneSettlementReceipt,
-            NposGenesisParams, PERMISSIONED_TAG, Proposal, RbcChunk, RbcDeliver, RbcInit, RbcReady,
-            Reconfig, SumeragiBlockSyncRosterStatus, SumeragiQcStatus,
-            SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
-            SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
-            SumeragiDataspaceCommitment, SumeragiKuraStoreStatus, SumeragiLaneCommitment,
-            SumeragiLaneGovernance, SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+            CertPhase, ConsensusBlockHeader, ConsensusGenesisParams, Evidence, EvidenceKind,
+            EvidencePayload, EvidenceRecord, ExecKv, ExecWitness, ExecWitnessMsg,
+            LaneBlockCommitment, LaneSettlementReceipt, NposGenesisParams, PERMISSIONED_TAG,
+            Proposal, Qc, QcAggregate, QcRef, QcVote, RbcChunk, RbcDeliver, RbcInit, RbcReady,
+            Reconfig, SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus,
+            SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiDaGateReason,
+            SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiDataspaceCommitment,
+            SumeragiKuraStoreStatus, SumeragiLaneCommitment, SumeragiLaneGovernance,
+            SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
             SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
-            SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
+            SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus,
             SumeragiRbcEvictedSession, SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook,
             SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
             SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
@@ -394,6 +394,17 @@ fn rng_roster(rng: &mut DeterministicRng) -> Vec<PeerId> {
 fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
     let roster = rng_roster(rng);
     let roster_hash = Hash::new(&roster.encode());
+    let total_chunks = u32::try_from(rng.range_inclusive(1, 8)).expect("range bound fits u32");
+    let mut chunk_digests = Vec::with_capacity(total_chunks as usize);
+    for _ in 0..total_chunks {
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&rng.bytes(32));
+        chunk_digests.push(digest);
+    }
+    let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(chunk_digests.clone())
+        .root()
+        .map(Hash::from)
+        .expect("chunk root");
     RbcInit {
         block_hash: rng_block_hash(rng),
         height: rng.next_u64(),
@@ -401,9 +412,10 @@ fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
         epoch: rng.next_u64(),
         roster,
         roster_hash,
-        total_chunks: u32::try_from(rng.range_inclusive(1, 8)).expect("range bound fits u32"),
+        total_chunks,
+        chunk_digests,
         payload_hash: rng_hash(rng),
-        chunk_root: rng_hash(rng),
+        chunk_root,
     }
 }
 
@@ -1639,6 +1651,11 @@ fn consensus_messages_norito_roundtrip() {
         PeerId::from(KeyPair::random().public_key().clone()),
     ];
     let roster_hash = Hash::new(&roster.encode());
+    let chunk_digests = vec![[0x31; 32], [0x32; 32], [0x33; 32]];
+    let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(chunk_digests.clone())
+        .root()
+        .map(Hash::from)
+        .expect("chunk root");
     let rbc_init = RbcInit {
         block_hash: sample_block_hash(0x30),
         height: 44,
@@ -1647,8 +1664,9 @@ fn consensus_messages_norito_roundtrip() {
         roster,
         roster_hash,
         total_chunks: 3,
+        chunk_digests,
         payload_hash: sample_hash(0x31),
-        chunk_root: sample_hash(0x32),
+        chunk_root,
     };
     let rbc_chunk = RbcChunk {
         block_hash: rbc_init.block_hash,

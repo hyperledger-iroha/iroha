@@ -7,7 +7,7 @@ A `genesis.json` file defines the first transactions that run when an Iroha netw
   genesis includes an Upgrade instruction as the first transaction. If omitted,
   no upgrade is performed and the built‑in executor is used.
 - `ivm_dir` – directory containing IVM bytecode libraries. Defaults to `"."` if omitted.
-- `consensus_mode` – consensus mode advertised in the manifest. Required; use `"Npos"` for Iroha3 (default) and `"Permissioned"` for Iroha2.
+- `consensus_mode` – consensus mode advertised in the manifest. Required; use `"Npos"` for the public Sora Nexus dataspace, or `"Permissioned"`/`"Npos"` for other Iroha3 dataspaces. Iroha2 defaults to `"Permissioned"`.
 - `transactions` – list of genesis transactions executed sequentially. Every entry may contain:
   - `parameters` – initial network parameters.
   - `instructions` – structured Norito instructions (e.g., `{ "Register": { "Domain": { "id": "wonderland" }}}`). Raw byte arrays are not accepted, and `SetParameter` instructions are rejected here—seed parameters via the `parameters` block and let normalization/signing inject the instructions.
@@ -122,7 +122,7 @@ cargo run -p iroha_cli --features sm -- \
      --ivm-dir <ivm/dir> \
      --genesis-public-key <PUBLIC_KEY> > genesis.json
    ```
-`--consensus-mode` controls which consensus parameters Kagami seeds into the `parameters` block. Iroha3 requires `npos` and does not support staged cutovers; Iroha2 defaults to `permissioned` and may stage `npos` via `--next-consensus-mode`/`--mode-activation-height`. When `npos` is selected, Kagami seeds the `sumeragi_npos_parameters` payload used by the NPoS pacemaker; normalization/signing turns these into `SetParameter` instructions in the signed block.
+`--consensus-mode` controls which consensus parameters Kagami seeds into the `parameters` block. The public Sora Nexus dataspace requires `npos` and does not support staged cutovers; other Iroha3 dataspaces may use permissioned or NPoS. Iroha2 defaults to `permissioned` and may stage `npos` via `--next-consensus-mode`/`--mode-activation-height`. When `npos` is selected, Kagami seeds the `sumeragi_npos_parameters` payload used by the NPoS pacemaker; normalization/signing turns these into `SetParameter` instructions in the signed block.
 2. Optionally edit `genesis.json`, then validate and sign it:
    ```bash
    cargo run -p iroha_kagami -- genesis sign genesis.json \
@@ -172,7 +172,7 @@ Kagami and the node code ensure this ordering so that, for example, parameters a
 ## Recommended Workflow
 
 - Start from a template with Kagami:
-  - Built‑in ISI only: `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (Iroha3 default; use `--consensus-mode permissioned` for Iroha2).
+  - Built‑in ISI only: `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (Sora Nexus public dataspace; use `--consensus-mode permissioned` for Iroha2 or private Iroha3).
   - With custom executor upgrade (optional): add `--executor <path/to/executor.to>`
   - Iroha2-only: to stage a future cutover to NPoS, pass `--next-consensus-mode npos --mode-activation-height <HEIGHT>` (keep `--consensus-mode permissioned` for the current mode).
 - `<PK>` is any multihash recognised by `iroha_crypto::Algorithm`, including the TC26 GOST variants when Kagami is built with `--features gost` (for example `gost3410-2012-256-paramset-a:...`).

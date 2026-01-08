@@ -258,7 +258,9 @@ impl ProofToken {
         } else {
             None
         };
-        if let Some(expires_at) = expires_at && expires_at <= issued_at {
+        if let Some(expires_at) = expires_at
+            && expires_at <= issued_at
+        {
             return Err(DecodeError::InvalidExpiry {
                 issued_at,
                 expires_at,

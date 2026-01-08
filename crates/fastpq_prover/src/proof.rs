@@ -1,6 +1,4 @@
 use core::convert::TryFrom;
-use std::collections::BTreeMap;
-
 use fastpq_isi::{CANONICAL_PARAMETER_SETS, StarkParameterSet, find_by_name};
 use iroha_crypto::Hash;
 use norito::{NoritoDeserialize, NoritoSerialize};
@@ -22,6 +20,10 @@ use crate::{
 
 /// Protocol version advertised by the Stage 2 prover implementation.
 const PROTOCOL_VERSION: u16 = 1;
+/// Domain tag for permission root fallback commitments.
+const PERM_ROOT_DOMAIN: &[u8] = b"fastpq:v1:perm_root";
+/// Domain tag for transaction set hash fallback commitments.
+const TX_SET_DOMAIN: &[u8] = b"fastpq:v1:tx_set";
 
 /// Public inputs committed by the prover and replayed by the verifier.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, Default)]
@@ -405,56 +407,50 @@ fn build_public_io(
     ordering_hash: Hash,
     permission_hashes: Vec<[u8; 32]>,
 ) -> Result<PublicIO> {
-    let metadata = &batch.metadata;
+    let inputs = &batch.public_inputs;
+    let perm_root = if is_zero_bytes(&inputs.perm_root) {
+        perm_root_from_permission_hashes(&permission_hashes)
+    } else {
+        inputs.perm_root
+    };
+    let tx_set_hash = if is_zero_bytes(&inputs.tx_set_hash) {
+        tx_set_hash_from_ordering(&ordering_hash)
+    } else {
+        inputs.tx_set_hash
+    };
     Ok(PublicIO {
-        dsid: metadata_fixed::<16>(metadata, "dsid")?,
-        slot: metadata_u64(metadata, "slot")?,
-        old_root: metadata_fixed::<32>(metadata, "old_root")?,
-        new_root: metadata_fixed::<32>(metadata, "new_root")?,
-        perm_root: metadata_fixed::<32>(metadata, "perm_root")?,
-        tx_set_hash: metadata_fixed::<32>(metadata, "tx_set_hash")?,
+        dsid: inputs.dsid,
+        slot: inputs.slot,
+        old_root: inputs.old_root,
+        new_root: inputs.new_root,
+        perm_root,
+        tx_set_hash,
         ordering_hash: hash_norito::core::to_bytes(&ordering_hash),
         permission_hashes,
     })
 }
 
-fn metadata_fixed<const N: usize>(
-    metadata: &BTreeMap<String, Vec<u8>>,
-    key: &str,
-) -> Result<[u8; N]> {
-    match metadata.get(key) {
-        Some(bytes) if bytes.len() == N => {
-            let mut out = [0u8; N];
-            out.copy_from_slice(bytes);
-            Ok(out)
-        }
-        Some(bytes) => Err(Error::MetadataLength {
-            key: key.to_string(),
-            expected: N,
-            actual: bytes.len(),
-        }),
-        None => Err(Error::MissingMetadata {
-            key: key.to_string(),
-        }),
-    }
+fn is_zero_bytes(bytes: &[u8]) -> bool {
+    bytes.iter().all(|&b| b == 0)
 }
 
-fn metadata_u64(metadata: &BTreeMap<String, Vec<u8>>, key: &str) -> Result<u64> {
-    match metadata.get(key) {
-        Some(bytes) if bytes.len() <= core::mem::size_of::<u64>() => {
-            let mut chunk = [0u8; 8];
-            chunk[..bytes.len()].copy_from_slice(bytes);
-            Ok(u64::from_le_bytes(chunk))
-        }
-        Some(bytes) => Err(Error::MetadataLength {
-            key: key.to_string(),
-            expected: 8,
-            actual: bytes.len(),
-        }),
-        None => Err(Error::MissingMetadata {
-            key: key.to_string(),
-        }),
+fn perm_root_from_permission_hashes(hashes: &[[u8; 32]]) -> [u8; 32] {
+    if hashes.is_empty() {
+        return [0u8; 32];
     }
+    let mut payload = Vec::with_capacity(PERM_ROOT_DOMAIN.len() + hashes.len() * 32);
+    payload.extend_from_slice(PERM_ROOT_DOMAIN);
+    for hash in hashes {
+        payload.extend_from_slice(hash);
+    }
+    hash_norito::core::to_bytes(&Hash::new(payload))
+}
+
+fn tx_set_hash_from_ordering(ordering_hash: &Hash) -> [u8; 32] {
+    let mut payload = Vec::with_capacity(TX_SET_DOMAIN.len() + Hash::LENGTH);
+    payload.extend_from_slice(TX_SET_DOMAIN);
+    payload.extend_from_slice(ordering_hash.as_ref());
+    hash_norito::core::to_bytes(&Hash::new(payload))
 }
 
 fn collect_permission_hashes(batch: &TransitionBatch) -> Result<Vec<[u8; 32]>> {
@@ -514,29 +510,19 @@ mod field_norito {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{OperationKind, StateTransition};
+    use crate::{OperationKind, PublicInputs, StateTransition};
 
     fn annotate_batch(batch: &mut TransitionBatch) {
-        batch.metadata.insert("dsid".into(), [0x11u8; 16].to_vec());
-        batch
-            .metadata
-            .insert("slot".into(), (42u64).to_le_bytes().to_vec());
-        batch
-            .metadata
-            .insert("old_root".into(), [0xAAu8; 32].to_vec());
-        batch
-            .metadata
-            .insert("new_root".into(), [0xBBu8; 32].to_vec());
-        batch
-            .metadata
-            .insert("perm_root".into(), [0xCCu8; 32].to_vec());
-        batch
-            .metadata
-            .insert("tx_set_hash".into(), [0xDDu8; 32].to_vec());
+        batch.public_inputs.dsid = [0x11; 16];
+        batch.public_inputs.slot = 42;
+        batch.public_inputs.old_root = [0xAA; 32];
+        batch.public_inputs.new_root = [0xBB; 32];
+        batch.public_inputs.perm_root = [0xCC; 32];
+        batch.public_inputs.tx_set_hash = [0xDD; 32];
     }
 
     fn sample_batch() -> TransitionBatch {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced");
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         batch.push(StateTransition::new(
             b"account/alice".to_vec(),
             vec![1],
@@ -555,7 +541,7 @@ mod tests {
     }
 
     fn sample_batch_with_size(rows: usize) -> TransitionBatch {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced");
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         for idx in 0..rows {
             let key = format!("asset/xor/account/{idx:04}").into_bytes();
             let idx_u64 = u64::try_from(idx).expect("sample row index fits u64");
@@ -574,7 +560,7 @@ mod tests {
     }
 
     fn sample_batch_with_permission() -> TransitionBatch {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced");
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         batch.push(StateTransition::new(
             b"role/sora-admin/permission/transfer".to_vec(),
             0u64.to_le_bytes().to_vec(),
@@ -588,6 +574,36 @@ mod tests {
         batch.sort();
         annotate_batch(&mut batch);
         batch
+    }
+
+    #[test]
+    fn public_io_falls_back_to_derived_inputs() {
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        batch.public_inputs.dsid = [0x11; 16];
+        batch.public_inputs.slot = 7;
+        batch.public_inputs.old_root = [0xAA; 32];
+        batch.public_inputs.new_root = [0xBB; 32];
+        batch.push(StateTransition::new(
+            b"role/sora-admin/permission/transfer".to_vec(),
+            0u64.to_le_bytes().to_vec(),
+            1u64.to_le_bytes().to_vec(),
+            OperationKind::RoleGrant {
+                role_id: vec![0xAB; 32],
+                permission_id: vec![0xCD; 32],
+                epoch: 7,
+            },
+        ));
+        batch.sort();
+        let ordering = ordering::ordering_hash(&batch).expect("ordering");
+        let permission_hashes =
+            collect_permission_hashes(&batch).expect("permission hashes");
+        let public_io = build_public_io(&batch, ordering, permission_hashes.clone())
+            .expect("public io");
+        assert_eq!(
+            public_io.perm_root,
+            perm_root_from_permission_hashes(&permission_hashes)
+        );
+        assert_eq!(public_io.tx_set_hash, tx_set_hash_from_ordering(&ordering));
     }
 
     #[test]

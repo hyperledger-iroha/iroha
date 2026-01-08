@@ -531,16 +531,14 @@ fn offender_indices(
             consensus_mode,
             prf_seed,
         ),
-        EvidencePayload::InvalidQc { certificate, .. } => {
-            canonicalize_indices_for_view(
-                bitmap_indices(&certificate.aggregate.signers_bitmap),
-                certificate.height,
-                certificate.view,
-                topology_len,
-                consensus_mode,
-                prf_seed,
-            )
-        }
+        EvidencePayload::InvalidQc { certificate, .. } => canonicalize_indices_for_view(
+            bitmap_indices(&certificate.aggregate.signers_bitmap),
+            certificate.height,
+            certificate.view,
+            topology_len,
+            consensus_mode,
+            prf_seed,
+        ),
         EvidencePayload::Censorship { receipts, .. } => {
             let Some(anchor) = censorship_anchor_height(receipts, recorded_at_height) else {
                 return Vec::new();
@@ -658,7 +656,7 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, World},
         sumeragi::{
-            consensus::{QcAggregate, PERMISSIONED_TAG, Phase, Vote},
+            consensus::{PERMISSIONED_TAG, Phase, QcAggregate, Vote},
             evidence::evidence_key,
         },
         telemetry::StateTelemetry,

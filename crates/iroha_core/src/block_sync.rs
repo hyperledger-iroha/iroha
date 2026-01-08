@@ -28,10 +28,10 @@ use crate::{
     sumeragi::{
         SumeragiHandle,
         consensus::{
-            QcAggregate, NPOS_TAG, PERMISSIONED_TAG, Phase, ValidatorIndex, qc_signer_count,
+            NPOS_TAG, PERMISSIONED_TAG, Phase, QcAggregate, ValidatorIndex, qc_signer_count,
         },
         network_topology::Topology,
-        stake_snapshot::CommitStakeSnapshot,
+        stake_snapshot::{CommitStakeSnapshot, stake_quorum_reached_for_snapshot},
         status,
     },
 };
@@ -345,6 +345,8 @@ impl BlockSynchronizer {
 
     #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
     fn qc_from_signers(
+        consensus_mode: ConsensusMode,
+        stake_snapshot: Option<&CommitStakeSnapshot>,
         mode_tag: &str,
         validator_set: Vec<PeerId>,
         block_hash: HashOf<BlockHeader>,
@@ -360,12 +362,33 @@ impl BlockSynchronizer {
         if roster_len == 0 {
             return None;
         }
-        let required = Self::min_votes_for_len(roster_len);
-        if signers.len() < required {
-            return None;
-        }
         if aggregate_signature.is_empty() {
             return None;
+        }
+        match consensus_mode {
+            ConsensusMode::Permissioned => {
+                let required = Self::min_votes_for_len(roster_len);
+                if signers.len() < required {
+                    return None;
+                }
+            }
+            ConsensusMode::Npos => {
+                let snapshot = stake_snapshot?;
+                let mut signer_peers = BTreeSet::new();
+                for signer in &signers {
+                    let Ok(idx) = usize::try_from(*signer) else {
+                        return None;
+                    };
+                    let Some(peer) = validator_set.get(idx) else {
+                        return None;
+                    };
+                    signer_peers.insert(peer.clone());
+                }
+                match stake_quorum_reached_for_snapshot(snapshot, &validator_set, &signer_peers) {
+                    Ok(true) => {}
+                    _ => return None,
+                }
+            }
         }
         let signers_bitmap = Self::build_signers_bitmap(&signers, roster_len);
         Some(Qc {
@@ -388,10 +411,26 @@ impl BlockSynchronizer {
         })
     }
 
-    pub(crate) fn block_sync_qc_for(block: &SignedBlock) -> Option<Qc> {
+    pub(crate) fn block_sync_qc_for(
+        state_view: &StateView<'_>,
+        fallback_consensus_mode: ConsensusMode,
+        block: &SignedBlock,
+    ) -> Option<Qc> {
         let block_hash = block.hash();
         let height = block.header().height().get();
         let view = u64::from(block.header().view_change_index());
+        let (consensus_mode, expected_mode_tag) = {
+            let consensus_mode = crate::sumeragi::effective_consensus_mode_for_height(
+                &state_view,
+                height,
+                fallback_consensus_mode,
+            );
+            let mode_tag = match consensus_mode {
+                ConsensusMode::Permissioned => PERMISSIONED_TAG,
+                ConsensusMode::Npos => NPOS_TAG,
+            };
+            (consensus_mode, mode_tag)
+        };
 
         if let Some(record) = status::precommit_signers_for(block_hash) {
             if record.height != height || record.view != view {
@@ -405,7 +444,19 @@ impl BlockSynchronizer {
                 );
                 return None;
             }
+            if record.mode_tag != expected_mode_tag {
+                iroha_logger::info!(
+                    height,
+                    view,
+                    expected_mode = expected_mode_tag,
+                    record_mode = %record.mode_tag,
+                    "block sync: cached precommit signer record uses unexpected mode tag"
+                );
+                return None;
+            }
             if let Some(qc) = Self::qc_from_signers(
+                consensus_mode,
+                record.stake_snapshot.as_ref(),
                 &record.mode_tag,
                 record.validator_set.clone(),
                 block_hash,
@@ -916,18 +967,88 @@ mod roster_metadata_tests {
         let (commit_qc, checkpoint) = sample_roster_artifacts();
         let block_hash = commit_qc.subject_block_hash;
         let roster = commit_qc.validator_set.clone();
-        state.commit_roster_journal.write().upsert(
-            commit_qc.clone(),
-            checkpoint.clone(),
-            None,
-        );
+        state
+            .commit_roster_journal
+            .write()
+            .upsert(commit_qc.clone(), checkpoint.clone(), None);
 
-        let metadata =
-            super::message::roster_metadata_from_state(&state, kura.as_ref(), 1, block_hash)
-                .expect("metadata should be available from journal");
+        let metadata = super::message::roster_metadata_from_state(
+            &state,
+            kura.as_ref(),
+            1,
+            block_hash,
+            ConsensusMode::Permissioned,
+        )
+        .expect("metadata should be available from journal");
         assert_eq!(metadata.commit_qc, Some(commit_qc));
         assert_eq!(metadata.validator_checkpoint, Some(checkpoint));
         assert_eq!(metadata.roster_snapshot().expect("roster"), roster);
+    }
+
+    #[test]
+    fn metadata_rejects_npos_without_stake_snapshot() {
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let (mut commit_qc, checkpoint) = sample_roster_artifacts();
+        commit_qc.mode_tag = NPOS_TAG.to_string();
+        let block_hash = commit_qc.subject_block_hash;
+        state
+            .commit_roster_journal
+            .write()
+            .upsert(commit_qc, checkpoint, None);
+
+        let metadata = super::message::roster_metadata_from_state(
+            &state,
+            kura.as_ref(),
+            1,
+            block_hash,
+            ConsensusMode::Npos,
+        );
+        assert!(
+            metadata.is_none(),
+            "missing stake snapshot should be rejected"
+        );
+    }
+
+    #[test]
+    fn metadata_accepts_npos_with_stake_snapshot() {
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let (mut commit_qc, checkpoint) = sample_roster_artifacts();
+        commit_qc.mode_tag = NPOS_TAG.to_string();
+        let block_hash = commit_qc.subject_block_hash;
+        let snapshot =
+            CommitStakeSnapshot::from_roster(state.view().world(), &commit_qc.validator_set)
+                .expect("stake snapshot");
+        state.commit_roster_journal.write().upsert(
+            commit_qc.clone(),
+            checkpoint.clone(),
+            Some(snapshot.clone()),
+        );
+
+        let metadata = super::message::roster_metadata_from_state(
+            &state,
+            kura.as_ref(),
+            1,
+            block_hash,
+            ConsensusMode::Npos,
+        )
+        .expect("metadata should be available");
+        assert_eq!(metadata.commit_qc, Some(commit_qc));
+        assert_eq!(metadata.validator_checkpoint, Some(checkpoint));
+        assert_eq!(metadata.stake_snapshot, Some(snapshot));
     }
 
     #[test]
@@ -944,7 +1065,13 @@ mod roster_metadata_tests {
             stake_snapshot: None,
         };
 
-        let effective = super::message::effective_roster_metadata(Some(&incoming), Some(fallback));
+        let effective = super::message::effective_roster_metadata(
+            Some(&incoming),
+            Some(fallback),
+            ConsensusMode::Permissioned,
+            commit_qc.height,
+            commit_qc.subject_block_hash,
+        );
         assert_eq!(effective, Some(incoming));
     }
 
@@ -962,20 +1089,66 @@ mod roster_metadata_tests {
             stake_snapshot: None,
         };
 
-        let effective =
-            super::message::effective_roster_metadata(Some(&incoming), Some(fallback.clone()));
+        let effective = super::message::effective_roster_metadata(
+            Some(&incoming),
+            Some(fallback.clone()),
+            ConsensusMode::Permissioned,
+            checkpoint.height,
+            checkpoint.block_hash,
+        );
         assert_eq!(effective, Some(fallback));
     }
 
     #[test]
     fn effective_roster_metadata_returns_none_when_empty() {
+        let (commit_qc, _checkpoint) = sample_roster_artifacts();
         let incoming = RosterMetadata {
             commit_qc: None,
             validator_checkpoint: None,
             stake_snapshot: None,
         };
-        let effective = super::message::effective_roster_metadata(Some(&incoming), None);
+        let effective = super::message::effective_roster_metadata(
+            Some(&incoming),
+            None,
+            ConsensusMode::Permissioned,
+            commit_qc.height,
+            commit_qc.subject_block_hash,
+        );
         assert!(effective.is_none());
+    }
+
+    #[test]
+    fn effective_roster_metadata_requires_snapshot_in_npos() {
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let (mut commit_qc, _checkpoint) = sample_roster_artifacts();
+        commit_qc.mode_tag = NPOS_TAG.to_string();
+        let snapshot =
+            CommitStakeSnapshot::from_roster(state.view().world(), &commit_qc.validator_set)
+                .expect("stake snapshot");
+        let incoming = RosterMetadata {
+            commit_qc: Some(commit_qc.clone()),
+            validator_checkpoint: None,
+            stake_snapshot: None,
+        };
+        let fallback = RosterMetadata {
+            commit_qc: Some(commit_qc.clone()),
+            validator_checkpoint: None,
+            stake_snapshot: Some(snapshot.clone()),
+        };
+
+        let effective = super::message::effective_roster_metadata(
+            Some(&incoming),
+            Some(fallback.clone()),
+            ConsensusMode::Npos,
+            commit_qc.height,
+            commit_qc.subject_block_hash,
+        );
+        assert_eq!(effective, Some(fallback));
     }
 }
 
@@ -991,6 +1164,7 @@ mod qc_build_tests {
     use nonzero_ext::nonzero;
 
     use super::*;
+    use crate::{query::store::LiveQueryStore, state::World};
 
     fn qc_preimage(
         chain_id: &ChainId,
@@ -1085,6 +1259,8 @@ mod qc_build_tests {
             &keypairs,
         );
         let qc = BlockSynchronizer::qc_from_signers(
+            ConsensusMode::Permissioned,
+            None,
             mode_tag,
             peers.clone(),
             block_hash,
@@ -1099,6 +1275,8 @@ mod qc_build_tests {
         assert!(qc.is_some(), "QC should be built with quorum signers");
 
         let qc_empty = BlockSynchronizer::qc_from_signers(
+            ConsensusMode::Permissioned,
+            None,
             mode_tag,
             peers.clone(),
             block_hash,
@@ -1118,6 +1296,8 @@ mod qc_build_tests {
         let mut partial_signers = BTreeSet::new();
         partial_signers.insert(ValidatorIndex::try_from(0).expect("index 0"));
         let partial = BlockSynchronizer::qc_from_signers(
+            ConsensusMode::Permissioned,
+            None,
             mode_tag,
             peers,
             block_hash,
@@ -1130,6 +1310,91 @@ mod qc_build_tests {
             vec![0xAA; 48],
         );
         assert!(partial.is_none(), "insufficient signers must be rejected");
+    }
+
+    #[test]
+    fn qc_from_signers_requires_stake_snapshot_in_npos() {
+        let chain_id = ChainId::from("qc-from-signers-npos");
+        let mode_tag = NPOS_TAG;
+        let keypairs = vec![
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        ];
+        let peers: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let topology = Topology::new(peers.clone());
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([2; 32]));
+        let height = 1;
+        let view = 0;
+        let epoch = 0;
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+        let mut signers = BTreeSet::new();
+        signers.insert(ValidatorIndex::try_from(0).expect("index 0"));
+        signers.insert(ValidatorIndex::try_from(1).expect("index 1"));
+
+        let aggregate = aggregate_signature_for_signers(
+            &chain_id,
+            mode_tag,
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            &signers,
+            &topology,
+            &keypairs,
+        );
+        let stake_snapshot = CommitStakeSnapshot {
+            validator_set_hash: HashOf::new(&peers),
+            entries: peers
+                .iter()
+                .cloned()
+                .map(
+                    |peer_id| crate::sumeragi::stake_snapshot::CommitStakeSnapshotEntry {
+                        peer_id,
+                        stake: iroha_primitives::numeric::Numeric::from(1_u64),
+                    },
+                )
+                .collect(),
+        };
+
+        let qc = BlockSynchronizer::qc_from_signers(
+            ConsensusMode::Npos,
+            Some(&stake_snapshot),
+            mode_tag,
+            peers.clone(),
+            block_hash,
+            zero_root,
+            zero_root,
+            height,
+            view,
+            epoch,
+            signers.clone(),
+            aggregate.clone(),
+        );
+        assert!(qc.is_some(), "stake snapshot should enable NPoS QC");
+
+        let missing_snapshot = BlockSynchronizer::qc_from_signers(
+            ConsensusMode::Npos,
+            None,
+            mode_tag,
+            peers,
+            block_hash,
+            zero_root,
+            zero_root,
+            height,
+            view,
+            epoch,
+            signers,
+            aggregate,
+        );
+        assert!(
+            missing_snapshot.is_none(),
+            "missing stake snapshot should reject QC"
+        );
     }
 
     #[test]
@@ -1150,6 +1415,13 @@ mod qc_build_tests {
         let block_hash = block.hash();
         let height = block.header().height().get();
         let view = u64::from(block.header().view_change_index());
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let state_view = state.view();
 
         let mut signers = BTreeSet::new();
         signers.insert(ValidatorIndex::try_from(0).expect("index 0"));
@@ -1179,9 +1451,12 @@ mod qc_build_tests {
             mode_tag: mode_tag.to_string(),
             bls_aggregate_signature: aggregate.clone(),
             validator_set: topology.as_ref().to_vec(),
+            stake_snapshot: None,
         });
 
-        let qc = BlockSynchronizer::block_sync_qc_for(&block).expect("cached QC should be built");
+        let qc =
+            BlockSynchronizer::block_sync_qc_for(&state_view, ConsensusMode::Permissioned, &block)
+                .expect("cached QC should be built");
         assert_eq!(qc.subject_block_hash, block_hash);
         assert_eq!(qc.aggregate.bls_aggregate_signature, aggregate);
     }
@@ -1205,6 +1480,13 @@ mod qc_build_tests {
         let height = block.header().height().get();
         let view = u64::from(block.header().view_change_index());
         let epoch = 4;
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let state_view = state.view();
 
         let mut signers = BTreeSet::new();
         signers.insert(ValidatorIndex::try_from(0).expect("index 0"));
@@ -1222,6 +1504,9 @@ mod qc_build_tests {
             &keypairs,
         );
         let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+        let stake_snapshot =
+            CommitStakeSnapshot::from_roster(state_view.world(), topology.as_ref())
+                .expect("stake snapshot");
         status::record_precommit_signers(status::PrecommitSignerRecord {
             block_hash,
             height,
@@ -1234,9 +1519,11 @@ mod qc_build_tests {
             mode_tag: mode_tag.to_string(),
             bls_aggregate_signature: aggregate.clone(),
             validator_set: topology.as_ref().to_vec(),
+            stake_snapshot: Some(stake_snapshot),
         });
 
-        let qc = BlockSynchronizer::block_sync_qc_for(&block).expect("cached QC should be built");
+        let qc = BlockSynchronizer::block_sync_qc_for(&state_view, ConsensusMode::Npos, &block)
+            .expect("cached QC should be built");
         assert_eq!(qc.subject_block_hash, block_hash);
         assert_eq!(qc.epoch, epoch);
         assert_eq!(qc.aggregate.bls_aggregate_signature, aggregate);
@@ -1319,6 +1606,31 @@ pub mod message {
         }
     }
 
+    fn roster_metadata_has_hints(metadata: &RosterMetadata) -> bool {
+        metadata.commit_qc.is_some() || metadata.validator_checkpoint.is_some()
+    }
+
+    fn roster_metadata_validation_error(
+        metadata: &RosterMetadata,
+        consensus_mode: ConsensusMode,
+    ) -> Option<&'static str> {
+        if !roster_metadata_has_hints(metadata) {
+            return Some("empty");
+        }
+        if matches!(consensus_mode, ConsensusMode::Npos) {
+            let Some(snapshot) = metadata.stake_snapshot.as_ref() else {
+                return Some("missing_stake_snapshot");
+            };
+            let Some(roster) = metadata.validator_set() else {
+                return Some("missing_validator_set");
+            };
+            if !snapshot.matches_roster(roster) {
+                return Some("stake_snapshot_mismatch");
+            }
+        }
+        None
+    }
+
     /// Message used to share blocks to a peer.
     #[derive(Debug, Clone, Encode)]
     pub struct ShareBlocks {
@@ -1352,6 +1664,47 @@ pub mod message {
         if blocks_len != rosters_len {
             return Err(ShareBlocksLengthError::RosterLengthMismatch);
         }
+        Ok(())
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum GetBlocksAfterValidationError {
+        PrevHashWithoutLatest,
+    }
+
+    fn validate_get_blocks_after_request(
+        prev_hash: &Option<HashOf<BlockHeader>>,
+        latest_hash: &Option<HashOf<BlockHeader>>,
+    ) -> Result<(), GetBlocksAfterValidationError> {
+        if prev_hash.is_some() && latest_hash.is_none() {
+            return Err(GetBlocksAfterValidationError::PrevHashWithoutLatest);
+        }
+        Ok(())
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ShareBlocksSequenceError {
+        Empty,
+        HeightMissed,
+        PrevBlockHashMismatch,
+    }
+
+    fn validate_share_blocks_sequence(
+        blocks: &[SignedBlock],
+    ) -> Result<(), ShareBlocksSequenceError> {
+        if blocks.is_empty() {
+            return Err(ShareBlocksSequenceError::Empty);
+        }
+
+        for window in blocks.windows(2) {
+            if window[1].header().height().get() != window[0].header().height().get() + 1 {
+                return Err(ShareBlocksSequenceError::HeightMissed);
+            }
+            if window[1].header().prev_block_hash() != Some(window[0].hash()) {
+                return Err(ShareBlocksSequenceError::PrevBlockHashMismatch);
+            }
+        }
+
         Ok(())
     }
 
@@ -1390,13 +1743,36 @@ pub mod message {
         kura: &Kura,
         block_height: u64,
         block_hash: HashOf<BlockHeader>,
+        fallback_consensus_mode: ConsensusMode,
     ) -> Option<RosterMetadata> {
+        let consensus_mode = {
+            let view = state.view();
+            consensus_mode_for_block_sync(&view, block_height, fallback_consensus_mode)
+        };
+        let filter_metadata = |metadata: RosterMetadata, source: &'static str| {
+            if let Some(reason) = roster_metadata_validation_error(&metadata, consensus_mode) {
+                if reason != "empty" {
+                    warn!(
+                        height = block_height,
+                        block = %block_hash,
+                        source,
+                        reason,
+                        "dropping block sync roster metadata"
+                    );
+                }
+                return None;
+            }
+            Some(metadata)
+        };
         if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
-            return Some(RosterMetadata {
-                commit_qc: Some(snapshot.commit_qc),
-                validator_checkpoint: Some(snapshot.validator_checkpoint),
-                stake_snapshot: snapshot.stake_snapshot,
-            });
+            return filter_metadata(
+                RosterMetadata {
+                    commit_qc: Some(snapshot.commit_qc),
+                    validator_checkpoint: Some(snapshot.validator_checkpoint),
+                    stake_snapshot: snapshot.stake_snapshot,
+                },
+                "commit_roster_journal",
+            );
         }
 
         if let Some(meta) = kura.read_roster_metadata(block_height).and_then(|meta| {
@@ -1412,19 +1788,25 @@ pub mod message {
                 None
             }
         }) {
-            return Some(RosterMetadata {
-                commit_qc: meta.commit_qc,
-                validator_checkpoint: meta.validator_checkpoint,
-                stake_snapshot: meta.stake_snapshot,
-            });
+            return filter_metadata(
+                RosterMetadata {
+                    commit_qc: meta.commit_qc,
+                    validator_checkpoint: meta.validator_checkpoint,
+                    stake_snapshot: meta.stake_snapshot,
+                },
+                "roster_sidecar",
+            );
         }
 
         if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
-            return Some(RosterMetadata {
-                commit_qc: Some(snapshot.commit_qc),
-                validator_checkpoint: Some(snapshot.validator_checkpoint),
-                stake_snapshot: snapshot.stake_snapshot,
-            });
+            return filter_metadata(
+                RosterMetadata {
+                    commit_qc: Some(snapshot.commit_qc),
+                    validator_checkpoint: Some(snapshot.validator_checkpoint),
+                    stake_snapshot: snapshot.stake_snapshot,
+                },
+                "commit_roster_journal",
+            );
         }
 
         let commit_qc = status::commit_qc_history()
@@ -1435,16 +1817,22 @@ pub mod message {
             .find(|chk| chk.height == block_height && chk.block_hash == block_hash);
 
         match (commit_qc, validator_checkpoint) {
-            (Some(cert), checkpoint) => Some(RosterMetadata {
-                commit_qc: Some(cert),
-                validator_checkpoint: checkpoint,
-                stake_snapshot: None,
-            }),
-            (None, Some(checkpoint)) => Some(RosterMetadata {
-                commit_qc: None,
-                validator_checkpoint: Some(checkpoint),
-                stake_snapshot: None,
-            }),
+            (Some(cert), checkpoint) => filter_metadata(
+                RosterMetadata {
+                    commit_qc: Some(cert),
+                    validator_checkpoint: checkpoint,
+                    stake_snapshot: None,
+                },
+                "commit_qc_history",
+            ),
+            (None, Some(checkpoint)) => filter_metadata(
+                RosterMetadata {
+                    commit_qc: None,
+                    validator_checkpoint: Some(checkpoint),
+                    stake_snapshot: None,
+                },
+                "validator_checkpoint_history",
+            ),
             _ => None,
         }
     }
@@ -1453,15 +1841,29 @@ pub mod message {
     pub(super) fn effective_roster_metadata(
         incoming: Option<&RosterMetadata>,
         fallback: Option<RosterMetadata>,
+        consensus_mode: ConsensusMode,
+        block_height: u64,
+        block_hash: HashOf<BlockHeader>,
     ) -> Option<RosterMetadata> {
-        let incoming_present = incoming.is_some_and(|meta| {
-            meta.commit_qc.is_some() || meta.validator_checkpoint.is_some()
-        });
-        if incoming_present {
-            incoming.cloned()
-        } else {
-            fallback
+        let incoming_error =
+            incoming.and_then(|meta| roster_metadata_validation_error(meta, consensus_mode));
+        let incoming_valid = incoming
+            .is_some_and(|meta| roster_metadata_validation_error(meta, consensus_mode).is_none());
+        if let Some(reason) = incoming_error {
+            if reason != "empty" {
+                warn!(
+                    height = block_height,
+                    block = %block_hash,
+                    source = "incoming",
+                    reason,
+                    "dropping incoming block sync roster metadata"
+                );
+            }
         }
+        if incoming_valid {
+            return incoming.cloned();
+        }
+        fallback.filter(|meta| roster_metadata_validation_error(meta, consensus_mode).is_none())
     }
 
     struct BlockSyncValidationContext {
@@ -1484,17 +1886,24 @@ pub mod message {
             .then(|| crate::sumeragi::npos_seed_for_height(state_view, block_height))
     }
 
+    fn consensus_mode_for_block_sync(
+        state_view: &StateView<'_>,
+        block_height: u64,
+        fallback_consensus_mode: ConsensusMode,
+    ) -> ConsensusMode {
+        crate::sumeragi::effective_consensus_mode_for_height(
+            state_view,
+            block_height,
+            fallback_consensus_mode,
+        )
+    }
+
     fn mode_tag_for_block_sync(
         state_view: &StateView<'_>,
         block_height: u64,
         fallback_consensus_mode: ConsensusMode,
     ) -> &'static str {
-        let consensus_mode = crate::sumeragi::effective_consensus_mode_for_height(
-            state_view,
-            block_height,
-            fallback_consensus_mode,
-        );
-        match consensus_mode {
+        match consensus_mode_for_block_sync(state_view, block_height, fallback_consensus_mode) {
             ConsensusMode::Permissioned => PERMISSIONED_TAG,
             ConsensusMode::Npos => NPOS_TAG,
         }
@@ -1540,11 +1949,14 @@ pub mod message {
     }
 
     fn sanitize_block_sync_qc(
+        state_view: &StateView<'_>,
+        fallback_consensus_mode: ConsensusMode,
         block: &SignedBlock,
         incoming: Option<Qc>,
         context: &BlockSyncValidationContext,
     ) -> Option<Qc> {
-        let derived_qc = BlockSynchronizer::block_sync_qc_for(block);
+        let derived_qc =
+            BlockSynchronizer::block_sync_qc_for(state_view, fallback_consensus_mode, block);
         match (incoming, derived_qc) {
             (Some(incoming), Some(derived)) if incoming == derived => Some(incoming),
             (Some(_incoming), Some(derived)) => {
@@ -1673,7 +2085,13 @@ pub mod message {
                         mode_tag_for_block_sync(state_view, block_height, fallback_consensus_mode);
                     let context =
                         BlockSyncValidationContext::new(&block, &topology, state_view, mode_tag);
-                    let sanitized_qc = sanitize_block_sync_qc(&block, qc, &context);
+                    let sanitized_qc = sanitize_block_sync_qc(
+                        state_view,
+                        fallback_consensus_mode,
+                        &block,
+                        qc,
+                        &context,
+                    );
                     let signature_check = BlockSynchronizer::block_signatures_valid(
                         &block,
                         &context.signature_topology,
@@ -1726,6 +2144,14 @@ pub mod message {
                     latest_hash,
                     seen_blocks,
                 }) => {
+                    if let Err(err) = validate_get_blocks_after_request(prev_hash, latest_hash) {
+                        warn!(
+                            error = ?err,
+                            "rejecting block sync request with invalid hash dependencies"
+                        );
+                        return;
+                    }
+
                     let local_latest_block_hash = block_sync.state.view().latest_block_hash();
 
                     if *latest_hash == local_latest_block_hash
@@ -1769,10 +2195,19 @@ pub mod message {
                     if !blocks.is_empty() {
                         trace!(hash=?prev_hash, "Sharing blocks after hash");
 
-                        let qcs: Vec<Option<Qc>> = blocks
-                            .iter()
-                            .map(BlockSynchronizer::block_sync_qc_for)
-                            .collect();
+                        let qcs: Vec<Option<Qc>> = {
+                            let state_view = block_sync.state.view();
+                            blocks
+                                .iter()
+                                .map(|block| {
+                                    BlockSynchronizer::block_sync_qc_for(
+                                        &state_view,
+                                        block_sync.fallback_consensus_mode,
+                                        block,
+                                    )
+                                })
+                                .collect()
+                        };
                         let rosters: Vec<RosterMetadata> = blocks
                             .iter()
                             .map(|block| {
@@ -1783,6 +2218,7 @@ pub mod message {
                                     &block_sync.kura,
                                     height,
                                     hash,
+                                    block_sync.fallback_consensus_mode,
                                 )
                                 .unwrap_or(RosterMetadata {
                                     commit_qc: None,
@@ -1810,6 +2246,14 @@ pub mod message {
                     use crate::sumeragi::message::BlockSyncUpdate;
 
                     let total = blocks.len();
+                    if let Err(err) = validate_share_blocks_sequence(blocks) {
+                        warn!(
+                            error = ?err,
+                            total,
+                            "rejecting block sync batch: invalid block sequence"
+                        );
+                        return;
+                    }
                     let roster_by_hash: BTreeMap<_, _> = blocks
                         .iter()
                         .zip(rosters.iter())
@@ -1868,18 +2312,62 @@ pub mod message {
                             &block_sync.kura,
                             block_height,
                             block_hash,
+                            block_sync.fallback_consensus_mode,
                         );
-                        if let Some(metadata) = effective_roster_metadata(incoming_roster, fallback)
-                        {
-                            msg.commit_qc
-                                .clone_from(&metadata.commit_qc);
+                        let view = block_sync.state.view();
+                        let consensus_mode = consensus_mode_for_block_sync(
+                            &view,
+                            block_height,
+                            block_sync.fallback_consensus_mode,
+                        );
+                        if let Some(metadata) = effective_roster_metadata(
+                            incoming_roster,
+                            fallback,
+                            consensus_mode,
+                            block_height,
+                            block_hash,
+                        ) {
+                            msg.commit_qc.clone_from(&metadata.commit_qc);
                             msg.validator_checkpoint
                                 .clone_from(&metadata.validator_checkpoint);
                             msg.stake_snapshot.clone_from(&metadata.stake_snapshot);
                         }
                         if msg.commit_qc.is_none() {
-                            msg.commit_qc = incoming_qc
-                                .or_else(|| BlockSynchronizer::block_sync_qc_for(&block));
+                            if let Some(qc) = incoming_qc.or_else(|| {
+                                BlockSynchronizer::block_sync_qc_for(
+                                    &view,
+                                    block_sync.fallback_consensus_mode,
+                                    &block,
+                                )
+                            }) {
+                                let attach_qc = match consensus_mode {
+                                    ConsensusMode::Permissioned => true,
+                                    ConsensusMode::Npos => {
+                                        if let Some(snapshot) = msg.stake_snapshot.as_ref() {
+                                            if snapshot.matches_roster(&qc.validator_set) {
+                                                true
+                                            } else {
+                                                warn!(
+                                                    height = block_height,
+                                                    block = %block_hash,
+                                                    "dropping block sync QC with mismatched stake snapshot"
+                                                );
+                                                false
+                                            }
+                                        } else {
+                                            warn!(
+                                                height = block_height,
+                                                block = %block_hash,
+                                                "dropping block sync QC without stake snapshot"
+                                            );
+                                            false
+                                        }
+                                    }
+                                };
+                                if attach_qc {
+                                    msg.commit_qc = Some(qc);
+                                }
+                            }
                         }
                         block_sync.sumeragi.incoming_block_message(
                             crate::sumeragi::message::BlockMessage::BlockSyncUpdate(msg),
@@ -2075,7 +2563,15 @@ pub mod message {
 
         impl<'de> norito::NoritoDeserialize<'de> for GetBlocksAfter {
             fn deserialize(archived: &'de norito::Archived<GetBlocksAfter>) -> Self {
-                Self::try_deserialize(archived).expect("invalid GetBlocksAfter")
+                let candidate = <GetBlocksAfterCandidate as norito::NoritoDeserialize>::deserialize(
+                    archived.cast(),
+                );
+                GetBlocksAfter {
+                    peer_id: candidate.peer,
+                    prev_hash: candidate.prev_hash,
+                    latest_hash: candidate.latest_hash,
+                    seen_blocks: candidate.seen_blocks,
+                }
             }
 
             fn try_deserialize(
@@ -2090,7 +2586,15 @@ pub mod message {
 
         impl<'de> norito::NoritoDeserialize<'de> for ShareBlocks {
             fn deserialize(archived: &'de norito::Archived<ShareBlocks>) -> Self {
-                Self::try_deserialize(archived).expect("invalid ShareBlocks")
+                let candidate = <ShareBlocksCandidate as norito::NoritoDeserialize>::deserialize(
+                    archived.cast(),
+                );
+                ShareBlocks {
+                    peer_id: candidate.peer,
+                    blocks: candidate.blocks,
+                    qcs: candidate.qcs,
+                    rosters: candidate.rosters,
+                }
             }
 
             fn try_deserialize(
@@ -2280,6 +2784,65 @@ pub mod message {
     }
 
     #[cfg(test)]
+    mod validation_tests {
+        use core::num::NonZeroU64;
+
+        use iroha_crypto::{Hash, HashOf, KeyPair, PrivateKey};
+
+        use super::*;
+        use crate::block::ValidBlock;
+
+        fn make_block(
+            leader_private_key: &PrivateKey,
+            height: u64,
+            prev_hash: Option<HashOf<BlockHeader>>,
+        ) -> SignedBlock {
+            let block = ValidBlock::new_dummy_and_modify_header(leader_private_key, |header| {
+                let height = NonZeroU64::new(height).expect("height must be non-zero");
+                header.set_height(height);
+                header.set_prev_block_hash(prev_hash);
+            });
+            block.into()
+        }
+
+        #[test]
+        fn validate_get_blocks_after_rejects_prev_hash_without_latest() {
+            let prev_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
+            let err = validate_get_blocks_after_request(&Some(prev_hash), &None)
+                .expect_err("prev hash without latest must be rejected");
+            assert_eq!(err, GetBlocksAfterValidationError::PrevHashWithoutLatest);
+        }
+
+        #[test]
+        fn validate_share_blocks_sequence_rejects_empty() {
+            let err = validate_share_blocks_sequence(&[])
+                .expect_err("empty block batch must be rejected");
+            assert_eq!(err, ShareBlocksSequenceError::Empty);
+        }
+
+        #[test]
+        fn validate_share_blocks_sequence_rejects_height_gap() {
+            let keypair = KeyPair::random();
+            let block1 = make_block(keypair.private_key(), 1, None);
+            let block2 = make_block(keypair.private_key(), 3, Some(block1.hash()));
+            let err = validate_share_blocks_sequence(&[block1, block2])
+                .expect_err("height gap must be rejected");
+            assert_eq!(err, ShareBlocksSequenceError::HeightMissed);
+        }
+
+        #[test]
+        fn validate_share_blocks_sequence_rejects_prev_hash_mismatch() {
+            let keypair = KeyPair::random();
+            let block1 = make_block(keypair.private_key(), 1, None);
+            let wrong_prev = HashOf::from_untyped_unchecked(Hash::prehashed([0xCD; Hash::LENGTH]));
+            let block2 = make_block(keypair.private_key(), 2, Some(wrong_prev));
+            let err = validate_share_blocks_sequence(&[block1, block2])
+                .expect_err("prev hash mismatch must be rejected");
+            assert_eq!(err, ShareBlocksSequenceError::PrevBlockHashMismatch);
+        }
+    }
+
+    #[cfg(test)]
     mod filter_tests {
         use std::{
             collections::{BTreeMap, BTreeSet},
@@ -2443,6 +3006,8 @@ pub mod message {
             );
             let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
             BlockSynchronizer::qc_from_signers(
+                ConsensusMode::Permissioned,
+                None,
                 mode_tag,
                 topology.as_ref().to_vec(),
                 block_hash,
@@ -2525,7 +3090,13 @@ pub mod message {
             );
             let context =
                 super::BlockSyncValidationContext::new(&block, &topology, &state_view, &mode_tag);
-            let sanitized = super::sanitize_block_sync_qc(&block, Some(qc.clone()), &context);
+            let sanitized = super::sanitize_block_sync_qc(
+                &state_view,
+                ConsensusMode::Permissioned,
+                &block,
+                Some(qc.clone()),
+                &context,
+            );
 
             assert_eq!(sanitized, Some(qc));
         }
@@ -3007,10 +3578,15 @@ pub mod message {
                     mode_tag: mode_tag.to_string(),
                     bls_aggregate_signature: aggregate_signature.clone(),
                     validator_set: topology.as_ref().to_vec(),
+                    stake_snapshot: None,
                 },
             );
-            let derived_qc =
-                BlockSynchronizer::block_sync_qc_for(&block).expect("cached QC available");
+            let derived_qc = BlockSynchronizer::block_sync_qc_for(
+                &state_view,
+                ConsensusMode::Permissioned,
+                &block,
+            )
+            .expect("cached QC available");
 
             // Forge a mismatched bitmap to force replacement.
             let mut forged_qc = derived_qc.clone();
@@ -3083,14 +3659,19 @@ pub mod message {
                     mode_tag: mode_tag.to_string(),
                     bls_aggregate_signature: aggregate_signature.clone(),
                     validator_set: topology.as_ref().to_vec(),
+                    stake_snapshot: None,
                 },
             );
             assert!(
                 crate::sumeragi::status::precommit_signers_for(block.hash()).is_some(),
                 "precommit signer record should be visible to block sync QC builder"
             );
-            let derived_qc = BlockSynchronizer::block_sync_qc_for(&block)
-                .expect("derived QC should be available for valid block");
+            let derived_qc = BlockSynchronizer::block_sync_qc_for(
+                &state_view,
+                ConsensusMode::Permissioned,
+                &block,
+            )
+            .expect("derived QC should be available for valid block");
 
             let mut forged_qc = derived_qc.clone();
             forged_qc.aggregate.bls_aggregate_signature = vec![0xFF; 48];
@@ -3177,14 +3758,19 @@ pub mod message {
                     mode_tag: mode_tag.to_string(),
                     bls_aggregate_signature: aggregate_signature.clone(),
                     validator_set: topology.as_ref().to_vec(),
+                    stake_snapshot: None,
                 },
             );
             assert!(
                 crate::sumeragi::status::precommit_signers_for(block.hash()).is_some(),
                 "precommit signer record should be visible to block sync QC builder"
             );
-            let derived_qc = BlockSynchronizer::block_sync_qc_for(&block)
-                .expect("derived QC should be available for valid block");
+            let derived_qc = BlockSynchronizer::block_sync_qc_for(
+                &state_view,
+                ConsensusMode::Permissioned,
+                &block,
+            )
+            .expect("derived QC should be available for valid block");
 
             let mut forged_signers = BTreeSet::new();
             forged_signers.insert(ValidatorIndex::try_from(0u32).expect("validator index parses"));
@@ -3381,6 +3967,7 @@ pub mod message {
                     mode_tag: mode_tag.to_string(),
                     bls_aggregate_signature: aggregate_signature,
                     validator_set: topology.as_ref().to_vec(),
+                    stake_snapshot: None,
                 },
             );
             assert!(

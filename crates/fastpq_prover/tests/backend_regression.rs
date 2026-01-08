@@ -2,11 +2,11 @@
 
 use std::fs;
 
-use fastpq_prover::{OperationKind, Prover, StateTransition, TransitionBatch};
+use fastpq_prover::{OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch};
 use norito::core::to_bytes;
 
 fn synthetic_batch(rows: usize) -> TransitionBatch {
-    let mut batch = TransitionBatch::new("fastpq-lane-balanced");
+    let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
     for idx in 0..rows {
         let key = format!("asset/xor/account/{idx:08}").into_bytes();
         let pre = (idx as u64).to_le_bytes().to_vec();
@@ -19,14 +19,12 @@ fn synthetic_batch(rows: usize) -> TransitionBatch {
         batch.push(StateTransition::new(key, pre, post, op));
     }
     batch.sort();
-    batch.metadata.insert("dsid".into(), vec![0u8; 16]);
-    batch
-        .metadata
-        .insert("slot".into(), 0u64.to_le_bytes().to_vec());
-    batch.metadata.insert("old_root".into(), vec![0u8; 32]);
-    batch.metadata.insert("new_root".into(), vec![0u8; 32]);
-    batch.metadata.insert("perm_root".into(), vec![0u8; 32]);
-    batch.metadata.insert("tx_set_hash".into(), vec![0u8; 32]);
+    batch.public_inputs.dsid = [0u8; 16];
+    batch.public_inputs.slot = 0;
+    batch.public_inputs.old_root = [0u8; 32];
+    batch.public_inputs.new_root = [0u8; 32];
+    batch.public_inputs.perm_root = [0u8; 32];
+    batch.public_inputs.tx_set_hash = [0u8; 32];
     batch
 }
 

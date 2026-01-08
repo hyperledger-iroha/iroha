@@ -38,8 +38,8 @@ use iroha_data_model::{
     },
     confidential::ConfidentialFeatureDigest,
     consensus::{
-        Qc, ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole,
-        ConsensusKeyStatus, ValidatorSetCheckpoint,
+        ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus, Qc,
+        ValidatorSetCheckpoint,
     },
     content::{ContentBundleId, ContentBundleRecord, ContentChunk},
     da::{
@@ -10235,11 +10235,7 @@ impl State {
             return;
         }
         let mut journal = self.commit_roster_journal.write();
-        journal.upsert(
-            commit_qc.clone(),
-            checkpoint.clone(),
-            stake_snapshot,
-        );
+        journal.upsert(commit_qc.clone(), checkpoint.clone(), stake_snapshot);
         if let Err(err) = journal.persist() {
             warn!(
                 ?err,
@@ -10265,12 +10261,109 @@ impl State {
         Some(snapshot)
     }
 
-    fn record_commit_roster(
+    fn upsert_commit_qc_in_world(&self, commit_qc: &Qc) {
+        let mut commit_qcs = self.world.commit_qcs.block();
+        let should_update = match commit_qcs.get(&commit_qc.subject_block_hash) {
+            Some(existing) => {
+                if existing.height != commit_qc.height {
+                    warn!(
+                        height = commit_qc.height,
+                        block = %commit_qc.subject_block_hash,
+                        existing_height = existing.height,
+                        "overwriting commit QC with mismatched height in world storage"
+                    );
+                }
+                existing.view <= commit_qc.view
+            }
+            None => true,
+        };
+        if !should_update {
+            return;
+        }
+        commit_qcs.insert(commit_qc.subject_block_hash, commit_qc.clone());
+        commit_qcs.commit();
+    }
+
+    fn record_commit_roster_internal(
         &self,
         commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
-    ) {
+        update_world: bool,
+    ) -> bool {
+        if !matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+            warn!(
+                height = commit_qc.height,
+                view = commit_qc.view,
+                phase = ?commit_qc.phase,
+                "skipping commit roster record for non-commit certificate"
+            );
+            return false;
+        }
+        if checkpoint.height != commit_qc.height
+            || checkpoint.block_hash != commit_qc.subject_block_hash
+        {
+            warn!(
+                height = commit_qc.height,
+                view = commit_qc.view,
+                block = %commit_qc.subject_block_hash,
+                checkpoint_height = checkpoint.height,
+                checkpoint_block = %checkpoint.block_hash,
+                "skipping commit roster record: checkpoint metadata mismatch"
+            );
+            return false;
+        }
+        if checkpoint.validator_set_hash_version != commit_qc.validator_set_hash_version
+            || checkpoint.validator_set_hash != commit_qc.validator_set_hash
+            || checkpoint.validator_set != commit_qc.validator_set
+            || checkpoint.signers_bitmap != commit_qc.aggregate.signers_bitmap
+            || checkpoint.bls_aggregate_signature != commit_qc.aggregate.bls_aggregate_signature
+        {
+            warn!(
+                height = commit_qc.height,
+                view = commit_qc.view,
+                block = %commit_qc.subject_block_hash,
+                "skipping commit roster record: checkpoint does not match commit certificate"
+            );
+            return false;
+        }
+        let mut stake_snapshot = stake_snapshot;
+        if stake_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| !snapshot.matches_roster(&commit_qc.validator_set))
+        {
+            warn!(
+                height = commit_qc.height,
+                view = commit_qc.view,
+                block = %commit_qc.subject_block_hash,
+                "skipping commit roster stake snapshot: roster mismatch"
+            );
+            stake_snapshot = None;
+        }
+        let existing_snapshot = self
+            .commit_roster_journal
+            .read()
+            .get(commit_qc.height, commit_qc.subject_block_hash);
+        if let Some(snapshot) = existing_snapshot.as_ref() {
+            if snapshot.commit_qc.view > commit_qc.view {
+                debug!(
+                    height = commit_qc.height,
+                    view = commit_qc.view,
+                    block = %commit_qc.subject_block_hash,
+                    existing_view = snapshot.commit_qc.view,
+                    "skipping commit roster record for older certificate view"
+                );
+                return false;
+            }
+        }
+        let stake_snapshot = stake_snapshot.or_else(|| {
+            existing_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.stake_snapshot.clone())
+        });
+        if update_world {
+            self.upsert_commit_qc_in_world(commit_qc);
+        }
         status::record_commit_qc(commit_qc.clone());
         status::record_validator_checkpoint(checkpoint.clone());
         let sidecar_snapshot = stake_snapshot.clone();
@@ -10283,6 +10376,28 @@ impl State {
             sidecar_snapshot,
         );
         self.kura.write_roster_metadata(&sidecar);
+        true
+    }
+
+    /// Record commit-roster artifacts in status caches, world storage, journal, and sidecar.
+    ///
+    /// Returns `true` when the roster entry is accepted or `false` when skipped.
+    pub(crate) fn record_commit_roster(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+    ) -> bool {
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true)
+    }
+
+    fn record_commit_roster_without_world(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+    ) -> bool {
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, false)
     }
 
     fn restore_commit_roster_history(&self) {
@@ -10294,6 +10409,7 @@ impl State {
         for snapshot in &snapshots {
             status::record_commit_qc(snapshot.commit_qc.clone());
             status::record_validator_checkpoint(snapshot.validator_checkpoint.clone());
+            self.upsert_commit_qc_in_world(&snapshot.commit_qc);
         }
         debug!(restored, "restored commit rosters from journal");
     }
@@ -12046,7 +12162,13 @@ impl State {
         let commit_topology = self.commit_topology.view();
         let prev_commit_topology = self.prev_commit_topology.view();
         let nexus = self.nexus_snapshot();
-        let _view_lock = self.view_lock.read();
+        let _view_lock = match self.view_lock.try_read() {
+            Some(guard) => Some(guard),
+            None => {
+                warn!("state view lock contended; returning unlocked view");
+                None
+            }
+        };
         StateView {
             world,
             block_hashes,
@@ -12233,8 +12355,7 @@ impl State {
         committee: &[AccountId],
     ) -> Result<(), LaneRelayError> {
         let qc = envelope.qc.as_ref().ok_or(LaneRelayError::MissingQc)?;
-        let public_keys =
-            Self::lane_relay_qc_public_keys(committee, &qc.aggregate.signers_bitmap)?;
+        let public_keys = Self::lane_relay_qc_public_keys(committee, &qc.aggregate.signers_bitmap)?;
         if public_keys.is_empty() {
             return Err(LaneRelayError::AggregateSignatureInvalid);
         }
@@ -14397,8 +14518,23 @@ impl<'state> StateBlock<'state> {
                         commit_cert.validator_set_hash_version,
                         None,
                     );
-                    self.state_ref
-                        .record_commit_roster(&commit_cert, &checkpoint, stake_snapshot);
+                    let recorded = self.state_ref.record_commit_roster_without_world(
+                        &commit_cert,
+                        &checkpoint,
+                        stake_snapshot,
+                    );
+                    if recorded {
+                        let should_update =
+                            match self.world.commit_qcs.get(&commit_cert.subject_block_hash) {
+                                Some(existing) => existing.view <= commit_cert.view,
+                                None => true,
+                            };
+                        if should_update {
+                            self.world
+                                .commit_qcs
+                                .insert(commit_cert.subject_block_hash, commit_cert.clone());
+                        }
+                    }
                 }
             } else {
                 warn!(
@@ -14823,7 +14959,7 @@ mod transfer_transcript_tests {
             from_merkle_proof: None,
             to_merkle_proof: None,
         };
-        tx.record_transfer_transcript(delta, None, None);
+        tx.record_transfer_transcript(delta, crate::fastpq::authority_digest(&ALICE_ID), None);
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
         let entry = transcripts
@@ -14854,7 +14990,7 @@ mod transfer_transcript_tests {
             from_merkle_proof: None,
             to_merkle_proof: None,
         };
-        tx.record_transfer_transcript(delta, None, None);
+        tx.record_transfer_transcript(delta, crate::fastpq::authority_digest(&ALICE_ID), None);
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
         assert_eq!(transcripts.len(), 1);
@@ -14905,7 +15041,11 @@ mod transfer_transcript_tests {
             from_merkle_proof: None,
             to_merkle_proof: None,
         };
-        tx.record_transfer_transcripts(vec![delta_a.clone(), delta_b.clone()], None, None);
+        tx.record_transfer_transcripts(
+            vec![delta_a.clone(), delta_b.clone()],
+            crate::fastpq::authority_digest(&ALICE_ID),
+            None,
+        );
         tx.apply();
         let transcripts = block.drain_transfer_transcripts();
         assert_eq!(transcripts.len(), 1);
@@ -16984,7 +17124,7 @@ impl StateTransaction<'_, '_> {
     pub fn record_transfer_transcript(
         &mut self,
         delta: TransferDeltaTranscript,
-        authority_digest: Option<Hash>,
+        authority_digest: Hash,
         poseidon_digest: Option<Hash>,
     ) {
         self.record_transfer_transcripts(vec![delta], authority_digest, poseidon_digest);
@@ -16994,7 +17134,7 @@ impl StateTransaction<'_, '_> {
     pub fn record_transfer_transcripts(
         &mut self,
         mut deltas: Vec<TransferDeltaTranscript>,
-        authority_digest: Option<Hash>,
+        authority_digest: Hash,
         poseidon_digest: Option<Hash>,
     ) {
         if deltas.is_empty() {
@@ -22236,6 +22376,13 @@ mod tests {
             checkpoints.iter().any(|chk| chk == &checkpoint),
             "checkpoint should be restored from journal"
         );
+        let view = state.view();
+        let stored = view.world().commit_qcs().get(&block_hash);
+        assert_eq!(
+            stored,
+            Some(&commit_cert),
+            "commit certificate should be restored into world storage"
+        );
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
     }
@@ -22269,6 +22416,13 @@ mod tests {
         let cert = certs.first().expect("commit certificate recorded");
         assert_eq!(cert.height, committed.as_ref().header().height().get());
         assert_eq!(cert.aggregate.signers_bitmap, vec![0b0000_0010]);
+        let view = state.view();
+        let stored = view.world().commit_qcs().get(&committed.as_ref().hash());
+        assert_eq!(
+            stored,
+            Some(cert),
+            "commit certificate should be recorded in world storage"
+        );
 
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -22363,6 +22517,16 @@ mod tests {
             sidecar.roster_snapshot().as_deref(),
             Some(commit_cert.validator_set.as_slice()),
             "roster snapshot should match commit certificate"
+        );
+        let view = state.view();
+        let stored = view
+            .world()
+            .commit_qcs()
+            .get(&commit_cert.subject_block_hash);
+        assert_eq!(
+            stored,
+            Some(&commit_cert),
+            "commit certificate should be recorded in world storage"
         );
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();

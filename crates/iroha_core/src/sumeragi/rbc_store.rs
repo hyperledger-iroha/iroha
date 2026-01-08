@@ -45,13 +45,15 @@ impl SoftwareManifest {
         }
     }
 
-    /// Returns true when manifests are equivalent; treats missing commit hashes as unequal.
+    /// Returns true when manifests are equivalent; missing commit hashes only match when both are
+    /// absent to avoid accidentally mixing builds.
     pub fn matches(&self, other: &Self) -> bool {
         if self.version != other.version || self.profile != other.profile {
             return false;
         }
         match (&self.git_commit, &other.git_commit) {
             (Some(this), Some(that)) => this == that,
+            (None, None) => true,
             _ => false,
         }
     }
@@ -136,7 +138,7 @@ pub(super) struct PersistOutcome {
     pub(super) pressure: StorePressure,
 }
 
-pub(super) const PERSIST_VERSION: u8 = 3;
+pub(super) const PERSIST_VERSION: u8 = 4;
 
 fn persist_version_supported(version: u8) -> bool {
     version == PERSIST_VERSION
@@ -690,7 +692,6 @@ impl ChunkStore {
         (self.soft_sessions > 0 && sessions > self.soft_sessions)
             || (self.soft_bytes > 0 && bytes > self.soft_bytes)
     }
-
 }
 
 fn temp_session_path(path: &Path) -> PathBuf {
@@ -768,6 +769,9 @@ pub(super) struct PersistedSession {
     pub(crate) view: u64,
     pub(crate) epoch: u64,
     pub(crate) total_chunks: u32,
+    /// SHA-256 digests for each chunk, indexed by chunk position.
+    #[norito(default)]
+    pub(crate) chunk_digests: Vec<[u8; 32]>,
     pub(crate) payload_hash: Option<Hash>,
     pub(crate) expected_chunk_root: Option<Hash>,
     pub(crate) computed_chunk_root: Option<Hash>,
@@ -836,11 +840,17 @@ fn ms_to_system_time(ms: u64) -> SystemTime {
 fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
     let expected = session.total_chunks as usize;
     if expected == 0 {
+        if !session.chunk_digests.is_empty() {
+            return Err("chunk digest count mismatch");
+        }
         return if session.chunks.is_empty() {
             Ok(())
         } else {
             Err("non-empty chunk list with zero expected chunks")
         };
+    }
+    if !session.chunk_digests.is_empty() && session.chunk_digests.len() != expected {
+        return Err("chunk digest count mismatch");
     }
     if session.chunks.len() > expected {
         return Err("too many chunks");
@@ -914,6 +924,9 @@ fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
             hashed.copy_from_slice(&digest);
             digests.push(hashed);
         }
+        if !session.chunk_digests.is_empty() && session.chunk_digests != digests {
+            return Err("chunk digest mismatch");
+        }
         let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests);
         let Some(root) = tree.root().map(Hash::from) else {
             return Err("failed to compute chunk root");
@@ -979,6 +992,7 @@ mod tests {
             view: key.2,
             epoch: 0,
             total_chunks: 0,
+            chunk_digests: Vec::new(),
             payload_hash: None,
             expected_chunk_root: None,
             computed_chunk_root: None,
@@ -1017,7 +1031,7 @@ mod tests {
     }
 
     #[test]
-    fn software_manifest_matches_requires_commit_hash() {
+    fn software_manifest_matches_handles_missing_commit_hashes() {
         let with_commit = SoftwareManifest {
             version: "1.0.0".into(),
             profile: "release".into(),
@@ -1031,7 +1045,7 @@ mod tests {
 
         assert!(!with_commit.matches(&missing_commit));
         assert!(!missing_commit.matches(&with_commit));
-        assert!(!missing_commit.matches(&missing_commit));
+        assert!(missing_commit.matches(&missing_commit));
     }
 
     #[test]
@@ -1071,6 +1085,7 @@ mod tests {
             view: key.2,
             epoch: 0,
             total_chunks: 0,
+            chunk_digests: Vec::new(),
             payload_hash: None,
             expected_chunk_root: None,
             computed_chunk_root: None,
@@ -1370,6 +1385,27 @@ mod tests {
     }
 
     #[test]
+    fn persisted_session_adopts_computed_chunk_root_when_expected_missing() {
+        let key = session_key(8);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let roster = vec![test_peer_id(1)];
+
+        let mut session = RbcSession::test_new(2, None, None, 0);
+        session.test_note_chunk(0, vec![1u8, 2, 3], 0);
+        session.test_note_chunk(1, vec![4u8, 5, 6], 0);
+        let computed_root = session.chunk_root().expect("chunk root");
+
+        let persisted = session.to_persisted(key, chain_hash, &manifest, &roster);
+        assert!(persisted.expected_chunk_root.is_none());
+        assert_eq!(persisted.computed_chunk_root, Some(computed_root));
+
+        let rebuilt = RbcSession::from_persisted_unchecked(&persisted).expect("rebuild session");
+        let roundtrip = rebuilt.to_persisted(key, chain_hash, &manifest, &roster);
+        assert_eq!(roundtrip.expected_chunk_root, Some(computed_root));
+    }
+
+    #[test]
     fn persisted_invalid_session_roundtrips_as_invalid() {
         let key = session_key(9);
         let chain_hash = test_chain_hash();
@@ -1478,10 +1514,7 @@ mod tests {
         let persisted = load.sessions.into_iter().next().expect("session persisted");
         assert!(
             persisted.chunks.len() == 2
-                && persisted
-                    .chunks
-                    .iter()
-                    .all(|chunk| !chunk.bytes.is_empty()),
+                && persisted.chunks.iter().all(|chunk| !chunk.bytes.is_empty()),
             "persisted session should retain chunk bytes for sampling"
         );
     }

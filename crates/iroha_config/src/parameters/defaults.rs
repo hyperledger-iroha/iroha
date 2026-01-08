@@ -2218,7 +2218,7 @@ pub mod sumeragi {
     /// Default: allow runtime consensus mode flips driven by on-chain parameters.
     pub const MODE_FLIP_ENABLED: bool = true;
     /// Default: data availability (RBC + availability QC gating) disabled.
-    pub const DA_ENABLED: bool = false;
+    pub const DA_ENABLED: bool = true;
     /// Multiplier for DA commit-quorum timeout (applied to block_time + 4 * commit_time).
     pub const DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 3;
     /// Multiplier for availability timeout in DA mode.

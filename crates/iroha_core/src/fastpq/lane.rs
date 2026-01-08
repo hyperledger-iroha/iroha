@@ -325,7 +325,7 @@ mod tests {
                     from_merkle_proof: None,
                     to_merkle_proof: None,
                 }],
-                authority_digest: None,
+                authority_digest: super::authority_digest(&ALICE_ID),
                 poseidon_preimage_digest: None,
             }],
         }

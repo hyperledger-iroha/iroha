@@ -136,7 +136,7 @@ Syntax
 - Upgrade hook: `kaizen(args...) permission(Role) { ... }`.
 
 Parameters اور returns
-- Arguments `r10..r17` registers میں values یا INPUT pointers (Norito TLV) کے طور پر ABI کے مطابق pass ہوتے ہیں؛ اضافی args stack پر spill ہوتے ہیں۔
+- Arguments `r10..r22` registers میں values یا INPUT pointers (Norito TLV) کے طور پر ABI کے مطابق pass ہوتے ہیں؛ اضافی args stack پر spill ہوتے ہیں۔
 - Functions صفر یا ایک scalar یا tuple return کرتی ہیں۔ primary return value scalar کے لیے `r10` میں؛ tuples convention کے مطابق stack/OUTPUT میں materialize ہوتے ہیں۔
 
 ## بیانات

@@ -3,17 +3,18 @@ pub mod lane;
 
 use std::collections::BTreeMap;
 
-use fastpq_prover::{OperationKind, StateTransition, TransitionBatch};
+use fastpq_prover::{OperationKind, PublicInputs, StateTransition, TransitionBatch};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
     asset::id::AssetDefinitionId,
-    block::consensus::ExecWitness,
+    block::{BlockHeader, consensus::ExecWitness},
     fastpq::{
-        FastpqOperationKind, FastpqRolePermissionDelta, FastpqStateTransition,
+        FastpqOperationKind, FastpqPublicInputs, FastpqRolePermissionDelta, FastpqStateTransition,
         FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript,
         TransferTranscript, TransferTranscriptBundle,
     },
+    DataSpaceId,
 };
 use iroha_primitives::numeric::Numeric;
 use iroha_zkp_halo2::poseidon;
@@ -21,6 +22,7 @@ use norito::{codec::Encode as NoritoEncode, to_bytes};
 use thiserror::Error;
 
 const AUTHORITY_DIGEST_DOMAIN: &[u8] = b"iroha:fastpq:v1:authority|";
+const TX_SET_HASH_DOMAIN: &[u8] = b"fastpq:v1:tx_set";
 /// Metadata key storing the originating entry hash for a batch.
 pub const ENTRY_HASH_METADATA_KEY: &str = "entry_hash";
 /// Metadata key storing the transcript count embedded in a batch.
@@ -28,6 +30,36 @@ pub const TRANSCRIPT_COUNT_METADATA_KEY: &str = "transcript_count";
 
 /// Canonical FASTPQ parameter name used across the host and CLI helpers.
 pub const FASTPQ_CANONICAL_PARAMETER_SET: &str = "fastpq-lane-balanced";
+
+/// Base fields for FASTPQ public inputs shared across batches in a block.
+#[derive(Debug, Clone, Copy)]
+pub struct FastpqPublicInputsTemplate {
+    /// Data-space identifier (little-endian UUID bytes).
+    pub dsid: [u8; 16],
+    /// Slot timestamp (nanoseconds since epoch).
+    pub slot: u64,
+    /// Sparse Merkle tree root before executing the batch.
+    pub old_root: [u8; 32],
+    /// Sparse Merkle tree root after executing the batch.
+    pub new_root: [u8; 32],
+    /// Permission table commitment for this slot.
+    pub perm_root: [u8; 32],
+}
+
+impl FastpqPublicInputsTemplate {
+    /// Build full public inputs using a precomputed transaction set hash.
+    #[must_use]
+    pub const fn with_tx_set_hash(self, tx_set_hash: [u8; 32]) -> FastpqPublicInputs {
+        FastpqPublicInputs {
+            dsid: self.dsid,
+            slot: self.slot,
+            old_root: self.old_root,
+            new_root: self.new_root,
+            perm_root: self.perm_root,
+            tx_set_hash,
+        }
+    }
+}
 
 /// Errors that can occur while mapping transfer transcripts into FASTPQ transition batches.
 #[derive(Debug, Error)]
@@ -45,6 +77,9 @@ pub enum TranscriptBatchError {
         #[from]
         source: norito::core::Error,
     },
+    /// Execution witness does not carry precomputed FASTPQ batches.
+    #[error("execution witness missing fastpq batches with public inputs")]
+    MissingFastpqBatches,
 }
 
 /// Compute the canonical authority digest hashed by the host.
@@ -74,8 +109,8 @@ fn append_encoded<T: NoritoEncode>(buffer: &mut Vec<u8>, value: &T) {
 
 /// Convert a collection of transfer transcripts into a canonical FASTPQ transition batch.
 ///
-/// The caller is responsible for threading metadata (slot, DSID, Merkle roots, etc.) into
-/// the returned batch's `metadata` map if those fields are required by downstream consumers.
+/// The caller is responsible for populating `public_inputs` and threading metadata
+/// (slot, DSID, Merkle roots, etc.) into the returned batch if required by downstream consumers.
 ///
 /// # Errors
 /// Returns [`TranscriptBatchError`] if any transcript fails to append to the batch.
@@ -87,7 +122,7 @@ where
     I: IntoIterator<Item = &'a TransferTranscript>,
 {
     let transcripts: Vec<TransferTranscript> = transcripts.into_iter().cloned().collect();
-    let mut batch = TransitionBatch::new(parameter_set);
+    let mut batch = TransitionBatch::new(parameter_set, PublicInputs::default());
     for transcript in &transcripts {
         append_transcript(&mut batch, transcript)?;
     }
@@ -242,6 +277,7 @@ pub fn transition_batch_to_dto_ref(batch: &TransitionBatch) -> FastpqTransitionB
         .collect();
     FastpqTransitionBatch {
         parameter: batch.parameter.clone(),
+        public_inputs: public_inputs_to_dto(&batch.public_inputs),
         transitions,
         metadata: batch.metadata.clone(),
     }
@@ -250,7 +286,10 @@ pub fn transition_batch_to_dto_ref(batch: &TransitionBatch) -> FastpqTransitionB
 /// Convert a DTO batch back into the prover representation.
 #[must_use]
 pub fn transition_batch_from_dto(dto: &FastpqTransitionBatch) -> TransitionBatch {
-    let mut batch = TransitionBatch::new(dto.parameter.clone());
+    let mut batch = TransitionBatch::new(
+        dto.parameter.clone(),
+        public_inputs_from_dto(&dto.public_inputs),
+    );
     for transition in &dto.transitions {
         batch.push(StateTransition::new(
             transition.key.clone(),
@@ -261,6 +300,28 @@ pub fn transition_batch_from_dto(dto: &FastpqTransitionBatch) -> TransitionBatch
     }
     batch.metadata = dto.metadata.clone();
     batch
+}
+
+fn public_inputs_to_dto(inputs: &PublicInputs) -> FastpqPublicInputs {
+    FastpqPublicInputs {
+        dsid: inputs.dsid,
+        slot: inputs.slot,
+        old_root: inputs.old_root,
+        new_root: inputs.new_root,
+        perm_root: inputs.perm_root,
+        tx_set_hash: inputs.tx_set_hash,
+    }
+}
+
+fn public_inputs_from_dto(inputs: &FastpqPublicInputs) -> PublicInputs {
+    PublicInputs {
+        dsid: inputs.dsid,
+        slot: inputs.slot,
+        old_root: inputs.old_root,
+        new_root: inputs.new_root,
+        perm_root: inputs.perm_root,
+        tx_set_hash: inputs.tx_set_hash,
+    }
 }
 
 fn state_transition_to_dto(transition: &StateTransition) -> FastpqStateTransition {
@@ -490,6 +551,14 @@ mod tests {
         let transcript = sample_transcript();
         let mut batch =
             batch_from_transcripts(FASTPQ_CANONICAL_PARAMETER_SET, [&transcript]).unwrap();
+        batch.public_inputs = PublicInputs {
+            dsid: [0x11; 16],
+            slot: 42,
+            old_root: [0x22; 32],
+            new_root: [0x33; 32],
+            perm_root: [0x44; 32],
+            tx_set_hash: [0x55; 32],
+        };
         batch.metadata.insert("test".into(), vec![0xAA, 0xBB, 0xCC]);
         let dto = transition_batch_to_dto(&batch);
         let restored = transition_batch_from_dto(&dto);
@@ -498,6 +567,7 @@ mod tests {
             dto_transitions(&restored.transitions),
             dto_transitions(&batch.transitions)
         );
+        assert_eq!(restored.public_inputs, batch.public_inputs);
         assert_eq!(restored.metadata, batch.metadata);
     }
 
@@ -545,7 +615,7 @@ mod tests {
                 from_merkle_proof: None,
                 to_merkle_proof: None,
             }],
-            authority_digest: None,
+            authority_digest: authority_digest(&ALICE_ID),
             poseidon_preimage_digest: None,
         }
     }

@@ -34,7 +34,7 @@ use crate::gpu;
 #[cfg(feature = "fastpq-gpu")]
 use crate::overrides;
 use crate::{
-    Error, Result, TransitionBatch,
+    Error, Result, StateTransition, TransitionBatch,
     backend::{self, ExecutionMode, PoseidonExecutionMode},
     fft::{GpuLdeDispatch, Planner},
     gadgets::transfer::{self, ProofFlavor, TransferRowKey},
@@ -503,25 +503,13 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
     let mut canonical = batch.clone();
     canonical.sort();
 
-    let transfer_witnesses = extract_transfer_witnesses(&canonical.metadata);
+    let transfer_witnesses =
+        extract_transfer_witnesses(&canonical.metadata, &canonical.transitions)?;
     let transfer_proof_index = transfer::index_row_proofs(&transfer_witnesses);
-    if let Some(transcripts) = transfer::decode_transcripts(&canonical.metadata)? {
-        transfer::verify_transcripts(&canonical.transitions, &transcripts)?;
-    }
 
     let metadata_hash = metadata_hash(&canonical.metadata)?;
-    let dsid_hash = canonical
-        .metadata
-        .get("dsid")
-        .map(|bytes| hash_with_domain(DSID_DOMAIN, bytes))
-        .transpose()? // Option<Result<_>> -> Result<Option<_>>
-        .unwrap_or(0);
-    let slot_value = canonical
-        .metadata
-        .get("slot")
-        .map(|bytes| decode_u64_le(bytes))
-        .transpose()? // Option<Result<_>> -> Result<Option<_>>
-        .unwrap_or(0);
+    let dsid_hash = hash_with_domain(DSID_DOMAIN, &canonical.public_inputs.dsid)?;
+    let slot_value = canonical.public_inputs.slot;
 
     let mut rows: Vec<RowData> = Vec::with_capacity(canonical.transitions.len());
     let mut running_per_asset: HashMap<Vec<u8>, i128> = HashMap::new();
@@ -578,29 +566,45 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
         let value_new_limbs = pack_bytes(&transition.post_value).limbs;
         let asset_limbs = pack_bytes(&asset_id_bytes).limbs;
 
-        let pre_value_u64 = decode_u64_le(&transition.pre_value)?;
-        let post_value_u64 = decode_u64_le(&transition.post_value)?;
-        let value_old = i128::from(pre_value_u64);
-        let value_new = i128::from(post_value_u64);
-        let delta_signed = value_new - value_old;
+        let numeric_values = matches!(
+            transition.operation,
+            crate::OperationKind::Transfer | crate::OperationKind::Mint | crate::OperationKind::Burn
+        );
+        let (_value_old, _value_new, delta_signed, pre_value_u64) = if numeric_values {
+            let pre_value_u64 = decode_u64_le(&transition.pre_value)?;
+            let post_value_u64 = decode_u64_le(&transition.post_value)?;
+            let value_old = i128::from(pre_value_u64);
+            let value_new = i128::from(post_value_u64);
+            (value_old, value_new, value_new - value_old, pre_value_u64)
+        } else {
+            (0, 0, 0, 0)
+        };
         let delta = field_from_i128(delta_signed);
 
         let asset_key = asset_id_bytes.clone();
         let running_prev = running_per_asset.get(&asset_key).copied().unwrap_or(0);
-        let running_next = running_prev + delta_signed;
-        running_per_asset.insert(asset_key.clone(), running_next);
+        let running_next = if numeric_values {
+            let running_next = running_prev + delta_signed;
+            running_per_asset.insert(asset_key.clone(), running_next);
+            running_next
+        } else {
+            running_prev
+        };
 
         let supply_prev = supply_counters.get(&asset_key).copied().unwrap_or(0);
-        let supply_next = supply_prev
-            + if matches!(
+        let supply_next = if numeric_values {
+            let mut supply_next = supply_prev;
+            if matches!(
                 &transition.operation,
                 crate::OperationKind::Mint | crate::OperationKind::Burn
             ) {
-                delta_signed
-            } else {
-                0
-            };
-        supply_counters.insert(asset_key.clone(), supply_next);
+                supply_next += delta_signed;
+            }
+            supply_counters.insert(asset_key.clone(), supply_next);
+            supply_next
+        } else {
+            supply_prev
+        };
 
         let mut row = RowData {
             key_limbs,
@@ -795,29 +799,13 @@ fn metadata_hash(metadata: &BTreeMap<String, Vec<u8>>) -> Result<u64> {
 
 fn extract_transfer_witnesses(
     metadata: &BTreeMap<String, Vec<u8>>,
-) -> Vec<transfer::TransferGadgetInput> {
-    match transfer::decode_transcripts(metadata) {
-        Ok(Some(transcripts)) => match transfer::transcripts_to_witnesses(&transcripts) {
-            Ok(inputs) => inputs,
-            Err(error) => {
-                warn!(
-                    target: "fastpq::trace",
-                    ?error,
-                    "transfer transcripts present but validation failed; skipping gadget witness extraction"
-                );
-                Vec::new()
-            }
-        },
-        Ok(None) => Vec::new(),
-        Err(error) => {
-            warn!(
-                target: "fastpq::trace",
-                ?error,
-                "failed to decode transfer transcripts from batch metadata; skipping gadget witness extraction"
-            );
-            Vec::new()
-        }
-    }
+    transitions: &[StateTransition],
+) -> Result<Vec<transfer::TransferGadgetInput>> {
+    let Some(transcripts) = transfer::decode_transcripts(metadata)? else {
+        return Ok(Vec::new());
+    };
+    transfer::verify_transcripts(transitions, &transcripts)?;
+    transfer::transcripts_to_witnesses(&transcripts)
 }
 
 pub(crate) fn permission_hash(role_id: &[u8], permission_id: &[u8], epoch: u64) -> Result<u64> {
@@ -1925,12 +1913,12 @@ mod tests {
 
     use super::*;
     use crate::{
-        ExecutionMode, OperationKind, PoseidonExecutionMode, StateTransition, TransitionBatch,
-        backend, gadgets::transfer, gpu,
+        ExecutionMode, OperationKind, PoseidonExecutionMode, PublicInputs, StateTransition,
+        TransitionBatch, backend, gadgets::transfer, gpu,
     };
 
     fn sample_batch() -> TransitionBatch {
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced");
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         batch.push(StateTransition::new(
             b"asset/xor/alice".to_vec(),
             100u64.to_le_bytes().to_vec(),
@@ -2357,6 +2345,31 @@ mod tests {
     }
 
     #[test]
+    fn build_trace_rejects_invalid_transfer_transcripts() {
+        let (mut batch, mut transcript) = batch_with_transfer_metadata();
+        transcript.deltas[0].from_balance_after = Numeric::from(1u32);
+        batch.metadata.insert(
+            TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
+            to_bytes(&vec![transcript]).expect("encode transcripts"),
+        );
+        let err = build_trace(&batch).expect_err("invalid transcript must fail");
+        assert!(matches!(err, Error::TransferInvariant { .. }));
+    }
+
+    #[test]
+    fn meta_set_accepts_non_numeric_values() {
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        batch.push(StateTransition::new(
+            b"metadata/domain/wonderland".to_vec(),
+            br#"{"key":"old","value":1}"#.to_vec(),
+            br#"{"key":"new","value":2}"#.to_vec(),
+            OperationKind::MetaSet,
+        ));
+        let trace = build_trace(&batch).expect("build trace");
+        assert_eq!(trace.rows, 1);
+    }
+
+    #[test]
     fn polynomial_data_exposes_transfer_witnesses() {
         let (batch, transcript) = batch_with_transfer_metadata();
         let trace = build_trace(&batch).expect("trace");
@@ -2382,7 +2395,7 @@ mod tests {
 
     fn batch_with_transfer_metadata() -> (TransitionBatch, TransferTranscript) {
         let transcript = sample_transfer_transcript();
-        let mut batch = TransitionBatch::new("fastpq-lane-balanced");
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         for transition in sample_transitions(&transcript) {
             batch.push(transition);
         }
@@ -2412,7 +2425,7 @@ mod tests {
         TransferTranscript {
             batch_hash,
             deltas: vec![delta],
-            authority_digest: Some(Hash::new(b"authority")),
+            authority_digest: Hash::new(b"authority"),
             poseidon_preimage_digest: Some(digest),
         }
     }

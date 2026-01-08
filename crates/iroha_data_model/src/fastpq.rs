@@ -31,8 +31,8 @@ pub struct TransferTranscript {
     pub batch_hash: Hash,
     /// Grouped transfer deltas covered by the transcript.
     pub deltas: Vec<TransferDeltaTranscript>,
-    /// Optional host-side digest of the authority set (signers, quorum, etc.).
-    pub authority_digest: Option<Hash>,
+    /// Host-side digest of the authority set (signers, quorum, etc.).
+    pub authority_digest: Hash,
     /// Optional Poseidon digest of the preimage `(from, to, asset, amount, batch_hash)`.
     pub poseidon_preimage_digest: Option<Hash>,
 }
@@ -103,6 +103,8 @@ impl TransferDeltaTranscript {
 pub struct FastpqTransitionBatch {
     /// Parameter set name (e.g., `fastpq-lane-balanced`).
     pub parameter: String,
+    /// Public inputs committed by the prover and replayed by the verifier.
+    pub public_inputs: FastpqPublicInputs,
     /// Ordered transitions the prover must replay.
     pub transitions: Vec<FastpqStateTransition>,
     /// Arbitrary metadata (e.g., entry hash, slot, DSID).
@@ -158,6 +160,34 @@ pub enum FastpqOperationKind {
     RoleRevoke(FastpqRolePermissionDelta),
     /// Metadata mutation (domains, accounts, assets, etc.).
     MetaSet,
+}
+
+/// Public inputs committed by the FASTPQ prover.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+    IntoSchema,
+)]
+pub struct FastpqPublicInputs {
+    /// Data-space identifier (little-endian UUID bytes).
+    pub dsid: [u8; 16],
+    /// Slot timestamp (nanoseconds since epoch).
+    pub slot: u64,
+    /// Sparse Merkle tree root before executing the batch.
+    pub old_root: [u8; 32],
+    /// Sparse Merkle tree root after executing the batch.
+    pub new_root: [u8; 32],
+    /// Permission table commitment for this slot.
+    pub perm_root: [u8; 32],
+    /// Transaction set hash recorded by the scheduler.
+    pub tx_set_hash: [u8; 32],
 }
 
 /// Role permission delta descriptor used in FASTPQ transcripts.

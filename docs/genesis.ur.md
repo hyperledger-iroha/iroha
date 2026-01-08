@@ -26,7 +26,7 @@ translation_last_reviewed: 2025-11-14
   executor استعمال ہوتا ہے۔
 - `ivm_dir`: وہ ڈائریکٹری جس میں IVM bytecode لائبریریز موجود ہوں۔ اگر یہ
   فیلڈ نہ ہو تو ڈیفالٹ `"."` استعمال ہوتا ہے۔
-- `consensus_mode`: manifest میں اعلان کردہ consensus mode۔ لازم ہے؛ Iroha3 کے لیے `"Npos"` (default) اور Iroha2 کے لیے `"Permissioned"` استعمال کریں۔
+- `consensus_mode`: manifest میں اعلان کردہ consensus mode۔ لازم ہے؛ Sora Nexus کے public dataspace کے لیے `"Npos"` اور دیگر Iroha3 dataspaces کے لیے `"Permissioned"` یا `"Npos"` استعمال کریں۔ Iroha2 میں default `"Permissioned"` ہے۔
 - `transactions`: genesis ٹرانزیکشنز کی فہرست، جو sequentially execute ہوتی
   ہیں۔ ہر entry میں یہ sub‑فیلڈز ہو سکتے ہیں:
   - `parameters`: نیٹ ورک کے ابتدائی parameters۔
@@ -167,7 +167,7 @@ cargo run -p iroha_cli --features sm -- \
      پر دستخط کیے جائیں گے؛ اسے `iroha_crypto::Algorithm` میں سپورٹڈ
      multihash ہونا چاہیے (بشمول GOST TC26 variants جب متعلقہ feature
      فعال ہو)۔
-   - Iroha3 میں `--consensus-mode npos` لازمی ہے اور staged cutovers سپورٹ نہیں ہوتے؛ Iroha2 میں default موڈ `permissioned` ہے۔
+   - Sora Nexus کے public dataspace میں `--consensus-mode npos` لازمی ہے اور staged cutovers سپورٹ نہیں ہوتے؛ دوسرے Iroha3 dataspaces میں `permissioned` یا `npos` چل سکتے ہیں۔ Iroha2 میں default موڈ `permissioned` ہے۔
 
 2. edit کے دوران validate کریں:
 
@@ -253,7 +253,7 @@ Kagami اور node کا کوڈ اس آرڈر کو enforce کرتے ہیں، تا
 
 - Kagami template سے شروع کریں:
   - صرف built‑in ISI:  
-    `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (Iroha3 default؛ Iroha2 کے لیے `--consensus-mode permissioned`)
+    `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (Sora Nexus public dataspace؛ Iroha2 یا private Iroha3 کے لیے `--consensus-mode permissioned`)
   - optional executor upgrade کے ساتھ: `--executor <path/to/executor.to>` شامل کریں۔
 - `<PK>` کوئی بھی multihash ہو سکتا ہے جسے `iroha_crypto::Algorithm`
   پہچانتا ہو، بشمول TC26 GOST variants (مثلاً

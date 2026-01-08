@@ -220,7 +220,7 @@ impl From<&Args> for ScenarioCounts {
 }
 
 fn build_synthetic_batch(parameter: &str, counts: &ScenarioCounts, seed: u64) -> TransitionBatch {
-    let mut batch = TransitionBatch::new(parameter);
+    let mut batch = TransitionBatch::new(parameter, fastpq_prover::PublicInputs::default());
     batch.transitions.reserve(counts.total_rows());
     batch
         .metadata

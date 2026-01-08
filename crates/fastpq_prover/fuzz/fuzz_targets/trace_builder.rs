@@ -135,16 +135,22 @@ impl<'a> Arbitrary<'a> for MetadataSeed {
 
 impl BatchSeed {
     fn into_batch(self) -> TransitionBatch {
-        let mut batch = TransitionBatch::new(self.parameter);
+        let mut batch = TransitionBatch::new(self.parameter, fastpq_prover::PublicInputs::default());
         let mut metadata = BTreeMap::new();
         for entry in self.metadata {
             metadata.insert(entry.key, entry.value);
         }
         if let Some(dsid) = self.dsid {
-            metadata.insert("dsid".to_string(), dsid);
+            let mut bytes = [0u8; 16];
+            let len = dsid.len().min(bytes.len());
+            bytes[..len].copy_from_slice(&dsid[..len]);
+            batch.public_inputs.dsid = bytes;
         }
         if let Some(slot) = self.slot {
-            metadata.insert("slot".to_string(), slot);
+            let mut buf = [0u8; 8];
+            let len = slot.len().min(buf.len());
+            buf[..len].copy_from_slice(&slot[..len]);
+            batch.public_inputs.slot = u64::from_le_bytes(buf);
         }
         batch.metadata = metadata;
 
