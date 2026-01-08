@@ -1,6 +1,12 @@
 # Status
 
 ## Latest Updates
+- Sumeragi: use per-block commit rosters when rebuilding QCs, rebroadcasting votes, and re-evaluating votes after BlockCreated; broadcast QCs to the block-specific roster and add snapshot-roster coverage for QC rebuilds, QC broadcasts, precommit block-sync updates, vote rebroadcasts, and BlockCreated handling.
+- Tests: not run (not requested).
+- FASTPQ: require transfer batches to include transfer transcript metadata, add transcript-aware synthetic generators (row bench + fixtures), and expose the shared poseidon preimage digest helper for transcript construction; update gadget docs accordingly.
+- Tests: not run (not requested).
+- Sumeragi: reschedule/pacemaker now uses per-block commit rosters for quorum reschedules and prevote-timeout rebroadcasts (fallback to active roster when unavailable); add coverage to assert snapshot roster targeting.
+- Tests: not run (not requested).
 - Sumeragi/NPoS: derive epochs from finalized VRF epoch records to keep epoch-length changes consistent across message validation, seed selection, penalties, and startup alignment; add epoch schedule unit coverage; update sumeragi docs.
 - Tests: `cargo test -p iroha_core epoch_schedule_uses_finalized_boundaries -- --nocapture` (timed out after 120s during compilation; errors in `crates/iroha_core/src/fastpq/lane.rs` and `crates/iroha_core/src/fastpq/mod.rs` about missing imports/ambiguous `Into`).
 - FASTPQ: moved DSID/slot/root/perm/tx-set inputs into `FastpqTransitionBatch.public_inputs`, built batches during exec-witness capture, enforced authority + poseidon digests in state, tightened transcript/query validation in the prover, refreshed CLI audit output + FASTPQ docs, and added public-inputs template coverage.
@@ -1766,7 +1772,8 @@
 - Kura disk-usage accounting now includes sidecar temp/debug files by summing block-store and pipeline directories, with a regression covering extra files.
 - Synced merge-ledger truncation and tiered snapshot pruning roots to harden crash consistency after pruning.
 - Aligned NPoS epoch manager initialization to the current height when no VRF record exists (mode flip + startup) and added epoch alignment tests.
-- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options); `cargo test --workspace` (timed out after 600s; warnings about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450` and dead_code in `crates/norito/src/core.rs:6792`).
+- Streaming telemetry now implements `Debug` without depending on `Metrics` and includes counters in the output (added coverage to ensure debug rendering is stable).
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options); `cargo test --workspace` (timed out after 600s while compiling; warning about unused `MissingQc` in `mochi/mochi-ui-egui/src/main.rs:10917`).
 - Fixed invalid-proposal evidence to carry the pending view when commit quorum failures occur, with coverage asserting the recorded proposal view.
 - Standardized ZK ballot public-input validation across Torii, CLI, and the JS SDK (Torii client + instruction builders) and refreshed the JS governance ballot examples.
 - Normalized Android CastZkBallot public inputs (canonical JSON, alias rejection, full lock hints) with new regression coverage, and clarified governance docs that partial lock hints are rejected.

@@ -15,7 +15,17 @@ use clap::Parser;
 use fastpq_prover::{
     OperationKind, RowUsage, StateTransition, Trace, TransitionBatch, build_trace,
 };
+use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_data_model::{
+    account::AccountId,
+    asset::id::AssetDefinitionId,
+    domain::DomainId,
+    fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
+};
+use iroha_primitives::numeric::Numeric;
 use norito::json::{self, Map, Value, to_writer, to_writer_pretty};
+use norito::to_bytes;
+use std::str::FromStr;
 
 const DEFAULT_TRANSFER_ROWS: usize = 2048;
 const DEFAULT_MINT_ROWS: usize = 64;
@@ -31,7 +41,7 @@ struct Args {
     /// Canonical parameter set to tag the synthetic batch with.
     #[arg(long, default_value = "fastpq-lane-balanced")]
     parameter: String,
-    /// Number of transfer selector rows to emit (counts per-row, not per-instruction).
+    /// Number of transfer selector rows to emit (counts per-row; must be even).
     #[arg(long, default_value_t = DEFAULT_TRANSFER_ROWS)]
     transfer_rows: usize,
     /// Number of mint selector rows to emit.
@@ -72,6 +82,13 @@ fn run() -> Result<(), Box<dyn Error>> {
     let counts = ScenarioCounts::from(&args);
     if counts.total_rows() == 0 {
         return Err("at least one selector row must be requested".into());
+    }
+    if counts.transfer_rows % 2 != 0 {
+        return Err(format!(
+            "transfer_rows must be even to build paired transfer transcripts (got {})",
+            counts.transfer_rows
+        )
+        .into());
     }
     let batch = build_synthetic_batch(&args.parameter, &counts, args.seed);
     let trace = build_trace(&batch)?;
@@ -222,15 +239,19 @@ impl From<&Args> for ScenarioCounts {
 fn build_synthetic_batch(parameter: &str, counts: &ScenarioCounts, seed: u64) -> TransitionBatch {
     let mut batch = TransitionBatch::new(parameter, fastpq_prover::PublicInputs::default());
     batch.transitions.reserve(counts.total_rows());
-    batch
-        .metadata
-        .insert("slot".into(), encode_u64(seed.rotate_left(7)));
-    batch
-        .metadata
-        .insert("dsid".into(), encode_u64(seed.rotate_left(19)));
+    batch.public_inputs.dsid = seed_dsid(seed);
+    batch.public_inputs.slot = seed.rotate_left(7);
+    batch.public_inputs.old_root = seed_root(seed ^ 0xA5A5_A5A5_A5A5_A5A5);
+    batch.public_inputs.new_root = seed_root(seed ^ 0x5A5A_5A5A_5A5A_5A5A);
+    batch.public_inputs.tx_set_hash = seed_root(seed ^ 0xC3C3_C3C3_C3C3_C3C3);
     let mut generator = RowGenerator::new(seed);
-    for _ in 0..counts.transfer_rows {
-        batch.push(generator.next_transfer());
+    let transfer_pairs = counts.transfer_rows / 2;
+    let mut transcripts = Vec::with_capacity(transfer_pairs);
+    for _ in 0..transfer_pairs {
+        let (transcript, sender, receiver) = generator.next_transfer_pair();
+        batch.push(sender);
+        batch.push(receiver);
+        transcripts.push(transcript);
     }
     for _ in 0..counts.mint_rows {
         batch.push(generator.next_mint());
@@ -246,6 +267,12 @@ fn build_synthetic_batch(parameter: &str, counts: &ScenarioCounts, seed: u64) ->
     }
     for _ in 0..counts.meta_set_rows {
         batch.push(generator.next_meta_set());
+    }
+    if !transcripts.is_empty() {
+        batch.metadata.insert(
+            TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
+            to_bytes(&transcripts).expect("encode transcripts"),
+        );
     }
     batch
 }
@@ -273,29 +300,61 @@ impl RowGenerator {
         }
     }
 
-    fn next_transfer(&mut self) -> StateTransition {
-        let idx = self.transfer_index;
+    fn next_transfer_pair(&mut self) -> (TransferTranscript, StateTransition, StateTransition) {
+        let pair_idx = self.transfer_index;
         self.transfer_index = self.transfer_index.wrapping_add(1);
-        let asset_group = idx / 2;
+        let asset_group = pair_idx % 128;
         let asset_id = format!("bench_asset_{asset_group}#lane");
-        let account_id = format!("account_{idx:05}");
-        let key = format!("asset/{asset_id}/{account_id}").into_bytes();
-        let rotation = u32::try_from(idx % 31).expect("rotation fits in u32") + 1;
+        let domain = DomainId::from_str("lane").expect("domain id");
+        let from_account = deterministic_account(&format!("sender_{pair_idx:05}"), &domain);
+        let to_account = deterministic_account(&format!("receiver_{pair_idx:05}"), &domain);
+        let asset_definition = AssetDefinitionId::from_str(&asset_id).expect("asset definition");
+        let rotation = u32::try_from(pair_idx % 31).expect("rotation fits in u32") + 1;
         let base = 1_000_000_u64
             .wrapping_add(self.seed.rotate_left(rotation))
-            .wrapping_add(idx as u64);
-        let amount = 1 + ((self.seed ^ (idx as u64 * 7919)) % 1_000);
-        let (pre, post) = if idx.is_multiple_of(2) {
-            (base, base.saturating_sub(amount))
-        } else {
-            (base, base.saturating_add(amount))
+            .wrapping_add(pair_idx as u64);
+        let amount = 1 + ((self.seed ^ (pair_idx as u64 * 7919)) % 1_000);
+        let from_pre = base;
+        let from_post = base.saturating_sub(amount);
+        let to_pre = base / 2;
+        let to_post = to_pre.saturating_add(amount);
+        let delta = TransferDeltaTranscript {
+            from_account: from_account.clone(),
+            to_account: to_account.clone(),
+            asset_definition: asset_definition.clone(),
+            amount: Numeric::from(amount),
+            from_balance_before: Numeric::from(from_pre),
+            from_balance_after: Numeric::from(from_post),
+            to_balance_before: Numeric::from(to_pre),
+            to_balance_after: Numeric::from(to_post),
+            from_merkle_proof: None,
+            to_merkle_proof: None,
         };
-        StateTransition::new(
-            key,
-            encode_u64(pre),
-            encode_u64(post),
+        let mut payload = Vec::with_capacity(32);
+        payload.extend_from_slice(b"fastpq-row-bench");
+        payload.extend_from_slice(&self.seed.to_le_bytes());
+        payload.extend_from_slice(&(pair_idx as u64).to_le_bytes());
+        let batch_hash = Hash::new(payload);
+        let digest = fastpq_prover::gadgets::transfer::compute_poseidon_digest(&delta, &batch_hash);
+        let transcript = TransferTranscript {
+            batch_hash,
+            deltas: vec![delta],
+            authority_digest: Hash::new(b"authority"),
+            poseidon_preimage_digest: Some(digest),
+        };
+        let sender = StateTransition::new(
+            format!("asset/{}/{}", asset_definition, from_account).into_bytes(),
+            encode_u64(from_pre),
+            encode_u64(from_post),
             OperationKind::Transfer,
-        )
+        );
+        let receiver = StateTransition::new(
+            format!("asset/{}/{}", asset_definition, to_account).into_bytes(),
+            encode_u64(to_pre),
+            encode_u64(to_post),
+            OperationKind::Transfer,
+        );
+        (transcript, sender, receiver)
     }
 
     fn next_mint(&mut self) -> StateTransition {
@@ -367,6 +426,33 @@ impl RowGenerator {
 
 fn encode_u64(value: u64) -> Vec<u8> {
     value.to_le_bytes().to_vec()
+}
+
+fn seed_dsid(seed: u64) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    out[..8].copy_from_slice(&seed.to_le_bytes());
+    out[8..].copy_from_slice(&seed.rotate_left(17).to_le_bytes());
+    out
+}
+
+fn seed_root(seed: u64) -> [u8; 32] {
+    let parts = [
+        seed,
+        seed.rotate_left(13),
+        seed.rotate_left(27),
+        seed.rotate_left(41),
+    ];
+    let mut out = [0u8; 32];
+    for (chunk, part) in out.chunks_mut(8).zip(parts) {
+        chunk.copy_from_slice(&part.to_le_bytes());
+    }
+    out
+}
+
+fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
+    let seed: [u8; Hash::LENGTH] = Hash::new(format!("{label}@{domain}")).into();
+    let keypair = KeyPair::from_seed(seed.to_vec(), Algorithm::default());
+    AccountId::new(domain.clone(), keypair.public_key().clone())
 }
 
 #[cfg(test)]

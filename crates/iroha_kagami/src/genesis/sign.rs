@@ -477,8 +477,7 @@ mod tests {
     #[test]
     fn topology_override_replaces_existing_entries() {
         use iroha_data_model::{
-            block::decode_framed_signed_block, isi::register::RegisterBox,
-            transaction::Executable,
+            block::decode_framed_signed_block, isi::register::RegisterBox, transaction::Executable,
         };
 
         let existing_kp = CryptoKeyPair::random_with_algorithm(Algorithm::BlsNormal);

@@ -484,6 +484,8 @@ struct StoredDaReceipt {
     receipt: DaIngestReceipt,
 }
 
+const STORED_RECEIPT_VERSION: u16 = 1;
+
 /// Outcome returned after attempting to insert a receipt into the log.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReceiptInsertOutcome {
@@ -686,12 +688,17 @@ impl DaReceiptLog {
             if !Self::is_receipt_file(&path) {
                 continue;
             }
-            let stored = Self::decode_receipt(&path).map_err(|err| {
-                err.wrap_err(format!(
-                    "failed to decode DA receipt from {}",
-                    path.display()
-                ))
-            })?;
+            let stored = match Self::decode_receipt(&path) {
+                Ok(stored) => stored,
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        path = %path.display(),
+                        "skipping DA receipt with invalid encoding"
+                    );
+                    continue;
+                }
+            };
             let StoredDaReceipt {
                 sequence, receipt, ..
             } = stored;
@@ -755,7 +762,15 @@ impl DaReceiptLog {
 
     fn decode_receipt(path: &Path) -> eyre::Result<StoredDaReceipt> {
         let data = fs::read(path)?;
-        decode_from_bytes::<StoredDaReceipt>(&data).map_err(|err| eyre!(err))
+        let stored = decode_from_bytes::<StoredDaReceipt>(&data).map_err(|err| eyre!(err))?;
+        if stored.version != STORED_RECEIPT_VERSION {
+            return Err(eyre!(
+                "unsupported DA receipt version {} (expected {})",
+                stored.version,
+                STORED_RECEIPT_VERSION
+            ));
+        }
+        Ok(stored)
     }
 
     fn is_receipt_file(path: &Path) -> bool {
@@ -2870,7 +2885,7 @@ fn persist_da_receipt(
     );
     let tmp_path = spool_dir.join(tmp_name);
     let encoded = to_bytes(&StoredDaReceipt {
-        version: 1,
+        version: STORED_RECEIPT_VERSION,
         sequence,
         receipt: receipt.clone(),
     })
@@ -2916,13 +2931,33 @@ fn load_da_receipts(spool_dir: &Path) -> std::io::Result<Vec<StoredDaReceipt>> {
         if !name.starts_with(RECEIPT_FILE_PREFIX) || !name.ends_with(".norito") {
             continue;
         }
-        let data = fs::read(&path)?;
-        let stored = decode_from_bytes::<StoredDaReceipt>(&data).map_err(|err| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("failed to decode DA receipt at {}: {err}", path.display()),
-            )
-        })?;
+        let data = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                warn!(?err, path = %path.display(), "failed to read DA receipt; skipping");
+                continue;
+            }
+        };
+        let stored = match decode_from_bytes::<StoredDaReceipt>(&data) {
+            Ok(stored) => stored,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %path.display(),
+                    "failed to decode DA receipt; skipping"
+                );
+                continue;
+            }
+        };
+        if stored.version != STORED_RECEIPT_VERSION {
+            warn!(
+                path = %path.display(),
+                version = stored.version,
+                expected = STORED_RECEIPT_VERSION,
+                "unsupported DA receipt version; skipping"
+            );
+            continue;
+        }
         receipts.push(stored);
     }
 
@@ -7311,6 +7346,7 @@ mod tests {
         let first_path = first_path.expect("receipt path");
         let bytes = fs::read(&first_path).expect("read receipt file");
         let decoded = decode_from_bytes::<StoredDaReceipt>(&bytes).expect("decode stored receipt");
+        assert_eq!(decoded.version, STORED_RECEIPT_VERSION);
         assert_eq!(decoded.sequence, 7);
         assert_eq!(decoded.receipt.manifest_hash, receipt.manifest_hash);
         let loaded = load_da_receipts(manifest_dir).expect("load receipts");
@@ -7322,6 +7358,27 @@ mod tests {
             persist_da_receipt(manifest_dir, &receipt, 7, &fingerprint).expect("persist again");
         let second_path = second_path.expect("receipt path");
         assert_eq!(first_path, second_path);
+    }
+
+    #[test]
+    fn load_da_receipts_skips_unsupported_versions() {
+        let temp_dir = tempdir().expect("temp dir");
+        let manifest_dir = temp_dir.path();
+        let signer = KeyPair::random();
+        let lane_id = LaneId::new(3);
+        let receipt = test_receipt(&signer, lane_id, 5, 0xAB);
+        let stored = StoredDaReceipt {
+            version: STORED_RECEIPT_VERSION + 1,
+            sequence: 7,
+            receipt,
+        };
+        let bytes = to_bytes(&stored).expect("encode receipt");
+        let path =
+            manifest_dir.join("da-receipt-00000003-0000000000000005-0000000000000007-bad.norito");
+        fs::write(&path, bytes).expect("write receipt");
+
+        let loaded = load_da_receipts(manifest_dir).expect("load receipts");
+        assert!(loaded.is_empty());
     }
 
     #[test]
@@ -7433,6 +7490,27 @@ mod tests {
                 .any(|(key, seq)| *key == lane_epoch && *seq == 2),
             "cursor store should be seeded from disk"
         );
+    }
+
+    #[test]
+    fn da_receipt_log_skips_invalid_entries_on_open() {
+        let temp_dir = tempdir().expect("temp dir");
+        let bad_path = temp_dir
+            .path()
+            .join("da-receipt-00000001-0000000000000001-0000000000000001-bad.norito");
+        fs::write(&bad_path, b"corrupt").expect("write corrupt receipt");
+
+        let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+        let signer = KeyPair::random();
+        let log = DaReceiptLog::open(
+            temp_dir.path().to_path_buf(),
+            Arc::clone(&cursor_store),
+            signer.public_key().clone(),
+        )
+        .expect("open log");
+
+        let lane_epoch = LaneEpoch::new(LaneId::new(1), 1);
+        assert!(log.receipts_for(lane_epoch).is_empty());
     }
 
     #[test]

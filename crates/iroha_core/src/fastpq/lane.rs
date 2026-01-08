@@ -90,8 +90,7 @@ pub fn start(cfg: &Fastpq) -> Option<(FastpqLaneHandle, tokio::task::JoinHandle<
     let task = tokio::spawn(async move {
         while let Some(job) = rx.recv().await {
             let engine = Arc::clone(&engine);
-            if let Err(err) =
-                tokio::task::spawn_blocking(move || process_job(&engine, &job)).await
+            if let Err(err) = tokio::task::spawn_blocking(move || process_job(&engine, &job)).await
             {
                 warn!(?err, "fastpq lane: prover task panicked");
             }
@@ -236,6 +235,9 @@ pub fn install_test_engine(engine: Arc<dyn FastpqProofEngine>) {
 
 #[cfg(test)]
 mod tests {
+    use crate::fastpq::{
+        FastpqPublicInputsTemplate, authority_digest, batches_from_bundles, transition_batch_to_dto,
+    };
     use iroha_data_model::fastpq::{
         TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle,
     };
@@ -268,21 +270,20 @@ mod tests {
         };
         let _ = start(&cfg);
         let bundle = sample_bundle();
-        let template = super::FastpqPublicInputsTemplate {
+        let template = FastpqPublicInputsTemplate {
             dsid: [0u8; 16],
             slot: 0,
             old_root: [0u8; 32],
             new_root: [0u8; 32],
             perm_root: [0u8; 32],
         };
-        let batches =
-            super::batches_from_bundles(FASTPQ_CANONICAL_PARAMETER_SET, template, [&bundle])
-                .expect("batches");
+        let batches = batches_from_bundles(FASTPQ_CANONICAL_PARAMETER_SET, template, [&bundle])
+            .expect("batches");
         let witness = ExecWitness {
             reads: Vec::new(),
             writes: Vec::new(),
             fastpq_transcripts: vec![bundle],
-            fastpq_batches: batches.iter().map(super::transition_batch_to_dto).collect(),
+            fastpq_batches: batches.iter().map(transition_batch_to_dto).collect(),
         };
         let job = FastpqWitnessJob {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
@@ -334,7 +335,7 @@ mod tests {
                     from_merkle_proof: None,
                     to_merkle_proof: None,
                 }],
-                authority_digest: super::authority_digest(&ALICE_ID),
+                authority_digest: authority_digest(&ALICE_ID),
                 poseidon_preimage_digest: None,
             }],
         }

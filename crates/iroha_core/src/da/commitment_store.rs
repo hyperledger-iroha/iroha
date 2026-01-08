@@ -187,7 +187,9 @@ mod tests {
             block_height: 7,
             index_in_bundle: 0,
         };
-        let dup = record.clone();
+        let mut dup = record.clone();
+        dup.storage_ticket = StorageTicketId::new([0x44; 32]);
+        dup.manifest_hash = ManifestDigest::new([0x55; 32]);
 
         assert!(store.insert(&record, loc));
         assert!(!store.insert(&dup, loc));

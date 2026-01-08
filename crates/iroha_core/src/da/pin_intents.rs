@@ -169,12 +169,17 @@ pub fn canonicalize_bundle(
             }
             std::collections::btree_map::Entry::Occupied(mut entry) => {
                 let (kept, kept_idx) = entry.get();
+                let (dropped_ticket, dropped_manifest) = if idx > *kept_idx {
+                    (kept.storage_ticket, kept.manifest_hash)
+                } else {
+                    (intent.storage_ticket, intent.manifest_hash)
+                };
                 drops.push(PinIntentDropReason::DuplicateIntent {
                     lane: key.lane,
                     epoch: key.epoch,
                     sequence: key.sequence,
-                    storage_ticket: key.ticket,
-                    replaced_manifest: kept.manifest_hash,
+                    storage_ticket: dropped_ticket,
+                    replaced_manifest: dropped_manifest,
                 });
                 if idx > *kept_idx {
                     entry.insert((intent, idx));
@@ -194,7 +199,7 @@ pub fn canonicalize_bundle(
                     let (previous_idx, previous) = *entry.get();
                     let prev_ticket = by_key
                         .get(&previous)
-                        .map_or(previous.ticket, |(intent, _)| intent.storage_ticket);
+                        .map_or(intent.storage_ticket, |(intent, _)| intent.storage_ticket);
                     if *idx > previous_idx {
                         entry.insert((*idx, *key));
                         drops.push(PinIntentDropReason::AliasSuperseded {
@@ -244,7 +249,7 @@ pub enum PinIntentDropReason {
         /// Sequence number within the epoch.
         sequence: u64,
     },
-    /// Duplicate `(lane, epoch, sequence, ticket)` entry encountered.
+    /// Duplicate `(lane, epoch, sequence)` entry encountered.
     DuplicateIntent {
         /// Lane identifier.
         lane: u32,
@@ -252,9 +257,9 @@ pub enum PinIntentDropReason {
         epoch: u64,
         /// Sequence number within the epoch.
         sequence: u64,
-        /// Storage ticket associated with the intent.
+        /// Storage ticket associated with the dropped intent.
         storage_ticket: StorageTicketId,
-        /// Manifest digest carried by the replaced intent.
+        /// Manifest digest carried by the dropped intent.
         replaced_manifest: iroha_data_model::sorafs::pin_registry::ManifestDigest,
     },
     /// Alias observed multiple times; the lexicographically-latest intent wins.
@@ -273,7 +278,6 @@ struct PinIntentKey {
     lane: u32,
     epoch: u64,
     sequence: u64,
-    ticket: StorageTicketId,
 }
 
 impl From<&DaPinIntent> for PinIntentKey {
@@ -282,7 +286,6 @@ impl From<&DaPinIntent> for PinIntentKey {
             lane: intent.lane_id.as_u32(),
             epoch: intent.epoch,
             sequence: intent.sequence,
-            ticket: intent.storage_ticket,
         }
     }
 }
@@ -456,6 +459,37 @@ mod tests {
         let (canonical, drops) = canonicalize_bundle(bundle);
 
         assert_eq!(canonical.intents.len(), 1);
+        assert_eq!(canonical.intents[0].manifest_hash, second.manifest_hash);
+        assert!(drops.iter().any(|drop| matches!(
+            drop,
+            PinIntentDropReason::DuplicateIntent {
+                lane,
+                epoch,
+                sequence,
+                storage_ticket,
+                replaced_manifest
+            } if *lane == first.lane_id.as_u32()
+                && *epoch == first.epoch
+                && *sequence == first.sequence
+                && *storage_ticket == first.storage_ticket
+                && *replaced_manifest == first.manifest_hash
+        )));
+    }
+
+    #[test]
+    fn canonicalize_replaces_duplicate_sequence_with_new_ticket() {
+        let mut first = sample_intent(5, 6);
+        first.storage_ticket = StorageTicketId::new([0x10; 32]);
+        first.manifest_hash = ManifestDigest::new([0x11; 32]);
+        let mut second = first.clone();
+        second.storage_ticket = StorageTicketId::new([0x22; 32]);
+        second.manifest_hash = ManifestDigest::new([0x33; 32]);
+
+        let bundle = DaPinIntentBundle::new(vec![first.clone(), second.clone()]);
+        let (canonical, drops) = canonicalize_bundle(bundle);
+
+        assert_eq!(canonical.intents.len(), 1);
+        assert_eq!(canonical.intents[0].storage_ticket, second.storage_ticket);
         assert_eq!(canonical.intents[0].manifest_hash, second.manifest_hash);
         assert!(drops.iter().any(|drop| matches!(
             drop,

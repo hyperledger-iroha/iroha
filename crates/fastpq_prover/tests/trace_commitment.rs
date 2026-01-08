@@ -10,7 +10,14 @@ use fastpq_prover::{
     OperationKind, PublicInputs, StateTransition, TransitionBatch, ordering_hash, trace_commitment,
 };
 use iroha_crypto::Hash;
-use norito::{decode_from_bytes, json};
+use iroha_data_model::{
+    asset::id::AssetDefinitionId,
+    fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
+};
+use iroha_primitives::numeric::Numeric;
+use iroha_test_samples::{ALICE_ID, BOB_ID};
+use norito::{decode_from_bytes, json, to_bytes};
+use std::str::FromStr;
 
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -48,18 +55,14 @@ fn build_fixture(name: &str) -> TransitionBatch {
 
     match name {
         "transfer" => {
-            batch.push(StateTransition::new(
-                b"asset/xor/alice".to_vec(),
-                u64_bytes(1_000),
-                u64_bytes(925),
-                OperationKind::Transfer,
-            ));
-            batch.push(StateTransition::new(
-                b"asset/xor/bob".to_vec(),
-                u64_bytes(75),
-                u64_bytes(150),
-                OperationKind::Transfer,
-            ));
+            let transcript = sample_transfer_transcript();
+            for transition in sample_transfer_transitions(&transcript) {
+                batch.push(transition);
+            }
+            batch.metadata.insert(
+                TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
+                to_bytes(&vec![transcript]).expect("encode transcripts"),
+            );
         }
         "mint" => {
             batch.push(StateTransition::new(
@@ -98,6 +101,56 @@ fn build_fixture(name: &str) -> TransitionBatch {
 
 fn u64_bytes(value: u64) -> Vec<u8> {
     value.to_le_bytes().to_vec()
+}
+
+fn sample_transfer_transcript() -> TransferTranscript {
+    let delta = TransferDeltaTranscript {
+        from_account: (*ALICE_ID).clone(),
+        to_account: (*BOB_ID).clone(),
+        asset_definition: AssetDefinitionId::from_str("xor#fixture").expect("asset definition"),
+        amount: Numeric::from(75u32),
+        from_balance_before: Numeric::from(1_000u32),
+        from_balance_after: Numeric::from(925u32),
+        to_balance_before: Numeric::from(75u32),
+        to_balance_after: Numeric::from(150u32),
+        from_merkle_proof: None,
+        to_merkle_proof: None,
+    };
+    let batch_hash = Hash::prehashed([0x11; 32]);
+    let digest = fastpq_prover::gadgets::transfer::compute_poseidon_digest(&delta, &batch_hash);
+    TransferTranscript {
+        batch_hash,
+        deltas: vec![delta],
+        authority_digest: Hash::new(b"authority"),
+        poseidon_preimage_digest: Some(digest),
+    }
+}
+
+fn sample_transfer_transitions(transcript: &TransferTranscript) -> Vec<StateTransition> {
+    transcript
+        .deltas
+        .iter()
+        .flat_map(|delta| {
+            let sender = StateTransition::new(
+                format!("asset/{}/{}", delta.asset_definition, delta.from_account).into_bytes(),
+                numeric_to_bytes(&delta.from_balance_before),
+                numeric_to_bytes(&delta.from_balance_after),
+                OperationKind::Transfer,
+            );
+            let receiver = StateTransition::new(
+                format!("asset/{}/{}", delta.asset_definition, delta.to_account).into_bytes(),
+                numeric_to_bytes(&delta.to_balance_before),
+                numeric_to_bytes(&delta.to_balance_after),
+                OperationKind::Transfer,
+            );
+            [sender, receiver]
+        })
+        .collect()
+}
+
+fn numeric_to_bytes(value: &Numeric) -> Vec<u8> {
+    let amount: u64 = value.clone().try_into().expect("numeric fits u64");
+    amount.to_le_bytes().to_vec()
 }
 
 fn bytes_to_hex(bytes: &[u8]) -> String {

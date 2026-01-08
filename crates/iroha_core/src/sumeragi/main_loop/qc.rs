@@ -766,9 +766,9 @@ impl Actor {
             return;
         }
         let msg = BlockMessage::Qc(qc);
-        let topology_peers = self.effective_commit_topology();
+        let topology_peers = topology.as_ref();
         let local_peer_id = self.common_config.peer.id().clone();
-        for peer in &topology_peers {
+        for peer in topology_peers {
             if peer == &local_peer_id {
                 continue;
             }
@@ -935,20 +935,6 @@ impl Actor {
     }
 
     pub(super) fn rebuild_qcs_from_cached_votes(&mut self, commit_topology: &[PeerId]) {
-        if commit_topology.is_empty() {
-            return;
-        }
-        let topology = super::network_topology::Topology::new(commit_topology.to_vec());
-        let height = u64::try_from(self.state.view().height()).unwrap_or(0);
-        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-        let required = match consensus_mode {
-            ConsensusMode::Permissioned => topology.min_votes_for_commit(),
-            ConsensusMode::Npos => 1,
-        };
-        if required == 0 {
-            return;
-        }
-
         // Avoid simultaneous immutable + mutable borrows of `self` by snapshotting read-only state.
         let existing_qcs: BTreeSet<QcVoteKey> = self.qc_cache.keys().copied().collect();
         let qc_present = move |key: &QcVoteKey| existing_qcs.contains(key);
@@ -963,13 +949,34 @@ impl Actor {
             pending_hashes.contains(&hash) || kura.get_block_height_by_hash(hash).is_some()
         };
         let vote_log: Vec<_> = self.vote_log.values().cloned().collect();
+        if vote_log.is_empty() {
+            return;
+        }
         rebuild_qc_candidates_with(
             vote_log.iter(),
-            required,
+            1,
             block_known,
             qc_present,
             |key, signer_count| {
                 let (phase, block_hash, height, view, epoch) = key;
+                let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+                let mut commit_roster =
+                    self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+                if commit_roster.is_empty() && !commit_topology.is_empty() {
+                    commit_roster = commit_topology.to_vec();
+                }
+                if commit_roster.is_empty() {
+                    return;
+                }
+                let topology = super::network_topology::Topology::new(commit_roster);
+                let required = match consensus_mode {
+                    ConsensusMode::Permissioned => topology.min_votes_for_commit(),
+                    ConsensusMode::Npos => 1,
+                };
+                if matches!(consensus_mode, ConsensusMode::Permissioned) && signer_count < required
+                {
+                    return;
+                }
                 let cached_before = self.qc_cache.contains_key(&key);
                 super::status::inc_qc_rebuild_attempts();
                 iroha_logger::info!(

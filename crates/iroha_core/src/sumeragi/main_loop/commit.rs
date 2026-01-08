@@ -2121,11 +2121,19 @@ impl Actor {
                 &self.vote_log,
                 vote,
             );
-            let topology_peers = self.effective_commit_topology();
+            let (consensus_mode, _, _) = self.consensus_context_for_height(vote.height);
+            let mut topology_peers = self.roster_for_vote_with_mode(
+                vote.block_hash,
+                vote.height,
+                vote.view,
+                consensus_mode,
+            );
+            if topology_peers.is_empty() {
+                topology_peers = self.effective_commit_topology();
+            }
             if topology_peers.is_empty() {
                 return;
             }
-            let (consensus_mode, _, _) = self.consensus_context_for_height(vote.height);
             if super::block_sync_update_has_roster(&update, consensus_mode) {
                 self.broadcast_block_sync_update(update, &topology_peers);
                 iroha_logger::info!(
@@ -2623,12 +2631,16 @@ impl Actor {
         if votes.is_empty() {
             return 0;
         }
-        let topology_peers = self.effective_commit_topology();
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let mut topology_peers =
+            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+        if topology_peers.is_empty() {
+            topology_peers = self.effective_commit_topology();
+        }
         if topology_peers.is_empty() {
             return 0;
         }
         let topology = super::network_topology::Topology::new(topology_peers);
-        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
         self.ensure_collector_plan(&signature_topology, height, view);
         while let Some(peer) = self.next_redundant_collector() {

@@ -527,7 +527,7 @@ mod tests {
             b"account/alice".to_vec(),
             vec![1],
             vec![2],
-            OperationKind::Transfer,
+            OperationKind::Mint,
         ));
         batch.push(StateTransition::new(
             b"asset/xor".to_vec(),
@@ -548,9 +548,9 @@ mod tests {
             let pre = idx_u64.to_le_bytes().to_vec();
             let post = idx_u64.wrapping_add(1).to_le_bytes().to_vec();
             let op = match idx % 3 {
-                0 => OperationKind::Transfer,
-                1 => OperationKind::Mint,
-                _ => OperationKind::Burn,
+                0 => OperationKind::Mint,
+                1 => OperationKind::Burn,
+                _ => OperationKind::MetaSet,
             };
             batch.push(StateTransition::new(key, pre, post, op));
         }
@@ -595,10 +595,9 @@ mod tests {
         ));
         batch.sort();
         let ordering = ordering::ordering_hash(&batch).expect("ordering");
-        let permission_hashes =
-            collect_permission_hashes(&batch).expect("permission hashes");
-        let public_io = build_public_io(&batch, ordering, permission_hashes.clone())
-            .expect("public io");
+        let permission_hashes = collect_permission_hashes(&batch).expect("permission hashes");
+        let public_io =
+            build_public_io(&batch, ordering, permission_hashes.clone()).expect("public io");
         assert_eq!(
             public_io.perm_root,
             perm_root_from_permission_hashes(&permission_hashes)

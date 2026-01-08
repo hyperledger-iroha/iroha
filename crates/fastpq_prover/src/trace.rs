@@ -26,6 +26,7 @@ use fastpq_isi::StarkParameterSet;
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_isi::poseidon::RATE;
 use iroha_crypto::Hash;
+use iroha_data_model::fastpq::TRANSFER_TRANSCRIPTS_METADATA_KEY;
 use rayon::prelude::*;
 use tracing::warn;
 
@@ -568,7 +569,9 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
 
         let numeric_values = matches!(
             transition.operation,
-            crate::OperationKind::Transfer | crate::OperationKind::Mint | crate::OperationKind::Burn
+            crate::OperationKind::Transfer
+                | crate::OperationKind::Mint
+                | crate::OperationKind::Burn
         );
         let (_value_old, _value_new, delta_signed, pre_value_u64) = if numeric_values {
             let pre_value_u64 = decode_u64_le(&transition.pre_value)?;
@@ -801,9 +804,22 @@ fn extract_transfer_witnesses(
     metadata: &BTreeMap<String, Vec<u8>>,
     transitions: &[StateTransition],
 ) -> Result<Vec<transfer::TransferGadgetInput>> {
+    let has_transfer = transitions
+        .iter()
+        .any(|transition| matches!(transition.operation, crate::OperationKind::Transfer));
     let Some(transcripts) = transfer::decode_transcripts(metadata)? else {
+        if has_transfer {
+            return Err(Error::MissingMetadata {
+                key: TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
+            });
+        }
         return Ok(Vec::new());
     };
+    if has_transfer && transcripts.is_empty() {
+        return Err(Error::TransferInvariant {
+            details: "transfer transcript metadata is empty".into(),
+        });
+    }
     transfer::verify_transcripts(transitions, &transcripts)?;
     transfer::transcripts_to_witnesses(&transcripts)
 }
@@ -1918,19 +1934,25 @@ mod tests {
     };
 
     fn sample_batch() -> TransitionBatch {
+        let transcript = sample_transfer_transcript();
         let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        for transition in sample_transitions(&transcript) {
+            batch.push(transition);
+        }
+        let mint_key = format!(
+            "asset/{}/{}",
+            transcript.deltas[0].asset_definition, transcript.deltas[0].to_account
+        );
         batch.push(StateTransition::new(
-            b"asset/xor/alice".to_vec(),
-            100u64.to_le_bytes().to_vec(),
-            80u64.to_le_bytes().to_vec(),
-            OperationKind::Transfer,
-        ));
-        batch.push(StateTransition::new(
-            b"asset/xor/bob".to_vec(),
+            mint_key.into_bytes(),
             20u64.to_le_bytes().to_vec(),
             40u64.to_le_bytes().to_vec(),
             OperationKind::Mint,
         ));
+        batch.metadata.insert(
+            TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
+            to_bytes(&vec![transcript]).expect("encode transcripts"),
+        );
         batch
     }
 
@@ -1970,7 +1992,8 @@ mod tests {
     #[test]
     fn trace_has_power_of_two_length() {
         let trace = build_trace(&sample_batch()).expect("build");
-        assert_eq!(trace.padded_len, 2);
+        assert!(trace.padded_len.is_power_of_two());
+        assert!(trace.padded_len >= trace.rows);
         assert!(
             trace
                 .columns
@@ -2357,6 +2380,17 @@ mod tests {
     }
 
     #[test]
+    fn build_trace_rejects_missing_transfer_transcripts() {
+        let transcript = sample_transfer_transcript();
+        let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
+        for transition in sample_transitions(&transcript) {
+            batch.push(transition);
+        }
+        let err = build_trace(&batch).expect_err("missing transcripts must fail");
+        assert!(matches!(err, Error::MissingMetadata { .. }));
+    }
+
+    #[test]
     fn meta_set_accepts_non_numeric_values() {
         let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
         batch.push(StateTransition::new(
@@ -2385,11 +2419,11 @@ mod tests {
     fn row_usage_counts_per_selector() {
         let trace = build_trace(&sample_batch()).expect("build");
         assert_eq!(trace.row_usage.total_rows, trace.rows);
-        assert_eq!(trace.row_usage.transfer_rows, 1);
+        assert_eq!(trace.row_usage.transfer_rows, 2);
         assert_eq!(trace.row_usage.mint_rows, 1);
         assert_eq!(
             trace.row_usage.non_transfer_rows(),
-            trace.row_usage.total_rows - 1
+            trace.row_usage.total_rows - trace.row_usage.transfer_rows
         );
     }
 
