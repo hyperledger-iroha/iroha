@@ -24,6 +24,7 @@ use iroha_config::parameters::actual::{
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
 use iroha_data_model::{
     ChainId, Encode as _,
+    asset::{AssetDefinitionId, AssetId},
     block::{
         BlockHeader, BlockSignature, SignedBlock,
         builder::BlockBuilder,
@@ -48,7 +49,7 @@ use iroha_data_model::{
     trigger::DataTriggerSequence,
 };
 use iroha_primitives::time::TimeSource;
-use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
+use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID};
 use nonzero_ext::nonzero;
 use norito::to_bytes;
 use sha2::{Digest as _, Sha256};
@@ -70,7 +71,9 @@ use crate::{
     query::store::LiveQueryStore,
     queue::{Queue, SingleLaneRouter},
     state::{State, StateReadOnly, World},
-    sumeragi::consensus::{PERMISSIONED_TAG, Phase, QcAggregate, QcHeaderRef, ValidatorIndex},
+    sumeragi::consensus::{
+        ExecWitness, PERMISSIONED_TAG, Phase, QcAggregate, QcHeaderRef, ValidatorIndex,
+    },
     tx::{AcceptTransactionFail, AcceptedTransaction},
 };
 
@@ -1469,6 +1472,206 @@ fn expected_block_sync_update_targets(actor: &Actor, peers: &[PeerId]) -> usize 
     };
     targets += remaining.min(fallback_world);
     targets
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn observer_local_indices_are_none() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.role = NodeRole::Observer;
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    assert!(actor.is_observer(), "observer role should be detected");
+    let view = actor.state.view();
+    assert!(
+        actor.local_validator_index(&view).is_none(),
+        "observer should not report a local validator index"
+    );
+    drop(view);
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    assert!(
+        actor.local_validator_index_for_topology(&topology).is_none(),
+        "observer should not report a validator index for topology"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn observer_assemble_proposal_returns_false() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.role = NodeRole::Observer;
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = 1u64;
+    let view = 0u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let _ = harness.background_rx.try_iter().count();
+    let assembled = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            Instant::now(),
+        )
+        .expect("assemble proposal");
+    assert!(!assembled, "observer should not assemble proposals");
+    assert!(
+        harness.background_rx.try_iter().next().is_none(),
+        "observer should not enqueue proposal messages"
+    );
+    assert!(
+        actor.pending.pending_blocks.is_empty(),
+        "observer should not stage pending blocks"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn observer_skips_votes_and_exec_artifacts() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.role = NodeRole::Observer;
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = 1u64;
+    let view = 0u64;
+    let epoch = actor.epoch_for_height(height);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE1; Hash::LENGTH]));
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let emitted = actor.emit_precommit_vote(
+        block_hash,
+        height,
+        view,
+        epoch,
+        &topology,
+        None,
+        Some((zero_state_root(), zero_state_root())),
+    );
+    assert!(!emitted, "observer should not emit precommit votes");
+    assert!(
+        actor.vote_log.is_empty(),
+        "observer vote log should remain empty"
+    );
+
+    let emitted = actor.emit_new_view_vote(height, view, sample_qc_ref(0, 0), &topology);
+    assert!(!emitted, "observer should not emit new view votes");
+    assert!(
+        actor.vote_log.is_empty(),
+        "observer vote log should remain empty"
+    );
+
+    let witness = ExecWitness {
+        reads: Vec::new(),
+        writes: Vec::new(),
+        fastpq_transcripts: Vec::new(),
+        fastpq_batches: Vec::new(),
+    };
+    let _ = harness.background_rx.try_iter().count();
+    actor.emit_exec_artifacts(block_hash, height, view, witness);
+    assert!(
+        harness.background_rx.try_iter().next().is_none(),
+        "observer should not broadcast exec witness"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn observer_skips_qc_aggregation() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.role = NodeRole::Observer;
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let height = 1u64;
+    let view = 0u64;
+    let epoch = actor.epoch_for_height(height);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE2; Hash::LENGTH]));
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let chain = actor.common_config.chain.clone();
+
+    for idx in 0..topology.as_ref().len() {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view,
+            epoch,
+            highest_qc: None,
+            signer: u32::try_from(idx).expect("signer index fits u32"),
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
+        actor.vote_log.insert(
+            (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
+            vote,
+        );
+    }
+
+    let _ = harness.background_rx.try_iter().count();
+    actor.try_form_qc_from_votes(Phase::Commit, block_hash, height, view, epoch, topology);
+    assert!(
+        actor.qc_cache.is_empty(),
+        "observer should not aggregate QCs"
+    );
+    assert!(
+        harness.background_rx.try_iter().next().is_none(),
+        "observer should not broadcast QCs"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn observer_skips_rbc_rebroadcasts() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.role = NodeRole::Observer;
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let key = session_key();
+    let payload = vec![0xAB; 2048];
+    let payload_hash = Hash::new(&payload);
+    let epoch = actor.epoch_for_height(key.1);
+    let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    let roster = actor.effective_commit_topology();
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Network);
+
+    let _ = harness.background_rx.try_iter().count();
+    let progress = actor.rebroadcast_stalled_rbc_payloads(Instant::now());
+    assert!(!progress, "observer should not rebroadcast RBC payloads");
+    assert!(
+        harness.background_rx.try_iter().next().is_none(),
+        "observer should not enqueue RBC payload messages"
+    );
+
+    harness.shutdown.send();
 }
 
 fn seed_genesis_block_for_state(state: &State) -> HashOf<BlockHeader> {
@@ -26330,6 +26533,38 @@ fn validate_block_for_voting_runs_before_votes() {
 }
 
 #[test]
+fn exec_roots_capture_fallback_uses_witness_snapshot() {
+    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let world = World::default();
+    let kura = Arc::new(Kura::blank_kura_for_testing());
+    let query = LiveQueryStore::start_test();
+    let state = State::new_for_testing(world, Arc::clone(&kura), query);
+
+    let genesis_hash = seed_genesis_block_for_state(&state);
+    let header = BlockHeader::new(nonzero!(2_u64), Some(genesis_hash), None, None, 0, 0);
+    let block_hash = header.hash();
+    let mut state_block = state.block(header);
+
+    crate::sumeragi::witness::start_block();
+    let asset_def: AssetDefinitionId = "rose#wonderland"
+        .parse()
+        .expect("asset definition id parses");
+    let asset_id = AssetId::new(asset_def, (*ALICE_ID).clone());
+    let pre = iroha_primitives::numeric::Numeric::from(1u32);
+    let post = iroha_primitives::numeric::Numeric::from(2u32);
+    crate::sumeragi::witness::record_read_asset(&asset_id, Some(&pre));
+    crate::sumeragi::witness::record_write_asset(&asset_id, &post);
+
+    let expected = crate::sumeragi::witness::snapshot_exec_witness();
+    let expected_parent = parent_state_from_witness(&expected);
+    let expected_post = post_state_from_witness(&expected);
+
+    let roots = exec_roots_for_state_block(&mut state_block, block_hash, 2, 0).expect("roots");
+    assert_eq!(roots.parent_state_root, expected_parent);
+    assert_eq!(roots.post_state_root, expected_post);
+}
+
+#[test]
 fn validation_reject_reason_label_covers_error_categories() {
     let reason_prev_hash =
         super::validation_reject_reason_label(&BlockValidationError::PrevBlockHashMismatch {
@@ -30476,6 +30711,70 @@ async fn conflicting_vote_does_not_override_first() {
         stored.block_hash, block_hash_a,
         "conflicting vote should not override the first vote"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_qc_uses_exec_roots_from_view_votes() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(1);
+    let view = 1u64;
+    let epoch = actor.epoch_for_height(height);
+    let chain_id = actor.chain_id.clone();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let block = block_with_txs(height, u32::try_from(view).expect("view fits u32"), None, vec![
+        sample_transaction(),
+    ]);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    actor
+        .pending
+        .pending_blocks
+        .insert(block_hash, PendingBlock::new(block, payload_hash, height, view));
+    actor.locked_qc = None;
+
+    let signature_topology =
+        super::topology_for_view(&topology, height, view, super::PERMISSIONED_TAG, None);
+    let required = signature_topology.min_votes_for_commit().max(1);
+    let parent_state_root = Hash::prehashed([0x11; 32]);
+    let post_state_root = Hash::prehashed([0x22; 32]);
+
+    for (idx, _) in signature_topology.as_ref().iter().enumerate().take(required) {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            parent_state_root,
+            post_state_root,
+            height,
+            view,
+            epoch,
+            highest_qc: None,
+            signer: ValidatorIndex::try_from(idx).expect("signer index fits"),
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_view(&mut vote, &chain_id, &topology, &harness.key_pairs);
+        actor.handle_vote(vote);
+    }
+
+    let key = (
+        crate::sumeragi::consensus::Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+    );
+    let qc = actor
+        .qc_cache
+        .get(&key)
+        .expect("QC formed from view-aligned votes");
+    assert_eq!(qc.parent_state_root, parent_state_root);
+    assert_eq!(qc.post_state_root, post_state_root);
 
     harness.shutdown.send();
 }

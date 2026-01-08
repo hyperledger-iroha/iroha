@@ -272,6 +272,8 @@ pub struct FilesystemSoranetProvisioner {
     spool_dir: PathBuf,
     counter: AtomicU64,
     max_spool_bytes: u64,
+    #[cfg(feature = "telemetry")]
+    telemetry: Option<StreamingTelemetry>,
 }
 
 impl FilesystemSoranetProvisioner {
@@ -282,7 +284,16 @@ impl FilesystemSoranetProvisioner {
             spool_dir,
             counter: AtomicU64::new(0),
             max_spool_bytes,
+            #[cfg(feature = "telemetry")]
+            telemetry: None,
         }
+    }
+
+    /// Attach a telemetry sink for budget reporting.
+    #[cfg(feature = "telemetry")]
+    pub fn with_telemetry(mut self, telemetry: StreamingTelemetry) -> Self {
+        self.telemetry = Some(telemetry);
+        self
     }
 
     fn exit_directory(&self, exit: &PrivacyRelay) -> PathBuf {
@@ -361,8 +372,27 @@ impl SoranetRouteProvisionTx for FilesystemSoranetProvisioner {
 
         if self.max_spool_bytes > 0 {
             let used = self.spool_usage_bytes()?;
+            #[cfg(feature = "telemetry")]
+            if let Some(telemetry) = &self.telemetry {
+                telemetry.record_storage_budget_usage(
+                    "soranet_spool",
+                    used,
+                    self.max_spool_bytes,
+                );
+            }
             let required = used.saturating_add(bytes.len() as u64);
             if required > self.max_spool_bytes {
+                iroha_logger::warn!(
+                    used,
+                    required,
+                    limit = self.max_spool_bytes,
+                    path = %self.spool_dir.display(),
+                    "SoraNet spool budget exceeded"
+                );
+                #[cfg(feature = "telemetry")]
+                if let Some(telemetry) = &self.telemetry {
+                    telemetry.inc_storage_budget_exceeded("soranet_spool");
+                }
                 return Err(SoranetTransportError::new(format!(
                     "SoraNet spool budget exceeded: used {used} bytes, update {update_len} bytes, limit {limit} bytes",
                     update_len = bytes.len(),
@@ -1329,6 +1359,13 @@ impl StreamingHandle {
     pub fn with_telemetry(mut self, telemetry: StreamingTelemetry) -> Self {
         self.telemetry = Some(telemetry);
         self
+    }
+
+    /// Return the configured streaming telemetry handle, if any.
+    #[cfg(feature = "telemetry")]
+    #[must_use]
+    pub fn telemetry_handle(&self) -> Option<StreamingTelemetry> {
+        self.telemetry.clone()
     }
 
     /// Return the capability flags currently advertised by this handle.
@@ -3058,6 +3095,18 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn streaming_handle_exposes_telemetry_handle() {
+        let metrics = Arc::new(crate::telemetry::Metrics::default());
+        let telemetry = crate::telemetry::StreamingTelemetry::new(metrics, true);
+        let handle = StreamingHandle::new();
+        assert!(handle.telemetry_handle().is_none());
+
+        let handle = handle.with_telemetry(telemetry);
+        assert!(handle.telemetry_handle().is_some());
+    }
+
     fn make_peer(key_pair: &KeyPair, port: u16) -> Peer {
         let addr = SocketAddr::from_str(&format!("127.0.0.1:{port}")).expect("valid addr");
         Peer::new(addr, key_pair.public_key().clone())
@@ -4561,7 +4610,16 @@ mod tests {
     #[test]
     fn filesystem_soranet_provisioner_rejects_when_budget_exceeded() {
         let dir = tempdir().expect("create temp dir");
-        let provisioner = FilesystemSoranetProvisioner::new(dir.path().to_path_buf(), 1);
+        #[cfg(feature = "telemetry")]
+        let metrics = Arc::new(crate::telemetry::Metrics::default());
+        #[cfg(feature = "telemetry")]
+        let telemetry = crate::telemetry::StreamingTelemetry::new(metrics.clone(), true);
+        let provisioner = {
+            let base = FilesystemSoranetProvisioner::new(dir.path().to_path_buf(), 1);
+            #[cfg(feature = "telemetry")]
+            let base = base.with_telemetry(telemetry);
+            base
+        };
         let exit = PrivacyRelay {
             relay_id: hash_with(0xE1),
             endpoint: Multiaddr::from("/dns/exit-relay/udp/9443/quic"),
@@ -4588,6 +4646,23 @@ mod tests {
             .provision_privacy_route(&update, &exit)
             .expect_err("spool budget should reject updates");
         assert!(err.to_string().contains("spool budget"));
+        #[cfg(feature = "telemetry")]
+        {
+            assert_eq!(
+                metrics
+                    .storage_budget_exceeded_total
+                    .with_label_values(&["soranet_spool"])
+                    .get(),
+                1
+            );
+            assert_eq!(
+                metrics
+                    .storage_budget_bytes_limit
+                    .with_label_values(&["soranet_spool"])
+                    .get(),
+                1
+            );
+        }
     }
 
     #[test]

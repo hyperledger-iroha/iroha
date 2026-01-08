@@ -9,6 +9,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
+        OnceLock,
         mpsc::{self, RecvTimeoutError},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -38,6 +39,7 @@ use iroha_data_model::{
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
 use iroha_logger::prelude::*;
+use crate::telemetry::StateTelemetry;
 #[cfg(test)]
 use iroha_primitives::time::TimeSource;
 #[cfg(test)]
@@ -116,6 +118,8 @@ pub struct Kura {
     /// Durably persisted commit rosters for block-sync consumers.
     #[allow(dead_code)]
     roster_log: Mutex<CommitRosterJournal>,
+    /// Optional telemetry sink for storage budget reporting.
+    telemetry: OnceLock<StateTelemetry>,
 }
 
 type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
@@ -540,6 +544,7 @@ impl Kura {
             init_block_count: block_count,
             merge_log: Mutex::new(merge_log),
             roster_log: Mutex::new(roster_log),
+            telemetry: OnceLock::new(),
         });
 
         Ok((kura, BlockCount(block_count)))
@@ -573,7 +578,13 @@ impl Kura {
                 PathBuf::new(),
                 BLOCK_SYNC_ROSTER_RETENTION,
             )),
+            telemetry: OnceLock::new(),
         })
+    }
+
+    /// Attach a telemetry sink for storage budget reporting.
+    pub fn attach_telemetry(&self, telemetry: StateTelemetry) {
+        let _ = self.telemetry.set(telemetry);
     }
 
     /// Root directory used by this Kura instance.
@@ -1757,30 +1768,49 @@ impl Kura {
 
         let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
 
-        let used = self.kura_disk_usage_bytes()?;
+        let limit = self.max_disk_usage_bytes;
+        let mut used = self.kura_disk_usage_bytes()?;
         let pending_bytes = self.pending_block_bytes(persisted_count, unindexed_bytes)?;
-        let mut required = used
-            .saturating_add(pending_bytes)
+        let mut budget_used = used.saturating_add(pending_bytes);
+        let mut required = budget_used
             .saturating_add(block_required)
             .saturating_add(merge_entry_bytes);
 
-        if required > self.max_disk_usage_bytes {
-            let mut used = used;
+        if required > limit {
             if self.purge_retired_storage() {
                 used = self.kura_disk_usage_bytes()?;
+                budget_used = used.saturating_add(pending_bytes);
                 required = used
                     .saturating_add(pending_bytes)
                     .saturating_add(block_required)
                     .saturating_add(merge_entry_bytes);
-                if required <= self.max_disk_usage_bytes {
+                if required <= limit {
+                    if let Some(telemetry) = self.telemetry.get() {
+                        telemetry.record_storage_budget_usage("kura", required, limit);
+                    }
                     return Ok(());
                 }
             }
+            if let Some(telemetry) = self.telemetry.get() {
+                telemetry.record_storage_budget_usage("kura", budget_used, limit);
+                telemetry.inc_storage_budget_exceeded("kura");
+            }
+            warn!(
+                used,
+                required,
+                limit,
+                path = %self.store_root.display(),
+                "Kura storage budget exceeded"
+            );
             return Err(Error::StorageBudgetExceeded {
-                limit: self.max_disk_usage_bytes,
+                limit,
                 used,
                 required,
             });
+        }
+
+        if let Some(telemetry) = self.telemetry.get() {
+            telemetry.record_storage_budget_usage("kura", required, limit);
         }
 
         Ok(())
@@ -1819,7 +1849,10 @@ impl Kura {
         }
         pending_raw_after = pending_raw_after.saturating_add(new_bytes);
 
+        let limit = self.max_disk_usage_bytes;
+        let pending_current = pending_raw.saturating_sub(unindexed_bytes);
         let mut used = self.kura_disk_usage_bytes()?;
+        let mut budget_used = used.saturating_add(pending_current);
         let mut required = {
             let used_after = if top_is_pending {
                 used
@@ -1830,9 +1863,10 @@ impl Kura {
             used_after.saturating_add(pending_after)
         };
 
-        if required > self.max_disk_usage_bytes {
+        if required > limit {
             if self.purge_retired_storage() {
                 used = self.kura_disk_usage_bytes()?;
+                budget_used = used.saturating_add(pending_current);
                 required = {
                     let used_after = if top_is_pending {
                         used
@@ -1842,15 +1876,33 @@ impl Kura {
                     let pending_after = pending_raw_after.saturating_sub(unindexed_bytes);
                     used_after.saturating_add(pending_after)
                 };
-                if required <= self.max_disk_usage_bytes {
+                if required <= limit {
+                    if let Some(telemetry) = self.telemetry.get() {
+                        telemetry.record_storage_budget_usage("kura", required, limit);
+                    }
                     return Ok(());
                 }
             }
+            if let Some(telemetry) = self.telemetry.get() {
+                telemetry.record_storage_budget_usage("kura", budget_used, limit);
+                telemetry.inc_storage_budget_exceeded("kura");
+            }
+            warn!(
+                used,
+                required,
+                limit,
+                path = %self.store_root.display(),
+                "Kura storage budget exceeded"
+            );
             return Err(Error::StorageBudgetExceeded {
-                limit: self.max_disk_usage_bytes,
+                limit,
                 used,
                 required,
             });
+        }
+
+        if let Some(telemetry) = self.telemetry.get() {
+            telemetry.record_storage_budget_usage("kura", required, limit);
         }
 
         Ok(())
@@ -5014,6 +5066,7 @@ mod tests {
     use iroha_test_samples::{
         SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
     };
+    use iroha_telemetry::metrics::Metrics;
     use iroha_version::codec::EncodeVersioned;
     use nonzero_ext::nonzero;
     use tempfile::TempDir;
@@ -5655,12 +5708,44 @@ mod tests {
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
         let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics.clone(), true);
+        kura.attach_telemetry(telemetry);
 
         let err = kura
             .store_block(block)
             .expect_err("budgeted kura should reject new blocks");
         assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
         assert_eq!(kura.blocks_count(), 0);
+        let (persisted_count, unindexed_bytes) = kura
+            .persisted_count_and_unindexed_bytes()
+            .expect("persisted count");
+        let pending_bytes = kura
+            .pending_block_bytes(persisted_count, unindexed_bytes)
+            .expect("pending bytes");
+        let used = kura.kura_disk_usage_bytes().expect("kura bytes");
+        let expected_used = used.saturating_add(pending_bytes);
+        assert_eq!(
+            metrics
+                .storage_budget_bytes_used
+                .with_label_values(&["kura"])
+                .get(),
+            expected_used
+        );
+        assert_eq!(
+            metrics
+                .storage_budget_bytes_limit
+                .with_label_values(&["kura"])
+                .get(),
+            kura.max_disk_usage_bytes
+        );
+        assert_eq!(
+            metrics
+                .storage_budget_exceeded_total
+                .with_label_values(&["kura"])
+                .get(),
+            1
+        );
     }
 
     #[test]
@@ -5770,6 +5855,9 @@ mod tests {
         };
         let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics.clone(), true);
+        kura.attach_telemetry(telemetry);
 
         let make_block = |message: &str| -> SignedBlock {
             let tx = TransactionBuilder::new(
@@ -5802,11 +5890,40 @@ mod tests {
             .max_disk_usage_bytes = limit;
 
         kura.store_block(small_block).expect("store small block");
+        let (persisted_count, unindexed_bytes) = kura
+            .persisted_count_and_unindexed_bytes()
+            .expect("persisted count");
+        let pending_bytes = kura
+            .pending_block_bytes(persisted_count, unindexed_bytes)
+            .expect("pending bytes");
+        let used = kura.kura_disk_usage_bytes().expect("kura bytes");
+        let expected_used = used.saturating_add(pending_bytes);
 
         let err = kura
             .replace_top_block(large_block)
             .expect_err("replacement should exceed budget");
         assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
+        assert_eq!(
+            metrics
+                .storage_budget_bytes_used
+                .with_label_values(&["kura"])
+                .get(),
+            expected_used
+        );
+        assert_eq!(
+            metrics
+                .storage_budget_bytes_limit
+                .with_label_values(&["kura"])
+                .get(),
+            limit
+        );
+        assert_eq!(
+            metrics
+                .storage_budget_exceeded_total
+                .with_label_values(&["kura"])
+                .get(),
+            1
+        );
     }
 
     #[test]

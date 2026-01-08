@@ -1543,6 +1543,28 @@ struct StateRoots {
     post_state_root: Hash,
 }
 
+fn exec_roots_for_state_block(
+    state_block: &mut crate::state::StateBlock<'_>,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+) -> Option<StateRoots> {
+    let exec_witness = state_block.take_exec_witness().or_else(|| {
+        warn!(
+            height,
+            view,
+            block = %block_hash,
+            "execution witness missing after validation; capturing fallback"
+        );
+        state_block.capture_exec_witness();
+        state_block.take_exec_witness()
+    });
+    exec_witness.map(|witness| StateRoots {
+        parent_state_root: parent_state_from_witness(&witness),
+        post_state_root: post_state_from_witness(&witness),
+    })
+}
+
 /// Run stateless and stateful validation for a block before emitting votes.
 fn validate_block_for_voting(
     block: SignedBlock,
@@ -1552,6 +1574,9 @@ fn validate_block_for_voting(
     state: &State,
     voting_block: &mut Option<VotingBlock>,
 ) -> Result<Option<StateRoots>, BlockValidationError> {
+    let block_hash = block.hash();
+    let height = block.header().height().get();
+    let view = u64::from(block.header().view_change_index());
     let time_source = TimeSource::new_system();
     let validation = ValidBlock::validate_keep_voting_block(
         block,
@@ -1567,26 +1592,7 @@ fn validate_block_for_voting(
 
     match validation {
         Ok((_validated, mut state_block)) => {
-            let roots = match state_block.take_exec_witness() {
-                Some(witness) => Some(StateRoots {
-                    parent_state_root: parent_state_from_witness(&witness),
-                    post_state_root: post_state_from_witness(&witness),
-                }),
-                None => {
-                    let header = _validated.as_ref().header();
-                    warn!(
-                        height = header.height(),
-                        view = header.view_change_index(),
-                        block = %_validated.as_ref().hash(),
-                        "missing exec witness for vote roots; using empty roots"
-                    );
-                    let empty = Hash::new([]);
-                    Some(StateRoots {
-                        parent_state_root: empty,
-                        post_state_root: empty,
-                    })
-                }
-            };
+            let roots = exec_roots_for_state_block(&mut state_block, block_hash, height, view);
             drop(state_block);
             Ok(roots)
         }
@@ -3729,15 +3735,7 @@ fn epoch_for_height_from_state(state: &State, height: u64, consensus_mode: Conse
         return 0;
     }
     let view = state.view();
-    let epoch_length = view
-        .world()
-        .sumeragi_npos_parameters()
-        .map_or(
-            iroha_config::parameters::defaults::sumeragi::EPOCH_LENGTH_BLOCKS,
-            |params| params.epoch_length_blocks,
-        )
-        .max(1);
-    height.saturating_sub(1) / epoch_length
+    super::EpochScheduleSnapshot::from_world(view.world()).epoch_for_height(height)
 }
 
 fn block_sync_history_roster_for_block(
@@ -4908,17 +4906,23 @@ impl Actor {
     }
 
     fn epoch_for_height(&self, height: u64) -> u64 {
-        let consensus_mode = {
-            let view = self.state.view();
-            super::effective_consensus_mode_for_height(&view, height, self.config.consensus_mode)
-        };
+        let view = self.state.view();
+        let consensus_mode =
+            super::effective_consensus_mode_for_height(&view, height, self.config.consensus_mode);
         if matches!(consensus_mode, ConsensusMode::Permissioned) {
             return 0;
         }
-        self.epoch_manager.as_ref().map_or_else(
-            || epoch_for_height_from_state(self.state.as_ref(), height, consensus_mode),
-            |manager| manager.epoch_for_height(height),
-        )
+        let schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
+            view.world(),
+            self.config.epoch_length_blocks,
+        );
+        let schedule_epoch = schedule.epoch_for_height(height);
+        if height <= schedule.last_finalized_end() {
+            return schedule_epoch;
+        }
+        self.epoch_manager
+            .as_ref()
+            .map_or(schedule_epoch, |manager| manager.epoch_for_height(height))
     }
 
     fn genesis_block_hash(&self) -> Option<HashOf<BlockHeader>> {
@@ -5378,11 +5382,11 @@ impl Actor {
             let height = view.height() as u64;
             let (epoch_seed_for_height, target_epoch, record_for_target_epoch) =
                 epoch_params.as_ref().map_or((None, 0, None), |params| {
-                    let target_epoch = if params.epoch_length_blocks > 0 && height > 0 {
-                        (height - 1) / params.epoch_length_blocks
-                    } else {
-                        0
-                    };
+                    let schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
+                        view.world(),
+                        params.epoch_length_blocks,
+                    );
+                    let target_epoch = schedule.epoch_for_height(height);
                     let seed = super::npos_seed_for_height(&view, height);
                     let record = view.world().vrf_epochs().get(&target_epoch).cloned();
                     (Some(seed), target_epoch, record)
@@ -6857,6 +6861,10 @@ impl Actor {
         }
     }
 
+    fn is_observer(&self) -> bool {
+        matches!(self.config.role, NodeRole::Observer)
+    }
+
     fn npos_prf_seed(&self) -> Option<[u8; 32]> {
         self.npos_collectors
             .map(|cfg| cfg.seed)
@@ -6864,6 +6872,9 @@ impl Actor {
     }
 
     fn local_validator_index(&self, view: &StateView<'_>) -> Option<ValidatorIndex> {
+        if self.is_observer() {
+            return None;
+        }
         derive_local_validator_index(
             view,
             self.common_config.trusted_peers.value(),
@@ -6875,6 +6886,9 @@ impl Actor {
         &self,
         topology: &super::network_topology::Topology,
     ) -> Option<ValidatorIndex> {
+        if self.is_observer() {
+            return None;
+        }
         topology
             .position(self.common_config.peer.id().public_key())
             .and_then(|idx| ValidatorIndex::try_from(idx).ok())
@@ -7497,6 +7511,9 @@ impl Actor {
     }
 
     fn rebroadcast_stalled_rbc_payloads(&mut self, now: Instant) -> bool {
+        if self.is_observer() {
+            return false;
+        }
         if !self.runtime_da_enabled() {
             return false;
         }

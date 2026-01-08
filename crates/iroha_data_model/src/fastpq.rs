@@ -34,6 +34,8 @@ pub struct TransferTranscript {
     /// Host-side digest of the authority set (signers, quorum, etc.).
     pub authority_digest: Hash,
     /// Optional Poseidon digest of the preimage `(from, to, asset, amount, batch_hash)`.
+    ///
+    /// Present for single-delta transcripts; omitted for multi-delta batches.
     pub poseidon_preimage_digest: Option<Hash>,
 }
 
@@ -107,7 +109,7 @@ pub struct FastpqTransitionBatch {
     pub public_inputs: FastpqPublicInputs,
     /// Ordered transitions the prover must replay.
     pub transitions: Vec<FastpqStateTransition>,
-    /// Arbitrary metadata (e.g., entry hash, slot, DSID).
+    /// Arbitrary metadata (e.g., entry hash, transcript count).
     pub metadata: BTreeMap<String, Vec<u8>>,
 }
 

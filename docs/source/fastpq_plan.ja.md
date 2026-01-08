@@ -175,7 +175,7 @@ else:
       *(EN note: run `python3 scripts/fastpq/wrap_benchmark.py … --require-lde-mean-ms 950 --require-poseidon-mean-ms 1000 --row-usage artifacts/fastpq_benchmarks/fastpq_row_usage_2025-05-12.json --sign-output` so the bundle enforces the <950 ms and <1 s targets, embeds the row-usage snapshot, surfaces `benchmarks.poseidon_microbench`, and emits a detached signature for Grafana/alert assets. When you need a standalone Poseidon microbench artefact, call `python3 scripts/fastpq/export_poseidon_microbench.py --bundle artifacts/fastpq_benchmarks/<metal>.json` to drop `benchmarks/poseidon/poseidon_microbench_<timestamp>.json`; the helper accepts both wrapped bundles and raw `fastpq_metal_bench*.json` captures, and you can rebuild the aggregated manifest with `python3 scripts/fastpq/aggregate_poseidon_microbench.py --input benchmarks/poseidon --output benchmarks/poseidon/manifest.json`.)*
       JSON には `speedup.ratio` / `speedup.delta_ms` が追加され、GPU と CPU の優位性を証跡内で直接確認できるようになった。【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:521】
      さらにラッパーは `zero_fill_hotspots`（バイト数・ゼロ埋め時間・算出 GB/s・queue_delta 差分）と `kernel_profiles` を出力し、パディングのボトルネックや Metal キュー／カーネルの挙動（帯域幅・オキュパンシー）を raw JSON を読まずに把握でき、`--row-usage` を渡した場合は `metadata.row_usage_snapshot` に転送ガジェットのエビデンスが埋め込まれ、`--sign-output` により `.json.asc` 署名も生成される。【scripts/fastpq/wrap_benchmark.py:1】
-    4. 実 ExecWitness から行使用率テレメトリを採取し、転送ガジェットと従来経路の行配分を証跡化する。Torii から witness を取得 (`iroha_cli audit witness --binary --out exec.witness`) した後、`iroha_cli audit witness --decode exec.witness --fastpq-parameter fastpq-lane-balanced` を実行すると、各 FASTPQ バッチに `row_usage`（`total_rows` / `transfer_rows` / `non_transfer_rows`、selector 別カウント、`transfer_ratio`）が付与される。FASTPQ バッチはデフォルトで出力されるため、通常は追加のフラグは不要で、出力を抑えたい場合だけ `--no-fastpq-batches` を付ければよい。この断片を Metal ベンチ JSON と同じディレクトリに保存しておけば、Grafana は追加のトランスクリプト処理なしにガジェット vs レガシーの比率を描画できる。【crates/iroha_cli/src/audit.rs:209】`scripts/fastpq/check_row_usage.py` を使うと、新旧スナップショットを比較して transfer_ratio / total_rows の回帰を即座に検出でき、CI で失敗させることができる。
+    4. 実 ExecWitness から行使用率テレメトリを採取し、転送ガジェットと従来経路の行配分を証跡化する。Torii から witness を取得 (`iroha_cli audit witness --binary --out exec.witness`) した後、`iroha_cli audit witness --decode exec.witness`（必要なら `--fastpq-parameter fastpq-lane-balanced` で期待パラメータを検証）を実行すると、各 FASTPQ バッチに `row_usage`（`total_rows` / `transfer_rows` / `non_transfer_rows`、selector 別カウント、`transfer_ratio`）が付与される。FASTPQ バッチはデフォルトで出力されるため、通常は追加のフラグは不要で、出力を抑えたい場合だけ `--no-fastpq-batches` を付ければよい。この断片を Metal ベンチ JSON と同じディレクトリに保存しておけば、Grafana は追加のトランスクリプト処理なしにガジェット vs レガシーの比率を描画できる。【crates/iroha_cli/src/audit.rs:209】`scripts/fastpq/check_row_usage.py` を使うと、新旧スナップショットを比較して transfer_ratio / total_rows の回帰を即座に検出でき、CI で失敗させることができる。
 
        ```bash
        python3 scripts/fastpq/check_row_usage.py \
@@ -391,6 +391,8 @@ CI でもガードを実行できるようにした。また GPU 依存の回帰
 | `ordering_hash` | 32 | Poseidon2 (LE) | 並び順ハッシュ。 |
 
 削除は値リムをゼロ化。未存在キーはゼロ葉 + `neighbour_leaf` 証明で表す。
+
+`FastpqTransitionBatch.public_inputs` が `dsid` / `slot` / ルートコミットメントの正規キャリアであり、metadata は entry hash / transcript count の管理に限定される。
 
 ## ハッシュ定義
 - 並び順: Poseidon2（タグ `fastpq:v1:ordering`）。

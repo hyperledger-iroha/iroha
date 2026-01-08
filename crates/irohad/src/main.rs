@@ -1052,6 +1052,10 @@ impl Iroha {
                 return Err(Report::new(error).change_context(StartError::InitKura));
             }
         };
+        #[cfg(feature = "telemetry")]
+        {
+            kura.attach_telemetry(state.telemetry.clone());
+        }
         // Thread chain id into state for VRF prehash binding.
         state.chain_id = config.common.chain.clone();
 
@@ -1573,11 +1577,11 @@ impl Iroha {
         streaming.apply_crypto_config(&config.crypto);
         streaming.set_soranet_config(&config.streaming.soranet);
         streaming.apply_sync_config(&config.streaming.sync);
-        configure_soranet_transport(&mut streaming, &config.streaming.soranet)?;
         #[cfg(feature = "telemetry")]
         if let Some(ref telemetry_handle) = streaming_telemetry {
             streaming = streaming.with_telemetry(telemetry_handle.clone());
         }
+        configure_soranet_transport(&mut streaming, &config.streaming.soranet)?;
         streaming.set_snapshot_path(snapshot_file.clone());
 
         let snapshot_encryption_key =
@@ -2075,10 +2079,9 @@ impl Iroha {
             nts_peers_rx,
             iroha_core::time::Params::from(&config.nts),
         );
-        // Observer nodes are configured with `NodeRole::Observer`; Sumeragi filters
-        // itself out of the consensus topology in that case, so observers follow the
-        // chain and serve queries without proposing or voting. Validators retain the
-        // full consensus duties.
+        // Observer nodes are configured with `NodeRole::Observer`; Sumeragi suppresses
+        // local consensus emissions in that case, so observers follow the chain and
+        // serve queries without proposing or voting. Validators retain the full duties.
 
         let net_for_relay = network.clone();
         let suppress_pow_broadcast_for_relay = suppress_pow_broadcast.clone();
@@ -2156,8 +2159,12 @@ fn configure_soranet_transport(
             ))
     })?;
 
-    let provisioner =
+    let mut provisioner =
         FilesystemSoranetProvisioner::new(spool_dir, soranet.provision_spool_max_bytes.get());
+    #[cfg(feature = "telemetry")]
+    if let Some(telemetry) = streaming.telemetry_handle() {
+        provisioner = provisioner.with_telemetry(telemetry);
+    }
     streaming.set_soranet_transport(Some(Arc::new(provisioner)));
     Ok(())
 }

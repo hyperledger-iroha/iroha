@@ -2221,6 +2221,9 @@ impl Actor {
         parent_hash: Option<HashOf<BlockHeader>>,
         pending_roots: Option<(Hash, Hash)>,
     ) -> bool {
+        if self.is_observer() {
+            return false;
+        }
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
         let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
@@ -2424,6 +2427,9 @@ impl Actor {
         highest_qc: crate::sumeragi::consensus::QcRef,
         topology: &super::network_topology::Topology,
     ) -> bool {
+        if self.is_observer() {
+            return false;
+        }
         let epoch = self.epoch_for_height(height);
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
@@ -2700,6 +2706,9 @@ impl Actor {
         view: u64,
         witness: ExecWitness,
     ) {
+        if self.is_observer() {
+            return;
+        }
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let epoch = match consensus_mode {
             ConsensusMode::Permissioned => 0,
@@ -3382,6 +3391,20 @@ impl Actor {
             );
             return None;
         }
+        let roots = if qc.phase == crate::sumeragi::consensus::Phase::Commit {
+            signers.iter().find_map(|signer| {
+                let key = (qc.phase, qc.height, qc.view, qc.epoch, *signer);
+                self.vote_log.get(&key).and_then(|vote| {
+                    if vote.block_hash == qc.subject_block_hash {
+                        Some((vote.parent_state_root, vote.post_state_root))
+                    } else {
+                        None
+                    }
+                })
+            })
+        } else {
+            None
+        };
         let rebuilt = self.build_qc_from_signers(
             QcBuildContext {
                 phase: qc.phase,
@@ -3395,6 +3418,7 @@ impl Actor {
             &canonical_signers,
             &topology,
             aggregate_signature,
+            roots,
         );
         self.qc_cache.insert(key, rebuilt.clone());
         Some(rebuilt)
@@ -3671,7 +3695,7 @@ impl Actor {
         height: u64,
         phase: EpochRefreshPhase,
     ) {
-        let (cfg, epoch_params, seed_for_height) = {
+        let (cfg, epoch_params, seed_for_height, epoch_schedule) = {
             let view = self.state.view();
             let cfg = super::load_npos_collector_config(&view)
                 .or(self.npos_collectors)
@@ -3682,7 +3706,11 @@ impl Actor {
                 });
             let epoch_params = super::load_npos_epoch_params(&view, &self.config);
             let seed_for_height = super::npos_seed_for_height(&view, height);
-            (cfg, epoch_params, seed_for_height)
+            let epoch_schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
+                view.world(),
+                epoch_params.epoch_length_blocks,
+            );
+            (cfg, epoch_params, seed_for_height, epoch_schedule)
         };
         let mut next_seed = seed;
         self.npos_collectors = Some(cfg);
@@ -3693,13 +3721,12 @@ impl Actor {
                 epoch_params.reveal_deadline_offset,
             );
             if matches!(phase, EpochRefreshPhase::PostCommit) {
-                let epoch_for_height = manager.epoch_for_height(height);
-                let expected_epoch =
-                    if height > 0 && height.is_multiple_of(manager.epoch_length_blocks()) {
-                        epoch_for_height.saturating_add(1)
-                    } else {
-                        epoch_for_height
-                    };
+                let epoch_for_height = epoch_schedule.epoch_for_height(height);
+                let expected_epoch = if epoch_schedule.is_epoch_boundary(height) {
+                    epoch_for_height.saturating_add(1)
+                } else {
+                    epoch_for_height
+                };
                 if manager.epoch() != expected_epoch {
                     manager.reset_epoch_state(expected_epoch, seed_for_height);
                     self.subsystems.vrf.reset();

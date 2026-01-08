@@ -170,6 +170,9 @@ impl Actor {
         local_validator_index: u32,
         _now: Instant,
     ) -> Result<bool> {
+        if self.is_observer() {
+            return Ok(false);
+        }
         super::status::set_leader_index(leader_index as u64);
         let required_for_commit = topology.min_votes_for_commit();
         debug!(

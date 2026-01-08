@@ -76,7 +76,7 @@ translator: manual
 - `SignedTransaction`: מזהה שרשרת ומסלול חתימה.
 - `BlockHeader`/`Block`: מטא-דאטה של בלוק ורשימת טרנזקציות.
 - `SignedBlock`: כולל `signatures: BTreeSet<BlockSignature>` של הוולידטורים, `BlockPayload { header, transactions }` ו-`BlockResult`. בתוך `BlockResult` נשמרים `time_triggers`, עצי מרקל לכניסות/תוצאות, `transaction_results`, וכן `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>` כדי לשמר את תמלילי ה-FASTPQ שנאספו במהלך ההרצה.
-- הודעות `ExecWitness` המשודרות ב-Torii כוללות כעת בנוסף ל-`fastpq_transcripts` גם `fastpq_batches: Vec<FastpqTransitionBatch>`, כך שמפעילי פרוברים יכולים למשוך את שורות ה-FASTPQ הקנוניות בלי להמיר את התמלילים מחדש.
+- הודעות `ExecWitness` המשודרות ב-Torii כוללות כעת בנוסף ל-`fastpq_transcripts` גם `fastpq_batches: Vec<FastpqTransitionBatch>` עם `public_inputs` (dsid, slot, old/new roots, perm_root, tx_set_hash), כך שמפעילי פרוברים יכולים למשוך את שורות ה-FASTPQ הקנוניות בלי להמיר את התמלילים מחדש.
 - כלים: `presigned`, `set_transaction_results(...)`, `set_transaction_results_with_transcripts(...)`, `header()`, `signatures()`, `hash()`, `add_signature()`, `replace_signatures()`.
 
 ## אירועים

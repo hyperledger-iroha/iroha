@@ -107,22 +107,65 @@ fn append_encoded<T: NoritoEncode>(buffer: &mut Vec<u8>, value: &T) {
     buffer.extend_from_slice(&value.encode());
 }
 
+/// Build a FASTPQ public input template for the supplied block witness.
+#[must_use]
+pub fn public_inputs_template_from_block(
+    header: &BlockHeader,
+    witness: &ExecWitness,
+) -> FastpqPublicInputsTemplate {
+    let creation_ms = u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX);
+    let slot = creation_ms.saturating_mul(1_000_000);
+    let old_root = crate::sumeragi::exec::parent_state_from_witness(witness);
+    let new_root = crate::sumeragi::exec::post_state_from_witness(witness);
+    FastpqPublicInputsTemplate {
+        dsid: dataspace_id_bytes(DataSpaceId::GLOBAL),
+        slot,
+        old_root: old_root.into(),
+        new_root: new_root.into(),
+        // TODO: thread permission table commitments once the WSV wiring lands.
+        perm_root: [0; 32],
+    }
+}
+
+fn dataspace_id_bytes(dsid: DataSpaceId) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    out[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
+    out
+}
+
+fn public_inputs_from_template(
+    template: FastpqPublicInputsTemplate,
+    entry_hash: &Hash,
+) -> FastpqPublicInputs {
+    let tx_set_hash = tx_set_hash_from_entry_hash(entry_hash);
+    template.with_tx_set_hash(tx_set_hash)
+}
+
+fn tx_set_hash_from_entry_hash(entry_hash: &Hash) -> [u8; 32] {
+    // TODO: replace entry-hash derivation with scheduler-provided tx set hash.
+    let mut payload = Vec::with_capacity(TX_SET_HASH_DOMAIN.len() + Hash::LENGTH);
+    payload.extend_from_slice(TX_SET_HASH_DOMAIN);
+    payload.extend_from_slice(entry_hash.as_ref());
+    Hash::new(payload).into()
+}
+
 /// Convert a collection of transfer transcripts into a canonical FASTPQ transition batch.
 ///
-/// The caller is responsible for populating `public_inputs` and threading metadata
-/// (slot, DSID, Merkle roots, etc.) into the returned batch if required by downstream consumers.
+/// The caller is responsible for supplying `public_inputs` and threading metadata
+/// (entry hash, transcript count, etc.) into the returned batch if required by downstream consumers.
 ///
 /// # Errors
 /// Returns [`TranscriptBatchError`] if any transcript fails to append to the batch.
 pub fn batch_from_transcripts<'a, I>(
     parameter_set: impl Into<String>,
+    public_inputs: FastpqPublicInputs,
     transcripts: I,
 ) -> Result<TransitionBatch, TranscriptBatchError>
 where
     I: IntoIterator<Item = &'a TransferTranscript>,
 {
     let transcripts: Vec<TransferTranscript> = transcripts.into_iter().cloned().collect();
-    let mut batch = TransitionBatch::new(parameter_set, PublicInputs::default());
+    let mut batch = TransitionBatch::new(parameter_set, public_inputs_from_dto(&public_inputs));
     for transcript in &transcripts {
         append_transcript(&mut batch, transcript)?;
     }
@@ -194,13 +237,13 @@ fn encode_numeric_le(value: Numeric) -> Result<Vec<u8>, TranscriptBatchError> {
     Ok(integer.to_le_bytes().to_vec())
 }
 
-/// Convert the transcript bundles stored in an [`ExecWitness`] into FASTPQ transition batches.
+/// Convert the FASTPQ batches stored in an [`ExecWitness`] into prover batches.
 ///
 /// # Errors
-/// Returns [`TranscriptBatchError`] if any transcript fails to append to a batch.
+/// Returns [`TranscriptBatchError::MissingFastpqBatches`] when transcripts are present
+/// without prebuilt batches.
 pub fn batches_from_exec_witness(
     witness: &ExecWitness,
-    parameter_set: &str,
 ) -> Result<Vec<TransitionBatch>, TranscriptBatchError> {
     if !witness.fastpq_batches.is_empty() {
         return Ok(witness
@@ -209,7 +252,10 @@ pub fn batches_from_exec_witness(
             .map(transition_batch_from_dto)
             .collect());
     }
-    batches_from_bundles(parameter_set, &witness.fastpq_transcripts)
+    if witness.fastpq_transcripts.is_empty() {
+        return Ok(Vec::new());
+    }
+    Err(TranscriptBatchError::MissingFastpqBatches)
 }
 
 /// Convert transcript bundles into FASTPQ batches, preserving execution order.
@@ -218,6 +264,7 @@ pub fn batches_from_exec_witness(
 /// Returns [`TranscriptBatchError`] if constructing a batch fails.
 pub fn batches_from_bundles<'a, I>(
     parameter_set: &str,
+    public_inputs: FastpqPublicInputsTemplate,
     bundles: I,
 ) -> Result<Vec<TransitionBatch>, TranscriptBatchError>
 where
@@ -225,7 +272,9 @@ where
 {
     let mut batches = Vec::new();
     for bundle in bundles {
-        let mut batch = batch_from_transcripts(parameter_set.to_string(), &bundle.transcripts)?;
+        let inputs = public_inputs_from_template(public_inputs, &bundle.entry_hash);
+        let mut batch =
+            batch_from_transcripts(parameter_set.to_string(), inputs, &bundle.transcripts)?;
         annotate_metadata(&mut batch, &bundle.entry_hash, bundle.transcripts.len());
         batches.push(batch);
     }
@@ -248,6 +297,7 @@ fn annotate_metadata(batch: &mut TransitionBatch, entry_hash: &Hash, transcript_
 /// Returns [`TranscriptBatchError`] if constructing the batches fails.
 pub fn dto_batches_from_transcripts(
     parameter_set: &str,
+    public_inputs: FastpqPublicInputsTemplate,
     transcripts: &BTreeMap<Hash, Vec<TransferTranscript>>,
 ) -> Result<Vec<FastpqTransitionBatch>, TranscriptBatchError> {
     let bundles: Vec<_> = transcripts
@@ -257,7 +307,7 @@ pub fn dto_batches_from_transcripts(
             transcripts: entries.clone(),
         })
         .collect();
-    let batches = batches_from_bundles(parameter_set, bundles.iter())?;
+    let batches = batches_from_bundles(parameter_set, public_inputs, bundles.iter())?;
     Ok(batches.iter().map(transition_batch_to_dto).collect())
 }
 
@@ -381,10 +431,10 @@ fn operation_from_dto(operation: &FastpqOperationKind) -> OperationKind {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, str::FromStr};
+    use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr};
 
     use iroha_data_model::{
-        block::consensus::ExecWitness,
+        block::{BlockHeader, consensus::{ExecKv, ExecWitness}},
         fastpq::{TransferTranscript, TransferTranscriptBundle},
     };
     use iroha_primitives::numeric::Numeric;
@@ -427,9 +477,66 @@ mod tests {
     }
 
     #[test]
+    fn public_inputs_template_from_block_uses_header_and_roots() {
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("height"),
+            None,
+            None,
+            None,
+            123,
+            0,
+        );
+        let witness = ExecWitness {
+            reads: vec![ExecKv {
+                key: b"key".to_vec(),
+                value: b"old".to_vec(),
+            }],
+            writes: vec![ExecKv {
+                key: b"key".to_vec(),
+                value: b"new".to_vec(),
+            }],
+            fastpq_transcripts: Vec::new(),
+            fastpq_batches: Vec::new(),
+        };
+        let template = public_inputs_template_from_block(&header, &witness);
+        let mut expected_dsid = [0u8; 16];
+        expected_dsid[..8].copy_from_slice(&DataSpaceId::GLOBAL.as_u64().to_le_bytes());
+        assert_eq!(template.dsid, expected_dsid);
+        assert_eq!(template.slot, 123_000_000);
+        assert_eq!(template.perm_root, [0u8; 32]);
+        assert_eq!(
+            template.old_root,
+            crate::sumeragi::exec::parent_state_from_witness(&witness).into()
+        );
+        assert_eq!(
+            template.new_root,
+            crate::sumeragi::exec::post_state_from_witness(&witness).into()
+        );
+    }
+
+    #[test]
+    fn public_inputs_from_template_derives_tx_set_hash() {
+        let template = sample_template();
+        let entry_hash = Hash::prehashed([0x22; 32]);
+        let inputs = public_inputs_from_template(template, &entry_hash);
+        let mut payload = Vec::with_capacity(TX_SET_HASH_DOMAIN.len() + Hash::LENGTH);
+        payload.extend_from_slice(TX_SET_HASH_DOMAIN);
+        payload.extend_from_slice(entry_hash.as_ref());
+        let expected: [u8; 32] = Hash::new(payload).into();
+        assert_eq!(inputs.tx_set_hash, expected);
+        assert_eq!(inputs.dsid, template.dsid);
+        assert_eq!(inputs.slot, template.slot);
+        assert_eq!(inputs.old_root, template.old_root);
+        assert_eq!(inputs.new_root, template.new_root);
+        assert_eq!(inputs.perm_root, template.perm_root);
+    }
+
+    #[test]
     fn batch_from_transcripts_builds_transfer_rows() {
         let transcript = sample_transcript();
-        let batch = batch_from_transcripts("fastpq-lane-balanced", [&transcript]).unwrap();
+        let batch =
+            batch_from_transcripts("fastpq-lane-balanced", sample_public_inputs(), [&transcript])
+                .unwrap();
         assert_eq!(batch.transitions.len(), 2);
         let delta = &transcript.deltas[0];
         let sender_key = format!("asset/{}/{}", delta.asset_definition, delta.from_account);
@@ -456,7 +563,12 @@ mod tests {
     #[test]
     fn batch_from_transcripts_embeds_transfer_metadata() {
         let transcript = sample_transcript();
-        let batch = batch_from_transcripts(FASTPQ_CANONICAL_PARAMETER_SET, [&transcript]).unwrap();
+        let batch = batch_from_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_public_inputs(),
+            [&transcript],
+        )
+        .unwrap();
         let encoded = batch
             .metadata
             .get(TRANSFER_TRANSCRIPTS_METADATA_KEY)
@@ -470,15 +582,24 @@ mod tests {
     fn batch_from_transcripts_rejects_fractional_values() {
         let mut transcript = sample_transcript();
         transcript.deltas[0].from_balance_before = Numeric::try_new(15, 1).unwrap();
-        let err = batch_from_transcripts("fastpq-lane-balanced", [&transcript]).unwrap_err();
+        let err = batch_from_transcripts(
+            "fastpq-lane-balanced",
+            sample_public_inputs(),
+            [&transcript],
+        )
+        .unwrap_err();
         assert!(matches!(err, TranscriptBatchError::NumericEncoding { .. }));
     }
 
     #[test]
     fn batches_from_bundles_add_metadata() {
         let bundle = sample_bundle(Hash::prehashed([0x33; 32]));
-        let batches =
-            batches_from_bundles(FASTPQ_CANONICAL_PARAMETER_SET, [&bundle]).expect("batches");
+        let batches = batches_from_bundles(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_template(),
+            [&bundle],
+        )
+        .expect("batches");
         assert_eq!(batches.len(), 1);
         let batch = &batches[0];
         let entry_hex = batch
@@ -501,14 +622,20 @@ mod tests {
     fn batches_from_exec_witness_match_bundle_order() {
         let bundle_a = sample_bundle(Hash::prehashed([0x41; 32]));
         let bundle_b = sample_bundle(Hash::prehashed([0x42; 32]));
+        let bundles = [&bundle_a, &bundle_b];
+        let built = batches_from_bundles(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_template(),
+            bundles,
+        )
+        .expect("batches");
         let witness = ExecWitness {
             reads: Vec::new(),
             writes: Vec::new(),
             fastpq_transcripts: vec![bundle_a.clone(), bundle_b.clone()],
-            fastpq_batches: Vec::new(),
+            fastpq_batches: built.iter().map(transition_batch_to_dto).collect(),
         };
-        let batches =
-            batches_from_exec_witness(&witness, FASTPQ_CANONICAL_PARAMETER_SET).expect("batches");
+        let batches = batches_from_exec_witness(&witness).expect("batches");
         assert_eq!(batches.len(), 2);
         let first_entry = hex::encode(
             batches[0]
@@ -527,9 +654,27 @@ mod tests {
     }
 
     #[test]
+    fn batches_from_exec_witness_rejects_missing_batches() {
+        let bundle = sample_bundle(Hash::prehashed([0x43; 32]));
+        let witness = ExecWitness {
+            reads: Vec::new(),
+            writes: Vec::new(),
+            fastpq_transcripts: vec![bundle],
+            fastpq_batches: Vec::new(),
+        };
+        let err = batches_from_exec_witness(&witness).expect_err("missing batches");
+        assert!(matches!(err, TranscriptBatchError::MissingFastpqBatches));
+    }
+
+    #[test]
     fn batches_from_exec_witness_prefers_prebuilt_batches() {
         let transcript = sample_transcript();
-        let batch = batch_from_transcripts(FASTPQ_CANONICAL_PARAMETER_SET, [&transcript]).unwrap();
+        let batch = batch_from_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_public_inputs(),
+            [&transcript],
+        )
+        .unwrap();
         let dto = transition_batch_to_dto(&batch);
         let witness = ExecWitness {
             reads: Vec::new(),
@@ -537,8 +682,7 @@ mod tests {
             fastpq_transcripts: Vec::new(),
             fastpq_batches: vec![dto],
         };
-        let batches =
-            batches_from_exec_witness(&witness, FASTPQ_CANONICAL_PARAMETER_SET).expect("batches");
+        let batches = batches_from_exec_witness(&witness).expect("batches");
         assert_eq!(batches.len(), 1);
         assert_eq!(
             dto_transitions(&batches[0].transitions),
@@ -549,8 +693,12 @@ mod tests {
     #[test]
     fn transition_batch_dto_roundtrip_preserves_metadata() {
         let transcript = sample_transcript();
-        let mut batch =
-            batch_from_transcripts(FASTPQ_CANONICAL_PARAMETER_SET, [&transcript]).unwrap();
+        let mut batch = batch_from_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_public_inputs(),
+            [&transcript],
+        )
+        .unwrap();
         batch.public_inputs = PublicInputs {
             dsid: [0x11; 16],
             slot: 42,
@@ -576,8 +724,12 @@ mod tests {
         let bundle = sample_bundle(Hash::prehashed([0x24; 32]));
         let mut map = BTreeMap::new();
         map.insert(bundle.entry_hash, bundle.transcripts.clone());
-        let batches =
-            dto_batches_from_transcripts(FASTPQ_CANONICAL_PARAMETER_SET, &map).expect("dto");
+        let batches = dto_batches_from_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_template(),
+            &map,
+        )
+        .expect("dto");
         assert_eq!(batches.len(), 1);
         let entry_hex = hex::encode(
             batches[0]
@@ -596,6 +748,20 @@ mod tests {
         let mut chunk = [0u8; 8];
         chunk[..bytes.len()].copy_from_slice(bytes);
         u64::from_le_bytes(chunk)
+    }
+
+    fn sample_template() -> FastpqPublicInputsTemplate {
+        FastpqPublicInputsTemplate {
+            dsid: [0u8; 16],
+            slot: 0,
+            old_root: [0u8; 32],
+            new_root: [0u8; 32],
+            perm_root: [0u8; 32],
+        }
+    }
+
+    fn sample_public_inputs() -> FastpqPublicInputs {
+        sample_template().with_tx_set_hash([0u8; 32])
     }
 
     fn sample_transcript() -> TransferTranscript {

@@ -3172,11 +3172,13 @@ pub(crate) mod valid {
             ) {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
+            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             Self::validate_and_record_transactions(&mut block, state_block);
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             state_block.capture_exec_witness();
+            drop(exec_witness_guard);
             let has_external_txs = block.external_transactions().next().is_some();
             if !state_block.has_committed_fragments() && !has_external_txs {
                 let error = BlockValidationError::EmptyBlock;
@@ -3217,6 +3219,7 @@ pub(crate) mod valid {
                 send_events(ev);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
+            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             Self::validate_and_record_transactions(&mut block, state_block);
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
                 let ev = PipelineEventBox::from(BlockEvent {
@@ -3227,6 +3230,7 @@ pub(crate) mod valid {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             state_block.capture_exec_witness();
+            drop(exec_witness_guard);
             let has_external_txs = block.external_transactions().next().is_some();
             if !state_block.has_committed_fragments() && !has_external_txs {
                 let error = BlockValidationError::EmptyBlock;
@@ -3328,6 +3332,7 @@ pub(crate) mod valid {
             } else {
                 state.block(block.header())
             };
+            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             Self::validate_and_record_transactions(&mut block, &mut state_block);
             if let Err(error) = validate_axt_envelopes(&block, &state_block) {
                 drop(state_block);
@@ -3338,6 +3343,7 @@ pub(crate) mod valid {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             state_block.capture_exec_witness();
+            drop(exec_witness_guard);
             let has_external_txs = block.external_transactions().next().is_some();
             if !state_block.has_committed_fragments() && !has_external_txs {
                 let error = BlockValidationError::EmptyBlock;
@@ -3425,6 +3431,7 @@ pub(crate) mod valid {
             } else {
                 state.block(block.header())
             };
+            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             Self::validate_and_record_transactions(&mut block, &mut state_block);
             if let Err(error) = validate_axt_envelopes(&block, &state_block) {
                 let ev = PipelineEventBox::from(BlockEvent {
@@ -3445,6 +3452,7 @@ pub(crate) mod valid {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             state_block.capture_exec_witness();
+            drop(exec_witness_guard);
             let has_external_txs = block.external_transactions().next().is_some();
             if !state_block.has_committed_fragments() && !has_external_txs {
                 let error = BlockValidationError::EmptyBlock;
@@ -6747,11 +6755,13 @@ pub(crate) mod valid {
             mut block: SignedBlock,
             state_block: &mut StateBlock<'_>,
         ) -> WithEvents<ValidBlock> {
+            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             Self::validate_and_record_transactions(&mut block, state_block);
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
                 panic!("AXT envelope validation failed on unchecked block: {error}");
             }
             state_block.capture_exec_witness();
+            drop(exec_witness_guard);
             WithEvents::new(ValidBlock(block))
         }
 

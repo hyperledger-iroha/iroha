@@ -1,6 +1,16 @@
 # Status
 
 ## Latest Updates
+- Sumeragi/NPoS: derive epochs from finalized VRF epoch records to keep epoch-length changes consistent across message validation, seed selection, penalties, and startup alignment; add epoch schedule unit coverage; update sumeragi docs.
+- Tests: `cargo test -p iroha_core epoch_schedule_uses_finalized_boundaries -- --nocapture` (timed out after 120s during compilation; errors in `crates/iroha_core/src/fastpq/lane.rs` and `crates/iroha_core/src/fastpq/mod.rs` about missing imports/ambiguous `Into`).
+- FASTPQ: moved DSID/slot/root/perm/tx-set inputs into `FastpqTransitionBatch.public_inputs`, built batches during exec-witness capture, enforced authority + poseidon digests in state, tightened transcript/query validation in the prover, refreshed CLI audit output + FASTPQ docs, and added public-inputs template coverage.
+- Tests: not run (not requested).
+- Kagami/localnet/FASTPQ: align DA policy with build line (Iroha2 disables), fix genesis embed-pop inputs, adjust consensus metadata wiring + handshake expectation, and make FASTPQ batches carry public inputs with required authority digests; fix RBC READY stash borrowing and fastpq prover trace handling.
+- Tests: `CARGO_TARGET_DIR=target/codex-kagami cargo test -p iroha_kagami`.
+- Sumeragi: honor `NodeRole::Observer` by skipping proposal assembly, local votes/QC aggregation, and RBC rebroadcast emissions; add observer-gating unit coverage.
+- Tests: not run (not requested).
+- Maintenance: resolve merge conflicts in Sumeragi RBC/block-sync/commit paths plus `status.md` and `roadmap.md`.
+- Tests: not run (not requested).
 - Sumeragi/RBC: refresh derived roster snapshots on READY/DELIVER roster-hash mismatches, reset READY/DELIVER state on derived-roster changes, and add coverage.
 - Tests: not run (not requested).
 - Sumeragi/RBC: accept persisted sessions when both manifests lack git commit hashes, adopt computed chunk roots on persisted-session rebuild, and set expected chunk roots from READY/DELIVER when missing; add coverage.
@@ -26,6 +36,16 @@
 - Sumeragi/RBC: keep payload rebroadcasts active when READY quorum is reached but chunks are still missing; add coverage and update docs.
 - Tests: not run (not requested).
 - Block sync: avoid decode panics on invalid GetBlocksAfter/ShareBlocks payloads, validate block sequences at handling time, and add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi: serialize exec-witness capture across block validation/commit to prevent cross-block witness mixing that can break execution-root QCs; add guard coverage and align witness tests to the shared guard.
+- Tests: not run (not requested).
+- Storage budgets: wire Kura budget telemetry + warnings, attach daemon telemetry to Kura, and document budget metrics/guidance in Nexus lanes.
+- Tests: not run (not requested).
+- Sumeragi: derive commit QC execution roots from view-aligned votes so aggregate signatures remain valid after view rotations; add regression coverage for view-aligned QC roots.
+- Tests: not run (not requested).
+- Sumeragi: add exec-witness fallback capture when pre-vote validation yields no roots, and add regression coverage for the fallback path to keep commit votes live.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Sumeragi/RBC: move roster lookups ahead of READY/DELIVER stash closures to resolve borrow-checker conflicts.
 - Tests: not run (not requested).
 - Sumeragi/RBC: represent empty payloads as a single chunk, invalidate recovered sessions on payload-hash mismatch, clear pending stash on chunk-root mismatch, and reset READY/DELIVER state when authoritative rosters override derived; add regression coverage.
 - Tests: not run (not requested).
