@@ -1123,6 +1123,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             session_store_dir: PathBuf::from(defaults::streaming::SESSION_STORE_DIR),
             feature_bits: defaults::streaming::FEATURE_BITS,
             soranet: A::StreamingSoranet::from_defaults(),
+            soravpn: A::StreamingSoravpn::from_defaults(),
             sync: A::StreamingSync::from_defaults(),
             codec: A::StreamingCodec {
                 cabac_mode: A::CabacMode::Disabled,

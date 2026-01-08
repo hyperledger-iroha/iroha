@@ -369,7 +369,7 @@ pub fn sanitize_pin_intents(
 
 /// Validate commitment bundle invariants before embedding into a block.
 ///
-/// Enforces unique `(lane, epoch, sequence, ticket)` tuples, unique manifest
+/// Enforces unique `(lane, epoch, sequence)` tuples, unique manifest
 /// hashes within the bundle, non-zero manifest hashes, and lane proof policy
 /// compatibility.
 ///
@@ -483,10 +483,8 @@ mod proof_policy_tests {
     fn sanitize_pin_intents_rejects_duplicate_sequence_with_new_ticket() {
         let lane_config = LaneConfig::default();
         let lane_id = lane_config.primary().lane_id;
-        let mut first = intent(lane_id, 2, 4, [0x11; 32], [0x10; 32]);
-        let mut second = intent(lane_id, 2, 4, [0x33; 32], [0x22; 32]);
-        first.alias = None;
-        second.alias = None;
+        let first = intent(lane_id, 2, 4, [0x11; 32], [0x10; 32]);
+        let second = intent(lane_id, 2, 4, [0x33; 32], [0x22; 32]);
 
         let (kept, rejected) =
             sanitize_pin_intents(vec![first.clone(), second.clone()], &lane_config, |_| true);

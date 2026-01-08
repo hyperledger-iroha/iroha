@@ -10384,16 +10384,20 @@ async fn recover_block_from_rbc_session_requests_missing_block_created() {
 
     let height = actor.state.view().height() as u64 + 1;
     let view = 0u64;
+    let epoch = actor.epoch_for_height(height);
     let block = sample_block(height, u32::try_from(view).expect("view fits u32"), None);
     let block_hash = block.hash();
     let key = (block_hash, height, view);
 
     let payload_bytes = super::proposals::block_payload_bytes(&block);
     let payload_hash = Hash::new(&payload_bytes);
-    let epoch = actor.epoch_for_height(height);
-    let mut session =
-        Actor::build_rbc_session_from_payload(&payload_bytes, payload_hash, 1024, epoch)
-            .expect("session");
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        1024,
+        epoch,
+    )
+    .expect("session");
     session.test_set_delivered(true);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
     actor.record_rbc_session_roster(
@@ -10424,16 +10428,20 @@ async fn recover_block_from_rbc_session_marks_invalid_on_payload_hash_mismatch()
 
     let height = actor.state.view().height() as u64 + 1;
     let view = 0u64;
+    let epoch = actor.epoch_for_height(height);
     let block = sample_block(height, u32::try_from(view).expect("view fits u32"), None);
     let block_hash = block.hash();
     let key = (block_hash, height, view);
 
     let payload_bytes = super::proposals::block_payload_bytes(&block);
     let payload_hash = Hash::new(&payload_bytes);
-    let epoch = actor.epoch_for_height(height);
-    let mut session =
-        Actor::build_rbc_session_from_payload(&payload_bytes, payload_hash, 1024, epoch)
-            .expect("session");
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        1024,
+        epoch,
+    )
+    .expect("session");
     session.payload_hash = Some(Hash::prehashed([0xEE; 32]));
     session.test_set_delivered(true);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);

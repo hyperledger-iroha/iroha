@@ -78,6 +78,9 @@ translator: manual
     - `padding_budget_ms` (ברירת מחדל: `25`): תקציב padding ברמת השהיה נמוכה במילישניות; `null` מבטל padding נוסף.
     - `access_kind` (ברירת מחדל: `authenticated`): תנוחת יציאה בעת הגישור (`authenticated` או `read-only`).
     - `channel_salt` (ברירת מחדל: `iroha.soranet.channel.seed.v1`): מחרוזת דומיין שמקודדת יחד עם מזהי stream/route כדי לגזור מזהי ערוץ מעוורים.
+  - `soravpn`: הגדרות spool התזמון המקומי של SoraVPN למסלולי streaming.
+    - `provision_spool_dir` (ברירת מחדל: `./storage/streaming/soravpn_routes`): ספריית spool שמכינה עדכוני מסלולי SoraVPN לצמתי VPN מקומיים.
+    - `provision_spool_max_bytes` (ברירת מחדל: `0`, בלתי מוגבל): גודל דיסק מקסימלי ל‑spool התזמון של SoraVPN.
   - `sync` (ברירת מחדל: observe‑only): מדיניות אכיפת סנכרון אודיו/וידאו עבור NSC-28b.
     - `enabled` (ברירת מחדל: `false`): העבירו ל־`true` כאשר המאמת צריך להתחיל להעריך דיווחי סטייה.
     - `observe_only` (ברירת מחדל: `true`): כאשר `true`, הפרות נרשמות ומופקות לטלמטריה אך המקטעים עדיין מתקבלים; הגדירו ל־`false` כדי להכשיל קשיח.

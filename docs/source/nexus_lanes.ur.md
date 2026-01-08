@@ -97,6 +97,17 @@ LaneConfigEntry {
 - **Retention policy** - public lanes full block bodies retain کرتی ہیں؛ commitment-only lanes checkpoints کے بعد پرانے bodies compact کر سکتی ہیں کیونکہ commitments authoritative ہیں۔ Confidential lanes ciphertext journals dedicated segments میں رکھتی ہیں تاکہ دوسرے workloads block نہ ہوں۔
 - **Tooling** - `cargo xtask nexus-lane-maintenance --config <path> [--compact-retired]` `<store>/blocks` اور `<store>/merge_ledger` کو derived `LaneConfig` کے ساتھ inspect کرتا ہے، active vs retired segments report کرتا ہے اور retired directories/logs کو `<store>/retired/...` کے تحت archive کرتا ہے تاکہ evidence deterministic رہے۔ Maintenance utilities (`kagami`, CLI admin commands) کو metrics, Prometheus labels یا Kura segments archive کرتے وقت slugged namespace reuse کرنا چاہیے۔
 
+## اسٹوریج بجٹس
+
+- `nexus.storage.max_disk_usage_bytes` Nexus nodes کے لئے Kura، cold WSV snapshots، SoraFS storage اور streaming spools (SoraNet/SoraVPN) پر مجموعی disk budget بیان کرتا ہے۔
+- `nexus.storage.max_wsv_memory_bytes` hot WSV tier کو `tiered_state.hot_retained_bytes` میں deterministic Norito payload sizing propagate کر کے limit کرتا ہے؛ grace retention عارضی طور پر budget سے اوپر جا سکتا ہے، مگر overflow telemetry (`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`) میں نظر آتا ہے۔
+- `nexus.storage.disk_budget_weights` disk budget کو basis points میں components میں تقسیم کرتا ہے (10,000 کا مجموعہ لازمی ہے)۔ derived caps `kura.max_disk_usage_bytes`، `tiered_state.max_cold_bytes`، `sorafs.storage.max_capacity_bytes`، `streaming.soranet.provision_spool_max_bytes` اور `streaming.soravpn.provision_spool_max_bytes` پر apply ہوتے ہیں۔
+- Kura budget enforcement active اور retired lane segments کے block-store bytes جمع کرتا ہے اور queued blocks (جو ابھی persist نہیں ہوئے) بھی شامل کرتا ہے تاکہ write lag کے دوران overshoot نہ ہو۔
+- SoraVPN provisioning spools `streaming.soravpn` settings استعمال کرتے ہیں اور SoraNet provision spool سے الگ cap ہوتے ہیں۔
+- Per-component limits اب بھی لاگو ہیں: اگر کسی component کا explicit non-zero cap ہو تو explicit cap اور derived Nexus budget میں سے چھوٹا cap enforce ہوتا ہے۔
+- Budget telemetry `storage_budget_bytes_used{component=...}` اور `storage_budget_bytes_limit{component=...}` کو `kura`، `wsv_hot`، `wsv_cold`، `soranet_spool`، `soravpn_spool` کے usage/caps رپورٹ کرنے کیلئے استعمال کرتی ہے؛ `storage_budget_exceeded_total{component=...}` تب بڑھتا ہے جب enforcement نئی data reject کرے اور logs operator کو warning دیں۔
+- Kura admission میں استعمال ہونے والی ہی accounting رپورٹ کرتا ہے (disk bytes + queued blocks، merge-ledger payloads سمیت)، اس لئے gauges صرف persisted bytes نہیں بلکہ effective pressure دکھاتے ہیں۔
+
 ## Routing اور APIs
 
 - Torii REST/gRPC endpoints optional `lane_id` لیتے ہیں؛ absence کا مطلب `lane_default` ہے۔

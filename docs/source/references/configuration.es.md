@@ -77,6 +77,9 @@ Primero los valores por defecto: los valores de configuración están preparados
     - `padding_budget_ms` (por defecto: `25`): margen de padding de baja latencia en milisegundos aplicado al circuito; `null` desactiva padding extra.
     - `access_kind` (por defecto: `authenticated`): postura de salida aplicada al hacer el puente (`authenticated` o `read-only`).
     - `channel_salt` (por defecto: `iroha.soranet.channel.seed.v1`): cadena de dominio con hash junto con los identificadores de stream/ruta para derivar IDs de canal cegados.
+  - `soravpn`: ajustes del spool de aprovisionamiento local de SoraVPN para rutas de streaming.
+    - `provision_spool_dir` (por defecto: `./storage/streaming/soravpn_routes`): directorio del spool usado para preparar actualizaciones de rutas SoraVPN para nodos VPN locales.
+    - `provision_spool_max_bytes` (por defecto: `0`, ilimitado): tamaño máximo en disco del spool de aprovisionamiento SoraVPN.
   - `sync` (por defecto: observe-only): política de aplicación de sincronización de audio/vídeo para NSC-28b.
     - `enabled` (por defecto: `false`): active a `true` cuando el validador deba comenzar a evaluar informes de deriva.
     - `observe_only` (por defecto: `true`): cuando es `true`, las violaciones se registran y se exportan vía telemetría pero los segmentos se aceptan; ponga `false` para fallar en duro.

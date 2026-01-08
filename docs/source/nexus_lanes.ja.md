@@ -95,6 +95,17 @@ LaneConfigEntry {
 - **保持ポリシー** — 公開レーンは完全なブロック本文を保持する。commitment のみのレーンは、commitment が権威となるためチェックポイント後に古い本文をコンパクト化できる。機密レーンは専用セグメントに暗号文ジャーナルを保持し、他のワークロードをブロックしないようにする。
 - **ツール** — `cargo xtask nexus-lane-maintenance --config <path> [--compact-retired]` は派生した `LaneConfig` を用いて `<store>/blocks` と `<store>/merge_ledger` を検査し、アクティブ/引退セグメントを報告し、引退ディレクトリ/ログを `<store>/retired/...` にアーカイブして証跡の決定性を保つ。メンテナンスツール（`kagami`、CLI 管理コマンド）は、メトリクスや Prometheus ラベルの公開、Kura セグメントのアーカイブ時にスラグ付き namespace を再利用すべきである。
 
+## ストレージ予算
+
+- `nexus.storage.max_disk_usage_bytes` は、Nexus ノードが Kura、WSV のコールドスナップショット、SoraFS ストレージ、ストリーミングスプール（SoraNet/SoraVPN）で消費すべき総ディスク予算を定義する。
+- `nexus.storage.max_wsv_memory_bytes` は Norito の決定論的ペイロードサイズを `tiered_state.hot_retained_bytes` に反映させて WSV ホット層を上限化する。グレース保持により一時的に超過する可能性があるが、超過はテレメトリ（`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`）で観測できる。
+- `nexus.storage.disk_budget_weights` は基準点でディスク予算をコンポーネントに分割する（合計 10,000 必須）。導出された上限は `kura.max_disk_usage_bytes`、`tiered_state.max_cold_bytes`、`sorafs.storage.max_capacity_bytes`、`streaming.soranet.provision_spool_max_bytes`、`streaming.soravpn.provision_spool_max_bytes` に適用される。
+- Kura のストレージ予算の適用は、アクティブ/引退レーンのセグメントに跨るブロックストアのバイト数を合算し、未永続化のキュー済みブロックも含めて書き込み遅延中の超過を防ぐ。
+- SoraVPN のプロビジョニングスプールは `streaming.soravpn` 設定を使い、SoraNet のプロビジョニングスプールと独立して上限が適用される。
+- コンポーネントごとの制限も有効で、明示的な非ゼロ上限がある場合は Nexus 由来の上限と小さい方が適用される。
+- 予算テレメトリは `storage_budget_bytes_used{component=...}` と `storage_budget_bytes_limit{component=...}` を用いて `kura`、`wsv_hot`、`wsv_cold`、`soranet_spool`、`soravpn_spool` の使用量/上限を報告する。`storage_budget_exceeded_total{component=...}` は新規データが拒否されると増加し、ログがオペレーターに警告を出す。
+- Kura は承認時に使う会計（ディスクバイト + キュー済みブロック、merge-ledger のペイロードがある場合はそれも含む）をそのまま報告するため、ゲージは永続化済みバイトだけではなく実効的な圧力を反映する。
+
 ## ルーティングと API
 
 - Torii の REST/gRPC エンドポイントは任意の `lane_id` を受け付ける。未指定の場合は `lane_default` を意味する。

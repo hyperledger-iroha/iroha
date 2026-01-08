@@ -7,6 +7,15 @@
 - Tests: not run (not requested).
 - Sumeragi: reschedule/pacemaker now uses per-block commit rosters for quorum reschedules and prevote-timeout rebroadcasts (fallback to active roster when unavailable); add coverage to assert snapshot roster targeting.
 - Tests: not run (not requested).
+- Storage budgets: split SoraVPN spool caps into dedicated `streaming.soravpn` config, apply Nexus budget clamps separately, and update Nexus-lanes/config-reference docs (including localized copies).
+- Tests: not run (not requested).
+- Maintenance: resolve merge conflicts in `crates/iroha_core/src/sumeragi/main_loop/tests.rs` and `status.md`.
+- Tests: not run (not requested).
+- Izanami: add target-block progress monitoring with stall detection, optional pipeline-time override, and coordinated stop control; extend CLI/TUI/config defaults; skip persistence on permission errors and add guard tests.
+- Tests: `cargo test -p izanami` (failed: missing IVM artifact fixture `crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_3_mode00_vlen0_cycles0_abi0.to`; embedded Nexus config rejected `nexus.storage.weights`).
+- Izanami run: `cargo run -p izanami -- --allow-net --peers 4 --faulty 0 --pipeline-time 200ms --target-blocks 2000 --progress-interval 5s --progress-timeout 60s --duration 20m --tps 30 --max-inflight 128` (failed: loopback port bind denied `127.0.0.1:30000`).
+- Tests: fix NFT missing-domain matchers to avoid partial moves and align RBC test epoch usage to resolve borrow conflicts during compilation.
+- Tests: `cargo test -p iroha_core --lib exec_witness_guard_serializes_block_access -- --nocapture`.
 - Sumeragi/NPoS: derive epochs from finalized VRF epoch records to keep epoch-length changes consistent across message validation, seed selection, penalties, and startup alignment; add epoch schedule unit coverage; update sumeragi docs.
 - Tests: `cargo test -p iroha_core epoch_schedule_uses_finalized_boundaries -- --nocapture` (timed out after 120s during compilation; errors in `crates/iroha_core/src/fastpq/lane.rs` and `crates/iroha_core/src/fastpq/mod.rs` about missing imports/ambiguous `Into`).
 - FASTPQ: moved DSID/slot/root/perm/tx-set inputs into `FastpqTransitionBatch.public_inputs`, built batches during exec-witness capture, enforced authority + poseidon digests in state, tightened transcript/query validation in the prover, refreshed CLI audit output + FASTPQ docs, and added public-inputs template coverage.

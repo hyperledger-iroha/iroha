@@ -60,6 +60,10 @@ enum Field {
     Peers,
     Faulty,
     Duration,
+    PipelineTime,
+    TargetBlocks,
+    ProgressInterval,
+    ProgressTimeout,
     Seed,
     Tps,
     MaxInflight,
@@ -77,6 +81,10 @@ impl Field {
             Field::Peers => "Peers",
             Field::Faulty => "Faulty Peers",
             Field::Duration => "Duration",
+            Field::PipelineTime => "Pipeline Time",
+            Field::TargetBlocks => "Target Blocks",
+            Field::ProgressInterval => "Progress Interval",
+            Field::ProgressTimeout => "Progress Timeout",
             Field::Seed => "Seed",
             Field::Tps => "Tx/s Target",
             Field::MaxInflight => "Max Inflight",
@@ -94,6 +102,10 @@ impl Field {
             Field::Peers,
             Field::Faulty,
             Field::Duration,
+            Field::PipelineTime,
+            Field::TargetBlocks,
+            Field::ProgressInterval,
+            Field::ProgressTimeout,
             Field::Seed,
             Field::Tps,
             Field::MaxInflight,
@@ -385,6 +397,49 @@ impl App {
                     parse_duration(buffer.trim()).map_err(|e| format!("Invalid duration: {e}"))?;
                 self.args.duration = dur;
             }
+            Field::PipelineTime => {
+                let trimmed = buffer.trim();
+                self.args.pipeline_time = if trimmed.is_empty() {
+                    None
+                } else {
+                    let dur = parse_duration(trimmed)
+                        .map_err(|e| format!("Invalid pipeline time: {e}"))?;
+                    if dur.is_zero() {
+                        return Err("Pipeline time must be greater than zero".into());
+                    }
+                    Some(dur)
+                };
+            }
+            Field::TargetBlocks => {
+                let trimmed = buffer.trim();
+                self.args.target_blocks = if trimmed.is_empty() {
+                    None
+                } else {
+                    let value: u64 = trimmed
+                        .parse()
+                        .map_err(|_| "Target blocks must be a positive integer".to_string())?;
+                    if value == 0 {
+                        return Err("Target blocks must be greater than zero".into());
+                    }
+                    Some(value)
+                };
+            }
+            Field::ProgressInterval => {
+                let dur = parse_duration(buffer.trim())
+                    .map_err(|e| format!("Invalid progress interval: {e}"))?;
+                if dur.is_zero() {
+                    return Err("Progress interval must be greater than zero".into());
+                }
+                self.args.progress_interval = dur;
+            }
+            Field::ProgressTimeout => {
+                let dur = parse_duration(buffer.trim())
+                    .map_err(|e| format!("Invalid progress timeout: {e}"))?;
+                if dur.is_zero() {
+                    return Err("Progress timeout must be greater than zero".into());
+                }
+                self.args.progress_timeout = dur;
+            }
             Field::Seed => {
                 let trimmed = buffer.trim();
                 self.args.seed = if trimmed.is_empty() {
@@ -509,6 +564,16 @@ impl App {
             Field::Peers => self.args.peers.to_string(),
             Field::Faulty => self.args.faulty.to_string(),
             Field::Duration => format_duration(self.args.duration).to_string(),
+            Field::PipelineTime => self.args.pipeline_time.map_or_else(
+                || "(default)".to_string(),
+                |duration| format_duration(duration).to_string(),
+            ),
+            Field::TargetBlocks => self
+                .args
+                .target_blocks
+                .map_or_else(|| "(none)".to_string(), |value| value.to_string()),
+            Field::ProgressInterval => format_duration(self.args.progress_interval).to_string(),
+            Field::ProgressTimeout => format_duration(self.args.progress_timeout).to_string(),
             Field::Seed => self
                 .args
                 .seed
@@ -528,6 +593,18 @@ impl App {
             Field::Peers => self.args.peers.to_string(),
             Field::Faulty => self.args.faulty.to_string(),
             Field::Duration => format_duration(self.args.duration).to_string(),
+            Field::PipelineTime => self
+                .args
+                .pipeline_time
+                .map(|duration| format_duration(duration).to_string())
+                .unwrap_or_default(),
+            Field::TargetBlocks => self
+                .args
+                .target_blocks
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            Field::ProgressInterval => format_duration(self.args.progress_interval).to_string(),
+            Field::ProgressTimeout => format_duration(self.args.progress_timeout).to_string(),
             Field::Seed => self.args.seed.map(|s| s.to_string()).unwrap_or_default(),
             Field::AllowNet => self.args.allow_net.to_string(),
             Field::Tps => self.args.tps.to_string(),
