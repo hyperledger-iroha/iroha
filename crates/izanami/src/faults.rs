@@ -142,8 +142,21 @@ pub async fn run_fault_loop<P: FaultPeer>(
             break;
         }
         let delay = config.sample_interval(&mut rng);
+        let now = Instant::now();
+        let Some(delay) = bounded_delay(now, deadline, delay) else {
+            break;
+        };
         debug!(target: "izanami::faults", peer = peer.mnemonic(), ?scenario, ?delay, "scheduling next fault");
         sleep(delay).await;
+    }
+}
+
+fn bounded_delay(now: Instant, deadline: Instant, delay: Duration) -> Option<Duration> {
+    let remaining = deadline.checked_duration_since(now)?;
+    if remaining.is_zero() {
+        None
+    } else {
+        Some(delay.min(remaining))
     }
 }
 
@@ -766,6 +779,23 @@ mod tests {
             FaultScenario::DiskSaturation,
         ]);
         assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn bounded_delay_clamps_to_deadline() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_millis(50);
+        let delay = Duration::from_millis(200);
+        let clamped = bounded_delay(now, deadline, delay).expect("delay should be bounded");
+        assert!(clamped <= Duration::from_millis(50));
+        assert!(clamped > Duration::from_millis(0));
+    }
+
+    #[test]
+    fn bounded_delay_returns_none_when_expired() {
+        let now = Instant::now();
+        let deadline = now - Duration::from_millis(1);
+        assert!(bounded_delay(now, deadline, Duration::from_secs(1)).is_none());
     }
 
     fn dummy_genesis() -> Arc<GenesisBlock> {

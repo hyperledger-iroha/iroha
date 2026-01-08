@@ -263,14 +263,20 @@ mod model {
         pub vrf_commit_window_blocks: u64,
         /// VRF reveal window length in blocks.
         pub vrf_reveal_window_blocks: u64,
+        /// Maximum validators to elect for the next epoch (0 = unlimited).
+        pub max_validators: u32,
         /// Minimum self-bond required for validator eligibility.
         pub min_self_bond: u64,
+        /// Minimum nomination bond required for delegators.
+        pub min_nomination_bond: u64,
         /// Maximum nominator concentration percentage.
         pub max_nominator_concentration_pct: u8,
         /// Seat allocation variance band percentage.
         pub seat_band_pct: u8,
         /// Maximum correlation percentage across validator entities.
         pub max_entity_correlation_pct: u8,
+        /// Finality margin in blocks before activating a newly elected set.
+        pub finality_margin_blocks: u64,
         /// Evidence retention horizon in blocks.
         pub evidence_horizon_blocks: u64,
         /// Activation lag in blocks for newly scheduled validator sets.
@@ -372,10 +378,22 @@ mod model {
             self.vrf_reveal_window_blocks
         }
 
+        /// Maximum validators to elect for the next epoch (0 = unlimited).
+        #[must_use]
+        pub fn max_validators(&self) -> u32 {
+            self.max_validators
+        }
+
         /// Minimum self-bonded stake required for validators.
         #[must_use]
         pub fn min_self_bond(&self) -> u64 {
             self.min_self_bond
+        }
+
+        /// Minimum nomination bond required for delegators.
+        #[must_use]
+        pub fn min_nomination_bond(&self) -> u64 {
+            self.min_nomination_bond
         }
 
         /// Maximum percentage of stake concentrated under a single nominator.
@@ -394,6 +412,12 @@ mod model {
         #[must_use]
         pub fn max_entity_correlation_pct(&self) -> u8 {
             self.max_entity_correlation_pct
+        }
+
+        /// Finality margin in blocks before activating a newly elected set.
+        #[must_use]
+        pub fn finality_margin_blocks(&self) -> u64 {
+            self.finality_margin_blocks
         }
 
         /// Number of blocks for which slashing evidence remains valid.
@@ -451,10 +475,13 @@ mod model {
                 redundant_send_r: redundant_send_r(),
                 vrf_commit_window_blocks: vrf_commit_window_blocks(),
                 vrf_reveal_window_blocks: vrf_reveal_window_blocks(),
+                max_validators: max_validators(),
                 min_self_bond: min_self_bond(),
+                min_nomination_bond: min_nomination_bond(),
                 max_nominator_concentration_pct: max_nominator_concentration_pct(),
                 seat_band_pct: seat_band_pct(),
                 max_entity_correlation_pct: max_entity_correlation_pct(),
+                finality_margin_blocks: finality_margin_blocks(),
                 evidence_horizon_blocks: evidence_horizon_blocks(),
                 activation_lag_blocks: activation_lag_blocks(),
                 epoch_length_blocks: epoch_length_blocks(),
@@ -1218,8 +1245,14 @@ mod defaults {
             pub const fn vrf_reveal_window_blocks() -> u64 {
                 40
             }
+            pub const fn max_validators() -> u32 {
+                128
+            }
             pub const fn min_self_bond() -> u64 {
                 1_000
+            }
+            pub const fn min_nomination_bond() -> u64 {
+                1
             }
             pub const fn max_nominator_concentration_pct() -> u8 {
                 25
@@ -1229,6 +1262,9 @@ mod defaults {
             }
             pub const fn max_entity_correlation_pct() -> u8 {
                 25
+            }
+            pub const fn finality_margin_blocks() -> u64 {
+                8
             }
             pub const fn evidence_horizon_blocks() -> u64 {
                 7_200
