@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Izanami: grant SoraFS replication permissions in chaos genesis; mark Nexus staking chaos plans as expected failures until staking assets/peer-backed validators are provisioned; sign staking mint/transfer plans with treasury.
+- Tests: `CARGO_TARGET_DIR=target/codex-izanami cargo test -p izanami` (timed out after 5m during compilation).
 - Integration tests/assets: disable Nexus in the asset test network builder (permissioned) and add a status-retry helper to avoid Torii readiness stalls.
 - Tests: `cargo test -p integration_tests --test asset client_add_asset_with_decimal_should_increase_asset_amount -- --nocapture`; `cargo test -p integration_tests --test asset client_add_asset_quantity_to_existing_asset_should_increase_asset_amount -- --nocapture`; `cargo test -p integration_tests --test asset client_add_big_asset_quantity_to_existing_asset_amount -- --nocapture`; `cargo test -p integration_tests --test asset fail_if_dont_satisfy_spec -- --nocapture`; `cargo test -p integration_tests --test asset find_rate_and_make_exchange_isi_should_succeed -- --nocapture`; `cargo test -p integration_tests --test asset transfer_asset_definition -- --nocapture` (all pass).
 - Izanami: write `sumeragi.consensus_mode` into the Nexus profile config layer so NPoS mode propagates through overrides.
