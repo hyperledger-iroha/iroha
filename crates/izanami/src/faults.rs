@@ -19,7 +19,7 @@ use iroha_genesis::GenesisBlock;
 use iroha_test_network::NetworkPeer;
 use iroha_test_samples::ALICE_ID;
 use rand::{Rng, RngCore, SeedableRng, rngs::StdRng, seq::IndexedRandom};
-use tokio::{task, time::sleep};
+use tokio::{sync::Notify, task, time::sleep};
 use toml::Table;
 use tracing::{debug, error, info, warn};
 
@@ -120,6 +120,7 @@ pub async fn run_fault_loop<P: FaultPeer>(
     config_layers: Arc<Vec<Table>>,
     base_domain: DomainId,
     stop: Arc<AtomicBool>,
+    stop_notify: Arc<Notify>,
     deadline: Instant,
     seed: u64,
 ) {
@@ -147,7 +148,10 @@ pub async fn run_fault_loop<P: FaultPeer>(
             break;
         };
         debug!(target: "izanami::faults", peer = peer.mnemonic(), ?scenario, ?delay, "scheduling next fault");
-        sleep(delay).await;
+        tokio::select! {
+            _ = sleep(delay) => {},
+            _ = stop_notify.notified() => break,
+        }
     }
 }
 
@@ -645,7 +649,7 @@ mod tests {
 
     use iroha_primitives::unique_vec::UniqueVec;
     use iroha_test_network::genesis_factory;
-    use tokio::{sync::Mutex as AsyncMutex, time::timeout};
+    use tokio::{sync::{Mutex as AsyncMutex, Notify}, time::{sleep, timeout}};
 
     use super::*;
 
@@ -806,6 +810,7 @@ mod tests {
     async fn run_fault_loop_respects_stop_flag() {
         let peer = MockPeer::new("stop");
         let stop = Arc::new(AtomicBool::new(true));
+        let stop_notify = Arc::new(Notify::new());
         let config = FaultConfig {
             interval: Duration::from_secs(1)..=Duration::from_secs(1),
             network_latency: None,
@@ -823,6 +828,7 @@ mod tests {
             config_layers,
             domain,
             stop,
+            stop_notify,
             Instant::now() + Duration::from_secs(1),
             7,
         )
@@ -832,6 +838,45 @@ mod tests {
             events.is_empty(),
             "stop flag should prevent fault loop work"
         );
+    }
+
+    #[tokio::test]
+    async fn run_fault_loop_wakes_on_stop_notify() {
+        let peer = MockPeer::new("stop-notify");
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_notify = Arc::new(Notify::new());
+        let config = FaultConfig {
+            interval: Duration::from_secs(10)..=Duration::from_secs(10),
+            network_latency: None,
+            network_partition: None,
+            cpu_stress: None,
+            disk_saturation: None,
+        };
+        let config_layers = Arc::new(Vec::new());
+        let genesis = dummy_genesis();
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let deadline = Instant::now() + Duration::from_secs(30);
+
+        let handle = tokio::spawn(run_fault_loop(
+            peer.clone(),
+            config,
+            genesis,
+            config_layers,
+            domain,
+            Arc::clone(&stop),
+            Arc::clone(&stop_notify),
+            deadline,
+            99,
+        ));
+
+        sleep(Duration::from_millis(10)).await;
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        stop_notify.notify_waiters();
+
+        timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("fault loop should stop promptly")
+            .expect("fault loop task should complete");
     }
 
     #[tokio::test]

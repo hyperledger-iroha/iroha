@@ -2500,22 +2500,20 @@ impl NewViewTracker {
             return None;
         }
         let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
-        self.highest_entry_mut(|_, _, entry| {
-            entry.count_in_roster(&roster_set, local) >= required
-        })
-        .map(|(key, entry)| {
-            let quorum = entry.count_in_roster(&roster_set, local);
-            if let Some(peer) = local {
-                if roster_set.contains(peer) {
-                    entry.senders.insert(peer.clone());
+        self.highest_entry_mut(|_, _, entry| entry.count_in_roster(&roster_set, local) >= required)
+            .map(|(key, entry)| {
+                let quorum = entry.count_in_roster(&roster_set, local);
+                if let Some(peer) = local {
+                    if roster_set.contains(peer) {
+                        entry.senders.insert(peer.clone());
+                    }
                 }
-            }
-            NewViewSelection {
-                key,
-                highest_qc: entry.highest_qc,
-                quorum,
-            }
-        })
+                NewViewSelection {
+                    key,
+                    highest_qc: entry.highest_qc,
+                    quorum,
+                }
+            })
     }
 }
 

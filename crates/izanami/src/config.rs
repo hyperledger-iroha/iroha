@@ -12,8 +12,8 @@ use iroha_config::{
         toml::{TomlSource, Writer as TomlWriter},
     },
     parameters::actual::{
-        Commit, Da, Fusion, LaneRoutingPolicy, LaneRoutingRule, Nexus as ActualNexus,
-        Sumeragi as ActualSumeragi,
+        Commit, ConsensusMode, Da, Fusion, LaneRoutingPolicy, LaneRoutingRule,
+        Nexus as ActualNexus, Sumeragi as ActualSumeragi,
     },
 };
 use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog};
@@ -276,7 +276,11 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
         if !args.tps.is_finite() {
             return Err(eyre!("tps must be finite"));
         }
-        let interval = Duration::from_secs_f64(1.0 / args.tps);
+        let interval_secs = 1.0 / args.tps;
+        if !interval_secs.is_finite() || interval_secs > (u64::MAX as f64) {
+            return Err(eyre!("tps too low for timer range"));
+        }
+        let interval = Duration::from_secs_f64(interval_secs);
         if interval.is_zero() {
             return Err(eyre!("tps too high for timer resolution"));
         }
@@ -409,6 +413,14 @@ impl NexusProfile {
         let mut raw_table: Table = toml::from_str(&config_str)
             .map_err(|err| eyre!("failed to parse embedded nexus config: {err}"))?;
         normalize_lane_metadata(&mut raw_table);
+        let consensus_mode = Value::String("npos".to_string());
+        if let Some(sumeragi) = raw_table.get_mut("sumeragi").and_then(Value::as_table_mut) {
+            sumeragi.insert("consensus_mode".to_string(), consensus_mode);
+        } else {
+            let mut sumeragi = Table::new();
+            sumeragi.insert("consensus_mode".to_string(), consensus_mode);
+            raw_table.insert("sumeragi".to_string(), Value::Table(sumeragi));
+        }
         let default_p2p_addr = canonical_addr_literal("127.0.0.1:1337")?;
         let default_torii_addr = canonical_addr_literal("127.0.0.1:8080")?;
         // Provide safe defaults for required network addresses and drop unsupported nested sections
@@ -644,7 +656,13 @@ fn build_nexus_layer(nexus: &ActualNexus, sumeragi: &ActualSumeragi) -> Table {
         nexus.da.rotation.latency_decay,
     );
 
-    TomlWriter::new(&mut layer).write(["sumeragi", "da_enabled"], sumeragi.da_enabled);
+    let consensus_mode = match sumeragi.consensus_mode {
+        ConsensusMode::Permissioned => "permissioned",
+        ConsensusMode::Npos => "npos",
+    };
+    TomlWriter::new(&mut layer)
+        .write(["sumeragi", "consensus_mode"], consensus_mode)
+        .write(["sumeragi", "da_enabled"], sumeragi.da_enabled);
 
     layer
 }
@@ -811,6 +829,22 @@ mod tests {
     }
 
     #[test]
+    fn nexus_profile_sets_npos_consensus_mode() {
+        let profile = NexusProfile::sora_defaults().expect("nexus profile should load");
+        let mode = profile
+            .config_layer
+            .get("sumeragi")
+            .and_then(Value::as_table)
+            .and_then(|sumeragi| sumeragi.get("consensus_mode"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            mode,
+            Some("npos"),
+            "nexus profile must force consensus_mode=npos"
+        );
+    }
+
+    #[test]
     fn chaos_config_rejects_progress_interval_over_timeout() {
         let args = IzanamiArgs {
             tui: false,
@@ -900,6 +934,37 @@ mod tests {
         assert!(
             err.to_string().contains("tps too high"),
             "error should mention timer resolution: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_rejects_tps_too_low_for_timer() {
+        let args = IzanamiArgs {
+            tui: false,
+            allow_net: true,
+            peers: 1,
+            faulty: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            seed: None,
+            tps: f64::MIN_POSITIVE,
+            max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
+            log_filter: "info".to_string(),
+            fault_interval_min: Duration::from_secs(1),
+            fault_interval_max: Duration::from_secs(1),
+            faults: FaultArgs::default(),
+            nexus: false,
+        };
+        let Err(err) = ChaosConfig::try_from(args) else {
+            panic!("tps too low for timer range should fail");
+        };
+        assert!(
+            err.to_string().contains("tps too low"),
+            "error should mention timer range: {err}"
         );
     }
 }

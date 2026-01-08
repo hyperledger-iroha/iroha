@@ -162,8 +162,11 @@ fn quiet_network_builder() -> NetworkBuilder {
     sumeragi.insert("collectors_redundant_send_r".into(), TomlValue::Integer(3));
     sumeragi.insert("rbc_pending_ttl_ms".into(), TomlValue::Integer(120_000));
     sumeragi.insert("rbc_session_ttl_secs".into(), TomlValue::Integer(240));
+    let mut nexus = toml::Table::new();
+    nexus.insert("enabled".into(), TomlValue::Boolean(false));
     let mut layer = toml::Table::new();
     layer.insert("sumeragi".into(), TomlValue::Table(sumeragi));
+    layer.insert("nexus".into(), TomlValue::Table(nexus));
     NetworkBuilder::new()
         .with_peers(4)
         .with_default_pipeline_time()
@@ -652,11 +655,11 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             return Ok(());
         };
         let test_client = network.client();
-        let mut status = match status_or_skip(get_status_with_retry(&test_client), "initial status")?
-        {
-            Some(status) => status,
-            None => return Ok(()),
-        };
+        let mut status =
+            match status_or_skip(get_status_with_retry(&test_client), "initial status")? {
+                Some(status) => status,
+                None => return Ok(()),
+            };
         let mut last_non_empty_height = status.blocks_non_empty;
 
         let seed_instructions: [InstructionBox; 3] = [

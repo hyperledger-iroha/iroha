@@ -22,6 +22,7 @@ use iroha_config::parameters::actual::{
     SumeragiNposTimeouts, SumeragiNposVrf,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
+use iroha_data_model::parameter::system::SumeragiNposParameters;
 use iroha_data_model::{
     ChainId, Encode as _,
     asset::{AssetDefinitionId, AssetId},
@@ -6640,7 +6641,9 @@ async fn pacemaker_base_interval_uses_npos_block_time_on_mode_reset() {
 
     let view = actor.state.view();
     let block_time = crate::sumeragi::resolve_npos_block_time(&view, &actor.config.npos);
-    let expected = pacemaker_base_interval(block_time, &actor.config);
+    let timeouts = crate::sumeragi::resolve_npos_timeouts(&view, &actor.config.npos);
+    let expected =
+        pacemaker_base_interval_with_propose_timeout(block_time, timeouts.propose, &actor.config);
     assert_eq!(
         actor.subsystems.propose.pacemaker.propose_interval, expected,
         "pacemaker interval should follow NPoS block_time"
@@ -21621,7 +21624,8 @@ async fn new_view_vote_rejects_mismatched_highest_block_hash() {
     let view = 0;
     let epoch = actor.epoch_for_height(height);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let signature_topology = super::topology_for_view(&topology, height, view, PERMISSIONED_TAG, None);
+    let signature_topology =
+        super::topology_for_view(&topology, height, view, PERMISSIONED_TAG, None);
     let signer = actor
         .local_validator_index_for_topology(&signature_topology)
         .expect("local peer in topology");
@@ -21678,7 +21682,8 @@ async fn new_view_vote_rejects_mismatched_highest_height() {
     let view = 0;
     let epoch = actor.epoch_for_height(height);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let signature_topology = super::topology_for_view(&topology, height, view, PERMISSIONED_TAG, None);
+    let signature_topology =
+        super::topology_for_view(&topology, height, view, PERMISSIONED_TAG, None);
     let signer = actor
         .local_validator_index_for_topology(&signature_topology)
         .expect("local peer in topology");
@@ -23316,11 +23321,12 @@ async fn pacemaker_defers_proposal_when_precommit_votes_present() {
         .expect("sender peer");
     let sender_a_idx = ValidatorIndex::try_from(sender_a_pos).expect("sender index");
 
-    actor
-        .subsystems
-        .propose
-        .new_view_tracker
-        .record(tracked_height, view, sender_a.clone(), highest_qc);
+    actor.subsystems.propose.new_view_tracker.record(
+        tracked_height,
+        view,
+        sender_a.clone(),
+        highest_qc,
+    );
     actor
         .subsystems
         .propose
@@ -23438,11 +23444,12 @@ async fn pacemaker_defers_proposal_when_precommit_votes_in_prior_epoch() {
         .expect("sender peer");
     let sender_a_idx = ValidatorIndex::try_from(sender_a_pos).expect("sender index");
 
-    actor
-        .subsystems
-        .propose
-        .new_view_tracker
-        .record(tracked_height, view, sender_a.clone(), highest_qc);
+    actor.subsystems.propose.new_view_tracker.record(
+        tracked_height,
+        view,
+        sender_a.clone(),
+        highest_qc,
+    );
     actor
         .subsystems
         .propose
@@ -23551,21 +23558,16 @@ async fn pacemaker_allows_proposal_with_unknown_precommit_votes() {
     let view = u64::from(local_idx);
     let sender_a_pos = (local_pos + 1) % topology.len();
     let sender_b_pos = (local_pos + 2) % topology.len();
-    let sender_a = topology
-        .get(sender_a_pos)
-        .cloned()
-        .expect("sender peer");
-    let sender_b = topology
-        .get(sender_b_pos)
-        .cloned()
-        .expect("sender peer");
+    let sender_a = topology.get(sender_a_pos).cloned().expect("sender peer");
+    let sender_b = topology.get(sender_b_pos).cloned().expect("sender peer");
     let sender_a_idx = ValidatorIndex::try_from(sender_a_pos).expect("sender index");
 
-    actor
-        .subsystems
-        .propose
-        .new_view_tracker
-        .record(tracked_height, view, sender_a.clone(), highest_qc);
+    actor.subsystems.propose.new_view_tracker.record(
+        tracked_height,
+        view,
+        sender_a.clone(),
+        highest_qc,
+    );
     actor
         .subsystems
         .propose
@@ -24015,21 +24017,16 @@ async fn pacemaker_allows_proposal_with_stale_precommit_votes() {
     let view = u64::from(local_idx);
     let sender_a_pos = (local_pos + 1) % topology.len();
     let sender_b_pos = (local_pos + 2) % topology.len();
-    let sender_a = topology
-        .get(sender_a_pos)
-        .cloned()
-        .expect("sender peer");
-    let sender_b = topology
-        .get(sender_b_pos)
-        .cloned()
-        .expect("sender peer");
+    let sender_a = topology.get(sender_a_pos).cloned().expect("sender peer");
+    let sender_b = topology.get(sender_b_pos).cloned().expect("sender peer");
     let sender_a_idx = ValidatorIndex::try_from(sender_a_pos).expect("sender index");
 
-    actor
-        .subsystems
-        .propose
-        .new_view_tracker
-        .record(tracked_height, view, sender_a.clone(), highest_qc);
+    actor.subsystems.propose.new_view_tracker.record(
+        tracked_height,
+        view,
+        sender_a.clone(),
+        highest_qc,
+    );
     actor
         .subsystems
         .propose
@@ -24048,7 +24045,13 @@ async fn pacemaker_allows_proposal_with_stale_precommit_votes() {
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x46; Hash::LENGTH]));
     let stale_view = u64::from(view == 0);
     actor.vote_log.insert(
-        (Phase::Commit, tracked_height, stale_view, epoch, sender_a_idx),
+        (
+            Phase::Commit,
+            tracked_height,
+            stale_view,
+            epoch,
+            sender_a_idx,
+        ),
         crate::sumeragi::consensus::Vote {
             phase: Phase::Commit,
             block_hash: vote_hash,
@@ -30953,13 +30956,13 @@ fn pacemaker_interval_respects_rtt_floor_and_cap() {
     let block_time = Duration::from_millis(800);
 
     assert_eq!(
-        pacemaker_base_interval(block_time, &cfg),
+        pacemaker_base_interval_with_propose_timeout(block_time, cfg.npos.timeouts.propose, &cfg),
         Duration::from_millis(900)
     );
 
     cfg.npos.pacemaker_rtt_floor_multiplier = 5; // 1_500ms floor → capped by max_backoff
     assert_eq!(
-        pacemaker_base_interval(block_time, &cfg),
+        pacemaker_base_interval_with_propose_timeout(block_time, cfg.npos.timeouts.propose, &cfg),
         Duration::from_millis(1_200)
     );
 
@@ -30967,7 +30970,7 @@ fn pacemaker_interval_respects_rtt_floor_and_cap() {
     cfg.npos.pacemaker_max_backoff = Duration::from_millis(5_000);
     let block_time = Duration::from_millis(1_500);
     assert_eq!(
-        pacemaker_base_interval(block_time, &cfg),
+        pacemaker_base_interval_with_propose_timeout(block_time, cfg.npos.timeouts.propose, &cfg),
         Duration::from_millis(1_500)
     );
 }
