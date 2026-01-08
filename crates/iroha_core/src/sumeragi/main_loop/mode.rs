@@ -99,7 +99,24 @@ impl Actor {
         self.subsystems.propose.proposals_seen.clear();
         self.qc_cache.clear();
         self.vote_log.clear();
-        let (_, redundant_r) = self.collector_plan_params();
+        let now = Instant::now();
+        let (effective_mode, pacemaker_block_time, pacemaker_timeouts) = {
+            let view = self.state.view();
+            let effective_mode = super::effective_consensus_mode(&view, self.config.consensus_mode);
+            let (block_time, timeouts) = if matches!(effective_mode, ConsensusMode::Npos) {
+                (
+                    super::resolve_npos_block_time(&view, &self.config.npos),
+                    super::resolve_npos_timeouts(&view, &self.config.npos),
+                )
+            } else {
+                (
+                    view.world.parameters().sumeragi().block_time(),
+                    self.config.npos.timeouts,
+                )
+            };
+            (effective_mode, block_time, timeouts)
+        };
+        let (_, redundant_r) = self.collector_plan_params_for_mode(effective_mode);
         self.subsystems.propose.collector_redundant_limit = redundant_r.max(1);
         self.pending.pending_replay_last_sent.clear();
         self.pending.missing_block_requests.clear();
@@ -110,12 +127,12 @@ impl Actor {
         self.payload_rebroadcast_log.clear();
         self.block_sync_rebroadcast_log.clear();
         self.block_sync_fetch_log.clear();
-        let now = Instant::now();
-        let block_time = {
-            let view = self.state.view();
-            view.world.parameters().sumeragi().block_time()
-        };
-        let base_pacemaker_interval = pacemaker_base_interval(block_time, &self.config);
+        let base_pacemaker_interval = pacemaker_base_interval_with_propose_timeout(
+            pacemaker_block_time,
+            pacemaker_timeouts.propose,
+            &self.config,
+        );
+        self.phase_ema = PhaseEma::new(&pacemaker_timeouts);
         reset_runtime_state_for_mode_flip(
             &mut self.subsystems.propose.pacemaker,
             &mut self.subsystems.propose.new_view_tracker,

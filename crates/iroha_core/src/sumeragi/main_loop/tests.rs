@@ -1023,10 +1023,13 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
         redundant_send_r: 4,
         vrf_commit_window_blocks: 100,
         vrf_reveal_window_blocks: 40,
+        max_validators: 21,
         min_self_bond: 10,
+        min_nomination_bond: 5,
         max_nominator_concentration_pct: 25,
         seat_band_pct: 5,
         max_entity_correlation_pct: 30,
+        finality_margin_blocks: 9,
         evidence_horizon_blocks: 500,
         activation_lag_blocks: 7,
         epoch_length_blocks: 12,
@@ -1102,12 +1105,16 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
                 timeout_aggregator_ms: 120,
                 k_aggregators: 5,
                 redundant_send_r: 4,
+                epoch_seed: npos_params.epoch_seed,
                 vrf_commit_window_blocks: 100,
                 vrf_reveal_window_blocks: 40,
+                max_validators: 21,
                 min_self_bond: 10,
+                min_nomination_bond: 5,
                 max_nominator_concentration_pct: 25,
                 seat_band_pct: 5,
                 max_entity_correlation_pct: 30,
+                finality_margin_blocks: 9,
                 evidence_horizon_blocks: 500,
                 activation_lag_blocks: 7,
             }),
@@ -2517,6 +2524,23 @@ async fn block_sync_update_accepts_uncertified_next_height_in_permissioned_mode(
         signer_kp.private_key(),
     );
     let update = super::message::BlockSyncUpdate::from(&block);
+    let now = Instant::now();
+    let retry_window = Duration::from_secs(1);
+    actor.pending.missing_block_requests.insert(
+        block.hash(),
+        super::MissingBlockRequest {
+            height: block_height,
+            view: view_index,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window,
+            view_change_window: Some(retry_window),
+            first_seen: now,
+            last_requested: now,
+            view_change_triggered: false,
+            attempts: 0,
+        },
+    );
 
     actor
         .handle_block_sync_update(update)
@@ -2530,7 +2554,7 @@ async fn block_sync_update_accepts_uncertified_next_height_in_permissioned_mode(
     );
     assert!(
         actor.block_known_locally(block.hash()),
-        "block sync should accept next-height block without QC in permissioned mode"
+        "block sync should accept next-height block without QC when explicitly requested"
     );
 
     harness.shutdown.send();
@@ -6571,49 +6595,98 @@ async fn rebroadcast_highest_pending_block_skips_aborted() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rebroadcast_cooldown_uses_chain_block_time() {
+async fn rebroadcast_cooldown_uses_npos_block_time() {
     let harness = test_actor_harness(4).await;
     let block_time = {
         let view = harness.actor.state.view();
-        view.world.parameters().sumeragi().block_time()
+        crate::sumeragi::resolve_npos_block_time(&view, &harness.actor.config.npos)
     };
     let cooldown = harness.actor.rebroadcast_cooldown();
+    let payload_cooldown = harness.actor.payload_rebroadcast_cooldown();
 
     assert_eq!(
         cooldown,
         super::rebroadcast_cooldown_from_block_time(block_time)
+    );
+    assert_eq!(
+        payload_cooldown,
+        super::payload_rebroadcast_cooldown_from_block_time(block_time)
     );
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn pacemaker_base_interval_uses_chain_block_time_on_mode_reset() {
+async fn pacemaker_base_interval_uses_npos_block_time_on_mode_reset() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
     actor.config.npos.block_time = Duration::from_secs(10);
     {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
-        let mut params_block = state.world.parameters.block();
-        params_block.sumeragi.block_time_ms = 200;
-        params_block.commit();
+        let mut block = state.world.block();
+        let params = SumeragiNposParameters {
+            block_time_ms: 200,
+            ..SumeragiNposParameters::default()
+        };
+        block.parameters.get_mut().custom.insert(
+            SumeragiNposParameters::parameter_id(),
+            params.into_custom_parameter(),
+        );
+        block.commit();
     }
 
     actor.reset_mode_flip_state();
 
-    let block_time = actor
-        .state
-        .view()
-        .world
-        .parameters()
-        .sumeragi()
-        .block_time();
+    let view = actor.state.view();
+    let block_time = crate::sumeragi::resolve_npos_block_time(&view, &actor.config.npos);
     let expected = pacemaker_base_interval(block_time, &actor.config);
     assert_eq!(
         actor.subsystems.propose.pacemaker.propose_interval, expected,
-        "pacemaker interval should follow chain block_time"
+        "pacemaker interval should follow NPoS block_time"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_quorum_timeout_uses_npos_timeouts() {
+    use iroha_data_model::parameter::system::SumeragiNposParameters;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.sumeragi.block_time_ms = 9_000;
+        params.sumeragi.commit_time_ms = 9_000;
+        let npos_params = SumeragiNposParameters {
+            block_time_ms: 1_000,
+            timeout_commit_ms: 200,
+            ..SumeragiNposParameters::default()
+        };
+        params.custom.insert(
+            SumeragiNposParameters::parameter_id(),
+            npos_params.into_custom_parameter(),
+        );
+        block.commit();
+    }
+
+    let view = actor.state.view();
+    let block_time = crate::sumeragi::resolve_npos_block_time(&view, &actor.config.npos);
+    let commit_time = crate::sumeragi::resolve_npos_timeouts(&view, &actor.config.npos).commit;
+    let da_enabled = view.world.parameters().sumeragi().da_enabled();
+    drop(view);
+
+    let expected = super::commit_quorum_timeout_from_durations(
+        block_time,
+        commit_time,
+        da_enabled,
+        actor.config.da_quorum_timeout_multiplier.max(1),
+    );
+    assert_eq!(actor.commit_quorum_timeout(), expected);
 
     harness.shutdown.send();
 }
@@ -9272,7 +9345,7 @@ async fn rbc_chunk_commit_pipeline_runs_on_completion() {
 
     let block_time = {
         let view = harness.actor.state.view();
-        view.world.parameters().sumeragi().block_time()
+        crate::sumeragi::resolve_npos_block_time(&view, &harness.actor.config.npos)
     };
     let cooldown = block_time.max(super::REBROADCAST_COOLDOWN_FLOOR);
     let now = Instant::now();
@@ -17590,6 +17663,62 @@ async fn retry_missing_block_requests_triggers_view_change_after_dwell() {
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn retry_missing_block_requests_uses_active_roster_when_commit_topology_empty() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(2);
+    let view = 0;
+    let now = Instant::now();
+
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCA; Hash::LENGTH]));
+    if actor.block_payload_available_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCB; Hash::LENGTH]));
+    }
+
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let commit_topology = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+    assert!(
+        commit_topology.is_empty(),
+        "precondition: commit topology should be empty for far height"
+    );
+
+    let retry_window = Duration::from_millis(10);
+    let last_requested = now - retry_window - Duration::from_millis(1);
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window,
+            view_change_window: Some(retry_window),
+            first_seen: last_requested,
+            last_requested,
+            view_change_triggered: false,
+            attempts: 0,
+        },
+    );
+
+    let progress = actor.retry_missing_block_requests(now);
+    assert!(
+        progress,
+        "retry should attempt fetch using active roster fallback"
+    );
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("request entry retained");
+    assert!(stats.attempts > 0, "retry should record an attempt");
+
+    harness.shutdown.send();
+}
+
 #[test]
 fn plan_missing_block_fetch_respects_backoff_window() {
     let mut requests = BTreeMap::new();
@@ -18779,10 +18908,12 @@ fn view_change_suggest_counter_increments() {
 fn new_view_tracker_deduplicates_senders() {
     let mut tracker = NewViewTracker::default();
     let qc = sample_qc_ref(3, 1);
-    assert_eq!(tracker.record(4, 2, 0, qc), 1);
-    assert_eq!(tracker.record(4, 2, 1, qc), 2);
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    assert_eq!(tracker.record(4, 2, peer_a.clone(), qc), 1);
+    assert_eq!(tracker.record(4, 2, peer_b.clone(), qc), 2);
     // Duplicate sender should not increment count.
-    assert_eq!(tracker.record(4, 2, 1, qc), 2);
+    assert_eq!(tracker.record(4, 2, peer_b.clone(), qc), 2);
     assert_eq!(tracker.count(4, 2), 2);
 }
 
@@ -18790,13 +18921,12 @@ fn new_view_tracker_deduplicates_senders() {
 fn new_view_tracker_counts_with_local_validator() {
     let mut tracker = NewViewTracker::default();
     let qc = sample_qc_ref(3, 1);
-    assert_eq!(tracker.record(4, 2, 0, qc), 1);
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    assert_eq!(tracker.record(4, 2, peer_a.clone(), qc), 1);
+    assert_eq!(tracker.count_with_local(4, 2, Some(&peer_b)), 2);
     assert_eq!(
-        tracker.count_with_local(4, 2, Some(ValidatorIndex::from(1u32))),
-        2
-    );
-    assert_eq!(
-        tracker.count_with_local(4, 2, Some(ValidatorIndex::from(0u32))),
+        tracker.count_with_local(4, 2, Some(&peer_a)),
         1,
         "local sender should not be double-counted"
     );
@@ -18808,16 +18938,26 @@ fn new_view_tracker_selects_highest_entry_with_quorum() {
     let mut tracker = NewViewTracker::default();
     let qc_low = sample_qc_ref(5, 1);
     let qc_high = sample_qc_ref(6, 2);
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_c = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_d = PeerId::new(KeyPair::random().public_key().clone());
     // Populate lower (height, view) with quorum-1 votes.
-    tracker.record(5, 1, 0, qc_low);
-    tracker.record(5, 1, 1, qc_low);
+    tracker.record(5, 1, peer_a.clone(), qc_low);
+    tracker.record(5, 1, peer_b.clone(), qc_low);
     // Populate higher entry with quorum votes excluding local (will be added later).
-    tracker.record(6, 2, 0, qc_high);
-    tracker.record(6, 2, 1, qc_high);
-    tracker.record(6, 2, 2, qc_high);
+    tracker.record(6, 2, peer_a.clone(), qc_high);
+    tracker.record(6, 2, peer_b.clone(), qc_high);
+    tracker.record(6, 2, peer_c.clone(), qc_high);
 
+    let roster = vec![
+        peer_a.clone(),
+        peer_b.clone(),
+        peer_c.clone(),
+        peer_d.clone(),
+    ];
     let selection = tracker
-        .select_with_quorum(3, Some(3))
+        .select_with_quorum(3, Some(&peer_d), &roster)
         .expect("quorum reached");
     assert_eq!(selection.key, (6, 2));
     assert_eq!(selection.highest_qc.height, 6);
@@ -18830,13 +18970,41 @@ fn new_view_tracker_selects_highest_entry_with_quorum() {
 fn new_view_tracker_returns_none_without_quorum() {
     let mut tracker = NewViewTracker::default();
     let qc = sample_qc_ref(4, 1);
-    tracker.record(5, 2, 0, qc);
-    tracker.record(5, 2, 1, qc);
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    tracker.record(5, 2, peer_a.clone(), qc);
+    tracker.record(5, 2, peer_b.clone(), qc);
 
+    let roster = vec![peer_a, peer_b];
     assert!(
-        tracker.select_with_quorum(3, None).is_none(),
+        tracker.select_with_quorum(3, None, &roster).is_none(),
         "NEW_VIEW selection must wait for quorum"
     );
+}
+
+#[test]
+fn new_view_tracker_ignores_senders_outside_roster() {
+    let mut tracker = NewViewTracker::default();
+    let qc = sample_qc_ref(4, 1);
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_c = PeerId::new(KeyPair::random().public_key().clone());
+
+    tracker.record(5, 2, peer_a.clone(), qc);
+    tracker.record(5, 2, peer_c.clone(), qc);
+
+    let roster = vec![peer_a.clone(), peer_b.clone()];
+    assert!(
+        tracker.select_with_quorum(2, None, &roster).is_none(),
+        "non-roster senders must not satisfy quorum"
+    );
+
+    tracker.record(5, 2, peer_b.clone(), qc);
+    let selection = tracker
+        .select_with_quorum(2, None, &roster)
+        .expect("roster quorum reached");
+    assert_eq!(selection.key, (5, 2));
+    assert_eq!(selection.quorum, 2);
 }
 
 #[test]
@@ -18849,16 +19017,18 @@ fn new_view_tracker_updates_highest_and_clears_after_timeout() {
 
     let qc_initial = sample_qc_ref(4, 0);
     let qc_updated = sample_qc_ref(6, 1);
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
 
-    assert_eq!(tracker.record(5, 0, 0, qc_initial), 1);
+    assert_eq!(tracker.record(5, 0, peer_a.clone(), qc_initial), 1);
     assert_eq!(
-        tracker.record(5, 0, 0, qc_updated),
+        tracker.record(5, 0, peer_a.clone(), qc_updated),
         1,
         "duplicate sender should not inflate quorum"
     );
 
+    let roster = vec![peer_a.clone()];
     let selection = tracker
-        .select_with_quorum(1, None)
+        .select_with_quorum(1, None, &roster)
         .expect("single sender should satisfy quorum=1 for tests");
     assert_eq!(selection.highest_qc.height, qc_updated.height);
     assert_eq!(selection.highest_qc.view, qc_updated.view);
@@ -18885,9 +19055,9 @@ fn new_view_tracker_updates_highest_and_clears_after_timeout() {
     );
 
     let qc_next = sample_qc_ref(7, 1);
-    tracker.record(5, 1, 1, qc_next);
+    tracker.record(5, 1, peer_a, qc_next);
     let next = tracker
-        .select_with_quorum(1, None)
+        .select_with_quorum(1, None, &roster)
         .expect("quorum regained after timeout");
     assert_eq!(next.key, (5, 1));
     assert_eq!(next.highest_qc.height, qc_next.height);
@@ -18900,12 +19070,15 @@ fn new_view_tracker_prefers_precommit_for_same_round() {
     let prevote = sample_qc_ref(3, 1);
     let mut precommit = prevote;
     precommit.phase = Phase::Commit;
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
 
-    tracker.record(4, 2, 0, prevote);
-    tracker.record(4, 2, 1, precommit);
+    tracker.record(4, 2, peer_a.clone(), prevote);
+    tracker.record(4, 2, peer_b.clone(), precommit);
 
+    let roster = vec![peer_a, peer_b];
     let selection = tracker
-        .select_with_quorum(1, None)
+        .select_with_quorum(1, None, &roster)
         .expect("single sender should satisfy quorum=1 for tests");
     assert_eq!(selection.highest_qc.phase, Phase::Commit);
     assert_eq!(selection.highest_qc.height, prevote.height);
@@ -18916,8 +19089,9 @@ fn new_view_tracker_prefers_precommit_for_same_round() {
 fn new_view_tracker_prunes_committed_height() {
     let mut tracker = NewViewTracker::default();
     let qc = sample_qc_ref(7, 0);
-    tracker.record(7, 0, 0, qc);
-    tracker.record(8, 1, 0, qc);
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    tracker.record(7, 0, peer_a.clone(), qc);
+    tracker.record(8, 1, peer_a, qc);
     tracker.prune(7);
     // Entry at height 7 should be removed; height 8 should remain.
     assert_eq!(tracker.count(7, 0), 0);
@@ -18928,9 +19102,12 @@ fn new_view_tracker_prunes_committed_height() {
 fn new_view_tracker_drops_views_below_floor() {
     let mut tracker = NewViewTracker::default();
     let qc = sample_qc_ref(7, 0);
-    tracker.record(8, 1, 0, qc);
-    tracker.record(8, 2, 1, qc);
-    tracker.record(9, 0, 2, qc);
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_c = PeerId::new(KeyPair::random().public_key().clone());
+    tracker.record(8, 1, peer_a, qc);
+    tracker.record(8, 2, peer_b, qc);
+    tracker.record(9, 0, peer_c, qc);
     tracker.drop_below_view(8, 2);
     assert_eq!(tracker.count(8, 1), 0);
     assert_eq!(tracker.count(8, 2), 1);
@@ -18962,7 +19139,8 @@ fn bump_view_after_quorum_timeout_resets_round_state() {
     pacemaker.next_deadline = now + Duration::from_millis(500);
     let mut new_view_tracker = NewViewTracker::default();
     let qc = sample_qc_ref(3, 0);
-    assert_eq!(new_view_tracker.record(3, 0, 0, qc), 1);
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    assert_eq!(new_view_tracker.record(3, 0, peer_a, qc), 1);
 
     let later = now + Duration::from_secs(1);
     let next_view = super::bump_view_after_quorum_timeout(
@@ -21366,6 +21544,186 @@ async fn new_view_votes_use_commit_qc_history_for_height() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn new_view_tracker_counts_local_with_rotated_indices() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 1;
+    let epoch = actor.epoch_for_height(height);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH]));
+    let highest_qc = QcHeaderRef {
+        subject_block_hash: block_hash,
+        height: committed_height,
+        view: 0,
+        epoch,
+        phase: Phase::Commit,
+    };
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let local_idx = actor
+        .local_validator_index_for_topology(&topology)
+        .expect("local peer in topology");
+    let rotated = super::topology_for_view(&topology, height, view, PERMISSIONED_TAG, None);
+    let signer_idx = usize::try_from(local_idx).expect("local index fits usize");
+    let rotated_peer = rotated
+        .as_ref()
+        .get(signer_idx)
+        .expect("rotated peer available");
+    assert_ne!(
+        rotated_peer,
+        actor.common_config.peer.id(),
+        "rotated signer should be remote"
+    );
+
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::NewView,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: Some(highest_qc),
+        signer: local_idx,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(
+        &mut vote,
+        &actor.common_config.chain,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor.handle_vote(vote);
+
+    let counted = actor.subsystems.propose.new_view_tracker.count_with_local(
+        height,
+        view,
+        Some(actor.common_config.peer.id()),
+    );
+    assert_eq!(
+        counted, 2,
+        "local peer should count toward quorum even when signer index matches local index"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn new_view_vote_rejects_mismatched_highest_block_hash() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0;
+    let epoch = actor.epoch_for_height(height);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signature_topology = super::topology_for_view(&topology, height, view, PERMISSIONED_TAG, None);
+    let signer = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local peer in topology");
+    let mut highest_qc = sample_qc_ref(committed_height, 0);
+    highest_qc.phase = Phase::Commit;
+    let wrong_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
+
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::NewView,
+        block_hash: wrong_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: Some(highest_qc),
+        signer,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(
+        &mut vote,
+        &actor.common_config.chain,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor.handle_vote(vote);
+
+    let key = (Phase::NewView, height, view, epoch, signer);
+    assert!(
+        actor.vote_log.get(&key).is_none(),
+        "mismatched highest hash should not be recorded"
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .propose
+            .new_view_tracker
+            .count(height, view),
+        0,
+        "mismatched highest hash should not advance NEW_VIEW tracking"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn new_view_vote_rejects_mismatched_highest_height() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(2);
+    let view = 0;
+    let epoch = actor.epoch_for_height(height);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signature_topology = super::topology_for_view(&topology, height, view, PERMISSIONED_TAG, None);
+    let signer = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local peer in topology");
+    let mut highest_qc = sample_qc_ref(committed_height, 0);
+    highest_qc.phase = Phase::Commit;
+
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::NewView,
+        block_hash: highest_qc.subject_block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: Some(highest_qc),
+        signer,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(
+        &mut vote,
+        &actor.common_config.chain,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor.handle_vote(vote);
+
+    let key = (Phase::NewView, height, view, epoch, signer);
+    assert!(
+        actor.vote_log.get(&key).is_none(),
+        "mismatched highest height should not be recorded"
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .propose
+            .new_view_tracker
+            .count(height, view),
+        0,
+        "mismatched highest height should not advance NEW_VIEW tracking"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn new_view_roster_rolls_forward_from_commit_qc_history() {
     use crate::sumeragi::status;
 
@@ -22868,18 +23226,19 @@ async fn pacemaker_keeps_new_view_entries_with_pending_txs() {
         phase: Phase::Commit,
     };
 
-    actor.subsystems.propose.new_view_tracker.record(
-        tracked_height,
-        view,
-        ValidatorIndex::try_from(1).expect("validator index 1"),
-        highest_qc,
-    );
-    actor.subsystems.propose.new_view_tracker.record(
-        tracked_height,
-        view,
-        ValidatorIndex::try_from(2).expect("validator index 2"),
-        highest_qc,
-    );
+    let roster = actor.effective_commit_topology();
+    let peer_a = roster.get(1).cloned().expect("validator 1");
+    let peer_b = roster.get(2).cloned().expect("validator 2");
+    actor
+        .subsystems
+        .propose
+        .new_view_tracker
+        .record(tracked_height, view, peer_a, highest_qc);
+    actor
+        .subsystems
+        .propose
+        .new_view_tracker
+        .record(tracked_height, view, peer_b, highest_qc);
 
     let offline_grace = actor.commit_quorum_timeout();
     let now = Instant::now();
@@ -22945,16 +23304,23 @@ async fn pacemaker_defers_proposal_when_precommit_votes_present() {
         .position(|peer| peer == actor.common_config.peer.id())
         .expect("local peer in topology");
     let view = u64::try_from(local_pos).unwrap_or_default();
-    let sender_a =
-        ValidatorIndex::try_from((local_pos + 1) % topology_peers.len()).expect("sender index");
-    let sender_b =
-        ValidatorIndex::try_from((local_pos + 2) % topology_peers.len()).expect("sender index");
+    let sender_a_pos = (local_pos + 1) % topology_peers.len();
+    let sender_b_pos = (local_pos + 2) % topology_peers.len();
+    let sender_a = topology_peers
+        .get(sender_a_pos)
+        .cloned()
+        .expect("sender peer");
+    let sender_b = topology_peers
+        .get(sender_b_pos)
+        .cloned()
+        .expect("sender peer");
+    let sender_a_idx = ValidatorIndex::try_from(sender_a_pos).expect("sender index");
 
     actor
         .subsystems
         .propose
         .new_view_tracker
-        .record(tracked_height, view, sender_a, highest_qc);
+        .record(tracked_height, view, sender_a.clone(), highest_qc);
     actor
         .subsystems
         .propose
@@ -22983,7 +23349,7 @@ async fn pacemaker_defers_proposal_when_precommit_votes_present() {
     let epoch = actor.current_epoch();
     let vote_hash = pending_block.hash();
     actor.vote_log.insert(
-        (Phase::Commit, tracked_height, view, epoch, sender_a),
+        (Phase::Commit, tracked_height, view, epoch, sender_a_idx),
         crate::sumeragi::consensus::Vote {
             phase: Phase::Commit,
             block_hash: vote_hash,
@@ -22993,7 +23359,7 @@ async fn pacemaker_defers_proposal_when_precommit_votes_present() {
             view,
             epoch,
             highest_qc: None,
-            signer: sender_a,
+            signer: sender_a_idx,
             bls_sig: Vec::new(),
         },
     );
@@ -23060,16 +23426,23 @@ async fn pacemaker_defers_proposal_when_precommit_votes_in_prior_epoch() {
         .position(|peer| peer == actor.common_config.peer.id())
         .expect("local peer in topology");
     let view = u64::try_from(local_pos).unwrap_or_default();
-    let sender_a =
-        ValidatorIndex::try_from((local_pos + 1) % topology_peers.len()).expect("sender index");
-    let sender_b =
-        ValidatorIndex::try_from((local_pos + 2) % topology_peers.len()).expect("sender index");
+    let sender_a_pos = (local_pos + 1) % topology_peers.len();
+    let sender_b_pos = (local_pos + 2) % topology_peers.len();
+    let sender_a = topology_peers
+        .get(sender_a_pos)
+        .cloned()
+        .expect("sender peer");
+    let sender_b = topology_peers
+        .get(sender_b_pos)
+        .cloned()
+        .expect("sender peer");
+    let sender_a_idx = ValidatorIndex::try_from(sender_a_pos).expect("sender index");
 
     actor
         .subsystems
         .propose
         .new_view_tracker
-        .record(tracked_height, view, sender_a, highest_qc);
+        .record(tracked_height, view, sender_a.clone(), highest_qc);
     actor
         .subsystems
         .propose
@@ -23103,7 +23476,7 @@ async fn pacemaker_defers_proposal_when_precommit_votes_in_prior_epoch() {
     assert_eq!(epoch, 0);
     let vote_hash = pending_block.hash();
     actor.vote_log.insert(
-        (Phase::Commit, tracked_height, view, epoch, sender_a),
+        (Phase::Commit, tracked_height, view, epoch, sender_a_idx),
         crate::sumeragi::consensus::Vote {
             phase: Phase::Commit,
             block_hash: vote_hash,
@@ -23113,7 +23486,7 @@ async fn pacemaker_defers_proposal_when_precommit_votes_in_prior_epoch() {
             view,
             epoch,
             highest_qc: None,
-            signer: sender_a,
+            signer: sender_a_idx,
             bls_sig: Vec::new(),
         },
     );
@@ -23169,20 +23542,30 @@ async fn pacemaker_allows_proposal_with_unknown_precommit_votes() {
         qc
     });
     highest_qc.phase = Phase::Commit;
-    let topology_len =
-        u32::try_from(actor.effective_commit_topology().len()).expect("topology len fits u32");
-    let local_idx = actor
-        .local_validator_index(&actor.state.view())
-        .expect("local validator index");
+    let topology = actor.effective_commit_topology();
+    let local_pos = topology
+        .iter()
+        .position(|peer| peer == actor.common_config.peer.id())
+        .expect("local peer in topology");
+    let local_idx = ValidatorIndex::try_from(local_pos).expect("local idx fits");
     let view = u64::from(local_idx);
-    let sender_a = ValidatorIndex::try_from((local_idx + 1) % topology_len).expect("sender index");
-    let sender_b = ValidatorIndex::try_from((local_idx + 2) % topology_len).expect("sender index");
+    let sender_a_pos = (local_pos + 1) % topology.len();
+    let sender_b_pos = (local_pos + 2) % topology.len();
+    let sender_a = topology
+        .get(sender_a_pos)
+        .cloned()
+        .expect("sender peer");
+    let sender_b = topology
+        .get(sender_b_pos)
+        .cloned()
+        .expect("sender peer");
+    let sender_a_idx = ValidatorIndex::try_from(sender_a_pos).expect("sender index");
 
     actor
         .subsystems
         .propose
         .new_view_tracker
-        .record(tracked_height, view, sender_a, highest_qc);
+        .record(tracked_height, view, sender_a.clone(), highest_qc);
     actor
         .subsystems
         .propose
@@ -23200,7 +23583,7 @@ async fn pacemaker_allows_proposal_with_unknown_precommit_votes() {
     let vote_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x45; Hash::LENGTH]));
     actor.vote_log.insert(
-        (Phase::Commit, tracked_height, view, epoch, sender_a),
+        (Phase::Commit, tracked_height, view, epoch, sender_a_idx),
         crate::sumeragi::consensus::Vote {
             phase: Phase::Commit,
             block_hash: vote_hash,
@@ -23210,7 +23593,7 @@ async fn pacemaker_allows_proposal_with_unknown_precommit_votes() {
             view,
             epoch,
             highest_qc: None,
-            signer: sender_a,
+            signer: sender_a_idx,
             bls_sig: Vec::new(),
         },
     );
@@ -23443,6 +23826,158 @@ async fn pacemaker_uses_commit_qc_roster_for_proposal_leader() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pacemaker_bootstraps_with_commit_qc_when_active_roster_empty() {
+    use crate::sumeragi::status;
+
+    status::reset_commit_certs_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let block1 = sample_block(1, 0, None);
+    let block2 = sample_block(2, 0, Some(block1.hash()));
+    actor
+        .kura
+        .store_block(block1.clone())
+        .expect("store block 1");
+    actor
+        .kura
+        .store_block(block2.clone())
+        .expect("store block 2");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(block1.hash());
+    state.push_block_hash_for_testing(block2.hash());
+
+    let local = actor.common_config.peer.id().clone();
+    let mut validator_set = actor.effective_commit_topology();
+    let parent_hash = block2.hash();
+    let mut derived_topology =
+        super::network_topology::rotated_for_prev_block_hash(validator_set.clone(), parent_hash);
+    if derived_topology.as_ref().first() != Some(&local) {
+        for _ in 0..validator_set.len() {
+            validator_set.rotate_left(1);
+            derived_topology = super::network_topology::rotated_for_prev_block_hash(
+                validator_set.clone(),
+                parent_hash,
+            );
+            if derived_topology.as_ref().first() == Some(&local) {
+                break;
+            }
+        }
+    }
+    assert_eq!(
+        derived_topology.as_ref().first(),
+        Some(&local),
+        "commit certificate roster should select local as view 0 leader"
+    );
+
+    let mut signers = BTreeSet::new();
+    for idx in 0..validator_set.len() {
+        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, validator_set.len());
+    let topology = super::network_topology::Topology::new(validator_set.clone());
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        parent_hash,
+        2,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    status::record_commit_qc(Qc {
+        phase: Phase::Commit,
+        subject_block_hash: parent_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 2,
+        view: 0,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set,
+        aggregate: QcAggregate {
+            signers_bitmap,
+            bls_aggregate_signature,
+        },
+    });
+
+    {
+        let mut topo_block = actor.state.commit_topology.block();
+        topo_block.mutate_vec(|vec| vec.clear());
+        topo_block.commit();
+    }
+    {
+        let mut world_block = actor.state.world.block();
+        world_block.peers.get_mut().clear();
+        world_block.commit();
+    }
+    {
+        let key_pair = KeyPair::random();
+        let peer_id = PeerId::new(key_pair.public_key().clone());
+        let address: SocketAddr = "127.0.0.1:7099".parse().expect("socket address parses");
+        let peer = Peer::new(address.into(), peer_id);
+        let trusted = trusted_with_pops(peer, Vec::new(), BTreeMap::new());
+        actor.common_config.trusted_peers = iroha_config::base::WithOrigin::inline(trusted);
+    }
+    assert!(
+        actor.effective_commit_topology().is_empty(),
+        "active roster should be empty for this test"
+    );
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    actor.highest_qc = None;
+
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let offline_grace = actor.commit_quorum_timeout();
+    let now = Instant::now();
+    let start = now
+        .checked_sub(offline_grace + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor.phase_tracker.start_new_round(tracked_height, start);
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        proposed,
+        "pacemaker should bootstrap from commit QC roster when active roster is empty"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, 0)
+            .is_some(),
+        "proposal should be assembled using commit QC roster despite empty active topology"
+    );
+
+    status::reset_commit_certs_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn pacemaker_allows_proposal_with_stale_precommit_votes() {
     use std::borrow::Cow;
 
@@ -23471,20 +24006,30 @@ async fn pacemaker_allows_proposal_with_stale_precommit_votes() {
         qc
     });
     highest_qc.phase = Phase::Commit;
-    let topology_len =
-        u32::try_from(actor.effective_commit_topology().len()).expect("topology len fits u32");
-    let local_idx = actor
-        .local_validator_index(&actor.state.view())
-        .expect("local validator index");
+    let topology = actor.effective_commit_topology();
+    let local_pos = topology
+        .iter()
+        .position(|peer| peer == actor.common_config.peer.id())
+        .expect("local peer in topology");
+    let local_idx = ValidatorIndex::try_from(local_pos).expect("local idx fits");
     let view = u64::from(local_idx);
-    let sender_a = ValidatorIndex::try_from((local_idx + 1) % topology_len).expect("sender index");
-    let sender_b = ValidatorIndex::try_from((local_idx + 2) % topology_len).expect("sender index");
+    let sender_a_pos = (local_pos + 1) % topology.len();
+    let sender_b_pos = (local_pos + 2) % topology.len();
+    let sender_a = topology
+        .get(sender_a_pos)
+        .cloned()
+        .expect("sender peer");
+    let sender_b = topology
+        .get(sender_b_pos)
+        .cloned()
+        .expect("sender peer");
+    let sender_a_idx = ValidatorIndex::try_from(sender_a_pos).expect("sender index");
 
     actor
         .subsystems
         .propose
         .new_view_tracker
-        .record(tracked_height, view, sender_a, highest_qc);
+        .record(tracked_height, view, sender_a.clone(), highest_qc);
     actor
         .subsystems
         .propose
@@ -23503,7 +24048,7 @@ async fn pacemaker_allows_proposal_with_stale_precommit_votes() {
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x46; Hash::LENGTH]));
     let stale_view = u64::from(view == 0);
     actor.vote_log.insert(
-        (Phase::Commit, tracked_height, stale_view, epoch, sender_a),
+        (Phase::Commit, tracked_height, stale_view, epoch, sender_a_idx),
         crate::sumeragi::consensus::Vote {
             phase: Phase::Commit,
             block_hash: vote_hash,
@@ -23513,7 +24058,7 @@ async fn pacemaker_allows_proposal_with_stale_precommit_votes() {
             view: stale_view,
             epoch,
             highest_qc: None,
-            signer: sender_a,
+            signer: sender_a_idx,
             bls_sig: Vec::new(),
         },
     );
@@ -23618,10 +24163,14 @@ async fn pacemaker_ignores_stale_new_view_entries() {
         .position(|peer| peer == actor.common_config.peer.id())
         .expect("local peer in topology");
     let view = u64::try_from(local_pos).unwrap_or_default();
-    let sender_a =
-        ValidatorIndex::try_from((local_pos + 1) % topology.len()).expect("sender index");
-    let sender_b =
-        ValidatorIndex::try_from((local_pos + 2) % topology.len()).expect("sender index");
+    let sender_a = topology
+        .get((local_pos + 1) % topology.len())
+        .cloned()
+        .expect("sender peer");
+    let sender_b = topology
+        .get((local_pos + 2) % topology.len())
+        .cloned()
+        .expect("sender peer");
 
     actor
         .subsystems
@@ -23698,10 +24247,14 @@ async fn pacemaker_retains_new_view_entries_when_parent_missing() {
         .position(|peer| peer == actor.common_config.peer.id())
         .expect("local peer in topology");
     let view = u64::try_from(local_pos).unwrap_or_default();
-    let sender_a =
-        ValidatorIndex::try_from((local_pos + 1) % topology.len()).expect("sender index");
-    let sender_b =
-        ValidatorIndex::try_from((local_pos + 2) % topology.len()).expect("sender index");
+    let sender_a = topology
+        .get((local_pos + 1) % topology.len())
+        .cloned()
+        .expect("sender peer");
+    let sender_b = topology
+        .get((local_pos + 2) % topology.len())
+        .cloned()
+        .expect("sender peer");
 
     actor
         .subsystems
@@ -23748,18 +24301,19 @@ async fn pacemaker_prunes_new_view_entries_at_committed_height() {
     let fresh_view = 0;
     let qc = sample_qc_ref(committed_height, 0);
 
+    let roster = actor.effective_commit_topology();
+    let sender = roster.get(1).cloned().expect("validator 1");
     actor.subsystems.propose.new_view_tracker.record(
         committed_height,
         stale_view,
-        ValidatorIndex::try_from(1).expect("validator index 1"),
+        sender.clone(),
         qc,
     );
-    actor.subsystems.propose.new_view_tracker.record(
-        fresh_height,
-        fresh_view,
-        ValidatorIndex::try_from(1).expect("validator index 1"),
-        qc,
-    );
+    actor
+        .subsystems
+        .propose
+        .new_view_tracker
+        .record(fresh_height, fresh_view, sender, qc);
 
     assert_eq!(
         actor
@@ -25837,24 +26391,12 @@ fn validate_block_sync_qc_accepts_trimmed_block_signatures() {
 #[test]
 fn block_sync_quorum_allows_missing_block_request_with_sparse_signatures() {
     let block_height = 5;
-    let local_height = 5;
+    let local_height = 4;
     assert!(
         super::block_sync_quorum_available(
             1,
             3,
             false,
-            false,
-            false,
-            false,
-            block_height,
-            local_height
-        ),
-        "validated sparse payload should be accepted to allow voting/recovery"
-    );
-    assert!(
-        super::block_sync_quorum_available(
-            1,
-            3,
             false,
             false,
             false,
@@ -25862,38 +26404,41 @@ fn block_sync_quorum_allows_missing_block_request_with_sparse_signatures() {
             block_height,
             local_height
         ),
-        "missing-block request should allow sparse block sync updates to proceed"
+        "missing-block request for next height should accept sparse signatures"
     );
     assert!(
-        super::block_sync_quorum_available(
+        !super::block_sync_quorum_available(
             1,
             3,
             false,
-            true,
+            false,
+            false,
             false,
             false,
             block_height,
             local_height
         ),
-        "candidate QC should satisfy quorum even with few block signatures"
+        "unsolicited sparse signatures should be rejected"
     );
     assert!(
-        super::block_sync_quorum_available(
+        !super::block_sync_quorum_available(
             1,
             3,
             false,
             false,
             false,
             false,
+            true,
             block_height.saturating_add(1),
             local_height
         ),
-        "sparse signatures should be allowed when catching up to a higher block height"
+        "missing-block request should reject far-ahead sparse payloads"
     );
     assert!(
         !super::block_sync_quorum_available(
             0,
             3,
+            false,
             false,
             false,
             false,
@@ -25904,9 +26449,52 @@ fn block_sync_quorum_allows_missing_block_request_with_sparse_signatures() {
         "missing-block request must not accept unsigned block sync updates"
     );
     assert!(
-        !super::block_sync_quorum_available(
+        super::block_sync_quorum_available(
             0,
             3,
+            false,
+            true,
+            false,
+            false,
+            false,
+            block_height,
+            local_height
+        ),
+        "candidate QC should satisfy quorum even with no block signatures"
+    );
+    assert!(
+        super::block_sync_quorum_available(
+            0,
+            3,
+            false,
+            false,
+            true,
+            false,
+            false,
+            block_height,
+            local_height
+        ),
+        "commit certificate should satisfy quorum even with no block signatures"
+    );
+    assert!(
+        super::block_sync_quorum_available(
+            0,
+            3,
+            false,
+            false,
+            false,
+            true,
+            false,
+            block_height,
+            local_height
+        ),
+        "validator checkpoint should satisfy quorum even with no block signatures"
+    );
+    assert!(
+        super::block_sync_quorum_available(
+            3,
+            3,
+            true,
             false,
             false,
             false,
@@ -25914,7 +26502,7 @@ fn block_sync_quorum_allows_missing_block_request_with_sparse_signatures() {
             block_height,
             local_height
         ),
-        "zero commit-role signatures must still be rejected"
+        "quorum signatures should satisfy block sync requirements"
     );
 }
 
@@ -30381,6 +30969,21 @@ fn pacemaker_interval_respects_rtt_floor_and_cap() {
     assert_eq!(
         pacemaker_base_interval(block_time, &cfg),
         Duration::from_millis(1_500)
+    );
+}
+
+#[test]
+fn pacemaker_interval_uses_explicit_propose_timeout() {
+    let mut cfg = test_sumeragi_config();
+    cfg.npos.timeouts.propose = Duration::from_millis(300);
+    cfg.npos.pacemaker_rtt_floor_multiplier = 2;
+    cfg.npos.pacemaker_max_backoff = Duration::from_millis(2_000);
+    let block_time = Duration::from_millis(800);
+    let on_chain_propose = Duration::from_millis(700);
+
+    assert_eq!(
+        pacemaker_base_interval_with_propose_timeout(block_time, on_chain_propose, &cfg),
+        Duration::from_millis(1_400)
     );
 }
 

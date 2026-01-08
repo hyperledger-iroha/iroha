@@ -27,6 +27,12 @@ enum SoraProfileChoice {
     Nexus,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConsensusModeChoice {
+    Permissioned,
+    Npos,
+}
+
 impl fmt::Display for SoraProfileChoice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -34,6 +40,55 @@ impl fmt::Display for SoraProfileChoice {
             SoraProfileChoice::Dataspace => write!(f, "dataspace (multi-lane defaults)"),
             SoraProfileChoice::Nexus => write!(f, "Sora Nexus (public dataspace)"),
         }
+    }
+}
+
+impl fmt::Display for ConsensusModeChoice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConsensusModeChoice::Permissioned => write!(f, "permissioned"),
+            ConsensusModeChoice::Npos => write!(f, "npos"),
+        }
+    }
+}
+
+impl From<ConsensusModeChoice> for SumeragiConsensusMode {
+    fn from(value: ConsensusModeChoice) -> Self {
+        match value {
+            ConsensusModeChoice::Permissioned => SumeragiConsensusMode::Permissioned,
+            ConsensusModeChoice::Npos => SumeragiConsensusMode::Npos,
+        }
+    }
+}
+
+struct ConsensusModePrompt {
+    choices: Vec<ConsensusModeChoice>,
+    default_index: usize,
+    locked: bool,
+}
+
+fn consensus_mode_prompt(
+    build_line: iroha_version::BuildLine,
+    sora_profile: Option<SoraProfile>,
+) -> ConsensusModePrompt {
+    if !build_line.is_iroha3() {
+        return ConsensusModePrompt {
+            choices: vec![ConsensusModeChoice::Permissioned],
+            default_index: 0,
+            locked: true,
+        };
+    }
+    if matches!(sora_profile, Some(SoraProfile::Nexus)) {
+        return ConsensusModePrompt {
+            choices: vec![ConsensusModeChoice::Npos],
+            default_index: 0,
+            locked: true,
+        };
+    }
+    ConsensusModePrompt {
+        choices: vec![ConsensusModeChoice::Permissioned, ConsensusModeChoice::Npos],
+        default_index: 1,
+        locked: false,
     }
 }
 
@@ -73,6 +128,15 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
             }
         } else {
             None
+        };
+        let consensus_prompt = consensus_mode_prompt(build_line, sora_profile);
+        let consensus_mode = if consensus_prompt.locked {
+            consensus_prompt.choices[consensus_prompt.default_index].into()
+        } else {
+            Select::new("Consensus mode?", consensus_prompt.choices)
+                .with_starting_cursor(consensus_prompt.default_index)
+                .prompt()?
+                .into()
         };
         let seed = if Confirm::new("Use a deterministic seed?")
             .with_default(true)
@@ -120,11 +184,6 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
             }
         }
 
-        let consensus_mode = if build_line.is_iroha3() {
-            SumeragiConsensusMode::Npos
-        } else {
-            SumeragiConsensusMode::Permissioned
-        };
         let opts = LocalnetOptions {
             build_line,
             sora_profile,
@@ -147,5 +206,38 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
 
         tui::status("Generating localnet (interactive)");
         generate_localnet(&opts, writer).wrap_err("localnet wizard")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn consensus_prompt_locks_permissioned_for_iroha2() {
+        let prompt = consensus_mode_prompt(iroha_version::BuildLine::Iroha2, None);
+        assert!(prompt.locked);
+        assert_eq!(prompt.choices, vec![ConsensusModeChoice::Permissioned]);
+        assert_eq!(prompt.default_index, 0);
+    }
+
+    #[test]
+    fn consensus_prompt_locks_npos_for_sora_nexus() {
+        let prompt =
+            consensus_mode_prompt(iroha_version::BuildLine::Iroha3, Some(SoraProfile::Nexus));
+        assert!(prompt.locked);
+        assert_eq!(prompt.choices, vec![ConsensusModeChoice::Npos]);
+        assert_eq!(prompt.default_index, 0);
+    }
+
+    #[test]
+    fn consensus_prompt_allows_choice_for_non_nexus_iroha3() {
+        let prompt = consensus_mode_prompt(iroha_version::BuildLine::Iroha3, None);
+        assert!(!prompt.locked);
+        assert_eq!(
+            prompt.choices,
+            vec![ConsensusModeChoice::Permissioned, ConsensusModeChoice::Npos]
+        );
+        assert_eq!(prompt.default_index, 1);
     }
 }

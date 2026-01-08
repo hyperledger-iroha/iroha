@@ -163,6 +163,7 @@ cargo run -p iroha_cli --features sm -- \
      `iroha_crypto::Algorithm` (بما في ذلك متغيّرات GOST TC26 عند
      تفعيل الـ feature المناسب).
    - في الـ dataspace العام لـ Sora Nexus، `--consensus-mode npos` مطلوب ولا يوجد دعم للقطع المرحلي؛ dataspaces أخرى في Iroha3 يمكنها استخدام `permissioned` أو `npos`. في Iroha2 الوضع الافتراضي هو `permissioned`.
+   - عند اختيار `npos`، يزرع Kagami حمولة `sumeragi_npos_parameters` التي تضبط توقيت pacemaker الخاص بـ NPoS، ومعدل fan-out للمجمعين، وسياسة الانتخاب، ونوافذ إعادة التهيئة؛ وتحولها عملية التطبيع/التوقيع إلى تعليمات `SetParameter` داخل الكتلة الموقعة.
 
 2. التحقق أثناء التحرير:
 
@@ -208,7 +209,7 @@ cargo run -p iroha_cli --features sm -- \
   block/commit، والانحراف)، ولـ Block (أقصى عدد من المعاملات)، ولـ
   Transaction (أقصى عدد من التعليمات وحجم bytecode)، ولـ executor
   والعقود الذكية (الوقود، الذاكرة، العمق)، بالإضافة إلى معلمات مخصّصة.
-  يزرع Kagami `Sumeragi::NextMode` وpayload `sumeragi_npos_parameters`
+  يزرع Kagami `Sumeragi::NextMode` وpayload `sumeragi_npos_parameters` (توقيت NPoS، الانتخاب، إعادة التهيئة)
   داخل كتلة `parameters`، وتحتوي الكتلة الموقَّعة على تعليمات
   `SetParameter` المُولَّدة بحيث يمكن لتشغيل العقدة (startup) تطبيق
   إعدادات الإجماع اعتمادًا على حالة on‑chain.

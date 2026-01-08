@@ -39,7 +39,7 @@ translator: manual
 - 任意の時点で開いている高さは 2 連続までのため、コレクター・RBC・テレメトリはフォークの危険なくパイプライン処理できます。`sumeragi::main_loop` 内の不変条件でこれを保証しており、`ensure_locked_qc_allows` が提案生成をガードし、保留ブロックはインメモリで追跡され、コミット経路では互換子 commit certificate を観測した後にのみ `locked_qc` を退役させます。
 
 ### ペースメーカー（ビュー変更）
-- v1 ではビュー 0 における観測ピアの投票猶予が削除され、観測ピアはビュー 0 で投票しません。ビュー 0 でローカルタイムアウトした際は（ローテーション前の広げる処理なしで）ビュー変更を提案します。タイミングはオンチェーンの `SumeragiParameters`（`BlockTimeMs` と `CommitTimeMs`）で制御され、リーダー提案はパイプライン時間の約 1/3、期待コミットは約 2/3 です。
+- v1 ではビュー 0 における観測ピアの投票猶予が削除され、観測ピアはビュー 0 で投票しません。ビュー 0 でローカルタイムアウトした際は（ローテーション前の広げる処理なしで）ビュー変更を提案します。タイミングはオンチェーンのパラメータで制御され、permissioned では `SumeragiParameters`（`BlockTimeMs`/`CommitTimeMs`）、NPoS では `sumeragi_npos_parameters`（`block_time_ms` と `timeouts.timeout_commit_ms`）を使います。リーダー提案はパイプライン時間の約 1/3、期待コミットは約 2/3 です。
 
 ### K / r パラメータ
 - 設定キー: `sumeragi.collectors_k: usize`（高さごとのコレクター数、既定 1）、`sumeragi.collectors_redundant_send_r: u8`（冗長送信ファンアウト、既定 1）。
@@ -60,7 +60,7 @@ translator: manual
 - `sumeragi::main_loop` がイベントループを担当し、commit certificate 更新、提案処理、コミット処理を管理します。
 - commit certificate ストレージは `HighestQc` と `LockedQc` を明示的な構造体で追跡し、ミスマッチ時に詳細ログとエビデンスを提供します。
 - RBC（Reliable Broadcast）は非同期で動作し、ブロック本体が揃うと commit certificate に基づいて即座にコミットを試行します。
-- Pacemaker はハートビートとビュー変更を制御し、`SumeragiParameters` のタイムアウトに従ってローカルタイムアウトやビュー拡張を行います。
+- Pacemaker はハートビートとビュー変更を制御し、permissioned では `SumeragiParameters`、NPoS では `sumeragi_npos_parameters` のタイムアウトに従ってローカルタイムアウトやビュー拡張を行います。
 - Telemetry は Prometheus メトリクスを公開し、`sumeragi_*` メトリクスで集約・キュー深さ・エビデンス件数などを可視化します。
 
 ### RBC／DA（データ可用性）
@@ -175,9 +175,9 @@ translator: manual
 - `docs/source/grafana_sumeragi_overview.json` — commit certificate 高さの乖離、BlockCreated ドロップ、VRF 参加状況を可視化する Grafana ダッシュボード。
 
 **アラート閾値**
-- Availability evidence レイテンシ: `sumeragi_qc_last_latency_ms{kind="availability"}` が `0.6 * CommitTimeMs` を 2 連続で超過、またはヒストグラム P95 が `0.7 * CommitTimeMs` を超えたら要警告。
+- Availability evidence レイテンシ: `sumeragi_qc_last_latency_ms{kind="availability"}` が `0.6 * commit_time_ms` を 2 連続で超過、またはヒストグラム P95 が `0.7 * commit_time_ms` を超えたら要警告（permissioned は `CommitTimeMs`、NPoS は `timeouts.timeout_commit_ms`）。
 - 投票取り込みの停滞: `sum(rate(sumeragi_da_votes_ingested_total[2m])) == 0` かつ `sumeragi_rbc_backlog_sessions_pending > 0`（RBC は動いているのに票が集まらない）。
-- ウィットネス遅延: `collect_witness_ms` または `sumeragi_phase_latency_ms{phase="collect_witness"}` の P95 が `0.75 * CommitTimeMs` を超過、あるいは新しいブロックが届いているのに 3 ラウンド以上 0 のまま。
+- ウィットネス遅延: `collect_witness_ms` または `sumeragi_phase_latency_ms{phase="collect_witness"}` の P95 が `0.75 * commit_time_ms` を超過、あるいは新しいブロックが届いているのに 3 ラウンド以上 0 のまま（permissioned は `CommitTimeMs`、NPoS は `timeouts.timeout_commit_ms`）。
 - コレクターファンアウト: `collect_aggregator_ms` が `0.5 * sumeragi.npos.timeouts.aggregator_ms` を 3 ラウンド連続で上回る、`sumeragi_redundant_sends_total` が一つの View で `redundant_send_r` を超える、`rate(sumeragi_gossip_fallback_total[5m]) > 0`、`increase(block_created_dropped_by_lock_total[5m]) > 0`、`increase(block_created_hint_mismatch_total[5m]) > 0`、`increase(block_created_proposal_mismatch_total[5m]) > 0`、または `increase(pacemaker_backpressure_deferrals_total[5m]) > 0` のいずれかが持続。
 
 冗長送信カウンタは DA リトライが追加コレクターへキャッシュ済み RBC ペイロードを再送したときに増えます。`npos_redundant_send_retries_update_metrics` テストでこの経路をカバーし、ダッシュボードと契約の乖離を検出します。

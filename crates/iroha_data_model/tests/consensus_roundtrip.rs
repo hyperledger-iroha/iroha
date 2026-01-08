@@ -218,6 +218,10 @@ fn rng_consensus_genesis_params(rng: &mut DeterministicRng) -> ConsensusGenesisP
 }
 
 fn rng_npos_genesis_params(rng: &mut DeterministicRng) -> NposGenesisParams {
+    let mut epoch_seed = [0u8; 32];
+    for chunk in epoch_seed.chunks_mut(8) {
+        chunk.copy_from_slice(&rng.next_u64().to_le_bytes());
+    }
     NposGenesisParams {
         block_time_ms: rng.next_u64(),
         timeout_propose_ms: rng.next_u64(),
@@ -228,14 +232,18 @@ fn rng_npos_genesis_params(rng: &mut DeterministicRng) -> NposGenesisParams {
         timeout_aggregator_ms: rng.next_u64(),
         k_aggregators: rng.next_u16(),
         redundant_send_r: rng.next_u8(),
+        epoch_seed,
         vrf_commit_window_blocks: rng.next_u64(),
         vrf_reveal_window_blocks: rng.next_u64(),
+        max_validators: rng.next_u32(),
         min_self_bond: rng.next_u64(),
+        min_nomination_bond: rng.next_u64(),
         max_nominator_concentration_pct: u8::try_from(rng.up_to(100))
             .expect("percentage bound fits into u8"),
         seat_band_pct: u8::try_from(rng.up_to(100)).expect("percentage bound fits into u8"),
         max_entity_correlation_pct: u8::try_from(rng.up_to(100))
             .expect("percentage bound fits into u8"),
+        finality_margin_blocks: rng.next_u64(),
         evidence_horizon_blocks: rng.next_u64(),
         activation_lag_blocks: rng.next_u64(),
     }
@@ -1443,12 +1451,16 @@ fn consensus_genesis_norito_roundtrip() {
         timeout_aggregator_ms: 120,
         k_aggregators: 3,
         redundant_send_r: 2,
+        epoch_seed: [0x11; 32],
         vrf_commit_window_blocks: 8,
         vrf_reveal_window_blocks: 5,
+        max_validators: 20,
         min_self_bond: 10,
+        min_nomination_bond: 2,
         max_nominator_concentration_pct: 35,
         seat_band_pct: 15,
         max_entity_correlation_pct: 25,
+        finality_margin_blocks: 9,
         evidence_horizon_blocks: 1_024,
         activation_lag_blocks: 12,
     };

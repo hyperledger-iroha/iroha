@@ -1740,7 +1740,7 @@ impl Actor {
 
         let block_time = {
             let view = self.state.view();
-            view.world.parameters().sumeragi().block_time()
+            self.block_time_for_mode(&view, self.consensus_mode)
         };
         let cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
         let cooldown_elapsed =
@@ -4058,22 +4058,9 @@ impl Actor {
         seed: [u8; 32],
         roster_len_hint: u32,
     ) -> Result<ValidatorElectionOutcome> {
-        let params = ValidatorElectionParameters {
-            max_validators: self.config.npos.election.max_validators,
-            min_self_bond: self.config.npos.election.min_self_bond,
-            min_nomination_bond: self.config.npos.election.min_nomination_bond,
-            max_nominator_concentration_pct: self
-                .config
-                .npos
-                .election
-                .max_nominator_concentration_pct,
-            seat_band_pct: self.config.npos.election.seat_band_pct,
-            max_entity_correlation_pct: self.config.npos.election.max_entity_correlation_pct,
-            finality_margin_blocks: self.config.npos.election.finality_margin_blocks,
-        };
-
-        let (_candidates, profiles) = {
+        let (params, _candidates, profiles) = {
             let view = self.state.view();
+            let params = super::resolve_npos_election_params(&view, &self.config.npos);
             let Some(epoch_roster) = view.epoch_validator_peer_ids(epoch) else {
                 let reason = "stake snapshot unavailable";
                 warn!(epoch, %reason, "validator election skipped");
@@ -4090,7 +4077,7 @@ impl Actor {
                 });
             };
             let profiles = self.collect_candidate_profiles(&view, &epoch_roster);
-            (epoch_roster, profiles)
+            (params, epoch_roster, profiles)
         };
 
         let filtered = election::filter_candidates_with_constraints(profiles, &params);

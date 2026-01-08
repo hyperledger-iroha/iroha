@@ -3026,6 +3026,24 @@ description = "lane overrides should be rejected when nexus is disabled"
     }
 
     #[test]
+    fn iroha3_rejects_permissioned_consensus_with_nexus_enabled() {
+        let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
+            .expect("default config");
+        config.sumeragi.da_enabled = true;
+        config.nexus.enabled = true;
+        config.sumeragi.consensus_mode =
+            iroha_config::parameters::actual::ConsensusMode::Permissioned;
+
+        let err = enforce_build_line(BuildLine::Iroha3, &mut config)
+            .expect_err("iroha3 should reject permissioned consensus with nexus");
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("NPoS"),
+            "error should mention NPoS requirement: {rendered}"
+        );
+    }
+
+    #[test]
     fn iroha2_rejects_multilane_catalog() {
         let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
             .expect("default config");
@@ -4013,6 +4031,13 @@ fn enforce_build_line(build_line: BuildLine, config: &mut Config) -> ReportResul
     enforce_da_rbc_policy(build_line, config)?;
 
     if build_line.is_iroha3() {
+        if config.nexus.enabled
+            && config.sumeragi.consensus_mode != iroha_config::parameters::actual::ConsensusMode::Npos
+        {
+            return Err(Report::new(MainError::Config).attach(
+                "Nexus requires the global NPoS validator set; set sumeragi.consensus_mode = \"npos\" or disable nexus.enabled",
+            ));
+        }
         return Ok(());
     }
 
@@ -4194,12 +4219,16 @@ fn consensus_caps_from_genesis(
                 timeout_aggregator_ms: npos.timeout_aggregator_ms(),
                 k_aggregators: npos.k_aggregators(),
                 redundant_send_r: npos.redundant_send_r(),
+                epoch_seed: npos.epoch_seed(),
                 vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
                 vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
+                max_validators: npos.max_validators(),
                 min_self_bond: npos.min_self_bond(),
+                min_nomination_bond: npos.min_nomination_bond(),
                 max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
                 seat_band_pct: npos.seat_band_pct(),
                 max_entity_correlation_pct: npos.max_entity_correlation_pct(),
+                finality_margin_blocks: npos.finality_margin_blocks(),
                 evidence_horizon_blocks: npos.evidence_horizon_blocks(),
                 activation_lag_blocks: npos.activation_lag_blocks(),
             },
@@ -4407,12 +4436,16 @@ fn verify_genesis_metadata(
                 timeout_aggregator_ms: npos.timeout_aggregator_ms(),
                 k_aggregators: npos.k_aggregators(),
                 redundant_send_r: npos.redundant_send_r(),
+                epoch_seed: npos.epoch_seed(),
                 vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
                 vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
+                max_validators: npos.max_validators(),
                 min_self_bond: npos.min_self_bond(),
+                min_nomination_bond: npos.min_nomination_bond(),
                 max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
                 seat_band_pct: npos.seat_band_pct(),
                 max_entity_correlation_pct: npos.max_entity_correlation_pct(),
+                finality_margin_blocks: npos.finality_margin_blocks(),
                 evidence_horizon_blocks: npos.evidence_horizon_blocks(),
                 activation_lag_blocks: npos.activation_lag_blocks(),
             },

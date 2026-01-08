@@ -8757,7 +8757,8 @@ pub(crate) mod valid {
         // Create a signed block with only leader signature
         let unverified_block = BlockBuilder::new(Vec::new())
             .chain(
-                topology.view_change_index(),
+                usize::try_from(topology.view_change_index())
+                    .expect("view change index fits into usize"),
                 state.view().latest_block().as_deref(),
             )
             .sign(kp1.private_key())
