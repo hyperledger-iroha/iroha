@@ -4,7 +4,7 @@ use std::{
     borrow::Cow,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -38,8 +38,11 @@ use crate::{
 fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>) -> NetworkBuilder {
     let mut builder = NetworkBuilder::new()
         .with_peers(config.peer_count)
-        .with_base_seed("izanami-chaos")
-        .with_default_pipeline_time();
+        .with_base_seed("izanami-chaos");
+    builder = match config.pipeline_time {
+        Some(duration) => builder.with_pipeline_time(duration),
+        None => builder.with_default_pipeline_time(),
+    };
     if let Some(profile) = &config.nexus {
         builder = builder
             .with_data_availability_enabled(profile.da_enabled)
@@ -68,6 +71,33 @@ fn select_fault_targets(peers_len: usize, faulty_peers: usize, rng: &mut StdRng)
     let mut indices: Vec<_> = (0..peers_len).collect();
     indices.shuffle(rng);
     indices.into_iter().take(target_count).collect()
+}
+
+#[derive(Clone)]
+struct RunControl {
+    stop: Arc<AtomicBool>,
+    deadline: Instant,
+}
+
+impl RunControl {
+    fn new(deadline: Instant) -> Self {
+        Self {
+            stop: Arc::new(AtomicBool::new(false)),
+            deadline,
+        }
+    }
+
+    fn deadline(&self) -> Instant {
+        self.deadline
+    }
+
+    fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+
+    fn should_stop(&self) -> bool {
+        self.stop.load(Ordering::Relaxed) || Instant::now() >= self.deadline
+    }
 }
 
 pub struct IzanamiRunner {
@@ -110,6 +140,7 @@ impl IzanamiRunner {
 
     pub async fn run(self) -> Result<()> {
         let deadline = Instant::now() + self.config.duration;
+        let run_control = Arc::new(RunControl::new(deadline));
         let mut rng = self.seeded_rng();
         let config_layers = Arc::new(
             self.network
@@ -120,8 +151,38 @@ impl IzanamiRunner {
         let genesis = Arc::new(self.network.genesis());
         let metrics = Arc::new(Metrics::default());
 
-        let faulty_handles = self.spawn_fault_tasks(&config_layers, &genesis, deadline, &mut rng);
-        let load_handles = self.spawn_load_supervisors(&metrics, deadline, &mut rng);
+        let faulty_handles =
+            self.spawn_fault_tasks(&config_layers, &genesis, &run_control, &mut rng);
+        let load_handles = self.spawn_load_supervisors(&metrics, &run_control, &mut rng);
+
+        let target_result = if let Some(target_blocks) = self.config.target_blocks {
+            wait_for_target_blocks(
+                &self.peers,
+                target_blocks,
+                self.config.progress_interval,
+                self.config.progress_timeout,
+                &run_control,
+            )
+            .await
+        } else {
+            Ok(())
+        };
+
+        if let Err(err) = target_result {
+            run_control.stop();
+            for handle in load_handles {
+                let _ = handle.await;
+            }
+            for handle in faulty_handles {
+                let _ = handle.await;
+            }
+            self.network.shutdown().await;
+            return Err(err);
+        }
+
+        if self.config.target_blocks.is_some() {
+            run_control.stop();
+        }
 
         for handle in load_handles {
             let _ = handle.await;
@@ -152,13 +213,14 @@ impl IzanamiRunner {
         &self,
         config_layers: &Arc<Vec<Table>>,
         genesis: &Arc<GenesisBlock>,
-        deadline: Instant,
+        run_control: &Arc<RunControl>,
         rng: &mut StdRng,
     ) -> Vec<JoinHandle<()>> {
         let targets = select_fault_targets(self.peers.len(), self.config.faulty_peers, rng);
         if targets.is_empty() {
             return Vec::new();
         }
+        let deadline = run_control.deadline();
         let mut handles = Vec::new();
         let toggles = self.config.faults;
         let fault_cfg = FaultConfig {
@@ -179,6 +241,7 @@ impl IzanamiRunner {
             let config_layers = Arc::clone(config_layers);
             let genesis = Arc::clone(genesis);
             let base_domain = self.base_domain.clone();
+            let stop = Arc::clone(&run_control.stop);
             let cfg = fault_cfg.clone();
             let seed = rng.next_u64();
             handles.push(tokio::spawn(async move {
@@ -188,6 +251,7 @@ impl IzanamiRunner {
                     genesis,
                     config_layers,
                     base_domain,
+                    stop,
                     deadline,
                     seed,
                 )
@@ -201,7 +265,7 @@ impl IzanamiRunner {
     fn spawn_load_supervisors(
         &self,
         metrics: &Arc<Metrics>,
-        deadline: Instant,
+        run_control: &Arc<RunControl>,
         rng: &mut StdRng,
     ) -> Vec<JoinHandle<()>> {
         let peers = self.peers.clone();
@@ -210,19 +274,24 @@ impl IzanamiRunner {
         let mut load_rng = rng.clone();
         let interval = Duration::from_secs_f64(1.0 / self.config.tps);
         let metrics = Arc::clone(metrics);
+        let run_control = Arc::clone(run_control);
         let handle = tokio::spawn(async move {
             let mut ticker = time::interval(interval);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
             let mut submissions: Vec<JoinHandle<()>> = Vec::new();
-            while Instant::now() < deadline {
+            while !run_control.should_stop() {
                 ticker.tick().await;
-                if Instant::now() >= deadline {
+                if run_control.should_stop() {
                     break;
                 }
                 let permit = match semaphore.clone().acquire_owned().await {
                     Ok(permit) => permit,
                     Err(_) => break,
                 };
+                if run_control.should_stop() {
+                    drop(permit);
+                    break;
+                }
                 let plan = match workload.next_plan(&mut load_rng).await {
                     Ok(plan) => plan,
                     Err(err) => {
@@ -257,6 +326,104 @@ fn seeded_rng_from_seed(seed: Option<u64>) -> StdRng {
         },
         StdRng::seed_from_u64,
     )
+}
+
+fn min_peer_height(peers: &[NetworkPeer]) -> u64 {
+    peers
+        .iter()
+        .map(|peer| peer.best_effort_block_height().map(|height| height.total).unwrap_or(0))
+        .min()
+        .unwrap_or(0)
+}
+
+struct ProgressState {
+    last_height: u64,
+    last_progress_at: Instant,
+}
+
+impl ProgressState {
+    fn new(now: Instant) -> Self {
+        Self {
+            last_height: 0,
+            last_progress_at: now,
+        }
+    }
+
+    fn update(&mut self, now: Instant, height: u64) -> bool {
+        if height > self.last_height {
+            self.last_height = height;
+            self.last_progress_at = now;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn stalled(&self, now: Instant, timeout: Duration) -> bool {
+        now.duration_since(self.last_progress_at) >= timeout
+    }
+}
+
+async fn wait_for_target_blocks(
+    peers: &[NetworkPeer],
+    target_blocks: u64,
+    progress_interval: Duration,
+    progress_timeout: Duration,
+    run_control: &RunControl,
+) -> Result<()> {
+    let start = Instant::now();
+    let mut progress = ProgressState::new(start);
+    loop {
+        if run_control.should_stop() {
+            return Err(eyre!("izanami run stopped before target blocks reached"));
+        }
+        let now = Instant::now();
+        if now >= run_control.deadline() {
+            return Err(eyre!(
+                "timed out before reaching target blocks (min height {}, target {})",
+                progress.last_height,
+                target_blocks
+            ));
+        }
+        let min_height = min_peer_height(peers);
+        if min_height >= target_blocks {
+            info!(
+                target: "izanami::progress",
+                min_height,
+                target_blocks,
+                elapsed = ?now.duration_since(start),
+                "target block height reached"
+            );
+            return Ok(());
+        }
+        if progress.update(now, min_height) {
+            info!(
+                target: "izanami::progress",
+                min_height,
+                target_blocks,
+                "block height advanced"
+            );
+        } else if progress.stalled(now, progress_timeout) {
+            return Err(eyre!(
+                "no block height progress for {:?} (min height {}, target {})",
+                progress_timeout,
+                min_height,
+                target_blocks
+            ));
+        }
+        let remaining = run_control
+            .deadline()
+            .checked_duration_since(Instant::now())
+            .unwrap_or_default();
+        if remaining.is_zero() {
+            return Err(eyre!(
+                "timed out before reaching target blocks (min height {}, target {})",
+                min_height,
+                target_blocks
+            ));
+        }
+        time::sleep(progress_interval.min(remaining)).await;
+    }
 }
 
 async fn submit_plan(
@@ -368,7 +535,9 @@ mod tests {
     use tokio::time::timeout;
 
     use super::*;
-    use crate::config::{FaultToggles, NexusProfile};
+    use crate::config::{
+        FaultToggles, NexusProfile, DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT,
+    };
 
     fn allow_net_for_tests() -> bool {
         std::env::var("IZANAMI_ALLOW_NET")
@@ -397,6 +566,10 @@ mod tests {
             peer_count: 4,
             faulty_peers: 0,
             duration: Duration::from_secs(2),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             seed: Some(42),
             tps: 1.0,
             max_inflight: 4,
@@ -455,6 +628,10 @@ mod tests {
             peer_count: 4,
             faulty_peers: 0,
             duration: Duration::from_secs(2),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             seed: Some(7),
             tps: 1.0,
             max_inflight: 4,
@@ -594,6 +771,80 @@ mod tests {
         );
     }
 
+    #[test]
+    fn progress_state_tracks_stalls() {
+        let start = Instant::now();
+        let mut state = ProgressState::new(start);
+        assert!(!state.stalled(start, Duration::from_secs(5)));
+        assert!(!state.update(start, 0));
+        assert!(!state.stalled(start + Duration::from_secs(2), Duration::from_secs(5)));
+        assert!(state.update(start + Duration::from_secs(3), 2));
+        assert!(!state.stalled(start + Duration::from_secs(6), Duration::from_secs(5)));
+        assert!(state.stalled(start + Duration::from_secs(9), Duration::from_secs(5)));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_for_target_blocks_reaches_target() -> Result<()> {
+        if !allow_net_for_tests() {
+            return Ok(());
+        }
+        crate::config::init_tracing_with_filter("warn");
+        init_instruction_registry();
+
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 2,
+            faulty_peers: 0,
+            duration: Duration::from_secs(4),
+            pipeline_time: Some(Duration::from_millis(250)),
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            seed: Some(9),
+            tps: 1.0,
+            max_inflight: 4,
+            fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([false, false, false, false]),
+            nexus: None,
+        };
+
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos {
+            state: _,
+            genesis,
+            recipes: _,
+        } = instructions::prepare_state(account_qty, None)?;
+        let builder = make_network_builder(&config, genesis);
+
+        let network = match builder.start().await {
+            Ok(network) => network,
+            Err(err) => {
+                let looks_like_permission_denied = err
+                    .downcast_ref::<io::Error>()
+                    .is_some_and(|io_err| io_err.kind() == io::ErrorKind::PermissionDenied)
+                    || err.to_string().contains("Operation not permitted");
+                if looks_like_permission_denied {
+                    return Ok(());
+                }
+                return Err(err);
+            }
+        };
+
+        let run_control = RunControl::new(Instant::now() + Duration::from_secs(20));
+        wait_for_target_blocks(
+            network.peers(),
+            2,
+            Duration::from_millis(200),
+            Duration::from_secs(5),
+            &run_control,
+        )
+        .await?;
+        network.shutdown().await;
+
+        Ok(())
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn allow_net_false_rejects_runner() {
         let config = ChaosConfig {
@@ -601,6 +852,10 @@ mod tests {
             peer_count: 1,
             faulty_peers: 0,
             duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             seed: Some(5),
             tps: 0.1,
             max_inflight: 1,
@@ -664,6 +919,51 @@ mod tests {
         assert_eq!(snapshot.unexpected_successes, 1);
     }
 
+    #[test]
+    fn make_network_builder_applies_pipeline_time() -> Result<()> {
+        init_instruction_registry();
+        let pipeline_time = Duration::from_millis(300);
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 2,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: Some(pipeline_time),
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            seed: Some(17),
+            tps: 1.0,
+            max_inflight: 4,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([false, false, false, false]),
+            nexus: None,
+        };
+
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos { genesis, .. } = instructions::prepare_state(account_qty, None)?;
+        let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            make_network_builder(&config, genesis).build()
+        })) {
+            Ok(network) => network,
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(ToString::to_string))
+                    .unwrap_or_default();
+                if msg.contains("Operation not permitted") || msg.contains("permission denied") {
+                    return Ok(());
+                }
+                std::panic::resume_unwind(payload);
+            }
+        };
+
+        assert_eq!(network.pipeline_time(), pipeline_time);
+        Ok(())
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn runner_respects_deadline_and_shuts_down() -> Result<()> {
         if !allow_net_for_tests() {
@@ -677,6 +977,10 @@ mod tests {
             peer_count: 2,
             faulty_peers: 0,
             duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             seed: Some(13),
             tps: 0.5,
             max_inflight: 2,
@@ -715,6 +1019,10 @@ mod tests {
             peer_count: 3,
             faulty_peers: 0,
             duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             seed: Some(23),
             tps: 1.0,
             max_inflight: 4,

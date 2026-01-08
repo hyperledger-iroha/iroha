@@ -40,6 +40,18 @@ pub struct IzanamiArgs {
     /// Wall-clock duration for which the scenario should run.
     #[arg(long, default_value = "120s", value_parser = parse_duration)]
     pub duration: Duration,
+    /// Optional total consensus pipeline time (block production + commit).
+    #[arg(long, value_parser = parse_duration)]
+    pub pipeline_time: Option<Duration>,
+    /// Target total block height required across all running peers before stopping.
+    #[arg(long)]
+    pub target_blocks: Option<u64>,
+    /// Interval between block-height progress checks when a target is set.
+    #[arg(long, default_value = "15s", value_parser = parse_duration)]
+    pub progress_interval: Duration,
+    /// Maximum time without block progress before failing when a target is set.
+    #[arg(long, default_value = "120s", value_parser = parse_duration)]
+    pub progress_timeout: Duration,
     /// Optional deterministic seed for reproducible chaos runs.
     #[arg(long)]
     pub seed: Option<u64>,
@@ -65,6 +77,9 @@ pub struct IzanamiArgs {
     #[arg(long)]
     pub nexus: bool,
 }
+
+pub const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(15);
+pub const DEFAULT_PROGRESS_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// CLI fault toggles controlling which fault injectors run.
 #[derive(Debug, Clone, Args)]
@@ -179,6 +194,10 @@ pub struct ChaosConfig {
     pub peer_count: usize,
     pub faulty_peers: usize,
     pub duration: Duration,
+    pub pipeline_time: Option<Duration>,
+    pub target_blocks: Option<u64>,
+    pub progress_interval: Duration,
+    pub progress_timeout: Duration,
     pub seed: Option<u64>,
     pub tps: f64,
     pub max_inflight: usize,
@@ -210,6 +229,28 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
         if args.duration.is_zero() {
             return Err(eyre!("duration must be greater than zero"));
         }
+        if args
+            .pipeline_time
+            .is_some_and(|duration| duration.is_zero())
+        {
+            return Err(eyre!("pipeline_time must be greater than zero"));
+        }
+        if args.target_blocks == Some(0) {
+            return Err(eyre!("target_blocks must be greater than zero"));
+        }
+        if args.progress_interval.is_zero() {
+            return Err(eyre!("progress_interval must be greater than zero"));
+        }
+        if args.progress_timeout.is_zero() {
+            return Err(eyre!("progress_timeout must be greater than zero"));
+        }
+        if args.progress_interval > args.progress_timeout {
+            return Err(eyre!(
+                "progress_interval ({:?}) must not exceed progress_timeout ({:?})",
+                args.progress_interval,
+                args.progress_timeout
+            ));
+        }
         if args.tps <= 0.0 {
             return Err(eyre!("tps must be positive"));
         }
@@ -230,6 +271,10 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             peers,
             faulty,
             duration,
+            pipeline_time,
+            target_blocks,
+            progress_interval,
+            progress_timeout,
             seed,
             tps,
             max_inflight,
@@ -251,6 +296,10 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             peer_count: peers,
             faulty_peers: faulty,
             duration,
+            pipeline_time,
+            target_blocks,
+            progress_interval,
+            progress_timeout,
             seed,
             tps,
             max_inflight,
@@ -282,6 +331,10 @@ impl IzanamiArgs {
             peers: cfg.peer_count,
             faulty: cfg.faulty_peers,
             duration: cfg.duration,
+            pipeline_time: cfg.pipeline_time,
+            target_blocks: cfg.target_blocks,
+            progress_interval: cfg.progress_interval,
+            progress_timeout: cfg.progress_timeout,
             seed: cfg.seed,
             tps: cfg.tps,
             max_inflight: cfg.max_inflight,
@@ -625,6 +678,10 @@ mod tests {
             peers: 2,
             faulty: 3,
             duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
@@ -650,6 +707,10 @@ mod tests {
             peers: 1,
             faulty: 0,
             duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             seed: Some(42),
             tps: 1.0,
             max_inflight: 1,
@@ -671,6 +732,10 @@ mod tests {
             peers: 1,
             faulty: 0,
             duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
@@ -686,6 +751,60 @@ mod tests {
         assert!(
             err.to_string().contains("allow_net"),
             "error should mention allow_net opt-in: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_rejects_zero_target_blocks() {
+        let args = IzanamiArgs {
+            tui: false,
+            allow_net: true,
+            peers: 1,
+            faulty: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: Some(0),
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            seed: None,
+            tps: 1.0,
+            max_inflight: 1,
+            log_filter: "info".to_string(),
+            fault_interval_min: Duration::from_secs(1),
+            fault_interval_max: Duration::from_secs(1),
+            faults: FaultArgs::default(),
+            nexus: false,
+        };
+        assert!(ChaosConfig::try_from(args).is_err());
+    }
+
+    #[test]
+    fn chaos_config_rejects_progress_interval_over_timeout() {
+        let args = IzanamiArgs {
+            tui: false,
+            allow_net: true,
+            peers: 1,
+            faulty: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: Some(5),
+            progress_interval: Duration::from_secs(10),
+            progress_timeout: Duration::from_secs(5),
+            seed: None,
+            tps: 1.0,
+            max_inflight: 1,
+            log_filter: "info".to_string(),
+            fault_interval_min: Duration::from_secs(1),
+            fault_interval_max: Duration::from_secs(1),
+            faults: FaultArgs::default(),
+            nexus: false,
+        };
+        let Err(err) = ChaosConfig::try_from(args) else {
+            panic!("progress_interval > progress_timeout should fail");
+        };
+        assert!(
+            err.to_string().contains("progress_interval"),
+            "error should mention progress_interval: {err}"
         );
     }
 }

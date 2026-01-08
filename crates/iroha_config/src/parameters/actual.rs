@@ -266,7 +266,6 @@ impl Root {
         let remainder = max_disk.saturating_sub(allocated);
         kura_budget = kura_budget.saturating_add(remainder);
 
-        let soranet_spool_budget = soranet_budget.saturating_add(soravpn_budget);
         self.kura.max_disk_usage_bytes =
             min_nonzero_bytes(self.kura.max_disk_usage_bytes, kura_budget);
         self.tiered_state.max_cold_bytes =
@@ -275,9 +274,12 @@ impl Root {
             min_nonzero_bytes(self.torii.sorafs_storage.max_capacity_bytes, sorafs_budget);
         self.streaming.soranet.provision_spool_max_bytes = min_nonzero_bytes(
             self.streaming.soranet.provision_spool_max_bytes,
-            soranet_spool_budget,
+            soranet_budget,
         );
-        // TODO: split SoraVPN spool caps once local VPN storage is implemented.
+        self.streaming.soravpn.provision_spool_max_bytes = min_nonzero_bytes(
+            self.streaming.soravpn.provision_spool_max_bytes,
+            soravpn_budget,
+        );
     }
 }
 
@@ -530,13 +532,15 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         root.tiered_state.max_cold_bytes = Bytes(0);
         root.torii.sorafs_storage.max_capacity_bytes = Bytes(0);
         root.streaming.soranet.provision_spool_max_bytes = Bytes(0);
+        root.streaming.soravpn.provision_spool_max_bytes = Bytes(0);
 
         root.apply_storage_budget();
 
         assert_eq!(root.kura.max_disk_usage_bytes.get(), 500);
         assert_eq!(root.tiered_state.max_cold_bytes.get(), 200);
         assert_eq!(root.torii.sorafs_storage.max_capacity_bytes.get(), 200);
-        assert_eq!(root.streaming.soranet.provision_spool_max_bytes.get(), 100);
+        assert_eq!(root.streaming.soranet.provision_spool_max_bytes.get(), 50);
+        assert_eq!(root.streaming.soravpn.provision_spool_max_bytes.get(), 50);
         assert!(root.tiered_state.enabled, "tiered state should be enabled");
         assert_eq!(root.tiered_state.hot_retained_bytes.get(), 512);
         assert_eq!(
@@ -1972,7 +1976,7 @@ impl Default for LaneRelayEmergency {
 pub struct NexusStorage {
     /// Aggregate on-disk storage budget (bytes).
     pub max_disk_usage_bytes: Bytes<u64>,
-    /// WSV hot-tier serialized payload budget (bytes).
+    /// WSV hot-tier deterministic payload size budget (bytes).
     pub max_wsv_memory_bytes: Bytes<u64>,
     /// Budget weights for dividing the disk cap across subsystems.
     pub disk_budget_weights: NexusStorageWeights,
@@ -5628,6 +5632,8 @@ pub struct Streaming {
     pub feature_bits: u32,
     /// Default SoraNet integration parameters applied to streaming privacy routes.
     pub soranet: StreamingSoranet,
+    /// SoraVPN provisioning spool settings for streaming routes.
+    pub soravpn: StreamingSoravpn,
     /// Audio/video sync enforcement policy.
     pub sync: StreamingSync,
     /// Codec toggles (CABAC gating, trellis scopes, rANS artefact path).
@@ -5702,6 +5708,26 @@ impl StreamingSoranet {
             channel_salt: defaults::streaming::soranet::CHANNEL_SALT.to_owned(),
             provision_spool_dir: PathBuf::from(defaults::streaming::soranet::PROVISION_SPOOL_DIR),
             provision_spool_max_bytes: defaults::streaming::soranet::PROVISION_SPOOL_MAX_BYTES,
+        }
+    }
+}
+
+/// SoraVPN provisioning spool settings for streaming routes.
+#[derive(Debug, Clone)]
+pub struct StreamingSoravpn {
+    /// Filesystem spool where SoraVPN route updates are staged for local VPN nodes.
+    pub provision_spool_dir: PathBuf,
+    /// Maximum on-disk footprint for the SoraVPN provision spool (0 = unlimited).
+    pub provision_spool_max_bytes: Bytes<u64>,
+}
+
+impl StreamingSoravpn {
+    /// Construct SoraVPN defaults using the repository constants.
+    #[must_use]
+    pub fn from_defaults() -> Self {
+        Self {
+            provision_spool_dir: PathBuf::from(defaults::streaming::soravpn::PROVISION_SPOOL_DIR),
+            provision_spool_max_bytes: defaults::streaming::soravpn::PROVISION_SPOOL_MAX_BYTES,
         }
     }
 }

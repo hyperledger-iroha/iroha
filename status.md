@@ -1,6 +1,11 @@
 # Status
 
 ## Latest Updates
+- Izanami: add target-block progress monitoring with stall detection, optional pipeline-time override, and coordinated stop control; extend CLI/TUI/config defaults; skip persistence on permission errors and add guard tests.
+- Tests: `cargo test -p izanami` (failed: missing IVM artifact fixture `crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_3_mode00_vlen0_cycles0_abi0.to`; embedded Nexus config rejected `nexus.storage.weights`).
+- Izanami run: `cargo run -p izanami -- --allow-net --peers 4 --faulty 0 --pipeline-time 200ms --target-blocks 2000 --progress-interval 5s --progress-timeout 60s --duration 20m --tps 30 --max-inflight 128` (failed: loopback port bind denied `127.0.0.1:30000`).
+- Tests: fix NFT missing-domain matchers to avoid partial moves and align RBC test epoch usage to resolve borrow conflicts during compilation.
+- Tests: `cargo test -p iroha_core --lib exec_witness_guard_serializes_block_access -- --nocapture`.
 - Sumeragi: serialize exec-witness capture across block validation/commit to prevent cross-block witness mixing that can break execution-root QCs; add guard coverage and align witness tests to the shared guard.
 - Tests: not run (not requested).
 - Storage budgets: wire Kura budget telemetry + warnings, attach daemon telemetry to Kura, and document budget metrics/guidance in Nexus lanes.

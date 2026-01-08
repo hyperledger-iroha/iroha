@@ -25,8 +25,8 @@ fast transaction validation.
   `cold_store_root`, `max_snapshots`, `max_cold_bytes`). The node applies these
   knobs at startup via `State::set_tiered_backend`, and the default build keeps
   the feature disabled until operators opt in.
-- `hot_retained_bytes` enforces a hot-tier byte budget derived from the exact
-  serialized payload size (Norito JSON). Grace retention may temporarily exceed
+- `hot_retained_bytes` enforces a hot-tier byte budget derived from deterministic
+  Norito payload sizing (used as an in-memory WSV size estimate). Grace retention may temporarily exceed
   this budget; the overflow is reported via telemetry.
 - `hot_retained_grace_snapshots` keeps newly hot entries pinned for a short
   window to reduce hot/cold churn when rankings fluctuate.

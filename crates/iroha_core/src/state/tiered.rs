@@ -19,6 +19,7 @@ use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
 use iroha_data_model::prelude::Name;
 use mv::storage::StorageReadOnly;
 use norito::{
+    core::NoritoSerialize,
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
@@ -33,7 +34,7 @@ pub struct TieredStateBackend {
     enabled: bool,
     /// Maximum number of keys to keep hot (0 = unlimited).
     hot_retained_keys: usize,
-    /// Hot-tier byte budget based on serialized payload bytes (0 = unlimited).
+    /// Hot-tier byte budget based on deterministic WSV payload sizing (0 = unlimited).
     hot_retained_bytes: u64,
     /// Minimum snapshots to retain newly hot entries before demotion (0 = disabled).
     hot_retained_grace_snapshots: u64,
@@ -1232,7 +1233,7 @@ impl TieredStateBackend {
     ) -> Result<()>
     where
         K: norito::codec::Encode,
-        V: json::JsonSerialize,
+        V: json::JsonSerialize + NoritoSerialize,
     {
         let key_encoded = norito::codec::Encode::encode(key);
         self.collect_entry_with_encoded_key(segment, key_handle, key_encoded, value, ctx)
@@ -1247,13 +1248,15 @@ impl TieredStateBackend {
         ctx: &mut CollectContext,
     ) -> Result<()>
     where
-        V: json::JsonSerialize,
+        V: json::JsonSerialize + NoritoSerialize,
     {
         let key_hash = sha256(&key_encoded);
         let id = TieredEntryId::new(segment, key_hash);
 
-        let (value_hash, value_size_bytes) =
+        let (value_hash, _json_len) =
             compute_json_hash(value).wrap_err("failed to encode value for tiered snapshot")?;
+        let value_size_bytes = compute_hot_bytes(value)
+            .wrap_err("failed to compute WSV hot-tier size estimate")?;
 
         let meta = self
             .entries
@@ -1552,6 +1555,16 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
 fn compute_json_hash(value: &impl json::JsonSerialize) -> Result<([u8; 32], usize)> {
     let encoded = json::to_vec(value).wrap_err("failed to encode snapshot value as JSON")?;
     Ok((sha256(&encoded), encoded.len()))
+}
+
+fn compute_hot_bytes(value: &impl NoritoSerialize) -> Result<usize> {
+    if let Some(exact) = value.encoded_len_exact() {
+        return Ok(exact);
+    }
+    if let Some(hint) = value.encoded_len_hint() {
+        return Ok(hint);
+    }
+    Ok(norito::codec::Encode::encode(value).len())
 }
 
 fn lane_snapshot_dir(root: &Path, entry: &LaneConfigEntry) -> PathBuf {
@@ -2050,6 +2063,14 @@ mod tests {
         let encoded = norito::json::to_vec(&value).expect("direct encode");
         assert_eq!(stream_len, encoded.len());
         assert_eq!(stream_hash, sha256(&encoded));
+    }
+
+    #[test]
+    fn hot_bytes_match_norito_payload_len() {
+        let value = vec![1_u8, 2, 3, 4, 5, 6, 7, 8];
+        let expected = norito::codec::Encode::encode(&value).len();
+        let measured = compute_hot_bytes(&value).expect("hot byte measurement");
+        assert_eq!(measured, expected);
     }
 
     fn dummy_qc(seed: u8) -> Qc {

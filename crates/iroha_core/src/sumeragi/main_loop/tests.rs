@@ -9299,6 +9299,7 @@ async fn recover_block_from_rbc_session_requests_missing_block_created() {
 
     let height = actor.state.view().height() as u64 + 1;
     let view = 0u64;
+    let epoch = actor.epoch_for_height(height);
     let block = sample_block(height, u32::try_from(view).expect("view fits u32"), None);
     let block_hash = block.hash();
     let key = (block_hash, height, view);
@@ -9309,7 +9310,7 @@ async fn recover_block_from_rbc_session_requests_missing_block_created() {
         &payload_bytes,
         payload_hash,
         1024,
-        actor.epoch_for_height(height),
+        epoch,
     )
     .expect("session");
     session.test_set_delivered(true);
@@ -9342,6 +9343,7 @@ async fn recover_block_from_rbc_session_marks_invalid_on_payload_hash_mismatch()
 
     let height = actor.state.view().height() as u64 + 1;
     let view = 0u64;
+    let epoch = actor.epoch_for_height(height);
     let block = sample_block(height, u32::try_from(view).expect("view fits u32"), None);
     let block_hash = block.hash();
     let key = (block_hash, height, view);
@@ -9352,7 +9354,7 @@ async fn recover_block_from_rbc_session_marks_invalid_on_payload_hash_mismatch()
         &payload_bytes,
         payload_hash,
         1024,
-        actor.epoch_for_height(height),
+        epoch,
     )
     .expect("session");
     session.payload_hash = Some(Hash::prehashed([0xEE; 32]));
@@ -9369,7 +9371,7 @@ async fn recover_block_from_rbc_session_marks_invalid_on_payload_hash_mismatch()
             block_hash,
             height,
             view,
-            epoch: actor.epoch_for_height(height),
+            epoch,
             idx: 0,
             bytes: vec![0xCD],
         },
