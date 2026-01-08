@@ -5,7 +5,7 @@ use std::{
     ops::RangeInclusive,
     path::PathBuf,
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -119,11 +119,12 @@ pub async fn run_fault_loop<P: FaultPeer>(
     genesis: Arc<GenesisBlock>,
     config_layers: Arc<Vec<Table>>,
     base_domain: DomainId,
+    stop: Arc<AtomicBool>,
     deadline: Instant,
     seed: u64,
 ) {
     let mut rng = StdRng::seed_from_u64(seed);
-    while Instant::now() < deadline {
+    while Instant::now() < deadline && !stop.load(std::sync::atomic::Ordering::Relaxed) {
         let scenario = FaultScenario::random(&mut rng, &config);
         let ctx = FaultApplyCtx {
             peer: &peer,
@@ -136,6 +137,9 @@ pub async fn run_fault_loop<P: FaultPeer>(
         };
         if let Err(err) = scenario.apply(ctx).await {
             warn!(target: "izanami::faults", peer = peer.mnemonic(), ?scenario, "fault scenario failed: {err:?}");
+        }
+        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
         }
         let delay = config.sample_interval(&mut rng);
         debug!(target: "izanami::faults", peer = peer.mnemonic(), ?scenario, ?delay, "scheduling next fault");
@@ -623,7 +627,7 @@ impl FaultPeer for NetworkPeer {
 mod tests {
     use std::{
         collections::HashSet,
-        sync::{Arc, Mutex as StdMutex},
+        sync::{Arc, Mutex as StdMutex, atomic::AtomicBool},
     };
 
     use iroha_primitives::unique_vec::UniqueVec;
@@ -766,6 +770,38 @@ mod tests {
 
     fn dummy_genesis() -> Arc<GenesisBlock> {
         Arc::new(genesis_factory(Vec::new(), UniqueVec::new(), Vec::new()))
+    }
+
+    #[tokio::test]
+    async fn run_fault_loop_respects_stop_flag() {
+        let peer = MockPeer::new("stop");
+        let stop = Arc::new(AtomicBool::new(true));
+        let config = FaultConfig {
+            interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            network_latency: None,
+            network_partition: None,
+            cpu_stress: None,
+            disk_saturation: None,
+        };
+        let config_layers = Arc::new(Vec::new());
+        let genesis = dummy_genesis();
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        run_fault_loop(
+            peer.clone(),
+            config,
+            genesis,
+            config_layers,
+            domain,
+            stop,
+            Instant::now() + Duration::from_secs(1),
+            7,
+        )
+        .await;
+        let events = peer.events().await;
+        assert!(
+            events.is_empty(),
+            "stop flag should prevent fault loop work"
+        );
     }
 
     #[tokio::test]

@@ -1007,6 +1007,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             ),
             feature_bits: iroha_config::parameters::defaults::streaming::FEATURE_BITS,
             soranet: iroha_config::parameters::actual::StreamingSoranet::from_defaults(),
+            soravpn: iroha_config::parameters::actual::StreamingSoravpn::from_defaults(),
             sync: iroha_config::parameters::actual::StreamingSync::from_defaults(),
             codec: iroha_config::parameters::actual::StreamingCodec::from_defaults(),
         },
