@@ -690,7 +690,6 @@ impl ChunkStore {
         (self.soft_sessions > 0 && sessions > self.soft_sessions)
             || (self.soft_bytes > 0 && bytes > self.soft_bytes)
     }
-
 }
 
 fn temp_session_path(path: &Path) -> PathBuf {
@@ -1478,10 +1477,7 @@ mod tests {
         let persisted = load.sessions.into_iter().next().expect("session persisted");
         assert!(
             persisted.chunks.len() == 2
-                && persisted
-                    .chunks
-                    .iter()
-                    .all(|chunk| !chunk.bytes.is_empty()),
+                && persisted.chunks.iter().all(|chunk| !chunk.bytes.is_empty()),
             "persisted session should retain chunk bytes for sampling"
         );
     }

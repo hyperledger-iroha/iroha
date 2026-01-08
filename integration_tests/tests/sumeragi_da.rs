@@ -222,8 +222,11 @@ async fn sumeragi_commit_qc_with_tight_block_queue_four_peers() -> Result<()> {
         |_| Ok(()),
     )
     .await;
-    if sandbox::handle_result(result, "sumeragi_commit_qc_with_tight_block_queue_four_peers")?
-        .is_none()
+    if sandbox::handle_result(
+        result,
+        "sumeragi_commit_qc_with_tight_block_queue_four_peers",
+    )?
+    .is_none()
     {
         return Ok(());
     }

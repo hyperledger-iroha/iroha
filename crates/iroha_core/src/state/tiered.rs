@@ -438,6 +438,19 @@ impl TieredStateBackend {
         } else {
             retained_bytes.saturating_sub(self.hot_retained_bytes)
         };
+        if (self.hot_retained_keys > 0 && hot_grace_overflow_keys > 0)
+            || (self.hot_retained_bytes > 0 && hot_grace_overflow_bytes > 0)
+        {
+            iroha_logger::warn!(
+                hot_limit_keys = self.hot_retained_keys,
+                hot_limit_bytes = self.hot_retained_bytes,
+                hot_entries = hot_ids.len(),
+                hot_bytes = retained_bytes,
+                hot_grace_overflow_keys,
+                hot_grace_overflow_bytes,
+                "tiered-state: hot tier budget exceeded due to grace retention"
+            );
+        }
 
         let mut hot_manifest_entries = Vec::with_capacity(hot_list.len());
         let mut cold_manifest_entries = Vec::with_capacity(scores.len());
@@ -698,6 +711,18 @@ impl TieredStateBackend {
         self.hot_retained_keys
     }
 
+    /// Returns the currently configured hot byte retention limit.
+    #[must_use]
+    pub fn hot_retained_bytes(&self) -> u64 {
+        self.hot_retained_bytes
+    }
+
+    /// Returns the currently configured cold snapshot byte budget.
+    #[must_use]
+    pub fn max_cold_bytes(&self) -> u64 {
+        self.max_cold_bytes
+    }
+
     /// Returns true when tiering is enabled and a cold tier is configured.
     #[must_use]
     pub fn is_cold_tier_enabled(&self) -> bool {
@@ -714,6 +739,33 @@ impl TieredStateBackend {
     #[must_use]
     pub fn last_manifest(&self) -> Option<&TieredSnapshotManifest> {
         self.last_manifest.as_ref()
+    }
+
+    /// Return the total cold-tier bytes currently stored on disk.
+    pub fn cold_store_bytes(&self) -> Result<Option<u64>> {
+        let Some(root) = self.cold_store_root.as_ref() else {
+            return Ok(None);
+        };
+        if !root.exists() {
+            return Ok(Some(0));
+        }
+        let mut total = 0u64;
+        for entry in fs::read_dir(root).wrap_err_with(|| {
+            format!(
+                "failed to read tiered snapshot root {path}",
+                path = root.display()
+            )
+        })? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if !file_type.is_dir() {
+                continue;
+            }
+            if Self::parse_snapshot_dir_name(&entry.file_name()).is_some() {
+                total = total.saturating_add(Self::snapshot_dir_size(&entry.path())?);
+            }
+        }
+        Ok(Some(total))
     }
 
     /// Update configuration knobs at runtime.
@@ -2224,6 +2276,35 @@ mod tests {
         let manifest = backend.last_manifest().expect("manifest recorded");
         assert_eq!(manifest.hot_entries.len(), 2);
         assert_eq!(manifest.hot_grace_overflow_keys, 1);
+    }
+
+    #[test]
+    fn tiered_backend_reports_budget_limits_and_cold_bytes() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 1, 256, 0, Some(temp.path().to_path_buf()), 0, 512);
+
+        assert_eq!(backend.hot_retained_bytes(), 256);
+        assert_eq!(backend.max_cold_bytes(), 512);
+
+        let mut world = World::default();
+        let qc1 = dummy_qc(1);
+        let qc2 = dummy_qc(2);
+        world.commit_qcs.insert(qc1.subject_block_hash, qc1);
+        world.commit_qcs.insert(qc2.subject_block_hash, qc2);
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("snapshot recorded");
+        let manifest = backend.last_manifest().expect("manifest recorded");
+        let cold_bytes = backend
+            .cold_store_bytes()
+            .expect("cold store bytes")
+            .expect("cold tier enabled");
+        assert!(
+            cold_bytes >= manifest.cold_bytes_total,
+            "cold store usage should cover cold payload bytes"
+        );
     }
 
     #[test]

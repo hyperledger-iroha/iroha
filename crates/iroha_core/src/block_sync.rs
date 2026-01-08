@@ -28,7 +28,7 @@ use crate::{
     sumeragi::{
         SumeragiHandle,
         consensus::{
-            QcAggregate, NPOS_TAG, PERMISSIONED_TAG, Phase, ValidatorIndex, qc_signer_count,
+            NPOS_TAG, PERMISSIONED_TAG, Phase, QcAggregate, ValidatorIndex, qc_signer_count,
         },
         network_topology::Topology,
         stake_snapshot::CommitStakeSnapshot,
@@ -916,11 +916,10 @@ mod roster_metadata_tests {
         let (commit_qc, checkpoint) = sample_roster_artifacts();
         let block_hash = commit_qc.subject_block_hash;
         let roster = commit_qc.validator_set.clone();
-        state.commit_roster_journal.write().upsert(
-            commit_qc.clone(),
-            checkpoint.clone(),
-            None,
-        );
+        state
+            .commit_roster_journal
+            .write()
+            .upsert(commit_qc.clone(), checkpoint.clone(), None);
 
         let metadata =
             super::message::roster_metadata_from_state(&state, kura.as_ref(), 1, block_hash)
@@ -1454,9 +1453,8 @@ pub mod message {
         incoming: Option<&RosterMetadata>,
         fallback: Option<RosterMetadata>,
     ) -> Option<RosterMetadata> {
-        let incoming_present = incoming.is_some_and(|meta| {
-            meta.commit_qc.is_some() || meta.validator_checkpoint.is_some()
-        });
+        let incoming_present = incoming
+            .is_some_and(|meta| meta.commit_qc.is_some() || meta.validator_checkpoint.is_some());
         if incoming_present {
             incoming.cloned()
         } else {
@@ -1871,8 +1869,7 @@ pub mod message {
                         );
                         if let Some(metadata) = effective_roster_metadata(incoming_roster, fallback)
                         {
-                            msg.commit_qc
-                                .clone_from(&metadata.commit_qc);
+                            msg.commit_qc.clone_from(&metadata.commit_qc);
                             msg.validator_checkpoint
                                 .clone_from(&metadata.validator_checkpoint);
                             msg.stake_snapshot.clone_from(&metadata.stake_snapshot);

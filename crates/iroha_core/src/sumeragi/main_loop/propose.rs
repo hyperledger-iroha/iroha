@@ -745,7 +745,7 @@ impl Actor {
                     block_hash,
                     height: proposal_height,
                     view,
-                    highest_qc: highest_qc,
+                    highest_qc,
                 };
                 self.subsystems
                     .propose
@@ -1019,7 +1019,7 @@ impl Actor {
                 height: block_height,
                 view,
                 epoch: highest_qc.epoch,
-                highest_qc: highest_qc,
+                highest_qc,
             },
             payload_hash,
         }
@@ -1654,10 +1654,7 @@ impl Actor {
         }
 
         let proposal_roster = self
-            .roster_from_commit_qc_history_roll_forward(
-                height,
-                Some(highest_qc.subject_block_hash),
-            )
+            .roster_from_commit_qc_history_roll_forward(height, Some(highest_qc.subject_block_hash))
             .unwrap_or_else(|| self.effective_commit_topology());
         if proposal_roster.is_empty() {
             warn!(

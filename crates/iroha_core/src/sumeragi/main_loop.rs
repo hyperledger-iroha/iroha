@@ -1402,6 +1402,28 @@ struct StateRoots {
     post_state_root: Hash,
 }
 
+fn exec_roots_for_state_block(
+    state_block: &mut crate::state::StateBlock<'_>,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+) -> Option<StateRoots> {
+    let exec_witness = state_block.take_exec_witness().or_else(|| {
+        warn!(
+            height,
+            view,
+            block = %block_hash,
+            "execution witness missing after validation; capturing fallback"
+        );
+        state_block.capture_exec_witness();
+        state_block.take_exec_witness()
+    });
+    exec_witness.map(|witness| StateRoots {
+        parent_state_root: parent_state_from_witness(&witness),
+        post_state_root: post_state_from_witness(&witness),
+    })
+}
+
 /// Run stateless and stateful validation for a block before emitting votes.
 fn validate_block_for_voting(
     block: SignedBlock,
@@ -1411,6 +1433,9 @@ fn validate_block_for_voting(
     state: &State,
     voting_block: &mut Option<VotingBlock>,
 ) -> Result<Option<StateRoots>, BlockValidationError> {
+    let block_hash = block.hash();
+    let height = block.header().height().get();
+    let view = u64::from(block.header().view_change_index());
     let time_source = TimeSource::new_system();
     let validation = ValidBlock::validate_keep_voting_block(
         block,
@@ -1426,10 +1451,7 @@ fn validate_block_for_voting(
 
     match validation {
         Ok((_validated, mut state_block)) => {
-            let roots = state_block.take_exec_witness().map(|witness| StateRoots {
-                parent_state_root: parent_state_from_witness(&witness),
-                post_state_root: post_state_from_witness(&witness),
-            });
+            let roots = exec_roots_for_state_block(&mut state_block, block_hash, height, view);
             drop(state_block);
             Ok(roots)
         }
@@ -3285,9 +3307,7 @@ fn apply_roster_selection_to_block_sync_update(
     update: &mut super::message::BlockSyncUpdate,
     selection: &BlockSyncRosterSelection,
 ) {
-    update
-        .commit_qc
-        .clone_from(&selection.commit_qc);
+    update.commit_qc.clone_from(&selection.commit_qc);
     update
         .validator_checkpoint
         .clone_from(&selection.checkpoint);
@@ -3544,30 +3564,29 @@ fn selection_from_roster_artifacts(
     mode_tag: &'static str,
 ) -> Option<BlockSyncRosterSelection> {
     let expected_epoch = epoch_for_height_from_state(state, block_height, consensus_mode);
-    let validated_cert =
-        commit_qc.and_then(|cert| {
-            match validate_commit_qc_roster(
-                cert,
-                block_hash,
-                block_height,
-                block_view,
-                consensus_mode,
-                stake_snapshot,
-                expected_epoch,
-                &state.chain_id,
-                mode_tag,
-            ) {
-                Ok(roster) => Some((roster, cert)),
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        block = %block_hash,
-                        "rejecting commit certificate roster hint"
-                    );
-                    None
-                }
+    let validated_cert = commit_qc.and_then(|cert| {
+        match validate_commit_qc_roster(
+            cert,
+            block_hash,
+            block_height,
+            block_view,
+            consensus_mode,
+            stake_snapshot,
+            expected_epoch,
+            &state.chain_id,
+            mode_tag,
+        ) {
+            Ok(roster) => Some((roster, cert)),
+            Err(err) => {
+                warn!(
+                    ?err,
+                    block = %block_hash,
+                    "rejecting commit certificate roster hint"
+                );
+                None
             }
-        });
+        }
+    });
     let epoch = match (consensus_mode, validated_cert.as_ref()) {
         (ConsensusMode::Npos, Some((_roster, cert))) => cert.epoch,
         (ConsensusMode::Npos, None) => expected_epoch,
@@ -5094,24 +5113,22 @@ impl Actor {
         let evidence_height = subject_height.unwrap_or(fallback_height);
         let (consensus_mode, mode_tag, prf_seed) =
             self.consensus_context_for_height(evidence_height);
-        let topology_peers =
-            match &evidence.payload {
-                crate::sumeragi::consensus::EvidencePayload::DoubleVote { v1, .. } => self
-                    .roster_for_vote_with_mode(v1.block_hash, v1.height, v1.view, consensus_mode),
-                crate::sumeragi::consensus::EvidencePayload::InvalidQc {
-                    certificate,
-                    ..
-                } => self.roster_for_vote_with_mode(
+        let topology_peers = match &evidence.payload {
+            crate::sumeragi::consensus::EvidencePayload::DoubleVote { v1, .. } => {
+                self.roster_for_vote_with_mode(v1.block_hash, v1.height, v1.view, consensus_mode)
+            }
+            crate::sumeragi::consensus::EvidencePayload::InvalidQc { certificate, .. } => self
+                .roster_for_vote_with_mode(
                     certificate.subject_block_hash,
                     certificate.height,
                     certificate.view,
                     consensus_mode,
                 ),
-                crate::sumeragi::consensus::EvidencePayload::InvalidProposal { .. }
-                | crate::sumeragi::consensus::EvidencePayload::Censorship { .. } => {
-                    self.effective_commit_topology()
-                }
-            };
+            crate::sumeragi::consensus::EvidencePayload::InvalidProposal { .. }
+            | crate::sumeragi::consensus::EvidencePayload::Censorship { .. } => {
+                self.effective_commit_topology()
+            }
+        };
         if topology_peers.is_empty() {
             debug!(
                 evidence_kind = ?evidence.kind,

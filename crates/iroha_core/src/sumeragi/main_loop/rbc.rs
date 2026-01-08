@@ -1703,6 +1703,11 @@ impl Actor {
             self.publish_rbc_backlog_snapshot();
             return Ok(());
         }
+        let topology_peers = self.rbc_session_roster(key);
+        let roster_source = self
+            .rbc_session_roster_source(key)
+            .unwrap_or(RbcRosterSource::Derived);
+
         let mut stash_ready = |ready: RbcReady, reason: &'static str| {
             let max_bytes = self.pending_rbc_caps().1;
             let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
@@ -1729,9 +1734,7 @@ impl Actor {
             } else {
                 warn!(
                     ?key,
-                    max_bytes,
-                    reason,
-                    "dropping pending RBC READY: stash limits exceeded"
+                    max_bytes, reason, "dropping pending RBC READY: stash limits exceeded"
                 );
                 Self::record_pending_drop_counts(
                     self.telemetry_handle(),
@@ -1743,11 +1746,6 @@ impl Actor {
             self.publish_rbc_backlog_snapshot();
             Ok(())
         };
-
-        let topology_peers = self.rbc_session_roster(key);
-        let roster_source = self
-            .rbc_session_roster_source(key)
-            .unwrap_or(RbcRosterSource::Derived);
         if topology_peers.is_empty() {
             return stash_ready(ready, "commit roster missing");
         }
@@ -2135,6 +2133,11 @@ impl Actor {
             self.publish_rbc_backlog_snapshot();
             return Ok(());
         }
+        let topology_peers = self.rbc_session_roster(key);
+        let roster_source = self
+            .rbc_session_roster_source(key)
+            .unwrap_or(RbcRosterSource::Derived);
+
         let mut stash_deliver = |deliver: RbcDeliver, reason: &'static str| {
             let max_bytes = self.pending_rbc_caps().1;
             let (accepted, dropped_bytes, pending_chunks, pending_bytes) = {
@@ -2159,9 +2162,7 @@ impl Actor {
             } else {
                 warn!(
                     ?key,
-                    max_bytes,
-                    reason,
-                    "dropping pending RBC DELIVER: stash limits exceeded"
+                    max_bytes, reason, "dropping pending RBC DELIVER: stash limits exceeded"
                 );
                 Self::record_pending_drop_counts(
                     self.telemetry_handle(),
@@ -2173,11 +2174,6 @@ impl Actor {
             self.publish_rbc_backlog_snapshot();
             Ok(())
         };
-
-        let topology_peers = self.rbc_session_roster(key);
-        let roster_source = self
-            .rbc_session_roster_source(key)
-            .unwrap_or(RbcRosterSource::Derived);
         if topology_peers.is_empty() {
             return stash_deliver(deliver, "commit roster missing");
         }

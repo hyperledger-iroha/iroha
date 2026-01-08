@@ -23,9 +23,7 @@ use iroha_data_model::{
         BlockHeader,
         consensus::{LaneBlockCommitment, SumeragiMembershipStatus, ValidatorIndex},
     },
-    consensus::{
-        Qc, ConsensusKeyRecord, ValidatorElectionOutcome, ValidatorSetCheckpoint,
-    },
+    consensus::{ConsensusKeyRecord, Qc, ValidatorElectionOutcome, ValidatorSetCheckpoint},
     isi::settlement::{SettlementAtomicity, SettlementExecutionOrder},
     nexus::{LaneId, LaneRelayEnvelope, LaneRelayError},
     peer::PeerId,
@@ -2940,8 +2938,7 @@ fn da_gate_snapshot() -> DaGateSnapshot {
 
 fn block_sync_roster_snapshot() -> BlockSyncRosterSnapshot {
     BlockSyncRosterSnapshot {
-        commit_qc_hint_total: BLOCK_SYNC_ROSTER_COMMIT_CERT_HINT_TOTAL
-            .load(Ordering::Relaxed),
+        commit_qc_hint_total: BLOCK_SYNC_ROSTER_COMMIT_CERT_HINT_TOTAL.load(Ordering::Relaxed),
         checkpoint_hint_total: BLOCK_SYNC_ROSTER_CHECKPOINT_HINT_TOTAL.load(Ordering::Relaxed),
         commit_qc_history_total: BLOCK_SYNC_ROSTER_COMMIT_CERT_HISTORY_TOTAL
             .load(Ordering::Relaxed),
@@ -5404,8 +5401,8 @@ mod tests {
             consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         },
         consensus::{
-            Qc, ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole,
-            ConsensusKeyStatus, ValidatorSetCheckpoint,
+            ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus, Qc,
+            ValidatorSetCheckpoint,
         },
         name::Name,
         nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneStorageProfile, LaneVisibility},
@@ -5420,7 +5417,7 @@ mod tests {
         ManifestGateKind, PrecommitSignerRecord, WorkerLoopStage, WorkerQueueKind,
     };
     use crate::governance::manifest::{GovernanceHooks, GovernanceRules, RuntimeUpgradeHook};
-    use crate::sumeragi::consensus::{QcAggregate, PERMISSIONED_TAG, Phase};
+    use crate::sumeragi::consensus::{PERMISSIONED_TAG, Phase, QcAggregate};
 
     #[test]
     fn locked_qc_updates_monotonically() {

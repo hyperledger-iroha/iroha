@@ -91,11 +91,13 @@ LaneConfigEntry {
 ## Storage Budgets
 
 - `nexus.storage.max_disk_usage_bytes` defines the total on-disk budget that Nexus nodes should consume across Kura, cold WSV snapshots, SoraFS storage, and streaming spools (SoraNet/SoraVPN).
-- `nexus.storage.max_wsv_memory_bytes` caps the hot WSV tier by propagating a serialized-payload byte budget into `tiered_state.hot_retained_bytes`; grace retention may temporarily exceed the budget, but the overflow is observable via telemetry.
+- `nexus.storage.max_wsv_memory_bytes` caps the hot WSV tier by propagating a serialized-payload byte budget into `tiered_state.hot_retained_bytes`; grace retention may temporarily exceed the budget, but the overflow is observable via telemetry (`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`).
 - `nexus.storage.disk_budget_weights` splits the disk budget across components using basis points (must sum to 10,000). The derived caps are applied to `kura.max_disk_usage_bytes`, `tiered_state.max_cold_bytes`, `sorafs.storage.max_capacity_bytes`, and `streaming.soranet.provision_spool_max_bytes`.
 - Kura's storage budget enforcement sums block-store bytes across active + retired lane segments and includes queued blocks not yet persisted to avoid overshoot during write lag.
 - SoraVPN spool budgets are currently folded into the SoraNet provision spool cap until dedicated VPN-local storage is implemented.
 - Per-component limits still apply: when a component has an explicit non-zero cap, the smaller of the explicit cap and the derived Nexus budget is enforced.
+- Budget telemetry uses `storage_budget_bytes_used{component=...}` and `storage_budget_bytes_limit{component=...}` to report usage/caps for `kura`, `wsv_hot`, `wsv_cold`, and `soranet_spool`; `storage_budget_exceeded_total{component=...}` increments when enforcement rejects new data and logs emit a warning for the operator.
+- Kura reports the same accounting used during admission (on-disk bytes plus queued blocks, including merge-ledger entry payloads when present), so the budget gauges reflect effective pressure rather than just persisted bytes.
 
 ## Routing & APIs
 

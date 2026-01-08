@@ -10151,7 +10151,9 @@ where
                 self.idx += 1;
             }
         }
-        if let Some(remaining) = self.values_remaining && remaining != 0 {
+        if let Some(remaining) = self.values_remaining
+            && remaining != 0
+        {
             return Err(Error::LengthMismatch);
         }
         if self.payload_remaining != 0 {
@@ -10200,7 +10202,9 @@ where
             let key = self.keys.as_mut().unwrap()[self.idx].take().unwrap();
             self.idx += 1;
             if self.idx == self.entries {
-                if let Some(remaining) = self.values_remaining && remaining != 0 {
+                if let Some(remaining) = self.values_remaining
+                    && remaining != 0
+                {
                     return Some(Err(Error::LengthMismatch));
                 }
                 if self.payload_remaining != 0 {

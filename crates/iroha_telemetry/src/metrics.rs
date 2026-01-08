@@ -5433,12 +5433,8 @@ fn build_sumeragi_status(metrics: &Metrics) -> SumeragiConsensusStatus {
         commit_qc_height: metrics.sumeragi_commit_qc_height.get(),
         commit_qc_view: metrics.sumeragi_commit_qc_view.get(),
         commit_qc_epoch: metrics.sumeragi_commit_qc_epoch.get(),
-        commit_qc_signatures_total: metrics
-            .sumeragi_commit_qc_signatures_total
-            .get(),
-        commit_qc_validator_set_len: metrics
-            .sumeragi_commit_qc_validator_set_len
-            .get(),
+        commit_qc_signatures_total: metrics.sumeragi_commit_qc_signatures_total.get(),
+        commit_qc_validator_set_len: metrics.sumeragi_commit_qc_validator_set_len.get(),
         gossip_fallback_total: metrics.sumeragi_gossip_fallback_total.get(),
         block_created_dropped_by_lock_total: metrics
             .sumeragi_block_created_dropped_by_lock_total
@@ -5929,6 +5925,8 @@ pub struct Metrics {
     pub sumeragi_epoch_reveal_deadline_offset: GenericGauge<AtomicU64>,
     /// Tiered state: entries retained in the hot tier after the latest snapshot.
     pub state_tiered_hot_entries: GenericGauge<AtomicU64>,
+    /// Tiered state: bytes retained in the hot tier after the latest snapshot.
+    pub state_tiered_hot_bytes: GenericGauge<AtomicU64>,
     /// Tiered state: entries spilled to the cold tier after the latest snapshot.
     pub state_tiered_cold_entries: GenericGauge<AtomicU64>,
     /// Tiered state: total bytes written to the cold tier in the latest snapshot.
@@ -5947,6 +5945,12 @@ pub struct Metrics {
     pub state_tiered_hot_grace_overflow_bytes: GenericGauge<AtomicU64>,
     /// Tiered state: last recorded snapshot index.
     pub state_tiered_last_snapshot_index: GenericGauge<AtomicU64>,
+    /// Storage budget: bytes used per component.
+    pub storage_budget_bytes_used: GenericGaugeVec<AtomicU64>,
+    /// Storage budget: configured cap per component.
+    pub storage_budget_bytes_limit: GenericGaugeVec<AtomicU64>,
+    /// Storage budget: cap exceed events per component.
+    pub storage_budget_exceeded_total: IntCounterVec,
     /// Governance: proposal counts grouped by status
     pub governance_proposals_status: GenericGaugeVec<AtomicU64>,
     /// Governance: latest council members count.
@@ -8010,6 +8014,11 @@ impl Default for Metrics {
             "Entries retained in the tiered-state hot tier after the latest snapshot",
         )
         .expect("Infallible");
+        let state_tiered_hot_bytes = GenericGauge::new(
+            "state_tiered_hot_bytes",
+            "Bytes retained in the tiered-state hot tier after the latest snapshot",
+        )
+        .expect("Infallible");
         let state_tiered_cold_entries = GenericGauge::new(
             "state_tiered_cold_entries",
             "Entries spilled to the tiered-state cold tier after the latest snapshot",
@@ -8053,6 +8062,30 @@ impl Default for Metrics {
         let state_tiered_last_snapshot_index = GenericGauge::new(
             "state_tiered_last_snapshot_index",
             "Latest tiered-state snapshot index recorded by this peer",
+        )
+        .expect("Infallible");
+        let storage_budget_bytes_used = GenericGaugeVec::new(
+            Opts::new(
+                "storage_budget_bytes_used",
+                "Storage budget bytes used per component",
+            ),
+            &["component"],
+        )
+        .expect("Infallible");
+        let storage_budget_bytes_limit = GenericGaugeVec::new(
+            Opts::new(
+                "storage_budget_bytes_limit",
+                "Storage budget limit bytes per component",
+            ),
+            &["component"],
+        )
+        .expect("Infallible");
+        let storage_budget_exceeded_total = IntCounterVec::new(
+            Opts::new(
+                "storage_budget_exceeded_total",
+                "Storage budget exceed events per component",
+            ),
+            &["component"],
         )
         .expect("Infallible");
         let governance_proposals_status = GenericGaugeVec::new(
@@ -12390,6 +12423,7 @@ impl Default for Metrics {
             sumeragi_epoch_commit_deadline_offset,
             sumeragi_epoch_reveal_deadline_offset,
             state_tiered_hot_entries,
+            state_tiered_hot_bytes,
             state_tiered_cold_entries,
             state_tiered_cold_bytes,
             state_tiered_cold_reused_entries,
@@ -12399,6 +12433,9 @@ impl Default for Metrics {
             state_tiered_hot_grace_overflow_keys,
             state_tiered_hot_grace_overflow_bytes,
             state_tiered_last_snapshot_index,
+            storage_budget_bytes_used,
+            storage_budget_bytes_limit,
+            storage_budget_exceeded_total,
             alias_usage_total,
             iso_reference_status,
             iso_reference_age_seconds,
@@ -12863,6 +12900,7 @@ impl Default for Metrics {
             sumeragi_epoch_commit_deadline_offset,
             sumeragi_epoch_reveal_deadline_offset,
             state_tiered_hot_entries,
+            state_tiered_hot_bytes,
             state_tiered_cold_entries,
             state_tiered_cold_bytes,
             state_tiered_cold_reused_entries,
@@ -12872,6 +12910,9 @@ impl Default for Metrics {
             state_tiered_hot_grace_overflow_keys,
             state_tiered_hot_grace_overflow_bytes,
             state_tiered_last_snapshot_index,
+            storage_budget_bytes_used,
+            storage_budget_bytes_limit,
+            storage_budget_exceeded_total,
             governance_proposals_status,
             governance_council_members,
             governance_council_alternates,

@@ -228,10 +228,11 @@ fn decode_scalar(bytes: &[u8]) -> Result<Scalar, BalanceProofError> {
     if bytes.len() != 32 {
         return Err(BalanceProofError::ScalarLength(bytes.len()));
     }
-    let scalar =
-        Scalar::from_canonical_bytes(bytes.try_into().map_err(|_| {
-            BalanceProofError::ScalarLength(bytes.len())
-        })?);
+    let scalar = Scalar::from_canonical_bytes(
+        bytes
+            .try_into()
+            .map_err(|_| BalanceProofError::ScalarLength(bytes.len()))?,
+    );
     Option::from(scalar).ok_or(BalanceProofError::NonCanonicalScalar)
 }
 

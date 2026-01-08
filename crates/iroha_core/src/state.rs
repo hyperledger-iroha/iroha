@@ -38,8 +38,8 @@ use iroha_data_model::{
     },
     confidential::ConfidentialFeatureDigest,
     consensus::{
-        Qc, ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole,
-        ConsensusKeyStatus, ValidatorSetCheckpoint,
+        ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus, Qc,
+        ValidatorSetCheckpoint,
     },
     content::{ContentBundleId, ContentBundleRecord, ContentChunk},
     da::{
@@ -10235,11 +10235,7 @@ impl State {
             return;
         }
         let mut journal = self.commit_roster_journal.write();
-        journal.upsert(
-            commit_qc.clone(),
-            checkpoint.clone(),
-            stake_snapshot,
-        );
+        journal.upsert(commit_qc.clone(), checkpoint.clone(), stake_snapshot);
         if let Err(err) = journal.persist() {
             warn!(
                 ?err,
@@ -12233,8 +12229,7 @@ impl State {
         committee: &[AccountId],
     ) -> Result<(), LaneRelayError> {
         let qc = envelope.qc.as_ref().ok_or(LaneRelayError::MissingQc)?;
-        let public_keys =
-            Self::lane_relay_qc_public_keys(committee, &qc.aggregate.signers_bitmap)?;
+        let public_keys = Self::lane_relay_qc_public_keys(committee, &qc.aggregate.signers_bitmap)?;
         if public_keys.is_empty() {
             return Err(LaneRelayError::AggregateSignatureInvalid);
         }
@@ -14255,11 +14250,29 @@ impl<'state> StateBlock<'state> {
         }
         #[cfg(feature = "telemetry")]
         {
-            if let Some(manifest) = tiered_backend.lock().last_manifest().cloned() {
+            let (manifest, hot_limit, cold_limit, cold_store_bytes) = {
+                let backend = tiered_backend.lock();
+                let manifest = backend.last_manifest().cloned();
+                let hot_limit = backend.hot_retained_bytes();
+                let cold_limit = backend.max_cold_bytes();
+                let cold_store_bytes = match backend.cold_store_bytes() {
+                    Ok(value) => value,
+                    Err(err) => {
+                        warn!(?err, "tiered-state: failed to measure cold store bytes");
+                        None
+                    }
+                };
+                (manifest, hot_limit, cold_limit, cold_store_bytes)
+            };
+            if let Some(manifest) = manifest {
+                let hot_bytes = manifest.hot_entries.iter().fold(0u64, |acc, entry| {
+                    acc.saturating_add(u64::try_from(entry.value_size_bytes).unwrap_or(u64::MAX))
+                });
                 crate::telemetry::record_state_tiered_snapshot(
                     &state_ref.telemetry,
                     manifest.snapshot_index,
                     manifest.hot_entries.len(),
+                    hot_bytes,
                     manifest.cold_entries.len(),
                     manifest.cold_bytes_total,
                     manifest.hot_promotions,
@@ -14269,6 +14282,20 @@ impl<'state> StateBlock<'state> {
                     manifest.cold_reused_entries,
                     manifest.cold_reused_bytes,
                 );
+                state_ref
+                    .telemetry
+                    .record_storage_budget_usage("wsv_hot", hot_bytes, hot_limit);
+                if hot_limit > 0 && manifest.hot_grace_overflow_bytes > 0 {
+                    state_ref.telemetry.inc_storage_budget_exceeded("wsv_hot");
+                }
+                if let Some(cold_used) = cold_store_bytes {
+                    state_ref
+                        .telemetry
+                        .record_storage_budget_usage("wsv_cold", cold_used, cold_limit);
+                    if cold_limit > 0 && cold_used > cold_limit {
+                        state_ref.telemetry.inc_storage_budget_exceeded("wsv_cold");
+                    }
+                }
             }
         }
         Ok(())
@@ -25589,6 +25616,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut state_block = state.block(header);
 
+        let _guard = crate::sumeragi::witness::exec_witness_guard();
         crate::sumeragi::witness::start_block();
         let asset_id = AssetId::from_str("rose#wonderland#alice@wonderland").unwrap();
         crate::sumeragi::witness::record_write_asset(

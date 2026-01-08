@@ -1052,6 +1052,10 @@ impl Iroha {
                 return Err(Report::new(error).change_context(StartError::InitKura));
             }
         };
+        #[cfg(feature = "telemetry")]
+        {
+            kura.attach_telemetry(state.telemetry.clone());
+        }
         // Thread chain id into state for VRF prehash binding.
         state.chain_id = config.common.chain.clone();
 
@@ -1573,11 +1577,11 @@ impl Iroha {
         streaming.apply_crypto_config(&config.crypto);
         streaming.set_soranet_config(&config.streaming.soranet);
         streaming.apply_sync_config(&config.streaming.sync);
-        configure_soranet_transport(&mut streaming, &config.streaming.soranet)?;
         #[cfg(feature = "telemetry")]
         if let Some(ref telemetry_handle) = streaming_telemetry {
             streaming = streaming.with_telemetry(telemetry_handle.clone());
         }
+        configure_soranet_transport(&mut streaming, &config.streaming.soranet)?;
         streaming.set_snapshot_path(snapshot_file.clone());
 
         let snapshot_encryption_key =
@@ -2156,8 +2160,12 @@ fn configure_soranet_transport(
             ))
     })?;
 
-    let provisioner =
+    let mut provisioner =
         FilesystemSoranetProvisioner::new(spool_dir, soranet.provision_spool_max_bytes.get());
+    #[cfg(feature = "telemetry")]
+    if let Some(telemetry) = streaming.telemetry_handle() {
+        provisioner = provisioner.with_telemetry(telemetry);
+    }
     streaming.set_soranet_transport(Some(Arc::new(provisioner)));
     Ok(())
 }
