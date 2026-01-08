@@ -166,6 +166,7 @@ cargo run -p iroha_cli --features sm -- \
      `iroha_crypto::Algorithm` (y compris les variantes GOST TC26 lorsque le
      build inclut le feature correspondant).
    - Sur le dataspace public de Sora Nexus, `--consensus-mode npos` est obligatoire et les basculements planifiés ne sont pas pris en charge ; les autres dataspaces Iroha3 peuvent utiliser `permissioned` ou `npos`. Sur Iroha2, le mode par défaut est `permissioned`.
+   - Lorsque `npos` est sélectionné, Kagami sème la charge utile `sumeragi_npos_parameters` qui pilote la temporisation du pacemaker NPoS, le fan-out des collecteurs, la politique d’élection et les fenêtres de reconfiguration ; la normalisation/signature la transforme en instructions `SetParameter` dans le bloc signé.
 
 2. Valider pendant l’édition :
 
@@ -216,7 +217,7 @@ séquence de manière déterministe :
   Transaction (nombre maximal d’instructions, taille de bytecode), pour
   l’exécuteur et les contrats intelligents (carburant, mémoire, profondeur)
   ainsi que pour les paramètres personnalisés. Kagami sème `Sumeragi::NextMode`
-  et la payload `sumeragi_npos_parameters` dans le bloc `parameters`, et le
+  et la payload `sumeragi_npos_parameters` (temporisation NPoS, élection, reconfiguration) dans le bloc `parameters`, et le
   bloc signé inclut les instructions `SetParameter` générées afin qu’au
   démarrage les réglages de consensus soient appliqués à partir de l’état
   on‑chain.

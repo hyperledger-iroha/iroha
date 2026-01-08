@@ -185,8 +185,7 @@ pub enum SoraProfile {
 impl SoraProfile {
     fn consensus_policy(self) -> ConsensusPolicy {
         match self {
-            SoraProfile::Dataspace => ConsensusPolicy::Any,
-            SoraProfile::Nexus => ConsensusPolicy::PublicDataspace,
+            SoraProfile::Dataspace | SoraProfile::Nexus => ConsensusPolicy::PublicDataspace,
         }
     }
 }
@@ -329,6 +328,7 @@ pub struct Args {
     redundant_send_r: Option<u8>,
     /// Consensus mode to emit in genesis/configs.
     /// Defaults to `npos` on Iroha3 and `permissioned` on Iroha2.
+    /// Sora profile localnets require `npos` because the global merge ledger is NPoS.
     #[arg(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
     /// Optional staged consensus mode to activate at `mode_activation_height`.
@@ -466,6 +466,11 @@ fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
             ));
         }
     }
+    if opts.sora_profile.is_some() && opts.consensus_mode != SumeragiConsensusMode::Npos {
+        return Err(eyre!(
+            "`--sora-profile` localnets require `--consensus-mode npos` because the global merge ledger is NPoS; use permissioned mode without `--sora-profile`"
+        ));
+    }
     let consensus_policy = opts
         .sora_profile
         .map_or(ConsensusPolicy::Any, SoraProfile::consensus_policy);
@@ -508,6 +513,8 @@ fn generate_localnet_with_line<T: Write>(
 
     tui::status("Generating genesis manifest");
     let da_rbc_enabled = build_line.is_iroha3();
+    // Nexus is only enabled for Sora profile localnets; standalone networks keep it off.
+    let nexus_enabled = build_line.is_iroha3() && opts.sora_profile.is_some();
     let (block_time_ms, commit_time_ms) =
         resolve_localnet_pipeline_times(opts.block_time_ms, opts.commit_time_ms);
     let redundant_send_r = resolve_localnet_redundant_send_r(opts.redundant_send_r, da_rbc_enabled);
@@ -570,6 +577,7 @@ fn generate_localnet_with_line<T: Write>(
             &kura_dir,
             (&hosts.bind, &hosts.public),
             opts.consensus_mode,
+            nexus_enabled,
             da_rbc_enabled,
             redundant_send_r,
             commit_inflight_timeout_ms,
@@ -730,6 +738,7 @@ fn render_peer_config(
     kura_store_dir: &Path,
     hosts: (&CanonicalHost, &CanonicalHost),
     consensus_mode: SumeragiConsensusMode,
+    nexus_enabled: bool,
     da_rbc_enabled: bool,
     redundant_send_r: Option<u8>,
     commit_inflight_timeout_ms: u64,
@@ -813,6 +822,12 @@ fn render_peer_config(
             i64::try_from(commit_inflight_timeout_ms).expect("commit_inflight_timeout_ms fits i64"),
         ),
     );
+
+    if !nexus_enabled {
+        let mut nexus = Table::new();
+        nexus.insert("enabled".into(), Value::Boolean(false));
+        root.insert("nexus".into(), Value::Table(nexus));
+    }
     let msg_channel_cap_votes = i64::try_from(LOCALNET_MSG_CHANNEL_CAP_VOTES)
         .expect("LOCALNET_MSG_CHANNEL_CAP_VOTES fits i64");
     let msg_channel_cap_block_payload = i64::try_from(LOCALNET_MSG_CHANNEL_CAP_BLOCK_PAYLOAD)
@@ -2355,7 +2370,35 @@ mod tests {
         };
         let err = validate_localnet_options(&opts).expect_err("sora nexus should require NPoS");
         assert!(
-            err.to_string().contains("public dataspace requires"),
+            err.to_string().contains("sora-profile"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_localnet_options_rejects_permissioned_on_sora_dataspace() {
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: Some(SoraProfile::Dataspace),
+            peers: NonZeroU16::new(4).unwrap(),
+            seed: None,
+            bind_host: DEFAULT_BIND_HOST.to_string(),
+            public_host: DEFAULT_PUBLIC_HOST.to_string(),
+            base_api_port: 28080,
+            base_p2p_port: 28337,
+            out_dir: PathBuf::from("unused"),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+        let err = validate_localnet_options(&opts).expect_err("sora profile should require NPoS");
+        assert!(
+            err.to_string().contains("sora-profile"),
             "unexpected error: {err}"
         );
     }
@@ -2382,6 +2425,92 @@ mod tests {
             mode_activation_height: None,
         };
         validate_localnet_options(&opts).expect("permissioned should be allowed on Iroha3");
+    }
+
+    #[test]
+    fn permissioned_iroha3_disables_nexus_in_peer_config() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            peers: NonZeroU16::new(1).unwrap(),
+            seed: Some("permissioned-iroha3".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_string(),
+            public_host: DEFAULT_PUBLIC_HOST.to_string(),
+            base_api_port: 28080,
+            base_p2p_port: 28337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
+            .expect("generate permissioned iroha3 localnet");
+
+        let peer_cfg: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("peer0.toml"))
+                .expect("read generated peer config"),
+        )
+        .expect("parse peer config");
+        let nexus_enabled = peer_cfg
+            .get("nexus")
+            .and_then(toml::Value::as_table)
+            .and_then(|nexus| nexus.get("enabled"))
+            .and_then(toml::Value::as_bool);
+        assert_eq!(
+            nexus_enabled,
+            Some(false),
+            "permissioned iroha3 localnet should disable nexus"
+        );
+    }
+
+    #[test]
+    fn npos_iroha3_without_sora_profile_disables_nexus_in_peer_config() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            peers: NonZeroU16::new(1).unwrap(),
+            seed: Some("npos-iroha3".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_string(),
+            public_host: DEFAULT_PUBLIC_HOST.to_string(),
+            base_api_port: 28080,
+            base_p2p_port: 28337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
+            .expect("generate npos iroha3 localnet");
+
+        let peer_cfg: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("peer0.toml"))
+                .expect("read generated peer config"),
+        )
+        .expect("parse peer config");
+        let nexus_enabled = peer_cfg
+            .get("nexus")
+            .and_then(toml::Value::as_table)
+            .and_then(|nexus| nexus.get("enabled"))
+            .and_then(toml::Value::as_bool);
+        assert_eq!(
+            nexus_enabled,
+            Some(false),
+            "npos iroha3 localnet should disable nexus without a sora profile"
+        );
     }
 
     #[test]

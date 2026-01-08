@@ -29,8 +29,8 @@ use iroha_data_model::{
 pub struct Topology(
     /// Ordered set of peers
     Vec<PeerId>,
-    /// Current view change index. Reset to 0 after every block commit
-    usize,
+    /// Current view change index. Reset to 0 after every block commit.
+    u64,
 );
 
 /// Topology with at least one peer
@@ -309,13 +309,17 @@ impl Topology {
         self.0.extend(new_peers);
     }
 
-    /// Rotate peers n times
-    pub fn nth_rotation(&mut self, n: usize) -> usize {
+    /// Rotate peers n times.
+    pub fn nth_rotation(&mut self, n: u64) -> u64 {
         assert!(n >= self.1, "View change index must monotonically increase");
 
         let rotations = n - self.1;
-        if let Some(rem) = rotations.checked_rem(self.0.len()) {
-            self.0.rotate_left(rem);
+        let len = self.0.len() as u64;
+        if len > 0 {
+            let rem = usize::try_from(rotations % len).unwrap_or(0);
+            if rem > 0 {
+                self.0.rotate_left(rem);
+            }
         }
 
         self.1 = n;
@@ -323,7 +327,7 @@ impl Topology {
     }
 
     /// Return current view change index of topology
-    pub fn view_change_index(&self) -> usize {
+    pub fn view_change_index(&self) -> u64 {
         self.1
     }
 
@@ -1388,7 +1392,7 @@ mod tests {
     fn no_leader_in_collectors_n4() {
         let peers = test_peers(4);
         let mut topo = Topology::new(peers);
-        for r in 0..4 {
+        for r in 0_u64..4 {
             topo.nth_rotation(r);
             for k in 1..=4 {
                 let idxs = topo.collector_indices_k(k);
@@ -1404,7 +1408,7 @@ mod tests {
     fn no_leader_in_collectors_n5() {
         let peers = test_peers(5);
         let mut topo = Topology::new(peers);
-        for r in 0..5 {
+        for r in 0_u64..5 {
             topo.nth_rotation(r);
             for k in 1..=5 {
                 let idxs = topo.collector_indices_k(k);
@@ -1420,7 +1424,7 @@ mod tests {
     fn no_leader_in_collectors_n7() {
         let peers = test_peers(7);
         let mut topo = Topology::new(peers);
-        for r in 0..7 {
+        for r in 0_u64..7 {
             topo.nth_rotation(r);
             for k in 1..=7 {
                 let idxs = topo.collector_indices_k(k);
@@ -1430,6 +1434,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn nth_rotation_handles_large_view_indices() {
+        let peers = test_peers(4);
+        let mut topo = Topology::new(peers.clone());
+        let large_view = u64::MAX - 2;
+        topo.nth_rotation(large_view);
+
+        let mut expected = Topology::new(peers);
+        let rotations = large_view % expected.as_ref().len() as u64;
+        expected.nth_rotation(rotations);
+
+        assert_eq!(topo.as_ref(), expected.as_ref());
+        assert_eq!(topo.view_change_index(), large_view);
     }
 
     #[test]

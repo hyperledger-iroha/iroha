@@ -86,18 +86,26 @@ pub struct NposGenesisParams {
     pub k_aggregators: u16,
     /// Redundant send fanout (distinct aggregators contacted over time).
     pub redundant_send_r: u8,
+    /// Deterministic epoch seed for PRF-based leader and collector selection.
+    pub epoch_seed: [u8; 32],
     /// VRF commit window length in blocks.
     pub vrf_commit_window_blocks: u64,
     /// VRF reveal window length in blocks.
     pub vrf_reveal_window_blocks: u64,
+    /// Maximum validators to elect for the next epoch (0 = unlimited).
+    pub max_validators: u32,
     /// Minimum self-bond required for validator eligibility.
     pub min_self_bond: u64,
+    /// Minimum nomination bond required for delegators.
+    pub min_nomination_bond: u64,
     /// Maximum nominator concentration percentage.
     pub max_nominator_concentration_pct: u8,
     /// Seat allocation variance band percentage.
     pub seat_band_pct: u8,
     /// Maximum correlation percentage across validator entities.
     pub max_entity_correlation_pct: u8,
+    /// Finality margin in blocks before activating a newly elected set.
+    pub finality_margin_blocks: u64,
     /// Evidence retention horizon in blocks.
     pub evidence_horizon_blocks: u64,
     /// Activation lag in blocks for newly scheduled validator sets.

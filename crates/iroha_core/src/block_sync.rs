@@ -516,14 +516,7 @@ fn align_topology_for_block_signatures(
     let view = u64::from(block.header().view_change_index());
     match mode_tag {
         PERMISSIONED_TAG => {
-            if let Ok(view) = usize::try_from(view) {
-                rotated.nth_rotation(view);
-            } else {
-                warn!(
-                    view,
-                    "skipping topology rotation for block signatures: view index exceeds usize"
-                );
-            }
+            rotated.nth_rotation(view);
         }
         NPOS_TAG => {
             if let Some(seed) = prf_seed {
@@ -3295,9 +3288,7 @@ pub mod message {
             for seed in [[0x5A; 32], [0xA5; 32], [0x3C; 32]] {
                 for view in 0_u64..=2 {
                     let mut permissioned = topology.clone();
-                    if let Ok(view_usize) = usize::try_from(view) {
-                        permissioned.nth_rotation(view_usize);
-                    }
+                    permissioned.nth_rotation(view);
                     let mut npos = topology.clone();
                     let leader = npos.leader_index_prf(seed, height, view);
                     npos.rotate_preserve_view_to_front(leader);
