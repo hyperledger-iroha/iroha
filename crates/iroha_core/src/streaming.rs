@@ -374,11 +374,7 @@ impl SoranetRouteProvisionTx for FilesystemSoranetProvisioner {
             let used = self.spool_usage_bytes()?;
             #[cfg(feature = "telemetry")]
             if let Some(telemetry) = &self.telemetry {
-                telemetry.record_storage_budget_usage(
-                    "soranet_spool",
-                    used,
-                    self.max_spool_bytes,
-                );
+                telemetry.record_storage_budget_usage("soranet_spool", used, self.max_spool_bytes);
             }
             let required = used.saturating_add(bytes.len() as u64);
             if required > self.max_spool_bytes {

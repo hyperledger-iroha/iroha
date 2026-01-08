@@ -619,12 +619,7 @@ impl Actor {
                     #[cfg(feature = "telemetry")]
                     let dedupe_before = intents.len();
                     intents.retain(|intent| {
-                        let key = (
-                            intent.lane_id.as_u32(),
-                            intent.epoch,
-                            intent.sequence,
-                            intent.storage_ticket,
-                        );
+                        let key = (intent.lane_id.as_u32(), intent.epoch, intent.sequence);
                         !self.subsystems.da_rbc.da.sealed_pin_intents.contains(&key)
                     });
                     #[cfg(feature = "telemetry")]
@@ -640,12 +635,7 @@ impl Actor {
                     if !intents.is_empty() {
                         let sanitized_bundle = DaPinIntentBundle::new(intents);
                         for intent in &sanitized_bundle.intents {
-                            let key = (
-                                intent.lane_id.as_u32(),
-                                intent.epoch,
-                                intent.sequence,
-                                intent.storage_ticket,
-                            );
+                            let key = (intent.lane_id.as_u32(), intent.epoch, intent.sequence);
                             self.subsystems.da_rbc.da.sealed_pin_intents.insert(key);
                         }
                         #[cfg(feature = "telemetry")]

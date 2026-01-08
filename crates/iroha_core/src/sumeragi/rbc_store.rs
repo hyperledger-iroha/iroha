@@ -13,6 +13,7 @@ use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{block::BlockHeader, peer::PeerId};
 use iroha_logger::prelude::*;
 use norito::codec::{Decode, Encode};
+use norito::{decode_from_bytes, to_bytes};
 use sha2::{Digest as _, Sha256};
 
 use crate::panic_hook;
@@ -284,7 +285,8 @@ impl ChunkStore {
     fn write_session(&self, persisted: &PersistedSession) -> io::Result<()> {
         let path = Self::make_session_path(&self.dir, &persisted.key());
         let tmp = temp_session_path(&path);
-        let encoded = <PersistedSession as Encode>::encode(persisted);
+        let encoded =
+            to_bytes(persisted).map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
         {
             let mut file = fs::OpenOptions::new()
                 .create(true)
@@ -536,10 +538,9 @@ impl ChunkStore {
     }
 
     fn decode_persisted_session_guarded(data: &[u8], path: &Path) -> Option<PersistedSession> {
-        let mut cursor = data;
         let result = panic_hook::with_hook_suppressed(|| {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                PersistedSession::decode(&mut cursor)
+                decode_from_bytes::<PersistedSession>(data)
             }))
         });
         match result {
@@ -1016,7 +1017,7 @@ mod tests {
         let path = std::env::var("RBC_SESSION_PATH").expect("set RBC_SESSION_PATH");
         let data = fs::read(&path).expect("read session file");
         let persisted =
-            PersistedSession::decode(&mut data.as_slice()).expect("decode persisted session");
+            decode_from_bytes::<PersistedSession>(&data).expect("decode persisted session");
         match validate_chunks(&persisted) {
             Ok(()) => println!("validate_chunks: ok"),
             Err(reason) => println!("validate_chunks failed: {reason}"),
@@ -1099,7 +1100,7 @@ mod tests {
             last_updated_ms: 0,
             session_roster: Vec::new(),
         };
-        let mut encoded = <PersistedSession as Encode>::encode(&persisted);
+        let mut encoded = to_bytes(&persisted).expect("encode persisted session");
         assert!(encoded.len() > 8);
         encoded.truncate(encoded.len() - 8);
 
@@ -1129,7 +1130,7 @@ mod tests {
         let chain_hash = test_chain_hash();
         let manifest = test_manifest();
         let persisted = sample_persisted_session(key, chain_hash, manifest.clone());
-        let encoded = <PersistedSession as Encode>::encode(&persisted);
+        let encoded = to_bytes(&persisted).expect("encode persisted session");
 
         let path = ChunkStore::make_session_path(dir.path(), &key);
         let tmp_path = temp_session_path(&path);
@@ -1170,7 +1171,7 @@ mod tests {
             .as_millis()
             .saturating_add(120_000);
         persisted.last_updated_ms = u64::try_from(future_ms).unwrap_or(u64::MAX);
-        let encoded = <PersistedSession as Encode>::encode(&persisted);
+        let encoded = to_bytes(&persisted).expect("encode persisted session");
 
         let path = ChunkStore::make_session_path(dir.path(), &key);
         fs::write(&path, &encoded).expect("write persisted session");
@@ -1192,7 +1193,7 @@ mod tests {
         let chain_hash = test_chain_hash();
         let manifest = test_manifest();
         let persisted = sample_persisted_session(key, chain_hash, manifest.clone());
-        let encoded = <PersistedSession as Encode>::encode(&persisted);
+        let encoded = to_bytes(&persisted).expect("encode persisted session");
 
         let path = ChunkStore::make_session_path(dir.path(), &key);
         let tmp_path = temp_session_path(&path);
@@ -1248,7 +1249,7 @@ mod tests {
         let chain_hash = test_chain_hash();
         let manifest = test_manifest();
         let persisted = sample_persisted_session(key, chain_hash, manifest.clone());
-        let encoded = <PersistedSession as Encode>::encode(&persisted);
+        let encoded = to_bytes(&persisted).expect("encode persisted session");
         let path = ChunkStore::make_session_path(dir.path(), &key);
         let tmp_path = temp_session_path(&path);
         fs::write(&path, &encoded).expect("write main session");
@@ -1269,7 +1270,7 @@ mod tests {
         let chain_hash = test_chain_hash();
         let manifest = test_manifest();
         let persisted = sample_persisted_session(key, chain_hash, manifest.clone());
-        let encoded = <PersistedSession as Encode>::encode(&persisted);
+        let encoded = to_bytes(&persisted).expect("encode persisted session");
 
         let path = ChunkStore::make_session_path(dir.path(), &key);
         let tmp_path = temp_session_path(&path);
@@ -1455,7 +1456,7 @@ mod tests {
         persisted.expected_chunk_root = Some(Hash::prehashed([0xEE; 32]));
 
         let path = ChunkStore::make_session_path(dir.path(), &key);
-        let encoded = <PersistedSession as Encode>::encode(&persisted);
+        let encoded = to_bytes(&persisted).expect("encode persisted session");
         fs::write(&path, &encoded).expect("write persisted session");
 
         let load = store

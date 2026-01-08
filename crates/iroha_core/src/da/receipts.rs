@@ -13,7 +13,7 @@ use std::{
 use blake3::Hasher as Blake3Hasher;
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_data_model::{
-    da::{commitment::DaCommitmentRecord, ingest::DaIngestReceipt},
+    da::{commitment::DaCommitmentRecord, ingest::DaIngestReceipt, types::StorageTicketId},
     nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
@@ -29,6 +29,8 @@ struct StoredDaReceipt {
     sequence: u64,
     receipt: DaIngestReceipt,
 }
+
+const STORED_RECEIPT_VERSION: u16 = 1;
 
 /// Receipt entry captured from the spool.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,6 +75,14 @@ pub enum DaReceiptSpoolError {
         #[source]
         source: norito::core::Error,
     },
+    /// Receipt version is not supported.
+    #[error("unsupported DA receipt version {version} at {path}")]
+    UnsupportedVersion {
+        /// Path that failed.
+        path: PathBuf,
+        /// Unsupported version encountered.
+        version: u16,
+    },
 }
 
 /// Errors returned when the receipt queue violates ordering or bundle mapping.
@@ -97,6 +107,20 @@ pub enum DaReceiptQueueError {
         expected: ManifestDigest,
         /// Manifest hash observed in the new receipt.
         observed: ManifestDigest,
+    },
+    /// Receipt reused a sequence number with a different storage ticket.
+    #[error("receipt storage ticket conflict for lane {lane:?} epoch {epoch} sequence {sequence}")]
+    StorageTicketConflict {
+        /// Lane identifier that conflicted.
+        lane: LaneId,
+        /// Epoch that conflicted.
+        epoch: u64,
+        /// Sequence that conflicted.
+        sequence: u64,
+        /// Storage ticket already recorded.
+        expected: StorageTicketId,
+        /// Storage ticket observed in the new receipt.
+        observed: StorageTicketId,
     },
     /// Receipt sequence regressed relative to the cursor.
     #[error(
@@ -153,6 +177,22 @@ pub enum DaReceiptQueueError {
         commitment: ManifestDigest,
         /// Manifest hash referenced by the receipt.
         receipt: ManifestDigest,
+    },
+    /// Commitment storage ticket did not match the receipt ticket.
+    #[error(
+        "commitment storage ticket {commitment:?} mismatches receipt ticket {receipt:?} for lane {lane:?} epoch {epoch} sequence {sequence}"
+    )]
+    CommitmentTicketMismatch {
+        /// Lane identifier that failed validation.
+        lane: LaneId,
+        /// Epoch that failed validation.
+        epoch: u64,
+        /// Sequence number that failed validation.
+        sequence: u64,
+        /// Storage ticket recorded in the commitment.
+        commitment: StorageTicketId,
+        /// Storage ticket referenced by the receipt.
+        receipt: StorageTicketId,
     },
 }
 
@@ -362,6 +402,12 @@ fn decode_receipt(data: &[u8], path: &Path) -> Result<DaReceiptEntry, DaReceiptS
             source,
         }
     })?;
+    if stored.version != STORED_RECEIPT_VERSION {
+        return Err(DaReceiptSpoolError::UnsupportedVersion {
+            path: path.to_path_buf(),
+            version: stored.version,
+        });
+    }
     let StoredDaReceipt {
         sequence, receipt, ..
     } = stored;
@@ -409,7 +455,6 @@ pub fn plan_committable_receipts(
             lane_id: entry.lane_epoch.lane_id,
             epoch: entry.lane_epoch.epoch,
             sequence: entry.sequence,
-            storage_ticket: entry.receipt.storage_ticket,
         };
         if sealed.contains(&key) {
             continue;
@@ -424,6 +469,15 @@ pub fn plan_committable_receipts(
                     sequence: entry.sequence,
                     expected: existing.manifest_hash,
                     observed: entry.manifest_hash,
+                });
+            }
+            if existing.receipt.storage_ticket != entry.receipt.storage_ticket {
+                return Err(DaReceiptQueueError::StorageTicketConflict {
+                    lane: entry.lane_epoch.lane_id,
+                    epoch: entry.lane_epoch.epoch,
+                    sequence: entry.sequence,
+                    expected: existing.receipt.storage_ticket,
+                    observed: entry.receipt.storage_ticket,
                 });
             }
             continue;
@@ -520,6 +574,15 @@ pub fn align_commitments_for_receipts(
                 receipt: receipt.manifest_hash,
             });
         }
+        if record.storage_ticket != receipt.receipt.storage_ticket {
+            return Err(DaReceiptQueueError::CommitmentTicketMismatch {
+                lane: receipt.lane_epoch.lane_id,
+                epoch: receipt.lane_epoch.epoch,
+                sequence: receipt.sequence,
+                commitment: record.storage_ticket,
+                receipt: receipt.receipt.storage_ticket,
+            });
+        }
         aligned.push((*record).clone());
     }
 
@@ -549,6 +612,15 @@ pub fn prune_spool(spool_dir: &Path, cursors: &BTreeMap<LaneEpoch, u64>) {
         let Ok(stored) = norito::decode_from_bytes::<StoredDaReceipt>(&data) else {
             continue;
         };
+        if stored.version != STORED_RECEIPT_VERSION {
+            iroha_logger::debug!(
+                path = %path.display(),
+                version = stored.version,
+                expected = STORED_RECEIPT_VERSION,
+                "skipping DA receipt with unsupported version during prune"
+            );
+            continue;
+        }
         let lane_epoch = LaneEpoch::new(stored.receipt.lane_id, stored.receipt.epoch);
         if let Some(highest) = cursors.get(&lane_epoch) {
             if stored.sequence <= *highest {
@@ -575,7 +647,10 @@ pub fn receipt_fingerprint(receipt: &DaIngestReceipt) -> ReplayFingerprint {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, num::NonZeroU32};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        num::NonZeroU32,
+    };
 
     use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
     use iroha_crypto::{Hash, Signature};
@@ -652,7 +727,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
-            version: 1,
+            version: STORED_RECEIPT_VERSION,
             sequence: 3,
             receipt: receipt.clone(),
         };
@@ -675,7 +750,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
-            version: 1,
+            version: STORED_RECEIPT_VERSION,
             sequence: 3,
             receipt: receipt.clone(),
         };
@@ -692,6 +767,25 @@ mod tests {
         let entries = load_receipt_entries(dir.path()).expect("load entries");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].receipt, receipt);
+    }
+
+    #[test]
+    fn load_receipt_entries_skips_unsupported_versions() {
+        let dir = tempdir().expect("tempdir");
+        let receipt = sample_receipt(1, 2, 3);
+        let stored = StoredDaReceipt {
+            version: STORED_RECEIPT_VERSION + 1,
+            sequence: 3,
+            receipt,
+        };
+        let bytes = to_bytes(&stored).expect("encode");
+        let path = dir
+            .path()
+            .join("da-receipt-00000001-0000000000000002-0000000000000003-bad.norito");
+        std::fs::write(&path, bytes).expect("write");
+
+        let entries = load_receipt_entries(dir.path()).expect("load entries");
+        assert!(entries.is_empty());
     }
 
     #[test]
@@ -748,6 +842,33 @@ mod tests {
     }
 
     #[test]
+    fn plan_committable_receipts_skips_sealed_sequence_with_ticket_mismatch() {
+        let lane = LaneId::new(5);
+        let receipt = sample_receipt(lane.as_u32(), 2, 1);
+        let mut sealed_record = sample_record(&receipt, 1);
+        sealed_record.storage_ticket = StorageTicketId::new([0x99; 32]);
+        let mut sealed = BTreeSet::new();
+        sealed
+            .insert(iroha_data_model::da::commitment::DaCommitmentKey::from_record(&sealed_record));
+
+        let lane_config = lane_config_for(lane);
+        let planned = plan_committable_receipts(
+            &lane_config,
+            &BTreeMap::new(),
+            &sealed,
+            vec![DaReceiptEntry {
+                lane_epoch: LaneEpoch::new(lane, 2),
+                sequence: 1,
+                manifest_hash: ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
+                receipt,
+            }],
+        )
+        .expect("plan receipts");
+
+        assert!(planned.is_empty());
+    }
+
+    #[test]
     fn align_commitments_enforces_manifest_match() {
         let lane = LaneId::new(4);
         let receipt = sample_receipt(lane.as_u32(), 2, 1);
@@ -764,6 +885,26 @@ mod tests {
         assert!(matches!(
             result,
             Err(DaReceiptQueueError::CommitmentManifestMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn align_commitments_enforces_storage_ticket_match() {
+        let lane = LaneId::new(4);
+        let receipt = sample_receipt(lane.as_u32(), 2, 1);
+        let mut bad_record = sample_record(&receipt, 1);
+        bad_record.storage_ticket = StorageTicketId::new([0x99; 32]);
+
+        let entries = vec![DaReceiptEntry {
+            lane_epoch: LaneEpoch::new(lane, 2),
+            sequence: 1,
+            manifest_hash: ManifestDigest::new(*receipt.manifest_hash.as_bytes()),
+            receipt,
+        }];
+        let result = align_commitments_for_receipts(&entries, &[bad_record]);
+        assert!(matches!(
+            result,
+            Err(DaReceiptQueueError::CommitmentTicketMismatch { .. })
         ));
     }
 
@@ -815,6 +956,38 @@ mod tests {
         assert!(matches!(
             result,
             Err(DaReceiptQueueError::ManifestConflict { sequence: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn plan_committable_receipts_flags_ticket_conflict() {
+        let lane = LaneId::new(6);
+        let receipt_a = sample_receipt(lane.as_u32(), 1, 1);
+        let mut receipt_b = sample_receipt(lane.as_u32(), 1, 1);
+        receipt_b.storage_ticket = StorageTicketId::new([0xAA; 32]);
+
+        let entries = vec![
+            DaReceiptEntry {
+                lane_epoch: LaneEpoch::new(lane, 1),
+                sequence: 1,
+                manifest_hash: ManifestDigest::new(*receipt_a.manifest_hash.as_bytes()),
+                receipt: receipt_a,
+            },
+            DaReceiptEntry {
+                lane_epoch: LaneEpoch::new(lane, 1),
+                sequence: 1,
+                manifest_hash: ManifestDigest::new(*receipt_b.manifest_hash.as_bytes()),
+                receipt: receipt_b,
+            },
+        ];
+        let lane_config = lane_config_for(lane);
+        let sealed = BTreeSet::new();
+        let cursors = BTreeMap::new();
+
+        let result = plan_committable_receipts(&lane_config, &cursors, &sealed, entries);
+        assert!(matches!(
+            result,
+            Err(DaReceiptQueueError::StorageTicketConflict { sequence: 1, .. })
         ));
     }
 }

@@ -906,7 +906,13 @@ mod tests {
             },
         };
 
-        let epoch = super::evidence_epoch(&evidence, 5, 5);
+        let epoch_schedule = EpochScheduleSnapshot {
+            finalized: Vec::new(),
+            last_finalized_epoch: None,
+            last_finalized_end: 0,
+            fallback_epoch_length: 5,
+        };
+        let epoch = super::evidence_epoch(&evidence, 5, &epoch_schedule);
         assert_eq!(epoch, 0);
     }
 

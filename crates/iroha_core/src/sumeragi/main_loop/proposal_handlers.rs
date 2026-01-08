@@ -889,7 +889,9 @@ impl Actor {
 
         // If votes or cached QCs already exist for this block, re-evaluate now that the payload is
         // present so late-arriving block payloads can still finalize with previously collected votes.
-        let commit_topology = self.effective_commit_topology();
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        let commit_topology =
+            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
         if !commit_topology.is_empty() {
             let topology = super::network_topology::Topology::new(commit_topology.clone());
             let epochs = distinct_epochs_for_block_votes(

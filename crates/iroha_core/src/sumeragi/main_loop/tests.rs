@@ -1493,7 +1493,9 @@ async fn observer_local_indices_are_none() {
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     assert!(
-        actor.local_validator_index_for_topology(&topology).is_none(),
+        actor
+            .local_validator_index_for_topology(&topology)
+            .is_none(),
         "observer should not report a validator index for topology"
     );
 
@@ -6858,6 +6860,120 @@ async fn precommit_vote_payload_broadcast_skips_aborted_pending_untracked() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn precommit_vote_block_sync_update_targets_snapshot_roster() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let _genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let parent = sample_block(1, 0, None);
+    let block = sample_block(2, 0, Some(parent.hash()));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let pending = PendingBlock::new(block.clone(), payload_hash, 2, 0);
+
+    let mut snapshot_roster = actor.effective_commit_topology();
+    let local_peer = actor.common_config.peer.id();
+    let removed_peer = snapshot_roster
+        .iter()
+        .find(|peer| *peer != local_peer)
+        .cloned()
+        .expect("non-local roster entry");
+    snapshot_roster.retain(|peer| peer != &removed_peer);
+
+    let topology = super::network_topology::Topology::new(snapshot_roster.clone());
+    let signers: BTreeSet<ValidatorIndex> = (0..snapshot_roster.len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, snapshot_roster.len());
+    let view_idx = u64::from(block.header().view_change_index());
+    let commit_qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        2,
+        view_idx,
+        0,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint_signature = aggregate_vote_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        block_hash,
+        2,
+        view_idx,
+        0,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        2,
+        block_hash,
+        snapshot_roster.clone(),
+        signers_bitmap,
+        checkpoint_signature,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    {
+        let mut journal = actor.state.commit_roster_journal.write();
+        journal.upsert(commit_qc, checkpoint, None);
+    }
+
+    let emitted = actor.emit_precommit_vote(
+        block_hash,
+        2,
+        view_idx,
+        0,
+        &topology,
+        block.header().prev_block_hash(),
+        Some((Hash::new([]), Hash::new([]))),
+    );
+    assert!(emitted, "expected local precommit vote to be emitted");
+
+    let vote = actor
+        .local_precommit_vote_for(2, view_idx, 0, &topology)
+        .expect("local precommit vote recorded");
+
+    let _ = harness.background_rx.try_iter().count();
+    actor.maybe_broadcast_block_sync_update_for_precommit_vote(&pending, &vote);
+
+    let online_peers = actor
+        .network
+        .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
+    let expected_targets = Actor::block_sync_update_targets_for_peers(
+        actor.common_config.peer.id(),
+        actor.block_sync_gossip_limit,
+        &snapshot_roster,
+        &online_peers,
+        block_hash.as_ref(),
+    );
+    let expected_set: BTreeSet<_> = expected_targets.into_iter().collect();
+
+    let actual_targets: BTreeSet<_> = harness
+        .background_rx
+        .try_iter()
+        .filter_map(|post| match post {
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::BlockSyncUpdate(update),
+                ..
+            } if update.block.hash() == block_hash => Some(peer),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        actual_targets, expected_set,
+        "block sync update should target the snapshot roster"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn precommit_vote_targets_collectors_without_broadcast() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -7005,6 +7121,197 @@ async fn rebroadcast_precommit_votes_fall_back_to_topology_when_collectors_below
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rebroadcast_block_votes_targets_snapshot_roster() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let block = sample_block(1, 0, None);
+    let block_hash = block.hash();
+    let height = 1;
+    let view = u64::from(block.header().view_change_index());
+    let epoch = 0;
+
+    let mut snapshot_roster = actor.effective_commit_topology();
+    let local_peer = actor.common_config.peer.id();
+    let removed_peer = snapshot_roster
+        .iter()
+        .find(|peer| *peer != local_peer)
+        .cloned()
+        .expect("non-local roster entry");
+    snapshot_roster.retain(|peer| peer != &removed_peer);
+
+    let topology = super::network_topology::Topology::new(snapshot_roster.clone());
+    let signers: BTreeSet<ValidatorIndex> = (0..snapshot_roster.len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, snapshot_roster.len());
+    let commit_qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint_signature = aggregate_vote_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        block_hash,
+        height,
+        view,
+        epoch,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        block_hash,
+        snapshot_roster.clone(),
+        signers_bitmap,
+        checkpoint_signature,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    {
+        let mut journal = actor.state.commit_roster_journal.write();
+        journal.upsert(commit_qc, checkpoint, None);
+    }
+
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_canonical_signer(&mut vote, &actor.common_config.chain, &topology, &harness.key_pairs);
+    actor.vote_log.insert(
+        (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
+        vote,
+    );
+
+    let _ = harness.background_rx.try_iter().count();
+    let _ = actor.rebroadcast_block_votes(Phase::Commit, block_hash, height, view);
+
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let mut expected_targets = signature_topology.as_ref().to_vec();
+    expected_targets.retain(|peer| peer != local_peer);
+    let expected_set: BTreeSet<_> = expected_targets.into_iter().collect();
+
+    let actual_targets: BTreeSet<_> = harness
+        .background_rx
+        .try_iter()
+        .filter_map(|post| match post {
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::QcVote(_),
+                ..
+            } => Some(peer),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        actual_targets, expected_set,
+        "rebroadcasted votes should target the snapshot roster"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn qc_broadcast_targets_snapshot_roster() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let view_idx = u64::from(block.header().view_change_index());
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view_idx),
+    );
+
+    let mut snapshot_roster = actor.effective_commit_topology();
+    let local_peer = actor.common_config.peer.id();
+    let removed_peer = snapshot_roster
+        .iter()
+        .find(|peer| *peer != local_peer)
+        .cloned()
+        .expect("non-local roster entry");
+    snapshot_roster.retain(|peer| peer != &removed_peer);
+
+    let topology = super::network_topology::Topology::new(snapshot_roster.clone());
+    let epoch = actor.epoch_for_height(height);
+    for signer in 0..snapshot_roster.len() {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view: view_idx,
+            epoch,
+            highest_qc: None,
+            signer: u32::try_from(signer).expect("signer fits u32"),
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_canonical_signer(
+            &mut vote,
+            &actor.common_config.chain,
+            &topology,
+            &harness.key_pairs,
+        );
+        actor.vote_log.insert(
+            (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
+            vote,
+        );
+    }
+
+    let _ = harness.background_rx.try_iter().count();
+    actor.try_form_qc_from_votes(Phase::Commit, block_hash, height, view_idx, epoch, topology);
+
+    let expected_targets: BTreeSet<_> = snapshot_roster
+        .iter()
+        .filter(|peer| *peer != local_peer)
+        .cloned()
+        .collect();
+    let actual_targets: BTreeSet<_> = harness
+        .background_rx
+        .try_iter()
+        .filter_map(|post| match post {
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::Qc(qc),
+                ..
+            } if qc.subject_block_hash == block_hash => Some(peer),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        actual_targets, expected_targets,
+        "QC broadcast should target the snapshot roster"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn materialize_qc_for_header_aggregates_votes() {
     let mut harness = test_actor_harness(4).await;
     let block = sample_block(1, 0, None);
@@ -7140,6 +7447,108 @@ async fn rebuild_qcs_from_cached_votes_skips_empty_roster() {
     actor.rebuild_qcs_from_cached_votes(&[]);
 
     assert_eq!(actor.qc_cache.len(), before);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rebuild_qcs_from_cached_votes_uses_snapshot_roster() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let block = sample_block(1, 0, None);
+    let block_hash = block.hash();
+    let height = 1;
+    let view = u64::from(block.header().view_change_index());
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor
+        .pending
+        .pending_blocks
+        .insert(block_hash, PendingBlock::new(block, payload_hash, height, view));
+
+    let mut snapshot_roster = actor.effective_commit_topology();
+    let local_peer = actor.common_config.peer.id();
+    let removed_peer = snapshot_roster
+        .iter()
+        .find(|peer| *peer != local_peer)
+        .cloned()
+        .expect("non-local roster entry");
+    snapshot_roster.retain(|peer| peer != &removed_peer);
+
+    let topology = super::network_topology::Topology::new(snapshot_roster.clone());
+    let signers: BTreeSet<ValidatorIndex> = (0..snapshot_roster.len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, snapshot_roster.len());
+    let epoch = actor.epoch_for_height(height);
+    let commit_qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint_signature = aggregate_vote_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        block_hash,
+        height,
+        view,
+        epoch,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        block_hash,
+        snapshot_roster.clone(),
+        signers_bitmap,
+        checkpoint_signature,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    {
+        let mut journal = actor.state.commit_roster_journal.write();
+        journal.upsert(commit_qc, checkpoint, None);
+    }
+
+    for signer in 0..snapshot_roster.len() {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view,
+            epoch,
+            highest_qc: None,
+            signer: u32::try_from(signer).expect("signer fits u32"),
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_canonical_signer(
+            &mut vote,
+            &actor.common_config.chain,
+            &topology,
+            &harness.key_pairs,
+        );
+        actor.vote_log.insert(
+            (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
+            vote,
+        );
+    }
+
+    actor.rebuild_qcs_from_cached_votes(&actor.effective_commit_topology());
+
+    let key = (Phase::Commit, block_hash, height, view, epoch);
+    let qc = actor.qc_cache.get(&key).expect("QC rebuilt from cached votes");
+    assert_eq!(
+        qc.validator_set, snapshot_roster,
+        "QC rebuild should honor the snapshot roster"
+    );
 
     harness.shutdown.send();
 }
@@ -9054,16 +9463,10 @@ async fn handle_rbc_ready_refreshes_derived_roster_on_mismatch() {
     let epoch = actor.epoch_for_height(key.1);
     let payload = b"payload".to_vec();
     let payload_hash = Hash::new(&payload);
-    let session =
-        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
-            .expect("session");
+    let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
     let chunk_root = session.expected_chunk_root.expect("chunk root");
-    actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .sessions
-        .insert(key, session);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
     let roster_a = actor.effective_commit_topology();
     assert!(roster_a.len() > 1, "test requires multiple peers");
@@ -9087,8 +9490,7 @@ async fn handle_rbc_ready_refreshes_derived_roster_on_mismatch() {
 
     let topology = super::network_topology::Topology::new(roster_b.clone());
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(key.1);
-    let signature_topology =
-        super::topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+    let signature_topology = super::topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
     let local_peer = actor.common_config.peer.id().clone();
     let (sender_idx, signer_peer) = signature_topology
         .as_ref()
@@ -10520,8 +10922,8 @@ async fn handle_rbc_init_ignores_payload_hash_mismatch_for_existing_session() {
 
     let payload = b"payload".to_vec();
     let payload_hash = Hash::new(&payload);
-    let session =
-        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch).expect("session");
+    let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
     let expected_digests = session
         .expected_chunk_digests
         .clone()
@@ -11050,12 +11452,7 @@ async fn handle_rbc_ready_sets_expected_chunk_root_when_missing() {
     let payload_hash = Hash::prehashed([0x11; 32]);
     let session = RbcSession::test_new(1, Some(payload_hash), None, epoch);
 
-    actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .sessions
-        .insert(key, session);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
     let roster = actor.effective_commit_topology();
     actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Network);
@@ -11194,9 +11591,8 @@ async fn handle_rbc_deliver_sets_expected_chunk_root_when_missing() {
     let payload = b"payload".to_vec();
     let payload_hash = Hash::new(&payload);
     let epoch = actor.epoch_for_height(key.1);
-    let mut session =
-        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
-            .expect("session");
+    let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
     session.expected_chunk_root = None;
 
     let roster = actor.effective_commit_topology();
@@ -11210,12 +11606,7 @@ async fn handle_rbc_deliver_sets_expected_chunk_root_when_missing() {
         );
     }
 
-    actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .sessions
-        .insert(key, session);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
     let deliver = {
         let session = actor
@@ -23396,6 +23787,109 @@ async fn stale_block_created_accepted_under_da() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_created_rebuilds_qc_with_snapshot_roster() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = sample_block(1, 0, None);
+    let block_hash = block.hash();
+    let height = 1;
+    let view = u64::from(block.header().view_change_index());
+
+    let mut snapshot_roster = actor.effective_commit_topology();
+    let local_peer = actor.common_config.peer.id();
+    let removed_peer = snapshot_roster
+        .iter()
+        .find(|peer| *peer != local_peer)
+        .cloned()
+        .expect("non-local roster entry");
+    snapshot_roster.retain(|peer| peer != &removed_peer);
+
+    let topology = super::network_topology::Topology::new(snapshot_roster.clone());
+    let signers: BTreeSet<ValidatorIndex> = (0..snapshot_roster.len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, snapshot_roster.len());
+    let epoch = actor.epoch_for_height(height);
+    let commit_qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint_signature = aggregate_vote_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        block_hash,
+        height,
+        view,
+        epoch,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        block_hash,
+        snapshot_roster.clone(),
+        signers_bitmap,
+        checkpoint_signature,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    {
+        let mut journal = actor.state.commit_roster_journal.write();
+        journal.upsert(commit_qc, checkpoint, None);
+    }
+
+    for signer in 0..snapshot_roster.len() {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view,
+            epoch,
+            highest_qc: None,
+            signer: u32::try_from(signer).expect("signer fits u32"),
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_canonical_signer(
+            &mut vote,
+            &actor.common_config.chain,
+            &topology,
+            &harness.key_pairs,
+        );
+        actor.vote_log.insert(
+            (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
+            vote,
+        );
+    }
+
+    actor
+        .handle_block_created(super::message::BlockCreated { block })
+        .expect("handle BlockCreated");
+
+    let key = (Phase::Commit, block_hash, height, view, epoch);
+    let qc = actor
+        .qc_cache
+        .get(&key)
+        .expect("QC cached after BlockCreated");
+    assert_eq!(
+        qc.validator_set, snapshot_roster,
+        "BlockCreated should rebuild QC using the snapshot roster"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn duplicate_block_created_hydrates_existing_rbc_session() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -29693,6 +30187,108 @@ async fn reschedule_stale_pending_blocks_skips_empty_roster() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn reschedule_stale_pending_blocks_targets_snapshot_roster() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let view_idx = u64::from(block.header().view_change_index());
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let mut snapshot_roster = actor.effective_commit_topology();
+    let local_peer = actor.common_config.peer.id();
+    let removed_peer = snapshot_roster
+        .iter()
+        .find(|peer| *peer != local_peer)
+        .cloned()
+        .expect("non-local roster entry");
+    snapshot_roster.retain(|peer| peer != &removed_peer);
+    assert!(
+        snapshot_roster.contains(local_peer),
+        "snapshot roster must include local peer"
+    );
+
+    let topology = super::network_topology::Topology::new(snapshot_roster.clone());
+    let signers: BTreeSet<ValidatorIndex> = (0..snapshot_roster.len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, snapshot_roster.len());
+    let commit_qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view_idx,
+        0,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint_signature = aggregate_vote_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        block_hash,
+        height,
+        view_idx,
+        0,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        block_hash,
+        snapshot_roster.clone(),
+        signers_bitmap,
+        checkpoint_signature,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    {
+        let mut journal = actor.state.commit_roster_journal.write();
+        journal.upsert(commit_qc, checkpoint, None);
+    }
+
+    assert!(
+        actor.reschedule_stale_pending_blocks(),
+        "pending block should be rescheduled"
+    );
+
+    let expected_targets: BTreeSet<_> = snapshot_roster
+        .iter()
+        .filter(|peer| *peer != local_peer)
+        .cloned()
+        .collect();
+    let mut targets = BTreeSet::new();
+    for post in harness.background_rx.try_iter() {
+        let BackgroundPost::Post { peer, msg, .. } = post else {
+            continue;
+        };
+        if let BlockMessage::BlockCreated(created) = msg {
+            if created.block.hash() == block_hash {
+                targets.insert(peer);
+            }
+        }
+    }
+    assert_eq!(
+        targets, expected_targets,
+        "reschedule should rebroadcast to the snapshot roster"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn reschedule_stale_pending_blocks_skips_when_commit_qc_cached() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -30728,15 +31324,18 @@ async fn commit_qc_uses_exec_roots_from_view_votes() {
     let chain_id = actor.chain_id.clone();
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
 
-    let block = block_with_txs(height, u32::try_from(view).expect("view fits u32"), None, vec![
-        sample_transaction(),
-    ]);
+    let block = block_with_txs(
+        height,
+        u32::try_from(view).expect("view fits u32"),
+        None,
+        vec![sample_transaction()],
+    );
     let block_hash = block.hash();
     let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
-    actor
-        .pending
-        .pending_blocks
-        .insert(block_hash, PendingBlock::new(block, payload_hash, height, view));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
     actor.locked_qc = None;
 
     let signature_topology =
@@ -30745,7 +31344,12 @@ async fn commit_qc_uses_exec_roots_from_view_votes() {
     let parent_state_root = Hash::prehashed([0x11; 32]);
     let post_state_root = Hash::prehashed([0x22; 32]);
 
-    for (idx, _) in signature_topology.as_ref().iter().enumerate().take(required) {
+    for (idx, _) in signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .take(required)
+    {
         let mut vote = crate::sumeragi::consensus::Vote {
             phase: crate::sumeragi::consensus::Phase::Commit,
             block_hash,

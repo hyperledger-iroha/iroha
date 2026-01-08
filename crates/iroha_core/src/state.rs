@@ -14205,18 +14205,18 @@ impl<'state> StateBlock<'state> {
         if self.exec_witness.is_none() {
             let mut witness = crate::sumeragi::witness::drain_exec_witness();
             if witness.fastpq_batches.is_empty() && !witness.fastpq_transcripts.is_empty() {
-                let template = crate::fastpq::public_inputs_template_from_block(
-                    &self._curr_block,
-                    &witness,
-                );
+                let template =
+                    crate::fastpq::public_inputs_template_from_block(&self._curr_block, &witness);
                 match crate::fastpq::batches_from_bundles(
                     crate::fastpq::FASTPQ_CANONICAL_PARAMETER_SET,
                     template,
                     witness.fastpq_transcripts.iter(),
                 ) {
                     Ok(batches) => {
-                        witness.fastpq_batches =
-                            batches.iter().map(crate::fastpq::transition_batch_to_dto).collect();
+                        witness.fastpq_batches = batches
+                            .iter()
+                            .map(crate::fastpq::transition_batch_to_dto)
+                            .collect();
                     }
                     Err(err) => {
                         iroha_logger::warn!(
@@ -14414,7 +14414,7 @@ impl<'state> StateBlock<'state> {
             };
             if let Some(manifest) = manifest {
                 let hot_bytes = manifest.hot_entries.iter().fold(0u64, |acc, entry| {
-                    acc.saturating_add(u64::try_from(entry.value_size_bytes).unwrap_or(u64::MAX))
+                    acc.saturating_add(u64::try_from(entry.value_size_bytes()).unwrap_or(u64::MAX))
                 });
                 crate::telemetry::record_state_tiered_snapshot(
                     &state_ref.telemetry,

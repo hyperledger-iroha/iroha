@@ -3106,7 +3106,7 @@ struct DaState {
     /// Keys of commitments already sealed to avoid duplicates.
     sealed_commitments: BTreeSet<iroha_data_model::da::commitment::DaCommitmentKey>,
     /// Keys of pin intents already sealed to avoid duplicates.
-    sealed_pin_intents: BTreeSet<(u32, u64, u64, iroha_data_model::da::types::StorageTicketId)>,
+    sealed_pin_intents: BTreeSet<(u32, u64, u64)>,
 }
 
 impl DaState {

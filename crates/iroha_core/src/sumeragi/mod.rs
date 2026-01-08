@@ -184,7 +184,13 @@ impl EpochScheduleSnapshot {
         let fallback_epoch_length = world
             .sumeragi_npos_parameters()
             .map(|params| params.epoch_length_blocks())
-            .or_else(|| world.vrf_epochs().iter().last().map(|(_, record)| record.epoch_length))
+            .or_else(|| {
+                world
+                    .vrf_epochs()
+                    .iter()
+                    .last()
+                    .map(|(_, record)| record.epoch_length)
+            })
             .unwrap_or(fallback_epoch_length)
             .max(1);
         let last_finalized_epoch = finalized.last().map(|(epoch, _)| *epoch);
@@ -374,7 +380,10 @@ mod tests {
         },
         consensus::VrfEpochRecord,
         nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
-        parameter::{Parameter, system::{SumeragiConsensusMode, SumeragiNposParameters}},
+        parameter::{
+            Parameter,
+            system::{SumeragiConsensusMode, SumeragiNposParameters},
+        },
         peer::PeerId,
     };
 
@@ -392,7 +401,12 @@ mod tests {
         now.checked_sub(duration).unwrap_or(now)
     }
 
-    fn vrf_record(epoch: u64, end_height: u64, epoch_length: u64, finalized: bool) -> VrfEpochRecord {
+    fn vrf_record(
+        epoch: u64,
+        end_height: u64,
+        epoch_length: u64,
+        finalized: bool,
+    ) -> VrfEpochRecord {
         VrfEpochRecord {
             epoch,
             seed: [u8::try_from(epoch).unwrap_or(0xAA); 32],
@@ -415,8 +429,11 @@ mod tests {
     #[test]
     fn epoch_schedule_uses_finalized_boundaries() {
         let kura = Arc::new(Kura::blank_kura_for_testing());
-        let state =
-            State::new_for_testing(World::new(), Arc::clone(&kura), LiveQueryStore::start_test());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
         {
             let mut world = state.world.block();
             let params = SumeragiNposParameters {

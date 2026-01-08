@@ -494,9 +494,7 @@ pub fn verify_transcripts(
     if !transfer_rows.is_empty() {
         let remaining = transfer_rows.values().map(VecDeque::len).sum::<usize>();
         return Err(Error::TransferInvariant {
-            details: format!(
-                "transfer transcripts did not cover {remaining} transfer row(s)"
-            ),
+            details: format!("transfer transcripts did not cover {remaining} transfer row(s)"),
         });
     }
     Ok(())
@@ -617,7 +615,8 @@ fn balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Vec<u8> {
     format!("asset/{asset}/{account}").into_bytes()
 }
 
-pub(crate) fn compute_poseidon_digest(delta: &TransferDeltaTranscript, batch_hash: &Hash) -> Hash {
+/// Compute the Poseidon digest committed by a transfer transcript entry.
+pub fn compute_poseidon_digest(delta: &TransferDeltaTranscript, batch_hash: &Hash) -> Hash {
     let mut preimage = Vec::with_capacity(256);
     append_encoded(&mut preimage, &delta.from_account);
     append_encoded(&mut preimage, &delta.to_account);

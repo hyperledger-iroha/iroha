@@ -12,16 +12,8 @@ impl Actor {
         }
 
         let reschedule_start = Instant::now();
-        let commit_roster = self.effective_commit_topology();
-        if commit_roster.is_empty() {
-            return false;
-        }
-        let commit_topology = super::network_topology::Topology::new(commit_roster);
-
-        let roster_len = commit_topology.as_ref().len();
+        let active_roster = self.effective_commit_topology();
         let local_peer_id = self.common_config.peer.id().clone();
-        let min_votes_commit = commit_topology.min_votes_for_commit();
-        let min_votes = min_votes_commit;
         let da_enabled = self.runtime_da_enabled();
         let quorum_timeout = self.quorum_timeout(da_enabled);
         let quorum_reschedule_cooldown = quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN);
@@ -58,6 +50,24 @@ impl Actor {
             ) {
                 continue;
             }
+            let (consensus_mode, _, _) = self.consensus_context_for_height(pending.height);
+            let mut commit_roster =
+                self.roster_for_vote_with_mode(*hash, pending.height, pending.view, consensus_mode);
+            if commit_roster.is_empty() {
+                commit_roster = active_roster.clone();
+            }
+            if commit_roster.is_empty() {
+                debug!(
+                    height = pending.height,
+                    view = pending.view,
+                    block = %hash,
+                    "skipping reschedule: empty commit roster"
+                );
+                continue;
+            }
+            let commit_topology = super::network_topology::Topology::new(commit_roster.clone());
+            let min_votes_for_commit = commit_topology.min_votes_for_commit();
+
             let pending_age = pending.age();
             let key = (*hash, pending.height, pending.view);
             let expected_epoch = self.epoch_for_height(pending.height);
@@ -82,7 +92,7 @@ impl Actor {
             });
             let qc_phase = qc_any.as_ref().map(|qc| qc.phase);
             if prevote_quorum_stale(qc_phase, pending_age, quorum_timeout) {
-                prevote_timeouts.push((key, pending_age, qc_any));
+                prevote_timeouts.push((key, pending_age, qc_any, commit_roster));
                 continue;
             }
             let (vote_count, quorum_reached) = if pending.commit_qc_seen || commit_qc_cached {
@@ -95,7 +105,7 @@ impl Actor {
                     reschedule_backoff_skipped = reschedule_backoff_skipped.saturating_add(1);
                     continue;
                 }
-                to_reschedule.push((key, pending_age, vote_count));
+                to_reschedule.push((key, pending_age, vote_count, min_votes_for_commit));
             }
         }
         let scan_done = Instant::now();
@@ -114,7 +124,7 @@ impl Actor {
         }
 
         let mut progress = false;
-        for (key, age, vote_count) in to_reschedule {
+        for (key, age, vote_count, min_votes) in to_reschedule {
             if let Some(pending) = self.pending.pending_blocks.remove(&key.0) {
                 self.reschedule_pending_quorum_block(
                     pending,
@@ -134,8 +144,9 @@ impl Actor {
             }
         }
 
-        for (key, pending_age, qc) in prevote_timeouts {
+        for (key, pending_age, qc, commit_roster) in prevote_timeouts {
             if let Some(pending) = self.pending.pending_blocks.remove(&key.0) {
+                let roster_len = commit_roster.len();
                 let vote_count = qc
                     .as_ref()
                     .map_or(0, |qc| qc_voting_signer_count(qc, roster_len));
@@ -145,7 +156,7 @@ impl Actor {
                 let msg = BlockMessage::BlockCreated(super::message::BlockCreated {
                     block: pending.block.clone(),
                 });
-                for peer in commit_topology.as_ref() {
+                for peer in &commit_roster {
                     if peer == &local_peer_id {
                         continue;
                     }
@@ -156,7 +167,7 @@ impl Actor {
                 }
                 if let Some(qc) = qc {
                     let msg = BlockMessage::Qc(qc.clone());
-                    for peer in commit_topology.as_ref() {
+                    for peer in &commit_roster {
                         if peer == &local_peer_id {
                             continue;
                         }
@@ -309,7 +320,12 @@ impl Actor {
                 (0, 0, 0, Vec::new())
             };
         pending.mark_quorum_reschedule(now);
-        let topology_peers = self.effective_commit_topology();
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        let mut topology_peers =
+            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+        if topology_peers.is_empty() {
+            topology_peers = self.effective_commit_topology();
+        }
         let local_peer_id = self.common_config.peer.id().clone();
         let rebroadcast = self.rebroadcast_pending_block_updates(
             &pending,

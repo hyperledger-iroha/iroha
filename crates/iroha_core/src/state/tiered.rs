@@ -2008,6 +2008,13 @@ pub struct TieredManifestEntry {
     spill_bytes: Option<u64>,
 }
 
+impl TieredManifestEntry {
+    #[must_use]
+    pub fn value_size_bytes(&self) -> usize {
+        self.value_size_bytes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, num::NonZeroU32};
