@@ -49,7 +49,8 @@ impl Actor {
 
     pub(super) fn handle_vote(&mut self, vote: crate::sumeragi::consensus::Vote) {
         let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
-        if self.drop_vote_for_height_or_view(&vote, committed_height)
+        let stale_view = self.stale_view(vote.height, vote.view);
+        if self.drop_vote_for_height_or_view(&vote, committed_height, stale_view)
             || self.drop_precommit_vote_for_lock(&vote)
         {
             return;
@@ -192,13 +193,24 @@ impl Actor {
                     );
                     return;
                 };
+                self.observe_new_view_highest_qc(highest);
+                crate::sumeragi::new_view_stats::note_receipt(vote.height, vote.view, signer_peer);
+                if let Some(local_view) = stale_view {
+                    debug!(
+                        height = vote.height,
+                        view = vote.view,
+                        local_view,
+                        signer = vote.signer,
+                        "recorded stale NEW_VIEW vote"
+                    );
+                    return;
+                }
                 let count = self.subsystems.propose.new_view_tracker.record(
                     vote.height,
                     vote.view,
                     signer_peer.clone(),
                     highest,
                 );
-                crate::sumeragi::new_view_stats::note_receipt(vote.height, vote.view, signer_peer);
                 debug!(
                     height = vote.height,
                     view = vote.view,
@@ -222,6 +234,7 @@ impl Actor {
         &self,
         vote: &crate::sumeragi::consensus::Vote,
         committed_height: u64,
+        stale_view: Option<u64>,
     ) -> bool {
         if vote.height <= committed_height {
             let matches_committed = vote.phase == Phase::Commit
@@ -270,7 +283,7 @@ impl Actor {
             );
             return true;
         }
-        if let Some(local_view) = self.stale_view(vote.height, vote.view) {
+        if let Some(local_view) = stale_view {
             let da_enabled = self.runtime_da_enabled();
             let missing_request = self
                 .pending
@@ -289,6 +302,14 @@ impl Actor {
                     missing_request,
                     "accepting precommit vote for stale view"
                 );
+            } else if vote.phase == crate::sumeragi::consensus::Phase::NewView {
+                debug!(
+                    height = vote.height,
+                    view = vote.view,
+                    local_view,
+                    signer = vote.signer,
+                    "accepting stale NEW_VIEW vote for highest QC processing"
+                );
             } else {
                 debug!(
                     height = vote.height,
@@ -301,6 +322,111 @@ impl Actor {
             }
         }
         false
+    }
+
+    fn observe_new_view_highest_qc(&mut self, highest: crate::sumeragi::consensus::QcHeaderRef) {
+        let should_update = self.highest_qc.is_none_or(|current| {
+            let incoming = (highest.height, highest.view);
+            let existing = (current.height, current.view);
+            let promotes_phase = incoming == existing
+                && highest.phase == crate::sumeragi::consensus::Phase::Commit
+                && current.phase != crate::sumeragi::consensus::Phase::Commit;
+            incoming > existing || promotes_phase
+        });
+        if should_update {
+            self.highest_qc = Some(highest);
+            super::status::set_highest_qc(highest.height, highest.view);
+            super::status::set_highest_qc_hash(highest.subject_block_hash);
+        }
+        if self.block_known_locally(highest.subject_block_hash) {
+            return;
+        }
+        let (consensus_mode, _, _) = self.consensus_context_for_height(highest.height);
+        let roster = self.roster_for_vote_with_mode(
+            highest.subject_block_hash,
+            highest.height,
+            highest.view,
+            consensus_mode,
+        );
+        if roster.is_empty() {
+            debug!(
+                height = highest.height,
+                view = highest.view,
+                block = %highest.subject_block_hash,
+                "skipping NEW_VIEW highest QC fetch: empty commit topology"
+            );
+            return;
+        }
+        let topology = super::network_topology::Topology::new(roster);
+        let retry_window = self.quorum_timeout(self.runtime_da_enabled());
+        let now = Instant::now();
+        let signers = BTreeSet::new();
+        let decision = plan_missing_block_fetch(
+            &mut self.pending.missing_block_requests,
+            highest.subject_block_hash,
+            highest.height,
+            highest.view,
+            crate::sumeragi::consensus::Phase::Commit,
+            MissingBlockPriority::Consensus,
+            &signers,
+            &topology,
+            now,
+            retry_window,
+            None,
+            self.config.missing_block_signer_fallback_attempts,
+        );
+        let dwell = self
+            .pending
+            .missing_block_requests
+            .get(&highest.subject_block_hash)
+            .map(|stats| now.saturating_duration_since(stats.first_seen))
+            .unwrap_or_default();
+        let dwell_ms = dwell.as_millis();
+        let targets_len = match &decision {
+            MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
+            _ => 0,
+        };
+        self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+        match decision {
+            MissingBlockFetchDecision::Requested {
+                targets,
+                target_kind,
+            } => {
+                self.request_missing_block(highest.subject_block_hash, &targets);
+                iroha_logger::info!(
+                    height = highest.height,
+                    view = highest.view,
+                    block = ?highest.subject_block_hash,
+                    targets = ?targets,
+                    target_kind = target_kind.label(),
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms,
+                    "requested missing block payload from NEW_VIEW highest QC"
+                );
+            }
+            MissingBlockFetchDecision::NoTargets => {
+                iroha_logger::warn!(
+                    height = highest.height,
+                    view = highest.view,
+                    block = ?highest.subject_block_hash,
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms,
+                    targets = targets_len,
+                    "unable to request missing block payload from NEW_VIEW highest QC: no peers available"
+                );
+            }
+            MissingBlockFetchDecision::Backoff => {
+                iroha_logger::info!(
+                    height = highest.height,
+                    view = highest.view,
+                    block = ?highest.subject_block_hash,
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms,
+                    targets = targets_len,
+                    "skipping missing-block fetch from NEW_VIEW highest QC during backoff"
+                );
+            }
+        }
     }
 
     fn drop_precommit_vote_for_lock(&self, vote: &crate::sumeragi::consensus::Vote) -> bool {
@@ -887,6 +1013,9 @@ impl Actor {
                 self.roster_from_commit_qc_history_roll_forward(height, parent_hash)
             {
                 return roster;
+            }
+            if parent_hash.is_some() {
+                return Vec::new();
             }
             if let Some(roster) = self.roster_from_commit_qc_history(height) {
                 return roster;

@@ -25,7 +25,7 @@ translation_last_reviewed: 2026-01-08
   `liquidity_profile` (`tier1`, `tier2`, או `tier3`), ו-`volatility_class` (`stable`,
   `elevated`, `dislocated`). דגלים אלה מוזנים ל-settlement router כדי שהצעת מחיר XOR
   תתאים ל-TWAP הקנוני ול-tier ה-haircut של ה-lane.
-- עסקאות IVM חייבות לכלול מטא-נתון `gas_limit` (`u64`) כדי להגביל חשיפה לעמלות. נקודת הקצה
+- עסקאות IVM חייבות לכלול מטא-נתון `gas_limit` (`u64`, > 0) כדי להגביל חשיפה לעמלות. נקודת הקצה
   `/v1/contracts/call` מחייבת `gas_limit` במפורש, וערכים לא תקינים נדחים.
 - כאשר עסקה מגדירה מטא-נתון `fee_sponsor`, הספונסר חייב להעניק לקורא
   `CanUseFeeSponsor { sponsor }`. נסיונות ספונסרשיפ לא מורשים נדחים ומתועדים.

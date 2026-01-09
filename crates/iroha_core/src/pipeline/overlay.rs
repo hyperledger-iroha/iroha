@@ -572,8 +572,9 @@ pub fn build_overlay_for_transaction_with_cache<R: StateReadOnly>(
             let summary = ivm_cache
                 .summarize_program(bytecode.as_ref())
                 .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
+            let gas_limit = require_tx_gas_limit(tx)?;
             let mut vm = ivm_cache
-                .clone_runtime(&summary, bytecode.as_ref())
+                .clone_runtime(&summary, bytecode.as_ref(), gas_limit)
                 .map_err(OverlayBuildError::IvmLoad)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
@@ -594,7 +595,6 @@ pub fn build_overlay_for_transaction_with_cache<R: StateReadOnly>(
                 bytecode.as_ref(),
             )?;
             validate_contract_binding(state_ro, tx, &summary)?;
-            let gas_limit = require_tx_gas_limit(tx)?;
 
             // Run CoreHost to collect queued ISIs
             // Snapshot of accounts for deterministic helpers
@@ -732,8 +732,7 @@ pub fn build_overlay_for_transaction_with_accounts(
                 bytecode.as_ref(),
             )?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
-            let stack_gas_limit = crate::smartcontracts::ivm::gas_limit_for_meta(&meta);
-            let mut vm = ivm::IVM::new(stack_gas_limit);
+            let mut vm = ivm::IVM::new(tx_gas_limit);
             let mut host = crate::smartcontracts::ivm::host::CoreHost::with_accounts(
                 tx.authority().clone(),
                 Arc::new(accounts.to_vec()),
@@ -803,8 +802,7 @@ pub(crate) fn build_overlay_for_transaction_with_accounts_zk<R: StateReadOnly>(
                 bytecode.as_ref(),
             )?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
-            let stack_gas_limit = crate::smartcontracts::ivm::gas_limit_for_meta(&meta);
-            let mut vm = ivm::IVM::new(stack_gas_limit);
+            let mut vm = ivm::IVM::new(tx_gas_limit);
             let mut host = crate::smartcontracts::ivm::host::CoreHost::with_accounts(
                 tx.authority().clone(),
                 Arc::new(accounts.to_vec()),
@@ -921,8 +919,6 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
             }
-            // Compute effective cycle cap before VM creation so the stack limit uses the
-            // same gas-derived ceiling.
             let tx_gas_limit = require_tx_gas_limit(tx)?;
             let mut eff = meta.max_cycles;
             if eff == 0 {
@@ -937,9 +933,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             if eff == u64::MAX {
                 eff = 0; // no cap
             }
-            let gas_cap = if eff == 0 { meta.max_cycles } else { eff };
-            let stack_gas_limit = crate::smartcontracts::ivm::gas_limit_for_cycles(gas_cap);
-            let mut vm = ivm::IVM::new(stack_gas_limit);
+            let mut vm = ivm::IVM::new(tx_gas_limit);
             let mut host = crate::smartcontracts::ivm::host::CoreHost::with_accounts(
                 tx.authority().clone(),
                 Arc::new(accounts.to_vec()),
@@ -1983,9 +1977,7 @@ mod tests {
         let decoded =
             ivm::ivm_cache::global_get_with_meta(&bytes[parsed.code_offset..], &parsed.metadata)
                 .expect("bytecode decodes before execution");
-        let mut vm = ivm::IVM::new(crate::smartcontracts::ivm::gas_limit_for_meta(
-            &parsed.metadata,
-        ));
+        let mut vm = ivm::IVM::new(TEST_GAS_LIMIT);
         let host = crate::smartcontracts::ivm::host::CoreHost::with_accounts(
             tx.authority().clone(),
             Arc::new(accounts),
