@@ -5108,10 +5108,9 @@ impl Actor {
             .map_or(0, super::epoch::EpochManager::epoch)
     }
 
-    fn epoch_for_height(&self, height: u64) -> u64 {
-        let view = self.state.view();
+    fn epoch_for_height_from_view(&self, view: &StateView<'_>, height: u64) -> u64 {
         let consensus_mode =
-            super::effective_consensus_mode_for_height(&view, height, self.config.consensus_mode);
+            super::effective_consensus_mode_for_height(view, height, self.config.consensus_mode);
         if matches!(consensus_mode, ConsensusMode::Permissioned) {
             return 0;
         }
@@ -5126,6 +5125,11 @@ impl Actor {
         self.epoch_manager
             .as_ref()
             .map_or(schedule_epoch, |manager| manager.epoch_for_height(height))
+    }
+
+    fn epoch_for_height(&self, height: u64) -> u64 {
+        let view = self.state.view();
+        self.epoch_for_height_from_view(&view, height)
     }
 
     fn genesis_block_hash(&self) -> Option<HashOf<BlockHeader>> {
@@ -5207,7 +5211,7 @@ impl Actor {
         let block = view.latest_block()?;
         let header = block.header();
         let height = header.height().get();
-        let epoch = self.epoch_for_height(height);
+        let epoch = self.epoch_for_height_from_view(&view, height);
         Some(crate::sumeragi::consensus::QcHeaderRef {
             height,
             view: header.view_change_index(),
