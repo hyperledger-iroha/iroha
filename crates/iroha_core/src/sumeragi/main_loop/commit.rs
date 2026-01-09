@@ -893,7 +893,7 @@ impl Actor {
                     view.world.peers().iter().cloned().collect::<Vec<_>>()
                 };
                 let (consensus_mode, _, _) = self.consensus_context_for_height(pending_height);
-                if super::block_sync_update_has_roster(&sync_update, consensus_mode) {
+                if self.prepare_block_sync_update_for_broadcast(&mut sync_update, consensus_mode) {
                     self.broadcast_block_sync_update(sync_update, &world_peers);
                 } else {
                     self.broadcast_block_created_for_block_sync(
@@ -1399,21 +1399,39 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
-        if pending.aborted {
-            debug!(
-                height = pending_height,
-                view = pending_view,
-                block = %block_hash,
-                "pending block marked aborted; skipping finalize"
-            );
-            self.pending.pending_blocks.insert(block_hash, pending);
-            return false;
-        }
-        let kura_has_block = self.kura.get_block_height_by_hash(block_hash).is_some();
         let (state_height, state_tip_hash) = {
             let view = self.state.view();
             (view.height(), view.latest_block_hash())
         };
+        if pending.aborted {
+            let pending_parent = pending.block.header().prev_block_hash();
+            if pending.commit_qc_seen
+                && super::pending_extends_tip(
+                    pending_height,
+                    pending_parent,
+                    state_height,
+                    state_tip_hash,
+                )
+            {
+                debug!(
+                    height = pending_height,
+                    view = pending_view,
+                    block = %block_hash,
+                    "reviving aborted pending block to finalize with commit QC"
+                );
+                pending.aborted = false;
+            } else {
+                debug!(
+                    height = pending_height,
+                    view = pending_view,
+                    block = %block_hash,
+                    "pending block marked aborted; skipping finalize"
+                );
+                self.pending.pending_blocks.insert(block_hash, pending);
+                return false;
+            }
+        }
+        let kura_has_block = self.kura.get_block_height_by_hash(block_hash).is_some();
         if kura::kura_and_state_aligned_for_block(
             kura_has_block,
             state_height,
@@ -2111,7 +2129,7 @@ impl Actor {
             .block_sync_rebroadcast_log
             .allow(vote.block_hash, now, cooldown)
         {
-            let update = self.block_sync_update_for_precommit_vote(
+            let mut update = self.block_sync_update_for_precommit_vote(
                 &pending.block,
                 self.state.as_ref(),
                 self.kura.as_ref(),
@@ -2132,7 +2150,7 @@ impl Actor {
             if topology_peers.is_empty() {
                 return;
             }
-            if super::block_sync_update_has_roster(&update, consensus_mode) {
+            if self.prepare_block_sync_update_for_broadcast(&mut update, consensus_mode) {
                 self.broadcast_block_sync_update(update, &topology_peers);
                 iroha_logger::info!(
                     height = vote.height,
@@ -3192,6 +3210,7 @@ impl Actor {
                 self.state.as_ref(),
                 self.config.consensus_mode,
             );
+            let (consensus_mode, _, _) = self.consensus_context_for_height(block_height);
             debug!(
                 height = block_height,
                 view = qc.view,
@@ -3199,7 +3218,14 @@ impl Actor {
                 targets = topology_peers.len(),
                 "rebroadcasting committed block for highest QC"
             );
-            self.broadcast_block_sync_update(update, topology_peers);
+            if self.prepare_block_sync_update_for_broadcast(&mut update, consensus_mode) {
+                self.broadcast_block_sync_update(update, topology_peers);
+            } else {
+                self.broadcast_block_created_for_block_sync(
+                    super::message::BlockCreated::from(block.as_ref()),
+                    topology_peers,
+                );
+            }
             return;
         }
 

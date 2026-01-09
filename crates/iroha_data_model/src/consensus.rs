@@ -250,6 +250,9 @@ pub struct ConsensusKeyRecord {
     pub id: ConsensusKeyId,
     /// Public key material used for signatures.
     pub public_key: PublicKey,
+    /// Optional Proof-of-Possession for BLS keys (required for BLS algorithms).
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub pop: Option<Vec<u8>>,
     /// First block height (inclusive) at which this key becomes valid.
     pub activation_height: u64,
     /// Optional block height (exclusive) at which this key expires.
@@ -518,6 +521,7 @@ mod tests {
         let record = ConsensusKeyRecord {
             id,
             public_key: pk,
+            pop: None,
             activation_height: 10,
             expiry_height: Some(20),
             hsm: None,
@@ -540,6 +544,7 @@ mod tests {
         let record = ConsensusKeyRecord {
             id,
             public_key: pk,
+            pop: None,
             activation_height: 0,
             expiry_height: None,
             hsm: None,

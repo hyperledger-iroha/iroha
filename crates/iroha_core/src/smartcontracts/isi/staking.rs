@@ -1629,6 +1629,7 @@ mod tests {
         let mut record = ConsensusKeyRecord {
             id: ident,
             public_key: peer.public_key().clone(),
+            pop: None,
             activation_height: stx.block_height(),
             expiry_height: None,
             hsm: None,
@@ -1665,6 +1666,7 @@ mod tests {
         let mut record = ConsensusKeyRecord {
             id: ident,
             public_key: peer.public_key().clone(),
+            pop: None,
             activation_height,
             expiry_height,
             hsm: None,

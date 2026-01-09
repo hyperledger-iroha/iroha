@@ -90,6 +90,10 @@ With the default `sumeragi.rbc_chunk_max_bytes = 64&nbsp;KiB`, the 10.5&nbsp;MiB
 instruction (11 010 048 bytes), and `force_deliver_quorum_one` enabled, the
 following invariants hold:
 
+Note: `sumeragi.rbc_chunk_max_bytes` is clamped at startup so serialized RBC
+chunks fit within the consensus frame plaintext cap derived from
+`network.max_frame_bytes_consensus`.
+
 | Scenario | Chunk count | READY threshold | Per-peer counters | Timing budgets |
 | --- | --- | --- | --- | --- |
 | Four peers | 168 chunks (all required) | READY votes ≥1 (debug override; normal ≥3 for *f* = 1) | `payload_bytes_delivered_total ≥ 11 010 048`, `deliver_broadcasts_total = 1`, `ready_broadcasts_total = 1` | `commit_ms` and `rbc_deliver_ms` should stay within `commit_time_ms` (default `4000`) |

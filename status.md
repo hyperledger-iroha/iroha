@@ -1,9 +1,60 @@
 # Status
 
 ## Latest Updates
+- Izanami: track account metadata keys so remove-account-kv plans target real keys; add coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-izanami cargo test -p izanami` (pass; warnings about `genesis topology is empty` from `iroha_test_network::config`).
+- Crypto/VRF: switch VRF prehash/output to raw Blake2b-256 digests (no Hash LSB tweak) to keep outputs unbiased; add tests to enforce raw digest usage and refresh VRF docs.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 300s while compiling; warning about unused `MissingQc` variant in `mochi/mochi-ui-egui/src/main.rs:10917`); `cargo test -p iroha_crypto --features bls vrf_output_uses_raw_blake2b` (pass).
+- Izanami: make unregister-asset-definition fallback target missing IDs to avoid unintended success; add fallback coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-izanami cargo test -p izanami` (pass; warnings about `genesis topology is empty` from `iroha_test_network::config`).
+- Izanami: avoid mint/burn trigger repetition plans targeting auto-executing triggers by using by-call filters, tracking only repetition triggers, and removing depleted entries; added coverage for repeatable trigger selection and non-repeatable trigger paths.
+- Tests: `CARGO_TARGET_DIR=target/codex-izanami cargo test -p izanami` (pass; warnings about `genesis topology is empty` from `iroha_test_network::config`).
+- Crypto/BLS: reject same-message aggregates that cancel to the identity element (aggregate signature or public key), and reject identity aggregates from `aggregate_signatures`; add canceling-pair regression tests for normal/small suites.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 300s while compiling; warning about unused `MissingQc` variant in `mochi/mochi-ui-egui/src/main.rs:10917`).
+- Izanami: track repeatable triggers separately so mint/burn repetition plans only target `Repeats::Exactly` triggers; register repetition triggers as finite; add coverage for repeatable trigger registration.
+- Tests: `CARGO_TARGET_DIR=target/codex-izanami cargo test -p izanami` (pass; warnings about `genesis topology is empty` from `iroha_test_network::config`).
+- Crypto: reject empty deterministic batch verification inputs for BLS/secp256k1/PQC; add empty-input tests and refresh batch-verification docs.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 300s while compiling; warning about unused `MissingQc` variant in `mochi-ui-egui/src/main.rs:10917`).
+- Sumeragi: compute consensus message wire sizes using the NetworkMessage envelope, trim BlockSyncUpdate optional fields to stay under frame caps, and drop oversize background consensus messages; update BlockCreated sizing and RBC chunk cap logic; add unit coverage.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Tests: `cargo test -p iroha_core consensus_block_wire_len_matches_network_message` (timed out after 300s while running filtered tests; target test passed before timeout).
+- Tests: `cargo test -p iroha_core trim_block_sync_update_drops_commit_votes_to_fit` (pass).
+- Tests: `cargo test -p iroha_core consensus_frame_cap_is_plaintext_and_rbc_chunk_is_clamped` (timed out after 180s while running filtered tests; target test passed before timeout).
+- Izanami run: `CARGO_TARGET_DIR=target/codex-izanami cargo run -p izanami -- --allow-net --peers 4 --faulty 0 --pipeline-time 250ms --target-blocks 200 --progress-interval 5s --progress-timeout 60s --duration 2m --tps 10 --max-inflight 64` (timed out after 600s during run; log review pending).
+- Tests: `CARGO_TARGET_DIR=target/codex-izanami cargo test --workspace` (timed out after 600s while compiling; warning about unused `MissingQc` variant in `mochi/mochi-ui-egui/src/main.rs:10917`).
+- Torii/Sumeragi tests: handle `MissingValidatorPop` in bridge finality responses; update QC/roster/checkpoint tests to use WorldView for PoP-aware validation.
+- Tests: `cargo test --workspace` (timed out after 300s while compiling; warning about unused `MissingQc` variant in `mochi/mochi-ui-egui`).
+- Consensus/Crypto: require BLS PoP for aggregate verification across QC, lane relay, bridge finality, and JDG attestations; store PoPs in consensus key records and bridge finality proofs; add pop lookup coverage; reject empty Ed25519 aggregate inputs with coverage.
+- Docs: update bridge finality + JDG attestation docs (localized) to reflect PoP requirements.
+- Tests: not run (not requested).
+- Sumeragi/P2P: clamp RBC chunk size to the consensus plaintext cap (accounting for encryption/header overhead), use plaintext consensus caps for frame sizing, and enforce BlockCreated size limits under DA; add unit coverage.
+- Docs: note runtime clamping of `rbc_chunk_max_bytes` in Sumeragi/DA/telemetry docs (including ja/he).
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 120s while compiling).
+- Tests: `cargo test -p iroha_core consensus_frame_cap_is_plaintext_and_rbc_chunk_is_clamped -- --nocapture` (failed compiling `crates/iroha_data_model/src/bridge.rs`: missing argument for `bls_normal_verify_preaggregated_same_message`; warning: unused import `std::iter` in `crates/iroha_crypto/src/signature/ed25519.rs`).
+- Izanami: register by-call triggers for `ExecuteTrigger` plans and track them separately so manual execution targets the correct filter; add coverage for by-call trigger registration/execution planning.
+- Tests: `CARGO_TARGET_DIR=target/codex-izanami cargo test -p izanami` (pass; warnings: genesis topology empty fallback in `iroha_test_network::config`).
+- Izanami: record the role grant-on-register for treasury so subsequent grant/revoke plans avoid duplicate grants, and prevent role revocations from targeting the treasury signer; update grant-role test counts.
+- Tests: `CARGO_TARGET_DIR=target/codex-izanami cargo test -p izanami` (pass; warnings: genesis topology empty fallback in `iroha_test_network::config`).
+- Izanami: only update staking tracking (validators, unbonds, asset instances) when the plan is expected to succeed, keeping chaos state consistent with current Nexus staking prerequisites; adjust staking tests accordingly.
+- Tests: `CARGO_TARGET_DIR=target/codex-izanami cargo test -p izanami` (pass; warnings: genesis topology empty fallback in `iroha_test_network::config`).
+- Izanami: clear completed SoraFS replication orders from the pending queue and add coverage for completion tracking.
+- Tests: `CARGO_TARGET_DIR=target/codex-izanami cargo test -p izanami` (pass; warnings: genesis topology empty fallback in `iroha_test_network::config`).
+- Izanami: move SoraFS pin/provider seeding out of chaos genesis into an explicit seed plan, align DvP authority with the delivery leg sender, and grant treasury mint permission for the base asset; update replication and DvP tests to match.
+- Tests: `CARGO_TARGET_DIR=target/codex-izanami cargo test -p izanami` (pass; warnings: genesis topology empty fallback in `iroha_test_network::config`).
+- Tests: `CARGO_TARGET_DIR=target/codex-izanami cargo test --workspace` (timed out after 600s while compiling; warning about unused `MissingQc` variant in `mochi/mochi-ui-egui/src/main.rs:10917`).
+- Queue: skip hash-queue resync while transaction guards are in-flight to prevent duplicate transactions in proposals; add regression coverage.
+- Tests: `cargo test -p iroha_core resync_skips_when_guards_inflight -- --nocapture` (timed out during compilation; rerun pending).
+- Izanami: validation run for duplicate-transaction fix pending.
+- Izanami: seed SoraFS pin manifests/provider owners in chaos genesis, grant pin/provider permissions, and emit capacity-style replication order payloads; add payload decode coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-izanami cargo test -p izanami` (pass; warnings: genesis topology empty fallback in `iroha_test_network::config`).
+- P2P/gossiper: size tx gossip batches using plaintext caps derived from encrypted frame limits (AEAD overhead) to prevent `FrameTooLarge` disconnects; add unit coverage.
+- Docs: clarify P2P frame-cap overhead and topic-cap enforcement.
+- Tests: `cargo test --workspace` (failed: `crates/izanami/src/instructions.rs` missing `Option<SorafsReplicationSeed>` arg for `ChaosState::new` and `sorafs_manifest::ReplicationOrderV1` no longer has `providers`/`redundancy`/`deadline`/`policy_hash`; warnings: unused imports in `crates/izanami/src/instructions.rs`).
+- Izanami: enforce minimum pipeline time (>=2ms) in config/TUI to match test-network builder; add coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-izanami cargo test -p izanami` (pass; warnings: genesis topology empty fallback in `iroha_test_network::config`).
 - Izanami: grant SoraFS replication permissions in chaos genesis; mark Nexus staking chaos plans as expected failures until staking assets/peer-backed validators are provisioned; sign staking mint/transfer plans with treasury.
 - Tests: `CARGO_TARGET_DIR=target/codex-izanami cargo test -p izanami` (timed out after 5m during compilation).
-- Integration tests/assets: disable Nexus in the asset test network builder (permissioned) and add a status-retry helper to avoid Torii readiness stalls.
+- Integration tests/assets: add a status-retry helper with storage fallback and use it in asset tests to tolerate Torii readiness stalls.
 - Tests: `cargo test -p integration_tests --test asset client_add_asset_with_decimal_should_increase_asset_amount -- --nocapture`; `cargo test -p integration_tests --test asset client_add_asset_quantity_to_existing_asset_should_increase_asset_amount -- --nocapture`; `cargo test -p integration_tests --test asset client_add_big_asset_quantity_to_existing_asset_amount -- --nocapture`; `cargo test -p integration_tests --test asset fail_if_dont_satisfy_spec -- --nocapture`; `cargo test -p integration_tests --test asset find_rate_and_make_exchange_isi_should_succeed -- --nocapture`; `cargo test -p integration_tests --test asset transfer_asset_definition -- --nocapture` (all pass).
 - Izanami: write `sumeragi.consensus_mode` into the Nexus profile config layer so NPoS mode propagates through overrides.
 - Tests: `cargo test -p izanami` (timed out: waiting for build directory lock).

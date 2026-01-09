@@ -3933,7 +3933,9 @@ pub(crate) mod valid {
                 #[derive(Clone)]
                 struct BlsItem {
                     idx: usize,
-                    pk: Vec<u8>,
+                    pk: iroha_crypto::PublicKey,
+                    pk_bytes: Vec<u8>,
+                    pop: Option<Vec<u8>>,
                     msg: [u8; 32],
                     sig: Vec<u8>,
                     small: bool, // true => BlsSmall, false => BlsNormal
@@ -3960,13 +3962,7 @@ pub(crate) mod valid {
                     let mut msg = [0u8; 32];
                     msg.copy_from_slice(h.as_ref());
                     let sig_bytes = tx.signature().payload().payload().to_vec();
-                    let item = BlsItem {
-                        idx: i,
-                        pk: pk_bytes.to_vec(),
-                        msg,
-                        sig: sig_bytes,
-                        small,
-                    };
+                    let mut pop = None;
                     if small {
                         // Require PoP metadata for BLS-small keys to enable batching
                         if let Some(pop_hex) =
@@ -3974,21 +3970,37 @@ pub(crate) mod valid {
                         {
                             if iroha_crypto::bls_small_pop_verify(signatory, &pop_hex).is_err() {
                                 all_small_have_pop = false;
+                            } else {
+                                pop = Some(pop_hex);
                             }
                         } else {
                             all_small_have_pop = false;
                         }
-                        items_small.push(item);
                     } else {
                         // Require a PoP in transaction metadata to harden against rogue-key
                         // aggregation. Missing/invalid PoP disables batching for normal BLS.
                         if let Some(pop_hex) = bls_pop_from_metadata(tx.metadata(), &BLS_POP_KEY) {
                             if iroha_crypto::bls_normal_pop_verify(signatory, &pop_hex).is_err() {
                                 all_normal_have_pop = false;
+                            } else {
+                                pop = Some(pop_hex);
                             }
                         } else {
                             all_normal_have_pop = false;
                         }
+                    }
+                    let item = BlsItem {
+                        idx: i,
+                        pk: signatory.clone(),
+                        pk_bytes: pk_bytes.to_vec(),
+                        pop,
+                        msg,
+                        sig: sig_bytes,
+                        small,
+                    };
+                    if small {
+                        items_small.push(item);
+                    } else {
                         items_normal.push(item);
                     }
                 }
@@ -4020,15 +4032,23 @@ pub(crate) mod valid {
                             debug_assert!(!slc.is_empty());
                             let msg = slc[0].msg.as_slice();
                             let sigs: Vec<&[u8]> = slc.iter().map(|it| it.sig.as_slice()).collect();
-                            let pks: Vec<&[u8]> = slc.iter().map(|it| it.pk.as_slice()).collect();
+                            let pks: Vec<&iroha_crypto::PublicKey> =
+                                slc.iter().map(|it| &it.pk).collect();
+                            let mut pops = Vec::with_capacity(slc.len());
+                            for it in slc {
+                                let Some(pop) = it.pop.as_ref() else {
+                                    return false;
+                                };
+                                pops.push(pop.as_slice());
+                            }
                             if slc[0].small {
                                 iroha_crypto::bls_small_verify_aggregate_same_message(
-                                    msg, &sigs, &pks,
+                                    msg, &sigs, &pks, &pops,
                                 )
                                 .is_ok()
                             } else {
                                 iroha_crypto::bls_normal_verify_aggregate_same_message(
-                                    msg, &sigs, &pks,
+                                    msg, &sigs, &pks, &pops,
                                 )
                                 .is_ok()
                             }
@@ -4130,7 +4150,7 @@ pub(crate) mod valid {
                             let sigs: Vec<&[u8]> =
                                 singletons.iter().map(|it| it.sig.as_slice()).collect();
                             let pks: Vec<&[u8]> =
-                                singletons.iter().map(|it| it.pk.as_slice()).collect();
+                                singletons.iter().map(|it| it.pk_bytes.as_slice()).collect();
                             let ok = if singletons[0].small {
                                 #[cfg(feature = "telemetry")]
                                 {
@@ -4164,7 +4184,7 @@ pub(crate) mod valid {
                                     let sigs: Vec<&[u8]> =
                                         slc.iter().map(|it| it.sig.as_slice()).collect();
                                     let pks: Vec<&[u8]> =
-                                        slc.iter().map(|it| it.pk.as_slice()).collect();
+                                        slc.iter().map(|it| it.pk_bytes.as_slice()).collect();
                                     let ok = if slc[0].small {
                                         iroha_crypto::bls_small_verify_aggregate_multi_message(
                                             &msgs, &sigs, &pks,
@@ -7115,6 +7135,7 @@ pub(crate) mod valid {
             let record = ConsensusKeyRecord {
                 id: id.clone(),
                 public_key,
+                pop: None,
                 activation_height,
                 expiry_height,
                 hsm: None,

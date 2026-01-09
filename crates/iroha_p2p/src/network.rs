@@ -484,11 +484,79 @@ impl<T> RelayMessage<T> {
     }
 }
 
+/// Return the plaintext wire length of a P2P data frame containing `payload`.
+///
+/// This accounts for the relay envelope and the `Message::Data` wrapper but
+/// excludes encryption overhead (use `frame_plaintext_cap` to apply caps).
+pub fn data_frame_wire_len<T: Encode + Clone>(
+    origin: &PeerId,
+    target: Option<&PeerId>,
+    ttl: u8,
+    priority: message::Priority,
+    payload: &T,
+) -> usize {
+    let target = match target {
+        Some(peer_id) => RelayTarget::Direct(peer_id.clone()),
+        None => RelayTarget::Broadcast,
+    };
+    let frame = RelayMessage::new(origin.clone(), target, ttl, priority, payload.clone());
+    crate::peer::data_message_wire_len(frame)
+}
+
 type WireMessage<T> = RelayMessage<T>;
 
 impl<T: message::ClassifyTopic> message::ClassifyTopic for RelayMessage<T> {
     fn topic(&self) -> message::Topic {
         self.payload.topic()
+    }
+}
+
+#[cfg(test)]
+mod data_frame_wire_len_tests {
+    use iroha_crypto::KeyPair;
+    use norito::codec::{Decode, Encode};
+
+    use super::*;
+
+    #[derive(Clone, Debug, Decode, Encode)]
+    struct Dummy {
+        tag: u8,
+    }
+
+    #[test]
+    fn data_frame_wire_len_matches_manual_envelope() {
+        let origin = PeerId::from(KeyPair::random().public_key().clone());
+        let target = PeerId::from(KeyPair::random().public_key().clone());
+        let payload = Dummy { tag: 7 };
+
+        let direct =
+            data_frame_wire_len(&origin, Some(&target), 8, message::Priority::High, &payload);
+        let direct_frame = RelayMessage::new(
+            origin.clone(),
+            RelayTarget::Direct(target.clone()),
+            8,
+            message::Priority::High,
+            payload.clone(),
+        );
+        let direct_expected = crate::peer::data_message_wire_len(direct_frame);
+        assert_eq!(
+            direct, direct_expected,
+            "direct frame size should match envelope"
+        );
+
+        let broadcast = data_frame_wire_len(&origin, None, 8, message::Priority::Low, &payload);
+        let broadcast_frame = RelayMessage::new(
+            origin,
+            RelayTarget::Broadcast,
+            8,
+            message::Priority::Low,
+            payload,
+        );
+        let broadcast_expected = crate::peer::data_message_wire_len(broadcast_frame);
+        assert_eq!(
+            broadcast, broadcast_expected,
+            "broadcast frame size should match envelope"
+        );
     }
 }
 

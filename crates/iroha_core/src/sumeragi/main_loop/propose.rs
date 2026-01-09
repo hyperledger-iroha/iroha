@@ -698,27 +698,31 @@ impl Actor {
                             continue;
                         }
                     }
-                } else {
-                    let frame_len = block_created_msg.clone().encode().len();
-                    if frame_len > self.consensus_frame_cap {
-                        if tx_batch.len() <= 1 {
-                            warn!(
-                                height = proposal_height,
-                                view,
-                                frame_len,
-                                cap = self.consensus_frame_cap,
-                                "BlockCreated frame exceeds consensus cap without RBC; unable to assemble proposal"
-                            );
-                            return Err(eyre!(
-                                "proposal frame size {frame_len} exceeds consensus cap {}",
-                                self.consensus_frame_cap
-                            ));
-                        }
-                        if let Some(removed_tx) = tx_batch.pop() {
-                            let _ = routing_batch.pop();
-                            removed_for_frame_cap.push(removed_tx);
-                            continue;
-                        }
+                }
+
+                let frame_len = super::consensus_block_wire_len(
+                    self.common_config.peer.id(),
+                    &block_created_msg,
+                );
+                if frame_len > self.consensus_frame_cap {
+                    if tx_batch.len() <= 1 {
+                        warn!(
+                            height = proposal_height,
+                            view,
+                            frame_len,
+                            cap = self.consensus_frame_cap,
+                            da_enabled,
+                            "BlockCreated frame exceeds consensus cap; unable to assemble proposal"
+                        );
+                        return Err(eyre!(
+                            "proposal frame size {frame_len} exceeds consensus cap {}",
+                            self.consensus_frame_cap
+                        ));
+                    }
+                    if let Some(removed_tx) = tx_batch.pop() {
+                        let _ = routing_batch.pop();
+                        removed_for_frame_cap.push(removed_tx);
+                        continue;
                     }
                 }
                 let payload_hash = Hash::new(&payload_bytes);

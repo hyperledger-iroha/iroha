@@ -39,3 +39,9 @@ fn pqc_batch_verify_ok_and_fail() {
     let broken_refs: Vec<&[u8]> = broken.iter().map(Vec::as_slice).collect();
     assert!(pqc_verify_batch_deterministic(&msg_refs, &broken_refs, &pk_refs, seed).is_err());
 }
+
+#[test]
+fn pqc_batch_verify_rejects_empty_input() {
+    let empty: Vec<&[u8]> = Vec::new();
+    assert!(pqc_verify_batch_deterministic(&empty, &empty, &empty, [0u8; 32]).is_err());
+}

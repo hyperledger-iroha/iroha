@@ -20,7 +20,7 @@ pub mod isi {
 
     use base64::engine::Engine as _;
     use eyre::Result;
-    use iroha_crypto::{Hash, Hash as CryptoHash, PublicKey, blake2::Blake2b512};
+    use iroha_crypto::{Algorithm, Hash, Hash as CryptoHash, PublicKey, blake2::Blake2b512};
     // Governance ISIs
     use iroha_data_model::isi::confidential;
     // Bring runtime upgrade ISIs into scope
@@ -162,6 +162,50 @@ pub mod isi {
                     render_list(&allowed_algorithms)
                 )),
             ));
+        }
+
+        match algo {
+            Algorithm::BlsNormal => {
+                let Some(pop) = record.pop.as_deref() else {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "BLS proof-of-possession required for consensus key".into(),
+                        ),
+                    ));
+                };
+                if let Err(err) = iroha_crypto::bls_normal_pop_verify(&record.public_key, pop) {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "invalid BLS proof-of-possession: {err}"
+                        )),
+                    ));
+                }
+            }
+            Algorithm::BlsSmall => {
+                let Some(pop) = record.pop.as_deref() else {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "BLS proof-of-possession required for consensus key".into(),
+                        ),
+                    ));
+                };
+                if let Err(err) = iroha_crypto::bls_small_pop_verify(&record.public_key, pop) {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "invalid BLS proof-of-possession: {err}"
+                        )),
+                    ));
+                }
+            }
+            _ => {
+                if record.pop.is_some() {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "proof-of-possession is only valid for BLS consensus keys".into(),
+                        ),
+                    ));
+                }
+            }
         }
 
         if sumeragi.key_require_hsm && record.hsm.is_none() {
@@ -7911,6 +7955,7 @@ pub mod isi {
             let lifecycle_record = ConsensusKeyRecord {
                 id: candidate_id,
                 public_key: peer_id.public_key().clone(),
+                pop: Some(self.pop.clone()),
                 activation_height,
                 expiry_height: self.expiry_at,
                 hsm: hsm_binding,
@@ -7996,9 +8041,15 @@ pub mod isi {
 
             let key_label = peer_id.public_key().to_string();
             let block_height = state_transaction._curr_block.height().get();
+            let candidate_id = derive_validator_key_id(peer_id.public_key());
+            let existing_pop = world
+                .consensus_keys
+                .get(&candidate_id)
+                .and_then(|record| record.pop.clone());
             let lifecycle_record = ConsensusKeyRecord {
-                id: derive_validator_key_id(peer_id.public_key()),
+                id: candidate_id,
                 public_key: peer_id.public_key().clone(),
+                pop: existing_pop,
                 activation_height: block_height,
                 expiry_height: Some(block_height),
                 hsm: None,
@@ -10412,6 +10463,7 @@ pub mod isi {
             let endorsement_record = ConsensusKeyRecord {
                 id: endorsement_key_id.clone(),
                 public_key: kp.public_key().clone(),
+                pop: None,
                 activation_height: stx.block_height(),
                 expiry_height: None,
                 hsm: None,
@@ -10486,6 +10538,7 @@ pub mod isi {
             let endorsement_record = ConsensusKeyRecord {
                 id: endorsement_key_id.clone(),
                 public_key: kp.public_key().clone(),
+                pop: None,
                 activation_height: stx.block_height(),
                 expiry_height: None,
                 hsm: None,
@@ -10525,6 +10578,7 @@ pub mod isi {
             let endorsement_record = ConsensusKeyRecord {
                 id: endorsement_key_id.clone(),
                 public_key: kp.public_key().clone(),
+                pop: None,
                 activation_height: stx.block_height(),
                 expiry_height: None,
                 hsm: None,
@@ -10636,6 +10690,7 @@ pub mod isi {
             let endorsement_record = ConsensusKeyRecord {
                 id: endorsement_key_id.clone(),
                 public_key: kp.public_key().clone(),
+                pop: None,
                 activation_height: stx.block_height(),
                 expiry_height: None,
                 hsm: None,
@@ -10785,9 +10840,12 @@ pub mod isi {
             // Seed a conflicting consensus key record with the same derived id but a different pk.
             let collision_id = crate::state::derive_validator_key_id(peer_id.public_key());
             let other = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let other_pop = iroha_crypto::bls_normal_pop_prove(other.private_key())
+                .expect("pop for conflicting key");
             let bogus = ConsensusKeyRecord {
                 id: collision_id.clone(),
                 public_key: other.public_key().clone(),
+                pop: Some(other_pop),
                 activation_height: stx.block_height(),
                 expiry_height: None,
                 hsm: None,
@@ -11025,6 +11083,7 @@ pub mod isi {
                 let existing_record = ConsensusKeyRecord {
                     id: existing_id.clone(),
                     public_key: peer_id.public_key().clone(),
+                    pop: Some(pop.clone()),
                     activation_height: stx.block_height(),
                     expiry_height: None,
                     hsm: None,
@@ -11180,6 +11239,8 @@ pub mod isi {
             let kp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-primary");
             let pk = kp.public_key().clone();
+            let pop =
+                iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("pop for validator");
             let hsm = HsmBinding {
                 provider: "pkcs11".to_string(),
                 key_label: "validator/0".to_string(),
@@ -11188,6 +11249,7 @@ pub mod isi {
             let make_record = |activation_height: u64| ConsensusKeyRecord {
                 id: id.clone(),
                 public_key: pk.clone(),
+                pop: Some(pop.clone()),
                 activation_height,
                 expiry_height: None,
                 hsm: Some(hsm.clone()),
@@ -11269,10 +11331,13 @@ pub mod isi {
 
             let mut stx = state_block.transaction();
             let kp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let pop =
+                iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("pop for validator");
             let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-hsm");
             let record = ConsensusKeyRecord {
                 id: id.clone(),
                 public_key: kp.public_key().clone(),
+                pop: Some(pop),
                 activation_height: stx
                     .block_height()
                     .saturating_add(params.key_activation_lead_blocks),
@@ -11326,6 +11391,7 @@ pub mod isi {
             let record = ConsensusKeyRecord {
                 id: id.clone(),
                 public_key: kp.public_key().clone(),
+                pop: None,
                 activation_height: stx
                     .block_height()
                     .saturating_add(params.key_activation_lead_blocks),
@@ -11380,10 +11446,13 @@ pub mod isi {
 
             let mut stx = state_block.transaction();
             let kp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let pop =
+                iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("pop for validator");
             let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-history");
             let record = ConsensusKeyRecord {
                 id: id.clone(),
                 public_key: kp.public_key().clone(),
+                pop: Some(pop),
                 activation_height: stx
                     .block_height()
                     .saturating_add(params.key_activation_lead_blocks),
@@ -11460,10 +11529,13 @@ pub mod isi {
             {
                 let mut stx = state_block.transaction();
                 let kp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+                let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key())
+                    .expect("pop for validator");
                 let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-bls-ok");
                 let record = ConsensusKeyRecord {
                     id: id.clone(),
                     public_key: kp.public_key().clone(),
+                    pop: Some(pop),
                     activation_height: stx
                         .block_height()
                         .saturating_add(params.key_activation_lead_blocks),
@@ -11490,6 +11562,7 @@ pub mod isi {
                 let record = ConsensusKeyRecord {
                     id: id.clone(),
                     public_key: kp.public_key().clone(),
+                    pop: None,
                     activation_height: stx
                         .block_height()
                         .saturating_add(params.key_activation_lead_blocks),
@@ -11521,11 +11594,14 @@ pub mod isi {
             {
                 let mut stx = state_block.transaction();
                 let kp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+                let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key())
+                    .expect("pop for validator");
                 let id =
                     ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-provider-reject");
                 let record = ConsensusKeyRecord {
                     id: id.clone(),
                     public_key: kp.public_key().clone(),
+                    pop: Some(pop),
                     activation_height: stx
                         .block_height()
                         .saturating_add(params.key_activation_lead_blocks),
@@ -11580,10 +11656,13 @@ pub mod isi {
 
             let mut stx = state_block.transaction();
             let kp_a = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let pop_a =
+                iroha_crypto::bls_normal_pop_prove(kp_a.private_key()).expect("pop for validator");
             let id_a = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-hsm-required");
             let record_a = ConsensusKeyRecord {
                 id: id_a.clone(),
                 public_key: kp_a.public_key().clone(),
+                pop: Some(pop_a),
                 activation_height: stx
                     .block_height()
                     .saturating_add(params.key_activation_lead_blocks),
@@ -11608,6 +11687,8 @@ pub mod isi {
 
             let mut stx = state_block.transaction();
             let kp_b = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let pop_b =
+                iroha_crypto::bls_normal_pop_prove(kp_b.private_key()).expect("pop for validator");
             let id_b = ConsensusKeyId::new(
                 ConsensusKeyRole::Validator,
                 "validator-hsm-missing-rotation",
@@ -11615,6 +11696,7 @@ pub mod isi {
             let record_b = ConsensusKeyRecord {
                 id: id_b.clone(),
                 public_key: kp_b.public_key().clone(),
+                pop: Some(pop_b),
                 activation_height: stx
                     .block_height()
                     .saturating_add(params.key_activation_lead_blocks + 1),
@@ -11684,10 +11766,13 @@ pub mod isi {
 
             let mut stx = state_block.transaction();
             let kp_a = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let pop_a =
+                iroha_crypto::bls_normal_pop_prove(kp_a.private_key()).expect("pop for validator");
             let id_a = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-hsm-optional-a");
             let record_a = ConsensusKeyRecord {
                 id: id_a.clone(),
                 public_key: kp_a.public_key().clone(),
+                pop: Some(pop_a),
                 activation_height: stx
                     .block_height()
                     .saturating_add(params.key_activation_lead_blocks),
@@ -11708,10 +11793,13 @@ pub mod isi {
 
             let mut stx = state_block.transaction();
             let kp_b = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let pop_b =
+                iroha_crypto::bls_normal_pop_prove(kp_b.private_key()).expect("pop for validator");
             let id_b = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-hsm-optional-b");
             let record_b = ConsensusKeyRecord {
                 id: id_b.clone(),
                 public_key: kp_b.public_key().clone(),
+                pop: Some(pop_b),
                 activation_height: stx
                     .block_height()
                     .saturating_add(params.key_activation_lead_blocks + 2),
@@ -11796,10 +11884,13 @@ pub mod isi {
                 };
                 let mut stx = state_block.transaction();
                 let kp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+                let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key())
+                    .expect("pop for validator");
                 let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-empty-algos");
                 let record = ConsensusKeyRecord {
                     id: id.clone(),
                     public_key: kp.public_key().clone(),
+                    pop: Some(pop),
                     activation_height: stx
                         .block_height()
                         .saturating_add(params.key_activation_lead_blocks),
@@ -11856,6 +11947,7 @@ pub mod isi {
                 let record = ConsensusKeyRecord {
                     id: id.clone(),
                     public_key: kp.public_key().clone(),
+                    pop: None,
                     activation_height: stx
                         .block_height()
                         .saturating_add(params.key_activation_lead_blocks),
@@ -11913,6 +12005,7 @@ pub mod isi {
                 let record = ConsensusKeyRecord {
                     id: id.clone(),
                     public_key: kp.public_key().clone(),
+                    pop: None,
                     activation_height: stx
                         .block_height()
                         .saturating_add(params.key_activation_lead_blocks),
@@ -11966,10 +12059,13 @@ pub mod isi {
 
             let mut stx = state_block.transaction();
             let kp_a = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let pop_a =
+                iroha_crypto::bls_normal_pop_prove(kp_a.private_key()).expect("pop for validator");
             let id_a = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-primary");
             let record_a = ConsensusKeyRecord {
                 id: id_a.clone(),
                 public_key: kp_a.public_key().clone(),
+                pop: Some(pop_a),
                 activation_height: stx
                     .block_height()
                     .saturating_add(params.key_activation_lead_blocks),
@@ -11994,10 +12090,13 @@ pub mod isi {
 
             let mut stx = state_block.transaction();
             let kp_b = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let pop_b =
+                iroha_crypto::bls_normal_pop_prove(kp_b.private_key()).expect("pop for validator");
             let id_b = ConsensusKeyId::new(ConsensusKeyRole::Validator, "validator-next");
             let record_b = ConsensusKeyRecord {
                 id: id_b.clone(),
                 public_key: kp_b.public_key().clone(),
+                pop: Some(pop_b),
                 activation_height: stx
                     .block_height()
                     .saturating_add(params.key_activation_lead_blocks + 1),
@@ -12615,6 +12714,7 @@ pub mod isi {
                 let rec = ConsensusKeyRecord {
                     id: id.clone(),
                     public_key: kp.public_key().clone(),
+                    pop: None,
                     activation_height: 0,
                     expiry_height: None,
                     hsm: None,

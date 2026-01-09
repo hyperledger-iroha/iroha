@@ -4799,6 +4799,34 @@ pub(crate) fn derive_validator_key_id(public_key: &PublicKey) -> ConsensusKeyId 
     ConsensusKeyId::new(ConsensusKeyRole::Validator, ident)
 }
 
+/// Fetch the stored BLS proof-of-possession for a consensus public key.
+///
+/// Prefers the `consensus_keys_by_pk` index and falls back to a scan if absent.
+pub(crate) fn consensus_key_pop_for_public_key(
+    snapshot: &impl WorldReadOnly,
+    public_key: &PublicKey,
+) -> Option<Vec<u8>> {
+    let pk_label = public_key.to_string();
+    if let Some(ids) = snapshot.consensus_keys_by_pk().get(&pk_label) {
+        for id in ids {
+            if let Some(record) = snapshot.consensus_keys().get(id) {
+                if record.public_key == *public_key {
+                    if let Some(pop) = record.pop.as_ref() {
+                        return Some(pop.clone());
+                    }
+                }
+            }
+        }
+    }
+    snapshot.consensus_keys().iter().find_map(|(_id, record)| {
+        if record.public_key == *public_key {
+            record.pop.clone()
+        } else {
+            None
+        }
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConsensusKeyGate {
     Live,
@@ -4982,10 +5010,10 @@ mod stake_snapshot_tests {
     use core::num::NonZeroU32;
 
     use iroha_config::parameters::actual::{LaneConfig as DerivedLaneConfig, LaneValidatorMode};
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId as DMAccountId,
-        consensus::ConsensusKeyStatus,
+        consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
         domain::DomainId,
         metadata::Metadata,
         nexus::{LaneCatalog, LaneConfig, LaneVisibility},
@@ -5004,6 +5032,7 @@ mod stake_snapshot_tests {
         let mut record = ConsensusKeyRecord {
             id: ident,
             public_key: peer.public_key().clone(),
+            pop: None,
             activation_height,
             expiry_height: None,
             hsm: None,
@@ -5026,6 +5055,48 @@ mod stake_snapshot_tests {
             by_pk.push(record.id.clone());
             world_block.consensus_keys_by_pk.insert(pk, by_pk);
         }
+    }
+
+    #[test]
+    fn consensus_key_pop_lookup_uses_index_and_fallback() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_id = PeerId::new(keypair.public_key().clone());
+        let pop =
+            iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("pop for test key");
+        let id = derive_validator_key_id(peer_id.public_key());
+        let record = ConsensusKeyRecord {
+            id: id.clone(),
+            public_key: peer_id.public_key().clone(),
+            pop: Some(pop.clone()),
+            activation_height: 0,
+            expiry_height: None,
+            hsm: None,
+            replaces: None,
+            status: ConsensusKeyStatus::Active,
+        };
+
+        let indexed_world = World::default();
+        {
+            let mut block = indexed_world.block();
+            block.consensus_keys.insert(id.clone(), record.clone());
+            block
+                .consensus_keys_by_pk
+                .insert(peer_id.public_key().to_string(), vec![id.clone()]);
+            block.commit();
+        }
+        let indexed_view = indexed_world.view();
+        let indexed_pop = consensus_key_pop_for_public_key(&indexed_view, peer_id.public_key());
+        assert_eq!(indexed_pop.as_deref(), Some(pop.as_slice()));
+
+        let fallback_world = World::default();
+        {
+            let mut block = fallback_world.block();
+            block.consensus_keys.insert(id, record);
+            block.commit();
+        }
+        let fallback_view = fallback_world.view();
+        let fallback_pop = consensus_key_pop_for_public_key(&fallback_view, peer_id.public_key());
+        assert_eq!(fallback_pop.as_deref(), Some(pop.as_slice()));
     }
 
     #[test]
@@ -5232,6 +5303,7 @@ mod stake_snapshot_tests {
         let expired_record = ConsensusKeyRecord {
             id: ident,
             public_key: expired_peer.public_key().clone(),
+            pop: None,
             activation_height: 0,
             expiry_height: Some(0),
             hsm: None,
@@ -12307,10 +12379,11 @@ impl State {
             .collect()
     }
 
-    fn lane_relay_qc_public_keys(
+    fn lane_relay_qc_signers(
+        world: &impl WorldReadOnly,
         committee: &[AccountId],
         signers_bitmap: &[u8],
-    ) -> Result<Vec<Vec<u8>>, LaneRelayError> {
+    ) -> Result<(Vec<PublicKey>, Vec<Vec<u8>>), LaneRelayError> {
         let expected_len = committee.len().div_ceil(8);
         if signers_bitmap.len() != expected_len {
             return Err(LaneRelayError::SignerBitmapLengthMismatch {
@@ -12320,6 +12393,7 @@ impl State {
         }
         let validator_count = u32::try_from(committee.len()).unwrap_or(u32::MAX);
         let mut public_keys = Vec::new();
+        let mut pops = Vec::new();
         for (byte_index, byte) in signers_bitmap.iter().enumerate() {
             if *byte == 0 {
                 continue;
@@ -12339,14 +12413,18 @@ impl State {
                 let Some(signatory) = committee[signer_index].try_signatory() else {
                     return Err(LaneRelayError::AggregateSignatureInvalid);
                 };
-                let (algorithm, payload) = signatory.to_bytes();
+                let (algorithm, _payload) = signatory.to_bytes();
                 if algorithm != Algorithm::BlsNormal {
                     return Err(LaneRelayError::AggregateSignatureInvalid);
                 }
-                public_keys.push(payload.to_vec());
+                let Some(pop) = consensus_key_pop_for_public_key(world, signatory) else {
+                    return Err(LaneRelayError::AggregateSignatureInvalid);
+                };
+                public_keys.push(signatory.clone());
+                pops.push(pop);
             }
         }
-        Ok(public_keys)
+        Ok((public_keys, pops))
     }
 
     fn verify_lane_relay_qc(
@@ -12355,7 +12433,9 @@ impl State {
         committee: &[AccountId],
     ) -> Result<(), LaneRelayError> {
         let qc = envelope.qc.as_ref().ok_or(LaneRelayError::MissingQc)?;
-        let public_keys = Self::lane_relay_qc_public_keys(committee, &qc.aggregate.signers_bitmap)?;
+        let world = self.world.view();
+        let (public_keys, pops) =
+            Self::lane_relay_qc_signers(&world, committee, &qc.aggregate.signers_bitmap)?;
         if public_keys.is_empty() {
             return Err(LaneRelayError::AggregateSignatureInvalid);
         }
@@ -12387,11 +12467,13 @@ impl State {
             bls_sig: Vec::new(),
         };
         let preimage = crate::sumeragi::consensus::vote_preimage(&self.chain_id, mode_tag, &vote);
-        let key_refs: Vec<&[u8]> = public_keys.iter().map(Vec::as_slice).collect();
+        let key_refs: Vec<&PublicKey> = public_keys.iter().collect();
+        let pop_refs: Vec<&[u8]> = pops.iter().map(Vec::as_slice).collect();
         iroha_crypto::bls_normal_verify_preaggregated_same_message(
             &preimage,
             &qc.aggregate.bls_aggregate_signature,
             &key_refs,
+            &pop_refs,
         )
         .map_err(|_| LaneRelayError::AggregateSignatureInvalid)?;
         Ok(())
@@ -12750,7 +12832,9 @@ impl State {
             return Err(MergeLedgerCommitError::MergeQCAggregateSignatureMissing);
         }
 
-        let mut public_keys: Vec<&[u8]> = Vec::with_capacity(signers.len());
+        let world = self.world.view();
+        let mut public_keys: Vec<&PublicKey> = Vec::with_capacity(signers.len());
+        let mut pops = Vec::with_capacity(signers.len());
         for signer in &signers {
             let Some(peer) = commit_topology.get().get(*signer) else {
                 return Err(MergeLedgerCommitError::MergeQCSignerOutOfBounds {
@@ -12758,14 +12842,20 @@ impl State {
                     roster_len,
                 });
             };
-            let (_, payload) = peer.public_key().to_bytes();
-            public_keys.push(payload);
+            let pk = peer.public_key();
+            let Some(pop) = consensus_key_pop_for_public_key(&world, pk) else {
+                return Err(MergeLedgerCommitError::MergeQCAggregateSignatureInvalid);
+            };
+            public_keys.push(pk);
+            pops.push(pop);
         }
 
+        let pop_refs: Vec<&[u8]> = pops.iter().map(Vec::as_slice).collect();
         iroha_crypto::bls_normal_verify_preaggregated_same_message(
             qc.message_digest.as_ref(),
             &qc.aggregate_signature,
             &public_keys,
+            &pop_refs,
         )
         .map_err(|_| MergeLedgerCommitError::MergeQCAggregateSignatureInvalid)?;
 

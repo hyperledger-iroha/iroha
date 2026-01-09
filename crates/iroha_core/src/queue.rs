@@ -9,8 +9,6 @@ mod router;
 pub(crate) mod routing_ledger;
 
 use core::time::Duration;
-#[cfg(test)]
-use std::sync::atomic::AtomicUsize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
@@ -19,7 +17,7 @@ use std::{
     str::FromStr,
     sync::{
         Arc, LazyLock,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -220,6 +218,8 @@ pub struct Queue {
     push_remove_lock: parking_lot::Mutex<()>,
     /// Monotonic counter tagging guards with their queue order to keep TEU gating fair.
     guard_sequence: AtomicU64,
+    /// Active guards holding queued transactions (used to avoid resyncing during in-flight reads).
+    inflight_guards: AtomicUsize,
     /// The maximum number of transactions in the queue
     capacity: NonZeroUsize,
     /// The maximum number of transactions in the queue per user. Used to apply throttling
@@ -475,6 +475,7 @@ impl Drop for TransactionGuard {
         let telemetry_ref: Option<&StateTelemetry> = None;
 
         self.queue.remove_transaction(&self.tx, telemetry_ref);
+        self.queue.release_inflight_guard();
     }
 }
 
@@ -1219,6 +1220,7 @@ impl Queue {
                 routing_decisions: DashMap::new(),
                 push_remove_lock: parking_lot::Mutex::new(()),
                 guard_sequence: AtomicU64::new(0),
+                inflight_guards: AtomicUsize::new(0),
                 capacity,
                 capacity_per_user,
                 time_source: TimeSource::new_system(),
@@ -1778,6 +1780,15 @@ impl Queue {
         self.publish_backpressure_state(0, None);
     }
 
+    fn record_inflight_guard(&self) {
+        self.inflight_guards.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn release_inflight_guard(&self) {
+        let prev = self.inflight_guards.fetch_sub(1, Ordering::Relaxed);
+        debug_assert!(prev > 0, "inflight guard counter underflow");
+    }
+
     /// Pop single transaction from the queue. Removes all transactions that fail the `tx_check`.
     fn pop_from_queue(
         self: &Arc<Self>,
@@ -1851,6 +1862,7 @@ impl Queue {
             let queue_position = self.guard_sequence.fetch_add(1, Ordering::Relaxed);
             #[cfg(feature = "telemetry")]
             let telemetry_clone = state_view.telemetry.clone();
+            self.record_inflight_guard();
             let guard = TransactionGuard {
                 tx: tx_arc,
                 queue: Arc::clone(self),
@@ -1865,8 +1877,12 @@ impl Queue {
     }
 
     /// Rebuild the hash queue when it is empty but transactions remain in the map.
+    /// Skip resync if there are in-flight guards to avoid re-enqueuing active selections.
     fn resync_hash_queue_if_needed(&self, _state_view: &StateView) -> bool {
         if !self.tx_hashes.is_empty() || self.txs.is_empty() {
+            return false;
+        }
+        if self.inflight_guards.load(Ordering::Relaxed) > 0 {
             return false;
         }
         #[cfg(feature = "telemetry")]
@@ -2613,6 +2629,7 @@ pub mod tests {
                     txs_per_user: DashMap::new(),
                     push_remove_lock: parking_lot::Mutex::new(()),
                     guard_sequence: AtomicU64::new(0),
+                    inflight_guards: AtomicUsize::new(0),
                     capacity: cfg.capacity,
                     capacity_per_user: cfg.capacity_per_user,
                     time_source: time_source.clone(),
@@ -5119,6 +5136,37 @@ pub mod tests {
         drop(guards);
 
         assert_eq!(queue.tx_len(), 1, "remaining queue size should be tracked");
+    }
+
+    #[tokio::test]
+    async fn resync_skips_when_guards_inflight() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push succeeds");
+
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
+        assert_eq!(guards.len(), 1, "expected one in-flight guard");
+        assert_eq!(
+            queue.tx_len(),
+            0,
+            "hash queue should be empty while guard is held"
+        );
+
+        let mut extra = Vec::new();
+        queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut extra);
+        assert!(
+            extra.is_empty(),
+            "resync should be skipped while guard is in flight"
+        );
+
+        drop(guards);
     }
 
     #[tokio::test]

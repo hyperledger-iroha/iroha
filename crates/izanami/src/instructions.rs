@@ -13,6 +13,7 @@ use iroha_data_model::{
     account::NewAccount,
     events::{
         EventFilterBox,
+        execute_trigger::ExecuteTriggerEventFilter,
         pipeline::{PipelineEventFilterBox, TransactionEventFilter},
         prelude::{AccountEventFilter, AccountEventSet, DataEventFilter, TimeEventFilter},
         time::{ExecutionTime, Schedule},
@@ -22,7 +23,10 @@ use iroha_data_model::{
         settlement::{
             DvpIsi, SettlementId, SettlementInstructionBox, SettlementLeg, SettlementPlan,
         },
-        sorafs::{CompleteReplicationOrder, IssueReplicationOrder},
+        sorafs::{
+            ApprovePinManifest, CompleteReplicationOrder, IssueReplicationOrder,
+            RegisterPinManifest, RegisterProviderOwner,
+        },
         space_directory::{
             ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest,
             RevokeSpaceDirectoryManifest,
@@ -39,7 +43,10 @@ use iroha_data_model::{
         PublicLaneRewardShare, UniversalAccountId,
     },
     prelude::*,
-    sorafs::pin_registry::ReplicationOrderId,
+    sorafs::{
+        capacity::ProviderId,
+        pin_registry::{ChunkerProfileHandle, ManifestDigest, PinPolicy, ReplicationOrderId},
+    },
     trigger::{
         Trigger,
         action::{Action, Repeats},
@@ -47,13 +54,16 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::{
     account::{CanModifyAccountMetadata, CanRegisterAccount},
-    asset::CanModifyAssetMetadataWithDefinition,
+    asset::{CanMintAssetWithDefinition, CanModifyAssetMetadataWithDefinition},
     asset_definition::{CanModifyAssetDefinitionMetadata, CanRegisterAssetDefinition},
     domain::{CanModifyDomainMetadata, CanRegisterDomain},
     nexus::CanPublishSpaceDirectoryManifest,
     nft::CanRegisterNft,
     role::CanManageRoles,
-    sorafs::{CanCompleteSorafsReplicationOrder, CanIssueSorafsReplicationOrder},
+    sorafs::{
+        CanApproveSorafsPin, CanCompleteSorafsReplicationOrder, CanIssueSorafsReplicationOrder,
+        CanRegisterSorafsPin, CanRegisterSorafsProviderOwner,
+    },
     trigger::CanRegisterTrigger,
 };
 use norito::{
@@ -61,7 +71,13 @@ use norito::{
     json::{Map as JsonMap, Value as JsonValue},
 };
 use rand::{Rng, RngCore, rngs::StdRng, seq::IndexedRandom};
-use sorafs_manifest::pin_registry::ReplicationOrderV1;
+use sorafs_manifest::{
+    capacity::{
+        REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
+        ReplicationOrderV1,
+    },
+    chunker_registry,
+};
 use tokio::sync::Mutex;
 
 use crate::config::WorkloadProfile;
@@ -188,6 +204,26 @@ pub fn prepare_state(
         })
         .unwrap_or_else(|| vec![LaneId::SINGLE]);
 
+    let sorafs_replication = if nexus.is_some() {
+        let manifest_digest = ManifestDigest::new(*Hash::new(b"izanami-sorafs-manifest").as_ref());
+        let descriptor = chunker_registry::default_descriptor();
+        let chunker = ChunkerProfileHandle {
+            profile_id: descriptor.id.0,
+            namespace: descriptor.namespace.to_string(),
+            name: descriptor.name.to_string(),
+            semver: descriptor.semver.to_string(),
+            multihash_code: descriptor.multihash_code,
+        };
+        let provider_id = ProviderId::new(*Hash::new(b"izanami-sorafs-provider").as_ref());
+        Some(SorafsReplicationSeed {
+            manifest_digest,
+            chunker,
+            provider_id,
+        })
+    } else {
+        None
+    };
+
     let mut genesis_tx = Vec::new();
     genesis_tx.push(InstructionBox::from(Register::domain(Domain::new(
         base_domain.clone(),
@@ -226,6 +262,12 @@ pub fn prepare_state(
     genesis_tx.push(InstructionBox::from(Grant::account_permission(
         CanRegisterAssetDefinition {
             domain: base_domain.clone(),
+        },
+        treasury.id.clone(),
+    )));
+    genesis_tx.push(InstructionBox::from(Grant::account_permission(
+        CanMintAssetWithDefinition {
+            asset_definition: asset_numeric_id.clone(),
         },
         treasury.id.clone(),
     )));
@@ -271,7 +313,19 @@ pub fn prepare_state(
             treasury.id.clone(),
         )));
     }
-    if nexus.is_some() {
+    if sorafs_replication.is_some() {
+        genesis_tx.push(InstructionBox::from(Grant::account_permission(
+            CanRegisterSorafsPin,
+            treasury.id.clone(),
+        )));
+        genesis_tx.push(InstructionBox::from(Grant::account_permission(
+            CanApproveSorafsPin,
+            treasury.id.clone(),
+        )));
+        genesis_tx.push(InstructionBox::from(Grant::account_permission(
+            CanRegisterSorafsProviderOwner,
+            treasury.id.clone(),
+        )));
         genesis_tx.push(InstructionBox::from(Grant::account_permission(
             CanIssueSorafsReplicationOrder,
             treasury.id.clone(),
@@ -296,6 +350,7 @@ pub fn prepare_state(
         asset_nft_id,
         dataspaces,
         lanes,
+        sorafs_replication,
     );
     state.asset_instances.insert(treasury_asset_id);
     let mut recipes = match workload_profile {
@@ -512,10 +567,13 @@ pub struct ChaosState {
     registered_roles: Vec<RoleId>,
     role_memberships: HashMap<RoleId, HashSet<AccountId>>,
     registered_triggers: Vec<TriggerId>,
+    repeatable_triggers: Vec<TriggerId>,
+    call_triggers: Vec<TriggerId>,
     asset_definitions: HashSet<AssetDefinitionId>,
     asset_definitions_unclaimed: HashSet<AssetDefinitionId>,
     asset_instances: HashSet<AssetId>,
     nft_holdings: HashMap<NftId, AccountId>,
+    account_metadata: HashMap<AccountId, HashSet<Name>>,
     domain_metadata: HashMap<DomainId, HashSet<Name>>,
     asset_definition_metadata: HashMap<AssetDefinitionId, HashSet<Name>>,
     asset_metadata: HashMap<AssetId, HashSet<Name>>,
@@ -525,6 +583,8 @@ pub struct ChaosState {
     public_lane_validators: HashMap<LaneId, HashSet<AccountId>>,
     pending_unbonds: Vec<PendingUnbond>,
     pending_replication_orders: Vec<ReplicationOrderId>,
+    sorafs_replication: Option<SorafsReplicationSeed>,
+    sorafs_replication_ready: bool,
     counters: ChaosCounters,
 }
 
@@ -534,6 +594,13 @@ struct PendingUnbond {
     validator: AccountId,
     staker: AccountId,
     request_id: Hash,
+}
+
+#[derive(Clone, Debug)]
+struct SorafsReplicationSeed {
+    manifest_digest: ManifestDigest,
+    chunker: ChunkerProfileHandle,
+    provider_id: ProviderId,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -565,6 +632,7 @@ impl ChaosState {
         asset_nft: AssetDefinitionId,
         dataspaces: Vec<DataSpaceId>,
         lanes: Vec<LaneId>,
+        sorafs_replication: Option<SorafsReplicationSeed>,
     ) -> Self {
         let mut asset_definitions = HashSet::new();
         asset_definitions.insert(asset_numeric.clone());
@@ -590,10 +658,13 @@ impl ChaosState {
             registered_roles: Vec::new(),
             role_memberships: HashMap::new(),
             registered_triggers: Vec::new(),
+            repeatable_triggers: Vec::new(),
+            call_triggers: Vec::new(),
             asset_definitions,
             asset_definitions_unclaimed: HashSet::new(),
             asset_instances: HashSet::new(),
             nft_holdings: HashMap::new(),
+            account_metadata: HashMap::new(),
             domain_metadata: HashMap::new(),
             asset_definition_metadata: HashMap::new(),
             asset_metadata: HashMap::new(),
@@ -603,6 +674,8 @@ impl ChaosState {
             public_lane_validators: HashMap::new(),
             pending_unbonds: Vec::new(),
             pending_replication_orders: Vec::new(),
+            sorafs_replication,
+            sorafs_replication_ready: false,
             counters: ChaosCounters::default(),
         }
     }
@@ -884,6 +957,10 @@ impl ChaosState {
             .parse()
             .map_err(|_| eyre!("failed to build metadata key"))?;
         let value = json_pair("chaos", true);
+        self.account_metadata
+            .entry(target.id.clone())
+            .or_default()
+            .insert(key.clone());
         Ok(TransactionPlan {
             label: "set_account_kv",
             instructions: vec![InstructionBox::from(SetKeyValue::account(
@@ -898,6 +975,23 @@ impl ChaosState {
 
     fn plan_remove_key(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
         let target = self.random_user(rng)?.clone();
+        if let Some(keys) = self.account_metadata.get_mut(&target.id)
+            && let Some(key) = keys.iter().next().cloned()
+        {
+            keys.remove(&key);
+            if keys.is_empty() {
+                self.account_metadata.remove(&target.id);
+            }
+            return Ok(TransactionPlan {
+                label: "remove_account_kv",
+                instructions: vec![InstructionBox::from(RemoveKeyValue::account(
+                    target.id.clone(),
+                    key,
+                ))],
+                signer: target,
+                expect_success: true,
+            });
+        }
         let key: Name = "ephemeral"
             .parse()
             .map_err(|_| eyre!("failed to parse key name"))?;
@@ -937,7 +1031,7 @@ impl ChaosState {
         })
     }
 
-    fn plan_unregister_asset_definition(&mut self, rng: &mut StdRng) -> TransactionPlan {
+    fn plan_unregister_asset_definition(&mut self, _rng: &mut StdRng) -> TransactionPlan {
         if let Some(candidate) = self.asset_definitions_unclaimed.iter().next().cloned() {
             self.asset_definitions_unclaimed.remove(&candidate);
             self.asset_definitions.remove(&candidate);
@@ -951,14 +1045,11 @@ impl ChaosState {
                 expect_success: true,
             };
         }
-        let fallback = self
-            .asset_definitions
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>()
-            .choose(rng)
-            .cloned()
-            .unwrap_or_else(|| self.asset_numeric.clone());
+        let domain_name = self.base_domain.name().to_string();
+        let fallback: AssetDefinitionId =
+            format!("ghost_asset_{}#{domain_name}", self.bump_invalid())
+                .parse()
+                .expect("ghost asset definition id should parse");
         TransactionPlan {
             label: "unregister_asset_definition",
             instructions: vec![InstructionBox::from(Unregister::asset_definition(fallback))],
@@ -1190,20 +1281,17 @@ impl ChaosState {
             let log_instruction = Log::new(Level::INFO, "trigger metadata bootstrap".to_string());
             let action = Action::new(
                 vec![InstructionBox::from(log_instruction)],
-                Repeats::Exactly(1),
+                Repeats::Indefinitely,
                 self.treasury.id.clone(),
-                EventFilterBox::Pipeline(PipelineEventFilterBox::Transaction(
-                    TransactionEventFilter::new(),
-                )),
+                EventFilterBox::ExecuteTrigger(
+                    ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+                ),
             );
             instructions.push(InstructionBox::from(Register::trigger(Trigger::new(
                 trigger_id.clone(),
                 action,
             ))));
             self.registered_triggers.push(trigger_id.clone());
-            self.trigger_repetitions
-                .entry(trigger_id.clone())
-                .or_insert(0);
             trigger_id
         };
 
@@ -1238,20 +1326,17 @@ impl ChaosState {
             let log_instruction = Log::new(Level::INFO, "trigger metadata bootstrap".to_string());
             let action = Action::new(
                 vec![InstructionBox::from(log_instruction)],
-                Repeats::Exactly(1),
+                Repeats::Indefinitely,
                 self.treasury.id.clone(),
-                EventFilterBox::Pipeline(PipelineEventFilterBox::Transaction(
-                    TransactionEventFilter::new(),
-                )),
+                EventFilterBox::ExecuteTrigger(
+                    ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+                ),
             );
             instructions.push(InstructionBox::from(Register::trigger(Trigger::new(
                 trigger_id.clone(),
                 action,
             ))));
             self.registered_triggers.push(trigger_id.clone());
-            self.trigger_repetitions
-                .entry(trigger_id.clone())
-                .or_insert(0);
             trigger_id
         };
 
@@ -1294,31 +1379,28 @@ impl ChaosState {
 
     fn plan_mint_trigger_repetitions(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
         let mut instructions = Vec::new();
-        let trigger_id = if let Some(existing) = self.random_registered_trigger(rng) {
+        let trigger_id = if let Some(existing) = self.random_repeatable_trigger(rng) {
             existing
         } else {
             let trigger_id: TriggerId = format!("repeat_trigger_{}", self.bump_trigger())
                 .parse()
                 .map_err(|_| eyre!("failed to parse repeat trigger id"))?;
-            let schedule = Schedule::starting_at(Duration::from_millis(250))
-                .with_period(Duration::from_millis(1_000));
             let action = Action::new(
                 vec![InstructionBox::from(Log::new(
                     Level::INFO,
                     "repetition bootstrap".to_string(),
                 ))],
-                Repeats::Indefinitely,
+                Repeats::Exactly(1),
                 self.treasury.id.clone(),
-                TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
+                EventFilterBox::ExecuteTrigger(
+                    ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+                ),
             );
             instructions.push(InstructionBox::from(Register::trigger(Trigger::new(
                 trigger_id.clone(),
                 action,
             ))));
-            self.registered_triggers.push(trigger_id.clone());
-            self.trigger_repetitions
-                .entry(trigger_id.clone())
-                .or_insert(0);
+            self.track_repeatable_trigger(trigger_id.clone());
             trigger_id
         };
         let amount = rng.random_range(1_u32..=3_u32);
@@ -1340,7 +1422,7 @@ impl ChaosState {
 
     fn plan_burn_trigger_repetitions(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
         let mut instructions = Vec::new();
-        let trigger_id = if let Some(existing) = self.random_registered_trigger(rng) {
+        let trigger_id = if let Some(existing) = self.random_repeatable_trigger(rng) {
             existing
         } else {
             return self.plan_mint_trigger_repetitions(rng);
@@ -1364,11 +1446,18 @@ impl ChaosState {
             burn_amount,
             trigger_id.clone(),
         )));
-        let entry = self
-            .trigger_repetitions
-            .entry(trigger_id.clone())
-            .or_default();
-        *entry = entry.saturating_sub(burn_amount);
+        let remaining = {
+            let entry = self
+                .trigger_repetitions
+                .entry(trigger_id.clone())
+                .or_default();
+            *entry = entry.saturating_sub(burn_amount);
+            *entry
+        };
+        if remaining == 0 {
+            self.trigger_repetitions.remove(&trigger_id);
+            self.repeatable_triggers.retain(|id| id != &trigger_id);
+        }
         Ok(TransactionPlan {
             label: "burn_trigger_repetitions",
             instructions,
@@ -1386,7 +1475,10 @@ impl ChaosState {
         };
         let role = Role::new(role_id.clone(), self.treasury.id.clone()).add_permission(permission);
         self.registered_roles.push(role_id.clone());
-        self.role_memberships.entry(role_id.clone()).or_default();
+        self.role_memberships
+            .entry(role_id.clone())
+            .or_default()
+            .insert(self.treasury.id.clone());
         Ok(TransactionPlan {
             label: "register_role",
             instructions: vec![InstructionBox::from(Register::role(role))],
@@ -1461,7 +1553,14 @@ impl ChaosState {
             .map(|set| set.iter().cloned().collect())
             .unwrap_or_default();
 
-        if let Some(account_id) = existing_members.choose(rng).cloned() {
+        if let Some(account_id) = existing_members
+            .iter()
+            .filter(|member| *member != &self.treasury.id)
+            .cloned()
+            .collect::<Vec<_>>()
+            .choose(rng)
+            .cloned()
+        {
             let remove_role_entry = self.role_memberships.get_mut(&role).is_some_and(|members| {
                 members.remove(&account_id);
                 members.is_empty()
@@ -1477,7 +1576,7 @@ impl ChaosState {
             });
         }
 
-        let account = self.random_user(rng)?.clone();
+        let account = self.random_user_except(rng, &self.treasury.id)?;
         let instructions = vec![
             InstructionBox::from(Grant::account_role(role.clone(), account.id.clone())),
             InstructionBox::from(Revoke::account_role(role.clone(), account.id.clone())),
@@ -1515,10 +1614,6 @@ impl ChaosState {
             self.treasury.id.clone(),
             TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
         );
-        self.registered_triggers.push(trigger_id.clone());
-        self.trigger_repetitions
-            .entry(trigger_id.clone())
-            .or_insert(0);
         Ok(TransactionPlan {
             label: "register_time_trigger",
             instructions: vec![InstructionBox::from(Register::trigger(Trigger::new(
@@ -1546,9 +1641,6 @@ impl ChaosState {
             DataEventFilter::Account(filter),
         );
         self.registered_triggers.push(trigger_id.clone());
-        self.trigger_repetitions
-            .entry(trigger_id.clone())
-            .or_insert(0);
         Ok(TransactionPlan {
             label: "register_data_trigger",
             instructions: vec![InstructionBox::from(Register::trigger(Trigger::new(
@@ -1573,9 +1665,6 @@ impl ChaosState {
             )),
         );
         self.registered_triggers.push(trigger_id.clone());
-        self.trigger_repetitions
-            .entry(trigger_id.clone())
-            .or_insert(0);
         Ok(TransactionPlan {
             label: "register_pipeline_trigger",
             instructions: vec![InstructionBox::from(Register::trigger(Trigger::new(
@@ -1587,17 +1676,42 @@ impl ChaosState {
     }
 
     fn plan_execute_trigger(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        if self.registered_triggers.is_empty() {
-            return self.plan_time_trigger(rng);
+        if self.call_triggers.is_empty() {
+            return self.plan_register_call_trigger();
         }
         let trigger = self
-            .registered_triggers
+            .call_triggers
             .choose(rng)
             .expect("non-empty trigger registry")
             .clone();
         Ok(TransactionPlan {
             label: "execute_trigger",
             instructions: vec![InstructionBox::from(ExecuteTrigger::new(trigger))],
+            signer: self.treasury.clone(),
+            expect_success: true,
+        })
+    }
+
+    fn plan_register_call_trigger(&mut self) -> Result<TransactionPlan> {
+        let trigger_id: TriggerId = format!("call_trigger_{}", self.bump_trigger())
+            .parse()
+            .map_err(|_| eyre!("failed to parse call trigger id"))?;
+        let log_instruction = Log::new(Level::INFO, "call trigger".to_string());
+        let action = Action::new(
+            vec![InstructionBox::from(log_instruction)],
+            Repeats::Indefinitely,
+            self.treasury.id.clone(),
+            EventFilterBox::ExecuteTrigger(
+                ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+            ),
+        );
+        self.registered_triggers.push(trigger_id.clone());
+        self.call_triggers.push(trigger_id.clone());
+        Ok(TransactionPlan {
+            label: "register_call_trigger",
+            instructions: vec![InstructionBox::from(Register::trigger(Trigger::new(
+                trigger_id, action,
+            )))],
             signer: self.treasury.clone(),
             expect_success: true,
         })
@@ -1626,10 +1740,6 @@ impl ChaosState {
             self.treasury.id.clone(),
             TimeEventFilter::new(ExecutionTime::PreCommit),
         );
-        self.registered_triggers.push(trigger_id.clone());
-        self.trigger_repetitions
-            .entry(trigger_id.clone())
-            .or_insert(0);
         Ok(TransactionPlan {
             label: "deploy_ivm_contract",
             instructions: vec![InstructionBox::from(Register::trigger(Trigger::new(
@@ -1661,9 +1771,6 @@ impl ChaosState {
             DataEventFilter::Any,
         );
         self.registered_triggers.push(trigger_id.clone());
-        self.trigger_repetitions
-            .entry(trigger_id.clone())
-            .or_insert(0);
         Ok(TransactionPlan {
             label: "deploy_kotodama_contract",
             instructions: vec![InstructionBox::from(Register::trigger(Trigger::new(
@@ -1798,15 +1905,13 @@ impl ChaosState {
         let stake_amount: Numeric = rng.random_range(10_u32..=100_u32).into();
         let treasury_asset = AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone());
         let stake_asset = AssetId::new(self.asset_numeric.clone(), stake_account.id.clone());
-        self.asset_instances.insert(treasury_asset.clone());
-        self.asset_instances.insert(stake_asset);
 
         let mut instructions = vec![InstructionBox::from(Mint::asset_numeric(
             stake_amount.clone(),
             treasury_asset.clone(),
         ))];
         instructions.push(InstructionBox::from(Transfer::asset_numeric(
-            treasury_asset,
+            treasury_asset.clone(),
             stake_amount.clone(),
             stake_account.id.clone(),
         )));
@@ -1817,16 +1922,21 @@ impl ChaosState {
             initial_stake: stake_amount,
             metadata: Metadata::default(),
         }));
-        self.public_lane_validators
-            .entry(lane)
-            .or_default()
-            .insert(validator.id.clone());
+        let expect_success = self.nexus_staking_expect_success();
+        if expect_success {
+            self.asset_instances.insert(treasury_asset);
+            self.asset_instances.insert(stake_asset);
+            self.public_lane_validators
+                .entry(lane)
+                .or_default()
+                .insert(validator.id.clone());
+        }
 
         Ok(TransactionPlan {
             label: "register_public_lane_validator",
             instructions,
             signer: self.treasury.clone(),
-            expect_success: self.nexus_staking_expect_success(),
+            expect_success,
         })
     }
 
@@ -1852,14 +1962,12 @@ impl ChaosState {
         let amount: Numeric = rng.random_range(5_u32..=40_u32).into();
         let treasury_asset = AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone());
         let staker_asset = AssetId::new(self.asset_numeric.clone(), staker.id.clone());
-        self.asset_instances.insert(treasury_asset.clone());
-        self.asset_instances.insert(staker_asset);
         let mut instructions = vec![InstructionBox::from(Mint::asset_numeric(
             amount.clone(),
             treasury_asset.clone(),
         ))];
         instructions.push(InstructionBox::from(Transfer::asset_numeric(
-            treasury_asset,
+            treasury_asset.clone(),
             amount.clone(),
             staker.id.clone(),
         )));
@@ -1870,12 +1978,17 @@ impl ChaosState {
             amount,
             metadata: Metadata::default(),
         }));
+        let expect_success = self.nexus_staking_expect_success();
+        if expect_success {
+            self.asset_instances.insert(treasury_asset);
+            self.asset_instances.insert(staker_asset);
+        }
 
         Ok(TransactionPlan {
             label: "bond_public_lane_stake",
             instructions,
             signer: self.treasury.clone(),
-            expect_success: self.nexus_staking_expect_success(),
+            expect_success,
         })
     }
 
@@ -1901,12 +2014,15 @@ impl ChaosState {
         let request_id = Hash::new(format!("izanami-unbond-{}", self.bump_staking()).as_bytes());
         let amount: Numeric = rng.random_range(1_u32..=10_u32).into();
         let release_at = now_ms().saturating_add(5_000);
-        self.pending_unbonds.push(PendingUnbond {
-            lane,
-            validator: validator.id.clone(),
-            staker: staker.id.clone(),
-            request_id,
-        });
+        let expect_success = self.nexus_staking_expect_success();
+        if expect_success {
+            self.pending_unbonds.push(PendingUnbond {
+                lane,
+                validator: validator.id.clone(),
+                staker: staker.id.clone(),
+                request_id,
+            });
+        }
 
         Ok(TransactionPlan {
             label: "schedule_public_lane_unbond",
@@ -1919,7 +2035,7 @@ impl ChaosState {
                 release_at_ms: release_at,
             })],
             signer: staker,
-            expect_success: self.nexus_staking_expect_success(),
+            expect_success,
         })
     }
 
@@ -1929,8 +2045,11 @@ impl ChaosState {
         } else {
             return self.plan_schedule_public_unbond(rng);
         };
-        self.pending_unbonds
-            .retain(|entry| entry.request_id != pending.request_id);
+        let expect_success = self.nexus_staking_expect_success();
+        if expect_success {
+            self.pending_unbonds
+                .retain(|entry| entry.request_id != pending.request_id);
+        }
         Ok(TransactionPlan {
             label: "finalize_public_lane_unbond",
             instructions: vec![InstructionBox::from(FinalizePublicLaneUnbond {
@@ -1940,7 +2059,7 @@ impl ChaosState {
                 request_id: pending.request_id,
             })],
             signer: self.treasury.clone(),
-            expect_success: self.nexus_staking_expect_success(),
+            expect_success,
         })
     }
 
@@ -1999,7 +2118,10 @@ impl ChaosState {
             });
         };
         let reward_asset = AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone());
-        self.asset_instances.insert(reward_asset.clone());
+        let expect_success = self.nexus_staking_expect_success();
+        if expect_success {
+            self.asset_instances.insert(reward_asset.clone());
+        }
         let reward: Numeric = rng.random_range(5_u32..=50_u32).into();
         let share = PublicLaneRewardShare {
             account: validator.id.clone(),
@@ -2025,12 +2147,12 @@ impl ChaosState {
                 }),
             ],
             signer: self.treasury.clone(),
-            expect_success: self.nexus_staking_expect_success(),
+            expect_success,
         })
     }
 
     fn plan_dvp_settlement(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let seller = self.random_user(rng)?.clone();
+        let seller = self.treasury.clone();
         let buyer = self.random_user_except(rng, &seller.id)?;
         let settlement_id: SettlementId = format!("settlement_{}", self.bump_settlement())
             .parse()
@@ -2079,31 +2201,95 @@ impl ChaosState {
         })
     }
 
+    fn plan_seed_replication(&mut self) -> Result<TransactionPlan> {
+        let (manifest_digest, chunker, provider_id) = {
+            let Some(replication) = self.sorafs_replication.as_ref() else {
+                return Err(eyre!("SoraFS replication seed not initialized"));
+            };
+            (
+                replication.manifest_digest,
+                replication.chunker.clone(),
+                replication.provider_id,
+            )
+        };
+        let manifest_epoch = self.bump_replication();
+        let chunk_digest = *Hash::new(b"izanami-sorafs-chunk-digest").as_ref();
+        let council_digest = *Hash::new(b"izanami-sorafs-council-digest").as_ref();
+        let instructions = vec![
+            InstructionBox::from(RegisterPinManifest {
+                digest: manifest_digest,
+                chunker,
+                chunk_digest_sha3_256: chunk_digest,
+                policy: PinPolicy::default(),
+                submitted_epoch: manifest_epoch,
+                alias: None,
+                successor_of: None,
+            }),
+            InstructionBox::from(ApprovePinManifest {
+                digest: manifest_digest,
+                approved_epoch: manifest_epoch,
+                council_envelope: None,
+                council_envelope_digest: Some(council_digest),
+            }),
+            Box::new(RegisterProviderOwner {
+                provider_id,
+                owner: self.treasury.id.clone(),
+            })
+            .into_instruction_box(),
+        ];
+        self.sorafs_replication_ready = true;
+        Ok(TransactionPlan {
+            label: "seed_replication_manifest",
+            instructions,
+            signer: self.treasury.clone(),
+            expect_success: true,
+        })
+    }
+
     fn plan_issue_replication_order(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
+        if !self.sorafs_replication_ready {
+            return self.plan_seed_replication();
+        }
+        let (manifest_digest, chunker, provider_id) = {
+            let Some(replication) = self.sorafs_replication.as_ref() else {
+                return Err(eyre!("SoraFS replication seed not initialized"));
+            };
+            (
+                replication.manifest_digest,
+                replication.chunker.clone(),
+                replication.provider_id,
+            )
+        };
         let mut order_id_bytes = [0u8; 32];
         rng.fill_bytes(&mut order_id_bytes);
         if order_id_bytes.iter().all(|byte| *byte == 0) {
             order_id_bytes[0] = 1;
         }
-        let mut provider_bytes = [0u8; 32];
-        rng.fill_bytes(&mut provider_bytes);
-        if provider_bytes.iter().all(|byte| *byte == 0) {
-            provider_bytes[0] = 2;
-        }
-        let mut policy_hash = [0u8; 32];
-        rng.fill_bytes(&mut policy_hash);
-        if policy_hash.iter().all(|byte| *byte == 0) {
-            policy_hash[0] = 3;
-        }
-        let manifest_cid = format!("cid-{}", self.bump_replication()).into_bytes();
-        let deadline = (now_ms() / 1_000).saturating_add(60);
+        let issued_epoch = self.bump_replication();
+        let manifest_cid = format!("cid-{}", issued_epoch).into_bytes();
+        let deadline_epoch = issued_epoch.saturating_add(60);
+        let issued_at = now_ms() / 1_000;
+        let deadline_at = issued_at.saturating_add(60);
         let order = ReplicationOrderV1 {
+            version: REPLICATION_ORDER_VERSION_V1,
             order_id: order_id_bytes,
             manifest_cid,
-            providers: vec![provider_bytes],
-            redundancy: 1,
-            deadline,
-            policy_hash,
+            manifest_digest: *manifest_digest.as_bytes(),
+            chunking_profile: chunker.to_handle(),
+            target_replicas: 1,
+            assignments: vec![ReplicationAssignmentV1 {
+                provider_id: *provider_id.as_bytes(),
+                slice_gib: 1,
+                lane: None,
+            }],
+            issued_at,
+            deadline_at,
+            sla: ReplicationOrderSlaV1 {
+                ingest_deadline_secs: 60,
+                min_availability_percent_milli: 100_000,
+                min_por_success_percent_milli: 100_000,
+            },
+            metadata: Vec::new(),
         };
         let payload = order.encode();
         let order_id = ReplicationOrderId::new(order_id_bytes);
@@ -2113,8 +2299,8 @@ impl ChaosState {
             instructions: vec![InstructionBox::from(IssueReplicationOrder {
                 order_id,
                 order_payload: payload,
-                issued_epoch: self.bump_replication(),
-                deadline_epoch: deadline,
+                issued_epoch,
+                deadline_epoch,
             })],
             signer: self.treasury.clone(),
             expect_success: true,
@@ -2122,9 +2308,11 @@ impl ChaosState {
     }
 
     fn plan_complete_replication_order(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let Some(order_id) = self.pending_replication_orders.choose(rng).cloned() else {
+        if self.pending_replication_orders.is_empty() {
             return self.plan_issue_replication_order(rng);
-        };
+        }
+        let order_index = rng.random_range(0..self.pending_replication_orders.len());
+        let order_id = self.pending_replication_orders.swap_remove(order_index);
         Ok(TransactionPlan {
             label: "complete_replication_order",
             instructions: vec![InstructionBox::from(CompleteReplicationOrder {
@@ -2183,6 +2371,15 @@ impl ChaosState {
 
     fn random_registered_trigger(&self, rng: &mut StdRng) -> Option<TriggerId> {
         self.registered_triggers.choose(rng).cloned()
+    }
+
+    fn random_repeatable_trigger(&self, rng: &mut StdRng) -> Option<TriggerId> {
+        self.repeatable_triggers.choose(rng).cloned()
+    }
+
+    fn track_repeatable_trigger(&mut self, trigger_id: TriggerId) {
+        self.repeatable_triggers.push(trigger_id.clone());
+        self.trigger_repetitions.entry(trigger_id).or_insert(0);
     }
 
     fn bump_domain(&mut self) -> u64 {
@@ -2260,7 +2457,8 @@ impl ChaosState {
 
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::isi::{RemoveKeyValueBox, SetKeyValueBox};
+    use iroha_data_model::isi::{RegisterBox, RemoveKeyValueBox, SetKeyValueBox, UnregisterBox};
+    use norito::codec::Decode;
     use rand::SeedableRng;
     use tokio::runtime::Builder;
 
@@ -2283,6 +2481,33 @@ mod tests {
         assert!(prepared.state.users.len() >= 3);
         let expected: DomainId = "chaosnet".parse().unwrap();
         assert_eq!(prepared.state.base_domain(), &expected);
+    }
+
+    #[test]
+    fn prepare_state_grants_treasury_mint_permission() {
+        let prepared = prepare_state(4, None, WorkloadProfile::Stable).expect("state prepared");
+        let base_asset = prepared.state.asset_numeric.clone();
+        let treasury_id = prepared.state.treasury.id.clone();
+        let has_grant = prepared.genesis.iter().flatten().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<GrantBox>()
+                .is_some_and(|grant| match grant {
+                    GrantBox::Permission(permission_grant) => {
+                        permission_grant.object
+                            == CanMintAssetWithDefinition {
+                                asset_definition: base_asset.clone(),
+                            }
+                            .into()
+                            && permission_grant.destination == treasury_id
+                    }
+                    _ => false,
+                })
+        });
+        assert!(
+            has_grant,
+            "treasury should be able to mint assets for the base definition"
+        );
     }
 
     #[test]
@@ -2339,7 +2564,8 @@ mod tests {
 
         let available_accounts = runtime.block_on(async {
             let guard = engine.state.lock().await;
-            guard.users.len() + 1
+            let total_accounts = guard.users.len() + 1;
+            total_accounts.saturating_sub(guard.role_memberships.values().map(HashSet::len).sum())
         });
 
         for _ in 0..available_accounts {
@@ -2395,12 +2621,13 @@ mod tests {
             .plan_register_public_validator(&mut rng)
             .expect("validator plan builds");
         assert_eq!(plan.label, "register_public_lane_validator");
-        assert!(
-            state
-                .public_lane_validators
-                .values()
-                .any(|validators| !validators.is_empty()),
-            "validator registry should record new entries"
+        let has_validators = state
+            .public_lane_validators
+            .values()
+            .any(|validators| !validators.is_empty());
+        assert_eq!(
+            has_validators, plan.expect_success,
+            "validator registry tracking should follow plan success"
         );
     }
 
@@ -2413,10 +2640,74 @@ mod tests {
         let plan = state
             .plan_issue_replication_order(&mut rng)
             .expect("replication plan builds");
+        assert_eq!(plan.label, "seed_replication_manifest");
+        assert!(
+            state.pending_replication_orders.is_empty(),
+            "replication orders should not be tracked before issuance"
+        );
+        let plan = state
+            .plan_issue_replication_order(&mut rng)
+            .expect("replication plan builds");
         assert_eq!(plan.label, "issue_replication_order");
         assert!(
             !state.pending_replication_orders.is_empty(),
             "pending replication orders should be tracked"
+        );
+    }
+
+    #[test]
+    fn replication_order_payload_references_seeded_manifest() {
+        let profile = NexusProfile::sora_defaults().expect("profile");
+        let PreparedChaos { mut state, .. } =
+            prepare_state(2, Some(&profile), WorkloadProfile::Stable).expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(52);
+        let seed = state
+            .plan_issue_replication_order(&mut rng)
+            .expect("replication seed builds");
+        assert_eq!(seed.label, "seed_replication_manifest");
+        let plan = state
+            .plan_issue_replication_order(&mut rng)
+            .expect("replication plan builds");
+        assert_eq!(plan.label, "issue_replication_order");
+        let instruction = plan
+            .instructions
+            .first()
+            .expect("replication order instruction");
+        let issue = instruction
+            .as_any()
+            .downcast_ref::<IssueReplicationOrder>()
+            .expect("issue replication order");
+        let decoded = ReplicationOrderV1::decode(&mut issue.order_payload.as_slice())
+            .expect("decode payload");
+        let seed = state.sorafs_replication.as_ref().expect("replication seed");
+        assert_eq!(decoded.manifest_digest, *seed.manifest_digest.as_bytes());
+        assert_eq!(decoded.chunking_profile, seed.chunker.to_handle());
+        let assignment = decoded.assignments.first().expect("assignment");
+        assert_eq!(assignment.provider_id, *seed.provider_id.as_bytes());
+    }
+
+    #[test]
+    fn complete_replication_order_clears_pending() {
+        let profile = NexusProfile::sora_defaults().expect("profile");
+        let PreparedChaos { mut state, .. } =
+            prepare_state(2, Some(&profile), WorkloadProfile::Stable).expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(91);
+        let seed = state
+            .plan_issue_replication_order(&mut rng)
+            .expect("replication seed builds");
+        assert_eq!(seed.label, "seed_replication_manifest");
+        let plan = state
+            .plan_issue_replication_order(&mut rng)
+            .expect("replication order builds");
+        assert_eq!(plan.label, "issue_replication_order");
+        assert_eq!(state.pending_replication_orders.len(), 1);
+        let complete = state
+            .plan_complete_replication_order(&mut rng)
+            .expect("completion plan builds");
+        assert_eq!(complete.label, "complete_replication_order");
+        assert!(
+            state.pending_replication_orders.is_empty(),
+            "completion should clear the pending order"
         );
     }
 
@@ -2430,6 +2721,23 @@ mod tests {
             .expect("dvp plan builds");
         assert_eq!(plan.label, "dvp_settlement");
         assert!(plan.expect_success);
+        let settlement = plan
+            .instructions
+            .iter()
+            .find_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<SettlementInstructionBox>()
+            })
+            .expect("settlement instruction");
+        match settlement {
+            SettlementInstructionBox::Dvp(isi) => {
+                assert_eq!(isi.delivery_leg.from, plan.signer.id);
+            }
+            SettlementInstructionBox::Pvp(_) => {
+                panic!("expected DvP settlement instruction");
+            }
+        }
     }
 
     #[test]
@@ -2445,9 +2753,10 @@ mod tests {
             .plan_schedule_public_unbond(&mut rng)
             .expect("unbond plan");
         assert_eq!(plan.label, "schedule_public_lane_unbond");
-        assert!(
+        assert_eq!(
             !state.pending_unbonds.is_empty(),
-            "pending unbonds should be recorded"
+            plan.expect_success,
+            "pending unbond tracking should follow plan success"
         );
     }
 
@@ -2493,6 +2802,39 @@ mod tests {
         assert!(
             state.asset_definitions_unclaimed.len() <= before,
             "unclaimed pool should shrink after removal"
+        );
+    }
+
+    #[test]
+    fn unregister_asset_definition_fallback_uses_missing_definition() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+        assert!(state.asset_definitions_unclaimed.is_empty());
+        let before = state.asset_definitions.clone();
+        let mut rng = StdRng::seed_from_u64(19);
+        let plan = state.plan_unregister_asset_definition(&mut rng);
+        assert_eq!(plan.label, "unregister_asset_definition");
+        assert!(!plan.expect_success, "fallback should expect failure");
+        assert_eq!(
+            state.asset_definitions, before,
+            "fallback should not mutate tracked definitions"
+        );
+        let target = plan
+            .instructions
+            .iter()
+            .find_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<UnregisterBox>()
+                    .and_then(|unregister| match unregister {
+                        UnregisterBox::AssetDefinition(inner) => Some(inner.object.clone()),
+                        _ => None,
+                    })
+            })
+            .expect("unregister asset definition instruction");
+        assert!(
+            !before.contains(&target),
+            "fallback should use a missing asset definition id"
         );
     }
 
@@ -2556,6 +2898,168 @@ mod tests {
     }
 
     #[test]
+    fn mint_trigger_repetitions_registers_repeatable_trigger() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(111);
+        let pipeline = state
+            .plan_pipeline_trigger(&mut rng)
+            .expect("pipeline trigger");
+        assert_eq!(pipeline.label, "register_pipeline_trigger");
+        assert!(state.repeatable_triggers.is_empty());
+
+        let plan = state
+            .plan_mint_trigger_repetitions(&mut rng)
+            .expect("mint plan");
+        let trigger = plan
+            .instructions
+            .iter()
+            .find_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterBox>()
+                    .and_then(|register| match register {
+                        RegisterBox::Trigger(registration) => Some(&registration.object),
+                        _ => None,
+                    })
+            })
+            .expect("repeatable trigger registration");
+        assert!(matches!(trigger.action().repeats(), Repeats::Exactly(_)));
+        assert!(matches!(
+            trigger.action().filter(),
+            EventFilterBox::ExecuteTrigger(_)
+        ));
+    }
+
+    #[test]
+    fn burn_trigger_repetitions_removes_depleted_trigger() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(141);
+        let _ = state
+            .plan_mint_trigger_repetitions(&mut rng)
+            .expect("mint plan");
+        let trigger_id = state
+            .repeatable_triggers
+            .first()
+            .cloned()
+            .expect("repeatable trigger");
+        state.trigger_repetitions.insert(trigger_id.clone(), 1);
+
+        let burn = state
+            .plan_burn_trigger_repetitions(&mut rng)
+            .expect("burn plan");
+        assert_eq!(burn.label, "burn_trigger_repetitions");
+        assert!(
+            !state.repeatable_triggers.contains(&trigger_id),
+            "depleted trigger should be removed from repeatable list"
+        );
+        assert!(
+            !state.trigger_repetitions.contains_key(&trigger_id),
+            "depleted trigger should be removed from repetition tracking"
+        );
+    }
+
+    #[test]
+    fn trigger_metadata_plans_do_not_track_repeatable_triggers() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(151);
+        let set_plan = state
+            .plan_set_trigger_key(&mut rng)
+            .expect("set trigger metadata");
+        assert_eq!(set_plan.label, "set_trigger_kv");
+        let trigger = set_plan
+            .instructions
+            .iter()
+            .find_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterBox>()
+                    .and_then(|register| match register {
+                        RegisterBox::Trigger(registration) => Some(&registration.object),
+                        _ => None,
+                    })
+            })
+            .expect("metadata trigger registration");
+        assert!(matches!(
+            trigger.action().filter(),
+            EventFilterBox::ExecuteTrigger(_)
+        ));
+        assert!(matches!(trigger.action().repeats(), Repeats::Indefinitely));
+        assert!(
+            state.registered_triggers.contains(trigger.id()),
+            "metadata trigger should be tracked as durable"
+        );
+        assert!(
+            state.repeatable_triggers.is_empty(),
+            "metadata trigger should not be tracked as repeatable"
+        );
+        let remove_plan = state
+            .plan_remove_trigger_key(&mut rng)
+            .expect("remove trigger metadata");
+        assert_eq!(remove_plan.label, "remove_trigger_kv");
+        assert!(
+            state.repeatable_triggers.is_empty(),
+            "metadata trigger should not be tracked as repeatable"
+        );
+    }
+
+    #[test]
+    fn time_trigger_is_not_repeatable() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(161);
+        let plan = state.plan_time_trigger(&mut rng).expect("time trigger");
+        assert_eq!(plan.label, "register_time_trigger");
+        assert!(
+            state.repeatable_triggers.is_empty(),
+            "time triggers should not be used for repetition mint/burn"
+        );
+    }
+
+    #[test]
+    fn deploy_ivm_trigger_is_not_repeatable() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(171);
+        let plan = state.plan_deploy_ivm(&mut rng).expect("ivm trigger");
+        assert_eq!(plan.label, "deploy_ivm_contract");
+        assert!(
+            state.repeatable_triggers.is_empty(),
+            "IVM triggers should not be used for repetition mint/burn"
+        );
+    }
+
+    #[test]
+    fn execute_trigger_registers_by_call_trigger() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(103);
+        let register_plan = state
+            .plan_execute_trigger(&mut rng)
+            .expect("register call trigger");
+        assert_eq!(register_plan.label, "register_call_trigger");
+        let call_id = state
+            .call_triggers
+            .first()
+            .cloned()
+            .expect("call trigger tracked");
+        let execute_plan = state
+            .plan_execute_trigger(&mut rng)
+            .expect("execute trigger");
+        assert_eq!(execute_plan.label, "execute_trigger");
+        let execute = execute_plan
+            .instructions
+            .first()
+            .expect("execute trigger instruction")
+            .as_any()
+            .downcast_ref::<ExecuteTrigger>()
+            .expect("execute trigger payload");
+        assert_eq!(execute.trigger, call_id);
+    }
+
+    #[test]
     fn asset_metadata_set_and_remove_trackers() {
         let PreparedChaos { mut state, .. } =
             prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
@@ -2616,6 +3120,26 @@ mod tests {
         assert_eq!(
             remove_plan.signer.id, remove_target,
             "remove key plan should be signed by the account owner"
+        );
+    }
+
+    #[test]
+    fn account_metadata_set_and_remove_trackers() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+        assert!(state.account_metadata.is_empty());
+        let mut rng = StdRng::seed_from_u64(205);
+        let set_plan = state.plan_set_key(&mut rng).expect("set key plan");
+        assert_eq!(set_plan.label, "set_account_kv");
+        let tracked_after_set: usize = state.account_metadata.values().map(HashSet::len).sum();
+        assert!(tracked_after_set > 0, "set key should be tracked");
+
+        let remove_plan = state.plan_remove_key(&mut rng).expect("remove key plan");
+        assert_eq!(remove_plan.label, "remove_account_kv");
+        let tracked_after_remove: usize = state.account_metadata.values().map(HashSet::len).sum();
+        assert!(
+            tracked_after_remove <= tracked_after_set,
+            "removal should not increase tracked keys"
         );
     }
 

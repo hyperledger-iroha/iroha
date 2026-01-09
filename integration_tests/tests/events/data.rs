@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 use eyre::{Result, WrapErr, eyre};
 use futures_util::StreamExt;
-use integration_tests::{sandbox, sync::get_status_with_retry};
+use integration_tests::{sandbox, sync::get_status_with_retry_async};
 use iroha::data_model::{
     events::{
         EventBox,
@@ -82,7 +82,8 @@ async fn transaction_execution_should_produce_events(
         return Ok(());
     };
     // Wait for Torii to come up before subscribing to events.
-    let status = get_status_with_retry(&network.client())
+    let status = get_status_with_retry_async(&network.client())
+        .await
         .map_err(|err| err.wrap_err(format!("{context}: wait for status")))?;
     let baseline_non_empty = status.blocks_non_empty;
     let mut events_stream = network
@@ -163,7 +164,8 @@ async fn produce_multiple_events() -> Result<()> {
     else {
         return Ok(());
     };
-    let status = get_status_with_retry(&network.client())
+    let status = get_status_with_retry_async(&network.client())
+        .await
         .map_err(|err| err.wrap_err("produce_multiple_events: wait for status"))?;
     let baseline_non_empty = status.blocks_non_empty;
 

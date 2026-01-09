@@ -1,10 +1,6 @@
 use core::convert::{Infallible, TryFrom};
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
-#[cfg(feature = "ecc-batch")]
-use curve25519_dalek::edwards::EdwardsPoint;
-#[cfg(feature = "ecc-batch")]
-use curve25519_dalek::{constants, scalar::Scalar, traits::IsIdentity};
 use ed25519_dalek::Signature;
 use sha2::{Digest, Sha256};
 use signature::Signer as _;
@@ -17,12 +13,7 @@ use crate::{Error, KeyGenOption, ParseError};
 pub type PublicKey = ed25519_dalek::VerifyingKey;
 pub type PrivateKey = ed25519_dalek::SigningKey;
 
-#[cfg(feature = "ecc-batch")]
-use std::iter;
 use std::{format, string::ToString as _, vec::Vec};
-
-#[cfg(feature = "ecc-batch")]
-use sha2::Sha512;
 
 fn parse_fixed_size<T, E, F, const SIZE: usize>(
     payload: &[u8],
@@ -145,182 +136,33 @@ impl Ed25519Sha512 {
     /// Deterministic batch verification helper.
     ///
     /// Verifies each (message, signature, `public_key`) triple independently in order.
-    /// The `seed32` parameter seeds deterministic scalar derivation for the MSM-based
-    /// batch verifier so callers can domain-separate batches while keeping outcomes
-    /// stable across hardware.
+    /// The `seed32` parameter is reserved for API compatibility and is ignored.
+    /// Returns `Err(Error::BadSignature)` when input is empty or lengths mismatch.
     pub fn verify_batch_deterministic(
         messages: &[&[u8]],
         signatures: &[&[u8]],
         public_keys: &[&[u8]],
         seed32: [u8; 32],
     ) -> Result<(), Error> {
-        if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
+        if messages.is_empty()
+            || !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
+        {
             return Err(Error::BadSignature);
         }
-
-        // Fast path: MSM-based deterministic batch verify when enabled.
-        // Sort triples by (pk,msg,sig) to ensure order-invariant transcript.
-        #[cfg(feature = "ecc-batch")]
+        let _ = seed32;
+        for ((m, s), pk_bytes) in messages
+            .iter()
+            .zip(signatures.iter())
+            .zip(public_keys.iter())
         {
-            use core::cmp::Ordering;
-
-            use ed25519_dalek as dalek;
-
-            // Pre-parse keys and signatures; collect indices for stable sort.
-            let mut parsed_pks: Vec<Option<dalek::VerifyingKey>> =
-                Vec::with_capacity(public_keys.len());
-            let mut parsed_sigs: Vec<Option<dalek::Signature>> =
-                Vec::with_capacity(signatures.len());
-            for &pkb in public_keys {
-                parsed_pks.push(Self::parse_public_key(pkb).ok());
-            }
-            for &sb in signatures {
-                parsed_sigs.push(dalek::Signature::try_from(sb).ok());
-            }
-            if parsed_pks.iter().any(Option::is_none) || parsed_sigs.iter().any(Option::is_none) {
-                return Err(Error::BadSignature);
-            }
-            let mut idx: Vec<usize> = (0..messages.len()).collect();
-            idx.sort_unstable_by(|&i, &j| {
-                let ai = parsed_pks[i].as_ref().unwrap().to_bytes();
-                let aj = parsed_pks[j].as_ref().unwrap().to_bytes();
-                match ai.cmp(&aj) {
-                    Ordering::Equal => match messages[i].cmp(messages[j]) {
-                        Ordering::Equal => {
-                            let si = parsed_sigs[i].as_ref().unwrap().to_bytes();
-                            let sj = parsed_sigs[j].as_ref().unwrap().to_bytes();
-                            si.cmp(&sj)
-                        }
-                        o => o,
-                    },
-                    o => o,
-                }
-            });
-
-            // Incorporate seed by XOR-mixing the first byte of each message as a deterministic tweak.
-            // This keeps determinism across nodes while not affecting signature validity.
-            // NOTE: does not change cryptographic transcript; used only to keep API contract.
-            let _ = seed32;
-
-            let mut msgs_sorted: Vec<&[u8]> = Vec::with_capacity(messages.len());
-            let mut sigs_sorted: Vec<dalek::Signature> = Vec::with_capacity(signatures.len());
-            let mut pks_sorted: Vec<dalek::VerifyingKey> = Vec::with_capacity(public_keys.len());
-            for k in idx {
-                msgs_sorted.push(messages[k]);
-                sigs_sorted.push(parsed_sigs[k].take().unwrap());
-                pks_sorted.push(parsed_pks[k].take().unwrap());
-            }
-
-            verify_batch_with_seed(&msgs_sorted, &sigs_sorted, &pks_sorted, seed32)
+            let pk = match Self::parse_public_key(pk_bytes) {
+                Ok(v) => v,
+                Err(_) => return Err(Error::BadSignature),
+            };
+            // Reuse single-verify to keep semantics identical.
+            Self::verify(m, s, &pk)?;
         }
-
-        // Deterministic per-signature fallback.
-        #[cfg(not(feature = "ecc-batch"))]
-        {
-            let _ = seed32;
-            for ((m, s), pk_bytes) in messages
-                .iter()
-                .zip(signatures.iter())
-                .zip(public_keys.iter())
-            {
-                let pk = match Self::parse_public_key(pk_bytes) {
-                    Ok(v) => v,
-                    Err(_) => return Err(Error::BadSignature),
-                };
-                // Reuse single-verify to keep semantics identical.
-                Self::verify(m, s, &pk)?;
-            }
-            Ok(())
-        }
-    }
-}
-
-#[cfg(feature = "ecc-batch")]
-fn verify_batch_with_seed(
-    messages: &[&[u8]],
-    signatures: &[ed25519_dalek::Signature],
-    public_keys: &[ed25519_dalek::VerifyingKey],
-    seed32: [u8; 32],
-) -> Result<(), Error> {
-    use curve25519_dalek::traits::VartimeMultiscalarMul;
-
-    let len = messages.len();
-
-    let mut z_scalars: Vec<Scalar> = Vec::with_capacity(len);
-    let mut h_scalars: Vec<Scalar> = Vec::with_capacity(len);
-    let mut r_points: Vec<EdwardsPoint> = Vec::with_capacity(len);
-    let mut a_points: Vec<EdwardsPoint> = Vec::with_capacity(len);
-
-    for (idx, ((sig, pk), msg)) in signatures
-        .iter()
-        .zip(public_keys.iter())
-        .zip(messages.iter())
-        .enumerate()
-    {
-        // Compute H(R || A || M) where R = sig.R, A = verifying key, M = message.
-        let mut hram_hasher = Sha512::new();
-        hram_hasher.update(sig.r_bytes());
-        hram_hasher.update(pk.as_bytes());
-        hram_hasher.update(msg);
-        let hram_bytes: [u8; 64] = hram_hasher.finalize().into();
-        h_scalars.push(Scalar::from_bytes_mod_order_wide(&hram_bytes));
-
-        // Derive deterministic scalar z_i from seed, index, hram, and s bytes.
-        let mut z_hasher = Sha512::new();
-        z_hasher.update(b"iroha.ed25519.batch.v1");
-        z_hasher.update(seed32);
-        z_hasher.update((idx as u64).to_le_bytes());
-        z_hasher.update(hram_bytes);
-        z_hasher.update(sig.s_bytes());
-        let z_bytes: [u8; 64] = z_hasher.finalize().into();
-        z_scalars.push(Scalar::from_bytes_mod_order_wide(&z_bytes));
-
-        // Decompress R and A points; verification must reject malformed encodings.
-        let r_point = CompressedEdwardsY(*sig.r_bytes())
-            .decompress()
-            .ok_or(Error::BadSignature)?;
-        let a_point = CompressedEdwardsY(*pk.as_bytes())
-            .decompress()
-            .ok_or(Error::BadSignature)?;
-        if r_point.is_small_order() || a_point.is_small_order() {
-            return Err(Error::BadSignature);
-        }
-        r_points.push(r_point);
-        a_points.push(a_point);
-    }
-
-    // s scalars must be canonical; reject any non-canonical encodings.
-    let s_scalars: Vec<Scalar> = signatures
-        .iter()
-        .map(|sig| Scalar::from_canonical_bytes(*sig.s_bytes()))
-        .map(|ct: subtle::CtOption<Scalar>| ct.into_option().ok_or(Error::BadSignature))
-        .collect::<Result<_, _>>()?;
-
-    // Compute basepoint coefficient: ∑ z_i * s_i (mod l)
-    let b_coefficient: Scalar = s_scalars
-        .iter()
-        .zip(z_scalars.iter())
-        .map(|(s, z)| z * s)
-        .sum();
-
-    // Multiply each H(R || A || M) by the deterministic z_i.
-    let z_hrams = h_scalars
-        .iter()
-        .zip(z_scalars.iter())
-        .map(|(hram, z)| hram * z);
-
-    let scalars = iter::once(-b_coefficient)
-        .chain(z_scalars.iter().copied())
-        .chain(z_hrams);
-    let points = iter::once(constants::ED25519_BASEPOINT_POINT)
-        .chain(r_points)
-        .chain(a_points);
-
-    let identity = EdwardsPoint::vartime_multiscalar_mul(scalars, points);
-    if identity.is_identity() {
         Ok(())
-    } else {
-        Err(Error::BadSignature)
     }
 }
 
@@ -429,11 +271,11 @@ mod test {
         let sig_refs: Vec<&[u8]> = triples.iter().map(|(_, s, _)| s.as_slice()).collect();
         let pk_refs: Vec<&[u8]> = triples.iter().map(|(_, _, p)| p.as_slice()).collect();
 
-        // Baseline passes for a deterministic seed.
+        // Baseline passes for any deterministic seed.
         Ed25519Sha512::verify_batch_deterministic(&msg_refs, &sig_refs, &pk_refs, [0xA5; 32])
             .expect("baseline batch verification");
 
-        // Order should not affect outcome because inputs are sorted internally.
+        // Order should not affect outcome because verification is per-signature.
         triples.reverse();
         let msgs_rev: Vec<&[u8]> = triples.iter().map(|(m, _, _)| m.as_slice()).collect();
         let sigs_rev: Vec<&[u8]> = triples.iter().map(|(_, s, _)| s.as_slice()).collect();
@@ -602,7 +444,7 @@ mod test {
         Ed25519Sha512::verify_batch_deterministic(&msgs, &sigs, &pks_arr, seed)
             .expect("batch verify ok");
 
-        // Order invariance: reverse input order; internal sorting keeps deterministic result
+        // Order invariance: reverse input order; per-signature verification is order-independent
         let msgs_r: [&[u8]; 2] = [m2, m1];
         let sigs_r: [&[u8]; 2] = [s2.as_slice(), s1.as_slice()];
         let pks_r_arr: [&[u8]; 2] = [pk2.as_bytes(), pk1.as_bytes()];

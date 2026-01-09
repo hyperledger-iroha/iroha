@@ -618,20 +618,39 @@ impl Actor {
                 return;
             }
         }
-        if self
-            .pending
-            .pending_blocks
-            .get(&block_hash)
-            .is_some_and(|pending| pending.aborted)
-        {
-            iroha_logger::debug!(
-                height,
-                view,
-                phase = ?phase,
-                block = ?block_hash,
-                "skipping QC aggregation for aborted pending block"
-            );
-            return;
+        if let Some(pending) = self.pending.pending_blocks.get(&block_hash) {
+            if matches!(pending.validation_status, ValidationStatus::Invalid) {
+                iroha_logger::debug!(
+                    height,
+                    view,
+                    phase = ?phase,
+                    block = ?block_hash,
+                    "skipping QC aggregation for invalid pending block"
+                );
+                return;
+            }
+            if pending.aborted {
+                let (state_height, tip_hash) = {
+                    let view = self.state.view();
+                    (view.height(), view.latest_block_hash())
+                };
+                let pending_parent = pending.block.header().prev_block_hash();
+                if !super::pending_extends_tip(
+                    pending.height,
+                    pending_parent,
+                    state_height,
+                    tip_hash,
+                ) {
+                    iroha_logger::debug!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = ?block_hash,
+                        "skipping QC aggregation for aborted pending block off tip"
+                    );
+                    return;
+                }
+            }
         }
 
         let snapshot = self.qc_signer_snapshot(
@@ -1621,22 +1640,26 @@ impl Actor {
             return Ok(());
         }
         let topology = super::network_topology::Topology::new(commit_topology.clone());
-        let stake_snapshot = match consensus_mode {
-            ConsensusMode::Permissioned => None,
-            ConsensusMode::Npos => {
-                CommitStakeSnapshot::from_roster(self.state.view().world(), topology.as_ref())
-            }
+        let (stake_snapshot, validation, evidence) = {
+            let state_view = self.state.view();
+            let world = state_view.world();
+            let stake_snapshot = match consensus_mode {
+                ConsensusMode::Permissioned => None,
+                ConsensusMode::Npos => CommitStakeSnapshot::from_roster(world, topology.as_ref()),
+            };
+            let (validation, evidence) = validate_qc_with_evidence(
+                &self.vote_log,
+                &qc,
+                &topology,
+                world,
+                &self.common_config.chain,
+                consensus_mode,
+                stake_snapshot.as_ref(),
+                mode_tag,
+                prf_seed,
+            );
+            (stake_snapshot, validation, evidence)
         };
-        let (validation, evidence) = validate_qc_with_evidence(
-            &self.vote_log,
-            &qc,
-            &topology,
-            &self.common_config.chain,
-            consensus_mode,
-            stake_snapshot.as_ref(),
-            mode_tag,
-            prf_seed,
-        );
         let validation = match validation {
             Ok(outcome) => outcome,
             Err(err) => {
@@ -1910,7 +1933,12 @@ impl Actor {
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
         let _signature_topology =
             super::topology_for_view(topology, qc.height, qc.view, mode_tag, prf_seed);
-        if !qc_aggregate_consistent(qc, topology, &self.common_config.chain, mode_tag) {
+        let aggregate_ok = {
+            let state_view = self.state.view();
+            let world = state_view.world();
+            qc_aggregate_consistent(qc, topology, world, &self.common_config.chain, mode_tag)
+        };
+        if !aggregate_ok {
             return None;
         }
         let roster_len = topology.as_ref().len();

@@ -4,9 +4,10 @@
 #![cfg(feature = "bls")]
 
 use iroha_crypto::{
-    BlsNormal, BlsSmall, KeyGenOption, bls_normal_aggregate_signatures,
-    bls_normal_verify_aggregate_multi_message, bls_normal_verify_aggregate_same_message,
-    bls_normal_verify_batch_deterministic, bls_normal_verify_preaggregated_same_message,
+    BlsNormal, BlsSmall, KeyGenOption, KeyPair, bls_normal_aggregate_signatures,
+    bls_normal_pop_prove, bls_normal_verify_aggregate_multi_message,
+    bls_normal_verify_aggregate_same_message, bls_normal_verify_batch_deterministic,
+    bls_normal_verify_preaggregated_same_message, bls_small_pop_prove,
     bls_small_verify_aggregate_multi_message, bls_small_verify_aggregate_same_message,
     bls_small_verify_batch_deterministic,
 };
@@ -60,28 +61,39 @@ fn bls_small_batch_verify_ok_and_fail() {
 }
 
 #[test]
+fn bls_batch_verify_rejects_empty_input() {
+    let empty: Vec<&[u8]> = Vec::new();
+    let seed = [0u8; 32];
+    assert!(bls_normal_verify_batch_deterministic(&empty, &empty, &empty, seed).is_err());
+    assert!(bls_small_verify_batch_deterministic(&empty, &empty, &empty, seed).is_err());
+}
+
+#[test]
 fn bls_normal_same_message_aggregate_ok_and_fail() {
     let (pk1, sk1) = BlsNormal::keypair(KeyGenOption::Random);
     let (pk2, sk2) = BlsNormal::keypair(KeyGenOption::Random);
+    let kp1: KeyPair = (pk1.clone(), sk1.clone()).into();
+    let kp2: KeyPair = (pk2.clone(), sk2.clone()).into();
+    let pop1 = bls_normal_pop_prove(kp1.private_key()).expect("pop");
+    let pop2 = bls_normal_pop_prove(kp2.private_key()).expect("pop");
 
     let msg = b"same-message".to_vec();
     let s1 = BlsNormal::sign(&msg, &sk1);
     let s2 = BlsNormal::sign(&msg, &sk2);
 
-    let p1 = pk1.to_bytes();
-    let p2 = pk2.to_bytes();
-
     let sig_refs: Vec<&[u8]> = vec![s1.as_slice(), s2.as_slice()];
-    let pk_refs: Vec<&[u8]> = vec![p1.as_slice(), p2.as_slice()];
+    let pk_refs = vec![kp1.public_key(), kp2.public_key()];
+    let pop_refs: Vec<&[u8]> = vec![pop1.as_slice(), pop2.as_slice()];
 
-    bls_normal_verify_aggregate_same_message(&msg, &sig_refs, &pk_refs).expect("aggregate ok");
+    bls_normal_verify_aggregate_same_message(&msg, &sig_refs, &pk_refs, &pop_refs)
+        .expect("aggregate ok");
 
     // Corrupt one signature
     let mut s2b = s2.clone();
     s2b[0] ^= 0x01;
     let broken_refs: Vec<&[u8]> = vec![s1.as_slice(), s2b.as_slice()];
     assert!(
-        bls_normal_verify_aggregate_same_message(&msg, &broken_refs, &pk_refs).is_err(),
+        bls_normal_verify_aggregate_same_message(&msg, &broken_refs, &pk_refs, &pop_refs).is_err(),
         "broken aggregate must fail"
     );
 }
@@ -90,6 +102,10 @@ fn bls_normal_same_message_aggregate_ok_and_fail() {
 fn bls_normal_preaggregated_same_message_roundtrip() {
     let (pk1, sk1) = BlsNormal::keypair(KeyGenOption::Random);
     let (pk2, sk2) = BlsNormal::keypair(KeyGenOption::Random);
+    let kp1: KeyPair = (pk1.clone(), sk1.clone()).into();
+    let kp2: KeyPair = (pk2.clone(), sk2.clone()).into();
+    let pop1 = bls_normal_pop_prove(kp1.private_key()).expect("pop");
+    let pop2 = bls_normal_pop_prove(kp2.private_key()).expect("pop");
 
     let msg = b"preaggregated-message".to_vec();
     let s1 = BlsNormal::sign(&msg, &sk1);
@@ -98,17 +114,24 @@ fn bls_normal_preaggregated_same_message_roundtrip() {
     let sig_refs: Vec<&[u8]> = vec![s1.as_slice(), s2.as_slice()];
     let aggregate = bls_normal_aggregate_signatures(&sig_refs).expect("aggregate ok");
 
-    let p1 = pk1.to_bytes();
-    let p2 = pk2.to_bytes();
-    let pk_refs: Vec<&[u8]> = vec![p1.as_slice(), p2.as_slice()];
-    bls_normal_verify_preaggregated_same_message(&msg, &aggregate, &pk_refs)
+    let pk_refs = vec![kp1.public_key(), kp2.public_key()];
+    let pop_refs: Vec<&[u8]> = vec![pop1.as_slice(), pop2.as_slice()];
+    bls_normal_verify_preaggregated_same_message(&msg, &aggregate, &pk_refs, &pop_refs)
         .expect("pre-aggregate verifies");
 
     let mut bad = aggregate.clone();
     bad[0] ^= 0x01;
     assert!(
-        bls_normal_verify_preaggregated_same_message(&msg, &bad, &pk_refs).is_err(),
+        bls_normal_verify_preaggregated_same_message(&msg, &bad, &pk_refs, &pop_refs).is_err(),
         "corrupted aggregate must fail"
+    );
+    let mut bad_pop = pop1.clone();
+    bad_pop[0] ^= 0x01;
+    let bad_pop_refs: Vec<&[u8]> = vec![bad_pop.as_slice(), pop2.as_slice()];
+    assert!(
+        bls_normal_verify_preaggregated_same_message(&msg, &aggregate, &pk_refs, &bad_pop_refs)
+            .is_err(),
+        "invalid pop must be rejected"
     );
     assert!(
         bls_normal_aggregate_signatures(&[]).is_err(),
@@ -119,41 +142,74 @@ fn bls_normal_preaggregated_same_message_roundtrip() {
 #[test]
 fn bls_normal_same_message_rejects_duplicate_public_keys() {
     let (pk, sk) = BlsNormal::keypair(KeyGenOption::Random);
+    let kp: KeyPair = (pk.clone(), sk.clone()).into();
+    let pop = bls_normal_pop_prove(kp.private_key()).expect("pop");
     let msg = b"dup-pk-same-message".to_vec();
     let sig = BlsNormal::sign(&msg, &sk);
-    let pk_bytes = pk.to_bytes();
 
     let sig_refs: Vec<&[u8]> = vec![sig.as_slice(), sig.as_slice()];
-    let pk_refs: Vec<&[u8]> = vec![pk_bytes.as_slice(), pk_bytes.as_slice()];
-    assert!(bls_normal_verify_aggregate_same_message(&msg, &sig_refs, &pk_refs).is_err());
+    let pk_refs = vec![kp.public_key(), kp.public_key()];
+    let pop_refs: Vec<&[u8]> = vec![pop.as_slice(), pop.as_slice()];
+    assert!(
+        bls_normal_verify_aggregate_same_message(&msg, &sig_refs, &pk_refs, &pop_refs).is_err()
+    );
 
     let aggregate = bls_normal_aggregate_signatures(&sig_refs).expect("aggregate ok");
-    assert!(bls_normal_verify_preaggregated_same_message(&msg, &aggregate, &pk_refs).is_err());
+    assert!(
+        bls_normal_verify_preaggregated_same_message(&msg, &aggregate, &pk_refs, &pop_refs)
+            .is_err()
+    );
+}
+
+#[test]
+fn bls_normal_same_message_rejects_invalid_pop() {
+    let (pk1, sk1) = BlsNormal::keypair(KeyGenOption::Random);
+    let (pk2, sk2) = BlsNormal::keypair(KeyGenOption::Random);
+    let kp1: KeyPair = (pk1.clone(), sk1.clone()).into();
+    let kp2: KeyPair = (pk2.clone(), sk2.clone()).into();
+    let mut pop1 = bls_normal_pop_prove(kp1.private_key()).expect("pop");
+    let pop2 = bls_normal_pop_prove(kp2.private_key()).expect("pop");
+
+    let msg = b"invalid-pop".to_vec();
+    let s1 = BlsNormal::sign(&msg, &sk1);
+    let s2 = BlsNormal::sign(&msg, &sk2);
+    pop1[0] ^= 0x01;
+
+    let sig_refs: Vec<&[u8]> = vec![s1.as_slice(), s2.as_slice()];
+    let pk_refs = vec![kp1.public_key(), kp2.public_key()];
+    let pop_refs: Vec<&[u8]> = vec![pop1.as_slice(), pop2.as_slice()];
+
+    assert!(
+        bls_normal_verify_aggregate_same_message(&msg, &sig_refs, &pk_refs, &pop_refs).is_err()
+    );
 }
 
 #[test]
 fn bls_small_same_message_aggregate_ok_and_fail() {
     let (pk1, sk1) = BlsSmall::keypair(KeyGenOption::Random);
     let (pk2, sk2) = BlsSmall::keypair(KeyGenOption::Random);
+    let kp1: KeyPair = (pk1.clone(), sk1.clone()).into();
+    let kp2: KeyPair = (pk2.clone(), sk2.clone()).into();
+    let pop1 = bls_small_pop_prove(kp1.private_key()).expect("pop");
+    let pop2 = bls_small_pop_prove(kp2.private_key()).expect("pop");
 
     let msg = b"same-message".to_vec();
     let s1 = BlsSmall::sign(&msg, &sk1);
     let s2 = BlsSmall::sign(&msg, &sk2);
 
-    let p1 = pk1.to_bytes();
-    let p2 = pk2.to_bytes();
-
     let sig_refs: Vec<&[u8]> = vec![s1.as_slice(), s2.as_slice()];
-    let pk_refs: Vec<&[u8]> = vec![p1.as_slice(), p2.as_slice()];
+    let pk_refs = vec![kp1.public_key(), kp2.public_key()];
+    let pop_refs: Vec<&[u8]> = vec![pop1.as_slice(), pop2.as_slice()];
 
-    bls_small_verify_aggregate_same_message(&msg, &sig_refs, &pk_refs).expect("aggregate ok");
+    bls_small_verify_aggregate_same_message(&msg, &sig_refs, &pk_refs, &pop_refs)
+        .expect("aggregate ok");
 
     // Corrupt one signature
     let mut s2b = s2.clone();
     s2b[0] ^= 0x01;
     let broken_refs: Vec<&[u8]> = vec![s1.as_slice(), s2b.as_slice()];
     assert!(
-        bls_small_verify_aggregate_same_message(&msg, &broken_refs, &pk_refs).is_err(),
+        bls_small_verify_aggregate_same_message(&msg, &broken_refs, &pk_refs, &pop_refs).is_err(),
         "broken aggregate must fail"
     );
 }
@@ -161,13 +217,36 @@ fn bls_small_same_message_aggregate_ok_and_fail() {
 #[test]
 fn bls_small_same_message_rejects_duplicate_public_keys() {
     let (pk, sk) = BlsSmall::keypair(KeyGenOption::Random);
+    let kp: KeyPair = (pk.clone(), sk.clone()).into();
+    let pop = bls_small_pop_prove(kp.private_key()).expect("pop");
     let msg = b"dup-pk-same-message-small".to_vec();
     let sig = BlsSmall::sign(&msg, &sk);
-    let pk_bytes = pk.to_bytes();
 
     let sig_refs: Vec<&[u8]> = vec![sig.as_slice(), sig.as_slice()];
-    let pk_refs: Vec<&[u8]> = vec![pk_bytes.as_slice(), pk_bytes.as_slice()];
-    assert!(bls_small_verify_aggregate_same_message(&msg, &sig_refs, &pk_refs).is_err());
+    let pk_refs = vec![kp.public_key(), kp.public_key()];
+    let pop_refs: Vec<&[u8]> = vec![pop.as_slice(), pop.as_slice()];
+    assert!(bls_small_verify_aggregate_same_message(&msg, &sig_refs, &pk_refs, &pop_refs).is_err());
+}
+
+#[test]
+fn bls_small_same_message_rejects_invalid_pop() {
+    let (pk1, sk1) = BlsSmall::keypair(KeyGenOption::Random);
+    let (pk2, sk2) = BlsSmall::keypair(KeyGenOption::Random);
+    let kp1: KeyPair = (pk1.clone(), sk1.clone()).into();
+    let kp2: KeyPair = (pk2.clone(), sk2.clone()).into();
+    let mut pop1 = bls_small_pop_prove(kp1.private_key()).expect("pop");
+    let pop2 = bls_small_pop_prove(kp2.private_key()).expect("pop");
+
+    let msg = b"invalid-pop-small".to_vec();
+    let s1 = BlsSmall::sign(&msg, &sk1);
+    let s2 = BlsSmall::sign(&msg, &sk2);
+    pop1[0] ^= 0x01;
+
+    let sig_refs: Vec<&[u8]> = vec![s1.as_slice(), s2.as_slice()];
+    let pk_refs = vec![kp1.public_key(), kp2.public_key()];
+    let pop_refs: Vec<&[u8]> = vec![pop1.as_slice(), pop2.as_slice()];
+
+    assert!(bls_small_verify_aggregate_same_message(&msg, &sig_refs, &pk_refs, &pop_refs).is_err());
 }
 
 #[test]

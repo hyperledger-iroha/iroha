@@ -57,6 +57,8 @@ cargo test -p integration_tests \
 
 עם `sumeragi.rbc_chunk_max_bytes = 64 KiB`, הוראה בגודל 10.5 MiB (11 010 048 בייט), ובהנחה ש‑`force_deliver_quorum_one` פעיל, מתקיימים התנאים הבאים:
 
+שים לב: `sumeragi.rbc_chunk_max_bytes` נחתך בזמן ההפעלה כך ש־`RbcChunk` סריאלי ייכנס לתקרת ה‑plaintext שמתקבלת מ־`network.max_frame_bytes_consensus` לאחר ניכוי תקורת ההצפנה.
+
 | תרחיש | מספר צ׳אנקים | סף READY | מונים לכל peer | תקציבי זמן |
 | --- | --- | --- | --- | --- |
 | ארבעה פירים | 168 צ׳אנקים (כולם נדרשים) | READY ≥1 (דיבוג כפוי; רגיל ≥3 עבור ‎f=1) | `payload_bytes_delivered_total ≥ 11 010 048`, ‏`deliver_broadcasts_total = 1`, ‏`ready_broadcasts_total = 1` | `commit_ms` ו-`rbc_deliver_ms` צריכים להישאר בתוך `commit_time_ms` (ברירת מחדל `4000`) |

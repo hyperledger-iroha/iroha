@@ -584,6 +584,10 @@ and a manifest/collector audit. Evictions never mark availability on their ownâ€
 availability still requires availability evidence (RBC `READY` quorum or availability votes) even when
 pending stash frames are discarded.
 
+At runtime, `rbc_chunk_max_bytes` is clamped so a serialized `RbcChunk` (including
+headers and length prefix) fits within the consensus frame plaintext cap derived
+from `network.max_frame_bytes_consensus`.
+
 #### Adaptive observability
 
 Enable `sumeragi.adaptive_observability` to let the actor temporarily widen
