@@ -5757,6 +5757,7 @@ mod tests {
             let record = ConsensusKeyRecord {
                 id: ConsensusKeyId::new(ConsensusKeyRole::Validator, ident),
                 public_key: KeyPair::random().public_key().clone(),
+                pop: None,
                 activation_height: idx,
                 expiry_height: None,
                 hsm: None,

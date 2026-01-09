@@ -4386,7 +4386,7 @@ impl core::fmt::Debug for StreamingTelemetry {
                 "gck_rotations_total",
                 &self.gck_rotations_total.load(Ordering::Relaxed),
             )
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

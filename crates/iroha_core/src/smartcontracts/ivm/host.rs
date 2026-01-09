@@ -3185,7 +3185,9 @@ impl IVMHost for CoreHost {
                 let mut gas = 0_u64;
                 let mut i = self.nft_seq;
                 let start = i;
-                for account_id in self.accounts_snapshot.iter() {
+                let accounts = Arc::clone(&self.accounts_snapshot);
+                let authority = self.authority.clone();
+                for account_id in accounts.iter() {
                     let name_str = format!("nft_number_{}_for_{}", i, account_id.signatory());
                     if let Ok(name) = name_str.parse() {
                         let nft_id = NftId::of(account_id.domain().clone(), name);
@@ -3193,7 +3195,7 @@ impl IVMHost for CoreHost {
                         let reg = InstructionBox::from(RegisterBox::from(Register::nft(nft)));
                         gas = gas.saturating_add(self.queue_instruction(reg));
                         let xfer = InstructionBox::from(TransferBox::from(Transfer::nft(
-                            self.authority.clone(),
+                            authority.clone(),
                             nft_id,
                             account_id.clone(),
                         )));

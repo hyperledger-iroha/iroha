@@ -220,6 +220,8 @@ impl TransactionGossiper {
             dataspace_cfg.restricted_target_reshuffle,
             now,
         );
+        // Keep gossip batches below the encrypted per-topic cap by reserving AEAD overhead.
+        let tx_frame_cap = iroha_p2p::frame_plaintext_cap(network_cfg.max_frame_bytes_tx_gossip);
         Self {
             chain_id,
             gossip_period,
@@ -227,7 +229,7 @@ impl TransactionGossiper {
             network,
             queue,
             state,
-            tx_frame_cap: network_cfg.max_frame_bytes_tx_gossip,
+            tx_frame_cap,
             dataspace_cfg,
             public_seed,
             restricted_seed,
@@ -1366,6 +1368,63 @@ mod tests {
             tls_only_v1_3: true,
             quic_max_idle_timeout: None,
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gossiper_tx_frame_cap_respects_encrypted_frame_limit() {
+        let temp_dir = tempdir().expect("temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let live_query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let queue = Arc::new(Queue::test(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+        ));
+
+        let shutdown = ShutdownSignal::new();
+        let mut network_cfg = test_network_config(socket_addr!(127.0.0.1:0));
+        network_cfg.max_frame_bytes = 512;
+        network_cfg.max_frame_bytes_tx_gossip = 1024;
+        let expected = iroha_p2p::frame_plaintext_cap(network_cfg.max_frame_bytes_tx_gossip);
+
+        let (network, _child) = IrohaNetwork::start(
+            KeyPair::random(),
+            network_cfg.clone(),
+            None,
+            None,
+            None,
+            shutdown.clone(),
+        )
+        .await
+        .expect("network starts");
+
+        let gossiper = TransactionGossiper::from_config(
+            "test-chain".parse().expect("chain id"),
+            Config {
+                gossip_period: Duration::from_millis(1000),
+                gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+                dataspace: DataspaceGossip::default(),
+            },
+            &network_cfg,
+            network,
+            queue,
+            state,
+        );
+
+        assert_eq!(gossiper.tx_frame_cap, expected);
+        shutdown.send();
     }
 
     #[test]

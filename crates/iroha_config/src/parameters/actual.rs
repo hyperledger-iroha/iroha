@@ -202,6 +202,10 @@ impl Root {
         self.torii.sorafs_storage.enabled = true;
         self.torii.sorafs_discovery.discovery_enabled = true;
         self.sumeragi.da_enabled = true;
+        if self.tiered_state.da_store_root.is_none() {
+            self.tiered_state.da_store_root =
+                Some(PathBuf::from(defaults::tiered_state::DEFAULT_DA_STORE_ROOT));
+        }
         // Sora Nexus public dataspace always runs on the global NPoS ring.
         self.sumeragi.consensus_mode = ConsensusMode::Npos;
 
@@ -241,7 +245,9 @@ impl Root {
             if !self.tiered_state.enabled {
                 self.tiered_state.enabled = true;
             }
-            if self.tiered_state.cold_store_root.is_none() {
+            if self.tiered_state.cold_store_root.is_none()
+                && self.tiered_state.da_store_root.is_none()
+            {
                 self.tiered_state.cold_store_root = Some(PathBuf::from(
                     defaults::tiered_state::DEFAULT_COLD_STORE_ROOT,
                 ));
@@ -459,6 +465,13 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             root.nexus.lane_config.entries().len(),
             root.nexus.lane_catalog.lanes().len()
         );
+        assert_eq!(
+            root.tiered_state
+                .da_store_root
+                .as_ref()
+                .expect("DA store root should be defaulted"),
+            &PathBuf::from(defaults::tiered_state::DEFAULT_DA_STORE_ROOT)
+        );
     }
 
     #[test]
@@ -517,6 +530,13 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             root.sumeragi.da_enabled,
             "Sora profile must enable data availability"
         );
+        assert_eq!(
+            root.tiered_state
+                .da_store_root
+                .as_ref()
+                .expect("DA store root should be defaulted"),
+            &PathBuf::from(defaults::tiered_state::DEFAULT_DA_STORE_ROOT)
+        );
         assert_eq!(root.nexus.lane_catalog, custom_catalog);
         assert_eq!(
             root.nexus
@@ -543,6 +563,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         };
         root.tiered_state.enabled = false;
         root.tiered_state.cold_store_root = None;
+        root.tiered_state.da_store_root = None;
         root.kura.max_disk_usage_bytes = Bytes(0);
         root.tiered_state.max_cold_bytes = Bytes(0);
         root.torii.sorafs_storage.max_capacity_bytes = Bytes(0);
@@ -558,6 +579,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert_eq!(root.streaming.soravpn.provision_spool_max_bytes.get(), 50);
         assert!(root.tiered_state.enabled, "tiered state should be enabled");
         assert_eq!(root.tiered_state.hot_retained_bytes.get(), 512);
+        assert!(root.tiered_state.da_store_root.is_none());
         assert_eq!(
             root.tiered_state
                 .cold_store_root
@@ -2898,6 +2920,8 @@ pub struct TieredState {
     pub hot_retained_grace_snapshots: u64,
     /// Optional on-disk root for cold shards.
     pub cold_store_root: Option<PathBuf>,
+    /// Optional on-disk root for DA-backed cold shards.
+    pub da_store_root: Option<PathBuf>,
     /// Number of snapshots to retain on disk (0 = keep all).
     pub max_snapshots: usize,
     /// Optional cold-tier byte budget across snapshots (0 = unlimited).

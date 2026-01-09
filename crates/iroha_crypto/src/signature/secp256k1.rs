@@ -60,14 +60,16 @@ impl EcdsaSecp256k1Sha256 {
     /// # Errors
     ///
     /// Returns [`Error::BadSignature`] when the inputs differ in length or any tuple fails
-    /// verification.
+    /// verification, or when the input is empty.
     pub fn verify_batch_deterministic(
         messages: &[&[u8]],
         signatures: &[&[u8]],
         public_keys: &[&[u8]],
         _seed32: [u8; 32],
     ) -> Result<(), Error> {
-        if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
+        if messages.is_empty()
+            || !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
+        {
             return Err(Error::BadSignature);
         }
         for ((m, s), pk_bytes) in messages
@@ -123,6 +125,15 @@ mod tests {
         let pks_arr: [&[u8]; 2] = [ep1.as_ref(), ep2.as_ref()];
         EcdsaSecp256k1Sha256::verify_batch_deterministic(&msgs, &sigs, &pks_arr, [0u8; 32])
             .expect("ok");
+    }
+
+    #[test]
+    fn verify_batch_deterministic_rejects_empty() {
+        let empty: Vec<&[u8]> = Vec::new();
+        assert!(
+            EcdsaSecp256k1Sha256::verify_batch_deterministic(&empty, &empty, &empty, [0u8; 32])
+                .is_err()
+        );
     }
 }
 

@@ -3,6 +3,7 @@
 
 use std::{string::String, vec::Vec};
 
+use iroha_crypto::PublicKey;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
@@ -210,11 +211,7 @@ pub struct BridgeProofRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
-    derive(
-        crate::DeriveFastJson,
-        crate::DeriveJsonSerialize,
-        crate::DeriveJsonDeserialize
-    )
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 pub struct BridgeFinalityProof {
@@ -228,6 +225,10 @@ pub struct BridgeFinalityProof {
     pub block_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
     /// Commit certificate collected for the block.
     pub commit_qc: crate::consensus::Qc,
+    /// Proof-of-possession entries aligned with `commit_qc.validator_set`.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub validator_set_pops: Vec<Vec<u8>>,
 }
 
 /// Authority set snapshot used for bridge commitments.
@@ -388,6 +389,14 @@ pub enum BridgeFinalityVerifyError {
     /// Proof carries an empty validator set.
     #[error("validator set is empty")]
     EmptyValidatorSet,
+    /// Validator-set PoP length does not match the validator-set length.
+    #[error("validator set pop length {got} does not match expected {expected}")]
+    ValidatorSetPopLengthMismatch {
+        /// Expected PoP count.
+        expected: usize,
+        /// Actual PoP count.
+        got: usize,
+    },
     /// Signer bitmap length does not match the validator-set length.
     #[error("signer bitmap length {got} does not match expected {expected}")]
     SignerBitmapLengthMismatch {
@@ -634,7 +643,7 @@ impl BridgeFinalityVerifier {
             return Err(BridgeFinalityVerifyError::EmptyValidatorSet);
         }
 
-        Self::validate_commit_qc(&proof.chain_id, &proof.commit_qc)?;
+        Self::validate_commit_qc(&proof.chain_id, &proof.commit_qc, &proof.validator_set_pops)?;
 
         self.latest_height = Some(proof.height);
         if self.expected_epoch.is_none() {
@@ -646,6 +655,7 @@ impl BridgeFinalityVerifier {
     fn validate_commit_qc(
         chain_id: &ChainId,
         certificate: &crate::consensus::Qc,
+        validator_set_pops: &[Vec<u8>],
     ) -> Result<(), BridgeFinalityVerifyError> {
         let validator_set = &certificate.validator_set;
         let required = Self::min_signatures(validator_set.len());
@@ -662,18 +672,26 @@ impl BridgeFinalityVerifier {
         if certificate.aggregate.bls_aggregate_signature.is_empty() {
             return Err(BridgeFinalityVerifyError::AggregateSignatureMissing);
         }
+        if validator_set_pops.len() != validator_set.len() {
+            return Err(BridgeFinalityVerifyError::ValidatorSetPopLengthMismatch {
+                expected: validator_set.len(),
+                got: validator_set_pops.len(),
+            });
+        }
 
-        let mut public_keys: Vec<&[u8]> = Vec::with_capacity(indices.len());
+        let mut public_keys: Vec<&PublicKey> = Vec::with_capacity(indices.len());
+        let mut pops: Vec<&[u8]> = Vec::with_capacity(indices.len());
         for idx in indices {
             let peer = &validator_set[idx];
-            let (algorithm, payload) = peer.public_key.to_bytes();
+            let (algorithm, _payload) = peer.public_key.to_bytes();
             if algorithm != iroha_crypto::Algorithm::BlsNormal {
                 return Err(BridgeFinalityVerifyError::InvalidValidatorKeyAlgorithm {
                     index: idx as u64,
                     algorithm,
                 });
             }
-            public_keys.push(payload);
+            public_keys.push(peer.public_key());
+            pops.push(validator_set_pops[idx].as_slice());
         }
 
         let preimage = commit_vote_preimage(chain_id, certificate);
@@ -681,6 +699,7 @@ impl BridgeFinalityVerifier {
             &preimage,
             &certificate.aggregate.bls_aggregate_signature,
             &public_keys,
+            &pops,
         )
         .map_err(|_| BridgeFinalityVerifyError::InvalidAggregateSignature)?;
 
@@ -812,6 +831,13 @@ mod tests {
         );
         let block_hash = HashOf::new(&header);
         let validator_set = validator_set_from_keys(keys);
+        let validator_set_pops: Vec<Vec<u8>> = keys
+            .iter()
+            .map(|kp| {
+                iroha_crypto::bls_normal_pop_prove(kp.private_key())
+                    .expect("PoP prove for validator keypair")
+            })
+            .collect();
         let validator_set_hash = HashOf::new(&validator_set);
         let cert_template = crate::consensus::Qc {
             phase: crate::block::consensus::CertPhase::Commit,
@@ -855,7 +881,32 @@ mod tests {
             block_header: header,
             block_hash,
             commit_qc,
+            validator_set_pops,
         }
+    }
+
+    #[test]
+    fn bridge_finality_rejects_pop_length_mismatch() {
+        let keys = vec![
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        ];
+        let proof = make_finality_proof("bridge-pop-mismatch", 1, 0, &keys);
+        let mut verifier =
+            BridgeFinalityVerifier::new("bridge-pop-mismatch".parse().expect("chain id"));
+        let mut bad = proof.clone();
+        bad.validator_set_pops.pop();
+
+        let err = verifier
+            .verify(&bad)
+            .expect_err("validator pop length mismatch should fail");
+        assert!(matches!(
+            err,
+            BridgeFinalityVerifyError::ValidatorSetPopLengthMismatch {
+                expected: 2,
+                got: 1
+            }
+        ));
     }
 
     #[test]

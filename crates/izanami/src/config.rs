@@ -3,7 +3,7 @@
 
 use std::{ops::RangeInclusive, sync::OnceLock, time::Duration};
 
-use clap::{Args, Parser};
+use clap::{Args, Parser, ValueEnum};
 use color_eyre::{Result, eyre::eyre};
 use humantime::parse_duration;
 use iroha_config::{
@@ -12,8 +12,8 @@ use iroha_config::{
         toml::{TomlSource, Writer as TomlWriter},
     },
     parameters::actual::{
-        Commit, Da, Fusion, LaneRoutingPolicy, LaneRoutingRule, Nexus as ActualNexus,
-        Sumeragi as ActualSumeragi,
+        Commit, ConsensusMode, Da, Fusion, LaneRoutingPolicy, LaneRoutingRule,
+        Nexus as ActualNexus, Sumeragi as ActualSumeragi,
     },
 };
 use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog};
@@ -40,7 +40,7 @@ pub struct IzanamiArgs {
     /// Wall-clock duration for which the scenario should run.
     #[arg(long, default_value = "120s", value_parser = parse_duration)]
     pub duration: Duration,
-    /// Optional total consensus pipeline time (block production + commit).
+    /// Optional total consensus pipeline time (block production + commit), minimum 2ms.
     #[arg(long, value_parser = parse_duration)]
     pub pipeline_time: Option<Duration>,
     /// Target total block height required across all running peers before stopping.
@@ -61,6 +61,9 @@ pub struct IzanamiArgs {
     /// Upper bound on the number of concurrently in-flight transactions submitted by Izanami.
     #[arg(long, default_value_t = 32)]
     pub max_inflight: usize,
+    /// Workload profile controlling which recipes are scheduled.
+    #[arg(long, value_enum, default_value_t = WorkloadProfile::Stable)]
+    pub workload_profile: WorkloadProfile,
     /// Tracing filter passed to `tracing-subscriber` (overridden by `RUST_LOG` if set).
     #[arg(long, default_value = "info")]
     pub log_filter: String,
@@ -78,8 +81,25 @@ pub struct IzanamiArgs {
     pub nexus: bool,
 }
 
+/// Workload profiles for recipe selection.
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum WorkloadProfile {
+    /// Favor deterministic, execution-safe recipes for long runs.
+    Stable,
+    /// Include intentionally invalid recipes for chaos coverage.
+    Chaos,
+}
+
+impl Default for WorkloadProfile {
+    fn default() -> Self {
+        Self::Stable
+    }
+}
+
 pub const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(15);
 pub const DEFAULT_PROGRESS_TIMEOUT: Duration = Duration::from_secs(120);
+/// Minimum pipeline time accepted by the test-network builder (must stay in sync).
+pub const MIN_PIPELINE_TIME: Duration = Duration::from_millis(2);
 
 /// CLI fault toggles controlling which fault injectors run.
 #[derive(Debug, Clone, Args)]
@@ -201,6 +221,7 @@ pub struct ChaosConfig {
     pub seed: Option<u64>,
     pub tps: f64,
     pub max_inflight: usize,
+    pub workload_profile: WorkloadProfile,
     pub fault_interval: RangeInclusive<Duration>,
     pub log_filter: String,
     pub faults: FaultToggles,
@@ -231,9 +252,12 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
         }
         if args
             .pipeline_time
-            .is_some_and(|duration| duration.is_zero())
+            .is_some_and(|duration| duration < MIN_PIPELINE_TIME)
         {
-            return Err(eyre!("pipeline_time must be greater than zero"));
+            return Err(eyre!(
+                "pipeline_time must be at least {} ms",
+                MIN_PIPELINE_TIME.as_millis()
+            ));
         }
         if args.target_blocks == Some(0) {
             return Err(eyre!("target_blocks must be greater than zero"));
@@ -253,6 +277,17 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
         }
         if args.tps <= 0.0 {
             return Err(eyre!("tps must be positive"));
+        }
+        if !args.tps.is_finite() {
+            return Err(eyre!("tps must be finite"));
+        }
+        let interval_secs = 1.0 / args.tps;
+        if !interval_secs.is_finite() || interval_secs > (u64::MAX as f64) {
+            return Err(eyre!("tps too low for timer range"));
+        }
+        let interval = Duration::from_secs_f64(interval_secs);
+        if interval.is_zero() {
+            return Err(eyre!("tps too high for timer resolution"));
         }
         if args.max_inflight == 0 {
             return Err(eyre!("max_inflight must be greater than zero"));
@@ -278,6 +313,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             seed,
             tps,
             max_inflight,
+            workload_profile,
             log_filter,
             fault_interval_min,
             fault_interval_max,
@@ -303,6 +339,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             seed,
             tps,
             max_inflight,
+            workload_profile,
             fault_interval: fault_interval_min..=fault_interval_max,
             log_filter,
             faults: toggles,
@@ -338,6 +375,7 @@ impl IzanamiArgs {
             seed: cfg.seed,
             tps: cfg.tps,
             max_inflight: cfg.max_inflight,
+            workload_profile: cfg.workload_profile,
             log_filter: cfg.log_filter.clone(),
             fault_interval_min: min,
             fault_interval_max: max,
@@ -380,7 +418,14 @@ impl NexusProfile {
         let mut raw_table: Table = toml::from_str(&config_str)
             .map_err(|err| eyre!("failed to parse embedded nexus config: {err}"))?;
         normalize_lane_metadata(&mut raw_table);
-        raw_table.remove("streaming");
+        let consensus_mode = Value::String("npos".to_string());
+        if let Some(sumeragi) = raw_table.get_mut("sumeragi").and_then(Value::as_table_mut) {
+            sumeragi.insert("consensus_mode".to_string(), consensus_mode);
+        } else {
+            let mut sumeragi = Table::new();
+            sumeragi.insert("consensus_mode".to_string(), consensus_mode);
+            raw_table.insert("sumeragi".to_string(), Value::Table(sumeragi));
+        }
         let default_p2p_addr = canonical_addr_literal("127.0.0.1:1337")?;
         let default_torii_addr = canonical_addr_literal("127.0.0.1:8080")?;
         // Provide safe defaults for required network addresses and drop unsupported nested sections
@@ -616,7 +661,13 @@ fn build_nexus_layer(nexus: &ActualNexus, sumeragi: &ActualSumeragi) -> Table {
         nexus.da.rotation.latency_decay,
     );
 
-    TomlWriter::new(&mut layer).write(["sumeragi", "da_enabled"], sumeragi.da_enabled);
+    let consensus_mode = match sumeragi.consensus_mode {
+        ConsensusMode::Permissioned => "permissioned",
+        ConsensusMode::Npos => "npos",
+    };
+    TomlWriter::new(&mut layer)
+        .write(["sumeragi", "consensus_mode"], consensus_mode)
+        .write(["sumeragi", "da_enabled"], sumeragi.da_enabled);
 
     layer
 }
@@ -685,6 +736,7 @@ mod tests {
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(2),
@@ -714,6 +766,7 @@ mod tests {
             seed: Some(42),
             tps: 1.0,
             max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
             log_filter: "warn".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
@@ -739,6 +792,7 @@ mod tests {
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
@@ -769,6 +823,7 @@ mod tests {
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
@@ -776,6 +831,57 @@ mod tests {
             nexus: false,
         };
         assert!(ChaosConfig::try_from(args).is_err());
+    }
+
+    #[test]
+    fn chaos_config_rejects_pipeline_time_under_minimum() {
+        let args = IzanamiArgs {
+            tui: false,
+            allow_net: true,
+            peers: 1,
+            faulty: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: Some(
+                MIN_PIPELINE_TIME
+                    .checked_sub(Duration::from_millis(1))
+                    .unwrap_or(Duration::ZERO),
+            ),
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            seed: None,
+            tps: 1.0,
+            max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
+            log_filter: "info".to_string(),
+            fault_interval_min: Duration::from_secs(1),
+            fault_interval_max: Duration::from_secs(1),
+            faults: FaultArgs::default(),
+            nexus: false,
+        };
+        let Err(err) = ChaosConfig::try_from(args) else {
+            panic!("pipeline_time below minimum should fail");
+        };
+        assert!(
+            err.to_string().contains("pipeline_time must be at least"),
+            "error should mention pipeline_time minimum: {err}"
+        );
+    }
+
+    #[test]
+    fn nexus_profile_sets_npos_consensus_mode() {
+        let profile = NexusProfile::sora_defaults().expect("nexus profile should load");
+        let mode = profile
+            .config_layer
+            .get("sumeragi")
+            .and_then(Value::as_table)
+            .and_then(|sumeragi| sumeragi.get("consensus_mode"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            mode,
+            Some("npos"),
+            "nexus profile must force consensus_mode=npos"
+        );
     }
 
     #[test]
@@ -793,6 +899,7 @@ mod tests {
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
@@ -805,6 +912,99 @@ mod tests {
         assert!(
             err.to_string().contains("progress_interval"),
             "error should mention progress_interval: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_rejects_non_finite_tps() {
+        let args = IzanamiArgs {
+            tui: false,
+            allow_net: true,
+            peers: 1,
+            faulty: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            seed: None,
+            tps: f64::NAN,
+            max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
+            log_filter: "info".to_string(),
+            fault_interval_min: Duration::from_secs(1),
+            fault_interval_max: Duration::from_secs(1),
+            faults: FaultArgs::default(),
+            nexus: false,
+        };
+        let Err(err) = ChaosConfig::try_from(args) else {
+            panic!("non-finite tps should fail");
+        };
+        assert!(
+            err.to_string().contains("tps must be finite"),
+            "error should mention finite tps: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_rejects_tps_too_high_for_timer() {
+        let args = IzanamiArgs {
+            tui: false,
+            allow_net: true,
+            peers: 1,
+            faulty: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            seed: None,
+            tps: f64::MAX,
+            max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
+            log_filter: "info".to_string(),
+            fault_interval_min: Duration::from_secs(1),
+            fault_interval_max: Duration::from_secs(1),
+            faults: FaultArgs::default(),
+            nexus: false,
+        };
+        let Err(err) = ChaosConfig::try_from(args) else {
+            panic!("tps too high for timer resolution should fail");
+        };
+        assert!(
+            err.to_string().contains("tps too high"),
+            "error should mention timer resolution: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_rejects_tps_too_low_for_timer() {
+        let args = IzanamiArgs {
+            tui: false,
+            allow_net: true,
+            peers: 1,
+            faulty: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            seed: None,
+            tps: f64::MIN_POSITIVE,
+            max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
+            log_filter: "info".to_string(),
+            fault_interval_min: Duration::from_secs(1),
+            fault_interval_max: Duration::from_secs(1),
+            faults: FaultArgs::default(),
+            nexus: false,
+        };
+        let Err(err) = ChaosConfig::try_from(args) else {
+            panic!("tps too low for timer range should fail");
+        };
+        assert!(
+            err.to_string().contains("tps too low"),
+            "error should mention timer range: {err}"
         );
     }
 }

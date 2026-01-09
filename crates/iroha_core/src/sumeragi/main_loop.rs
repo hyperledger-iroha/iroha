@@ -18,7 +18,7 @@ use iroha_config::parameters::actual::{
     AdaptiveObservability, Common as CommonConfig, ConsensusMode, DaManifestPolicy,
     LaneConfig as LaneConfigSnapshot, NodeRole, Sumeragi as SumeragiConfig,
 };
-use iroha_crypto::{Hash, HashOf, MerkleTree, PrivateKey, Signature};
+use iroha_crypto::{Hash, HashOf, MerkleTree, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     ChainId, Encode as _,
     account::AccountId,
@@ -40,7 +40,8 @@ use iroha_data_model::{
     transaction::{Executable, SignedTransaction},
 };
 use iroha_logger::prelude::*;
-use iroha_p2p::{Broadcast, Post, Priority, UpdateTopology};
+use iroha_p2p::network::data_frame_wire_len;
+use iroha_p2p::{Broadcast, Post, Priority, UpdateTopology, frame_plaintext_cap};
 use iroha_primitives::time::TimeSource;
 #[cfg(all(test, feature = "telemetry"))]
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
@@ -83,7 +84,10 @@ use crate::{
     nexus::lane_relay::LaneRelayBroadcaster,
     peers_gossiper::PeersGossiperHandle,
     queue::{BackpressureState, Queue, RoutingDecision},
-    state::{CellVecExt, StakeSnapshot, State, StateView, compute_confidential_feature_digest},
+    state::{
+        CellVecExt, StakeSnapshot, State, StateView, WorldReadOnly,
+        compute_confidential_feature_digest, consensus_key_pop_for_public_key,
+    },
     sumeragi::evidence::EvidenceStore,
     telemetry::{MissingBlockFetchOutcome, MissingBlockFetchTargetKind},
     tx::AcceptedTransaction,
@@ -683,6 +687,7 @@ fn validate_qc_with_evidence(
     >,
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
+    world: &impl WorldReadOnly,
     chain_id: &ChainId,
     consensus_mode: ConsensusMode,
     stake_snapshot: Option<&CommitStakeSnapshot>,
@@ -696,6 +701,7 @@ fn validate_qc_with_evidence(
         vote_log,
         qc,
         topology,
+        world,
         chain_id,
         consensus_mode,
         stake_snapshot,
@@ -876,6 +882,7 @@ fn qc_validator_set_matches_topology(
 fn qc_aggregate_consistent(
     qc: &crate::sumeragi::consensus::Qc,
     canonical_topology: &super::network_topology::Topology,
+    world: &impl WorldReadOnly,
     chain_id: &ChainId,
     mode_tag: &str,
 ) -> bool {
@@ -899,7 +906,8 @@ fn qc_aggregate_consistent(
     if parsed_signers.present.is_empty() {
         return false;
     }
-    let mut public_keys: Vec<&[u8]> = Vec::with_capacity(parsed_signers.present.len());
+    let mut public_keys: Vec<&PublicKey> = Vec::with_capacity(parsed_signers.present.len());
+    let mut pops: Vec<Vec<u8>> = Vec::with_capacity(parsed_signers.present.len());
     for signer in &parsed_signers.present {
         let Ok(idx) = usize::try_from(*signer) else {
             return false;
@@ -907,14 +915,20 @@ fn qc_aggregate_consistent(
         let Some(peer) = canonical_topology.as_ref().get(idx) else {
             return false;
         };
-        let (_, payload) = peer.public_key().to_bytes();
-        public_keys.push(payload);
+        let pk = peer.public_key();
+        let Some(pop) = consensus_key_pop_for_public_key(world, pk) else {
+            return false;
+        };
+        public_keys.push(pk);
+        pops.push(pop);
     }
     let preimage = qc_bls_preimage(qc, chain_id, mode_tag);
+    let pop_refs: Vec<&[u8]> = pops.iter().map(Vec::as_slice).collect();
     iroha_crypto::bls_normal_verify_preaggregated_same_message(
         &preimage,
         &qc.aggregate.bls_aggregate_signature,
         &public_keys,
+        &pop_refs,
     )
     .is_ok()
 }
@@ -1034,6 +1048,7 @@ pub(crate) fn validated_block_signers(
 pub(crate) fn validate_block_sync_qc(
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
+    world: &impl WorldReadOnly,
     block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
     block_view: u64,
     chain_id: &ChainId,
@@ -1086,7 +1101,7 @@ pub(crate) fn validate_block_sync_qc(
             }
         }
     }
-    if !qc_aggregate_consistent(qc, topology, chain_id, mode_tag) {
+    if !qc_aggregate_consistent(qc, topology, world, chain_id, mode_tag) {
         return Err(QcValidationError::AggregateMismatch);
     }
     let block_signature_topology =
@@ -1256,6 +1271,7 @@ fn tally_qc_against_votes(
     >,
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
+    world: &impl WorldReadOnly,
     chain_id: &ChainId,
     consensus_mode: ConsensusMode,
     stake_snapshot: Option<&CommitStakeSnapshot>,
@@ -1266,6 +1282,7 @@ fn tally_qc_against_votes(
         vote_log,
         qc,
         topology,
+        world,
         chain_id,
         consensus_mode,
         stake_snapshot,
@@ -1287,6 +1304,7 @@ fn tally_qc_against_votes(
 fn tally_qc_against_block_signers(
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
+    world: &impl WorldReadOnly,
     block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
     block_view: u64,
     chain_id: &ChainId,
@@ -1298,6 +1316,7 @@ fn tally_qc_against_block_signers(
     let _ = validate_block_sync_qc(
         qc,
         topology,
+        world,
         block_signers,
         block_view,
         chain_id,
@@ -1349,6 +1368,7 @@ fn validate_qc_against_votes(
     >,
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
+    world: &impl WorldReadOnly,
     chain_id: &ChainId,
     consensus_mode: ConsensusMode,
     stake_snapshot: Option<&CommitStakeSnapshot>,
@@ -1391,7 +1411,7 @@ fn validate_qc_against_votes(
         }
     }
 
-    if !qc_aggregate_consistent(qc, topology, chain_id, mode_tag) {
+    if !qc_aggregate_consistent(qc, topology, world, chain_id, mode_tag) {
         return Err(QcValidationError::AggregateMismatch);
     }
     let mut missing = 0usize;
@@ -1452,12 +1472,13 @@ fn validate_qc_against_votes(
 fn fallback_qc_tally_from_bitmap(
     qc: &crate::sumeragi::consensus::Qc,
     topology: &super::network_topology::Topology,
+    world: &impl WorldReadOnly,
     chain_id: &ChainId,
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
 ) -> Option<QcSignerTally> {
     let _signature_topology = topology_for_view(topology, qc.height, qc.view, mode_tag, prf_seed);
-    if !qc_aggregate_consistent(qc, topology, chain_id, mode_tag) {
+    if !qc_aggregate_consistent(qc, topology, world, chain_id, mode_tag) {
         return None;
     }
     let roster_len = topology.as_ref().len();
@@ -2627,6 +2648,51 @@ fn non_rbc_payload_budget(
     config_cap.min(frame_cap)
 }
 
+fn consensus_block_wire_len(origin: &PeerId, msg: &BlockMessage) -> usize {
+    consensus_block_wire_len_owned(origin, msg.clone())
+}
+
+fn consensus_block_wire_len_owned(origin: &PeerId, msg: BlockMessage) -> usize {
+    let payload = NetworkMessage::SumeragiBlock(Box::new(msg));
+    data_frame_wire_len(
+        origin,
+        Some(origin),
+        iroha_config::parameters::defaults::network::RELAY_TTL,
+        Priority::High,
+        &payload,
+    )
+}
+
+fn rbc_chunk_payload_cap(origin: &PeerId, consensus_frame_cap: usize) -> usize {
+    // Use max values for varint fields so the cap holds for any height/view/index.
+    let mut chunk = crate::sumeragi::consensus::RbcChunk {
+        block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH])),
+        height: u64::MAX,
+        view: u64::MAX,
+        epoch: u64::MAX,
+        idx: u32::MAX,
+        bytes: Vec::new(),
+    };
+    let base_len = consensus_block_wire_len_owned(origin, BlockMessage::RbcChunk(chunk.clone()));
+    if base_len >= consensus_frame_cap {
+        return 0;
+    }
+    let mut low = 0usize;
+    let mut high = consensus_frame_cap - base_len;
+    while low < high {
+        let mid = (low + high + 1) / 2;
+        chunk.bytes.resize(mid, 0);
+        let encoded_len =
+            consensus_block_wire_len_owned(origin, BlockMessage::RbcChunk(chunk.clone()));
+        if encoded_len <= consensus_frame_cap {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    low
+}
+
 fn is_peer_admin_instruction(instr: &iroha_data_model::isi::InstructionBox) -> bool {
     let id = iroha_data_model::isi::Instruction::id(&**instr).to_ascii_lowercase();
     id.contains("registerpeer") || id.contains("unregisterpeer")
@@ -3548,6 +3614,10 @@ fn block_sync_update_has_roster(
     }
 }
 
+fn block_sync_update_wire_len(origin: &PeerId, update: &super::message::BlockSyncUpdate) -> usize {
+    consensus_block_wire_len_owned(origin, BlockMessage::BlockSyncUpdate(update.clone()))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ViewChangeCause {
     CommitFailure,
@@ -3685,6 +3755,8 @@ fn selection_from_roster_artifacts(
     mode_tag: &'static str,
 ) -> Option<BlockSyncRosterSelection> {
     let expected_epoch = epoch_for_height_from_state(state, block_height, consensus_mode);
+    let state_view = state.view();
+    let world = state_view.world();
     let validated_cert = commit_qc.and_then(|cert| {
         match validate_commit_qc_roster(
             cert,
@@ -3694,6 +3766,7 @@ fn selection_from_roster_artifacts(
             consensus_mode,
             stake_snapshot,
             expected_epoch,
+            world,
             &state.chain_id,
             mode_tag,
         ) {
@@ -3713,6 +3786,21 @@ fn selection_from_roster_artifacts(
         (ConsensusMode::Npos, None) => expected_epoch,
         _ => 0,
     };
+    let checkpoint_roots = validated_cert
+        .as_ref()
+        .map(|(_, cert)| (cert.parent_state_root, cert.post_state_root))
+        .or_else(|| {
+            super::status::precommit_signers_for(block_hash).and_then(|record| {
+                if record.height == block_height
+                    && record.epoch == epoch
+                    && block_view.map_or(true, |view| view == record.view)
+                {
+                    Some((record.parent_state_root, record.post_state_root))
+                } else {
+                    None
+                }
+            })
+        });
     let validated_checkpoint = checkpoint.and_then(|chk| {
         match validate_checkpoint_roster(
             chk,
@@ -3724,6 +3812,8 @@ fn selection_from_roster_artifacts(
             &state.chain_id,
             mode_tag,
             epoch,
+            checkpoint_roots,
+            world,
         ) {
             Ok(roster) => Some((roster, chk)),
             Err(err) => {
@@ -4052,6 +4142,7 @@ fn validate_commit_qc_roster(
     consensus_mode: ConsensusMode,
     stake_snapshot: Option<&CommitStakeSnapshot>,
     expected_epoch: u64,
+    world: &impl WorldReadOnly,
     chain_id: &ChainId,
     mode_tag: &str,
 ) -> Result<Vec<PeerId>, RosterValidationError> {
@@ -4157,7 +4248,8 @@ fn validate_commit_qc_roster(
         }
     }
     let preimage = qc_bls_preimage(cert, chain_id, mode_tag);
-    let mut public_keys: Vec<&[u8]> = Vec::with_capacity(signer_indices.len());
+    let mut public_keys: Vec<&PublicKey> = Vec::with_capacity(signer_indices.len());
+    let mut pops: Vec<Vec<u8>> = Vec::with_capacity(signer_indices.len());
     for idx in &signer_indices {
         let Some(peer) = cert.validator_set.get(*idx) else {
             return Err(RosterValidationError::SignerOutOfRange {
@@ -4165,13 +4257,19 @@ fn validate_commit_qc_roster(
                 roster_len: roster_len.try_into().unwrap_or(u32::MAX),
             });
         };
-        let (_, payload) = peer.public_key().to_bytes();
-        public_keys.push(payload);
+        let pk = peer.public_key();
+        let Some(pop) = consensus_key_pop_for_public_key(world, pk) else {
+            return Err(RosterValidationError::AggregateSignatureInvalid);
+        };
+        public_keys.push(pk);
+        pops.push(pop);
     }
+    let pop_refs: Vec<&[u8]> = pops.iter().map(Vec::as_slice).collect();
     if iroha_crypto::bls_normal_verify_preaggregated_same_message(
         &preimage,
         &cert.aggregate.bls_aggregate_signature,
         &public_keys,
+        &pop_refs,
     )
     .is_err()
     {
@@ -4190,6 +4288,8 @@ fn validate_checkpoint_roster(
     chain_id: &ChainId,
     mode_tag: &str,
     epoch: u64,
+    roots: Option<(Hash, Hash)>,
+    world: &impl WorldReadOnly,
 ) -> Result<Vec<PeerId>, RosterValidationError> {
     if checkpoint.block_hash != block_hash {
         return Err(RosterValidationError::BlockHashMismatch);
@@ -4292,6 +4392,13 @@ fn validate_checkpoint_roster(
             }
         }
     }
+    if let Some((parent_state_root, post_state_root)) = roots {
+        if checkpoint.parent_state_root != parent_state_root
+            || checkpoint.post_state_root != post_state_root
+        {
+            return Err(RosterValidationError::AggregateSignatureInvalid);
+        }
+    }
     let parent_state_root = checkpoint.parent_state_root;
     let post_state_root = checkpoint.post_state_root;
     let view = block_view.unwrap_or(checkpoint.view);
@@ -4308,7 +4415,8 @@ fn validate_checkpoint_roster(
         bls_sig: Vec::new(),
     };
     let preimage = vote_preimage(chain_id, mode_tag, &vote);
-    let mut public_keys: Vec<&[u8]> = Vec::with_capacity(signer_indices.len());
+    let mut public_keys: Vec<&PublicKey> = Vec::with_capacity(signer_indices.len());
+    let mut pops: Vec<Vec<u8>> = Vec::with_capacity(signer_indices.len());
     for idx in &signer_indices {
         let Some(peer) = checkpoint.validator_set.get(*idx) else {
             return Err(RosterValidationError::SignerOutOfRange {
@@ -4316,13 +4424,19 @@ fn validate_checkpoint_roster(
                 roster_len: roster_len.try_into().unwrap_or(u32::MAX),
             });
         };
-        let (_, payload) = peer.public_key().to_bytes();
-        public_keys.push(payload);
+        let pk = peer.public_key();
+        let Some(pop) = consensus_key_pop_for_public_key(world, pk) else {
+            return Err(RosterValidationError::AggregateSignatureInvalid);
+        };
+        public_keys.push(pk);
+        pops.push(pop);
     }
+    let pop_refs: Vec<&[u8]> = pops.iter().map(Vec::as_slice).collect();
     if iroha_crypto::bls_normal_verify_preaggregated_same_message(
         &preimage,
         &checkpoint.bls_aggregate_signature,
         &public_keys,
+        &pop_refs,
     )
     .is_err()
     {
@@ -4891,27 +5005,60 @@ impl Actor {
         topology: &super::network_topology::Topology,
     ) -> Option<QcSignerTally> {
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
-        let stake_snapshot = match consensus_mode {
-            ConsensusMode::Permissioned => None,
-            ConsensusMode::Npos => {
-                CommitStakeSnapshot::from_roster(self.state.view().world(), topology.as_ref())
-            }
-        };
         let key = Self::qc_tally_key(qc);
         if let Some(tally) = self.qc_signer_tally.get(&key) {
             return Some(tally.clone());
         }
 
-        let (result, evidence) = validate_qc_with_evidence(
-            &self.vote_log,
-            qc,
-            topology,
-            &self.common_config.chain,
-            consensus_mode,
-            stake_snapshot.as_ref(),
-            mode_tag,
-            prf_seed,
-        );
+        let (result, evidence, fallback_tally, sync_err) = {
+            let state_view = self.state.view();
+            let world = state_view.world();
+            let stake_snapshot = match consensus_mode {
+                ConsensusMode::Permissioned => None,
+                ConsensusMode::Npos => CommitStakeSnapshot::from_roster(world, topology.as_ref()),
+            };
+            let (result, evidence) = validate_qc_with_evidence(
+                &self.vote_log,
+                qc,
+                topology,
+                world,
+                &self.common_config.chain,
+                consensus_mode,
+                stake_snapshot.as_ref(),
+                mode_tag,
+                prf_seed,
+            );
+            let mut fallback_tally = None;
+            let mut sync_err = None;
+            if matches!(&result, Err(QcValidationError::MissingVotes { .. })) {
+                match tally_qc_against_block_signers(
+                    qc,
+                    topology,
+                    world,
+                    block_signers,
+                    block_view,
+                    &self.common_config.chain,
+                    consensus_mode,
+                    stake_snapshot.as_ref(),
+                    mode_tag,
+                    prf_seed,
+                ) {
+                    Ok(tally) => fallback_tally = Some(tally),
+                    Err(err) => {
+                        sync_err = Some(err);
+                        fallback_tally = fallback_qc_tally_from_bitmap(
+                            qc,
+                            topology,
+                            world,
+                            &self.common_config.chain,
+                            mode_tag,
+                            prf_seed,
+                        );
+                    }
+                }
+            }
+            (result, evidence, fallback_tally, sync_err)
+        };
         match result {
             Ok(QcValidationOutcome {
                 signers,
@@ -4931,34 +5078,12 @@ impl Actor {
                     let _ = self.handle_evidence(evidence);
                 }
                 if matches!(err, QcValidationError::MissingVotes { .. }) {
-                    match tally_qc_against_block_signers(
-                        qc,
-                        topology,
-                        block_signers,
-                        block_view,
-                        &self.common_config.chain,
-                        consensus_mode,
-                        stake_snapshot.as_ref(),
-                        mode_tag,
-                        prf_seed,
-                    ) {
-                        Ok(tally) => {
-                            self.note_validated_qc_tally(qc, tally.clone());
-                            return Some(tally);
-                        }
-                        Err(sync_err) => {
-                            record_qc_validation_error(self.telemetry_handle(), &sync_err);
-                            if let Some(tally) = fallback_qc_tally_from_bitmap(
-                                qc,
-                                topology,
-                                &self.common_config.chain,
-                                mode_tag,
-                                prf_seed,
-                            ) {
-                                self.note_validated_qc_tally(qc, tally.clone());
-                                return Some(tally);
-                            }
-                        }
+                    if let Some(sync_err) = sync_err {
+                        record_qc_validation_error(self.telemetry_handle(), &sync_err);
+                    }
+                    if let Some(tally) = fallback_tally {
+                        self.note_validated_qc_tally(qc, tally.clone());
+                        return Some(tally);
                     }
                 }
                 None
@@ -5265,6 +5390,43 @@ impl Actor {
         None
     }
 
+    fn reconcile_new_view_tracker_with_local_blocks(&mut self) {
+        let mut drop_keys = Vec::new();
+        for (key, entry) in self.subsystems.propose.new_view_tracker.entries.iter_mut() {
+            let Some((local_height, local_view)) =
+                self.local_block_height_view(entry.highest_qc.subject_block_hash)
+            else {
+                continue;
+            };
+            if local_height != entry.highest_qc.height {
+                warn!(
+                    height = key.0,
+                    view = key.1,
+                    highest_height = entry.highest_qc.height,
+                    local_height,
+                    block = %entry.highest_qc.subject_block_hash,
+                    "dropping NEW_VIEW entry with highest QC height mismatch against local block"
+                );
+                drop_keys.push(*key);
+                continue;
+            }
+            if local_view != entry.highest_qc.view {
+                debug!(
+                    height = key.0,
+                    view = key.1,
+                    highest_view = entry.highest_qc.view,
+                    local_view,
+                    block = %entry.highest_qc.subject_block_hash,
+                    "correcting NEW_VIEW highest QC view to match local block header"
+                );
+                entry.highest_qc.view = local_view;
+            }
+        }
+        for key in drop_keys {
+            self.subsystems.propose.new_view_tracker.entries.remove(&key);
+        }
+    }
+
     fn highest_qc_extends_locked(&self, highest: crate::sumeragi::consensus::QcHeaderRef) -> bool {
         qc_extends_locked_if_present(
             self.locked_qc,
@@ -5459,7 +5621,7 @@ impl Actor {
 
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(super) fn new(
-        config: SumeragiConfig,
+        mut config: SumeragiConfig,
         common_config: CommonConfig,
         consensus_frame_cap: usize,
         events_sender: EventsSender,
@@ -5478,6 +5640,24 @@ impl Actor {
         background_post_tx: Option<mpsc::SyncSender<BackgroundPost>>,
         rbc_status_handle: rbc_status::Handle,
     ) -> Result<Self> {
+        let consensus_frame_cap = frame_plaintext_cap(consensus_frame_cap);
+        let local_peer_id = common_config.peer.id();
+        let rbc_chunk_cap = rbc_chunk_payload_cap(local_peer_id, consensus_frame_cap);
+        if rbc_chunk_cap == 0 {
+            return Err(eyre!(
+                "consensus frame cap {consensus_frame_cap} is too small to encode RBC chunk headers"
+            ));
+        }
+        if config.rbc_chunk_max_bytes > rbc_chunk_cap {
+            warn!(
+                configured = config.rbc_chunk_max_bytes,
+                capped = rbc_chunk_cap,
+                consensus_frame_cap,
+                "clamping rbc_chunk_max_bytes to fit consensus frame cap"
+            );
+            config.rbc_chunk_max_bytes = rbc_chunk_cap;
+        }
+
         let chain_id = common_config.chain.clone();
         let chain_hash = Self::derive_chain_hash(&chain_id);
         let rbc_manifest = super::rbc_store::SoftwareManifest::current();
@@ -6958,7 +7138,135 @@ impl Actor {
         Ok(())
     }
 
+    fn prepare_block_sync_update_for_broadcast(
+        &self,
+        update: &mut super::message::BlockSyncUpdate,
+        consensus_mode: ConsensusMode,
+    ) -> bool {
+        if !self.trim_block_sync_update_for_frame_cap(update) {
+            return false;
+        }
+        block_sync_update_has_roster(update, consensus_mode)
+    }
+
+    fn trim_block_sync_update_for_frame_cap(
+        &self,
+        update: &mut super::message::BlockSyncUpdate,
+    ) -> bool {
+        let origin = self.common_config.peer.id();
+        let mut wire_len = block_sync_update_wire_len(origin, update);
+        if wire_len <= self.consensus_frame_cap {
+            return true;
+        }
+
+        if !update.commit_votes.is_empty() {
+            update.commit_votes.clear();
+            wire_len = block_sync_update_wire_len(origin, update);
+            if wire_len <= self.consensus_frame_cap {
+                return true;
+            }
+        }
+
+        let height = update.block.header().height().get();
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+
+        match consensus_mode {
+            ConsensusMode::Permissioned => {
+                if update.stake_snapshot.is_some() {
+                    update.stake_snapshot = None;
+                    wire_len = block_sync_update_wire_len(origin, update);
+                    if wire_len <= self.consensus_frame_cap {
+                        return true;
+                    }
+                }
+                if update.validator_checkpoint.is_some() {
+                    update.validator_checkpoint = None;
+                    wire_len = block_sync_update_wire_len(origin, update);
+                    if wire_len <= self.consensus_frame_cap {
+                        return true;
+                    }
+                }
+                if update.commit_qc.is_some() {
+                    update.commit_qc = None;
+                    wire_len = block_sync_update_wire_len(origin, update);
+                    if wire_len <= self.consensus_frame_cap {
+                        return true;
+                    }
+                }
+            }
+            ConsensusMode::Npos => {
+                if update.validator_checkpoint.is_some() {
+                    update.validator_checkpoint = None;
+                    wire_len = block_sync_update_wire_len(origin, update);
+                    if wire_len <= self.consensus_frame_cap {
+                        return true;
+                    }
+                }
+                if update.commit_qc.is_some() {
+                    update.commit_qc = None;
+                    wire_len = block_sync_update_wire_len(origin, update);
+                    if wire_len <= self.consensus_frame_cap {
+                        return true;
+                    }
+                }
+                if update.stake_snapshot.is_some() {
+                    update.stake_snapshot = None;
+                    wire_len = block_sync_update_wire_len(origin, update);
+                    if wire_len <= self.consensus_frame_cap {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    fn prepare_background_block_message(&self, msg: &mut BlockMessage) -> bool {
+        let origin = self.common_config.peer.id();
+        let mut wire_len = consensus_block_wire_len(origin, msg);
+        if let BlockMessage::BlockSyncUpdate(update) = msg {
+            if wire_len > self.consensus_frame_cap {
+                if !self.trim_block_sync_update_for_frame_cap(update) {
+                    warn!(
+                        kind = Self::block_message_kind(msg),
+                        wire_len,
+                        cap = self.consensus_frame_cap,
+                        "dropping consensus message over frame cap"
+                    );
+                    return false;
+                }
+                wire_len = consensus_block_wire_len(origin, msg);
+            }
+        }
+        if wire_len > self.consensus_frame_cap {
+            warn!(
+                kind = Self::block_message_kind(msg),
+                wire_len,
+                cap = self.consensus_frame_cap,
+                "dropping consensus message over frame cap"
+            );
+            return false;
+        }
+        true
+    }
+
     fn schedule_background(&mut self, request: BackgroundRequest) {
+        let request = match request {
+            BackgroundRequest::Post { peer, mut msg } => {
+                if !self.prepare_background_block_message(&mut msg) {
+                    return;
+                }
+                BackgroundRequest::Post { peer, msg }
+            }
+            BackgroundRequest::Broadcast { mut msg } => {
+                if !self.prepare_background_block_message(&mut msg) {
+                    return;
+                }
+                BackgroundRequest::Broadcast { msg }
+            }
+            other => other,
+        };
         let dispatched = {
             #[cfg(feature = "telemetry")]
             {

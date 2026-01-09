@@ -1202,6 +1202,7 @@ fn minimal_config_snapshot() {
                 hot_retained_bytes: Bytes(0),
                 hot_retained_grace_snapshots: 1,
                 cold_store_root: None,
+                da_store_root: None,
                 max_snapshots: 2,
                 max_cold_bytes: Bytes(0),
             },

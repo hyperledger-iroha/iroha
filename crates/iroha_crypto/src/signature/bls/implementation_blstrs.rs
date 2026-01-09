@@ -119,24 +119,36 @@ impl<C: BlsConfiguration> BlsImpl<C> {
     }
 
     pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey<C>) -> Result<(), Error> {
-        // Delegate to w3f-bls for exact ciphersuite semantics to keep signature behavior stable.
-        let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
+        // Verify with the same pairing-based check used by aggregate paths and
+        // reject non-canonical or identity encodings up front.
         if C::NORMAL {
-            let sig = w3f_bls::Signature::<w3f_bls::ZBLS>::from_bytes(signature)
-                .map_err(|_| Error::BadSignature)?;
-            let pk = w3f_bls::PublicKey::<w3f_bls::ZBLS>::from_bytes(&pk.bytes)
-                .map_err(|_| Error::BadSignature)?;
-            if sig.verify(&msg, &pk) {
+            let sig = to_g2(signature)
+                .ok_or_else(|| ParseError("invalid BLS signature encoding".to_string()))?;
+            let pk = to_g1(&pk.bytes)
+                .ok_or_else(|| ParseError("invalid BLS public key encoding".to_string()))?;
+            let h = hash_msg_to_g2(message);
+            let terms: [(&G1Affine, &G2Prepared); 2] = [
+                (&G1Affine::generator(), &G2Prepared::from(sig)),
+                (&(-G1Projective::from(pk)).to_affine(), &G2Prepared::from(h)),
+            ];
+            let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
+            if gt.is_identity().into() {
                 Ok(())
             } else {
                 Err(Error::BadSignature)
             }
         } else {
-            let sig = w3f_bls::Signature::<w3f_bls::TinyBLS381>::from_bytes(signature)
-                .map_err(|_| Error::BadSignature)?;
-            let pk = w3f_bls::PublicKey::<w3f_bls::TinyBLS381>::from_bytes(&pk.bytes)
-                .map_err(|_| Error::BadSignature)?;
-            if sig.verify(&msg, &pk) {
+            let sig = to_g1(signature)
+                .ok_or_else(|| ParseError("invalid BLS signature encoding".to_string()))?;
+            let pk = to_g2(&pk.bytes)
+                .ok_or_else(|| ParseError("invalid BLS public key encoding".to_string()))?;
+            let h = hash_msg_to_g1(message);
+            let terms: [(&G1Affine, &G2Prepared); 2] = [
+                (&sig, &G2Prepared::from(G2Affine::generator())),
+                (&(-G1Projective::from(h)).to_affine(), &G2Prepared::from(pk)),
+            ];
+            let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
+            if gt.is_identity().into() {
                 Ok(())
             } else {
                 Err(Error::BadSignature)
@@ -170,8 +182,16 @@ impl<C: BlsConfiguration> BlsImpl<C> {
                 agg_pk =
                     Some(agg_pk.unwrap_or_else(G1Projective::identity) + G1Projective::from(pk));
             }
-            let sig = agg_sig.unwrap().to_affine();
-            let pk = agg_pk.unwrap().to_affine();
+            let sig = agg_sig.unwrap();
+            if sig.is_identity().into() {
+                return Err(Error::BadSignature);
+            }
+            let pk = agg_pk.unwrap();
+            if pk.is_identity().into() {
+                return Err(Error::BadSignature);
+            }
+            let sig = sig.to_affine();
+            let pk = pk.to_affine();
             let h = hash_msg_to_g2(message);
             let terms: [(&G1Affine, &G2Prepared); 2] = [
                 (&G1Affine::generator(), &G2Prepared::from(sig)),
@@ -200,8 +220,16 @@ impl<C: BlsConfiguration> BlsImpl<C> {
                 agg_pk =
                     Some(agg_pk.unwrap_or_else(G2Projective::identity) + G2Projective::from(pk));
             }
-            let sig = agg_sig.unwrap().to_affine();
-            let pk = agg_pk.unwrap().to_affine();
+            let sig = agg_sig.unwrap();
+            if sig.is_identity().into() {
+                return Err(Error::BadSignature);
+            }
+            let pk = agg_pk.unwrap();
+            if pk.is_identity().into() {
+                return Err(Error::BadSignature);
+            }
+            let sig = sig.to_affine();
+            let pk = pk.to_affine();
             let h = hash_msg_to_g1(message);
             let terms: [(&G1Affine, &G2Prepared); 2] = [
                 (&sig, &G2Prepared::from(G2Affine::generator())),
@@ -218,6 +246,7 @@ impl<C: BlsConfiguration> BlsImpl<C> {
 
     /// Aggregate a sequence of BLS signatures (same-message context) into a single signature.
     /// The caller is responsible for ensuring all signatures are valid and from the same suite.
+    /// Rejects aggregates that cancel to the identity element.
     pub fn aggregate_signatures(signatures: &[&[u8]]) -> Result<Vec<u8>, Error> {
         if signatures.is_empty() {
             return Err(Error::BadSignature);
@@ -228,12 +257,18 @@ impl<C: BlsConfiguration> BlsImpl<C> {
                 let sig = to_g2(s).ok_or(Error::BadSignature)?;
                 agg_sig += G2Projective::from(sig);
             }
+            if agg_sig.is_identity().into() {
+                return Err(Error::BadSignature);
+            }
             Ok(agg_sig.to_affine().to_compressed().to_vec())
         } else {
             let mut agg_sig = G1Projective::identity();
             for s in signatures {
                 let sig = to_g1(s).ok_or(Error::BadSignature)?;
                 agg_sig += G1Projective::from(sig);
+            }
+            if agg_sig.is_identity().into() {
+                return Err(Error::BadSignature);
             }
             Ok(agg_sig.to_affine().to_compressed().to_vec())
         }

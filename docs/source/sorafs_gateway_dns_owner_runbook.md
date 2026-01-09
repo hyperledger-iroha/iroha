@@ -115,6 +115,9 @@ node docs/portal/scripts/generate-dns-cutover-plan.mjs \
    whenever a selector is marked `soft`, `hard`, or `emergency` frozen (returning
    `SERVFAIL` or `REFUSED`), while `thawing` and `monitoring` phases continue to
    serve records for staged rollbacks.
+   The zonefile skeleton only defines the authoritative zone records. It does
+   not set parent-zone NS/DS delegation at the registrar; that delegation must
+   be configured separately for regular internet resolution.
 2. Update the resolver configuration (example path `ops/soradns/resolver.staging.json`)
    so the new bundle and RAD sources point at the staged artefacts.
 3. Validate the config locally:

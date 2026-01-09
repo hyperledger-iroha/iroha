@@ -191,6 +191,7 @@ impl PendingBlock {
 
     pub(super) fn mark_aborted(&mut self) {
         self.aborted = true;
+        self.inserted_at = Instant::now();
         self.reset_kura_retry();
         self.last_gate = None;
         self.last_gate_satisfied = None;

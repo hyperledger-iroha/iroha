@@ -774,7 +774,7 @@ Configuration
 
 DA/RBC (Sumeragi) configuration
 - `sumeragi.da_enabled` (bool): enables data availability tracking and Reliable Broadcast (RBC) payload distribution together. Availability evidence (`availability evidence` or an RBC `READY` quorum) is recorded but does not gate commit; RBC remains transport/recovery and its delivery latency is still tracked.
-- `sumeragi.rbc_chunk_max_bytes` (usize): maximum bytes per RBC chunk when broadcasting payloads; must be > 0.
+- `sumeragi.rbc_chunk_max_bytes` (usize): maximum bytes per RBC chunk when broadcasting payloads; must be > 0. Clamped at startup so serialized RBC chunks fit within the consensus frame plaintext cap derived from `network.max_frame_bytes_consensus`.
 - `sumeragi.rbc_session_ttl_secs` (u64): inactive RBC sessions are pruned after this TTL to bound memory.
 
 Metrics: RBC exports gauges/counters (`sumeragi_rbc_sessions_active`, `sumeragi_rbc_sessions_pruned_total`, `sumeragi_rbc_ready_broadcasts_total`, `sumeragi_rbc_deliver_broadcasts_total`, `sumeragi_rbc_payload_bytes_delivered_total`) and per-lane/dataspace backlog gauges (`sumeragi_rbc_lane_{tx_count,total_chunks,pending_chunks,bytes_total}{lane_id}` and `sumeragi_rbc_dataspace_{tx_count,total_chunks,pending_chunks,bytes_total}{lane_id,dataspace_id}`) alongside the Torii JSON endpoints shown above.

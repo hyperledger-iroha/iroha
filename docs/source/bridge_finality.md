@@ -17,6 +17,8 @@ is finalized without off‑chain computation or trusted relays.
 - `block_header`: canonical `BlockHeader`.
 - `block_hash`: hash of the header (clients recompute to validate).
 - `commit_certificate`: validator set + signatures that finalized the block.
+- `validator_set_pops`: Proof-of-Possession bytes aligned with the validator set
+  order (required for BLS aggregate verification).
 
 The proof is self‑contained; no external manifests or opaque blobs are required.
 Retention: Torii serves finality proofs for the recent commit-certificate window
@@ -61,18 +63,21 @@ justification wrapper for bridge protocols that prefer the separation.
 3. Check `chain_id` matches the expected Iroha chain.
 4. Recompute `validator_set_hash` from `commit_certificate.validator_set` and
    check it matches the recorded hash/version.
-5. Verify signatures in the commit certificate against the header hash using
+5. Ensure `validator_set_pops` length matches the validator set and validate
+   each PoP against its BLS public key.
+6. Verify signatures in the commit certificate against the header hash using
    the referenced validator public keys and indices; enforce quorum
    (`2f+1` when `n>3`, else `n`) and reject duplicate/out‑of‑range indices.
-6. Optionally bind to a trusted checkpoint by comparing the validator set hash
+7. Optionally bind to a trusted checkpoint by comparing the validator set hash
    to an anchored value (weak‑subjectivity anchor).
-7. Optionally bind to an expected epoch anchor so proofs from older/newer
+8. Optionally bind to an expected epoch anchor so proofs from older/newer
    epochs are rejected until the anchor is rotated intentionally.
 
 `BridgeFinalityVerifier` (in `iroha_data_model::bridge`) applies these checks,
-rejecting chain-id/height drift, validator-set hash/version mismatches,
-duplicate/out-of-range signers, invalid signatures, and unexpected epochs before
-counting quorum so light clients can reuse a single verifier.
+rejecting chain-id/height drift, validator-set hash/version mismatches, missing
+or invalid PoPs, duplicate/out-of-range signers, invalid signatures, and
+unexpected epochs before counting quorum so light clients can reuse a single
+verifier.
 
 ## Reference verifier
 

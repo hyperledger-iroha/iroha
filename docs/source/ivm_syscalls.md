@@ -43,6 +43,10 @@ Canonical syscall table (subset)
 | 0xFA | GET_MERKLE_COMPACT         | `addr:u64`, `out_ptr:u64`, optional `depth_cap:u64`, optional `root_out:u64` | `u64=depth` | `G_mpath + depth`           | `[u8 depth][u32 dirs_le][u32 count][count*32 siblings]` |
 | 0xFF | GET_REGISTER_MERKLE_COMPACT| `reg_index:u64`, `out_ptr:u64`, optional `depth_cap:u64`, optional `root_out:u64` | `u64=depth` | `G_mpath + depth`           | Same compact layout for register commitment |
 
+Gas enforcement
+- CoreHost charges extra gas for ISI syscalls using the native ISI schedule; FASTPQ batch transfers are charged per entry.
+- ZK_VERIFY syscalls reuse the confidential verification gas schedule (base + proof size).
+
 Notes
 - All pointer arguments reference Norito TLV envelopes in the INPUT region and are validated on first dereference (`E_NORITO_INVALID` on error).
 - All mutations are applied via Iroha’s standard executor (through `CoreHost`), not directly by the VM.

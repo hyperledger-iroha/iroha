@@ -22,12 +22,12 @@ translator: manual
 ## יישום נוכחי
 
 - `TieredStateBackend` (ראו `crates/iroha_core/src/state/tiered.rs`) סורק את ה-WSV לאחר כל בלוק שנחתם, מדרג מפתחות לפי המוטציה האחרונה ושופך רשומות שמעבר לקיבולת החמה המוגדרת אל שכבת קירור בדיסק. המטענים הקרים נכתבים בקידוד Norito לצד מניפסט סנאפשוט (`manifest.json`) המכיל hash מפתחות, טביעות ערכים ונתיב spill יחסי.
-- התצורה נמצאת תחת `iroha_config.parameters.tiered_state` (`enabled`, ‏`hot_retained_keys`, ‏`hot_retained_bytes`, ‏`hot_retained_grace_snapshots`, ‏`cold_store_root`, ‏`max_snapshots`, ‏`max_cold_bytes`). הצומת מיישם את הכפתורים בהפעלה באמצעות `State::set_tiered_backend`, והבנייה ברירת המחדל משאירה את הפיצ'ר כבוי עד שהמפעיל מפעיל אותו מפורשות.
+- התצורה נמצאת תחת `iroha_config.parameters.tiered_state` (`enabled`, ‏`hot_retained_keys`, ‏`hot_retained_bytes`, ‏`hot_retained_grace_snapshots`, ‏`cold_store_root`, ‏`da_store_root`, ‏`max_snapshots`, ‏`max_cold_bytes`). הצומת מיישם את הכפתורים בהפעלה באמצעות `State::set_tiered_backend`, והבנייה ברירת המחדל משאירה את הפיצ'ר כבוי עד שהמפעיל מפעיל אותו מפורשות. כאשר `cold_store_root` לא מוגדר, הסנאפשוטים נשמרים תחת `da_store_root` והקריאות בודקות את שני השורשים. שינוי `cold_store_root` או `da_store_root` מאפס את מטא‑נתוני ה‑tiering ואת מונה הסנאפשוטים.
 - `hot_retained_bytes` מגביל את תקציב הבייטים של השכבה החמה לפי גודל payload דטרמיניסטי של Norito (הערכת גודל WSV בזיכרון). grace עשוי לחרוג זמנית מהתקציב, והחריגה נרשמת בטלמטריה.
 - `hot_retained_grace_snapshots` משאיר רשומות חמות חדשות pinned לפרק זמן קצר כדי לצמצם churn בין שכבות חם/קר.
 - כאשר hash הערך לא משתנה, המטען הקר ממוחזר מהסנאפשוט הקודם כדי להימנע מקידוד מחדש.
 - `max_cold_bytes` מקצץ סנאפשוטים ישנים כאשר נפח האחסון הקר הכולל חורג מהתקציב, תוך שמירה על הסנאפשוט העדכני ביותר.
-- `StateBlock::commit` רושם סנאפשוט חדש תחת שורש הקירור המוגדר (ומגזם ספריות ישנות בהתאם ל-`max_snapshots`) תוך החזקת נעילת כתיבה על מצב העולם, כדי להבטיח מניפסטים דטרמיניסטיים בין פירים.
+- `StateBlock::commit` רושם סנאפשוט חדש תחת שורש הקירור הראשי המוגדר (`cold_store_root` או `da_store_root`, ומגזם ספריות ישנות בהתאם ל-`max_snapshots`) תוך החזקת נעילת כתיבה על מצב העולם, כדי להבטיח מניפסטים דטרמיניסטיים בין פירים.
 
 ## צעדים הבאים
 

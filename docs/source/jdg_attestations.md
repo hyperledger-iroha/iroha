@@ -14,7 +14,9 @@ This note documents the v1 JDG attestation guard that now ships in `iroha_core`.
   committee or a structured error.
   - `scheme_id = 1` (`simple_threshold`): per-signer signatures, optional signer bitmap.
   - `scheme_id = 2` (`bls_normal_aggregate`): single pre-aggregated BLS-normal signature over the
-    attestation hash; signer bitmap optional, defaults to all signers in the attestation.
+    attestation hash; signer bitmap optional, defaults to all signers in the attestation. BLS
+    aggregate validation requires a valid PoP per committee member in the manifest; missing or
+    invalid PoPs reject the attestation.
   Configure the allow-list via `governance.jdg_signature_schemes`.
 - **Retention store:** `JdgAttestationStore` tracks attestations per dataspace with a configurable
   per-dataspace cap, pruning oldest entries on insert. Call `for_dataspace` or

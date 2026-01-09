@@ -2157,6 +2157,10 @@ mod run {
         Pong,
     }
 
+    pub(crate) fn data_message_wire_len<T: Encode>(payload: T) -> usize {
+        Message::Data(payload).encode().len()
+    }
+
     #[cfg(test)]
     mod tests {
         use std::{
@@ -4345,6 +4349,8 @@ mod handshake_flow {
     impl_handshake!(ConnectedTo);
     impl_handshake!(Connecting);
 }
+
+pub(crate) use run::data_message_wire_len;
 
 pub mod message {
     //! Module for peer messages

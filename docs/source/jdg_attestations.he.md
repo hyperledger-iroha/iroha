@@ -6,8 +6,8 @@ direction: rtl
 source: docs/source/jdg_attestations.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 08e619c7226d9c7dda000839e3f9ec86ea42709ad0e5d5718a7e14bfbcd4d866
-source_last_modified: "2025-11-30T17:52:42.326506+00:00"
+source_hash: 459e8ed4612da7cfa68053e4e299b2f68e7620d4f3b98a8a721ebf8327829ea1
+source_last_modified: "2026-01-08T21:57:18.412403+00:00"
 translation_last_reviewed: null
 ---
 

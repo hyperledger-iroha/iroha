@@ -19,6 +19,68 @@ enum CommittedQcDecision {
     Drop,
 }
 
+pub(super) fn select_commit_root_signers(
+    vote_log: &BTreeMap<
+        (
+            crate::sumeragi::consensus::Phase,
+            u64,
+            u64,
+            u64,
+            crate::sumeragi::consensus::ValidatorIndex,
+        ),
+        crate::sumeragi::consensus::Vote,
+    >,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+) -> (BTreeSet<crate::sumeragi::consensus::ValidatorIndex>, usize) {
+    if signers.is_empty() {
+        return (BTreeSet::new(), 0);
+    }
+    let mut groups: BTreeMap<(Hash, Hash), BTreeSet<crate::sumeragi::consensus::ValidatorIndex>> =
+        BTreeMap::new();
+    for signer in signers {
+        let key = (
+            crate::sumeragi::consensus::Phase::Commit,
+            height,
+            view,
+            epoch,
+            *signer,
+        );
+        let Some(vote) = vote_log.get(&key) else {
+            continue;
+        };
+        if vote.block_hash != block_hash {
+            continue;
+        }
+        groups
+            .entry((vote.parent_state_root, vote.post_state_root))
+            .or_default()
+            .insert(*signer);
+    }
+    let group_count = groups.len();
+    let mut selected: Option<(
+        &(Hash, Hash),
+        &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+    )> = None;
+    for (root, group) in &groups {
+        let replace = match selected {
+            None => true,
+            Some((best_root, best_group)) => {
+                let size_cmp = group.len().cmp(&best_group.len());
+                size_cmp.is_gt() || (size_cmp.is_eq() && root < best_root)
+            }
+        };
+        if replace {
+            selected = Some((root, group));
+        }
+    }
+    let filtered = selected.map(|(_, group)| group.clone()).unwrap_or_default();
+    (filtered, group_count)
+}
+
 impl Actor {
     pub(super) fn request_missing_block(
         &self,
@@ -556,20 +618,39 @@ impl Actor {
                 return;
             }
         }
-        if self
-            .pending
-            .pending_blocks
-            .get(&block_hash)
-            .is_some_and(|pending| pending.aborted)
-        {
-            iroha_logger::debug!(
-                height,
-                view,
-                phase = ?phase,
-                block = ?block_hash,
-                "skipping QC aggregation for aborted pending block"
-            );
-            return;
+        if let Some(pending) = self.pending.pending_blocks.get(&block_hash) {
+            if matches!(pending.validation_status, ValidationStatus::Invalid) {
+                iroha_logger::debug!(
+                    height,
+                    view,
+                    phase = ?phase,
+                    block = ?block_hash,
+                    "skipping QC aggregation for invalid pending block"
+                );
+                return;
+            }
+            if pending.aborted {
+                let (state_height, tip_hash) = {
+                    let view = self.state.view();
+                    (view.height(), view.latest_block_hash())
+                };
+                let pending_parent = pending.block.header().prev_block_hash();
+                if !super::pending_extends_tip(
+                    pending.height,
+                    pending_parent,
+                    state_height,
+                    tip_hash,
+                ) {
+                    iroha_logger::debug!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = ?block_hash,
+                        "skipping QC aggregation for aborted pending block off tip"
+                    );
+                    return;
+                }
+            }
         }
 
         let snapshot = self.qc_signer_snapshot(
@@ -830,7 +911,7 @@ impl Actor {
         signature_topology: &super::network_topology::Topology,
         required: usize,
     ) -> QcSignerSnapshot {
-        let signers =
+        let valid_signers =
             self.qc_signers_for_votes(phase, block_hash, height, view, epoch, signature_topology);
         let raw_votes = self
             .vote_log
@@ -843,7 +924,21 @@ impl Actor {
                     && stored.epoch == epoch
             })
             .count();
-        if signers.is_empty() && raw_votes > 0 {
+        let mut signers = valid_signers.clone();
+        let mut root_groups = 0;
+        if phase == crate::sumeragi::consensus::Phase::Commit && !signers.is_empty() {
+            let (filtered, groups) = select_commit_root_signers(
+                &self.vote_log,
+                block_hash,
+                height,
+                view,
+                epoch,
+                &signers,
+            );
+            root_groups = groups;
+            signers = filtered;
+        }
+        if valid_signers.is_empty() && raw_votes > 0 {
             iroha_logger::warn!(
                 height,
                 view,
@@ -854,17 +949,32 @@ impl Actor {
                 topology_len = signature_topology.as_ref().len(),
                 "votes observed but no valid signers collected for QC"
             );
-        } else if raw_votes > 0 && signers.len() != raw_votes {
+        } else if raw_votes > 0 && valid_signers.len() != raw_votes {
             iroha_logger::warn!(
                 height,
                 view,
                 phase = ?phase,
                 block = ?block_hash,
                 raw_votes,
-                valid_signers = signers.len(),
+                valid_signers = valid_signers.len(),
                 required,
                 topology_len = signature_topology.as_ref().len(),
                 "some votes failed signature/topology validation; QC tally may stall"
+            );
+        }
+        if phase == crate::sumeragi::consensus::Phase::Commit
+            && root_groups > 1
+            && signers.len() < valid_signers.len()
+        {
+            warn!(
+                height,
+                view,
+                block = ?block_hash,
+                root_groups,
+                selected_signers = signers.len(),
+                valid_signers = valid_signers.len(),
+                required,
+                "commit votes split across execution roots; QC tally may stall"
             );
         }
         let voting_signers = voting_signer_count(&signers, signature_topology.as_ref().len());
@@ -1569,22 +1679,26 @@ impl Actor {
             return Ok(());
         }
         let topology = super::network_topology::Topology::new(commit_topology.clone());
-        let stake_snapshot = match consensus_mode {
-            ConsensusMode::Permissioned => None,
-            ConsensusMode::Npos => {
-                CommitStakeSnapshot::from_roster(self.state.view().world(), topology.as_ref())
-            }
+        let (stake_snapshot, validation, evidence) = {
+            let state_view = self.state.view();
+            let world = state_view.world();
+            let stake_snapshot = match consensus_mode {
+                ConsensusMode::Permissioned => None,
+                ConsensusMode::Npos => CommitStakeSnapshot::from_roster(world, topology.as_ref()),
+            };
+            let (validation, evidence) = validate_qc_with_evidence(
+                &self.vote_log,
+                &qc,
+                &topology,
+                world,
+                &self.common_config.chain,
+                consensus_mode,
+                stake_snapshot.as_ref(),
+                mode_tag,
+                prf_seed,
+            );
+            (stake_snapshot, validation, evidence)
         };
-        let (validation, evidence) = validate_qc_with_evidence(
-            &self.vote_log,
-            &qc,
-            &topology,
-            &self.common_config.chain,
-            consensus_mode,
-            stake_snapshot.as_ref(),
-            mode_tag,
-            prf_seed,
-        );
         let validation = match validation {
             Ok(outcome) => outcome,
             Err(err) => {
@@ -1868,7 +1982,12 @@ impl Actor {
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
         let _signature_topology =
             super::topology_for_view(topology, qc.height, qc.view, mode_tag, prf_seed);
-        if !qc_aggregate_consistent(qc, topology, &self.common_config.chain, mode_tag) {
+        let aggregate_ok = {
+            let state_view = self.state.view();
+            let world = state_view.world();
+            qc_aggregate_consistent(qc, topology, world, &self.common_config.chain, mode_tag)
+        };
+        if !aggregate_ok {
             return None;
         }
         let roster_len = topology.as_ref().len();
@@ -1905,5 +2024,147 @@ impl Actor {
         let _ = self
             .events_sender
             .send(EventBox::Pipeline(PipelineEventBox::Witness(witness)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_commit_root_signers;
+    use crate::sumeragi::consensus::{Phase, ValidatorIndex, Vote};
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::block::BlockHeader;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn vote_with_roots(
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        signer: ValidatorIndex,
+        parent_state_root: Hash,
+        post_state_root: Hash,
+    ) -> Vote {
+        Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root,
+            post_state_root,
+            height,
+            view,
+            epoch,
+            highest_qc: None,
+            signer,
+            bls_sig: vec![1],
+        }
+    }
+
+    #[test]
+    fn commit_root_signers_pick_majority_group() {
+        let block_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
+        let height = 8;
+        let view = 3;
+        let epoch = 0;
+        let root_a_parent = Hash::prehashed([0x11; Hash::LENGTH]);
+        let root_a_post = Hash::prehashed([0x12; Hash::LENGTH]);
+        let root_b_parent = Hash::prehashed([0x21; Hash::LENGTH]);
+        let root_b_post = Hash::prehashed([0x22; Hash::LENGTH]);
+
+        let mut vote_log = BTreeMap::new();
+        vote_log.insert(
+            (Phase::Commit, height, view, epoch, 0),
+            vote_with_roots(
+                block_hash,
+                height,
+                view,
+                epoch,
+                0,
+                root_a_parent,
+                root_a_post,
+            ),
+        );
+        vote_log.insert(
+            (Phase::Commit, height, view, epoch, 1),
+            vote_with_roots(
+                block_hash,
+                height,
+                view,
+                epoch,
+                1,
+                root_a_parent,
+                root_a_post,
+            ),
+        );
+        vote_log.insert(
+            (Phase::Commit, height, view, epoch, 2),
+            vote_with_roots(
+                block_hash,
+                height,
+                view,
+                epoch,
+                2,
+                root_b_parent,
+                root_b_post,
+            ),
+        );
+
+        let mut signers = BTreeSet::new();
+        signers.insert(0);
+        signers.insert(1);
+        signers.insert(2);
+
+        let (filtered, groups) =
+            select_commit_root_signers(&vote_log, block_hash, height, view, epoch, &signers);
+        assert_eq!(groups, 2);
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.contains(&0));
+        assert!(filtered.contains(&1));
+    }
+
+    #[test]
+    fn commit_root_signers_tiebreaks_by_root() {
+        let block_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xB1; Hash::LENGTH]));
+        let height = 5;
+        let view = 1;
+        let epoch = 0;
+        let root_a_parent = Hash::prehashed([0x01; Hash::LENGTH]);
+        let root_a_post = Hash::prehashed([0x02; Hash::LENGTH]);
+        let root_b_parent = Hash::prehashed([0x02; Hash::LENGTH]);
+        let root_b_post = Hash::prehashed([0x03; Hash::LENGTH]);
+
+        let mut vote_log = BTreeMap::new();
+        vote_log.insert(
+            (Phase::Commit, height, view, epoch, 1),
+            vote_with_roots(
+                block_hash,
+                height,
+                view,
+                epoch,
+                1,
+                root_a_parent,
+                root_a_post,
+            ),
+        );
+        vote_log.insert(
+            (Phase::Commit, height, view, epoch, 2),
+            vote_with_roots(
+                block_hash,
+                height,
+                view,
+                epoch,
+                2,
+                root_b_parent,
+                root_b_post,
+            ),
+        );
+
+        let mut signers = BTreeSet::new();
+        signers.insert(1);
+        signers.insert(2);
+
+        let (filtered, groups) =
+            select_commit_root_signers(&vote_log, block_hash, height, view, epoch, &signers);
+        assert_eq!(groups, 2);
+        assert_eq!(filtered.len(), 1);
+        assert!(filtered.contains(&1));
     }
 }

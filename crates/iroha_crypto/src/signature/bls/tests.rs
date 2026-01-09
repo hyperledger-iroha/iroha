@@ -63,7 +63,7 @@ mod normal {
     use super::*;
     #[cfg(feature = "bls-backend-blstrs")]
     use crate::signature::bls::implementation;
-    use blstrs::{G1Affine, G2Affine};
+    use blstrs::{G1Affine, G2Affine, Scalar};
     use group::prime::PrimeCurveAffine;
     #[cfg(feature = "bls-backend-blstrs")]
     #[test]
@@ -191,6 +191,31 @@ mod normal {
         );
     }
 
+    #[test]
+    fn aggregate_same_message_rejects_canceling_pairs() {
+        let msg = b"aggregate-canceling";
+        let pk = G1Affine::generator() * Scalar::from(7u64);
+        let sig = G2Affine::generator() * Scalar::from(11u64);
+        let pk_bytes = G1Affine::from(pk).to_compressed();
+        let sig_bytes = G2Affine::from(sig).to_compressed();
+        let pk_neg_bytes = G1Affine::from(-pk).to_compressed();
+        let sig_neg_bytes = G2Affine::from(-sig).to_compressed();
+        let signatures: [&[u8]; 2] = [sig_bytes.as_ref(), sig_neg_bytes.as_ref()];
+        let public_keys: [&[u8]; 2] = [pk_bytes.as_ref(), pk_neg_bytes.as_ref()];
+        assert!(
+            BlsImpl::<NormalConfiguration>::verify_aggregate_same_message(
+                msg,
+                &signatures,
+                &public_keys
+            )
+            .is_err()
+        );
+        assert!(
+            BlsImpl::<NormalConfiguration>::aggregate_signatures(&signatures).is_err(),
+            "identity aggregate must be rejected"
+        );
+    }
+
     #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
     #[test]
     fn aggregate_multi_message_verification() {
@@ -256,7 +281,7 @@ mod small {
     use super::*;
     #[cfg(feature = "bls-backend-blstrs")]
     use crate::signature::bls::implementation;
-    use blstrs::{G1Affine, G2Affine};
+    use blstrs::{G1Affine, G2Affine, Scalar};
     use group::prime::PrimeCurveAffine;
     #[cfg(feature = "bls-backend-blstrs")]
     #[test]
@@ -347,6 +372,31 @@ mod small {
                 &public_keys,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn aggregate_same_message_rejects_canceling_pairs() {
+        let msg = b"aggregate-canceling-small";
+        let pk = G2Affine::generator() * Scalar::from(9u64);
+        let sig = G1Affine::generator() * Scalar::from(13u64);
+        let pk_bytes = G2Affine::from(pk).to_compressed();
+        let sig_bytes = G1Affine::from(sig).to_compressed();
+        let pk_neg_bytes = G2Affine::from(-pk).to_compressed();
+        let sig_neg_bytes = G1Affine::from(-sig).to_compressed();
+        let signatures: [&[u8]; 2] = [sig_bytes.as_ref(), sig_neg_bytes.as_ref()];
+        let public_keys: [&[u8]; 2] = [pk_bytes.as_ref(), pk_neg_bytes.as_ref()];
+        assert!(
+            BlsImpl::<SmallConfiguration>::verify_aggregate_same_message(
+                msg,
+                &signatures,
+                &public_keys
+            )
+            .is_err()
+        );
+        assert!(
+            BlsImpl::<SmallConfiguration>::aggregate_signatures(&signatures).is_err(),
+            "identity aggregate must be rejected"
         );
     }
 

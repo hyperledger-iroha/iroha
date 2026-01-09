@@ -120,7 +120,7 @@ impl Actor {
                             std::time::Instant::now(),
                             cooldown,
                         ) {
-                            let update = self.block_sync_update_for_precommit_vote(
+                            let mut update = self.block_sync_update_for_precommit_vote(
                                 &pending.block,
                                 self.state.as_ref(),
                                 self.kura.as_ref(),
@@ -128,7 +128,10 @@ impl Actor {
                                 &self.vote_log,
                                 &vote,
                             );
-                            if super::block_sync_update_has_roster(&update, consensus_mode) {
+                            if self.prepare_block_sync_update_for_broadcast(
+                                &mut update,
+                                consensus_mode,
+                            ) {
                                 self.broadcast_block_sync_update(update, &topology_peers);
                                 iroha_logger::info!(
                                     height = vote.height,
@@ -195,7 +198,11 @@ impl Actor {
                     signer_peer.clone(),
                     highest,
                 );
-                crate::sumeragi::new_view_stats::note_receipt(vote.height, vote.view, signer_peer);
+                crate::sumeragi::new_view_stats::note_receipt(
+                    vote.height,
+                    vote.view,
+                    signer_peer,
+                );
                 debug!(
                     height = vote.height,
                     view = vote.view,

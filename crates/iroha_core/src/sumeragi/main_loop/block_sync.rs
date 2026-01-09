@@ -22,6 +22,16 @@ impl Actor {
                 self.state.as_ref(),
                 self.config.consensus_mode,
             );
+            if !self.trim_block_sync_update_for_frame_cap(update) {
+                warn!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    cap = self.consensus_frame_cap,
+                    "dropping oversized block sync response"
+                );
+                return;
+            }
         }
         self.schedule_background(BackgroundRequest::Post { peer, msg });
     }
@@ -398,9 +408,12 @@ impl Actor {
         };
         let local_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
         let validated_qc = candidate_qc.as_ref().and_then(|qc| {
+            let state_view = self.state.view();
+            let world = state_view.world();
             match validate_block_sync_qc(
                 qc,
                 &topology,
+                world,
                 &block_signers,
                 block_view,
                 &self.common_config.chain,
@@ -441,9 +454,12 @@ impl Actor {
                 expected_epoch,
             )
             .and_then(|qc| {
+                let state_view = self.state.view();
+                let world = state_view.world();
                 validate_block_sync_qc(
                     &qc,
                     &topology,
+                    world,
                     &block_signers,
                     block_view,
                     &self.common_config.chain,
@@ -473,12 +489,18 @@ impl Actor {
         };
         if incoming_qc.is_none() && had_incoming_qc {
             if let Some(qc) = original_candidate_qc {
-                if super::qc_aggregate_consistent(
-                    &qc,
-                    &topology,
-                    &self.common_config.chain,
-                    mode_tag,
-                ) {
+                let aggregate_ok = {
+                    let state_view = self.state.view();
+                    let world = state_view.world();
+                    super::qc_aggregate_consistent(
+                        &qc,
+                        &topology,
+                        world,
+                        &self.common_config.chain,
+                        mode_tag,
+                    )
+                };
+                if aggregate_ok {
                     let stake_quorum_ok = match consensus_mode {
                         ConsensusMode::Permissioned => true,
                         ConsensusMode::Npos => {
@@ -586,6 +608,8 @@ impl Actor {
         let incoming_qc_signers = incoming_qc.as_ref().map(qc_signer_count);
         let allow_nonextending_qc = selection.commit_qc.is_some()
             || incoming_qc.as_ref().is_some_and(|cert| {
+                let state_view = self.state.view();
+                let world = state_view.world();
                 super::validate_commit_qc_roster(
                     cert,
                     block_hash,
@@ -594,6 +618,7 @@ impl Actor {
                     consensus_mode,
                     stake_snapshot.as_ref(),
                     expected_epoch,
+                    world,
                     &self.common_config.chain,
                     mode_tag,
                 )
@@ -741,17 +766,23 @@ impl Actor {
                     |hash, height| self.parent_hash_for(hash, height),
                     |hash| self.block_known_locally(hash),
                 );
-                match tally_qc_against_block_signers(
-                    &qc,
-                    &topology,
-                    &block_signers,
-                    block_view,
-                    &self.common_config.chain,
-                    consensus_mode,
-                    stake_snapshot.as_ref(),
-                    mode_tag,
-                    prf_seed,
-                ) {
+                let tally_result = {
+                    let state_view = self.state.view();
+                    let world = state_view.world();
+                    tally_qc_against_block_signers(
+                        &qc,
+                        &topology,
+                        world,
+                        &block_signers,
+                        block_view,
+                        &self.common_config.chain,
+                        consensus_mode,
+                        stake_snapshot.as_ref(),
+                        mode_tag,
+                        prf_seed,
+                    )
+                };
+                match tally_result {
                     Ok(tally) => {
                         crate::sumeragi::status::record_precommit_signers(
                             crate::sumeragi::status::PrecommitSignerRecord {
@@ -926,17 +957,23 @@ impl Actor {
             return;
         }
         let qc_signers = qc_signer_count(&qc);
-        match tally_qc_against_block_signers(
-            &qc,
-            topology,
-            block_signers,
-            block_view,
-            &self.common_config.chain,
-            consensus_mode,
-            stake_snapshot.as_ref(),
-            mode_tag,
-            prf_seed,
-        ) {
+        let tally_result = {
+            let state_view = self.state.view();
+            let world = state_view.world();
+            tally_qc_against_block_signers(
+                &qc,
+                topology,
+                world,
+                block_signers,
+                block_view,
+                &self.common_config.chain,
+                consensus_mode,
+                stake_snapshot.as_ref(),
+                mode_tag,
+                prf_seed,
+            )
+        };
+        match tally_result {
             Ok(tally) => {
                 crate::sumeragi::status::record_precommit_signers(
                     crate::sumeragi::status::PrecommitSignerRecord {
@@ -1013,10 +1050,13 @@ impl Actor {
             .as_ref()
             .filter(|inflight| inflight.block_hash == block_hash)
         {
-            if inflight.pending.aborted {
+            if matches!(
+                inflight.pending.validation_status,
+                ValidationStatus::Invalid
+            ) {
                 debug!(
                     hash = %block_hash,
-                    "skipping fetch response for aborted inflight pending block"
+                    "skipping fetch response for invalid inflight pending block"
                 );
             } else {
                 let block = &inflight.pending.block;
@@ -1061,10 +1101,10 @@ impl Actor {
         }
 
         if let Some(pending) = self.pending.pending_blocks.get(&block_hash) {
-            if pending.aborted {
+            if matches!(pending.validation_status, ValidationStatus::Invalid) {
                 debug!(
                     hash = %block_hash,
-                    "skipping fetch response for aborted pending block"
+                    "skipping fetch response for invalid pending block"
                 );
             } else {
                 let block = &pending.block;

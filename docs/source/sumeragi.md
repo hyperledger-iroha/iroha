@@ -288,7 +288,7 @@ Overview
 - NEW_VIEW height sanity: frames are only accepted when `height == highest_qc.height + 1` so view changes cannot skip heights.
 - NEW_VIEW highest certificate epoch: votes and QCs are rejected when `highest_qc.epoch` does not match the height-derived epoch for `highest_qc.height`.
 - NEW_VIEW highest certificate phase: outbound NEW_VIEW frames must carry a commit certificate (phase `Commit`); when only a prepare certificate is known locally, peers fall back to the latest committed commit certificate (or the genesis stub) before gossiping.
-- NEW_VIEW highest certificate view: when the referenced parent block is known locally, NEW_VIEW votes/QCs are rejected if `highest_qc.height`/`view` do not match the stored header.
+- NEW_VIEW highest certificate view: when the referenced parent block is known locally, NEW_VIEW votes/QCs are rejected if `highest_qc.height`/`view` do not match the stored header; cached NEW_VIEW entries are reconciled to the local header view when the parent becomes available.
 - NEW_VIEW roster selection: NEW_VIEW votes/QCs for the next height use the active commit topology (post-commit state) so roster changes are honored; gaps beyond the next height roll forward from commit-certificate history.
 - NEW_VIEW highest certificate roster: highest certificate verification uses the roster snapshot for the referenced block when available so topology changes do not invalidate late highest-certificate payloads.
 - Highest certificate: peers update `(height, view, hash)` on incoming NEW_VIEW and on commit-certificate receipts; this informs leader’s proposal header and pacemaker.
@@ -588,6 +588,10 @@ and `iroha sumeragi status --summary`; sustained movement should trigger alerts
 and a manifest/collector audit. Evictions never mark availability on their own—
 availability still requires availability evidence (RBC `READY` quorum or availability votes) even when
 pending stash frames are discarded.
+
+At runtime, `rbc_chunk_max_bytes` is clamped so a serialized `RbcChunk` (including
+headers and length prefix) fits within the consensus frame plaintext cap derived
+from `network.max_frame_bytes_consensus`.
 
 #### Adaptive observability
 

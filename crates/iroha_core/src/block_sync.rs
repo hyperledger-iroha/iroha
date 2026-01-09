@@ -3005,6 +3005,7 @@ pub mod message {
                 let record = ConsensusKeyRecord {
                     id: id.clone(),
                     public_key: pk.clone(),
+                    pop: None,
                     activation_height,
                     expiry_height,
                     hsm: None,

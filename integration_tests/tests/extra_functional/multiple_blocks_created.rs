@@ -6,7 +6,7 @@ use std::{
 };
 
 use eyre::{Result, eyre};
-use integration_tests::{sandbox, sync::get_status_with_retry};
+use integration_tests::{sandbox, sync::get_status_with_retry_async};
 use iroha::data_model::{parameter::BlockParameter, prelude::*};
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
@@ -80,7 +80,7 @@ async fn multiple_blocks_created() -> Result<()> {
     }
 
     let mut last_non_empty = match sandbox::handle_result(
-        get_status_with_retry(&submit_client),
+        get_status_with_retry_async(&submit_client).await,
         stringify!(multiple_blocks_created),
     )? {
         Some(status) => status.blocks_non_empty,
@@ -134,7 +134,7 @@ async fn multiple_blocks_created() -> Result<()> {
         }
 
         match sandbox::handle_result(
-            get_status_with_retry(&submit_client),
+            get_status_with_retry_async(&submit_client).await,
             stringify!(multiple_blocks_created),
         )? {
             Some(status) => last_non_empty = status.blocks_non_empty,

@@ -89,7 +89,7 @@ LaneConfigEntry {
   - `lane_{id:03}_merge` — 縮約状態ルートと決済アーティファクトを記録する merge-ledger セグメント。
   - グローバルセグメント（合意証跡、テレメトリキャッシュ）はレーン中立のため共有され、キーにはレーン接頭辞が含まれない。
 - ランタイムはレーンカタログ更新を監視する。新規レーンは `kura/blocks/` と `kura/merge_ledger/` にブロック/merge-ledger ディレクトリが自動的に作成され、引退レーンは `kura/retired/{blocks,merge_ledger}/lane_{id:03}_*` にアーカイブされる。
-- 階層状態スナップショットも同じライフサイクルに従う。各レーンは `cold_store_root/lanes/lane_{id:03}_{slug}` に書き込み、引退時にディレクトリツリーが `cold_store_root/retired/lanes/` に移される。
+- 階層状態スナップショットも同じライフサイクルに従う。各レーンは `<cold_root>/lanes/lane_{id:03}_{slug}` に書き込み、`<cold_root>` は `cold_store_root`（`cold_store_root` 未設定時は `da_store_root`）を指し、引退時にディレクトリツリーが `<cold_root>/retired/lanes/` に移される。
 - **キー接頭辞** — `LaneId` から算出した 4 バイト接頭辞は MV エンコード済みキーに常に前置される。ホスト固有のハッシュは使われないため、順序はノード間で同一となる。
 - **ブロックログのレイアウト** — ブロックデータ、インデックス、ハッシュは `kura/blocks/lane_{id:03}_{slug}/` の下に配置される。merge-ledger ジャーナルは同一のスラグ（`kura/merge/lane_{id:03}_{slug}.log`）を再利用し、レーンごとのリカバリフローを分離する。
 - **保持ポリシー** — 公開レーンは完全なブロック本文を保持する。commitment のみのレーンは、commitment が権威となるためチェックポイント後に古い本文をコンパクト化できる。機密レーンは専用セグメントに暗号文ジャーナルを保持し、他のワークロードをブロックしないようにする。

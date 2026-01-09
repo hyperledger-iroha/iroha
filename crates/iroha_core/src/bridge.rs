@@ -19,7 +19,11 @@ use iroha_data_model::{
 };
 use thiserror::Error;
 
-use crate::{mmr::BlockMmr, state::StateReadOnly, sumeragi};
+use crate::{
+    mmr::BlockMmr,
+    state::{StateReadOnly, consensus_key_pop_for_public_key},
+    sumeragi,
+};
 
 struct MmrCache {
     mmr: BlockMmr,
@@ -54,6 +58,12 @@ pub enum BridgeFinalityError {
         cert_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
         /// Hash of the stored block header.
         block_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
+    },
+    /// Validator PoP missing for the validator set entry.
+    #[error("validator PoP missing for index {index}")]
+    MissingValidatorPop {
+        /// Index into the validator set.
+        index: usize,
     },
 }
 
@@ -181,12 +191,22 @@ pub fn build_finality_proof(
         return Err(BridgeFinalityError::QcNotFound(height));
     };
 
+    let world = state.world();
+    let mut validator_set_pops = Vec::with_capacity(cert.validator_set.len());
+    for (index, peer) in cert.validator_set.iter().enumerate() {
+        let Some(pop) = consensus_key_pop_for_public_key(world, peer.public_key()) else {
+            return Err(BridgeFinalityError::MissingValidatorPop { index });
+        };
+        validator_set_pops.push(pop);
+    }
+
     Ok(BridgeFinalityProof {
         height,
         chain_id: state.chain_id().clone(),
         block_header,
         block_hash,
         commit_qc: cert,
+        validator_set_pops,
     })
 }
 
@@ -311,6 +331,14 @@ pub enum BridgeFinalityVerificationError {
     /// Validator set is empty, so no quorum can be reached.
     #[error("validator set is empty")]
     EmptyValidatorSet,
+    /// Validator-set PoP length does not match the validator-set length.
+    #[error("validator set pop length mismatch: expected {expected}, got {actual}")]
+    ValidatorSetPopLengthMismatch {
+        /// Expected PoP count.
+        expected: usize,
+        /// Actual PoP count.
+        actual: usize,
+    },
     /// Signer bitmap length does not match the validator set size.
     #[error("signer bitmap length mismatch: expected {expected}, got {actual}")]
     SignerBitmapLengthMismatch {
@@ -461,6 +489,14 @@ pub fn verify_finality_proof(
     if roster_len == 0 {
         return Err(BridgeFinalityVerificationError::EmptyValidatorSet);
     }
+    if proof.validator_set_pops.len() != roster_len {
+        return Err(
+            BridgeFinalityVerificationError::ValidatorSetPopLengthMismatch {
+                expected: roster_len,
+                actual: proof.validator_set_pops.len(),
+            },
+        );
+    }
     let expected_bitmap_len = roster_len.div_ceil(8);
     if certificate.aggregate.signers_bitmap.len() != expected_bitmap_len {
         return Err(
@@ -520,7 +556,8 @@ pub fn verify_finality_proof(
     };
     let preimage =
         sumeragi::consensus::vote_preimage(config.expected_chain_id, &certificate.mode_tag, &vote);
-    let mut public_keys: Vec<&[u8]> = Vec::with_capacity(seen.len());
+    let mut public_keys: Vec<&iroha_crypto::PublicKey> = Vec::with_capacity(seen.len());
+    let mut pops: Vec<&[u8]> = Vec::with_capacity(seen.len());
     for signer in &seen {
         let idx = usize::try_from(*signer).map_err(|_| {
             BridgeFinalityVerificationError::SignerOutOfBounds {
@@ -534,13 +571,14 @@ pub fn verify_finality_proof(
                 roster_len,
             });
         };
-        let (_, payload) = peer.public_key().to_bytes();
-        public_keys.push(payload);
+        public_keys.push(peer.public_key());
+        pops.push(proof.validator_set_pops[idx].as_slice());
     }
     if iroha_crypto::bls_normal_verify_preaggregated_same_message(
         &preimage,
         &certificate.aggregate.bls_aggregate_signature,
         &public_keys,
+        &pops,
     )
     .is_err()
     {

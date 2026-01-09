@@ -1,7 +1,7 @@
 //! Integration tests for basic asset lifecycle operations.
 
 use std::{
-    sync::{Mutex, MutexGuard, OnceLock},
+    sync::OnceLock,
     thread::sleep,
     time::{Duration, Instant},
 };
@@ -9,7 +9,7 @@ use std::{
 use eyre::{Report, Result, eyre};
 use integration_tests::{
     sandbox,
-    sync::{get_status_with_retry, sync_after_submission},
+    sync::{get_status_with_retry_or_storage, sync_after_submission},
 };
 use iroha::{
     client::{Client, Status},
@@ -28,8 +28,6 @@ use iroha_test_samples::{ALICE_ID, gen_account_in};
 use toml::Value as TomlValue;
 
 static GENESIS_STATUS: OnceLock<std::result::Result<(), ()>> = OnceLock::new();
-static START_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-static ASSET_TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 const QUERY_RETRIES: usize = 240;
 const QUERY_RETRY_DELAY: Duration = Duration::from_millis(500);
 const NON_EMPTY_BLOCK_TIMEOUT: Duration = Duration::from_secs(600);
@@ -135,13 +133,6 @@ fn wait_for_asset_absent(client: &Client, asset_id: &AssetId, context: &'static 
     }
 }
 
-fn asset_test_guard() -> MutexGuard<'static, ()> {
-    ASSET_TEST_MUTEX
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
-}
-
 /// Ensure noisy tracing is silenced before any network is spawned.
 fn install_quiet_tracing() {
     static QUIET_TRACE: OnceLock<()> = OnceLock::new();
@@ -162,8 +153,11 @@ fn quiet_network_builder() -> NetworkBuilder {
     sumeragi.insert("collectors_redundant_send_r".into(), TomlValue::Integer(3));
     sumeragi.insert("rbc_pending_ttl_ms".into(), TomlValue::Integer(120_000));
     sumeragi.insert("rbc_session_ttl_secs".into(), TomlValue::Integer(240));
+    let mut nexus = toml::Table::new();
+    nexus.insert("enabled".into(), TomlValue::Boolean(false));
     let mut layer = toml::Table::new();
     layer.insert("sumeragi".into(), TomlValue::Table(sumeragi));
+    layer.insert("nexus".into(), TomlValue::Table(nexus));
     NetworkBuilder::new()
         .with_peers(4)
         .with_default_pipeline_time()
@@ -260,14 +254,8 @@ fn start_test_network_with_builder(
     }
 
     let serial_guard = sandbox::serial_guard();
-    let guard = START_MUTEX
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|err| err.into_inner());
-
     if matches!(GENESIS_STATUS.get(), Some(Err(()))) {
         eprintln!("Skipping test: failed to start network (cached)");
-        drop(guard);
         return None;
     }
 
@@ -283,7 +271,6 @@ fn start_test_network_with_builder(
             Ok(())
         })
     {
-        drop(guard);
         match sandbox::handle_result::<()>(Err(err.into()), "bind preflight") {
             Ok(None) => return None,
             Ok(Some(())) => unreachable!("sandbox handler should not return Some on Err"),
@@ -292,7 +279,6 @@ fn start_test_network_with_builder(
     }
 
     if let Err(err) = runtime.block_on(async { network.start_all().await }) {
-        drop(guard);
         match sandbox::handle_result::<()>(Err(err), "start test network") {
             Ok(None) => return None,
             Ok(Some(())) => unreachable!("sandbox handler should not return Some on Err"),
@@ -303,7 +289,6 @@ fn start_test_network_with_builder(
         }
     }
     if let Err(err) = runtime.block_on(async { network.ensure_blocks(1).await }) {
-        drop(guard);
         match sandbox::handle_result::<()>(Err(err), "reach block 1") {
             Ok(None) => return None,
             Ok(Some(())) => unreachable!("sandbox handler should not return Some on Err"),
@@ -315,8 +300,6 @@ fn start_test_network_with_builder(
     }
 
     let _ = GENESIS_STATUS.set(Ok(()));
-    drop(guard);
-
     Some((
         sandbox::SerializedNetwork::new(network, serial_guard),
         runtime,
@@ -327,7 +310,6 @@ fn start_test_network_with_builder(
 // This test is also covered at the UI level in the iroha_cli tests
 // in test_mint_assets.py
 fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() -> Result<()> {
-    let _guard = asset_test_guard();
     // Given
     let account_id = ALICE_ID.clone();
     let asset_definition_id = "xor#wonderland".parse::<AssetDefinitionId>()?;
@@ -340,11 +322,13 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() ->
         return Ok(());
     };
     let test_client = network.client();
-    let mut last_non_empty_height =
-        match status_or_skip(get_status_with_retry(&test_client), "initial status")? {
-            Some(status) => status.blocks_non_empty,
-            None => return Ok(()),
-        };
+    let mut last_non_empty_height = match status_or_skip(
+        get_status_with_retry_or_storage(&network, &test_client, "initial status"),
+        "initial status",
+    )? {
+        Some(status) => status.blocks_non_empty,
+        None => return Ok(()),
+    };
 
     if submit_or_tolerate_timeout(&test_client, create_asset, "register asset definition")?
         .is_none()
@@ -404,7 +388,6 @@ fn client_add_asset_quantity_to_existing_asset_should_increase_asset_amount() ->
 
 #[test]
 fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount() -> Result<()> {
-    let _guard = asset_test_guard();
     // Given
     let account_id = ALICE_ID.clone();
     let asset_definition_id = "xor#wonderland".parse::<AssetDefinitionId>()?;
@@ -417,11 +400,13 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
         return Ok(());
     };
     let test_client = network.client();
-    let mut last_non_empty_height =
-        match status_or_skip(get_status_with_retry(&test_client), "initial status")? {
-            Some(status) => status.blocks_non_empty,
-            None => return Ok(()),
-        };
+    let mut last_non_empty_height = match status_or_skip(
+        get_status_with_retry_or_storage(&network, &test_client, "initial status"),
+        "initial status",
+    )? {
+        Some(status) => status.blocks_non_empty,
+        None => return Ok(()),
+    };
 
     if submit_or_tolerate_timeout(&test_client, create_asset, "register asset definition")?
         .is_none()
@@ -481,7 +466,6 @@ fn client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount(
 
 #[test]
 fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
-    let _guard = asset_test_guard();
     // Given
     let account_id = ALICE_ID.clone();
     let asset_definition_id = "xor#wonderland".parse::<AssetDefinitionId>()?;
@@ -497,11 +481,13 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
     let env_dir = network.env_dir().to_path_buf();
     let test_client = network.client();
     let torii = test_client.torii_url.clone();
-    let mut last_non_empty_height =
-        match status_or_skip(get_status_with_retry(&test_client), "initial status")? {
-            Some(status) => status.blocks_non_empty,
-            None => return Ok(()),
-        };
+    let mut last_non_empty_height = match status_or_skip(
+        get_status_with_retry_or_storage(&network, &test_client, "initial status"),
+        "initial status",
+    )? {
+        Some(status) => status.blocks_non_empty,
+        None => return Ok(()),
+    };
 
     if submit_or_skip(&test_client, create_asset, "register asset definition")
         .map_err(|err| {
@@ -621,7 +607,6 @@ fn client_add_asset_with_decimal_should_increase_asset_amount() -> Result<()> {
 #[test]
 #[allow(clippy::unnecessary_wraps)]
 fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
-    let _guard = asset_test_guard();
     let result: Result<()> = (|| {
         let (dex_id, _dex_keypair) = gen_account_in("exchange");
         let (seller_id, seller_keypair) = gen_account_in("company");
@@ -652,7 +637,10 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             return Ok(());
         };
         let test_client = network.client();
-        let mut status = match status_or_skip(test_client.get_status(), "initial status")? {
+        let mut status = match status_or_skip(
+            get_status_with_retry_or_storage(&network, &test_client, "initial status"),
+            "initial status",
+        )? {
             Some(status) => status,
             None => return Ok(()),
         };
@@ -796,7 +784,6 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
 #[test]
 #[allow(clippy::unnecessary_wraps)]
 fn transfer_asset_definition() -> Result<()> {
-    let _guard = asset_test_guard();
     let alice_id = ALICE_ID.clone();
     // Create a destination account we can register (in a domain Alice can manage)
     let (new_owner_id, _kp) = gen_account_in("domain");
@@ -811,6 +798,14 @@ fn transfer_asset_definition() -> Result<()> {
         return Ok(());
     };
     let test_client = network.client();
+    if status_or_skip(
+        get_status_with_retry_or_storage(&network, &test_client, "initial status"),
+        "initial status",
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
 
     if submit_or_tolerate_timeout(
         &test_client,
@@ -856,7 +851,6 @@ fn transfer_asset_definition() -> Result<()> {
 #[allow(clippy::unnecessary_wraps)]
 #[allow(clippy::too_many_lines)]
 fn fail_if_dont_satisfy_spec() -> Result<()> {
-    let _guard = asset_test_guard();
     let result: Result<()> = (|| {
         let alice_id = ALICE_ID.clone();
         // Prepare a transferable destination account under a manageable domain
@@ -879,18 +873,19 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         let env_dir = network.env_dir().to_path_buf();
         let test_client = network.client();
         let torii = test_client.torii_url.clone();
-        let mut last_non_empty_height =
-            match status_or_skip(get_status_with_retry(&test_client), "initial status").map_err(
-                |err| {
-                    err.wrap_err(format!(
-                        "initial status; torii={torii}, env_dir={}",
-                        env_dir.display()
-                    ))
-                },
-            )? {
-                Some(status) => status.blocks_non_empty,
-                None => return Ok(()),
-            };
+        let mut last_non_empty_height = match status_or_skip(
+            get_status_with_retry_or_storage(&network, &test_client, "initial status"),
+            "initial status",
+        )
+        .map_err(|err| {
+            err.wrap_err(format!(
+                "initial status; torii={torii}, env_dir={}",
+                env_dir.display()
+            ))
+        })? {
+            Some(status) => status.blocks_non_empty,
+            None => return Ok(()),
+        };
 
         // Register and seed the asset definition under Alice's authority after genesis.
         if submit_or_tolerate_timeout(
