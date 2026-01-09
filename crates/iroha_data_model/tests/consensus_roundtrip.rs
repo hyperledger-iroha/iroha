@@ -744,7 +744,7 @@ fn rng_dataspace_commitment(rng: &mut DeterministicRng) -> SumeragiDataspaceComm
 fn rng_lane_relay_envelope(rng: &mut DeterministicRng) -> LaneRelayEnvelope {
     let height = NonZeroU64::new(rng.next_u64().saturating_add(1))
         .unwrap_or_else(|| NonZeroU64::new(1).expect("nonzero height"));
-    let mut header = BlockHeader::new(height, None, None, None, rng.next_u64(), rng.next_u32());
+    let mut header = BlockHeader::new(height, None, None, None, rng.next_u64(), rng.next_u64());
     let da_hash = rng
         .next_bool()
         .then(|| HashOf::<commitment::DaCommitmentBundle>::from_untyped_unchecked(rng_hash(rng)));

@@ -334,6 +334,14 @@ pub mod nexus {
             pub dataspace: DataSpaceId,
         }
     }
+
+    permission! {
+        /// Permission to charge Nexus fees to the specified sponsor account.
+        pub struct CanUseFeeSponsor {
+            /// Sponsor account that may be debited for fees.
+            pub sponsor: AccountId,
+        }
+    }
 }
 
 /// Governance-related permissions

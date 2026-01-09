@@ -679,6 +679,7 @@ fn lower_map_key_eq(ctx: &mut LowerCtx, key_ty: &Type, left: Temp, right: Temp) 
 fn key_codec_for_type(ty: &Type) -> Option<KeyCodec> {
     match semantic::resolve_struct_type(ty) {
         Type::Int => Some(KeyCodec::Int),
+        Type::String => Some(KeyCodec::Pointer),
         other if semantic::is_pointer_type(&other) => Some(KeyCodec::Pointer),
         _ => None,
     }
@@ -1666,10 +1667,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                     t
                 }
-                // Pointer-ABI constructors: accept only string literals for now and
-                // lower to typed data references placed in the data section.
-                // These produce temps that codegen recognizes and wires into
-                // Norito TLV fixups for the appropriate registers at call sites.
+                // Pointer-ABI constructors: accept string literals (or temps derived from them)
+                // and lower to typed pointers that codegen wires into Norito TLV fixups.
                 "account_id" | "asset_definition" | "asset_id" | "nft_id" | "name" | "json"
                 | "domain" | "domain_id" | "blob" | "norito_bytes" | "dataspace_id"
                 | "axt_descriptor" | "asset_handle" | "proof_blob" => {
@@ -1708,6 +1707,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     let src = lower_expr(ctx, arg, vars);
                     let resolved_arg = semantic::resolve_struct_type(&arg.ty);
                     match (target_ty.clone(), resolved_arg.clone()) {
+                        (Type::Blob | Type::Bytes, _) => src,
+                        (t, arg_ty) if t == arg_ty => src,
                         (Type::Json, ty) if semantic::is_blob_like(&ty) => {
                             let dest = ctx.new_temp();
                             ctx.current_instr(Instr::JsonDecode { dest, blob: src });
@@ -1718,8 +1719,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                             ctx.current_instr(Instr::NameDecode { dest, blob: src });
                             dest
                         }
-                        (Type::Blob | Type::Bytes, _) => src,
-                        (t, arg_ty) if t == arg_ty => src,
+                        (_, Type::String) => {
+                            let dest = ctx.new_temp();
+                            ctx.current_instr(Instr::PointerFromString { dest, kind, src });
+                            dest
+                        }
                         (_, ty) if semantic::is_blob_like(&ty) => {
                             let dest = ctx.new_temp();
                             ctx.current_instr(Instr::PointerFromNorito {
@@ -1739,6 +1743,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 }
                 "assert" => {
                     let cond = lower_expr(ctx, &args[0], vars);
+                    if args.len() > 1 {
+                        let _ = lower_expr(ctx, &args[1], vars);
+                    }
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Unary {
                         dest: t,

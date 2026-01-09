@@ -35,7 +35,7 @@ use iroha_data_model::{
         TouchManifest as ModelTouchManifest, proof_matches_manifest,
     },
     prelude::{AccountId, *},
-    proof::{VerifyingKeyId, VerifyingKeyRecord},
+    proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     query::parameters::ForwardCursor,
     zk::BackendTag,
 };
@@ -2027,6 +2027,35 @@ impl CoreHost {
         u32::try_from(len).map_err(|_| ivm::VMError::NoritoInvalid)
     }
 
+    fn gas_for_zk_verify_payload(payload: &[u8]) -> u64 {
+        // Reuse the confidential gas schedule by wrapping the envelope payload
+        // in a VerifyProof instruction; this keeps ZK verify costs aligned with ISI gas.
+        let backend: iroha_schema::Ident = "halo2/ipa".into();
+        let proof = ProofBox::new(backend.clone(), payload.to_vec());
+        let vk = VerifyingKeyBox::new(backend.clone(), Vec::new());
+        let attachment = ProofAttachment::new_inline(backend, proof, vk);
+        let instr = InstructionBox::from(DMZk::VerifyProof::new(attachment));
+        crate::gas::meter_instruction(&instr)
+    }
+
+    fn queue_instruction(&mut self, instr: InstructionBox) -> u64 {
+        let gas = crate::gas::meter_instruction(&instr);
+        self.queued.push(instr);
+        gas
+    }
+
+    fn queue_instructions<I>(&mut self, instrs: I) -> u64
+    where
+        I: IntoIterator<Item = InstructionBox>,
+    {
+        let mut gas = 0_u64;
+        for instr in instrs {
+            gas = gas.saturating_add(crate::gas::meter_instruction(&instr));
+            self.queued.push(instr);
+        }
+        gas
+    }
+
     fn enqueue_fastpq_batch(&mut self, entries: Vec<TransferAssetBatchEntry>) {
         self.queued
             .push(InstructionBox::from(TransferAssetBatch::new(entries)));
@@ -2061,8 +2090,11 @@ impl CoreHost {
         let to: AccountId = Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?;
         let asset_def: AssetDefinitionId =
             Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
+        let asset_id = AssetId::of(asset_def.clone(), from.clone());
+        let isi = Transfer::asset_numeric(asset_id, amount, to.clone());
+        let gas = crate::gas::meter_instruction(&InstructionBox::from(TransferBox::from(isi)));
         entries.push(TransferAssetBatchEntry::new(from, to, asset_def, amount));
-        Ok(0)
+        Ok(gas)
     }
 
     fn finish_fastpq_batch(&mut self) -> Result<u64, ivm::VMError> {
@@ -2086,8 +2118,8 @@ impl CoreHost {
         if batch.entries().is_empty() {
             return Err(ivm::VMError::DecodeError);
         }
-        self.enqueue_fastpq_batch(batch.entries().clone());
-        Ok(0)
+        let instr = InstructionBox::from(batch);
+        Ok(self.queue_instruction(instr))
     }
 
     fn handle_axt_begin(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
@@ -2898,17 +2930,15 @@ impl IVMHost for CoreHost {
                 let ptr = vm.register(10);
                 let id: DomainId = Self::decode_tlv_typed(vm, ptr, PointerType::DomainId)?;
                 let isi = Register::domain(Domain::new(id));
-                self.queued
-                    .push(InstructionBox::from(RegisterBox::from(isi)));
-                Ok(0)
+                let instr = InstructionBox::from(RegisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
             }
             ivm::syscalls::SYSCALL_UNREGISTER_DOMAIN => {
                 let ptr = vm.register(10);
                 let id: DomainId = Self::decode_tlv_typed(vm, ptr, PointerType::DomainId)?;
                 let isi = Unregister::domain(id);
-                self.queued
-                    .push(InstructionBox::from(UnregisterBox::from(isi)));
-                Ok(0)
+                let instr = InstructionBox::from(UnregisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
             }
             ivm::syscalls::SYSCALL_TRANSFER_DOMAIN => {
                 // r10=&DomainId, r11=&AccountId(to)
@@ -2918,9 +2948,8 @@ impl IVMHost for CoreHost {
                 let to: AccountId = Self::decode_tlv_typed(vm, tptr, PointerType::AccountId)?;
                 let from = self.authority.clone();
                 let isi = Transfer::domain(from, id, to);
-                self.queued
-                    .push(InstructionBox::from(TransferBox::from(isi)));
-                Ok(0)
+                let instr = InstructionBox::from(TransferBox::from(isi));
+                Ok(self.queue_instruction(instr))
             }
             // ----------------- Asset (Numeric) ISIs via pointer-ABI -----------------
             ivm::syscalls::SYSCALL_MINT_ASSET => {
@@ -2962,8 +2991,8 @@ impl IVMHost for CoreHost {
                     amount = v;
                 }
                 let isi = Mint::asset_numeric(amount, asset_id);
-                self.queued.push(InstructionBox::from(MintBox::from(isi)));
-                Ok(0)
+                let instr = InstructionBox::from(MintBox::from(isi));
+                Ok(self.queue_instruction(instr))
             }
             ivm::syscalls::SYSCALL_BURN_ASSET => {
                 let account_ptr = vm.register(10);
@@ -2975,8 +3004,8 @@ impl IVMHost for CoreHost {
                     Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
                 let asset_id = AssetId::of(asset_def, account);
                 let isi = Burn::asset_numeric(amount, asset_id);
-                self.queued.push(InstructionBox::from(BurnBox::from(isi)));
-                Ok(0)
+                let instr = InstructionBox::from(BurnBox::from(isi));
+                Ok(self.queue_instruction(instr))
             }
             ivm::syscalls::SYSCALL_TRANSFER_ASSET => {
                 if self.fastpq_batch_entries.is_some() {
@@ -2992,9 +3021,8 @@ impl IVMHost for CoreHost {
                     Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
                 let asset_id = AssetId::of(asset_def, from);
                 let isi = Transfer::asset_numeric(asset_id, amount, to);
-                self.queued
-                    .push(InstructionBox::from(TransferBox::from(isi)));
-                Ok(0)
+                let instr = InstructionBox::from(TransferBox::from(isi));
+                Ok(self.queue_instruction(instr))
             }
             ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN => self.begin_fastpq_batch(),
             ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_END => self.finish_fastpq_batch(),
@@ -3036,9 +3064,8 @@ impl IVMHost for CoreHost {
                 };
 
                 let isi = SetKeyValue::account(account, key, value);
-                self.queued
-                    .push(InstructionBox::from(SetKeyValueBox::from(isi)));
-                Ok(0)
+                let instr = InstructionBox::from(SetKeyValueBox::from(isi));
+                Ok(self.queue_instruction(instr))
             }
             ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE => {
                 let ptr = vm.register(10);
@@ -3050,36 +3077,36 @@ impl IVMHost for CoreHost {
                 let request: scode::RegisterSmartContractCode =
                     norito::decode_from_bytes(tlv.payload)
                         .map_err(|_| ivm::VMError::DecodeError)?;
-                self.queued.push(InstructionBox::from(request));
-                Ok(0)
+                let instr = InstructionBox::from(request);
+                Ok(self.queue_instruction(instr))
             }
             ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES => {
                 let ptr = vm.register(10);
                 let request: scode::RegisterSmartContractBytes =
                     Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
-                self.queued.push(InstructionBox::from(request));
-                Ok(0)
+                let instr = InstructionBox::from(request);
+                Ok(self.queue_instruction(instr))
             }
             ivm::syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE => {
                 let ptr = vm.register(10);
                 let request: scode::ActivateContractInstance =
                     Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
-                self.queued.push(InstructionBox::from(request));
-                Ok(0)
+                let instr = InstructionBox::from(request);
+                Ok(self.queue_instruction(instr))
             }
             ivm::syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE => {
                 let ptr = vm.register(10);
                 let request: scode::DeactivateContractInstance =
                     Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
-                self.queued.push(InstructionBox::from(request));
-                Ok(0)
+                let instr = InstructionBox::from(request);
+                Ok(self.queue_instruction(instr))
             }
             ivm::syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES => {
                 let ptr = vm.register(10);
                 let request: scode::RemoveSmartContractBytes =
                     Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
-                self.queued.push(InstructionBox::from(request));
-                Ok(0)
+                let instr = InstructionBox::from(request);
+                Ok(self.queue_instruction(instr))
             }
             // ----------------- NFT (Non-fungible) ISIs -----------------
             ivm::syscalls::SYSCALL_NFT_MINT_ASSET => {
@@ -3105,9 +3132,8 @@ impl IVMHost for CoreHost {
                     return Err(ivm::VMError::DecodeError);
                 };
                 let nft = Nft::new(nft_id, Metadata::default());
-                self.queued
-                    .push(InstructionBox::from(RegisterBox::from(Register::nft(nft))));
-                Ok(0)
+                let instr = InstructionBox::from(RegisterBox::from(Register::nft(nft)));
+                Ok(self.queue_instruction(instr))
             }
             ivm::syscalls::SYSCALL_NFT_TRANSFER_ASSET => {
                 let from_ptr = vm.register(10);
@@ -3131,9 +3157,8 @@ impl IVMHost for CoreHost {
                     return Err(ivm::VMError::DecodeError);
                 };
                 let isi = Transfer::nft(from, nft_id, to);
-                self.queued
-                    .push(InstructionBox::from(TransferBox::from(isi)));
-                Ok(0)
+                let instr = InstructionBox::from(TransferBox::from(isi));
+                Ok(self.queue_instruction(instr))
             }
             ivm::syscalls::SYSCALL_NFT_SET_METADATA => {
                 let nft_id_ptr = vm.register(10);
@@ -3145,35 +3170,36 @@ impl IVMHost for CoreHost {
                 let value: Json = Self::decode_tlv_json(vm, value_ptr)?;
 
                 let isi = SetKeyValue::nft(nft_id, key, value);
-                self.queued
-                    .push(InstructionBox::from(SetKeyValueBox::from(isi)));
-                Ok(0)
+                let instr = InstructionBox::from(SetKeyValueBox::from(isi));
+                Ok(self.queue_instruction(instr))
             }
             ivm::syscalls::SYSCALL_NFT_BURN_ASSET => {
                 let nft_id_ptr = vm.register(10);
                 let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
                 let isi = Unregister::nft(nft_id);
-                self.queued
-                    .push(InstructionBox::from(UnregisterBox::from(isi)));
-                Ok(0)
+                let instr = InstructionBox::from(UnregisterBox::from(isi));
+                Ok(self.queue_instruction(instr))
             }
             // Sample convenience: create one NFT per known account (from snapshot)
             ivm::syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS => {
+                let mut gas = 0_u64;
                 let mut i = self.nft_seq;
                 let start = i;
-                for account_id in self.accounts_snapshot.iter() {
+                let accounts = Arc::clone(&self.accounts_snapshot);
+                let authority = self.authority.clone();
+                for account_id in accounts.iter() {
                     let name_str = format!("nft_number_{}_for_{}", i, account_id.signatory());
                     if let Ok(name) = name_str.parse() {
                         let nft_id = NftId::of(account_id.domain().clone(), name);
                         let nft = Nft::new(nft_id.clone(), Metadata::default());
-                        self.queued
-                            .push(InstructionBox::from(RegisterBox::from(Register::nft(nft))));
-                        self.queued
-                            .push(InstructionBox::from(TransferBox::from(Transfer::nft(
-                                self.authority.clone(),
-                                nft_id,
-                                account_id.clone(),
-                            ))));
+                        let reg = InstructionBox::from(RegisterBox::from(Register::nft(nft)));
+                        gas = gas.saturating_add(self.queue_instruction(reg));
+                        let xfer = InstructionBox::from(TransferBox::from(Transfer::nft(
+                            authority.clone(),
+                            nft_id,
+                            account_id.clone(),
+                        )));
+                        gas = gas.saturating_add(self.queue_instruction(xfer));
                         i = i.saturating_add(1);
                         if i.saturating_sub(start) >= 256 {
                             break;
@@ -3181,7 +3207,7 @@ impl IVMHost for CoreHost {
                     }
                 }
                 self.nft_seq = i;
-                Ok(0)
+                Ok(gas)
             }
             // Set SmartContract execution depth parameter to x10
             ivm::syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH => {
@@ -3195,9 +3221,8 @@ impl IVMHost for CoreHost {
                 let param = Parameter::SmartContract(
                     iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(depth),
                 );
-                self.queued
-                    .push(InstructionBox::from(SetParameter::new(param)));
-                Ok(0)
+                let instr = InstructionBox::from(SetParameter::new(param));
+                Ok(self.queue_instruction(instr))
             }
             // Reserved for future smart-contract helpers
             // Accept a Norito-encoded InstructionBox and enqueue it for later execution.
@@ -3228,8 +3253,8 @@ impl IVMHost for CoreHost {
                         proof: pa,
                         root_hint: z.root_hint,
                     };
-                    self.queued.push(new.into());
-                    Ok(0)
+                    let instr = InstructionBox::from(new);
+                    Ok(self.queue_instruction(instr))
                 } else if let Some(u) = any_ref.downcast_ref::<DMZk::Unshield>() {
                     let mut pa = u.proof.clone();
                     if pa.envelope_hash.is_none()
@@ -3245,8 +3270,8 @@ impl IVMHost for CoreHost {
                         proof: pa,
                         root_hint: u.root_hint,
                     };
-                    self.queued.push(new.into());
-                    Ok(0)
+                    let instr = InstructionBox::from(new);
+                    Ok(self.queue_instruction(instr))
                 } else if let Some(sb) = any_ref.downcast_ref::<DMZk::SubmitBallot>() {
                     let mut pa = sb.ballot_proof.clone();
                     if pa.envelope_hash.is_none()
@@ -3260,8 +3285,8 @@ impl IVMHost for CoreHost {
                         ballot_proof: pa,
                         nullifier: sb.nullifier,
                     };
-                    self.queued.push(new.into());
-                    Ok(0)
+                    let instr = InstructionBox::from(new);
+                    Ok(self.queue_instruction(instr))
                 } else if let Some(ft) = any_ref.downcast_ref::<DMZk::FinalizeElection>() {
                     let mut pa = ft.tally_proof.clone();
                     if pa.envelope_hash.is_none()
@@ -3274,12 +3299,11 @@ impl IVMHost for CoreHost {
                         tally: ft.tally.clone(),
                         tally_proof: pa,
                     };
-                    self.queued.push(new.into());
-                    Ok(0)
+                    let instr = InstructionBox::from(new);
+                    Ok(self.queue_instruction(instr))
                 } else if any_ref.downcast_ref::<DMZk::VerifyProof>().is_some() {
                     // Allow explicit VerifyProof if issued via vendor bridge; pass-through
-                    self.queued.push(ib);
-                    Ok(0)
+                    Ok(self.queue_instruction(ib))
                 } else {
                     Err(ivm::VMError::PermissionDenied)
                 }
@@ -3294,20 +3318,21 @@ impl IVMHost for CoreHost {
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
+                let gas = Self::gas_for_zk_verify_payload(tlv.payload);
                 let env_hash = Self::compute_envelope_hash(tlv.payload)?;
                 if let Err(code) =
                     self.enforce_zk_envelope(tlv.payload, "zk_verify_transfer/v1", "transfer")
                 {
                     vm.set_register(10, 0);
                     vm.set_register(11, code);
-                    return Ok(0);
+                    return Ok(gas);
                 }
                 let _ = self.default.syscall(number, vm)?;
                 if vm.register(10) != 0 {
                     self.zk_verified_transfer.push_back(env_hash);
                     self.zk_last_env_hash_transfer.push_back(env_hash);
                 }
-                Ok(0)
+                Ok(gas)
             }
             ivm::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => {
                 let ptr = vm.register(10);
@@ -3315,20 +3340,21 @@ impl IVMHost for CoreHost {
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
+                let gas = Self::gas_for_zk_verify_payload(tlv.payload);
                 let env_hash = Self::compute_envelope_hash(tlv.payload)?;
                 if let Err(code) =
                     self.enforce_zk_envelope(tlv.payload, "zk_verify_unshield/v1", "unshield")
                 {
                     vm.set_register(10, 0);
                     vm.set_register(11, code);
-                    return Ok(0);
+                    return Ok(gas);
                 }
                 let _ = self.default.syscall(number, vm)?;
                 if vm.register(10) != 0 {
                     self.zk_verified_unshield.push_back(env_hash);
                     self.zk_last_env_hash_unshield.push_back(env_hash);
                 }
-                Ok(0)
+                Ok(gas)
             }
             ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => {
                 let ptr = vm.register(10);
@@ -3336,20 +3362,21 @@ impl IVMHost for CoreHost {
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
+                let gas = Self::gas_for_zk_verify_payload(tlv.payload);
                 let env_hash = Self::compute_envelope_hash(tlv.payload)?;
                 if let Err(code) =
                     self.enforce_zk_envelope(tlv.payload, "zk_verify_ballot/v1", "ballot")
                 {
                     vm.set_register(10, 0);
                     vm.set_register(11, code);
-                    return Ok(0);
+                    return Ok(gas);
                 }
                 let _ = self.default.syscall(number, vm)?;
                 if vm.register(10) != 0 {
                     self.zk_verified_ballot.push_back(env_hash);
                     self.zk_last_env_hash_ballot.push_back(env_hash);
                 }
-                Ok(0)
+                Ok(gas)
             }
             ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
                 let ptr = vm.register(10);
@@ -3357,20 +3384,21 @@ impl IVMHost for CoreHost {
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
+                let gas = Self::gas_for_zk_verify_payload(tlv.payload);
                 let env_hash = Self::compute_envelope_hash(tlv.payload)?;
                 if let Err(code) =
                     self.enforce_zk_envelope(tlv.payload, "zk_verify_tally/v1", "tally")
                 {
                     vm.set_register(10, 0);
                     vm.set_register(11, code);
-                    return Ok(0);
+                    return Ok(gas);
                 }
                 let _ = self.default.syscall(number, vm)?;
                 if vm.register(10) != 0 {
                     self.zk_verified_tally.push_back(env_hash);
                     self.zk_last_env_hash_tally.push_back(env_hash);
                 }
-                Ok(0)
+                Ok(gas)
             }
             // ZK roots read: build response from snapshot and return TLV pointer in r10
             ivm::syscalls::SYSCALL_ZK_ROOTS_GET => {
@@ -5096,8 +5124,9 @@ mod pointer_abi_tests {
         vm.set_register(10, ivm::Memory::INPUT_START);
 
         let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE, &mut vm);
-        assert_eq!(res, Ok(0));
         let expected = InstructionBox::from(request.clone());
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
     }
 
@@ -5124,8 +5153,9 @@ mod pointer_abi_tests {
             ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
             &mut vm,
         );
-        assert_eq!(res, Ok(0));
         let expected = InstructionBox::from(request.clone());
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
     }
 
@@ -5149,8 +5179,9 @@ mod pointer_abi_tests {
         vm.set_register(10, ivm::Memory::INPUT_START);
 
         let res = host.syscall(ivm::syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE, &mut vm);
-        assert_eq!(res, Ok(0));
         let expected = InstructionBox::from(request.clone());
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
     }
 
@@ -5174,8 +5205,9 @@ mod pointer_abi_tests {
         vm.set_register(10, ivm::Memory::INPUT_START);
 
         let res = host.syscall(ivm::syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE, &mut vm);
-        assert_eq!(res, Ok(0));
         let expected = InstructionBox::from(request.clone());
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
     }
 
@@ -5199,9 +5231,42 @@ mod pointer_abi_tests {
         vm.set_register(10, ivm::Memory::INPUT_START);
 
         let res = host.syscall(ivm::syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES, &mut vm);
-        assert_eq!(res, Ok(0));
         let expected = InstructionBox::from(request.clone());
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn mint_asset_syscall_returns_metered_gas() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority.clone());
+        vm.load_program(&ivm::ProgramMetadata::default().encode())
+            .expect("load header");
+
+        let account_tlv = make_tlv(PointerType::AccountId as u16, &authority.encode());
+        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_def.encode());
+
+        vm.memory
+            .preload_input(0, &account_tlv)
+            .expect("preload account");
+        vm.memory
+            .preload_input(256, &asset_tlv)
+            .expect("preload asset def");
+        vm.set_register(10, ivm::Memory::INPUT_START);
+        vm.set_register(11, ivm::Memory::INPUT_START + 256);
+        vm.set_register(12, 5);
+
+        let gas = host
+            .syscall(ivm::syscalls::SYSCALL_MINT_ASSET, &mut vm)
+            .expect("mint syscall");
+        let asset_id = AssetId::of(asset_def, authority);
+        let isi = Mint::asset_numeric(5u64, asset_id);
+        let expected =
+            crate::gas::meter_instruction(&InstructionBox::from(MintBox::from(isi)));
+        assert_eq!(gas, expected);
     }
 
     #[test]
@@ -5397,6 +5462,23 @@ mod tests {
     pub(super) fn store_tlv(vm: &mut IVM, ty: PointerType, payload: &[u8]) -> u64 {
         let tlv = make_tlv(ty as u16, payload);
         vm.alloc_input_tlv(&tlv).expect("allocate TLV input")
+    }
+
+    #[test]
+    fn queue_instructions_accumulates_gas_and_enqueues() {
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+        let instr_one =
+            InstructionBox::from(Log::new(iroha_logger::Level::INFO, "one".to_string()));
+        let instr_two =
+            InstructionBox::from(Log::new(iroha_logger::Level::WARN, "two".to_string()));
+        let expected = crate::gas::meter_instruction(&instr_one)
+            .saturating_add(crate::gas::meter_instruction(&instr_two));
+
+        let gas = host.queue_instructions(vec![instr_one.clone(), instr_two.clone()]);
+
+        assert_eq!(gas, expected);
+        assert_eq!(host.queued, vec![instr_one, instr_two]);
     }
 
     pub(super) fn make_policy_snapshot(

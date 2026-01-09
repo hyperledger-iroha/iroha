@@ -624,6 +624,11 @@ fn reset_nexus_metrics(metrics: &Metrics) {
         .write()
         .expect("lane TEU status cache lock poisoned")
         .clear();
+    metrics
+        .nexus_scheduler_dataspace_teu_status
+        .write()
+        .expect("dataspace TEU status cache lock poisoned")
+        .clear();
 }
 
 impl StateTelemetry {
@@ -9836,6 +9841,43 @@ mod tests {
                 .with_label_values(&[lane_label.as_str(), dataspace_label.as_str(), "missing",])
                 .get(),
             0
+        );
+    }
+
+    #[test]
+    fn nexus_disable_clears_dataspace_teu_status_cache() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics.clone(), true);
+        let lane_id = LaneId::SINGLE;
+        let dataspace_id = DataSpaceId::new(7);
+
+        telemetry.record_nexus_scheduler_dataspace_teu(
+            lane_id,
+            dataspace_id,
+            DataspaceTeuGaugeUpdate {
+                backlog: 12,
+                age_slots: 3,
+                virtual_finish: 9,
+            },
+        );
+
+        let key = (lane_id.as_u32(), dataspace_id.as_u64());
+        assert!(
+            metrics
+                .nexus_scheduler_dataspace_teu_status
+                .read()
+                .expect("dataspace TEU status cache lock poisoned")
+                .contains_key(&key)
+        );
+
+        telemetry.set_nexus_enabled(false);
+
+        assert!(
+            metrics
+                .nexus_scheduler_dataspace_teu_status
+                .read()
+                .expect("dataspace TEU status cache lock poisoned")
+                .is_empty()
         );
     }
 

@@ -43,6 +43,11 @@ impl Actor {
                     aborted_expired.push((*hash, pending.height, pending.view));
                     continue;
                 }
+                if pending.height > tip_height {
+                    // Keep aborted payloads above the committed tip so missing-block fetches can
+                    // recover across view changes at the current height.
+                    continue;
+                }
                 let has_votes = self.vote_log.values().any(|vote| {
                     vote.block_hash == *hash
                         && vote.height == pending.height

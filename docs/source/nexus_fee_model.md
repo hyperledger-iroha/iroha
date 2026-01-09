@@ -12,6 +12,12 @@ operators can reconcile gas debits against the Nexus fee model.
   or `tier3`), and a `volatility_class` (`stable`, `elevated`, `dislocated`).
   These flags feed the settlement router so the resulting XOR
   quote matches the canonical TWAP and haircut tier for the lane.
+- IVM transactions must include `gas_limit` metadata (`u64`) to cap fee
+  exposure. The `/v1/contracts/call` endpoint requires `gas_limit`
+  explicitly, and invalid values are rejected.
+- When a transaction sets `fee_sponsor` metadata, the sponsor must grant
+  `CanUseFeeSponsor { sponsor }` to the caller. Unauthorized sponsorship
+  attempts are rejected and recorded.
 - Every transaction that pays gas records a `LaneSettlementReceipt`.  Each
   receipt stores the caller-provided source identifier, the local micro-amount,
   the XOR due immediately, the XOR expected after the haircut, the realised

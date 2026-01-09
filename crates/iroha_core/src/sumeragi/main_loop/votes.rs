@@ -195,10 +195,14 @@ impl Actor {
                 let count = self.subsystems.propose.new_view_tracker.record(
                     vote.height,
                     vote.view,
-                    signer_peer,
+                    signer_peer.clone(),
                     highest,
                 );
-                crate::sumeragi::new_view_stats::note_receipt(vote.height, vote.view, vote.signer);
+                crate::sumeragi::new_view_stats::note_receipt(
+                    vote.height,
+                    vote.view,
+                    signer_peer,
+                );
                 debug!(
                     height = vote.height,
                     view = vote.view,
@@ -224,17 +228,37 @@ impl Actor {
         committed_height: u64,
     ) -> bool {
         if vote.height <= committed_height {
-            iroha_logger::debug!(
-                phase = ?vote.phase,
-                height = vote.height,
-                view = vote.view,
-                epoch = vote.epoch,
-                signer = vote.signer,
-                block_hash = %vote.block_hash,
-                committed_height,
-                "dropping stale vote below committed height"
-            );
-            return true;
+            let matches_committed = vote.phase == Phase::Commit
+                && self
+                    .kura
+                    .get_block_height_by_hash(vote.block_hash)
+                    .is_some_and(|height| {
+                        u64::try_from(height.get()).is_ok_and(|height| height == vote.height)
+                    });
+            if matches_committed {
+                iroha_logger::debug!(
+                    phase = ?vote.phase,
+                    height = vote.height,
+                    view = vote.view,
+                    epoch = vote.epoch,
+                    signer = vote.signer,
+                    block_hash = %vote.block_hash,
+                    committed_height,
+                    "accepting commit vote for committed block"
+                );
+            } else {
+                iroha_logger::debug!(
+                    phase = ?vote.phase,
+                    height = vote.height,
+                    view = vote.view,
+                    epoch = vote.epoch,
+                    signer = vote.signer,
+                    block_hash = %vote.block_hash,
+                    committed_height,
+                    "dropping stale vote below committed height"
+                );
+                return true;
+            }
         }
         let expected_epoch = self.epoch_for_height(vote.height);
         if vote.epoch != expected_epoch {
@@ -421,6 +445,19 @@ impl Actor {
                 );
                 return false;
             };
+            let expected_epoch = self.epoch_for_height(highest.height);
+            if highest.epoch != expected_epoch {
+                warn!(
+                    height = vote.height,
+                    view = vote.view,
+                    signer = vote.signer,
+                    highest_height = highest.height,
+                    highest_epoch = highest.epoch,
+                    expected_epoch,
+                    "dropping NEW_VIEW vote with mismatched highest QC epoch"
+                );
+                return false;
+            }
             if highest.phase != Phase::Commit {
                 debug!(
                     height = vote.height,
@@ -455,6 +492,23 @@ impl Actor {
                     "dropping NEW_VIEW vote with mismatched height"
                 );
                 return false;
+            }
+            if let Some((local_height, local_view)) =
+                self.local_block_height_view(highest.subject_block_hash)
+            {
+                if local_height != highest.height || local_view != highest.view {
+                    warn!(
+                        height = vote.height,
+                        view = vote.view,
+                        signer = vote.signer,
+                        highest_height = highest.height,
+                        highest_view = highest.view,
+                        local_height,
+                        local_view,
+                        "dropping NEW_VIEW vote with highest QC that mismatches local block metadata"
+                    );
+                    return false;
+                }
             }
         }
         let key = vote_key(vote);
@@ -744,7 +798,7 @@ impl Actor {
         if let Some(block_height) = self.kura.get_block_height_by_hash(block_hash) {
             roster_height = u64::try_from(block_height.get()).unwrap_or(height);
             if let Some(block) = self.kura.get_block(block_height) {
-                roster_view = Some(u64::from(block.header().view_change_index()));
+                roster_view = Some(block.header().view_change_index());
             }
         }
         if roster_view.is_none() && roster_height == height {
@@ -827,12 +881,15 @@ impl Actor {
         if height <= committed_height {
             return self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
         }
+        let active = self.effective_commit_topology();
+        if height == committed_height.saturating_add(1) && !active.is_empty() {
+            return active;
+        }
         if let Some(roster) =
             self.roster_from_commit_qc_history_roll_forward(height, Some(block_hash))
         {
             return roster;
         }
-        let active = self.effective_commit_topology();
         if height > committed_height.saturating_add(1) {
             return Vec::new();
         }

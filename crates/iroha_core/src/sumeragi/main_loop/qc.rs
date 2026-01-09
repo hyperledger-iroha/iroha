@@ -1595,6 +1595,45 @@ impl Actor {
             );
             return Ok(());
         }
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
+            let Some(highest) = qc.highest_qc else {
+                warn!(
+                    height = qc.height,
+                    view = qc.view,
+                    block = %qc.subject_block_hash,
+                    "dropping NEW_VIEW QC missing highest certificate reference"
+                );
+                return Ok(());
+            };
+            let expected_highest_epoch = self.epoch_for_height(highest.height);
+            if highest.epoch != expected_highest_epoch {
+                warn!(
+                    height = qc.height,
+                    view = qc.view,
+                    highest_height = highest.height,
+                    highest_epoch = highest.epoch,
+                    expected_highest_epoch,
+                    "dropping NEW_VIEW QC with mismatched highest epoch"
+                );
+                return Ok(());
+            }
+            if let Some((local_height, local_view)) =
+                self.local_block_height_view(highest.subject_block_hash)
+            {
+                if local_height != highest.height || local_view != highest.view {
+                    warn!(
+                        height = qc.height,
+                        view = qc.view,
+                        highest_height = highest.height,
+                        highest_view = highest.view,
+                        local_height,
+                        local_view,
+                        "dropping NEW_VIEW QC with highest certificate that mismatches local block metadata"
+                    );
+                    return Ok(());
+                }
+            }
+        }
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
         let commit_topology = if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
             self.roster_for_new_view_with_mode(
@@ -1726,7 +1765,10 @@ impl Actor {
                         .and_then(|snapshot| snapshot.stake_snapshot);
                     let checkpoint = ValidatorSetCheckpoint::new(
                         qc.height,
+                        qc.view,
                         qc.subject_block_hash,
+                        qc.parent_state_root,
+                        qc.post_state_root,
                         qc.validator_set.clone(),
                         qc.aggregate.signers_bitmap.clone(),
                         qc.aggregate.bls_aggregate_signature.clone(),
@@ -1911,6 +1953,13 @@ impl Actor {
         let QcValidationError::MissingVotes { .. } = err else {
             return None;
         };
+        if qc.phase == crate::sumeragi::consensus::Phase::NewView {
+            let highest = super::validate_new_view_qc_highest(qc).ok()?;
+            let expected_highest_epoch = self.epoch_for_height(highest.height);
+            if highest.epoch != expected_highest_epoch {
+                return None;
+            }
+        }
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
         let _signature_topology =
             super::topology_for_view(topology, qc.height, qc.view, mode_tag, prf_seed);

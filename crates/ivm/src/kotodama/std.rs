@@ -80,8 +80,8 @@ pub fn zk_verify_unshield(host: &mut dyn IVMHost, vm: &mut IVM, env_bytes: &[u8]
 
 /// Vendor bridge: enqueue a built-in instruction by passing a Norito-encoded
 /// `InstructionBox` in a `NoritoBytes` TLV via INPUT and invoking the vendor
-/// syscall. Returns the host gas cost (always 0 for default host) and leaves
-/// r10 unspecified.
+/// syscall. Returns the host gas cost (0 for `DefaultHost`; CoreHost returns
+/// metered costs) and leaves r10 unspecified.
 pub fn vendor_execute_instruction_bytes(
     host: &mut dyn IVMHost,
     vm: &mut IVM,

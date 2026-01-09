@@ -32,19 +32,22 @@ lane_count = 3
 index = 0
 alias = "core"
 description = "Primary execution lane"
+dataspace = "universal"
 
 [[nexus.lane_catalog]]
 index = 1
 alias = "governance"
 description = "Governance & parliament traffic"
+dataspace = "governance"
 
 [[nexus.lane_catalog]]
 index = 2
 alias = "zk"
 description = "Zero-knowledge attachments"
+dataspace = "zk"
 
 [[nexus.dataspace_catalog]]
-alias = "global"
+alias = "universal"
 id = 0
 description = "Single-lane data space"
 fault_tolerance = 1
@@ -77,7 +80,7 @@ Torii REST/gRPC surfaces.
 ```toml
 [nexus.routing_policy]
 default_lane = 0                # use the "core" lane when no rules match
-default_dataspace = "global"    # reuse the public dataspace for the fallback
+default_dataspace = "universal"    # reuse the public dataspace for the fallback
 
 [[nexus.routing_policy.rules]]
 lane = 1
@@ -187,7 +190,7 @@ Sample output:
 ```json
 {
   "default_lane": 0,
-  "default_dataspace": "global",
+  "default_dataspace": "universal",
   "rules": [
     {"lane": 1, "dataspace": "governance", "matcher": {"instruction": "governance"}},
     {"lane": 2, "dataspace": "zk", "matcher": {"instruction": "smartcontract::deploy"}}

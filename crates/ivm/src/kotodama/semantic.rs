@@ -139,7 +139,7 @@ const SENSITIVE_SYSCALLS: &[&str] = &[
 pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     // Collect struct definitions up front and publish to thread-local env for this analysis pass.
     let mut structs: HashMap<String, Vec<(String, Type)>> = HashMap::new();
-    let mut state: IndexMap<String, Type> = IndexMap::new();
+    let mut state_decls: Vec<(String, TypeExpr)> = Vec::new();
     let mut fn_returns: HashMap<String, Type> = HashMap::new();
     FUNCTION_SUMMARY.with(|map| map.borrow_mut().clear());
     for item in &program.items {
@@ -152,9 +152,7 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
                 structs.insert(def.name.clone(), fields);
             }
             Item::State(st) => {
-                let ty = convert_type_expr(&st.ty)?;
-                validate_state_type(&ty)?;
-                state.insert(st.name.clone(), ty);
+                state_decls.push((st.name.clone(), st.ty.clone()));
             }
             Item::Function(f) => {
                 let ret = if let Some(ret_ty) = &f.ret_ty {
@@ -167,6 +165,12 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
         }
     }
     STRUCT_ENV.with(|env| env.replace(structs));
+    let mut state: IndexMap<String, Type> = IndexMap::new();
+    for (name, ty_expr) in state_decls {
+        let ty = convert_type_expr(&ty_expr)?;
+        validate_state_type(&ty)?;
+        state.insert(name, ty);
+    }
     let resolved_state: IndexMap<String, Type> = state
         .into_iter()
         .map(|(name, ty)| (name, resolve_struct_type(&ty)))
@@ -228,7 +232,7 @@ fn is_supported_durable_value_type(ty: &Type) -> bool {
 
 fn is_supported_durable_key_type(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
-        Type::Int => true,
+        Type::Int | Type::String => true,
         other if is_pointer_type(&other) => true,
         _ => false,
     }
@@ -2174,15 +2178,6 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         });
                     }
                     let arg_ty = resolve_struct_type(&arg_typed[0].ty);
-                    if matches!(arg_ty, Type::String)
-                        && !matches!(arg_typed[0].expr, ExprKind::String(_))
-                    {
-                        return Err(SemanticError {
-                            message: format!(
-                                "{name} expects a string literal; pass a literal or Blob|bytes"
-                            ),
-                        });
-                    }
                     let (ty, allow_blob, allow_int) = match name.as_str() {
                         "account_id" => (Type::AccountId, true, false),
                         "asset_definition" => (Type::AssetDefinitionId, true, false),
@@ -2240,9 +2235,17 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "assert" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Bool {
+                    let ok = match arg_typed.len() {
+                        1 => arg_typed[0].ty == Type::Bool,
+                        2 => {
+                            arg_typed[0].ty == Type::Bool
+                                && matches!(arg_typed[1].ty, Type::String | Type::Int)
+                        }
+                        _ => false,
+                    };
+                    if !ok {
                         return Err(SemanticError {
-                            message: "assert expects (bool)".into(),
+                            message: "assert expects (bool) or (bool, string|int)".into(),
                         });
                     }
                     Ok(TypedExpr {
@@ -4561,11 +4564,10 @@ mod tests {
     }
 
     #[test]
-    fn pointer_constructor_requires_string_literal() {
+    fn pointer_constructor_accepts_string_binding() {
         let program = parse("fn f() { let s = \"wonderland\"; let _n = name(s); }")
             .expect("parse pointer constructor");
-        let err = analyze(&program).expect_err("non-literal string should error");
-        assert!(err.message.contains("string literal"));
+        analyze(&program).expect("string binding should be allowed");
     }
 
     #[test]
@@ -4630,9 +4632,12 @@ mod tests {
 
     #[test]
     fn assert_rejects_extra_args() {
-        let program = parse("fn f() { assert(true, \"oops\"); }").expect("parse assert");
-        let err = analyze(&program).expect_err("assert extra args should error");
-        assert!(err.message.contains("assert expects (bool)"));
+        let program = parse("fn f() { assert(true, false); }").expect("parse assert");
+        let err = analyze(&program).expect_err("assert message type should error");
+        assert!(
+            err.message
+                .contains("assert expects (bool) or (bool, string|int)")
+        );
     }
 
     #[test]
@@ -4686,7 +4691,7 @@ mod tests {
 
     #[test]
     fn state_map_key_type_is_validated() {
-        let program = parse("state M: Map<string, int>; fn f() {}").expect("parse state map");
+        let program = parse("state M: Map<bool, int>; fn f() {}").expect("parse state map");
         let err = analyze(&program).expect_err("state map key should be validated");
         assert!(err.message.contains("state Map key type"));
     }

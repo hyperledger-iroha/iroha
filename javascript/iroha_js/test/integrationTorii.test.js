@@ -2702,11 +2702,28 @@ test(
     if (isNonEmptyString(gasAssetId)) {
       request.gasAssetId = gasAssetId;
     }
-    const gasLimit =
+    const gasLimitRaw =
       CONTRACT_CALL_OPTIONS.gasLimit ?? CONTRACT_CALL_OPTIONS.gas_limit ?? null;
-    if (typeof gasLimit === "number" && Number.isFinite(gasLimit)) {
-      request.gasLimit = gasLimit;
+    let gasLimit = null;
+    if (
+      typeof gasLimitRaw === "number" &&
+      Number.isFinite(gasLimitRaw) &&
+      Number.isInteger(gasLimitRaw)
+    ) {
+      gasLimit = gasLimitRaw;
+    } else if (typeof gasLimitRaw === "string") {
+      const trimmed = gasLimitRaw.trim();
+      if (/^[0-9]+$/.test(trimmed)) {
+        gasLimit = trimmed;
+      }
     }
+    if (gasLimit === null) {
+      t.diagnostic(
+        "contract call payload must include numeric `gasLimit`/`gas_limit` field",
+      );
+      return;
+    }
+    request.gasLimit = gasLimit;
 
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,

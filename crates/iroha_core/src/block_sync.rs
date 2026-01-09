@@ -418,7 +418,7 @@ impl BlockSynchronizer {
     ) -> Option<Qc> {
         let block_hash = block.hash();
         let height = block.header().height().get();
-        let view = u64::from(block.header().view_change_index());
+        let view = block.header().view_change_index();
         let (consensus_mode, expected_mode_tag) = {
             let consensus_mode = crate::sumeragi::effective_consensus_mode_for_height(
                 &state_view,
@@ -513,7 +513,7 @@ fn align_topology_for_block_signatures(
 ) -> Topology {
     let mut rotated = topology.clone();
     let height = block.header().height().get();
-    let view = u64::from(block.header().view_change_index());
+    let view = block.header().view_change_index();
     match mode_tag {
         PERMISSIONED_TAG => {
             rotated.nth_rotation(view);
@@ -937,7 +937,10 @@ mod roster_metadata_tests {
         };
         let checkpoint = ValidatorSetCheckpoint::new(
             1,
+            commit_qc.view,
             block_hash,
+            commit_qc.parent_state_root,
+            commit_qc.post_state_root,
             roster,
             signers_bitmap,
             bls_aggregate_signature,
@@ -1407,7 +1410,7 @@ mod qc_build_tests {
         let block = BlockBuilder::new(header).build_with_signature(0, keypairs[0].private_key());
         let block_hash = block.hash();
         let height = block.header().height().get();
-        let view = u64::from(block.header().view_change_index());
+        let view = block.header().view_change_index();
         let kura = Arc::new(Kura::blank_kura_for_testing());
         let state = State::new_for_testing(
             World::new(),
@@ -1471,7 +1474,7 @@ mod qc_build_tests {
         let block = BlockBuilder::new(header).build_with_signature(0, keypairs[0].private_key());
         let block_hash = block.hash();
         let height = block.header().height().get();
-        let view = u64::from(block.header().view_change_index());
+        let view = block.header().view_change_index();
         let epoch = 4;
         let kura = Arc::new(Kura::blank_kura_for_testing());
         let state = State::new_for_testing(
@@ -1862,7 +1865,7 @@ pub mod message {
     struct BlockSyncValidationContext {
         block_hash: HashOf<BlockHeader>,
         block_height: u64,
-        block_view_idx: u32,
+        block_view_idx: u64,
         block_view: u64,
         signature_topology: Topology,
         commit_quorum: usize,
@@ -1947,10 +1950,27 @@ pub mod message {
         block: &SignedBlock,
         incoming: Option<Qc>,
         context: &BlockSyncValidationContext,
+        topology: &Topology,
+        block_signers: &BTreeSet<ValidatorIndex>,
+        stake_snapshot: Option<&CommitStakeSnapshot>,
     ) -> Option<Qc> {
+        let consensus_mode = consensus_mode_for_block_sync(
+            state_view,
+            context.block_height,
+            fallback_consensus_mode,
+        );
+        let mode_tag =
+            mode_tag_for_block_sync(state_view, context.block_height, fallback_consensus_mode);
+        let expected_epoch = match consensus_mode {
+            ConsensusMode::Permissioned => 0,
+            ConsensusMode::Npos => crate::sumeragi::epoch_for_height_from_world(
+                &state_view.world,
+                context.block_height,
+            ),
+        };
         let derived_qc =
             BlockSynchronizer::block_sync_qc_for(state_view, fallback_consensus_mode, block);
-        match (incoming, derived_qc) {
+        let candidate = match (incoming, derived_qc) {
             (Some(incoming), Some(derived)) if incoming == derived => Some(incoming),
             (Some(_incoming), Some(derived)) => {
                 status::inc_block_sync_qc_replaced();
@@ -1977,7 +1997,78 @@ pub mod message {
                 Some(incoming)
             }
             (None, derived) => derived,
+        };
+
+        let qc = candidate?;
+        if qc.subject_block_hash != context.block_hash {
+            warn!(
+                height = context.block_height,
+                view = context.block_view,
+                hash = %context.block_hash,
+                qc_hash = %qc.subject_block_hash,
+                "dropping block sync QC with mismatched block hash"
+            );
+            return None;
         }
+        if qc.height != context.block_height {
+            warn!(
+                height = context.block_height,
+                view = context.block_view,
+                qc_height = qc.height,
+                "dropping block sync QC with mismatched height"
+            );
+            return None;
+        }
+        if qc.view != context.block_view {
+            warn!(
+                height = context.block_height,
+                view = context.block_view,
+                qc_view = qc.view,
+                "dropping block sync QC with mismatched view"
+            );
+            return None;
+        }
+        if qc.epoch != expected_epoch {
+            warn!(
+                height = context.block_height,
+                view = context.block_view,
+                expected_epoch,
+                qc_epoch = qc.epoch,
+                "dropping block sync QC with mismatched epoch"
+            );
+            return None;
+        }
+        if !matches!(qc.phase, Phase::Commit) {
+            warn!(
+                height = context.block_height,
+                view = context.block_view,
+                phase = ?qc.phase,
+                "dropping block sync QC with non-commit phase"
+            );
+            return None;
+        }
+        let prf_seed = prf_seed_for_block_sync(mode_tag, state_view, context.block_height);
+        if let Err(err) = crate::sumeragi::main_loop::validate_block_sync_qc(
+            &qc,
+            topology,
+            block_signers,
+            context.block_view,
+            state_view.chain_id(),
+            consensus_mode,
+            stake_snapshot,
+            mode_tag,
+            prf_seed,
+        ) {
+            warn!(
+                ?err,
+                height = context.block_height,
+                view = context.block_view,
+                hash = %context.block_hash,
+                "dropping block sync QC after validation failure"
+            );
+            return None;
+        }
+        Some(qc)
     }
 
     fn should_drop_block_sync_entry(
@@ -2030,10 +2121,10 @@ pub mod message {
 
     impl Message {
         #[allow(dead_code)]
-        fn commit_role_signers(
+        fn commit_role_signers_all(
             block: &SignedBlock,
             topology: &Topology,
-        ) -> Option<BTreeSet<ValidatorIndex>> {
+        ) -> BTreeSet<ValidatorIndex> {
             let mut signers = BTreeSet::new();
             for signature in topology.filter_signatures_by_roles(
                 &[
@@ -2044,9 +2135,19 @@ pub mod message {
                 ],
                 block.signatures(),
             ) {
-                let signer = ValidatorIndex::try_from(signature.index()).ok()?;
-                signers.insert(signer);
+                if let Ok(signer) = ValidatorIndex::try_from(signature.index()) {
+                    signers.insert(signer);
+                }
             }
+            signers
+        }
+
+        #[allow(dead_code)]
+        fn commit_role_signers(
+            block: &SignedBlock,
+            topology: &Topology,
+        ) -> Option<BTreeSet<ValidatorIndex>> {
+            let signers = Self::commit_role_signers_all(block, topology);
             let quorum = topology.min_votes_for_commit().max(1);
             (signers.len() >= quorum).then_some(signers)
         }
@@ -2078,17 +2179,28 @@ pub mod message {
                         mode_tag_for_block_sync(state_view, block_height, fallback_consensus_mode);
                     let context =
                         BlockSyncValidationContext::new(&block, &topology, state_view, mode_tag);
+                    let signature_check = BlockSynchronizer::block_signatures_valid(
+                        &block,
+                        &context.signature_topology,
+                        state_view,
+                    );
+                    let block_signers = if signature_check.is_ok() {
+                        Self::commit_role_signers_all(&block, &context.signature_topology)
+                    } else {
+                        BTreeSet::new()
+                    };
+                    let stake_snapshot = rosters
+                        .get(&block_hash)
+                        .and_then(|meta| meta.stake_snapshot.as_ref());
                     let sanitized_qc = sanitize_block_sync_qc(
                         state_view,
                         fallback_consensus_mode,
                         &block,
                         qc,
                         &context,
-                    );
-                    let signature_check = BlockSynchronizer::block_signatures_valid(
-                        &block,
-                        &context.signature_topology,
-                        state_view,
+                        &topology,
+                        &block_signers,
+                        stake_snapshot,
                     );
                     if should_drop_block_sync_entry(
                         &block,
@@ -2866,7 +2978,10 @@ pub mod message {
         };
 
         fn test_chain_config() -> (ChainId, String) {
-            (ChainId::from("test-chain"), PERMISSIONED_TAG.to_owned())
+            (
+                ChainId::from("00000000-0000-0000-0000-000000000000"),
+                PERMISSIONED_TAG.to_owned(),
+            )
         }
 
         fn state_with_consensus_keys(
@@ -3076,9 +3191,9 @@ pub mod message {
                 &mode_tag,
                 block.hash(),
                 block.header().height().get(),
-                u64::from(block.header().view_change_index()),
+                block.header().view_change_index(),
                 0,
-                signers,
+                signers.clone(),
                 &topology,
                 &[kp_leader.clone(), kp_validator.clone()],
             );
@@ -3090,9 +3205,62 @@ pub mod message {
                 &block,
                 Some(qc.clone()),
                 &context,
+                &topology,
+                &signers,
+                None,
             );
 
             assert_eq!(sanitized, Some(qc));
+        }
+
+        #[test]
+        fn sanitize_block_sync_qc_drops_view_mismatch() {
+            crate::sumeragi::status::reset_precommit_signer_history_for_tests();
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+            ]);
+
+            let mut block = unique_dummy_block(kp_leader.private_key(), |_| {});
+            block.sign(&kp_validator, &topology);
+            let block: SignedBlock = block.into();
+
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let state_view = state.view();
+            let (chain_id, mode_tag) = test_chain_config();
+            let signers = super::Message::commit_role_signers(&block, &topology)
+                .expect("commit quorum should be met");
+            let qc = qc_from_signers_with_aggregate(
+                &chain_id,
+                &mode_tag,
+                block.hash(),
+                block.header().height().get(),
+                block.header().view_change_index().saturating_add(1),
+                0,
+                signers.clone(),
+                &topology,
+                &[kp_leader.clone(), kp_validator.clone()],
+            );
+            let context =
+                super::BlockSyncValidationContext::new(&block, &topology, &state_view, &mode_tag);
+            let sanitized = super::sanitize_block_sync_qc(
+                &state_view,
+                ConsensusMode::Permissioned,
+                &block,
+                Some(qc),
+                &context,
+                &topology,
+                &signers,
+                None,
+            );
+
+            assert!(sanitized.is_none());
         }
 
         #[test]
@@ -3135,7 +3303,7 @@ pub mod message {
                 &mode_tag,
                 block.hash(),
                 block.header().height().get(),
-                u64::from(block.header().view_change_index()),
+                block.header().view_change_index(),
                 0,
                 signers,
                 &topology,
@@ -3319,7 +3487,7 @@ pub mod message {
             let height_nz = NonZeroU64::new(height).expect("height must be non-zero");
             let mut block: SignedBlock = unique_dummy_block(kp_a.private_key(), |header| {
                 header.set_height(height_nz);
-                header.set_view_change_index(u32::try_from(view).expect("view fits u32"));
+                header.set_view_change_index(view);
             })
             .into();
             let block_hash = block.hash();
@@ -3380,9 +3548,13 @@ pub mod message {
                 PeerId::new(kp_b.public_key().clone()),
                 PeerId::new(kp_a.public_key().clone()),
             ];
+            let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
             let checkpoint = ValidatorSetCheckpoint::new(
                 block.header().height().get(),
+                block.header().view_change_index(),
                 block.hash(),
+                zero_root,
+                zero_root,
                 roster,
                 Vec::new(),
                 Vec::new(),
@@ -3497,6 +3669,22 @@ pub mod message {
         }
 
         #[test]
+        fn commit_role_signers_all_keeps_partial_set() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+            ]);
+
+            let block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |_| {}).into();
+            let signers = super::Message::commit_role_signers_all(&block, &topology);
+
+            assert_eq!(signers.len(), 1);
+            assert!(signers.contains(&ValidatorIndex::try_from(0u32).expect("index")));
+        }
+
+        #[test]
         fn commit_role_signers_accept_set_b_quorum() {
             let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -3550,7 +3738,7 @@ pub mod message {
                 Phase::Commit,
                 block_hash,
                 block.header().height().get(),
-                u64::from(block.header().view_change_index()),
+                block.header().view_change_index(),
                 0,
                 &commit_signers,
                 &topology,
@@ -3561,7 +3749,7 @@ pub mod message {
                 crate::sumeragi::status::PrecommitSignerRecord {
                     block_hash,
                     height: block.header().height().get(),
-                    view: u64::from(block.header().view_change_index()),
+                    view: block.header().view_change_index(),
                     epoch: 0,
                     parent_state_root: zero_root,
                     post_state_root: zero_root,
@@ -3631,7 +3819,7 @@ pub mod message {
                 Phase::Commit,
                 block.hash(),
                 block.header().height().get(),
-                u64::from(block.header().view_change_index()),
+                block.header().view_change_index(),
                 0,
                 &recorded_signers,
                 &topology,
@@ -3642,7 +3830,7 @@ pub mod message {
                 crate::sumeragi::status::PrecommitSignerRecord {
                     block_hash: block.hash(),
                     height: block.header().height().get(),
-                    view: u64::from(block.header().view_change_index()),
+                    view: block.header().view_change_index(),
                     epoch: 0,
                     parent_state_root: zero_root,
                     post_state_root: zero_root,
@@ -3725,7 +3913,7 @@ pub mod message {
                 Phase::Commit,
                 block.hash(),
                 block.header().height().get(),
-                u64::from(block.header().view_change_index()),
+                block.header().view_change_index(),
                 0,
                 &recorded_signers,
                 &topology,
@@ -3741,7 +3929,7 @@ pub mod message {
                 crate::sumeragi::status::PrecommitSignerRecord {
                     block_hash: block.hash(),
                     height: block.header().height().get(),
-                    view: u64::from(block.header().view_change_index()),
+                    view: block.header().view_change_index(),
                     epoch: 0,
                     parent_state_root: zero_root,
                     post_state_root: zero_root,
@@ -3773,7 +3961,7 @@ pub mod message {
                 &mode_tag,
                 block.hash(),
                 block.header().height().get(),
-                u64::from(block.header().view_change_index()),
+                block.header().view_change_index(),
                 0,
                 forged_signers,
                 &topology,
@@ -3823,7 +4011,7 @@ pub mod message {
                 &mode_tag,
                 block.hash(),
                 block.header().height().get(),
-                u64::from(block.header().view_change_index()),
+                block.header().view_change_index(),
                 0,
                 signers,
                 &topology,
@@ -3875,7 +4063,7 @@ pub mod message {
                 &mode_tag,
                 block.hash(),
                 block.header().height().get(),
-                u64::from(block.header().view_change_index()),
+                block.header().view_change_index(),
                 0,
                 signers,
                 &topology,
@@ -3934,7 +4122,7 @@ pub mod message {
                 Phase::Commit,
                 block.hash(),
                 block.header().height().get(),
-                u64::from(block.header().view_change_index()),
+                block.header().view_change_index(),
                 0,
                 &recorded_signers,
                 &topology,
@@ -3950,7 +4138,7 @@ pub mod message {
                 crate::sumeragi::status::PrecommitSignerRecord {
                     block_hash: block.hash(),
                     height: block.header().height().get(),
-                    view: u64::from(block.header().view_change_index()),
+                    view: block.header().view_change_index(),
                     epoch: 0,
                     parent_state_root: zero_root,
                     post_state_root: zero_root,

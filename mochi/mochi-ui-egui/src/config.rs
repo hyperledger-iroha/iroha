@@ -1127,7 +1127,7 @@ lane_count = 2
 [[nexus.lane_catalog]]
 index = 0
 alias = "core"
-dataspace = "global"
+dataspace = "universal"
 
 [sumeragi]
 da_enabled = true

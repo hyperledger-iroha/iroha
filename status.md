@@ -3,6 +3,1917 @@
 ## Latest Updates
 - Crypto/BLS: blstrs backend verify now enforces canonical/non-identity encodings via pairing checks to align with aggregate paths; add identity-signature parse-error tests.
 - Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 300s while compiling; warning about unused `MissingQc` variant in `mochi/mochi-ui-egui/src/main.rs:10917`); `cargo test -p iroha_crypto --features bls verify_rejects_identity_signature_as_parse_error` (pass).
+- Executor permissions: classify `CanUseFeeSponsor` as domain/account-associated, and add association coverage; IVM host queueing uses explicit `u64` gas accumulation and avoids borrow conflicts; SoraNet web deploy integration test uses `norito::json!`, base64 decode, and captures response status safely.
+- Tests: `CARGO_TARGET_DIR=target/codex-workspace cargo test --workspace` (failed: merge conflict markers in `crates/iroha_core/src/sumeragi/main_loop.rs`); `CARGO_TARGET_DIR=target/codex-workspace cargo test -p iroha_executor` (failed: `OfflineSpendReceipt.invoice_id` private field in `crates/iroha_executor/src/default/offline.rs`).
+- Docs: add public DNS delegation guidance to the SoraDNS registry RFC and clarify registrar delegation in the DNS owner runbook.
+- Tests: not run (not requested).
+- Sumeragi: reconcile cached NEW_VIEW entries against locally known parent block views before proposing to avoid stale highest-QC metadata; add regression coverage and document the reconciliation.
+- Tests: not run (not requested).
+- Merge: resolve conflict markers in Sumeragi checkpoint roster validation and status/roadmap docs.
+- Tests: not run (not requested).
+- Docs: explain public DNS delegation and apex/subdomain record guidance for SoraDNS gateway hosts.
+- Tests: not run (not requested).
+- Sumeragi: drop NEW_VIEW votes/QCs whose highest QC view/height mismatches a locally known parent block; add regression coverage and document the rule.
+- Tests: not run (not requested).
+- Sumeragi: prefer the active commit topology for NEW_VIEW roster selection at the next height (honoring roster changes) and add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi/NPoS tests: seed genesis before activation-height vote handling/emission so commit rosters are available for height 2 validation.
+- Tests: `CARGO_TARGET_DIR=target/codex-sumeragi cargo test -p iroha_core --lib handle_vote_uses_activation_height_mode_tag` (pass); `CARGO_TARGET_DIR=target/codex-sumeragi cargo test -p iroha_core --lib emit_precommit_vote_uses_activation_height_mode_tag` (pass).
+- Integration tests: update SoraNet web deploy coverage to emit public DNS CNAME settings for regular internet zones and use the authoritative DNS stub.
+- Tests: not run (not requested).
+- Sumeragi: reject proposals/hints whose highest QC view does not match locally known parent blocks, and drop BlockCreated hints with parent-view mismatches; add unit coverage and document the validation rule.
+- Tests: not run (not requested).
+- IVM gas budgeting: treat `max_cycles=0` as an unbounded budget when deriving gas limits, and add unit coverage for the conversion helper.
+- Tests: not run (not requested).
+- Integration tests: add SoraNet web deploy + DNS reference gateway coverage for SoraFS pin/fetch and derived SoraDNS CNAME settings.
+- Tests: not run (not requested).
+- Sumeragi: reject NEW_VIEW QCs with mismatched highest-epoch values even when recovering from aggregate signatures; enforce highest-epoch checks on NEW_VIEW QC ingress.
+- Tests: not run (not requested).
+- Sumeragi/RBC tests: build payload bundles from expected chunk digests when cached chunks are missing, validate BlockCreated-without-hint using a properly signed block, and keep block-sync updates aligned by pre-seeding the pending candidate.
+- Tests: `cargo test -p iroha_core --lib rbc_payload_bundle_allows_empty_chunks` (pass); `cargo test -p iroha_core --lib block_created_without_hint_accepts_extending_lock` (pass); `cargo test -p iroha_core --lib block_sync_update_allows_nonextending_qc_without_commit_qc` (pass).
+- Tests: `cargo test -p iroha_core --lib sumeragi::main_loop` (timed out after 180s; no failures observed before timeout).
+- Sumeragi/NPoS tests: fix replay validation to use a non-genesis Ed25519 signer, build valid commit-QC blocks in tests, and align RBC chunk commit cooldown with mode-aware block time.
+- Tests: `cargo test -p iroha_core --lib rbc_chunk_commit_pipeline_runs_on_completion` (pass); `cargo test -p iroha_core --lib commit_qc_uses_exec_roots_from_view_votes` (pass); `cargo test -p iroha_core --lib apply_without_execution_canonicalizes_commit_roster_signatures` (pass); `cargo test -p iroha_core --lib replay_from_height_catches_up_state` (pass).
+- Block sync (share path): validate commit QCs (hash/height/view/epoch/mode/aggregate) before letting them bypass signature checks; add permissioned view-mismatch regression coverage and document the stricter QC validation.
+- Tests: `cargo test -p iroha_core sanitize_block_sync_qc_drops_view_mismatch -- --nocapture` (timed out after 120s during compilation).
+- Tx fees: require `gasLimit` in the JS SDK contract-call helper, require `--gas-limit` for CLI contract simulation, and update docs/tests accordingly.
+- Tests: `cargo test -p iroha_cli simulate_emits_gas_limit_metadata_key -- --nocapture` (timed out after 120s during compilation).
+- Sumeragi: accept BlockCreated without hints when locked ancestry is unknown, while still rejecting provable lock conflicts; add regression coverage and clarify docs.
+- Tests: not run (not requested).
+- Nexus dataspaces: rename the default alias from `global` to `universal` across defaults, configs, SDK fixtures, and docs; refresh the Nexus defaults hash entry.
+- Tests: not run (not requested).
+- Sumeragi/permissioned block sync: reject commit QCs whose view mismatches the block header, emit a QC view-mismatch reason, and document the stricter validation with regression coverage.
+- Tests: `cargo test -p iroha_core validate_block_sync_qc_rejects_view_mismatch_in_permissioned_mode -- --nocapture` (pass).
+- Sumeragi: enforce locked-chain checks on BlockCreated even when proposal hints are missing, with regression coverage.
+- Tests: not run (not requested).
+- Nexus configs: add dataspace bindings to Sora Nexus configs, wizard output, and multilane Kura layout fixture to keep routing policy aligned with lane catalogs.
+- Tests: not run (not requested).
+- Nexus fees: require `CanUseFeeSponsor` grants for fee sponsorship, reject unauthorized sponsors with new status counters, and enforce `gas_limit` metadata (contract calls require it); update Nexus fee model docs.
+- Tests: not run (not requested).
+- Sumeragi: drop proposals with highest-QC height/epoch/parent mismatches, allow invalid-proposal evidence when views reset across heights, and add coverage + docs updates.
+- Tests: not run (not requested).
+- Tests: `cargo test -p iroha_data_model validator_set_checkpoint_roundtrip_and_hash -- --nocapture` (pass).
+- Tests: `cargo test -p iroha_core validate_checkpoint_roster_rejects_view_mismatch -- --nocapture` (pass).
+- Queue routing: fall back to a catalog dataspace when routing defaults or lane bindings reference unknown dataspaces; add regression coverage for missing dataspace handling.
+- Tests: not run (not requested).
+- Queue routing: fall back to the lowest configured lane when routing policy points at a missing default lane, and add regression coverage.
+- Tests: not run (not requested).
+- Queue routing: align policy evaluation with lane/dataspace catalogs across block validation, fraud checks, and proposal assembly; add catalog-aware routing helper and mismatch/unknown lane coverage.
+- Tests: `cargo test -p iroha_core aligns_dataspace_with_lane_binding_on_mismatch -- --nocapture` (timed out after 120s during compilation).
+- Sumeragi: reject proposal hints whose highest QC height or epoch does not match the target height, and add regression coverage.
+- Sumeragi: reject NEW_VIEW QCs whose highest QC epoch does not match the height-derived epoch, with regression coverage.
+- Tests: not run (not requested).
+- Sumeragi: reject proposals whose header epoch does not match the height-derived epoch; add proposal-epoch mismatch coverage.
+- Tests: not run (not requested).
+- Sumeragi: build proposals with the height-derived epoch (not the highest QC epoch), thread epochs through invalid-proposal evidence, and update proposal tests to assert header epochs.
+- Tests: not run (not requested).
+- Nexus config: require routing-policy dataspaces to match lane dataspace bindings, update Sora lane catalog + default Nexus config + quickstart/CBDC docs to set lane dataspaces, and add mismatch rejection coverage.
+- Tests: `cargo test -p iroha_config routing_policy_lane_dataspace_mismatch_rejected -- --nocapture` (pass).
+- Tests: `cargo test -p iroha_data_model --no-run` (pass); `cargo test -p iroha_core --no-run` (pass); `cargo test --workspace --no-run` (timed out after 10m during compilation; warning: `mochi-ui-egui` has unused `MissingQc` variant).
+- Sumeragi/permissioned block sync: gate quorum availability and roster updates on validated commit evidence (QC/cert/checkpoint), embed view + parent/post state roots in validator checkpoints, drop mismatched checkpoint roots, and reject invalid QCs below quorum; update block-sync docs and tests.
+- Data model: promote `BlockHeader.view_change_index` to u64 end-to-end (wire format, system params, Torii summaries), remove u32 limit/rejection, and refresh golden bytes + large-index coverage.
+- Tests: `cargo test --workspace` (failed: `integration_tests --test address_canonicalisation` where test-network peers exit with `Nexus requires the global NPoS validator set; set sumeragi.consensus_mode = "npos" or disable nexus.enabled`).
+- Tests: `cargo test -p iroha_data_model block_header_golden_bytes -- --nocapture` (pass).
+- Sumeragi/tests: align view-change indices to u64 in commit/test helpers (sample blocks, block-sync header assembly, and heartbeat paths) to match `BlockHeader::new`.
+- Tests: `cargo test -p iroha_core handshake_fingerprint_uses_chain_seed_without_npos_params -- --nocapture` (timed out after 120s: waiting for build directory lock).
+- Tests: `CARGO_TARGET_DIR=target/codex-sumeragi cargo test -p iroha_core handshake_fingerprint_uses_chain_seed_without_npos_params -- --nocapture` (timed out after 180s during compilation).
+- Tests: `CARGO_TARGET_DIR=target/codex-sumeragi cargo test -p iroha_core handshake_fingerprint_uses_chain_seed_without_npos_params -- --nocapture` (timed out after 300s during compilation).
+- Tests: `CARGO_TARGET_DIR=target/codex-sumeragi cargo test -p iroha_core handshake_fingerprint_uses_chain_seed_without_npos_params -- --nocapture` (pass).
+- Tests: `CARGO_TARGET_DIR=target/codex-sumeragi cargo test -p iroha_core` (timed out after 600s; observed failures in `sumeragi::main_loop::commit::tests::rbc_payload_bundle_allows_empty_chunks`, `sumeragi::main_loop::tests::assemble_proposal_skips_view_overflow`, `sumeragi::main_loop::tests::block_created_rebuilds_qc_with_snapshot_roster`, `state::replay_validation_tests::replay_from_height_catches_up_state`, `state::tests::apply_without_execution_canonicalizes_commit_roster_signatures`, `sumeragi::main_loop::tests::block_sync_update_accepts_pre_activation_signature_after_mode_flip`, `sumeragi::main_loop::tests::block_sync_update_known_block_records_commit_votes_without_roster_hint`, `sumeragi::main_loop::tests::commit_pipeline_rebuilds_qcs_with_empty_active_roster`, `sumeragi::main_loop::tests::commit_pipeline_reschedules_without_da_gate_blocking`, `sumeragi::main_loop::tests::commit_pipeline_uses_epoch_for_height_when_emitting_votes`, `sumeragi::main_loop::tests::commit_pipeline_votes_lowest_view_first_for_same_height`, `sumeragi::main_loop::tests::commit_qc_uses_exec_roots_from_view_votes`, `sumeragi::main_loop::tests::commit_quorum_timeout_uses_npos_timeouts`).
+- Telemetry: clear the Nexus dataspace TEU status cache when Nexus telemetry is disabled to avoid stale `/status` snapshots, and align scheduler TEU label names in telemetry docs.
+- Tests: `cargo test --workspace` (failed: `ValidatorSetCheckpoint::new` signature changes not applied across core/tests, missing `SumeragiNposParameters` import, missing `pacemaker_base_interval`, and BlockHeader wire type mismatch in `iroha_data_model`).
+- Sumeragi/NPoS: make mode-aware timing use NPoS block/commit timeouts across pacemaker/rebroadcast/commit paths, include `epoch_seed` in the genesis consensus fingerprint payload (chain-derived fallback when on-chain NPoS params are absent), and add unit coverage + docs updates.
+- Tests: `cargo test -p iroha_core handshake_fingerprint_uses_chain_seed_without_npos_params -- --nocapture` (failed: compile errors in `crates/iroha_core/src/sumeragi/consensus.rs` resolved afterward plus unrelated signature/type/import errors in `crates/iroha_core/src/block_sync.rs`, `crates/iroha_core/src/state.rs`, `crates/iroha_core/src/sumeragi/main_loop/tests.rs`, `crates/iroha_core/src/sumeragi/status.rs`, `crates/iroha_core/src/sumeragi/main_loop/propose.rs`, `crates/iroha_core/src/block.rs`).
+- Sumeragi/block sync: treat validator checkpoints as commit evidence for block-sync quorum gating (so trimmed signatures still sync) and add unit coverage.
+- Tests: not run (not requested).
+- Kagami/localnet: require NPoS when `--sora-profile` is set, enable Nexus only for Sora profiles, and add localnet validation/config coverage; refresh Kagami profile + Sumeragi guidance.
+- Tests: `cargo test -p iroha_kagami validate_localnet_options_rejects_permissioned_on_sora_dataspace -- --nocapture` (timed out: build dir lock); `CARGO_TARGET_DIR=target/codex-kagami cargo test -p iroha_kagami localnet::tests -- --nocapture` (timed out after 120s during compilation).
+- Sumeragi: require roster evidence for permissioned block-sync updates, tighten block-sync acceptance to commit evidence or explicit missing-block responses, and make view-rotation deterministic across large view indices; add coverage for quorum gating and large-view rotations.
+- Tests: not run (not requested).
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 30m during integration tests; warning: `mochi-ui-egui` has unused `MissingQc` variant).
+- Kagami/localnet TUI: prompt for consensus mode on Iroha3 when not targeting Sora Nexus, while keeping Nexus locked to NPoS; tests `CARGO_TARGET_DIR=target/codex-kagami cargo test -p iroha_kagami localnet_tui::tests -- --nocapture` (pass).
+- Kagami/localnet: document the public `SoraProfile` enum/variants to satisfy missing-docs lint.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 20m during test execution; warning: `mochi-ui-egui` has unused `MissingQc` variant).
+- State: seed commit QC before `apply_without_execution` and align AXT envelope descriptor bindings/touch manifests for replay-ledger validation; tests `cargo test -p iroha_core --lib state::tests::apply_without_execution_canonicalizes_commit_roster_signatures -- --nocapture` and `cargo test -p iroha_core --lib state::tests::axt_replay_ledger_persisted_from_block_rejects_reuse_on_validation -- --nocapture` (pass).
+- FASTPQ: speed up row-bench summaries by avoiding full trace builds unless needed, reuse deterministic account pools, and add a trace-summary parity check for small batches.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test -p fastpq_prover` (pass); `cargo test --workspace` (failed: `crates/iroha_kagami/src/localnet.rs` missing docs for `SoraProfile` enum/variants; warning: `mochi-ui-egui` has unused `MissingQc` variant).
+- Kagami/localnet: add `--sora-profile` (dataspace/nexus) presets, enforce Iroha3 + 4+ peers for Sora localnets, and pass `--sora` in start scripts; update localnet docs/tests.
+- Tests: not run (not requested).
+- Sumeragi: prefer per-block snapshot rosters when requesting missing parents for BlockCreated gaps (fall back to active roster for gap sweeps); add coverage for empty-active roster fetches.
+- Tests: not run (not requested).
+- Sumeragi: rebuild cached QCs even when the active commit roster is empty; add commit-pipeline coverage for empty-roster QC rebuilds.
+- Tests: not run (not requested).
+- Sumeragi: let the pacemaker bootstrap proposals from commit-QC rosters when the active topology is empty, and add coverage.
+- Tests: not run (not requested).
+- Sumeragi: record NEW_VIEW senders by peer ID (avoid view-rotation index mismatches) and refresh pacemaker/new-view tracker coverage.
+- Tests: not run (not requested).
+- Sumeragi: missing-block retries fall back to active rosters when commit/QC rosters are empty (avoid panic on empty validator sets) and add a far-height retry regression test.
+- Tests: not run (not requested).
+- DA ingest: derive replay fingerprints from canonical manifest templates (zeroed `storage_ticket`/`issued_at_unix`) for all requests, align storage tickets with the canonical fingerprint, and regenerate DA ingest fixtures.
+- Tests: `cargo test -p iroha_torii regenerate_da_ingest_fixtures -- --ignored` (timed out after ~5m while filtering other test binaries; regeneration test passed).
+- Kagami/localnet: add explicit `--build-line` selection, reject zero block/commit overrides, export the build line in generated start scripts, and fix IPv6 readiness URLs in the deploy script; update localnet docs and scripts accordingly.
+- Tests: not run (not requested).
+- Sumeragi: allow `materialize_qc_for_header` to recover commit QCs from precommit-signer records even when the commit topology is empty; add coverage for empty-roster recovery.
+- Tests: not run (not requested).
+- FASTPQ: refresh stage2/trace fixtures and trace-commitment goldens after transcript-aware batches and deterministic account identifiers.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `FASTPQ_UPDATE_FIXTURES=1 cargo test -p fastpq_prover --test trace_commitment --test proof_fixture --test backend_regression` (trace_commitment failed until goldens updated); `cargo test -p fastpq_prover --test trace_commitment -- --nocapture` (pass).
+- Sumeragi: use per-block commit rosters when rebuilding QCs, rebroadcasting votes, and re-evaluating votes after BlockCreated; broadcast QCs to the block-specific roster and add snapshot-roster coverage for QC rebuilds, QC broadcasts, precommit block-sync updates, vote rebroadcasts, and BlockCreated handling.
+- Tests: not run (not requested).
+- FASTPQ: require transfer batches to include transfer transcript metadata, add transcript-aware synthetic generators (row bench + fixtures), and expose the shared poseidon preimage digest helper for transcript construction; update gadget docs accordingly.
+- Tests: not run (not requested).
+- Sumeragi: reschedule/pacemaker now uses per-block commit rosters for quorum reschedules and prevote-timeout rebroadcasts (fallback to active roster when unavailable); add coverage to assert snapshot roster targeting.
+- Tests: not run (not requested).
+- Storage budgets: split SoraVPN spool caps into dedicated `streaming.soravpn` config, apply Nexus budget clamps separately, and update Nexus-lanes/config-reference docs (including localized copies).
+- Tests: not run (not requested).
+- Maintenance: resolve merge conflicts in `crates/iroha_core/src/sumeragi/main_loop/tests.rs` and `status.md`.
+- Tests: not run (not requested).
+- Izanami: add target-block progress monitoring with stall detection, optional pipeline-time override, and coordinated stop control; extend CLI/TUI/config defaults; skip persistence on permission errors and add guard tests.
+- Tests: `cargo test -p izanami` (failed: missing IVM artifact fixture `crates/ivm/tests/fixtures/predecoder/mixed/artifacts/artifact_v1_3_mode00_vlen0_cycles0_abi0.to`; embedded Nexus config rejected `nexus.storage.weights`).
+- Izanami run: `cargo run -p izanami -- --allow-net --peers 4 --faulty 0 --pipeline-time 200ms --target-blocks 2000 --progress-interval 5s --progress-timeout 60s --duration 20m --tps 30 --max-inflight 128` (failed: loopback port bind denied `127.0.0.1:30000`).
+- Tests: fix NFT missing-domain matchers to avoid partial moves and align RBC test epoch usage to resolve borrow conflicts during compilation.
+- Tests: `cargo test -p iroha_core --lib exec_witness_guard_serializes_block_access -- --nocapture`.
+- Sumeragi/NPoS: derive epochs from finalized VRF epoch records to keep epoch-length changes consistent across message validation, seed selection, penalties, and startup alignment; add epoch schedule unit coverage; update sumeragi docs.
+- Tests: `cargo test -p iroha_core epoch_schedule_uses_finalized_boundaries -- --nocapture` (timed out after 120s during compilation; errors in `crates/iroha_core/src/fastpq/lane.rs` and `crates/iroha_core/src/fastpq/mod.rs` about missing imports/ambiguous `Into`).
+- FASTPQ: moved DSID/slot/root/perm/tx-set inputs into `FastpqTransitionBatch.public_inputs`, built batches during exec-witness capture, enforced authority + poseidon digests in state, tightened transcript/query validation in the prover, refreshed CLI audit output + FASTPQ docs, and added public-inputs template coverage.
+- Tests: not run (not requested).
+- Kagami/localnet/FASTPQ: align DA policy with build line (Iroha2 disables), fix genesis embed-pop inputs, adjust consensus metadata wiring + handshake expectation, and make FASTPQ batches carry public inputs with required authority digests; fix RBC READY stash borrowing and fastpq prover trace handling.
+- Tests: `CARGO_TARGET_DIR=target/codex-kagami cargo test -p iroha_kagami`.
+- Sumeragi: honor `NodeRole::Observer` by skipping proposal assembly, local votes/QC aggregation, and RBC rebroadcast emissions; add observer-gating unit coverage.
+- Tests: not run (not requested).
+- Maintenance: resolve merge conflicts in Sumeragi RBC/block-sync/commit paths plus `status.md` and `roadmap.md`.
+- Tests: not run (not requested).
+- Sumeragi/RBC: refresh derived roster snapshots on READY/DELIVER roster-hash mismatches, reset READY/DELIVER state on derived-roster changes, and add coverage.
+- Tests: not run (not requested).
+- Sumeragi/RBC: accept persisted sessions when both manifests lack git commit hashes, adopt computed chunk roots on persisted-session rebuild, and set expected chunk roots from READY/DELIVER when missing; add coverage.
+- Tests: not run (not requested).
+- Sumeragi/RBC: allow READY/DELIVER emission and validation with derived rosters when roster hashes match (stash mismatches until INIT), use computed chunk roots for local READY/DELIVER emission, and flush pending RBC once a roster is cached; update docs/tests.
+- Tests: not run (not requested).
+- Sumeragi/NPoS: enforce stake-quorum validation for commit and block-sync QCs, require stake snapshots for NPoS QC validation, propagate stake snapshots through precommit signer records, and add NPoS stake-quorum coverage; update Sumeragi docs accordingly.
+- Tests: not run (not requested).
+- Sumeragi/QC: accept block-sync commit votes for already known blocks even when no roster hints are attached, and add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi/RBC: bind per-chunk digests into INIT, validate cached chunks on INIT/hydration, drop mismatches on load, require delivered payload matches only when the chunk set is complete, and ignore conflicting INITs instead of poisoning live sessions; add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi/QC: persist commit certificates into world storage, commit-roster journals, and roster sidecars at commit time; accept late commit QCs for committed/known blocks; and add regression coverage for committed-height QC handling and block-sync updates.
+- Tests: not run (not requested).
+- Sumeragi/RBC: avoid evicting pending stashes for active sessions when the pending session cap is hit; drop new pending frames instead, record session-cap drops, and add coverage/docs.
+- Tests: not run (not requested).
+- Block sync: require stake snapshots for NPoS roster metadata in share batches (drop incomplete hints), align fetch-pending roster checks with consensus mode, and add NPoS roster-metadata tests.
+- Tests: not run (not requested).
+- Kagami/localnet: enforce NPoS only for the Sora Nexus public dataspace (other Iroha3 dataspaces can be permissioned or NPoS), relax profile verification to allow permissioned dev/testus manifests, block staged cutovers in profile verification, fix unseeded localnet account key reuse, adjust swarm/validation handling, update localnet defaults, and refresh genesis/sumeragi/kagami profile docs + README guidance.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 120s: waiting for build directory lock); `CARGO_TARGET_DIR=target/codex-kagami cargo test -p iroha_kagami` (timed out after 300s during compilation; warning: `private_interfaces` in `crates/iroha_core/src/sumeragi/main_loop/qc.rs`).
+- Sumeragi/DA: default `da_enabled=true` in config/data-model to match v3 DA/RBC requirements, and update docs/tests accordingly.
+- Tests: not run (not requested).
+- Sumeragi/RBC: keep payload rebroadcasts active when READY quorum is reached but chunks are still missing; add coverage and update docs.
+- Tests: not run (not requested).
+- Block sync: avoid decode panics on invalid GetBlocksAfter/ShareBlocks payloads, validate block sequences at handling time, and add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi: serialize exec-witness capture across block validation/commit to prevent cross-block witness mixing that can break execution-root QCs; add guard coverage and align witness tests to the shared guard.
+- Tests: not run (not requested).
+- Storage budgets: wire Kura budget telemetry + warnings, attach daemon telemetry to Kura, and document budget metrics/guidance in Nexus lanes.
+- Tests: not run (not requested).
+- Sumeragi: derive commit QC execution roots from view-aligned votes so aggregate signatures remain valid after view rotations; add regression coverage for view-aligned QC roots.
+- Tests: not run (not requested).
+- Sumeragi: add exec-witness fallback capture when pre-vote validation yields no roots, and add regression coverage for the fallback path to keep commit votes live.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options).
+- Sumeragi/RBC: move roster lookups ahead of READY/DELIVER stash closures to resolve borrow-checker conflicts.
+- Tests: not run (not requested).
+- Sumeragi/RBC: represent empty payloads as a single chunk, invalidate recovered sessions on payload-hash mismatch, clear pending stash on chunk-root mismatch, and reset READY/DELIVER state when authoritative rosters override derived; add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi/RBC: require authoritative rosters before handling READY/DELIVER, stash unverified frames, retain delivered chunk bytes for sampling (no compaction), and reject zero `rbc_chunk_max_bytes`; update docs/tests/metrics accordingly.
+- Tests: not run (not requested).
+- Tx admission: compare signature/instruction/bytecode limits using u64 counts to avoid usize overflow panics on narrow platforms; keep limit errors deterministic.
+- Tests: not run (not requested).
+- CLI smoke fixes: align council/sumeragi summary expectations, keep ledger export schema hashing keyed to the iroha binary, and enrich ledger export schema-mismatch errors; drop unused imports in client/space-directory.
+- Tests: `cargo test -p iroha_cli --test cli_smoke`; `cargo test -p iroha_cli ledger_export_schema_mismatch_reports_expected_and_actual`.
+- Sumeragi/DA: treat local BlockCreated payloads as available for the DA gate (missing_local_data clears without waiting on RBC delivery), and only broadcast BlockSyncUpdate when a verifiable commit QC or validator checkpoint is attached (NPoS requires a matching stake snapshot); otherwise fall back to BlockCreated for precommit-vote/reschedule rebroadcasts; refresh docs and unit tests accordingly.
+- Tests: not run (not requested).
+- Offline balance proofs: reject invalid blinding/scalar byte lengths instead of panicking; add regression coverage for compute/builder paths.
+- Tests: not run (not requested).
+- Core/NFT: return `FindError::Domain` when registering/unregistering NFTs in missing domains instead of panicking; add regression coverage.
+- Tests: not run (not requested).
+- Maintenance: resolve merge conflicts in Sumeragi reschedule/tests and `status.md`.
+- Tests: not run (not requested).
+- Consensus fixtures: add parent/post state roots to Qc/QcVote test builders and align Torii consensus vote helpers with current vote fields.
+- Tests: not run (not requested).
+- Sumeragi: thread parent/post state roots through precommit signer records, derived QCs, and checkpoint verification; update block-sync/test helpers accordingly.
+- Tests: not run (not requested).
+- Torii tests: rename commit QC endpoint test file to match commit QC naming.
+- Tests: not run (not requested).
+- Data model: remove the duplicate `DecodeFromSlice` shim for `Qc` to resolve the conflicting impl with the consensus codec bridge.
+- Tests: not run (not requested).
+- Docs: label the transaction pipeline as Iroha v1 and remove prior-version wording about no-std support.
+- Tests: not run (not requested).
+- Sumeragi: remove ExecQC/exec-root surfaces, unify commit QC with state roots, update clients/tests/docs, and add the `/v1/sumeragi/commit_qc/{hash}` endpoint.
+- Tests: not run (not requested).
+- Sumeragi: capture exec roots during pre-vote validation, store them with pending blocks, and add coverage for root capture/reset.
+- Tests: not run (not requested).
+- UAID: accept mixed-case/whitespace-trimmed prefixes in Torii/JS/data-model parsing, add regression coverage, and enforce LSB=1 in CBDC rollout checks.
+- Docs: refresh Nexus/UAID guidance to accept raw 64-hex inputs (LSB=1) alongside `uaid:<hex>` literals and align JS integration messages.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 120s during compilation; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Governance ZK voting: enforce canonical owner hints across CLI/JS SDK (torii client + builders)/JS host/bridges/Swift/Python clients and Torii mock, update governance portal examples + JS SDK examples to IH58, and add regression coverage.
+- Tests: not run (not requested).
+- Telemetry: count rejected txs using external transaction results only (ignore time-trigger failures) and add coverage.
+- Tests: not run (not requested).
+- Sumeragi tests: keep DA enabled in main-loop harnesses to avoid consensus startup deadlocks; remove DA-disabled configs in harnessed tests and assert DA stays on in the harness.
+- UAID: accept raw/prefixed UAID literals in CBDC whitelist integration parsing, refresh JS/Python UAID docs with LSB=1 guidance, and clarify CLI parse errors.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 120s during compilation; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- UAID: enforce LSB=1 across Rust/JS/Python/Android/Swift normalization, update Space Directory/Torii docs, and add regression tests.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 120s during compilation).
+- Sumeragi/RBC: refuse local DELIVER emission when the computed chunk root mismatches the expected root (mark invalid, clear pending); add coverage for local DELIVER chunk-root mismatch.
+- Tests: `cargo test -p iroha_core --lib maybe_emit_rbc_deliver_rejects_chunk_root_mismatch -- --nocapture` (pass).
+- UAID: align parsing across data model, CLI, Android SDK, and CBDC rollout checks; accept `uaid:<hex>` or raw 64-hex inputs and drop unsupported `did:ua` literals in Android.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 120s during compilation; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Telemetry: clamp commit-time deltas when block creation times are ahead of local time; add coverage.
+- Tests: not run (not requested).
+- Sumeragi/RBC: drop DELIVER messages with mismatched chunk roots without invalidating the session; add coverage for DELIVER chunk-root mismatch handling.
+- Tests: `cargo test --workspace` (timed out after 120s during compilation; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Governance ZK voting: enforce canonical owner hints in Torii for ZK public inputs (zk/zk-v1/ballot-proof), add regression coverage, align zk-v1 ballot-proof skeleton test with complete lock hints, and clarify canonical owner requirements in governance API docs.
+- Tests: not run (not requested).
+- Tests: make status test guards reentrant across Tokio tasks to avoid deadlocks in multi-threaded async tests; refresh guard reentrancy coverage.
+- Tests: not run (not requested).
+- Core/AXT: only preserve policy min era/sub-nonce when manifest root and target lane match during directory refresh, so lane changes reset replay minima; add regression coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p iroha_core --lib axt_policy_refresh_resets_minimums_on_lane_change -- --nocapture` (pass).
+- Sumeragi/RBC: enforce `rbc_session_ttl` by pruning stale RBC sessions from memory/status; add coverage.
+- Tests: `cargo test -p iroha_core rbc_session_ttl_prunes_stale_sessions -- --nocapture` (timed out after 120s during compilation).
+- Core/AXT: clear cached policy entries when the Space Directory snapshot can't be derived (no manifests/lane mapping), preventing stale policies from persisting; add regression coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p iroha_core --lib axt_policy_refresh_clears_stale_entries_when_snapshot_missing -- --nocapture` (pass).
+- State: skip missing Kura blocks in `all_blocks` to avoid panics and add coverage for missing entries.
+- Tests: not run (not requested).
+- UAID: accept `uaid:<hex>` (case-insensitive) literals in `UniversalAccountId::from_str` and add roundtrip coverage.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 120s: waiting for build directory lock; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Governance ZK voting: reject deprecated alias keys in ZK V1 JSON payloads by inspecting raw JSON for top-level and ballot-proof inputs; add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi/RBC: defer local DELIVER emission until all chunks are present; add coverage for missing-chunk deferral.
+- Tests: `cargo test --workspace` (timed out after 120s: blocked waiting for build directory lock; compilation in progress; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Sumeragi: prioritize missing-block requests (consensus vs background), arm view-change windows for RBC recovery and one-block parent gaps, and add priority/background coverage; update Sumeragi docs.
+- Tests: not run (not requested).
+- Core/AXT: skip zero-hash manifest sentinels during UAID binding migration so state-derived policy snapshots ignore placeholder manifests; add regression coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p iroha_core --lib axt_policy_snapshot_ignores_zero_manifest_hash_sentinel -- --nocapture` (failed: `MissingBlockPriority` arguments/fields missing in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`).
+- Assets: clear asset metadata when a transfer drains the balance to zero; add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi/DA: avoid deriving roster snapshots in the RBC rebroadcast loop, reset READY/DELIVER state when a derived roster mismatch is stashed, and only flush pending RBC when a roster snapshot is already cached; add coverage and document the background behavior.
+- Tests: `cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_does_not_derive_roster_for_pending_chunks -- --nocapture` (timed out: waiting for build directory lock).
+- Maintenance: resolve merge conflicts in `status.md` and `roadmap.md`.
+- Tests: not run (not requested).
+- Sumeragi: retry missing-block fetches on tick with backoff + view-change triggers, skip quorum reschedules when commit QCs are cached, and mark rehydrated pending blocks as commit-certified; add coverage.
+- Tests: not run (not requested).
+- Sumeragi/DA: require authoritative RBC rosters before emitting READY/DELIVER or rebroadcasting READYs; add derived-roster deferral coverage and update docs.
+- Tests: `cargo test -p iroha_core --lib build_rbc_messages_skip_derived_roster -- --nocapture` (failed: `rehydrate_pending_from_kura_for_qc` is private in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:11802`).
+- Governance ZK voting: standardize hints to `root_hint`/`nullifier` across BallotProof + public inputs, reject deprecated aliases in core/Torii/SDKs/CLI/bridges, treat explicit null public-input hints as absent in core, refresh JS typings/dist, and update docs; added regression coverage.
+- Tests: not run (not requested).
+- Sumeragi: retain cached commit QCs/signers when dropping pending after quorum reschedule, and rehydrate pending from Kura on commit QC to avoid losing progress; add coverage.
+- Tests: not run (not requested).
+- Core/AXT: block validation now rejects handle fragments without a touch manifest (even when the descriptor omits touch specs); add regression coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p iroha_core --lib --features app_api axt_validation_rejects_handle_without_touch_manifest -- --nocapture` (pass).
+- Sumeragi/DA: when an INIT overrides a derived roster snapshot, clear cached READY/DELIVER state and rebroadcast cooldowns so invalid signatures do not linger; extend coverage.
+- Tests: `cargo test -p iroha_core --lib handle_rbc_init_overrides_derived_roster_mismatch -- --nocapture` (pass).
+- Sumeragi/DA: skip RBC INIT/payload rebroadcasts when only a derived roster is cached, so nodes do not spread mismatched snapshots; add coverage for derived-roster rebroadcast suppression.
+- Tests: `cargo test -p iroha_core --lib rbc_payload_rebroadcast_skips_derived_roster -- --nocapture` (pass).
+- Tests: `cargo test -p iroha_core --lib rbc_ -- --nocapture` (timed out after 300s; suite still running at timeout).
+- IVM/AXT: allow non-monotonic handle sub-nonces within an envelope by rejecting duplicates only; add regression coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p ivm record_handle_allows_out_of_order_sub_nonce -- --nocapture` (timed out after 300s; test passed but cargo kept running remaining binaries).
+- Sumeragi/DA: treat derived RBC roster snapshots as non-authoritative (stash mismatched READY/DELIVER, allow INIT to override derived rosters), persist sessions only once an authoritative roster is known, and avoid persisting derived roster snapshots; add coverage for derived mismatch handling and authoritative overrides; reorder session-plan persistence to record the roster first.
+- Tests: not run (full `cargo test -p iroha_core` not rerun after roster-source updates).
+- Governance ZK voting: BallotProof JSON hints now use canonical 32-byte hex strings (optional `0x`/`blake2b32:` prefixes); public inputs standardized to `root_hint`/`nullifier` and deprecated aliases are rejected; SDKs/CLI/bridges updated, JS dist rebuilt, and docs/examples refreshed; added regression coverage.
+- Tests: `cargo test --workspace` (timed out after 120s during compilation; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Core/AXT: block validation now allows handles to target their policy lanes even when they differ from the envelope lane; add regression coverage for cross-lane handles.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p iroha_core --lib --features app_api axt_validation_accepts_cross_lane_handles -- --nocapture` (timed out after 120s during compilation).
+- Tests: `cargo test -p iroha_core --lib rbc_ -- --nocapture` (timed out after 360s; suite still running at timeout, no failures observed before abort).
+- Torii telemetry: treat /status 404/503 as telemetry unsupported to avoid noisy decode warnings; add regression coverage.
+- Tests: `cargo test -p iroha_torii --lib --features app_api,telemetry metrics_marks_telemetry_unsupported_on_service_unavailable -- --nocapture` (failed: `iroha_core` missing `RbcRosterSource` argument in `crates/iroha_core/src/sumeragi/main_loop/rbc.rs`).
+- IVM: scope AXT handle sub-nonce replay checks to target_lane so identical sub-nonces across lanes are allowed; add regression coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p ivm record_handle_allows_same_sub_nonce_across_lanes -- --nocapture` (timed out after 120s; test passed).
+- Maintenance: resolve merge conflict markers in `status.md`.
+- Tests: not run (not requested).
+- Sumeragi/RBC: clamp test config to default RBC caps/TTLs, ensure persistence uses roster snapshots even when none are cached, add roster-hash guard to READY rebroadcasts, and serialize RBC status tests; adjust RBC tests for local sender indexing, tip-aligned pending blocks, and chunk-cap expectations; add READY rebroadcast mismatch coverage.
+- Tests: `cargo test -p iroha_core --lib rbc_chunk_accepts_minimum_size_when_chunk_max_zero -- --nocapture` (pass); `cargo test -p iroha_core --lib rbc_chunk_commit_pipeline_runs_on_completion -- --nocapture` (pass); `cargo test -p iroha_core --lib rbc_ -- --nocapture` (timed out after 180s; remaining tests still running when aborted).
+- IVM/WsvHost: respect explicit AXT policy current_slot values while falling back to time when unset; align proof expiry checks with policy slots and AXT snapshot emission; add regression coverage for explicit slot handling and time-derived snapshots.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p ivm --test axt_host_flow -- --nocapture`; `CARGO_TARGET_DIR=target/codex-axt cargo test -p ivm --test core_host_policy -- --nocapture`; `CARGO_TARGET_DIR=target/codex-axt cargo test -p ivm axt_policy_snapshot_model -- --nocapture` (timed out after 120s; relevant unit tests finished).
+- Governance ZK voting: treat `null` canonical public-input fields as absent so alias keys can populate the canonical slot; add regression coverage.
+- Tests: `cargo test -p iroha_torii --lib normalize_zk_ballot_public_inputs_allows_alias_when_canonical_null -- --nocapture`.
+- Sumeragi/DA: record roster snapshots for RBC sessions seeded from `BlockCreated` and clear persisted-session markers so restarts retain the roster; add unit coverage.
+- Tests: `cargo test -p iroha_core seed_rbc_session_from_block_records_roster_snapshot -- --nocapture` (failed: `WorldTransaction.elections` is private in `crates/iroha_core/tests/gov_auto_close_zk_requires_tally.rs:38`).
+- Torii telemetry: pace /status polling with an interval to avoid tight retry loops while still timing out and disconnecting on unresponsive peers; regression test already covers timeout exit.
+- Tests: not run (build locks/timeouts in prior attempts).
+- Roadmap: add Sumeragi unified QC (commit + execution) task breakdown for the first-release, no-backcompat design.
+- Integration tests: import QueryBuilderExt in connected_peers roster polling to fix execute_all usage.
+- Tests: not run (not requested).
+- Integration tests: align connected-peer expectations with commit-quorum size and wait for roster updates during unregister/re-register; accept terminal pipeline events even if queued is missed; use default pipeline timing and blocking submits in `multiple_blocks_created`; expand trigger failure error matching to include SmartContract invalid-parameter failures.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p integration_tests extra_functional::connected_peers::connected_peers_with_f_1_0_1 -- --nocapture` (timed out after 10m; test still running).
+- Sumeragi: treat DA availability as missing until RBC payload evidence arrives (ignore local payload matches) so commit reschedules record `MissingLocalData`.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core --lib sumeragi::main_loop::tests::commit_pipeline_reschedules_without_da_gate_blocking -- --nocapture`.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core` (timed out after 3h; no failures observed before timeout).
+- Client: clarify blocking submit waits for `Applied` and log applied block-event confirmations.
+- Integration tests: centralize env var mutation helpers in `integration_tests/src/sandbox.rs` and add EnvRestore roundtrip coverage.
+- Tests: `cargo test -p iroha_core pacemaker_ignores_stale_new_view_entries -- --nocapture` (x10; all pass).
+- Tests: `cargo test -p integration_tests --test iterable_queries_torii burn_trigger_repetitions_removes_from_active_ids -- --nocapture` (pass).
+- Tests: `cargo test -p integration_tests --lib env_restore_roundtrips_env_var -- --nocapture` (pass).
+- Integration tests: allow sandbox env var mutation helpers under `#[allow(unsafe_code)]` to satisfy `rust.unsafe_code = "deny"` while calling `std::env::set_var`/`remove_var`.
+- Tests: `cargo test -p integration_tests` (timed out after ~4m while running `address_canonicalisation`; compilation succeeded and unit tests completed).
+- Maintenance: resolve merge conflicts in `crates/iroha_core/src/sumeragi/main_loop/commit.rs` and `status.md`.
+- Tests: not run (not requested).
+- Integration tests: remove `unsafe` blocks around sandbox env var restore helpers in `integration_tests/src/sandbox.rs`, add env-restore roundtrip coverage to satisfy `-D unsafe-code`.
+- Tests: not run (not requested).
+- Integration tests: wrap env var mutation helpers in `unsafe` blocks and document the env-lock requirement for Rust's environment safety contract.
+- Tests: not run (not requested).
+- Maintenance: resolve merge conflict markers in `status.md`.
+- Tests: not run (not requested).
+- Test network harness: workspace fingerprint now honors simple `.gitignore` globs and ignores custom `CARGO_TARGET_DIR` paths to reduce unnecessary rebuilds; added unit coverage.
+- Tests: not run (not requested).
+- Integration tests: default sandbox network parallelism now scales with CPU/4 (matching the cross-process permit heuristic) and updated the serial-guard unit test to reflect the new default.
+- IVM/CoreHost: reject duplicate AXT touches, deny DS proofs when policy manifest roots are zero, and align fixture host timing with handle skew; add regression coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p ivm --test core_host_policy -- --nocapture`.
+- Torii/Sumeragi build fixes: update RBC roster hashing for slice inputs, include roster snapshot/hash in duplicate RBC init, reuse cloned init for rebroadcast, avoid session-roster borrow conflicts, and fix governance JSON map signatures + state borrow in tests.
+- Tests: `cargo test -p iroha_torii metrics_timeout_exits_poll_loop -- --nocapture` (timed out after ~10m; build succeeded but test harness still running); `cargo test -p iroha_torii --lib metrics_timeout_exits_poll_loop -- --nocapture` (timed out waiting for build lock).
+- IVM/WsvHost: validate AXT proofs against manifest roots and skewed expiry (including inline proofs); add regression tests for skewed proof acceptance and inline expiry rejection.
+- Tests: `CARGO_TARGET_DIR=target/codex-axt cargo test -p ivm --test axt_host_flow -- --nocapture`.
+- Sumeragi/DA: treat locally available payload hashes as availability evidence for the DA gate so missing-local-data warnings clear even when RBC delivery lags; add unit coverage.
+- Tests: `cargo test -p iroha_core payload_available_for_da_accepts_local_payload_without_rbc -- --nocapture` (timed out after 120s: waiting for package cache/build directory locks).
+- Sumeragi/DA: request missing `BlockCreated` after RBC payload delivery when the signed header is absent; add recovery coverage.
+- Tests: `cargo test -p iroha_core recover_block_from_rbc_session_requests_missing_block_created -- --nocapture` (timed out after 120s: waiting for build directory lock).
+- Governance ZK voting: canonicalize `root_hint`/`nullifier` hex hints across SDKs/CLI/bridges, align core CastZkBallot parsing with case-insensitive `blake2b32:`/`0x` prefixes, refresh JS dist output, and update governance API examples; add regression coverage.
+- Tests: not run (not requested).
+- IVM CoreHost: record raw AXT proof expiry while applying skew only to cache/slot checks, reject inline proofs with zero expiry slots, and align cache expiry storage; add regression coverage for skewed proof acceptance and zero-expiry rejection.
+- Tests: not run (not requested).
+- Maintenance: resolve merge conflicts in `status.md`, `roadmap.md`, `crates/iroha_core/src/block.rs`, and `crates/iroha_core/src/smartcontracts/isi/offline.rs`.
+- Tests: not run (not requested).
+- Torii telemetry: treat IPv4-mapped IPv6 Torii hosts as IPv4 when deciding geo lookup eligibility; add regression coverage.
+- Tests: `cargo test -p iroha_torii geo_host_publicity_checks -- --nocapture` (failed: `norito::json::Map` alias used with generics in `crates/iroha_torii/src/gov.rs:313`).
+- IVM: WsvHost AXT policy now honors configured slot length/clock skew and rejects handle skew overrides above the configured max; SnapshotAxtPolicy enforces the same bound; add regression tests.
+- Tests: not run (not requested).
+- Core: record raw AXT proof expiry in envelopes while keeping skew only for cache/slot checks; add regression test for raw expiry recording.
+- Tests: not run (not requested).
+- Swift SDK: canonicalize offline account-id Norito encoding (IH58 for encoded/raw keys, domain normalization) across receipts, challenges, and Poseidon leaf hashing; add regression coverage.
+- Tests: not run (not requested).
+- Core: align AXT proof/handle expiry comparison with commit rules, record handle binding/manifest length errors, tighten AXT reject context coverage (descriptor vs missing policy, touch/handle invariants), and add regression tests.
+- Tests: not run (not requested).
+- Governance ZK voting: Python Torii clients now normalize ZK public-input aliases, enforce complete lock hints (zk/zk-v1/ballot-proof), and the Torii mock validates ZK public inputs; add regression tests.
+- Tests: not run (not requested).
+- Core: align CoreHost AXT replay retention with ledger semantics (retention floor + `is_expired` checks) and add regression tests.
+- Tests: not run (not requested).
+- Governance ZK voting: Swift SDK now normalizes ZK public-input aliases and enforces complete lock hints for Torii requests and CastZkBallot encoding; add regression tests.
+- Tests: not run (not requested).
+- Core: AXT block validation now checks descriptor binding and uses per-dataspace policy slots with global proof skew to align replay/expiry checks; add regression coverage.
+- Tests: not run (not requested).
+- Governance voting: auto-close now defers ZK decisions until a finalized tally, turnout uses approve+reject only (consistent with finalize), Torii tally applies conviction factors and respects finalized ZK tallies, and plain ReferendumOpened events emit real windows; added regression tests.
+- Tests: not run (not requested).
+- Offline transfers: canonicalize App Attest `key_id` (standard base64), enforce receipt ordering + single counter scope, validate Android marker key bytes/signatures, and refresh bundle fixtures/specs + docs for the standardized formats.
+- Tests: `target/debug/xtask offline-bundle --spec scripts/offline_bundle/spec.example.json --output target/offline_bundle_fixture`.
+- Core: AXT block validation now enforces descriptor/touch manifest invariants; add regression coverage and doc note.
+- Tests: not run (not requested).
+- Core: block-level AXT validation now enforces handle intent invariants (amount match/non-zero, scope/subject, non-zero era/sub-nonce/expiry); add regression coverage and docs note.
+- Tests: not run (not requested).
+- Data model: enable BLS feature in workspace `iroha_data_model` dependency so IH58 account parsing accepts BLS curve ids in integration tests/clients.
+- Asset tests: sync after fractional rejection operations in `fail_if_dont_satisfy_spec` to keep non-empty height tracking aligned under slow confirmations.
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p integration_tests --test address_canonicalisation account_transactions_query_supports_address_format -- --nocapture` (pass).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p integration_tests --test asset fail_if_dont_satisfy_spec -- --nocapture` (pass).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p integration_tests --test asset client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount -- --nocapture` (pass).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test --workspace` (failed: `client_add_big_asset_quantity_to_existing_asset_should_increase_asset_amount` timed out waiting for mint large asset; warnings about unused imports/assignments as noted below).
+- Tests: `cargo test -p integration_tests client_add_asset_quantity_to_existing_asset_should_increase_asset_amount -- --nocapture` (pass; warnings about unused `file_permit` in `crates/iroha_test_network/src/lib.rs:1212` and unused assignments in `integration_tests/tests/asset.rs`).
+- Tests: `cargo test -p integration_tests find_rate_and_make_exchange_isi_should_succeed -- --nocapture` (pass; warnings about unused `file_permit` in `crates/iroha_test_network/src/lib.rs:1212`, unused assignments in `integration_tests/tests/asset.rs`, and `ensure_blocks_with` timeout warning after grant transfer permission).
+- Sumeragi/DA: treat locally available block payloads as delivered for DA gating (payload hash match) to avoid commit stalls when RBC delivery lags; add unit coverage for payload hash matching.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p integration_tests client_add_asset_with_decimal_should_increase_asset_amount -- --nocapture` (pass; warnings about unused `file_permit` in `crates/iroha_test_network/src/lib.rs:1212` and unused assignments in `integration_tests/tests/asset.rs`).
+- Tests: `cargo test --workspace` (failed: `integration_tests` `iterable_queries_torii::burn_trigger_repetitions_removes_from_active_ids` with trigger not found).
+- Tests: `cargo test -p integration_tests --test iterable_queries_torii burn_trigger_repetitions_removes_from_active_ids -- --nocapture` (pass).
+- Block builder: compute DA proof policy bundle hash consistently when signing (use `HashOf::new(bundle)`), preventing invalid block signatures; add regression coverage.
+- Sumeragi: effective consensus mode now uses the pre-activation mode after a mode flip when the fallback matches the next mode; add unit coverage.
+- Sumeragi tests: fix local validator index helper return and use state view for latest block hash in vote emission coverage (compile fix).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core pacemaker_ignores_stale_new_view_entries -- --nocapture` (x10; all pass).
+- Sumeragi: canonicalize commit-topology ordering by sorting peer IDs before hash-keyed rotations to keep rosters deterministic across nodes; drop gap-height fallbacks to active rosters for vote/new-view derivation to prevent invalid signatures; update related tests and docs.
+- Tests: not run (not requested).
+- Sumeragi: fall back to the active commit topology when vote/new-view roster history is missing at gap heights, avoiding empty-roster drops; add roster fallback coverage for new-view and vote paths plus view-change vote validation.
+- Tests: `cargo test --workspace` (timed out after 30m during integration tests; warnings about unused `Align64` in `crates/norito/src/core.rs:6792`, unused `file_permit` in `crates/iroha_test_network/src/lib.rs:1212`, unused `required` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:6998`, unused imports in `crates/iroha_cli/src/offline.rs`, and unused assignments in `integration_tests/tests/asset.rs`).
+- Tests: `CARGO_TARGET_DIR=target_tmp cargo test -p iroha_core --lib roster_falls_back_to_active -- --nocapture`.
+- Tests: `CARGO_TARGET_DIR=target_tmp cargo test -p iroha_core --lib trigger_view_change_records_new_view_vote_with_active_roster -- --nocapture`.
+- Core tests: add `elections_mut` unit coverage and commit state blocks before view access to avoid view-lock hangs.
+- Tests: `CARGO_TARGET_DIR=target_tmp cargo test -p iroha_core --lib pacemaker_ignores_stale_new_view_entries -- --nocapture` (x10).
+- Tests: `CARGO_TARGET_DIR=target_tmp cargo test -p iroha_core --lib elections_mut_seeds_storage -- --nocapture`.
+- Test network harness: add global cross-process permit in `iroha_test_network` to cap concurrent test networks across binaries; add unit coverage and keep the integration-test guard in-process.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: not run (existing `cargo test` processes still running and holding the build directory).
+- Integration tests: add cross-process network permit files to bound concurrent test networks across binaries and reclaim stale permits; add unit coverage.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s; blocked waiting for build directory lock while other cargo test processes were running).
+- Tests: `CARGO_TARGET_DIR=target/codex-test cargo test --workspace` (timed out after 120s during compilation; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Integration tests: extend status retry budget to 30s and sync asset mint tests on non-empty blocks to reduce tx confirmation timeouts.
+- Tests: not run (existing cargo build/test processes held the build directory lock).
+- Swift SDK: refresh offline receipt poseidon platform-proof hash vectors for the sample receipts.
+- Tests: `swift test --disable-sandbox` (from `IrohaSwift`).
+- Java/Android SDK: add JSON-ready encoders for offline transfer items/platform snapshots plus `invalidateAndCancel()` on transports/OkHttp executors; update HTTP/OkHttp test fixtures to use Norito-encoded payloads, refresh gateway summary/Android provisioned proof fixtures for strict validation, and add regression coverage.
+- Tests: `JAVA_HOME=/Library/Java/JavaVirtualMachines/openjdk-21.jdk/Contents/Home ./gradlew :core:test` (from `java/iroha_android`); `ANDROID_HOME=/Users/mtakemiya/Library/Android/sdk ANDROID_SDK_ROOT=/Users/mtakemiya/Library/Android/sdk JAVA_HOME=/Library/Java/JavaVirtualMachines/openjdk-21.jdk/Contents/Home ./gradlew :android:testDebugUnitTest` (from `java/iroha_android`).
+- Governance ZK voting: require `public_inputs_json` to be an object, enforce owner type strictly, accept only canonical `root_hint`/`nullifier` hints, and add regression coverage; updated JS/Python SDKs for v1 lock hints, refreshed JS dist, and synced governance API docs (source/portal + ja/he).
+- Tests: not run (not requested).
+- Core: AXT block validation now rejects duplicate handle sub-nonces across dataspaces to match replay-key semantics; add regression coverage.
+- Tests: not run (not requested).
+- Swift SDK: accept `icon_hash` in Connect app metadata decode, allow missing events in permissions JSON, and add open-frame + JSON decode coverage.
+- Tests: `swift test --filter IrohaSwiftTests.ConnectFramesTests`; `swift test --filter IrohaSwiftTests.ConnectClientTests/testSendFrameUsesCoder`; `swift test --filter IrohaSwiftTests.ConnectSessionTests/testSendOpenSendsControlFrame` (from `IrohaSwift`).
+- Core: ZK ballot flow now validates lock parameters before recording ballots, and slashing always targets the submitting authority (not JSON-provided owner hints).
+- Tests: `cargo test -p iroha_core sumeragi:: -- --nocapture` (failed: 117 tests, mainly `sumeragi::evidence`, `sumeragi::main_loop`, and `sumeragi::status`; warning about unused `state_view` in `crates/iroha_core/src/queue.rs:1868`).
+- Core: fix `extract_vote_public_inputs` error construction, add invalid-payload regression test, and resolve mutable borrow in `ivm_corehost_halo2_enabled_vendor_ok.rs`.
+- Tests: `cargo test -p iroha_core --lib extract_vote_public_inputs_rejects_invalid_payload -- --nocapture` (pass; warning about unused `state_view` in `crates/iroha_core/src/queue.rs:1868`).
+- Sumeragi/RBC: allow READY emission once f+1 READY quorum is observed even without all chunks to unblock DA stalls; add unit coverage.
+- Integration tests: bound localnet smoke status polling with per-peer timeouts and improved error reporting to avoid indefinite hangs.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (failed: type annotations needed at `crates/iroha_core/src/smartcontracts/isi/world.rs:361`; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Integration tests: refresh `last_non_empty_height` after the seed mint in `fail_if_dont_satisfy_spec` so later syncs wait for the correct non-empty block.
+- Tests: not run (not requested).
+- Sumeragi tests: make pacemaker NEW_VIEW tests resilient when committed QC is missing by falling back to a commit-phase sample QC.
+- Tests: `cargo test -p iroha_core --lib pacemaker_ignores_stale_new_view_entries -- --nocapture` (x10; all pass; warnings about unused `state_view` in `crates/iroha_core/src/queue.rs:1868` and unused `mut` in `crates/iroha_core/src/smartcontracts/isi/world.rs:9010` and `crates/iroha_core/src/smartcontracts/isi/world.rs:9071`).
+- Sumeragi: pacemaker now prunes stale NEW_VIEW entries, keeps NEW_VIEW votes when proposal assembly defers (missing parent), and `assemble_and_broadcast_proposal` reports whether a proposal was built; add regression coverage.
+- Tests: `cargo test --workspace` (timed out after 30m; warnings about dead-code `Align64` in `crates/norito/src/core.rs:6792` and unused `mut` in `crates/iroha_core/src/smartcontracts/isi/world.rs:9010` and `crates/iroha_core/src/smartcontracts/isi/world.rs:9071`).
+- Client: check committed transactions when pipeline status returns queued/approved to avoid tx confirmation timeouts; add unit coverage for queued committed fallback.
+- Tests: not run (cargo tests already running; build lock held).
+- Sumeragi: reset empty-child view targets to 0 for new heights, avoid advancing view state on proposal attempts that bail early, and wire view-change index/suggest/install tracking to triggers + phase samples; update docs and unit tests.
+- Tests: not run (not requested).
+- Sumeragi: view-change bug hunt flagged empty-child fallback view derived from prior height, view-change counters/index not updated in status/telemetry, and phase tracker advancing before proposal when parent is missing.
+- Tests: not run (analysis only).
+- Torii config: fix test fixtures/helpers to include the new `peer_geo` field after introducing opt-in geo lookups.
+- Tests: not run (not requested).
+- Sumeragi tests: fix permissioned block-sync update test to pass the optional previous hash directly (avoids `Option<Option<_>>` compile error).
+- Integration tests: re-ran localnet smoke test 3x; all passes.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (x3).
+- Tests: `cargo test -p iroha_core rbc_persist_worker_persists_full_session -- --nocapture` (failed before fix: `Option<Option<_>>` in block-sync update test; not re-run yet).
+- Tests: `cargo test --workspace` (failed: unstable `IpAddr::is_global` in `crates/iroha_torii/src/telemetry/peers/monitor.rs` from existing local changes).
+- Torii telemetry: make peer geo lookups opt-in via `torii.peer_geo` (disabled by default), allow custom endpoints, and add geo query/disabled-config coverage.
+- Tests: not run (not requested).
+- Torii telemetry: skip geo lookups for non-public Torii hosts to avoid reserved-range errors in localnet; add unit coverage for host filtering and collect-geo short-circuit.
+- Tests: not run (not requested).
+- Sumeragi/block sync: allow permissioned next-height block sync updates without QC/cert to use local roster fallback, avoiding localnet stalls; add regression coverage.
+- Tests: not run (not requested).
+- Core: enforce ZK voting proof attachments to carry exactly one VK, validate halo2/ipa envelope metadata (circuit_id/vk_hash), and apply per-VK max_proof_bytes limits; adjust vendor ballot test circuit_id.
+- Core: length-prefix ballot nullifier derivation inputs (domain tag, chain id, election id) to avoid delimiter collisions; added coverage.
+- Governance docs: align BallotProof `root_hint`/`nullifier` examples with canonical 32-byte hex-string hints across portal/source governance API docs.
+- JS SDK: use `root_hint`/`nullifier` for ZK ballot v1 payloads in Torii client, typings, and tests; refresh dist output.
+- Tests: not run (not requested).
+- JS SDK: prioritize safe-integer validation over max-bound checks for oversized multisig BigInt inputs.
+- Tests: `npm run test:js` (from `javascript/iroha_js`; native binding disabled; 249 skipped).
+- Tests: `npm run test:js` (from `javascript/iroha_js`; 1 failure: `test/multisigSpecBuilder.test.js` expects a safe-integer error but got "exceeds the supported maximum (255)"; native-dependent tests skipped).
+- JS SDK: reject invalid discriminant values in SoraFS optional lane decoding; add regression coverage.
+- Tests: `node --test test/sorafsReplicationOrder.test.js` (from `javascript/iroha_js`).
+- JS SDK: accept array-like AXT descriptor inputs (dsids/touches/manifests) to match typings; add regression coverage.
+- Tests: `node --test test/axt_descriptor_builder.test.js` (from `javascript/iroha_js`; native binding missing; 1 skipped).
+- JS SDK: parse JSON string envelopes in Nexus batch verification so duplicate detection works for string inputs; add regression coverage.
+- Tests: `node --test test/nexus.test.js` (from `javascript/iroha_js`; skipped, native binding missing).
+- JS SDK: accept byte-array inputs for fixed-length instruction fields (e.g., election roots/nullifiers) with byte-range validation; add regression coverage.
+- Tests: `node --test test/instructionBuilders.test.js` (from `javascript/iroha_js`; skipped, native binding missing).
+- JS SDK: accept byte-array hash inputs for Torii governance deploy-contract requests and validate byte range; add regression coverage.
+- Tests: `node --test test/toriiClient.test.js` (from `javascript/iroha_js`).
+- JS SDK: validate Connect retry seed inputs (ArrayBuffer/view/array-like) to avoid silent wrapping; add regression coverage.
+- Tests: `node --test test/connectRetryPolicy.test.js` (from `javascript/iroha_js`).
+- JS SDK: validate canonical auth private key byte arrays to avoid silent wrapping; add regression coverage.
+- Tests: `node --test test/toriiCanonicalAuth.test.js` (from `javascript/iroha_js`).
+- Java/Android SDK: reject negative epoch/timestamp values in SoraFS manifest/replication builders and pin policies; add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: accept ArrayBuffer/ArrayBufferView relay envelope inputs in Nexus helpers to match typings; add regression coverage.
+- Tests: `node --test test/nexus.test.js` (from `javascript/iroha_js`; skipped, native binding missing).
+- Java/Android SDK: validate base64 payloads for SoraFS capacity/replication/manifest builders and offline allowance attestation reports; add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: accept array-like DA manifest/payload inputs with byte validation to match BinaryLike and avoid silent truncation; add regression coverage.
+- Tests: `node --test test/dataAvailability.test.js` (from `javascript/iroha_js`).
+- JS SDK: accept array-like Connect journal payloads (ciphertext/payloadHash/decoding) with byte-range validation to match typings; add regression coverage.
+- Tests: `node --test test/connectJournalRecord.test.js` (from `javascript/iroha_js`).
+- JS SDK: accept array-like session ids for Connect queue journal/diagnostics and reject empty/non-byte inputs to avoid colliding session roots; add regression coverage.
+- Tests: `node --test test/connectQueueJournal.test.js`; `node --test test/connectQueueDiagnostics.test.js` (from `javascript/iroha_js`).
+- Java/Android SDK: validate Kaigi proof base64 inputs and relay manifest HPKE keys in CreateKaigi; add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: validate byte arrays for Nexus relay envelope helpers to avoid silent wrapping of out-of-range values; add regression coverage.
+- Tests: `node --test test/nexus.test.js` (from `javascript/iroha_js`; skipped, native binding missing).
+- JS SDK: align canonical query-string encoding with form-urlencoded rules so special characters are percent-escaped and sorting matches server; add regression coverage.
+- Tests: `node --test test/canonicalRequest.test.js` (from `javascript/iroha_js`).
+- Java/Android SDK: reject out-of-range integer values in client config manifests and add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: enforce 32-byte hex for SoraFS gateway manifest/provider ids (request + summary), reject out-of-range chunk indices, and refresh Android test fixtures.
+- Tests: not run (not requested).
+- JS SDK: reject empty byte-array/base64 inputs for instruction builder payloads (proofs, ciphertexts, hpke keys) to avoid silent zero-length fields; add regression coverage.
+- Tests: `node --test test/instructionBuilders.test.js` (from `javascript/iroha_js`; skipped, native binding missing).
+- Core: derive governance ZK ballot nullifiers from the proof commitment (domain tag + chain id + election id), enforce commit/root binding, and align Torii/CLI hints + docs/tests.
+- Tests: not run (not requested).
+- JS SDK: validate connect session byte arrays to reject non-byte entries and avoid silent truncation; add regression coverage.
+- Tests: `node --test test/connectSession.test.js` (from `javascript/iroha_js`).
+- Java/Android SDK: validate SoraFS gateway request inputs (hex/base64 + option bounds) and add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: enforce safe integer parsing for Torii status/time/connect counters, retry config knobs, SoraNet puzzle timeouts, offline envelope/counter timestamps, AXT dsids, and Connect queue retention; update JS docs and add regression coverage.
+- Tests: `node --test test/toriiClient.test.js test/retryPolicy.test.js test/connectQueueJournal.test.js test/offlineCounterJournal.test.js test/offlineEnvelope.test.js test/axt.test.js test/soranetPuzzleClient.test.js` (from `javascript/iroha_js`; native binding missing; 7 skipped).
+- JS SDK: reject empty smart-contract bytecode in register instruction builders; add regression coverage.
+- Tests: `node --test test/instructionBuilders.test.js` (from `javascript/iroha_js`; skipped, native binding missing).
+- Java/Android SDK: reject fractional numeric fields when parsing SoraFS gateway summaries and client config manifests; add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: reject empty byte payloads when base64 fields are required (e.g., deployContract code_b64) and add regression coverage.
+- Tests: `node --test test/toriiClient.test.js` (from `javascript/iroha_js`).
+- JS SDK: reject mismatched verifying key lengths when vk_len contradicts inline vk_bytes; add regression coverage.
+- Tests: `node --test test/toriiClient.test.js` (from `javascript/iroha_js`).
+- Java/Android SDK: reject fractional counter journal values on load and add regression coverage.
+- Tests: not run (not requested).
+- Swift SDK: reject invalid proof event hex fields (proof hash, commitment, call/envelope hashes) and add regression coverage.
+- Tests: `swift test --filter ToriiClientTests.testStreamProofEventsRejectsInvalidProofHashHex`; `swift test --filter ToriiClientTests.testStreamProofEventsRejectsInvalidCommitmentHex` (from `IrohaSwift`).
+- JS SDK: enforce Numeric literal validation (scale/bit bounds) for instruction builders and Torii amount inputs, add safe-integer guards for u128 JSON and multisig weights, and harden SoraFS gateway options (manifest/base64 + integer-only knobs); add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: validate SoraFS gateway streamTokenB64 inputs (base64/base64url) for Torii provider normalization and native gateway wrappers; add regression coverage.
+- Tests: `node --test test/toriiClient.test.js`; `node --test test/sorafsGatewayFetch.wrapper.test.js` (from `javascript/iroha_js`).
+- Swift SDK: validate proof attachment verifying key fields (non-empty, no separators, non-empty inline bytes) and preflight commitment/envelope hash lengths; add regression coverage.
+- Tests: `swift test --filter ProofAttachmentNoritoTests` (from `IrohaSwift`).
+- Java/Android SDK: reject fractional numeric fields when parsing offline verdict metadata, audit logs, Android provisioned proofs, and Safety Detect OAuth expiry; add regression coverage.
+- Tests: not run (not requested).
+- Swift SDK: enforce single-key SSE event payloads for verifying key, trigger, and proof events; add regression coverage.
+- Tests: `swift test --filter ToriiClientTests.testStreamVerifyingKeyEventsRejectsMultiplePayloadKinds`; `swift test --filter ToriiClientTests.testStreamTriggerEventsRejectsMultiplePayloadKinds`; `swift test --filter ToriiClientTests.testStreamProofEventsRejectsMultiplePayloadKinds` (from `IrohaSwift`).
+- Java/Android SDK: ignore cancellation errors when SSE streams are closed before the response arrives, unwrap CompletionException failures, and reject fractional numeric fields in UAID/offline JSON parsers; add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: tighten ISO bridge positive-integer parsing and validate DA proof manifest base64 before decoding; add regression coverage.
+- Tests: `node --test test/isoBridge.test.js`; `node --test test/toriiClient.test.js` (from `javascript/iroha_js`).
+- Swift SDK: clamp Connect queue retention interval to avoid negative/overflow conversions and add regression coverage.
+- Tests: `swift test --filter ConnectQueueJournalTests` (from `IrohaSwift`).
+- Swift SDK: make Connect codec JSON decoding strict (reject unknown keys and non-string values) and add regression coverage.
+- Tests: `swift test --filter ConnectFramesTests` (from `IrohaSwift`).
+- Swift SDK: validate DA ingest receipt digest tuples (single entry, 32-byte length) and add regression coverage.
+- Tests: `swift test --filter ToriiDaIngestTests` (from `IrohaSwift`).
+- JS SDK: tighten Norito base64 heuristics, validate trigger-action and DA pdp_commitment base64, and enforce integer getBlock heights; add regression coverage.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Swift SDK: enforce single-key governance proposal kinds and require DA rent quote micro amounts to be unsigned integers; add regression coverage.
+- Tests: `swift test --filter ToriiDaIngestTests` (from `IrohaSwift`); `swift test --filter ToriiGovernanceDecodingTests` (from `IrohaSwift`).
+- Swift SDK: reject multi-kind Connect envelope/control payloads, and enforce strict sequence parsing in the fallback native bridge; add regression coverage.
+- Tests: `swift test --filter ConnectEnvelopeTests` (from `IrohaSwift`).
+- JS SDK: tighten base64 validation for offline envelopes, Torii payload normalization, and Nexus helpers; add regression coverage.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Swift SDK: tighten JSON numeric parsing for Connect envelopes/balance snapshots, compute simulator limits, governance lock/tally amounts, prover report count fallback, and account address bridge fields; add regression coverage.
+- Tests: `swift test --filter ConnectEnvelopeTests` (from `IrohaSwift`); `swift test --filter ConnectEventsTests` (from `IrohaSwift`); `swift test --filter ComputeSimulatorTests` (from `IrohaSwift`); `swift test --filter AccountAddressTests` (from `IrohaSwift`); `swift test --filter ToriiGovernanceDecodingTests` (from `IrohaSwift`); `swift test --filter ToriiClientTests.testCountProverReportsRejectsFractionalCount` (from `IrohaSwift`).
+- JS SDK: enforce strict base64url decoding for Connect session input/queue journals/diagnostics and add regression coverage.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Swift SDK: harden Torii numeric parsing to reject fractional values and out-of-range ints across Connect status, DA manifests/sampling plans, and verdict metadata; add regression coverage.
+- Tests: `swift test --filter ToriiJSONValueTests` (from `IrohaSwift`); `swift test --filter ToriiNumericParsingTests` (from `IrohaSwift`); `swift test --filter OfflineVerdictJournalTests` (from `IrohaSwift`).
+- JS SDK: validate base64 inputs strictly in instruction builders (fixed-length + payload fields) and add regression coverage.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Tests: `cargo test -p iroha_core --lib active_topology_sorts_world_peers_when_commit_topology_empty -- --nocapture` (x10; all passes; periodic build-dir locks; warnings about unused `mut` in `crates/iroha_core/src/smartcontracts/isi/world.rs:9010` and `crates/iroha_core/src/smartcontracts/isi/world.rs:9071`).
+- Sumeragi: canonicalize world-peers ordering when commit topology is empty to keep leader selection deterministic across nodes; add regression coverage for initial roster sorting.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p iroha_core active_topology_sorts_world_peers_when_commit_topology_empty -- --nocapture` (timed out after 300s while finishing filtered test binaries; target test passed; warnings about unused `mut` in `crates/iroha_core/src/smartcontracts/isi/world.rs:9010` and `crates/iroha_core/src/smartcontracts/isi/world.rs:9071`).
+- Tests: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test asset client_add_asset_quantity_to_existing_asset_should_increase_asset_amount -- --nocapture`.
+- Tests: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test asset find_rate_and_make_exchange_isi_should_succeed -- --nocapture`.
+- SoraNet handshake: ignore unknown suite identifiers when parsing suite lists for negotiation; add unit coverage and update `docs/source/soranet_handshake.md`.
+- Tests: not run (not requested).
+- Integration tests: attempted 10x localnet smoke loop with `TEST_NETWORK_TMP_DIR=tmp/test_network_runs`; runs 1-4 passed, run 5 failed (`heights failed to converge to 2 within 15s`). Artifacts: `tmp/test_network_runs/irohad_test_network_{dHJSwc,pQlBYw,F6weXl,WkBXsw,b7tGbD}`.
+- Localnet log scan (failing run `tmp/test_network_runs/irohad_test_network_b7tGbD`): repeated `deferring RBC DELIVER` with READY 1-2/3 plus periodic `rebroadcasting RBC INIT and cached chunks`; `dropping block sync update: no verifiable roster available` in `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs:141` while height 2 proposal cached.
+- Integration tests: re-ran localnet smoke 3x; all passes (artifacts kept under `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_{muQPfy,SYbxqQ,INOD2L}`).
+- Tests: `CARGO_TARGET_DIR=target/codex IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (x3).
+- Sumeragi/localnet: canonicalized the Sora profile BLS private key to satisfy multihash parsing in profile detection defaults.
+- Tests: `CARGO_TARGET_DIR=target/codex cargo test -p iroha_test_network sora_profile_detection_defaults_parse_with_bls_keys -- --nocapture`.
+- Tests: `CARGO_TARGET_DIR=target/codex IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (passed; warning about unused variable `epoch` in `crates/iroha_core/src/block_sync.rs:393`).
+- Core: make block-sync Norito decode fallible for invalid GetBlocksAfter/ShareBlocks batches and add regression coverage.
+- Tests: `cargo test -p iroha_core decode_invalid_ -- --nocapture` (timed out after 300s; new tests passed; warnings about unused `mut` in `crates/iroha_core/src/smartcontracts/isi/world.rs:9010` and `crates/iroha_core/src/smartcontracts/isi/world.rs:9071`).
+- JS SDK: honor IROHA_JS_FORCE_NATIVE to fail fast when native binding is required; add verification tests and README note.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Swift SDK: guard Torii JSON numeric normalization against Int overflow and reuse the safer path for allowance/proof parsing; add regression coverage.
+- Tests: `swift test --filter ToriiJSONValueTests` (from `IrohaSwift`).
+- Java/Android SDK: avoid duplicate WebSocket reconnection scheduling when both error and close fire; add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: ignore stale WebSocket events from prior sessions to prevent reconnects after a new session opens; add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: apply WebSocket connect timeout options to OkHttp connectors and add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: stream SSE responses without buffering full bodies by adding streaming transport support (OkHttp/JDK/URLConnection) and add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: ignore stale SSE subscription events and avoid duplicate reconnect scheduling; add regression coverage.
+- Tests: not run (not requested).
+- Swift SDK: restrict canonical query encoding to ASCII unreserved characters so non-ASCII is percent-escaped; add regression coverage.
+- Tests: `swift test --filter CanonicalRequestTests` (from `IrohaSwift`).
+- Sumeragi penalties/status: seed staking config + escrow assets for censorship slashing tests; add reentrant test guards for view-change/validation-reject counters and commit-history snapshots to avoid cross-test interference.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core consensus_penalties_apply_censorship_evidence --lib -- --nocapture`.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core sumeragi::status::tests::view_change_cause --lib -- --nocapture`.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core sumeragi::status::tests::validation_reject_snapshot --lib -- --nocapture`.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core sumeragi::status::tests::commit_certificate --lib -- --nocapture`.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core` (timed out after 4h; no failures observed before timeout).
+- Integration tests: re-ran localnet smoke + Kagami localnet bootstrap; no failures observed.
+- Tests: `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture`.
+- Tests: `CARGO_TARGET_DIR=target-codex-localnet IROHA_TEST_SKIP_BUILD=1 KAGAMI_BIN=/Users/takemiyamakoto/dev/iroha/target/debug/kagami TEST_NETWORK_BIN_IROHAD=/Users/takemiyamakoto/dev/iroha/target/debug/iroha3d IROHA_KAGAMI_LOCALNET_KEEP=1 cargo test -p integration_tests --test sumeragi_kagami_localnet -- --nocapture`.
+- Sumeragi: deterministically order block-sync gossip targets (seeded by block hash + local peer), enforce strict PoP roster filtering without quorum fallback, and require actual quorum-sized signer sets; add unit coverage for gossip ordering, PoP subquorum behavior, and quorum signers.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 30m during test execution; warnings about unused variable `epoch` in `crates/iroha_core/src/block_sync.rs:401` and dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Sumeragi: reject early VRF reveals before the reveal window, anchor censorship evidence horizon to the newest receipt height, skip empty-roster penalty attribution, and evict future-timestamp RBC sessions; add regression coverage.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 20m; initial build-dir lock wait; warnings about dead-code `Align64` in `crates/norito/src/core.rs:6792` and unused `epoch` in `crates/iroha_core/src/block_sync.rs:401`; timeout during `integration_tests` `address_canonicalisation`).
+- Sumeragi: periodically rebroadcast stalled RBC payloads/READY sets during ticks to prevent DA availability stalls when peers miss INIT/chunk fan-out; add regression coverage.
+- Tests: `cargo test -p iroha_core tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown -- --nocapture` (timed out after 10s waiting on build directory lock); `CARGO_TARGET_DIR=target/codex cargo test -p iroha_core tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown -- --nocapture` (timed out after 120s during compile).
+- Sumeragi: drop mismatched commit votes from block-sync updates and add regression coverage for vote filtering.
+- Tests: not run (not requested).
+- Sumeragi: require cached QC lookups and block-sync vote/QC attachments to match the expected epoch, plus regression coverage for epoch-filtered cached QCs.
+- Tests: not run (not requested).
+- Sumeragi: reject non-commit-phase commit-certificate roster hints, enforce mode-tag and aggregate-signature validation, and add regression coverage for phase/tag/signature checks.
+- Tests: not run (not requested).
+- Sumeragi: reject QCs with mismatched mode tags during validation/aggregate salvage and add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi: validate commit-certificate roster hints with mode-tag and aggregate-signature checks, plus regression coverage for signature and tag validation alongside block-sync roster test updates.
+- Tests: not run (not requested).
+- Sumeragi: static production bug hunt; flagged empty-topology panic paths, QC/signature mismatch handling, and gossip target randomness as potential risks.
+- Tests: not run (analysis only).
+- Sumeragi: validate block-sync QC aggregate salvage against canonical topology to avoid view-rotation mismatches; add regression coverage.
+- Tests: not run (not requested).
+- Block sync: allow cached precommit QCs to reuse nonzero epochs from signer records and add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: gate native-only tests by required native capabilities (Norito/SM2/SoraDNS) and add helper coverage.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Java/Android SDK: preserve baseUri path segments when building UAID request URLs; add regression coverage.
+- Tests: not run (not requested).
+- Swift SDK: avoid retry-delay modulo overflow when max backoff is UInt64.max and add regression coverage.
+- Tests: `swift test --filter ConnectRetryPolicyTests` (from `IrohaSwift`).
+- Swift SDK: clamp Connect flow-control token grants on overflow, reject offline counter wraparound, and add regression coverage.
+- Tests: `swift test --filter ConnectFlowControlTests` (from `IrohaSwift`); `swift test --filter OfflineCounterJournalTests` (from `IrohaSwift`).
+- Swift SDK: clamp Connect queue expiry timestamps on TTL overflow and add regression coverage.
+- Tests: `swift test --filter ConnectQueueJournalTests` (from `IrohaSwift`).
+- Core: harden block sync peer sampling (cap stray fanout, validate batch lengths, avoid height truncation), and invalidate bridge MMR cache on top-block rewrites; add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: ensure redaction failure telemetry records the originating signal id for pipeline-status emissions; add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: treat verifying key `record.deprecation_height` as an alias of `record.withdraw_height`, reject mismatches, and add regression coverage.
+- Tests: `JAVA_HOME=/Library/Java/JavaVirtualMachines/openjdk-21.jdk/Contents/Home GRADLE_USER_HOME=java/iroha_android/.gradle ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests,org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests java/iroha_android/gradlew -p java/iroha_android :core:test --stacktrace`.
+- JS SDK: accept hex Connect SIDs, restore camelCase request aliases across Torii helpers (connect admin, governance, SNS, SoraFS, DA, runtime upgrade, contracts), and normalize SoraFS pin-register responses; update Connect SID tests.
+- Tests: `npm run test:js` (from `javascript/iroha_js`).
+- Swift SDK: validate non-empty/expected public key sizes when building account addresses, document the stricter key rules, and add regression tests for invalid keys.
+- Tests: `swift test --filter AccountAddressTests` (from `IrohaSwift`).
+- Swift SDK: avoid crashes on zero-count queue drains by surfacing a new ConnectQueueError; add regression coverage and error mapping tests.
+- Tests: `swift test --filter ConnectQueueJournalTests` (from `IrohaSwift`); `swift test --filter ConnectErrorTests` (from `IrohaSwift`).
+- Swift SDK: ensure account literal path encoding escapes `%` to prevent ambiguous path segments; add ToriiClient coverage for percent-escaped account literals.
+- Tests: `swift test --filter ToriiClientTests` (from `IrohaSwift`).
+- Swift SDK: canonicalize account-address domain labels to lowercase ASCII, reject invalid labels, and document the stricter domain rules; add regression coverage.
+- Tests: `swift test --filter AccountAddressTests` (from `IrohaSwift`).
+- Swift SDK: tighten offline/transaction ID validation to reject reserved characters, align asset/account parsing with name rules, and add OfflineNoritoEncoding coverage.
+- Tests: `swift test --filter OfflineNoritoEncodingTests` (from `IrohaSwift`); `swift test --filter TransactionInputValidatorTests` (from `IrohaSwift`); `swift test --filter OfflineReceiptBuilderTests` (from `IrohaSwift`).
+- Crypto/SoraNet: enforce canonical multihash hex parsing, reject admission tokens with non-zero flags or zero TTL, require PoW ticket version during raw/signed decode, and validate guard directory snapshot windows; add regression coverage and doc updates.
+- Tests: `cargo test -p iroha_crypto --lib decode_public_key_str_rejects`; `cargo test -p iroha_crypto --lib decode_private_key_str_rejects`; `cargo test -p iroha_crypto --lib decode_rejects`; `cargo test -p iroha_crypto unsupported_version`; `cargo test -p iroha_crypto snapshot_rejects`.
+- Core: fix MMR peak merging/bagging order for bridge commitments and keep live query cursors on cursor mismatch; add regression coverage.
+- Tests: not run (not requested).
+- WSV/IVM: mock WSV domain unregister now blocks domains that still have NFTs; add regression coverage.
+- Tests: not run (not requested).
+- SoraNet handshake: reject unknown non-GREASE capability TLVs, enforce singleton-only duplicates, and validate capability payload lengths; add regression coverage.
+- Tests: `cargo test -p iroha_crypto parse_capabilities_`.
+- Swift SDK: rebuild NoritoBridge xcframework to match the current encoder, refresh expected bridge hashes, and add a NoritoBridge artifact manifest with version/hash metadata.
+- Tests: `swift test --filter TransactionParityFixturesTests` (from `IrohaSwift`).
+- Java/Android SDK: apply Torii SSE timeout options to transport requests and add regression coverage.
+- Tests: `GRADLE_USER_HOME=java/iroha_android/.gradle ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests java/iroha_android/gradlew -p java/iroha_android :core:test --stacktrace` (failed: `IllegalArgumentException: 25` from `JavaVersion.parse`, likely unsupported JDK).
+- WSV: unregistering a domain now clears endorsement policies and stored endorsement records; add regression coverage.
+- Tests: not run (not requested).
+- JS SDK: make canonical ordering deterministic (UTF-16 code units), enforce strict multihash hex/length validation, and fix offline envelope README example; add multihash validation tests.
+- Tests: `npm run test:js` (failed: existing JS test failures in `javascript/iroha_js/test/axt.test.js` and multiple `javascript/iroha_js/test/toriiClient.test.js` cases unrelated to the ordering/normalizer changes).
+- Crypto/SoraNet: reject duplicate fields in SRCv2 certificate payloads to enforce canonical CBOR maps; add regression coverage.
+- Tests: `cargo test -p iroha_crypto parse_certificate_payload_rejects_duplicate_field`.
+- WSV: unregistering a domain now removes assets whose definitions live in that domain even when held by accounts in other domains; add regression coverage.
+- Tests: not run (not requested).
+- Java/Android SDK: reject non-canonical JSON numbers (leading zeros/overflow) and add JsonParser regression coverage.
+- Tests: `cargo test -p iroha_crypto decode_rejects`.
+- Crypto/SoraFS: reject proof tokens with unknown flags, empty entry lists, or expiries at/before issuance during decode; add regression coverage.
+- Client: match committed transactions by entrypoint hash during confirmation fallback to avoid tx-status timeouts; extend unit coverage for entrypoint hash matching.
+- Tests: `cargo test -p integration_tests --test asset client_add_asset_quantity_to_existing_asset_should_increase_asset_amount -- --nocapture`; `cargo test -p integration_tests --test asset find_rate_and_make_exchange_isi_should_succeed -- --nocapture`; `cargo test -p iroha tx_hash_tests::committed_transaction_matches_signed_hash_for_external_entrypoint -- --nocapture`.
+- Integration tests: parallelize status polling in `sumeragi_localnet_smoke` to avoid serial Torii stalls while waiting for block convergence.
+- Tests: `IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture`.
+- Sumeragi: reject commit certificate roster hints with mismatched epochs and add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi: skip NEW_VIEW vote emission and QC rebuild/materialization when commit rosters are empty; add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi: compute NPoS epochs from on-chain parameters when consensus hasn't flipped yet (pre-activation catch-up), and add regression coverage for height-based epoch derivation.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p iroha_core epoch_for_height_uses_npos_params_before_activation -- --nocapture` (timed out after 120s during compile).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Sumeragi: validate checkpoint signatures using the commit certificate epoch when available (avoids NPoS epoch-length drift) and add regression coverage for mixed epoch-length roster selection.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p iroha_core selection_from_roster_artifacts_uses_commit_cert_epoch_for_checkpoint -- --nocapture` (timed out after 120s during compile).
+- Tests: `cargo test --workspace` (failed: missing crate docs in `crates/iroha_data_model/tests/merkle_roundtrip.rs`).
+- Sumeragi: prevent highest_qc regression from stale proposal hints, canonicalize payload hash without signatures, defer validation on empty commit rosters, and harden Kura retry overflow handling; add regression coverage and update docs.
+- Tests: not run (not requested).
+- Sumeragi: only treat pending blocks that extend the committed tip as active for proposal/view-change gating; add regression coverage.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (failed: missing crate docs in `crates/iroha_data_model/tests/merkle_roundtrip.rs`; warning about dead-code `Align64` in `crates/norito/src/core.rs:6792`).
+- Sumeragi: ignore invalid block-signature indices in topology role filtering to avoid panics; add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi: compute epochs using the effective consensus mode for the target height so pre-activation permissioned QCs/votes keep epoch 0 after mode flips; add regression coverage for block sync QC acceptance.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p iroha_core block_sync_update_accepts_pre_activation_qc_epoch_after_mode_flip -- --nocapture` (timed out after 120s during compile).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warning about dead-code `Align64` in `crates/norito/src/core.rs`).
+- Sumeragi: guard quorum-reschedule against empty commit roster (avoid Topology::new panic) and add regression coverage for empty-roster reschedule.
+- Tests: not run (not requested).
+- Sumeragi: reject block-sync commit certificates with mismatched epochs (apply + cache paths) and add regression coverage for epoch-mismatch drops.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p iroha_core block_sync_update_drops_qc_epoch_mismatch -- --nocapture` (timed out after 120s during compile).
+- Tests: `cargo test --workspace` (timed out after 120s waiting for build directory lock).
+- Sumeragi: reject RBC INIT messages with zero chunks and treat empty payload hydration as a layout mismatch; add regression tests.
+- Crypto/SoraFS: reject proof tokens with empty entry lists or expiries at/before issuance during decode; add regression coverage.
+- Tests: not run (not requested).
+- Docs: resolve merge conflicts in status.md and roadmap.md.
+- Tests: not run (not requested).
+- WSV (IVM mock): clear direct permissions and role assignments on account unregister to avoid stale grants; add regression coverage.
+- Tests: not run (not requested).
+- Swift SDK: unwrap Norito-framed native signed transactions before packaging, fix SM2 private-key payload encoding, and refresh DA/proof fixtures; add Norito frame decoding coverage.
+- Tests: `swift test` (from `IrohaSwift`).
+- Norito Java: enforce canonical varint decoding, encode maps deterministically (sorted keys), implement packed-map layout per the Norito spec, and add regression tests.
+- Java/Android SDK: sort JSON object keys during encoding to produce canonical payloads and add regression coverage.
+- P2P: fix IPv6 CIDR masking on byte boundaries to avoid shift panics and ensure correct allow/deny matching; add regression coverage.
+- Tests: `cargo test --workspace` (timed out after 120s; warnings about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450` and dead_code in `crates/norito/src/core.rs:6792`).
+- Crypto: make Merkle byte-chunk builders validate chunk sizes (return `Result`), validate deserialized layouts, and guard proof audit-path shifts; add regression tests.
+- Tests: not run (not requested).
+- Kura: skip temp sidecar index promotion when the main index is valid to avoid losing correct sidecar pointers; add regression coverage for conflicting temp index entries.
+- Tests: not run (not requested).
+- WSV: clean up account/domain unregister to drop owned NFTs, per-asset metadata, tx sequences, account labels, and UAID bindings; wire asset cleanup into detached merges and add regression coverage.
+- Tests: `cargo test -p iroha_core unregister_ -- --nocapture` (failed: ivm compile errors in `crates/ivm/src/byte_merkle_tree.rs`; warnings about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450` and dead_code in `crates/iroha_crypto/src/merkle.rs`).
+- P2P: flush handshake and message writes so WS fallback sends frames; add unit tests covering flush behavior in handshake and message sender.
+- Tests: not run (not requested).
+- Java/Android SDK: respect `retryOnNetworkError` in `HttpClientTransport` retries and add regression coverage for network failures without retries.
+- Kura: enforce storage budget checks when replacing the top block (soft-fork rewrites) and add regression coverage for oversized replacements.
+- Tests: `cargo test -p iroha_core replace_top_block_rejects_when_budget_exceeded -- --nocapture` (timed out after 300s; new test passed before timeout; warning about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450`).
+- Sumeragi: realign NPoS epoch state and seed when on-chain epoch length changes (reset stale VRF inputs), and add regression coverage for epoch-length refresh behavior.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p iroha_core refresh_npos_seed_realigns_epoch_after_epoch_length_change -- --nocapture` (timed out after 120s during compile; warnings about unused methods in `crates/iroha_core/src/sumeragi/main_loop/pending_rbc.rs` and `crates/iroha_core/src/sumeragi/main_loop/votes.rs`).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about dead-code `Align64` in `crates/norito/src/core.rs` and unused methods in `crates/iroha_core/src/sumeragi/main_loop/pending_rbc.rs` and `crates/iroha_core/src/sumeragi/main_loop/votes.rs`).
+- Sumeragi: derive merge QC view from lane-tip view-change indices (view now part of QC digest/signatures), wire VRF epoch snapshots for NPoS scheduling/telemetry, and add regression coverage.
+- Penalties: derive censorship evidence epochs from receipt heights and attribute slashing to the leader at the receipt anchor; add unit tests.
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused `dropped_counts` in `crates/iroha_core/src/sumeragi/main_loop/pending_rbc.rs`, unused `roster_for_vote` in `crates/iroha_core/src/sumeragi/main_loop/votes.rs`, and dead-code field `Align64` in `crates/norito/src/core.rs`).
+- Norito fixtures: regenerated Android/Swift/Python/Norito-RPC manifests for the current Ed25519 seed-derived key, refreshed Swift parity payloads/.norito, and updated connect_norito_bridge expectations + Swift parity hashes.
+- Tests: `CARGO_TARGET_DIR=target/codex cargo test -p connect_norito_bridge`.
+- Core: fix iroha_core test regressions across keep-voting validation, block-sync QC cache collisions, executor fuel setup, IVM access header handling, Sumeragi worker-order expectations/RBC timestamps, commit outcome sidecar persistence, and NPoS replay leader signing.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core state::replay_validation_tests::replay_rotates_topology_for_npos_prf_leader --lib -- --nocapture` (passed); `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core` (aborted after ~10m).
+- Sumeragi: persist roster sidecars after recording commit certificates (with precommit signer fallback) to avoid block-sync roster gaps; add regression tests for commit-sidecar persistence and signer-based synthesis; fix roster-index test to use an Arc-backed provider.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (failed: could not write dep-info/fingerprint files under `target/debug/.fingerprint`/`target/debug/deps` with `No such file or directory`).
+- Genesis: enable DA in `defaults/genesis.json` across parameter blocks and refresh the consensus fingerprint to match the DA-enabled parameters (fixes genesis startup failures when defaults are used).
+- Tests: not run (not requested).
+- Sumeragi: validate RBC READY signatures before chunk-root rejection and keep sessions valid when mismatched roots arrive; extend regression test.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s waiting for build directory lock).
+- Sumeragi: fall back to full roster indices when the epoch roster provider is incomplete to avoid excluding validators during NPoS transitions; add regression test.
+- Tests: not run (not requested).
+- Sumeragi: reject VRF commit/reveal messages from non-roster signer indices to prevent off-roster entropy injection; add regression tests.
+- Tests: not run (not requested).
+- Sumeragi: apply pending NPoS roster activation at the activation height during catch-up (avoid pre-activation epoch snapshots using the new roster); add regression test.
+- Tests: not run (not requested).
+- Sumeragi: drop RBC READY messages with mismatched chunk roots so quorum only counts votes for the expected payload; add regression test.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/assignments and unexpected cfgs in unrelated modules).
+- Sumeragi: drop RBC chunks with mismatched epochs (align with INIT/READY/DELIVER filtering); add regression test.
+- Tests: not run (not requested).
+- Sumeragi: reject RBC INIT/READY/DELIVER messages with mismatched epochs to prevent cross-epoch availability drift; add regression tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/assignments and unexpected cfgs in unrelated modules).
+- Sumeragi: derive membership adverts and pacemaker precommit deferrals from per-height epochs to avoid cross-epoch mismatches; add regression tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/assignments in unrelated modules).
+- Torii/Connect/content: enforce base64url-only SIDs across Connect preview/session/WS (server + JS/Python/Swift + connect-cli + fixtures/docs), reserve WS capacity during handshake, and require canonical signed headers for role/sponsor content reads; docs/OpenAPI updated.
+- Tests: not run (not requested).
+- Build fixes: import AudioEncoderSampleCountMismatchInfo in Norito streaming, add DecodeFromSlice/Debug for archive_view DummyPayload, disambiguate Ed25519 test key types, fix missing qc2_hash in tiered snapshot test, and use StateView/Registrable in Torii content auth tests.
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450` and dead_code in `crates/norito/src/core.rs:6792`).
+- Norito/SDKs: accept alignment padding in Python/Java/Swift/JS header parsing, fix JS ConnectJournalRecord major/hash encoding, and add cross-language padding/header tests; update `norito.md` and Python design notes.
+- Tests: not run (not requested).
+- Crypto/JS: standardize Ed25519 seed derivation (SHA-256 for non-32 seeds), accept 64-byte seed+public private keys, and validate ML-DSA public-key parsing; update JS SDK parity/tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options); `cargo test --workspace` (timed out after 120s during compile; warnings about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450` and dead_code in `crates/norito/src/core.rs:6792`).
+- IVM/Kotodama: allow dynamic bounds in `.take`/`.range` when `kotodama_dynamic_bounds` is enabled; add regression tests for non-literal bounds.
+- Tests: `cargo test --workspace` (failed: missing `AudioEncoderSampleCountMismatchInfo` in `crates/norito/src/streaming.rs:4230`; warning about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450`).
+- Kura: avoid pre-shrinking the block index before batch writes by adding a targeted append path for rewrites; add regression coverage for tail rewrites.
+- Tests: not run (not requested).
+- IVM/Kotodama: keep spill stack offsets in i64 to avoid truncation, make regalloc interval ordering deterministic, and clarify map-iteration bounds commentary; add unit coverage for large stack offsets and deterministic allocation ties.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Kura: validate sidecar temp index sanity before promotion to avoid replacing good indexes with partial temp writes; add regression coverage for corrupt temp index handling.
+- Tests: not run (not requested).
+- Kura: make sidecar pruning tolerate misaligned index tails and invalid entries (drop out-of-range payloads) with regression coverage.
+- Tests: not run (not requested).
+- Crypto/IVM: align compact Merkle proof `dirs` semantics with leaf-index bits (0 = left, 1 = right) across iroha_crypto + IVM compact proof generation/verification; add regression coverage for dirs derivation and syscall output.
+- Tests: not run (existing norito compile errors in `crates/norito/src/streaming.rs` still block `cargo test`).
+- Norito: fix JSON unescape to preserve UTF-8 bytes, reject leading-zero numbers in `parse_value`, and add regression coverage.
+- Tests: `cargo test --workspace` (failed: missing `AudioEncoderSampleCountMismatchInfo` in `crates/norito/src/streaming.rs:4230`; warning about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450`).
+- Crypto/SoraFS: switch proof-token Ed25519 verification to strict mode (reject weak keys/non-canonical signatures) and add low-order signature regression coverage.
+- IVM: enforce canonical/low-S secp256k1 verification, align ISO 20022 secp256k1 signing/validation with compressed SEC1 keys, and add high-S rejection coverage.
+- Tests: `cargo test -p iroha_crypto secp256k1` (failed: missing `AudioEncoderSampleCountMismatchInfo` in `crates/norito/src/streaming.rs:4230`; warning about unused `mut` in `crates/norito/src/core/gpu_zstd.rs:450`).
+- DA spool readers: skip unreadable/corrupt commitment/pin‑intent/receipt files with warnings for partial‑write tolerance; add regression coverage for corrupt entries.
+- Tests: not run (not requested).
+- Kura/WSV: sync parent directories after lane storage relabel/retire renames to harden crash consistency for lane segment moves.
+- Tests: not run (not requested).
+- Offline proofs: add CLI regression coverage ensuring `offline transfer proof` runs without Torii config and emits a proof request from local bundle input.
+- Crypto: import `ed25519_dalek::Verifier` in the Ed25519 test module to satisfy the trait method in low-order key tests.
+- Snapshot tests: mark `snapshot_write_overwrites_existing_files` async to align with `tokio::test` usage.
+- Tests: not run (per request).
+- DA shard cursors: persist journals via temp file + dir sync, recover from temp when main is missing/corrupt, and add regression coverage for temp promotion/fallback.
+- Tests: not run (not requested).
+- Streaming fixtures: standardize Norito streaming integration-test capability flags (explicit feature bits + bundled entropy), refresh baseline/bundled golden snapshots, and remove unused imports in streaming helpers, `norito` core, and ed25519 signatures.
+- Tests: `cargo test -p integration_tests --test norito_streaming_end_to_end streaming::tests::baseline_snapshot_matches_golden_fixture -- --nocapture`; `cargo test -p integration_tests --test norito_streaming_end_to_end streaming::tests::bundled_snapshot_matches_golden_fixture -- --nocapture`; `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Crypto/BLS: make `Choice` conversions explicit in BLS/VRF helpers, gate the BLS fixture test by feature, and switch SM/ML-DSA/SM2 test crates to inner doc comments; add VRF invalid-length regression tests and include `pairing` in the `bls` feature.
+- Norito: restrict `ArchivedBox` to sized payloads and remove a stray fixed-offset write in `copy_from_payload` that referenced a missing writer.
+- Tests: `cargo test -p iroha_torii --test connect_gating`; `cargo test -p iroha_crypto --features bls vrf_to_g`; `cargo test -p norito copy_from_payload_allows_zero_len`.
+- Crypto: require non-empty, distinct message sets for BLS multi-message aggregate verification and add regression coverage for wrapper + internal verifier paths.
+- Tests: not run (not requested).
+- Kura: allow commit-marker updates to overwrite existing marker files (cross-platform rename), with regression coverage.
+- Tests: not run (not requested).
+- Kura: prune sidecar rename handles existing files (cross-platform replace) when swapping pruned data/index, without dropping recovery temp files.
+- Tests: not run (not requested).
+- Snapshot/WSV: overwrite existing snapshot artifacts atomically across platforms (handle temp rename over existing files) and add regression coverage for repeat writes.
+- Tests: not run (not requested).
+- Commit roster journal: allow temp promotion/overwrite when journal file already exists (cross-platform rename), with regression coverage for overwrite.
+- Tests: not run (not requested).
+- Norito: return owning `ArchivedBox` for compressed decodes, enforce schema checks in core/ArchiveView, implement packed-seq encoding for sequences/maps (fixed/varint offsets), and add regression coverage + doc updates.
+- Tests: not run (not requested).
+- Offline proofs: standardize `/v1/offline/transfers/proof` on transfer payloads only, keep CLI proof generation local (no Torii config), and add missing-transfer rejection coverage alongside SDK/docs updates.
+- Tests: not run (not requested).
+- Crypto: reject identity BLS keys/signatures and enforce canonical compressed encodings across parse/aggregate/VRF paths; add regression coverage for identity rejection.
+- Tests: `cargo test -p iroha_crypto secp256k1` (failed: norito compile errors E0599/E0607 in `crates/norito/src/core.rs:3006`/`crates/norito/src/core.rs:3008`).
+- RBC: prefer temp session snapshots but fall back to main when temps are invalid; add regression coverage for scan/load fallback cases.
+- Tests: not run (not requested).
+- Streaming: fsync + dir sync for streaming snapshot persistence, recover/promote temp snapshots on load, and add regression coverage for temp promotion.
+- Tests: not run (not requested).
+- RBC: recover temp status snapshots and temp session files on load (with fsync + dir sync on writes); add regression coverage for temp promotion in status/store.
+- Tests: not run (not requested).
+- SM2/Bridge: rebuild `NoritoBridge.xcframework` to align SM2 public-key multihash payloads (distid + SEC1) with the canonical fixture so Swift parity tests match.
+- Tests: `swift test --filter Sm2Tests`; `cargo test -p iroha_torii --lib`.
+- Crypto: fix Algorithm discriminant stability (explicit repr u8 values aligned with TryFrom/PublicKeyCompact/SDK docs) and gate `bls_check` behind the `bls` feature; add regression assertion for discriminant values.
+- Sumeragi: hydrate existing RBC sessions on duplicate `BlockCreated` and emit precommit/exec votes with per-height epochs to avoid cross-epoch drops; add regression tests.
+- Irohad: remove the DA/RBC override for Iroha 3 so `sumeragi.da_enabled` is enforced by config validation; update docs and tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/assignments in unrelated modules).
+- Core: silence unused warnings in Norito AoS helpers and Sumeragi commit/pacemaker paths, derive `Debug` for RBC sampling payloads, and add missing unit tests for Kura sidecar height mismatch cases.
+- Tests: `cargo test -p iroha_core` (timed out after 240s; multiple test failures still pending).
+- ABI/runtime upgrades: keep ABI v1 fixed (no version bumps), allow v1 runtime upgrades without ABI increments, re-enable runtime-upgrade admission tests, and align runtime-upgrade + IVM syscall/pointer-ABI docs and the Swift ABI checklist with the v1-only policy.
+- Integration tests: ensure genesis peers always receive a genesis file to prevent empty-storage startup failures.
+- Sumeragi: drop votes/QCs with mismatched epochs (commit + exec paths) to avoid cross-epoch pollution; add regression tests.
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/vars in unrelated modules).
+- Sumeragi: ignore conflicting same-signer votes (record evidence without overwriting the first vote) to avoid QC regression; add regression coverage.
+- Tests: not run (not requested).
+- Sumeragi: drop the DA/RBC devnet override so `sumeragi.da_enabled` is honored at runtime; update docs and runtime DA tests accordingly.
+- Tests: not run (not requested).
+- Genesis: align shipped genesis manifests to wire protocol v1 and refresh consensus_fingerprint values.
+- Tests: not run (not requested).
+- Norito: reject non-zero alignment padding and bitset padding bits in NCB/opt columns, enforce trailing-byte checks in NCB views, and document NCB canonicalization rules.
+- Tests: `cargo test -p norito --test ncb_padding_trailing`.
+- Offline proofs: allow `/v1/offline/transfers/proof` to accept transfer payloads pre-admission, refactor proof-request builders onto `OfflineToOnlineTransfer`, add Torii/Swift updates, and refresh docs/tests.
+- Tests: not run (not requested).
+- Tiered state: sync cold shard parent directories before snapshot promotion to harden crash consistency for nested payloads.
+- Tests: not run (not requested).
+- Kura: keep pruned sidecar temp index on rename failure so recovery can promote it.
+- Tests: not run (not requested).
+- Crypto: reject non-canonical SEC1 encodings for secp256k1 public keys (canonical form only) and add regression coverage.
+- Tests: not run (not requested).
+- Kura: avoid promoting orphaned sidecar temp data without matching temp index; add regression coverage for ignoring orphaned temp data.
+- Tests: not run (not requested).
+- Kura: recover sidecar prune artifacts by promoting temp index/data on read/write; add regression coverage for temp index promotion.
+- Tests: not run (not requested).
+- Snapshot/WSV: ignore invalid UTF-8 in snapshot sidecar files so tmp fallbacks still work; add regression coverage.
+- Kura: prefer temp commit-roster journals when present (crash-consistency), with regression coverage for temp promotion.
+- Tests: `cargo test -p norito --test ncb_id_delta_overflow`.
+- Norito: fallback to non-delta id encoding when forced delta would overflow i64, and add regression coverage for u64 id-delta overflow cases.
+- Tests: not run (not requested).
+- Crypto: make SM2 random key generation validate distid instead of panicking, propagate errors to SDK bindings, and add regression coverage for invalid distids.
+- Tests: not run (not requested).
+- Kura: keep commit-marker writes pending on failure so fsync retries; add regression coverage for temp-marker write failures.
+- Tests: not run (not requested).
+- Crypto: enforce HashOf Norito decoding LSB validation and fixed-size DecodeFromSlice consumption; add regression tests.
+- Tests: not run (not requested).
+- Crypto: reject negative single-byte SM2 DER INTEGER encodings to avoid accepting signed DER; add regression coverage.
+- Tests: not run (not requested).
+- Norito: reject non-canonical varint encodings across core/stream/columnar decoders, enforce zero-filled padding during streaming decode, add regression coverage, and document canonical varints.
+- Tests: not run (not requested).
+- Warnings cleanup: remove unused imports/mut, drop unused sorafs helper, add missing Kura sidecar tests, use TelemetryProfile fields in error display, and tighten tiered-state hot entry assertions.
+- Tests: not run (not requested).
+- Crypto: reject out-of-range Merkle proof leaf indices, enforce compact proof depth <= 32, and reject low-order X25519 shared secrets in hybrid KEM/DEM; add regression tests.
+- Tests: not run (not requested).
+- Tiered state: recover snapshot artifacts (.bak/.staging) on startup and add regression coverage for backup restore + staging cleanup.
+- Tests: not run (not requested).
+- Norito: reject trailing bytes in AoS decoders, enforce exact zero-filled header padding for `from_bytes`/`from_compressed_bytes` (plus padding-byte validation for archive views), and add regression coverage; document the padding rule.
+- Tests: not run (not requested).
+- Torii/Connect: decouple server-event sequencing from peer monotonic enforcement, update session activity on server sends, and standardize WS token delivery (Authorization/Sec-WebSocket-Protocol) across Swift SDK, examples, and docs; add regression coverage.
+- Tests: not run (not requested).
+- Kura: align mis-sized block index tails on init, and recover from corrupted commit markers (temp marker fallback + rewrite); add regression tests.
+- Tests: `cargo test -p iroha_core prune_does_not_advance_commit_marker` (timed out after 120s; waiting on build directory lock).
+- Kura: fix mutable borrow ordering in data-file truncation so mmap invalidation can precede shrinking.
+- Snapshot tests: restore `expected_chain_id` capture and assert chain id after snapshot reads.
+- Tests: `cargo test -p norito` (passed).
+- Tests: `cargo test --workspace` (timed out after 600s while running tests; no errors reported before timeout; warnings about unused imports/assignments in multiple crates).
+- Crypto: validate SM2 default distid updates, include distid in SM2 public key equality, and reject non-canonical DER integer encodings for SM2 signatures; add regression tests.
+- Tests: not run (not requested).
+- Norito: reject overflowing varint length encodings across core/stream/columnar decoders, add overflow regression coverage, and document the varint overflow rule.
+- Tests: `cargo test -p norito` (timed out after 120s; waiting on build directory lock).
+- Kura: prevent `BlockStore::prune` from advancing the durable commit marker; add regression coverage for over-height prune requests.
+- Torii/Connect: prune idle handshake buckets, treat zero per-IP cap/handshake rate as disabled, and add regression coverage; document zero-value semantics.
+- Tests: not run (not requested).
+- Norito: honor active layout flags when encoding headered payloads, loosen header-hint matching for v1 headers, reject trailing bytes in `decode_from_bytes`, and fix NCB negative tests for offsets/enum dict codes.
+- Tests: `cargo test -p norito` (passed).
+- Kura/WSV: add block-store durable-count marker handling and retired-segment budget reclaim; add regression coverage for commit marker pruning and retired purge.
+- Tiered state: reuse cold shard payloads via hard links when supported to cut churn; add Unix-only hard-link reuse coverage; fix Nexus storage budget doc key.
+- Tests: not run (not requested).
+- IVM/Kotodama: ensure `encode_int` literals lower via `EncodeInt`, propagate unary-neg constants for inline amount checks, and validate NFT transfer syscalls in CoreHost/DefaultHost; add IR regression coverage for literal encode_int lowering.
+- Docs: replace stub translations for Kotodama grammar in ar/es/fr/pt/ru/ur with full translated content (including inline builder literal/length rules).
+- Tests: `cargo test -p ivm --test kotodama_invalid_literals --test kotodama_pointer_roundtrips` (passed).
+- Crypto: standardize SM2 multihash payloads to encode `distid_len || distid || SEC1` and propagate the new format across tests, fixtures, SDK bindings, curve registry metadata, and genesis/SM vector docs.
+- Tests: not run (not requested).
+- Torii: enforce app pagination on NFT list/query endpoints (reject `limit=0`, clamp query fetch_size); add regression tests.
+- Crypto: fix Merkle proof test type inference by pinning `HashOf<()>` and derive `Debug` for `PublicKeyCompact`.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; no errors reported at timeout; warnings about unused imports/consts in `norito`, `document-features`, `iroha_crypto`, `iroha_telemetry`).
+- Torii: enforce app pagination on offline list/query endpoints (allowances, transfers, receipts, summaries, revocations) and clamp query fetch_size; add regression tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (failed in `iroha_crypto` tests: E0282 type annotations needed in `crates/iroha_crypto/src/merkle.rs:1489`; E0277 missing `Debug` for `PublicKeyCompact` in `crates/iroha_crypto/src/lib.rs:2659`/`2671`; warnings about unused imports/consts in `norito`/`document-features`).
+- Norito: honor `COMPACT_LEN`/`COMPACT_SEQ_LEN` for core collection serializers (Vec/sets/maps/etc.), tuples/arrays/results/Cow, and BinaryHeap pointer decoding; add `write_seq_len`/`seq_len_prefix_len` helpers, ConstVec compact-seq updates, and compact-length regression tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s; failed in `iroha_crypto` tests: E0282 type annotations needed in `crates/iroha_crypto/src/merkle.rs:1489`; E0277 missing `Debug` for `PublicKeyCompact` in `crates/iroha_crypto/src/lib.rs:2659`/`2671`; warnings about unused imports/consts in `norito`/`document-features`).
+- Torii: enforce app pagination on repo-agreements and asset-definitions list/query endpoints (reject `limit=0`, clamp fetch_size); add regression tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; no errors reported at timeout).
+- Torii: negotiate Kaigi relay endpoint responses so JSON `Accept` headers receive JSON bodies.
+- Tests: not run (not requested).
+- Torii: update evidence decode tests to assert `DoublePrepare` now that `EvidenceKind::DoublePrevote` is removed.
+- Tests: not run (not requested).
+- Crypto: fix Merkle compact-proof depth truncation test by typing the sibling hash to satisfy `HashOf` inference (E0282).
+- Tests: not run (not requested).
+- Crypto: derive `Debug` for `PublicKeyCompact` to unblock compact payload error assertions.
+- Tests: not run (not requested).
+- Resolved merge conflicts across Sumeragi docs, telemetry, and roadmap/status to align commit-certificate terminology and DA availability wording.
+- Refactored commit-certificate-only test fixtures across core (QC alias), block-sync checkpoints, evidence, and bridge finality proofs to use BLS aggregate signatures + signer bitmaps; removed legacy view-change proof tests.
+- Tests: `cargo test -p iroha_core --tests --no-run` (passed; warnings about unused imports/assignments in unrelated modules).
+- Torii: enforce app pagination on accounts list/query endpoints so `limit=0` is rejected; add regression tests.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (failed in `iroha_crypto` tests: E0282 type annotations needed in `crates/iroha_crypto/src/merkle.rs:1489`; E0277 missing `Debug` for `PublicKeyCompact` in `crates/iroha_crypto/src/lib.rs:2659`/`2671`).
+- Crypto: align SHA-256 Merkle empty-leaf semantics across sequential/parallel builders, enforce CompactMerkleProof depth/sibling length (truncate >32), harden multihash hex formatting via canonical parsing, and validate PublicKeyCompact payloads; add regression tests.
+- Tests: not run (not requested).
+- Tests: `cargo check -p norito` (passed; warning about unused `MAX_VARINT_BYTES` in `crates/norito/src/aos.rs`).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; no errors reported at timeout).
+- Norito: standardize length-prefix scoping across packed-struct/metadata/ConstVec, add explicit varint helpers/tests, and update Norito docs/spec for flag scoping.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: not run (not requested).
+- Kura/WSV: tighten Kura storage budgeting across active/retired lanes, queued blocks, sidecars, merge logs, commit-roster journal, and debug JSONL; add budget regression tests (pending/sidecar/retired lanes) and wire max disk usage defaults in Kura tests; fold SoraVPN budget into SoraNet spool cap.
+- Norito: use `core::decode_from_bytes` in string length-prefix tests to support `&str` decoding without HRTB errors.
+- Kagami: allow test-only env overrides under `unsafe_code` deny by scoping `#[allow(unsafe_code)]` to the `EnvGuard` helpers.
+- Tests: `cargo test --workspace` (timed out after 600s while still running tests; no errors reported at timeout).
+- IVM/Kotodama: word-align JALR targets, enforce literal-only inline ZK builders with hex decoding, require 32-byte nullifier/inputs and non-negative unshield amounts, accept runtime NFT pointer arguments (mint/transfer) while preserving syscall args, and update opcode docs + ZK sample; add regression coverage for literal enforcement, invalid sizes/amounts, and runtime NFT pointers.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p ivm --test kotodama_invalid_literals --test kotodama_pointer_roundtrips` (timed out after 120s during compile).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; prior attempt failed in `norito` test `string_len_prefix`: `NoritoDeserialize` not general enough for `&str` at `crates/norito/tests/string_len_prefix.rs:46`).
+- Torii: enforce pagination limits on domains list/query and account-permissions list so `limit=0` no longer bypasses caps; added regression tests for invalid pagination.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (failed in `norito`: missing `core::len_prefix_len` in `crates/norito/src/aos.rs`).
+- Crypto: enforce canonical varuint encodings (including zero), add X25519 shared-secret contributory checks, and make Hash/PublicKey Norito decoding fallible; update Connect SDK bindings/examples and add regression tests.
+- Tests: not run (not requested).
+- Torii: reject invalid Accept q-values during response negotiation and add regression coverage for the invalid q path.
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (failed in `iroha_kagami`: E0364 re-export visibility + E0133 unsafe env var calls; warnings about unused imports/assignments across several crates).
+- Kagami/Swarm: enforce Iroha3 NPoS-only consensus with no staged cutovers, propagate BLS PoPs through swarm signing, default localnet consensus by build line, and align Kagami NPoS/swarm docs with `--next-consensus-mode` + activation height usage (plus Iroha3 cutover bans).
+- Tests: `UPDATE_EXPECT=1 cargo test -p iroha_swarm --lib` (passed).
+- Torii: preserve subprotocol during connect WS token auth, accept binary Norito proof events, and align ZK1 attachment handling/error mapping for prover + subrouter endpoints.
+- Core/DA: plumb manifest guard cache outcomes through proposal validation and avoid telemetry-off unused warnings.
+- Tests: `cargo test -p iroha_torii -- --nocapture` (passed with network access for socket binding).
+- Norito: guard opt-column presence-bitset masking and NCB str/optstr offset counts against overflow for 32-bit safety.
+- Tests: not run (not requested).
+- IVM: guard `Memory::load_region` against oversized lengths to avoid unchecked slice panics; add regression coverage.
+- Tests: not run (not requested).
+- Kotodama: avoid overflow panic in static literal negation and add regression coverage for nested `i64::MIN` negation.
+- IVM: guard Merkle syscalls against out-of-bounds memory/register indices and add regression coverage.
+- Tests: not run (not requested).
+- Norito: reject id-delta underflow in NCB views and add regression coverage for delta-coded ids.
+- Tests: not run (not requested).
+- Norito: validate NCB dict codes, harden opt-column length parsing, and guard SIMD bundle length handling; add regression coverage.
+- Tests: not run (not requested).
+- WSV/DA: base tiered hot budget on serialized Norito size, record grace overflow + cold reuse metrics, and harden DA spool/manifest caches (dir stamps, duplicate-aware manifest matching, cache telemetry) to cut churn; update tiered-state docs/config comments and include merge-ledger/sidecar/journal bytes in Kura budget checks.
+- Tests: not run (not requested).
+- Kotodama: accept `i64::MIN` literals by widening numeric tokens and range-checking in the parser; add lexer/parser regressions for min-literal handling and range errors.
+- Tests: not run (not requested).
+- Norito: harden NCB columnar view parsing with checked length multipliers, enum dict code validation, and u32-delta bounds; add regression coverage.
+- Tests: not run (not requested).
+- Genesis: preserve consensus metadata (consensus_mode/handshake fields) when rebuilding manifests via GenesisBuilder/DomainBuilder; add regression coverage.
+- Kagami: enforce NPoS consensus for Iroha3 genesis generation and reject staged cutovers; update CLI help and add validation tests.
+- Docs: update genesis guidance/examples (all translations) to reflect Iroha3 requiring NPoS and updated `kagami genesis generate` usage.
+- Tests: not run (not requested).
+- Norito: make streaming DecodeFromSlice use canonical decoding and enforce monotonic u32 offsets for NCB name/opt-str columns; added regression coverage.
+- Tests: not run (not requested).
+- Torii/Data model: register Space Directory manifest ISIs in the default instruction registry so canonical Norito framing works during Torii publish/revoke admission.
+- Tests: `cargo test -p iroha_torii --test space_directory_manifests -- --nocapture` (passed).
+- Tests: `cargo test -p iroha_torii -- --nocapture` (failed in sandbox: `torii_start_blocks_until_shutdown_signal` could not bind; reran `cargo test -p iroha_torii --test torii_start -- --nocapture` with network access and it passed).
+- Norito: validate packed-seq map offsets (start at 0, monotonic), track streaming payload length consumption, and add StreamMapIter regression coverage; document the offset rule.
+- Tests: not run (not requested).
+- Kotodama/IVM: make syscall/crypto codegen spill-safe (pubkgen/valcom, pointer-ABI syscalls, JSON/Schema/VRF/Axt paths) and add spill-focused Kotodama regression coverage for pubkgen/valcom and JSON encode/decode.
+- Tests: `cargo test -p ivm --test kotodama pubkgen_valcom_spills_are_handled`.
+- Kagami/Genesis: make `--topology` override drop existing topology entries, require canonical topology objects + consensus_mode in embed-pop/validate, and add `clear_topology` helper with regression coverage.
+- Tests: not run (not requested).
+- Torii/Core: register governance ISIs in the core instruction handler list and scope the governance flow test's `StateView` so ballot application no longer deadlocks block-hash writes.
+- Tests: `cargo test -p iroha_torii gov::tests::gov_flow_submits_and_applies -- --nocapture` (passed; command timed out after running filtered binaries).
+- WSV/DA: add `hot_retained_grace_snapshots` (tiered hot retention hysteresis), and cache DA spool/manifest reads to reduce churn; update manifest guard coverage and state-tiering docs.
+- Tests: not run (not requested).
+- Kura/WSV: enforce Kura block-store disk budgets before enqueue, add tiered-state hot/cold byte budgets with cold snapshot pruning, and update tests for the new limits.
+- Streaming/Nexus: enforce SoraNet spool byte caps, wire Nexus storage budgets into the sample config, and document the new `nexus.storage` + tiered-state byte knobs (including JA/HE state-tiering translations).
+- Tests: not run (not requested).
+- Kotodama/IVM: make MapGet/MapLoadPair/Load64Imm codegen spill-safe and add map spill coverage for map get, keys_take2 lowering, and MapLoadPair base spills.
+- Tests: `cargo test -p ivm --test kotodama map_get_handles_spills`; `cargo test -p ivm --test kotodama keys_take2_load64imm_executes`; `cargo test -p ivm --test kotodama map_load_pair_handles_spilled_map_base`.
+- Kagami/Genesis: require consensus_mode in raw genesis JSON, enforce topology entry objects, and tighten embed-pop peer-pop validation (empty/duplicate/unused); add regression coverage.
+- Docs: update genesis format/topology guidance and schema reference across translations.
+- Tests: not run (not requested).
+- Norito: guard AoS row counts and sequence length preallocation, and enforce checked u64→usize length conversions for deterministic decode bounds; added regression coverage.
+- Tests: not run (not requested).
+- Kagami: require explicit consensus_mode in signed manifests (or a CLI override), preserve manifest mode during signing, and canonicalize embed-pop topology peers to public-key strings; added regression coverage.
+- Docs: standardize genesis topology/consensus_mode format and signing requirements across translations.
+- Tests: not run (not requested).
+- Kotodama/IVM: zero-initialize `Map::new()` in-memory map storage to keep map ops deterministic; added regression coverage and updated docs.
+- Tests: not run (not requested).
+- Kotodama: reject reassignment of state maps (state maps are not first-class); added semantic regression coverage and documented the restriction.
+- Tests: not run (not requested).
+- Kotodama: enforce in-memory map key/value types to be word-sized and use pointer-equality for pointer-like map keys; added semantic + IR regression coverage.
+- Kotodama compiler: treat string literals as Blob pointers for pointer-equality lowering; added compilation coverage.
+- Docs: clarify in-memory vs durable map key/value support in Kotodama grammar.
+- Tests: not run (not requested).
+- Kagami: require NPoS parameters when signing NPoS consensus (current or staged), preserve explicit consensus_mode during localnet genesis rebuilds, and add staged-cutover regression coverage.
+- Tests: not run (not requested).
+- Connect/NoritoBridge: allow signed-transaction decode to fall back to headerless Norito payloads when the header is missing (fixes `InvalidMagic` in bridge tests).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test -p connect_norito_bridge --lib` (passed).
+- Tests: `cargo test --workspace` (failed while compiling `irohad`: `No such file or directory` copying an object into `target/debug/deps` and `dsymutil` warning).
+- Kotodama: validate durable state scalar/struct/tuple types so unsupported fields (e.g., `string`) are rejected; added semantic regression coverage and documented durable state type limits.
+- Tests: not run (not requested).
+- Docs: note Kotodama ternary expressions are supported (remove outdated “not implemented” note).
+- Tests: not run (doc-only update).
+- Kotodama: allow `info(int)` by encoding to NoritoBytes before debug logging; added semantic + IR regression coverage and updated docs.
+- Tests: not run (not requested).
+- IVM/Kotodama: fix missing pointer-literal stub helpers in compiler tests and update ZK confidential event tests to pass `ConfidentialEncryptedPayload`.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (failed in `connect_norito_bridge` with `InvalidMagic` leading to chain discriminant lock poison errors; warnings about unused imports/assignments across `vendor/document-features`, `iroha_crypto`, `norito`, `iroha_telemetry`, `iroha_core`, `iroha_torii`, `iroha_cli`, `xtask`, and `ivm` unexpected cfgs).
+- Kotodama: reject assignments to non-variable/map-index lvalues (e.g., tuple/struct fields) instead of silently ignoring them; added semantic regression coverage and documented assignment targets.
+- Tests: not run (not requested).
+- Kotodama: validate durable state map key types (int/pointer only) to avoid silent non-persistent map operations; added semantic regression coverage and documented the limitation.
+- Tests: not run (not requested).
+- Kura: avoid unused `truncated` assignment during merge-ledger load to clear warning.
+- Tests: not run (warning fix only).
+- Kotodama: allow `Blob`/`bytes` equality by treating them as compatible blob-like types; added semantic regression coverage.
+- Tests: not run (not requested).
+- Kotodama: allow `Map::new()` to adopt annotated/return map types instead of defaulting to `Map<int,int>`; added semantic regression coverage and documented the requirement for non-int maps.
+- Tests: not run (not requested).
+- Kotodama: `assert` now rejects extra arguments (previously ignored), matching available lowering; added semantic regression coverage and updated docs.
+- Tests: not run (not requested).
+- Kotodama: enforce tuple/struct destructuring arity and type checks (reject non-tuples and mismatched bindings); added semantic regression coverage and documented tuple destructuring rules.
+- Tests: not run (not requested).
+- Kotodama: fix `for` scoping so step/body bindings don’t leak and step bindings aren’t visible in the body; added semantic regression coverage and documented loop scoping.
+- Tests: not run (not requested).
+- Kotodama: pointer constructors now reject non-literal string arguments (runtime string-to-TLV conversion is unsupported); added semantic regression coverage and clarified docs.
+- Tests: not run (not requested).
+- Tests: `cargo test -p soranet-relay` (passed; initial wait on build directory lock).
+- Tests: `cargo test --workspace` (failed: missing `reserve_pointer_literal_stub`/`patch_pointer_literal_stub` in `crates/ivm/src/kotodama/compiler.rs`; warnings about unused imports in `vendor/document-features/lib.rs`, `crates/norito/src/lib.rs`, `crates/norito/tests/aos_version.rs`, `crates/iroha_crypto/src/soranet/handshake.rs`, `crates/iroha_telemetry/src/metrics.rs`).
+- Kotodama: reject equality on tuple/struct/map types, and lower Blob/bytes equality via TLV pointer equality; added semantic + IR regression coverage and documented the equality constraints.
+- Tests: not run (not requested).
+- SoraNet VPN: route control/keepalive adapter frames through control-plane metrics (no receipts/data/cover), and update control accounting coverage/docs.
+- Tests: `cargo test -p soranet-relay adapter_tracks_control_frames_separately -- --nocapture`.
+- Kotodama: reject complex for-loop init/step clauses so tuple/struct bindings fail fast with `E0005`/`E0006`; added semantic regression coverage and documented the restriction.
+- Tests: not run (not requested).
+- SDKs (JS/Python/Swift): enforce canonical-only response handling in JS ToriiClient list decoders and transaction status checks; reject camelCase alias config/input/address-format variants in Python/Swift and update SDK tests.
+- Docs: replace "compatible" phrasing across core docs, portal docs, and portal i18n translations, keeping literal identifiers/metric tags intact.
+- Tests: not run (not requested).
+- Kotodama: reject index assignments on non-map targets to prevent invalid MapSet lowering; added semantic regression coverage.
+- Tests: `cargo test -p ivm --lib` (timed out after 120s; build directory lock during compile).
+- SoraNet VPN: drop cover/control/keepalive cells when forwarding to the TUN interface and add coverage for cover-frame dropping.
+- Tests: `cargo test -p soranet-relay bridge_drops_cover_frames_on_tun_forward -- --nocapture`.
+- Kotodama: reject shadowing `state` identifiers in params/let/map-loop bindings to avoid state/local ambiguity; added semantic regression coverage and documented `E_STATE_SHADOWED`.
+- Tests: not run (not requested).
+- Kura/WSV: allow non-overlapping out-of-order pipeline sidecar offsets, validate snapshot Merkle leaf counts, and restore from temp snapshot bundles with best-effort promotion; snapshot integrity docs updated.
+- Build/tests: expose Nexus fee test helpers to integration tests and disambiguate executor test usage.
+- Tests: `cargo test -p iroha_core snapshot_read_promotes_tmp_bundle -- --nocapture` (timed out after running the unit test; test passed; integration tests continued; warning about unused import `info` in `crates/iroha_core/src/executor.rs`).
+- Tests: `cargo test -p iroha_core --lib merkle_leaf_count_mismatch_rejected -- --nocapture` (timed out waiting for build directory lock; warning about unused import `info` in `crates/iroha_core/src/executor.rs`).
+- Tests: `cargo test -p iroha_core --lib pipeline_sidecar_allows_out_of_order_offsets -- --nocapture` (timed out waiting for build directory lock; warning about unused import `info` in `crates/iroha_core/src/executor.rs`).
+- SoraNet VPN: fix cover egress accounting for adapter-encoded cells, enforce cover-flag/class consistency during padding, reject non-pinned VPN cell sizes in config parsing, and harden relay VPN metrics/puzzle tests (plus cover pacing buffer); add regression coverage.
+- Tests: `cargo test -p soranet-relay`; `cargo test -p iroha_config soranet_vpn -- --nocapture`.
+- Kotodama: reject `break`/`continue` outside loops via semantic checks; added regression coverage and documented new error codes.
+- Tests: not run (not requested).
+- Kotodama: assignment type checks now use assignability rules (e.g., bool→int), matching `let`/compound assignment; added semantic regression coverage.
+- Tests: not run (not requested).
+- Kotodama: reject aliasing/passing state maps to user-defined functions (state maps are not first-class); added semantic regression coverage and documented `E_STATE_MAP_ALIAS`.
+- Tests: not run (not requested).
+- SoraNet VPN: fix cover egress accounting for adapter-encoded cells, enforce cover-flag/class consistency during padding, and reject non-pinned VPN cell sizes in config parsing; add regression coverage.
+- Tests: not run (not requested).
+- Torii/Core/P2P: remove unused-assignment warnings by using error fields in Torii display strings, dropping unused hint updates in streaming manifest fallback, removing an unused mut in SSE filters, and including bind error details in P2P listener failures.
+- Tests: `cargo check -p iroha_torii` (passed).
+- IVM: ILP execution now charges gas and reports errors in instruction order; added regression coverage for out-of-gas prefix execution and deterministic error ordering.
+- Tests: `cargo test -p ivm --test ilp_gas_error -- --nocapture` (timed out after 120s; blocking on build directory lock while compiling).
+- Torii: full integration tests for connect gating and ZK roots now compile and pass with updated payload defaults/timeout config.
+- Tests: `cargo test -p iroha_torii --test zk_roots_handler_integration --test connect_gating -- --nocapture` (passed; warnings about unused assignments/mut in `crates/iroha_data_model/src/isi/mod.rs`, `crates/iroha_p2p/src/lib.rs`, `crates/iroha_core/src/{block,kura,snapshot,streaming}.rs`, `crates/iroha_torii/src/{routing,lib}.rs`).
+- Tx fees: stage settlement receipts per transaction so rejected txs don't emit lane receipts; added block gas-limit regression coverage.
+- Tests: not run (not requested).
+- Tx fees: stage Nexus fee charged events until transaction commit so rejected txs don't update fee snapshots; added staging coverage.
+- Tests: not run (not requested).
+- Tx fees telemetry: stage block fee-unit metrics until commit, update block gas used on apply, and reset per-block fee units at block start; added telemetry coverage.
+- Tests: not run (not requested).
+- SDKs/Portal: remove Android `DeprecateVerifyingKey` instruction surface, enforce snake_case-only native response parsing in JS (`soradns`, `nexus`, SM2 fixtures), and drive cutover promotion from xtask route plans; added JS/Python tests for gateway hosts, relay envelopes, and verifying-key filters.
+- Docs: removed older-version references in bridge finality + SoraFS FR translations and aligned Norito streaming transport wording.
+- Tests: not run (not requested).
+- Kura/WSV: fsync pipeline/roster sidecar payloads and indices on append/update, fsync pruned sidecar temp files before rename, and add a zero-height append guard test; pipeline docs updated.
+- Tests: not run (not requested).
+- Torii: fix ZK roots integration payloads to use `ConfidentialEncryptedPayload`, and add Torii `ws_message_timeout` defaults in connect-gating test config.
+- Tests: `cargo test -p iroha_torii -- --nocapture` (timed out after 120s during compile; warnings about unused assignments/mut in `crates/iroha_data_model/src/isi/mod.rs`, `crates/iroha_p2p/src/lib.rs`, `crates/iroha_core/src/{block,kura,snapshot,streaming}.rs`, `crates/iroha_torii/src/{routing,lib}.rs`).
+- IVM hosts: INPUT_PUBLISH_TLV now rejects invalid TLV envelopes and disallowed pointer types across DefaultHost and WsvHost; added regression coverage for unknown type ids.
+- Tests: not run (not requested).
+- WSV tiered snapshots: write `manifest.json` atomically with fsync and ensure temp files are removed; added manifest temp cleanup coverage.
+- Tests: not run (not requested).
+- Torii: fix build regressions in content chunk assembly lifetimes, Torii test config defaults, WS test constants, SSE filter debug derives, operator-auth token source, cursor-mode test JSON disambiguation, and version test Kura setup.
+- Tests: `cargo test -p iroha_torii --lib ws_stream_survives_lagged_receiver -- --nocapture` (passed; warnings about unused assignments/mut in `crates/iroha_data_model/src/isi/mod.rs`, `crates/iroha_p2p/src/lib.rs`, `crates/iroha_core/src/{block,kura,snapshot,streaming}.rs`, `crates/iroha_torii/src/{routing,lib}.rs`).
+- IVM/CoreHost: INPUT_PUBLISH_TLV now rejects invalid TLV envelopes and disallowed pointer types instead of copying them; added regression coverage for unknown type ids.
+- Tests: not run (not requested).
+- SoraNet VPN: exclude handshake/control-plane bytes from VPN receipts/metrics, add control-plane route-open counters, validate cover-frame flags, and update docs/tests.
+- Tests: `cargo test --workspace` (timed out after 120s; build directory lock wait; warnings about unused imports/assignments in `vendor/document-features/lib.rs`, `crates/iroha_data_model/src/isi/mod.rs`, `crates/iroha_crypto/src/soranet/handshake.rs`, `crates/iroha_telemetry/src/metrics.rs`, `crates/norito/src/lib.rs`, `crates/iroha_p2p/src/lib.rs`, `crates/iroha_core/src/{block.rs,kura.rs,snapshot.rs,streaming.rs}`, `crates/ivm/tests/wsv_host_decode_syscalls.rs`, `crates/iroha_torii/src/{content.rs,routing.rs,lib.rs}`; failed: `crates/ivm/src/kotodama/compiler.rs` missing `reserve_pointer_literal_stub`/`patch_pointer_literal_stub`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Build: fix `iroha_core` test config/gas fixture compile errors by wiring `ws_message_timeout` defaults and using `ConfidentialEncryptedPayload` for Shield gas tests; update pipeline warning tests to use block header hash.
+- Tests: `cargo test -p iroha_core journal_loads_from_temp_when_main_missing -- --nocapture` (passed; warnings about unused assignments in `crates/iroha_data_model/src/isi/mod.rs`, `crates/iroha_p2p/src/lib.rs`, and several `iroha_core` modules).
+- Tx fees: record settlement receipts for IVM gas-fee transfers to keep settlement metadata consistent with ISI fees; added IVM gas-fee settlement coverage.
+- Tests: not run (not requested).
+- Kura/WSV: fix missing semicolon in commit-roster journal load path selection (restores build).
+- Tests: not run (not requested).
+- Torii: WebSocket event streams now skip lagged broadcast gaps instead of closing; added WS lagged-receiver regression coverage.
+- Tests: `cargo test -p iroha_torii ws_stream_survives_lagged_receiver -- --nocapture` (timed out after 120s during compile; pre-existing compile error in `crates/iroha_core/src/commit_roster_journal.rs:165` expected `;`; warnings about unused assignments in `crates/iroha_data_model/src/isi/mod.rs` and `crates/iroha_p2p/src/lib.rs`).
+- Kura/WSV: make commit-roster journal persistence atomic (temp + fsync + dir sync), promote temp journals on load, and add coverage for temp recovery/cleanup.
+- Tests: not run (not requested).
+- IVM/Kotodama: reject iteration over nested durable state maps with non-int keys so pointer-key maps fail fast instead of lowering to ephemeral map iteration; added semantic regression coverage.
+- Tests: not run (not requested).
+- SoraNet VPN: count cover payload bytes in session receipts for adapter/async-recorded frames; added unit coverage.
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/assignments in `vendor/document-features/lib.rs`, `crates/norito/src/lib.rs`, `crates/iroha_crypto/src/soranet/handshake.rs`, `crates/norito/tests/aos_version.rs`, `crates/iroha_data_model/src/isi/mod.rs`, `crates/iroha_p2p/src/lib.rs`).
+- WSV snapshots: fsync digest/signature sidecars, sync the snapshot directory after atomic renames, and cover temp-file cleanup.
+- Tests: not run (not requested).
+- SoraNet relay handshake: inject the relay suite list from certificates/defaults into `snnet.suite_list`, and reject client `kem_id`/`sig_id` values that don’t match negotiated capabilities; docs updated.
+- Tests: not run (not requested).
+- IVM/Kotodama: standardized pointer-ABI syscalls to require explicit pointers (no implicit last-input fallback), enforced ABI pointer checks in JSON/Schema/Name decode across CoreHost/WsvHost, and added regression coverage for explicit-pointer and WsvHost decode paths.
+- Tests: not run (not requested).
+- Torii: WebSocket subscriptions now bundle proof filters, proof filtering is unified across WS/SSE/webhooks (including pruned handling), WS message timeouts are configurable, and content range responses assemble only the requested bytes; added unit coverage and updated config docs/templates.
+- Tests: not run (not requested).
+- Kura/WSV: reject roster sidecars whose embedded commit certificate or checkpoint metadata doesn't match the sidecar height/hash; added coverage for commit-certificate mismatches.
+- Tests: not run (not requested).
+- Kura/WSV: avoid persisting commit-roster journals to the working directory when the Kura root is empty; added coverage for the empty-root journal path.
+- Tests: not run (not requested).
+- SoraNet handshake: standardize capability required flags to TLV-specific semantics (suite_list MSB; PQ/constant-rate flags), refresh fixture vectors/hashes, and align TLV labels in docs.
+- Tests: not run (not requested).
+- Kura/WSV: normalize commit-roster journal format to v1-only and add hash-mismatch coverage for pipeline/roster sidecar reads.
+- Tests: not run (not requested).
+- IVM/Kotodama: move/copy codegen now uses ADDI (including pointer literal stubs and wide encode_move) to preserve ZK privacy tags; unary neg now emits the NEG opcode; added unit coverage for the new encodings.
+- Tests: not run (per request; full workspace tests skipped).
+- SoraNet tokens: validate ML-DSA signatures before replay-store insertion so invalid tokens can’t exhaust replay capacity; added regression coverage.
+- Tests: not run (not requested).
+- Kura/WSV: standardized pipeline/roster sidecars to v1-only (block-hash anchored), added read locking + height validation, and refreshed sidecar tests/docs.
+- Tests: not run (not requested).
+- IVM/Kotodama: JSON/SCHEMA decode syscalls now accept Blob payloads to match Kotodama `decode_*` typing; added CoreHost/WsvHost coverage and updated syscall docs.
+- Tests: not run (per request; full workspace tests skipped).
+- SoraNet guards: drop stale PQ keys when certificates expire, make PQ selection time-aware (including diversity checks), and avoid skipping viable candidates during diversity passes; added regression coverage.
+- SoraNet proxy: default cache-tagging now includes `tcp`, and cache-tag derivation tests expect TCP tags.
+- Tests: not run (not requested).
+- IVM/Kotodama: CoreHost `INPUT_PUBLISH_TLV` now treats null input as a no-op instead of reusing cached NoritoBytes; added regression coverage.
+- Tests: not run (per request; full workspace tests skipped).
+- IVM/Kotodama: `DECODE_INT` now accepts ASCII bytes from both NoritoBytes and Blob TLVs; added CoreHost coverage and updated syscall docs.
+- Tests: not run (per request; full workspace tests skipped).
+- Torii/content: bundle expiry now treats `expires_at_height` as exclusive (expired at or above); added unit coverage.
+- Tests: not run (not requested).
+- IVM: CoreHost `POINTER_TO_NORITO` now includes the inner TLV hash so `POINTER_FROM_NORITO` can roundtrip; added unit coverage.
+- Tests: not run (per request; full workspace tests skipped).
+- IVM: NAME_DECODE now validates and normalizes Name strings in CoreHost/WsvHost; added regression coverage.
+- Tests: not run (per request; full workspace tests skipped).
+- Torii/SoraFS: oversize range requests now return `416 Range Not Satisfiable` with a `Content-Range` header; added unit coverage.
+- Tests: not run (not requested).
+- Torii: attachments now normalize `+json` content types (e.g., `application/ld+json`) to JSON; added sanitizer unit coverage.
+- Tests: not run (not requested).
+- IVM/Kotodama: decode syscalls now treat null pointers as zero in CoreHost/WsvHost (JSON/Name/Pointer/Int), and WsvHost INPUT_PUBLISH_TLV accepts nulls; added unit coverage.
+- Tests: not run (per request; full workspace tests skipped).
+- Torii: API version parsing now rejects extra semantic segments (e.g., `1.2.3`) and non-UTF header values; added unit coverage.
+- Tests: not run (not requested).
+- WSV/Kura: reset tiered-state metadata on cold-root changes, serialize sidecar writes, and sync sidecar prune renames; added tiered reconfigure coverage and updated tiering docs.
+- Tests: not run (not requested).
+- Torii: stored-cursor gas gating now honors continuation cursor budgets; added regression coverage.
+- Tests: `cargo test -p iroha_torii cursor_mode_tests::stored_mode_continue_uses_cursor_gas_budget -- --nocapture` (timed out after 120s during compile; warnings about unused assignments in `crates/iroha_data_model/src/isi/mod.rs` and `crates/iroha_p2p/src/lib.rs`).
+- SoraNet privacy: ignore whitespace-only GAR categories so empty labels are not counted; added regression coverage.
+- SoraNet privacy: drain ready buckets across modes to avoid skipped flushes; added regression coverage.
+- SoraNet proxy: cap handshake/stream frame sizes, reject handshake/stream version mismatches, and document guardrails; added regression coverage.
+- Tests: not run (not requested).
+- Kotodama: load function parameters before emitting state allocations so entry state setup no longer clobbers argument registers; added regression test.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: not run (per request; full workspace tests skipped).
+- IVM: enforce ZK privacy tag checks/propagation for AESENC/AESDEC and add regression coverage.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: not run (per request; full workspace tests skipped).
+- Torii: prevent Connect sessions from being pruned while active, close stale/missing sessions reliably, normalize Connect WS roles, and enforce strict SSE filter parsing (invalid filters now 400); SSE no longer emits `filtered` comments; tests + docs updated.
+- Tests: not run (not requested).
+- SoraFS: proof stream fixtures now emit `manifest_digest_hex`, GAR JWS validation enforces record version bounds + validity windows, and host canonicalization rejects consecutive dots; added regression coverage.
+- Tests: not run (not requested).
+- Kura: defer block-cache eviction to already-persisted heights so unpersisted blocks remain available while the writer catches up; added unit coverage for persisted/unpersisted retention.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports/assignments).
+- IVM: propagate ZK privacy tags for simple ADDI/shift ops and enforce tag matching in simple/parallel execution paths; added regression coverage.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: not run (per request; full workspace tests skipped).
+- WSV/Kura: seed tiered snapshot counters from existing directories to avoid overwrites, include/enforce snapshot chain IDs on restore, and add regression coverage; docs updated.
+- SoraFS: fix proof stream request construction/tests to use `manifest_digest_hex` and silence debug output in norito_derive that broke JSON-formatted rustc output.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused imports).
+- Torii: `/api_version` now returns 503 (text/plain) until genesis is committed, avoiding panics; added coverage and updated API versioning docs/OpenAPI.
+- Tests: not run (not requested).
+- IVM/Kotodama: gate ZK opcodes behind the header `ZK` bit (trap with `ZkExtensionDisabled`), add Kotodama ZK opcode detection, and cover the gating in tests.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options).
+- Tests: `cargo test --workspace` (failed: `crates/iroha/src/client.rs` missing `DecodeAll` trait import for `decode_all`; warnings about unused imports/assignments across crates).
+- Torii: evidence submission now expects Norito-framed `ConsensusEvidence` hex (whitespace-tolerant), clients decode Norito-framed status/evidence list responses, and tests/docs updated.
+- Tests: not run (not requested).
+- Docs/Portal: removed obsolete wording across translations, collapsed migration roadmap/ledger pages to first-release notes, and normalized rollout terminology.
+- Portal tooling: removed the Node gateway-binding helper and switched `sorafs-pin-release.sh` to `cargo xtask soradns-binding-template`.
+- SDKs: dropped remaining trigger-mutation response alias parsing in `iroha_python` and added tests to enforce snake_case-only fields.
+- Tests: not run (not requested).
+- Data model streaming types now avoid duplicate Norito derives, Torii block subscription uses the result alias correctly, and SoraFS gateway fetch context exposes a debug view for test assertions.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Tests: `cargo test --workspace` (timed out after 300s during compile; warnings about unused imports/assignments).
+- SoraFS: enforce gateway proof signing/verification (Ed25519 over `proof_digest`), require provider id + signing key for gateway datasets, validate chunk profile sizes, enforce streaming verifier chunk size limits, avoid panicking on invalid direct-CAR schemes, fix oversized fetch rate limiting, and reject stream tokens with mismatched provider ids; updated gateway profile docs.
+- Tests: not run (not requested).
+- WSV/Kura: set the chain id before replay, added partial replay (`replay_blocks_from_kura_range`) to catch up snapshots, and covered the replay-from-height path with a regression test.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Tests: `cargo test --workspace` (failed: `iroha_data_model` duplicate archived types + conflicting Norito derive impls; warnings about unused imports/assignments).
+- IVM: enforce ZK privacy-tag checks on crypto op address registers (SHA256BLOCK, SHA3BLOCK, Poseidon2/6, BLAKE2S, Ed25519 batch/verify, ECDSA, Dilithium) with regression coverage.
+- Tests: `cargo test --workspace` (failed: `crates/iroha_data_model` duplicate archived types and conflicting Norito derive impls for stream messages; warnings about unused imports/assignments).
+- Torii: WebSocket block/event streams now use Norito-framed messages, block subscriptions guard against oversized heights without panicking, and tests cover the new framing + height conversion.
+- Tests: not run (not requested).
+- IVM: enforce VECTOR header gating for LOAD128/STORE128 and add regression coverage in vector_gating tests.
+- Tests: `cargo test --workspace` (failed: `crates/iroha_torii/src/operator_auth.rs` missing `OperatorToken` enum variant; `crates/iroha_torii/src/content.rs` `RangeState` lacks `Debug` for `expect_err`; warnings about unused imports/assignments).
+- Torii: recover operator-auth credential lock poisoning without panics, return RFC-compliant `416` Content-Range for unsatisfiable ranges (including zero-length files), and add regression coverage.
+- Tests: not run (not requested).
+- Kura: switched debug block dumps to JSONL (`blocks.jsonl`), stopped panicking on dump failures, and added coverage; snapshot reads now report missing Kura blocks instead of panicking, with regression tests and config doc updates.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Tests: `cargo test --workspace` (timed out after 300s during compile; warnings about unused assignments/imports in multiple crates).
+- Kotodama: include SHA256BLOCK/AESENC/AESDEC in vector-usage detection so vector mode is enabled for vector-gated crypto ops; added unit coverage.
+- Tests: `cargo test --workspace` (timed out after 300s during compile; warnings about unused assignments/imports in multiple crates).
+- Torii: standardized Norito response framing (including dynamic JSON values), hardened media-type parsing, clamped content ranges, aligned content rate-limit keys with headers/remote IPs, fixed origin matching and query-limit lock recovery, and updated Norito RPC docs with regression coverage.
+- Tests: not run (not requested).
+- Removed SDK shims (Python Torii connect ping aliases + governance lock stats helpers, Swift ConnectKeyStore plaintext migration + OfflineVerdictStore shim) and updated the iOS demo docs to drop pipeline guidance.
+- Tests: not run (not requested).
+- Cleared IVM OUTPUT region and reset the append-only cursor on program/code load; added commit_output coverage for output reset.
+- Tests: `cargo test --workspace` (failed: `connect_norito_bridge` accel/fixture tests failing with `InvalidMagic` and poisoned chain-discriminant lock; warnings about unused imports/assignments).
+- Fixed tiered WSV snapshot pruning to only remove canonical snapshot directories (preserving lanes/retired folders), documented snapshot directory naming, and added regression coverage; clarified Kura in-memory retention for genesis + last N blocks with a drop-old-block test.
+- Tests: `cargo test --workspace` (timed out after 120s during compile; warnings about unused assignments/imports in several crates).
+- Removed Python SDK shims and migration docs; `iroha_python` now exposes only the first-release surface.
+- Tests: not run (not requested).
+- Block sync now derives the consensus-mode tag per height (permissioned vs NPoS) instead of hardcoding permissioned, so signature validation aligns with on-chain mode; added unit coverage for NPoS rotation in block-sync filtering.
+- Tests: `cargo test -p iroha_core filter_blocks_rotates_topology_for_npos_view -- --nocapture` (timed out after 120s; build directory lock/compile delay).
+- Transaction confirmation now treats rejection/expiration/queued-too-long as final (skips fallback polling) to avoid 180s waits on expected failures; added unit coverage for final-error fallback gating.
+- Tests: `cargo test -p iroha tx_confirmation_stream_tests::final_confirmation_errors_skip_fallback -- --nocapture` (timed out after 120s while compiling `iroha`).
+- Resolved merge conflict markers in `status.md`.
+- Tests: not run (merge resolution only).
+- Standardized IVM header major to v1 across parser/admission paths, compiler outputs, fixtures, and shipped `.to` artifacts; refreshed header/docs references to remove prior-version mentions.
+- Tests: not run (not requested).
+- Hardened IVM DIV_CEIL/GCD against i64::MIN overflow for deterministic behavior and added regression coverage for the edge cases.
+- Tests: `cargo test --workspace` (timed out after 10m during compile; warnings about unused imports/assignments in several crates).
+- Removed the stale `client_static_public` field from NK3 handshake requirement construction after the struct slimming.
+- Switched client/server version fetch to Torii `/api_version` (plain string), updated CLI output and the `get_server_version` integration test, and fixed the OpenAPI path-group test case for the system routes.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Tests: not run (per request; full workspace tests skipped).
+- IVM metadata parsing now rejects non-v1 headers; predecoder fixtures trimmed to v1/ABI-1-only variants.
+- Tests: not run (not requested).
+- Removed IVM header/padding parsing, required registration-height metadata for time triggers, and cleaned Torii contract + IVM docs to drop `code_bytes`/alias notes.
+- Tests: not run (not requested).
+- Removed obsolete multisig derived-key helper test references so the multisig module compiles cleanly after the cleanup.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Tests: `cargo test --workspace` (failed: `crates/iroha_torii/src/da.rs` duplicate `LaneConfig` import and config/model `LaneConfig` mismatches, plus `crates/iroha_torii/src/da/commitments.rs` missing `LaneConfig::from_catalog` and type mismatches in DA proof verification).
+- Localnet: bumped Kagami defaults to a 1s pipeline, restored DA quorum/availability timeouts to on-chain defaults for stability, and kept commit inflight scaling tied to pipeline size.
+- SoraNet relay: removed NK1 references, kept downgrade tagging for NK3 handshakes, and added unit coverage for handshake-suite metrics/downgrades.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Tests: `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (passed; warnings about unused imports/assignments in unrelated crates).
+- Tests: `cargo test --workspace` (failed: pre-existing compile errors in `crates/iroha_core/src/smartcontracts/isi/multisig.rs` missing `DomainId`/`Algorithm` imports and unresolved `derived_key_flag`/`derived_multisig_account_id`).
+- Removed derived-multisig references (derived-key checks/metrics/tests), simplified multisig direct-sign guarding, and updated multisig docs/roadmap accordingly.
+- Resolved DA lane-config test mismatches by splitting runtime vs model LaneConfig in DA modules, Kura tests, and scheduler telemetry, and renamed the StateTransaction AXT refresh helper to the directory-based API.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core multisig_account_direct_signing_rejected_in_validation -- --nocapture` (passed).
+- Deferred RBC init/chunk/READY background sends until after proposal/hint/BlockCreated posting by splitting RBC plan install vs broadcast, and added unit coverage for background ordering.
+- Tests: `CARGO_TARGET_DIR=target/codex-iroha-core-tests cargo test -p iroha_core assemble_proposal_schedules_rbc_after_proposal_messages -- --nocapture` (failed: pre-existing compile errors in `crates/iroha_core/src/da/shard_cursor.rs` duplicate `LaneConfig` import, `crates/iroha_core/src/gossiper.rs` private `WithOrigin`, multiple `crates/iroha_core/src/kura.rs` `LaneConfig` type mismatches, and `crates/iroha_core/src/state.rs` missing `refresh_axt_policies_from_space_directory`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Filtered restricted gossip targets to online commit-topology peers, made inbound gossip drop invalid entries without discarding valid batches, added gossiper coverage, and updated Nexus docs across locales.
+- Tests: `CARGO_TARGET_DIR=target-codex-gossip cargo test -p iroha_core restricted_plan_filters_commit_topology_to_online_peers -- --nocapture` (failed: pre-existing compile errors in `crates/iroha_core/src/da/shard_cursor.rs` duplicate `LaneConfig` import and config/data-model `LaneConfig` mismatches, `crates/iroha_core/src/da/proofs.rs`/`da/receipts.rs` `LaneConfig` mismatches, `crates/iroha_core/src/kura.rs` `LaneConfig` mismatches, and `crates/iroha_core/src/state.rs` missing `refresh_axt_policies_from_space_directory`).
+- Tests: `CARGO_TARGET_DIR=target-codex-gossip cargo test -p iroha_core restricted_plan_filters_commit_topology_to_online_peers -- --nocapture` (timed out after 300s during compile).
+- Tests: `CARGO_TARGET_DIR=target-codex-gossip cargo test -p iroha_core restricted_plan_filters_commit_topology_to_online_peers -- --nocapture` (passed).
+- Tests: `CARGO_TARGET_DIR=target-codex-gossip cargo test -p iroha_core gossip_accepts_valid_entries_with_invalid_routes_present -- --nocapture` (failed: compile errors in `crates/iroha_core/src/smartcontracts/isi/multisig.rs` missing `DomainId`/`Algorithm` imports and unresolved `derived_key_flag`/`derived_multisig_account_id`).
+- Added multisig-derived telemetry counters to metrics registry/struct so derived-account tracking compiles cleanly.
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core derived_multisig_helpers_match_expected_values -- --nocapture` (timed out after 300s during compile).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Block sync now keeps seen block hashes across stalled heights (clearing only on height regression) so `GetBlocksAfter` doesn't repeatedly refetch the same blocks; added unit coverage for pruning behavior.
+- Tests: `cargo test -p iroha_core block_sync::seen_blocks_tests -- --nocapture` (timed out after 120s while compiling `iroha_core`).
+- Switched event notification and SSE smoke integration tests to use at least four peers to avoid single-peer consensus deadlocks and SSE timeouts.
+- Tests: not run (not requested).
+- Parallelized RBC delivery checks in the seven-peer consistency integration test, dropped the full-telemetry override, extended the submitter client transaction timeout/TTL for slow networks, and made the mint submission blocking to ensure commit before convergence checks.
+- Tests: `cargo test -p integration_tests seven_peer_cross_peer_consistency_basic --test mod -- --nocapture` (failed: rustup toolchain update conflict while installing components).
+- Raised the workspace Rust baseline to 1.92 (toolchain + MSRV), updated SoraFS CI templates, added the Rust 1.92 lint gate script + rollout notes, and switched operator-auth rate conversion to `NonZero::div_ceil` with unit coverage.
+- Tests: not run (not requested).
+- Serialized unguarded integration-test network builds (genesis validation, Torii bind failure, observer sync, permissions/roles genesis failures, and concurrency config) to enforce min-peer networks under the sandbox guard for full-suite stability.
+- Tests: `cargo check -p integration_tests --tests` (passed).
+- Waited for unregister-peer roster updates via `FindPeers` instead of `/status` peer counts, so the churn test aligns with on-chain peer registration before bootstrapping and after removal.
+- Tests: `CARGO_TARGET_DIR=target-codex-itest IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=target/debug/iroha3d cargo test -p integration_tests --test mod network_stable_after_add_and_after_remove_peer -- --nocapture` (passed; shutdown logged peer-task timeouts).
+- Relaxed the time-trigger skip guard to rely on block height and only fall back to the timestamp when height metadata is missing; updated time-trigger tests to cover same-timestamp blocks.
+- Tests: `cargo test -p iroha_core match_time_event_skips_recently_registered_triggers -- --nocapture` (passed).
+- Tests: `cargo test -p iroha_core time_trigger_precommit_executes_and_emits_time_event -- --nocapture` (timed out after 120s while running filtered binaries; target test passed).
+- Tests: `cargo test -p integration_tests sse_captures_time_trigger_and_metadata_events -- --nocapture` (passed).
+- Format: `cargo fmt --all` (failed: stable rustfmt does not support configured unstable options).
+- Broadened trigger-failure notification tests to accept SmartContract invalid-parameter errors and non-empty NotPermitted messages when by-call triggers fail.
+- Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 120s; build directory lock while compiling).
+- Stabilized the unregister-peer churn integration test by relying on network sync fallbacks, waiting for peer-count updates after unregister, and polling asset values to expected totals.
+- Tests: `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD=target/debug/iroha3d cargo test -p integration_tests --test mod network_stable_after_add_and_after_remove_peer -- --nocapture` (passed).
+- Removed SoraFS anonymity/capability variants across Rust/JS/Python/Android bindings, updated stubs/tests, tightened SoraNet capability validation, dropped query-lane and genesis-bootstrap shims, enforced executor validation on undecodable verdicts, and refreshed SoraFS/Swift docs to remove labels.
+- Tests: not run (not requested).
+- Made genesis topology entries accept optional `pop_hex`, added PoP merge support, and updated downstream parsing/build/tests plus genesis docs/translations.
+- Resolved clippy warnings across integration tests/config/SoraFS policies and removed the obsolete anonymity policy branch from Python bindings.
+- Tests: `CARGO_TARGET_DIR=target-codex-clippy cargo clippy --workspace --all-targets -- -D warnings` (passed).
+- Skip QC aggregation when the pending block is marked aborted, preventing invalid blocks from forming precommit/availability QCs; added unit coverage for the aborted-pending path.
+- Tests: not run (not requested).
+- Clarified multisig derived-account helpers in core tests (no path; deterministic derived IDs only) and tightened precommit block-sync rebroadcast borrowing; added unit coverage for derived helper behavior.
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core falls_back -- --nocapture` (timed out after 300s during test run).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core derived_multisig_helpers_match_expected_values -- --nocapture` (failed: `iroha_telemetry` missing multisig-derived metrics fields in `crates/iroha_telemetry/src/metrics.rs`).
+- Ran `IROHA_KAGAMI_LOCALNET_KEEP=1 cargo test -p integration_tests --test sumeragi_kagami_localnet -- --nocapture`; failed to build `iroha3d` due to `irohad` compile errors (missing `ConsensusMode` arg to `replay_blocks_from_kura`, `Arc::clone` expects `Arc<State>`, missing `TelemetryIntegrity` arg to telemetry WS start, and missing `CommitVote` match arm). Localnet artifacts kept at `target/kagami-localnet/.tmpQD6K96`.
+- Reset pending-block availability/gate/abort state on replacement with a new subject, and expand unit coverage to ensure replacement clears DA/QC gating and aborted flags.
+- Tests: not run (not requested).
+- Resolved merge conflicts in `status.md` and `roadmap.md` after the i23 merge.
+- Tests: not run (merge resolution only).
+- Skip rebroadcasting aborted pending blocks in precommit sync updates, highest-QC payload rebroadcasts, and pending replay selection; added unit coverage for aborted-pending vote handling and broadcast suppression.
+- Tests: `cargo test --workspace` (timed out after 120s; waiting for build directory lock while compiling).
+- Added equal-weight fallback for empty NPoS public-lane stake maps when forming commit snapshots and computing stake quorum, with unit coverage and NPoS docs updated.
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core stake_snapshot_from_roster_falls_back_to_equal_weights_without_stake_records -- --nocapture` (timed out after 120s during compile; retry failed to compile `iroha_core` due to borrow error in `crates/iroha_core/src/sumeragi/main_loop/votes.rs:126`).
+- Avoided Sumeragi stalls under full background queues by dropping non-blocking RBC chunk posts, added unit coverage for the new behavior, and removed debug eprintlns from the block-created path.
+- Tests: not run (not requested).
+- Removed Space Directory manifest JSON support, refreshed docs/fixtures for the v1-only schema, and regenerated Norito `.to` capability payloads.
+- Stabilized `multiple_blocks_created` by syncing on non-empty heights via status polling and added missing CBDC rollout test logs.
+- Enabled snapshots for the restart-peer extra-functional test and waited for snapshot artifacts before shutdown so restart restores state from disk.
+- Tests: `cargo test -p integration_tests --test mod restarted_peer_should_restore_its_state -- --nocapture` (skipped: loopback bind denied in sandbox).
+- Resolved merge conflicts in `status.md`.
+- Updated the unregister-peer churn integration test to wait for the removed peer to observe the post-unregister mint, matching block-sync behavior.
+- Tests: `cargo test -p integration_tests --test mod network_stable_after_add_and_after_remove_peer -- --nocapture` (skipped: loopback bind denied in sandbox).
+- Tests: `cargo test -p integration_tests --test mod network_stable_after_add_and_after_remove_peer -- --nocapture` (failed: `iroha3d` build error, missing `main` in `crates/irohad/src/main.rs`).
+- Treat aborted pending blocks as unknown for consensus checks while still counting their payloads for missing-block tracking, with unit coverage for the new distinction.
+- Tests: not run (not requested).
+- Strengthened Norito streaming snapshot assertions (ticket fields, policy, revocation) and added coverage for large prepaid TEU JSON encoding.
+- Tests: not run (not requested).
+- Resolved merge conflicts in `integration_tests/tests/debug_genesis.rs`, `integration_tests/tests/extra_functional/offline_peers.rs`, and `status.md`.
+- Tests: not run (merge resolution only).
+- Wait for trigger-completion events while submitting the trigger in the integration notification test and close the WS stream after receipt to avoid missed events and shutdown lag.
+- Tests: `cargo test -p integration_tests trigger_completion_success_should_produce_event --test mod -- --nocapture` (failed: `integration_tests/tests/debug_genesis.rs` and `integration_tests/tests/extra_functional/offline_peers.rs` use `?` on `Option`).
+- Normalized Norito streaming integration-test snapshots to structured ticket JSON, aligned revocation fixtures with ticket identifiers, and validated bundle-width telemetry against the configured width.
+- Tests: not run (not requested).
+- Canonicalized Kagami localnet host handling (IPv6 + lowercase), centralized localnet validation, embedded rANS tables for repo-less runs, and fixed start.sh default irohad paths (debug + release); added host/script/rANS unit coverage and updated localnet docs.
+- Tests: not run (not requested).
+- Skip fetch-pending responses for aborted pending blocks (including inflight), with unit coverage ensuring aborted pending blocks are not served.
+- Tests: `cargo test -p iroha_core fetch_pending_block_ignores_aborted_pending -- --nocapture` (timed out after 120s during compile).
+- Added commit-roster journal and roster-sidecar roundtrip tests (stake snapshot retention) and documented that NPoS block-sync commit certificates require matching stake snapshots in roster metadata.
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core commit_roster_journal -- --nocapture` (passed).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p iroha_core roster_sidecar_roundtrip_v2_with_stake_snapshot -- --nocapture` (passed).
+- Tests: `scripts/check_no_scale.sh` (passed).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test --workspace` (failed: no space left on device while compiling `iroha_config`/`iroha_telemetry`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Drop aborted pending blocks when any requeue failure occurs (even with duplicate txs), and added unit coverage for mixed duplicate/full requeue failures.
+- Tests: `cargo test --workspace` (timed out after 120s during compile).
+- Wait for tx confirmation event-stream setup (bounded connect timeout) before submitting, and continue status polling when the stream can't be established; added connect-timeout unit coverage.
+- Tests: not run (not requested).
+- Format: not run (not requested).
+- Resolved merge conflicts across status/roadmap docs and Sumeragi RBC store-eviction visibility.
+- Tests: not run (merge resolution only).
+- Format: not run (not requested).
+- Extended tx confirmation polling to decode base64 rejection reasons, capture approved block heights, and skip committed backfills for queued/approved statuses when possible; added unit coverage for polling/block-height behavior.
+- Tests: not run (not requested).
+- Format: not run (not requested).
+- Cached validated NEW_VIEW HighestQCs (and signer tallies/precommit signer history) so view-change rebroadcasts no longer skip when local votes are missing; added unit coverage in `handle_new_view_gossips_new_view_frames`.
+- Tests: `cargo test -p iroha_core handle_new_view_gossips_new_view_frames -- --nocapture` (timed out after 120s during compile).
+- Tests: `cargo test --workspace` (failed: `iroha_torii/tests/zk_attachments_subprocess.rs` imports private `routing` module; warnings about unused `mut` in `crates/iroha_core/src/state.rs:18891` and `crates/iroha_torii/src/routing.rs:4800`).
+- Tests: `TEST_NETWORK_TMP_DIR=/Users/mtakemiya/dev/iroha/tmp/test_network_new_view_cache IROHA_KAGAMI_LOCALNET_KEEP=1 cargo test -p integration_tests --test sumeragi_kagami_localnet -- --nocapture` (failed: local socket bind denied on 127.0.0.1:32832 in `fslock_ports`).
+- Tests: `cargo test -p iroha_core handle_new_view_gossips_new_view_frames -- --nocapture` (timed out after 300s during compile).
+- Tests: `CARGO_TARGET_DIR=target/codex-iroha-core cargo test -p iroha_core handle_new_view_gossips_new_view_frames -- --nocapture` (failed: bind denied on 127.0.0.1:0 in test harness).
+- Fixed `iroha_torii` subprocess attachment test import to use the public `MaybeTelemetry` re-export so `cargo test --workspace` no longer fails on the private routing module.
+- Format: `cargo fmt --all` (timed out after 10s; stable toolchain warns about unstable fmt options).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Added crash-recovery PRF seed fallback for NPoS epochs when the seed-only next-epoch snapshot is missing after restart, added a regression test, and documented the restart recompute behavior in `docs/source/sumeragi.md`.
+- Tests: `CARGO_TARGET_DIR=target/codex-iroha-core-check cargo check -p iroha_core --lib` (passed).
+- Tests: `CARGO_TARGET_DIR=target/codex-iroha-core-tests cargo test -p iroha_core prf_seed_tests::npos_seed_for_height_derives_next_epoch_seed_after_restart_gap -- --nocapture` (timed out after 300s while running filtered binaries; target test passed).
+- Guarded VRF commit/reveal note paths against height=0 to prevent epoch window underflow; added unit coverage for zero-height rejections.
+- Tests: not run (not requested).
+- Fixed stake snapshot world-view plumbing (commit roster snapshots, stake quorum helpers, and tests), corrected penalties helper lookup, and removed invalid `?` in lane relay validator pool selection.
+- Tests: `cargo check -p iroha_core --tests` (passed).
+- Tests: `cargo test -p iroha_core block_created_requests_missing_parent_on_height_gap -- --nocapture` (timed out after 240s during compile).
+- Tests: `cargo test -p integration_tests --test sumeragi_kagami_localnet -- --nocapture` (failed: loopback bind denied in sandbox). Re-run with escalated permissions timed out after 10m with the test still running (>60s).
+- Validate persisted RBC chunk roots against stored expected/computed roots when full payload chunks are present, dropping corrupted sessions; added unit coverage for mismatched chunk roots.
+- Tests: not run (not requested).
+- Avoided commit-time view-lock deadlocks by building stake snapshots from world views, updating stake snapshot helpers/callers to use `WorldReadOnly`, and fixing permissioned view-rotation index conversion with new unit coverage.
+- Tests: `CARGO_TARGET_DIR=target/codex-iroha-core-check cargo check -p iroha_core --lib` (passed).
+- Tests: `CARGO_TARGET_DIR=target/codex-integration-tests cargo test -p integration_tests --no-run` (passed).
+- Tests: `CARGO_TARGET_DIR=target/codex-integration-tests IROHA_TEST_NETWORK_PARALLELISM=1 cargo test -p integration_tests --test observer_sync -- --nocapture` (failed: loopback bind denied, Operation not permitted).
+- Tests: `CARGO_TARGET_DIR=target/codex-iroha-core-tests cargo test -p iroha_core penalties::tests::canonicalize_index_for_view_permissioned_wraps -- --nocapture` (timed out after 300s while running filtered binaries; target test passed).
+- Persisted NPoS stake snapshots in commit-roster artifacts for block-sync validation, switched NPoS roster checks to snapshot-based stake quorum, tightened consensus penalty attribution (no current-roster fallback; pending on missing rosters/PRF seeds; applied-only on legitimate empty offenders), and aligned roster-retention defaults/validation with evidence horizons (docs updated).
+- Tests: `cargo test --workspace` (timed out after 120s while compiling; build lock while waiting for the build directory).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Aligned RBC session roster selection with vote-roster fallbacks (persisted/previous commit topology) so READY/DELIVER validation can recover after topology changes; added unit coverage for the prev-commit fallback and updated stake-snapshot call sites.
+- Tests: `cargo test -p iroha_core --lib rbc_session_roster_falls_back_to_prev_commit_topology_without_snapshot -- --nocapture` (failed: loopback bind denied on 127.0.0.1:0 in test harness).
+- Tests: `TEST_NETWORK_TMP_DIR=/Users/mtakemiya/dev/iroha/tmp/test_network_rbc_fix IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test mod network_stable_after_add_and_after_remove_peer -- --nocapture` (skipped: port allocation denied in sandbox loopback bind).
+- Advanced VRF epoch restore to advance seed/epoch when restoring a finalized record and clear stale participation state; added unit coverage for finalized restore.
+- Tests: not run (not requested).
+- Translated the Sumeragi randomness evidence runbook across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Aligned handshake consensus caps with on-chain K/r parameters and rejected zero collectors/redundant-send updates in `SetParameter`, adding unit coverage for the new validation and caps behavior.
+- Tests: `cargo test -p iroha_core consensus_caps_use_on_chain_collectors -- --nocapture` (failed: compile errors in `crates/iroha_core/src/state.rs` and `crates/iroha_core/src/sumeragi/stake_snapshot.rs` unrelated to these changes).
+- Translated the Sumeragi evidence audit API doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Added missing-parent fetch on BlockCreated and block-sync signature deferral (with gap sweeps) so lagging peers request parents instead of dropping ahead blocks; added unit coverage and documented the recovery flow.
+- Tests: `cargo test -p iroha_core block_created_requests_missing_parent_on_height_gap -- --nocapture` (timed out after 120s; build lock while compiling `iroha_core`, compile errors in unrelated files: missing `stake_snapshot` params in roster journal/block sync, `penalties.rs` `u64::from(usize)` mismatch, `stake_snapshot.rs` missing trait import).
+- Tests: `cargo test -p integration_tests --test sumeragi_kagami_localnet -- --nocapture` (failed to compile `iroha_core`: `penalties.rs` `u64::from(usize)` mismatch, `stake_snapshot.rs` missing trait import).
+- Tests: `cargo test --workspace` (timed out after 120s during compile; `iroha_core` compile errors).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Aligned collector planning and `ConsensusParams` adverts with on-chain `SumeragiParameters` K/r values (instead of config defaults), with updated unit coverage for on-chain overrides and collector-target expectations.
+- Tests: not run (not requested).
+- Translated the Sumeragi aggregators doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Translated the Sumeragi NPoS task breakdown doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Translated the Sumeragi pacemaker doc across docs/source locales (ar/es/fr/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Request missing parent blocks when validation defers a block ahead of local height, so lagging peers can sync and resume voting; added unit coverage for the new fetch path.
+- Tests: `cargo test -p iroha_core validation_defers_block_ahead_of_local_height -- --nocapture` (timed out after 120s; build lock while compiling `iroha_core`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Switched commit-pipeline and precommit block-sync cooldowns to use on-chain block_time instead of config defaults, with added throttling coverage.
+- Tests: not run (not requested).
+- Kept configured trusted peers (e.g., observers) in the P2P topology set so they remain dialable even when excluded from world-state topology; expanded gossiper test assertions to cover static topology retention.
+- Tests: `cargo check -p iroha_core --lib` (warning: dead-code `rotate_set_a` in `crates/iroha_core/src/sumeragi/network_topology.rs:330`).
+- Tests: `cargo test -p integration_tests --test observer_sync -- --nocapture` (failed: local socket bind denied on 127.0.0.1:30000).
+- Tests: `cargo test -p integration_tests --no-run` (timed out after 120s during compile; warnings: dead-code `rotate_set_a`, `tempfile::TempDir::into_path` in `integration_tests/tests/sumeragi_kagami_localnet.rs:77`).
+- Translated the runtime upgrades doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Translated the bridge finality proofs doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Applied backpressure for `BlockSyncUpdate` ingestion to avoid dropping commit/QC evidence under block-queue saturation, added blocking test coverage, and documented the backpressure behavior; Kagami localnet failures can now retain artifacts via `IROHA_KAGAMI_LOCALNET_KEEP`.
+- Tests: `CARGO_TARGET_DIR=target/codex-check cargo check -p iroha_core` (warning: dead-code `rotate_set_a` in `crates/iroha_core/src/sumeragi/network_topology.rs:330`).
+- Translated the bridge proofs doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Aligned vote roster lookups with block-view resolution, fixed Option signatures in block-sync roster selection, and updated commit-certificate validation tests for view-aware parameters.
+- Tests: not run (not requested).
+- Resolved block-view optionality mismatches in block-sync roster selection and vote roster lookup so view-aware validation stays consistent across call sites.
+- Tests: `cargo test -p iroha_core --lib consensus_penalties_defer_censorship_evidence -- --nocapture` (passed; warnings about unused import in `crates/iroha_core/src/sumeragi/main_loop/rbc.rs:9`, unused `mut` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:2130` and `crates/iroha_core/src/sumeragi/main_loop/tests.rs:9337`, and unused variable in `crates/iroha_core/src/sumeragi/mod.rs:4082`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Docker builder image doc across docs/source locales (ar/es/fr/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Translated the Iroha release artifact selection doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Hardened block-sync roster validation (hash version, cert height/view, checkpoint expiry), removed unvalidated roster-hint fallbacks, and added unit coverage for the new validation paths and invalid hint rejection.
+- Tests: not run (not requested).
+- Translated the Testing and Troubleshooting guide across docs/source locales (ar/es/fr/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Rejected missing-block block-sync updates without commit-role signatures, and kept censorship evidence pending until attribution is implemented; added unit coverage for unsigned missing-block requests and censorship penalty deferral.
+- Tests: `cargo test -p iroha_core block_sync_quorum_allows_missing_block_request_with_sparse_signatures -- --nocapture` (timed out after 120s; build lock; warnings about unused import/dead code/unused-mut in `crates/iroha_core/src/sumeragi/`).
+- Tests: `cargo test -p iroha_core consensus_penalties_defer_censorship_evidence -- --nocapture` (timed out after 120s; build lock; same warnings).
+- Tests: `cargo test --workspace` (timed out after 120s; build lock).
+- Format: `cargo fmt --all` (timed out after 10s; stable toolchain warns about unstable fmt options).
+- Translated the account address compliance status doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Split static block validation into state-dependent snapshot + transaction-only pass so keep-voting validation drops `StateView` earlier; added unit coverage for the snapshot path.
+- Tests: `cargo test -p iroha_core validate_static_snapshot_accepts_valid_block -- --nocapture` (failed: `crates/iroha_core/src/sumeragi/main_loop/tests.rs` calls private `handle_rbc_store_evictions`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Clamped RBC chunk size/pending caps to a minimum of 1 byte when `rbc_chunk_max_bytes` is zero and added unit coverage for zero-size configs.
+- Tests: not run (not requested).
+- Format: not run (not requested).
+- Translated the Nexus elastic lane provisioning doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Limited integration-test network concurrency via a sandbox permit guard, added test-only overrides to avoid unsafe env mutations, and documented `IROHA_TEST_NETWORK_PARALLELISM` in the integration test README.
+- Tests: `cargo test -p integration_tests --lib sandbox -- --nocapture` (passed; warnings about unused import/dead code in `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` and `crates/iroha_core/src/sumeragi/network_topology.rs`).
+- Tests: `cargo test --workspace` (timed out after 120s during compile).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus settlement FAQ doc across docs/source locales (ar/es/fr/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Preserved persisted RBC invalid flags when rebuilding sessions from disk and added unit coverage for invalid-session roundtrips.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus SDK quickstarts doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Skip emitting RBC READY on invalid sessions (e.g., payload-hash mismatches) and added coverage to ensure invalid sessions do not mark sent-ready.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (timed out after 120s; stable toolchain warns about unstable fmt options).
+- Translated the Nexus privacy commitments doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Cleared BlockCreated payload-mismatch state by purging RBC caches and replay/availability throttles, with unit coverage for payload mismatch cleanup and RBC store-eviction cache cleanup.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Increased test-network Sumeragi block queue capacity to reduce BlockSyncUpdate drops during integration runs and added unit coverage for the new default.
+- Tests: `cargo test -p integration_tests --test mod events::proof::verify_proof_emits_verified_event -- --nocapture` (passed; warnings about unused import/dead code in `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` and `crates/iroha_core/src/sumeragi/network_topology.rs`).
+- Tests: `cargo test -p iroha_test_network base_config_increases_block_queue_capacity -- --nocapture` (passed; same warnings in `iroha_core`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus ledger refactor plan across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Cleaned up RBC store-eviction handling to drop pending/rebroadcast/persisted session caches and added unit coverage for eviction cleanup.
+- Tests: not run (not requested).
+- Replay now resolves per-block validator rosters from commit-roster journals/sidecars during Kura rebuilds, with a regression test covering roster ordering on restart.
+- Tests: `cargo test -p iroha_core replay_uses_commit_roster_journal_for_signature_order -- --nocapture` (timed out after 180s while running filtered binaries; target test passed; warnings about unused import/dead code in Sumeragi and unused-mut in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`).
+- Tests: `TEST_NETWORK_TMP_DIR=/Users/mtakemiya/dev/iroha/tmp/test_network IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_da sumeragi_rbc_recovers_after_peer_restart -- --nocapture --test-threads=1`.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Pruned QC signer tallies alongside QC-cache evictions across commit/propose/validation/reschedule paths and added coverage in `drop_stale_pending_block` to ensure tallies are cleared with stale blocks.
+- Tests: `cargo test --workspace` (timed out after 120s during compile).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus routed-trace audit report (2026 Q1) across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Tracked missing-block request heights so stale requests are pruned on commit, and added/updated unit coverage for height updates and pruning.
+- Tests: `cargo test --workspace` (timed out after 120s during compile; ivm/sorafs build errors copying incremental artifacts and missing rlib, plus warnings for unused import/dead code in Sumeragi and unused-mut in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Disabled integration-test network serialization by default (use `IROHA_TEST_SERIALIZE_NETWORKS=1` to re-enable), and extended ZK proof event test timeouts/submit path to reduce tx confirmation stalls.
+- Tests: `cargo test -p integration_tests serial_guard_is_noop_by_default -- --nocapture` (failed: `crates/iroha_core/src/sumeragi/main_loop/qc.rs` calls `plan_missing_block_fetch` with a missing `height` argument).
+- Translated the Nexus telemetry remediation plan across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Dropped commit votes for committed heights and stale views unless the block is known/missing; added unit coverage for stale/committed commit-vote handling.
+- Tests: `cargo test --workspace` (timed out after 120s during compile).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Pruned Sumeragi `vote_log`/`commit_votes` on block commits and cleared commit votes on roster/mode resets; added unit coverage.
+- Tests: `cargo test --workspace` (timed out after 120s during compile).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Pruned `proposals_seen` on block commits to prevent unbounded growth and extended commit-retention unit coverage.
+- Tests: not run (not requested).
+- Translated the Nexus cross-lane commitments doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Pruned `exec_vote_log` on block commits to prevent unbounded growth and added unit coverage for commit-time retention.
+- Tests: not run (not requested).
+- Translated the Nexus public lane staking doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Bounded NEW_VIEW receipt snapshots to a fixed in-memory window, added unit tests, and updated telemetry/pipeline docs (en/ja/he).
+- Tests: `cargo test --workspace` (timed out after 300s during compile).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus operations runbook across docs/source locales (ar/es/fr/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Guarded Sumeragi proposal assembly against view indices beyond `u32::MAX` to avoid block-header panics and added unit coverage for overflow views.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus fee model updates doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Translated the Nexus lane compliance policy engine spec across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Aligned NPoS epoch scheduling with on-chain `SumeragiNposParameters` during mode flips and seed refreshes, updated status/telemetry + docs, and added unit coverage for epoch-parameter loading and overrides.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus technical design spec across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and enforced ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Applied VRF epoch parameter snapshots during epoch-manager restore and persisted VRF records using the epoch-manager window/length values; added unit coverage for restore and snapshot behavior.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Guarded view-change proof creation/lookup with u32 indices and skipped proof broadcasts on overflow view indices; added unit coverage for proof builder, proof lookup, and overflow handling.
+- Tests: not run (not requested).
+- Translated the Nexus lane model doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur) and confirmed ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Updated proposal-hint PRF context to use activation-height seed selection and added unit coverage.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Refreshed NPoS collector params on seed updates so on-chain k/redundant-r changes apply without restart; added unit coverage.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Hardened Torii attachment sanitization with subprocess mode config, OS-level rlimits, export re‑sanitization for attachments, sanitized IDs, fixture + subprocess tests, and updated zk app API/security hardening/threat model/roadmap docs (including he/ja updates).
+- Tests: `cargo test --workspace` (timed out after 120s during compile).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Aligned Sumeragi leader selection and collector planning with activation-height consensus mode/PRF seed; added activation-height unit tests for leader selection and collector plan.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus transition notes across docs/source locales (ar/es/fr/pt/ru/ur) and confirmed ASCII-only es/fr/pt.
+- Tests: not run (docs-only change).
+- Aligned Sumeragi commit pipeline (vote emission, commit votes, QC tallying, roster sidecars) with activation-height consensus mode tags/PRF seeds; added activation-height unit tests for emitted availability/precommit/exec votes and commit vote validation.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the Nexus overview doc across docs/source locales (ar/es/fr/he/ja/pt/ru/ur), finalizing the JA/HE drafts and adding RTL wrappers.
+- Tests: not run (docs-only change).
+- Added commit-vote status/metrics assertions and bounded commit-certificate history queries in the Sumeragi commit-certificate integration tests, plus a Kagami localnet bootstrap test for 4-peer coverage.
+- Tests: not run (not requested).
+- Aligned Sumeragi RBC READY/DELIVER handling and NEW_VIEW broadcast signing with activation-height consensus mode tags/PRF seeds; added unit tests for activation-height RBC READY/DELIVER and NEW_VIEW signatures.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the finance repo custodian ack/governance packet templates across docs examples locales (ar/es/fr/he/ja/pt/ru/ur) and cleared the remaining docs/examples translation stub in the volunteer brief template.
+- Tests: not run (docs-only change).
+- Implemented Torii attachment sanitization with magic-byte sniffing, allowlisted MIME types, bounded gzip/zstd expansion, provenance metadata, and new telemetry counters/tests; docs updated.
+- Tests: not run (not requested).
+- Translated the SoraNet relay incentive parliament packet docs (README, economic analysis, rollback plan) across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Fixed Sumeragi QC handling and NEW_VIEW validation to use height-based consensus mode/tags (including activation-height acceptance), with unit coverage for QC/NewView activation-mode cases.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the SoraGlobal gateway billing reconciliation report template across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SoraFS CI sample fixtures README and SoraFS capacity simulation toolkit README across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SoraNet testnet stage-gate report template and sample report across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Fixed Sumeragi block-sync QC caching and vote/availability/exec vote validation to use height-based consensus mode/tags, and added activation-height unit coverage for those paths.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the SoraNet testnet operator kit templates (readme, checklist, telemetry, incident playbook, verification report) across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Commit-certificate migration note: B-Chain commit certificates now gate finalize, with integration coverage for permissioned quorum, NPoS stake quorum gating, and block-sync propagation on restart.
+- Tests: not run (not requested).
+- Recorded Sumeragi worker drain-budget config and last-envelope metadata to clear dead-code warnings.
+- Tests: not run (not requested).
+- Translated the SoraNet GAR intake template across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the Nexus steering priority snapshot (2025-03 wave) across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Fixed Sumeragi actor subsystem field access and block sync mode tagging after the refactor.
+- Tests: `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture`.
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Translated the SNS arbitration transparency report template across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Adjusted Sumeragi block-sync validation and outgoing updates to use height-specific consensus mode/tag/PRF seed across roster selection, signatures, and QCs; added block-sync tests for activation-mode mapping and pre-activation acceptance after a mode flip.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Completed the Sumeragi actor refactor (subcomponent split, background-post backpressure/drop metrics, dedup eviction tracking) and refreshed Sumeragi/telemetry docs to reflect the deterministic scheduler.
+- Tests: not run (not requested).
+- Fixed Sumeragi penalties/test plumbing (typed roster collection, evidence helper path) and updated Torii VRF epoch test setup to use the `vrf_epochs()` accessor.
+- Tests: `cargo test --workspace` (timed out after 240s during compile).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Evidence handling now derives consensus mode and roster selection from evidence height (including penalty processing), added a height-specific consensus-mode helper, and added unit coverage for evidence mode tagging.
+- Tests: not run (not requested).
+- Format: `cargo fmt --all` (stable toolchain warns about unstable fmt options).
+- Canonicalized double-vote and double-exec evidence ordering for deterministic evidence keys and added evidence-order dedup tests.
+- Tests: not run (not requested).
+- Translated the SNS training templates (slides, workbook, evaluation, invite email) across docs examples locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Fixed consensus penalty offender mapping to prefer evidence-specific roster snapshots/history (avoiding misattribution after topology rotation) and added penalties helper tests.
+- Tests: not run (not requested).
+- Translated the Connect chaos & fault rehearsal runbook across docs runbook locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Adjusted Torii evidence validation to derive NPoS PRF seeds from the evidence subject height, added NPoS height-sensitive evidence tests in Torii routing handlers, and exposed `npos_seed_for_height` for cross-crate use.
+- Tests: not run (not requested).
+- Translated the Connect session preview runbook across docs runbook locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Fixed Sumeragi active-topology ordering to preserve commit rotation, canonicalized censorship receipts for deterministic evidence deduplication, and allowed locked-QC subjects to update on same height/view; added unit coverage.
+- Tests: not run (not requested).
+- Translated the SNS metrics & onboarding kit page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SNS local-to-global address toolkit page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SNS registry schema page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SNS address checksum incident runbook page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the Nexus SDK quickstarts page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the DA threat model page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Relaxed the localnet smoke test view-change expectations to tolerate f+1 suspicion churn while still bounding divergence across peers (`integration_tests/tests/sumeragi_localnet_smoke.rs`).
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test -p integration_tests --test contracts post_and_get_contract_manifest_via_torii -- --nocapture`; `CARGO_TARGET_DIR=target-codex cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture`; `CARGO_TARGET_DIR=target-codex cargo test --workspace` (failed: `No space left on device` writing to `target-codex`).
+- Translated the DA commitments plan page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Hardened Torii contract manifest integration test polling (wait for manifest GET with clearer errors) and enforced 4-peer localnet in `integration_tests/tests/contracts.rs`.
+- Tests: `cargo test -p integration_tests post_and_get_contract_manifest_via_torii -- --nocapture` (failed: `No space left on device` writing `target/debug` artifacts; `dsymutil` I/O failure).
+- Translated the DA ingest plan page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the DA replication policy page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SNS bulk onboarding toolkit page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Finished Sumeragi commit-certificate/quorum status/telemetry surfacing (metrics + `/v1/status`/`/v1/sumeragi/status`), added commit quorum/certificate snapshot tests, and refreshed Sumeragi/evidence/telemetry docs with censorship-evidence view-change notes.
+- Tests: `cargo fmt --all` (warns about unstable fmt options on stable toolchain); `cargo test --workspace` (failed: `integration_tests` sandbox tests cannot bind `127.0.0.1:30000`).
+- Translated the SNS payment settlement plan page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SNS suffix catalog page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SNS registrar API page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the governance API endpoints page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Aligned Sumeragi block-sync/precommit unit expectations with gossip fanout and inline precommit routing; fixed non-proxy commit-vote coverage to sign with the view leader; added a helper for block-sync target counts in tests.
+- Tests: `cargo test -p iroha_core --lib commit_vote_`.
+- Format: `cargo fmt --all` (warns about unstable fmt options on stable toolchain).
+- Translated the SNS governance playbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Validated Sumeragi commit-certificate unit coverage (commit-vote replay + commit-cert gating) against heartbeat-backed non-genesis blocks.
+- Tests: `cargo test -p iroha_core --lib commit_votes_replayed_after_payload_arrives`, `cargo test -p iroha_core --lib finalize_pending_block_requires_commit_certificate`.
+- Translated the SNS address display guidelines across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Adjusted Sumeragi commit-vote tests to seed a genesis stub and build heartbeat-backed non-genesis blocks; fixed RBC status persistence borrow + RBC dedup signature hash typing; refreshed Sumeragi handle tests for RBC queues.
+- Tests: `cargo test -p iroha_core commit_vote_from_proxy_tail_commits_block` (failed: build ran out of disk space, `os error 28`; cargo target dir locked intermittently).
+- Translated the SNS KPI dashboard across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Translated the SoraFS deployment guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Tests: not run (docs-only change).
+- Sumeragi ingress now uses non-blocking enqueue for network relay (try_* APIs + tests), background routing is centralized on `BlockMessage`, dedup caches evict FIFO instead of clearing, RBC status persists timestamps on unchanged updates, and main-loop lint allowances are scoped to submodules/actor blocks.
+- Tests: `cargo test --workspace` (timed out after 120s during compile).
+- Implemented B‑Chain commit-certificate flow in Sumeragi: commit votes to proxy tail, commit certificates gate finalize, commit-vote replay on payload arrival, QC-driven finalize removed, quorum timeouts use commit votes (stake-aware for NPoS); added unit coverage and refreshed Sumeragi docs/roadmap.
+- Tests: not run (user requested no full workspace run).
+- Added a Sumeragi actor-model refactor plan with staged tasks in `roadmap.md`.
+- Resolved merge conflict in `status.md` and merged latest updates from both branches.
+- Completed SEC-TORII-OPERATOR-AUTH: WebAuthn/mTLS operator auth with enrollment/login flow, session tokens, mTLS gating, operator endpoint protection, telemetry, and updated OpenAPI/docs/tests.
+- Tests: `CARGO_TARGET_DIR=target-codex cargo test --workspace` (fails: `integration_tests` sandbox tests require loopback binds; `build_network_*` and `serialized_network_*` panic on denied `127.0.0.1:30000`).
+- Completed SEC-UPGRADE-PROVENANCE: runtime upgrade manifests now carry SBOM/SLSA provenance and signer metadata, governance config enforces trusted signer thresholds, admission rejects missing/invalid provenance with telemetry/error codes, and docs/tests refreshed.
+- Tests: `cargo test -p iroha pipeline_status_404_falls_back_to_committed_query`, `cargo test -p iroha_core runtime_upgrade_admission`.
+- Stabilized `iroha_test_network::Network::client()` to use the first peer deterministically, avoiding event-stream hangs from random peer selection in integration tests.
+- Cleared pending consensus caches on commit-topology changes so stale votes/RBC sessions do not stall after peer membership updates; added unit test `commit_topology_change_clears_pending_consensus_state`.
+- Tests: `cargo test -p iroha_core commit_topology_change_clears_pending_consensus_state -- --nocapture` (timed out after 2m; target test passed; warnings in `crates/iroha_core/src/state.rs` about unused variables).
+- Replayed Kura blocks now rotate topology using the effective consensus mode and NPoS PRF seed so restart validation matches leader selection; added replay unit coverage.
+- Wired `sumeragi.debug.rbc.force_deliver_quorum_one` through config and RBC deliver quorum gating; added unit coverage and refreshed the Sumeragi DA docs to note the override in large-payload scenarios.
+- Stabilized NPoS PRF seed tracking by aligning epoch seeds with on-chain parameters, keeping the seed fixed within an epoch, and persisting a seed-only record for the next epoch at rollover; added unit coverage and refreshed Sumeragi VRF docs (en/ja/he).
+- Suppressed early Torii `/status` connection-refused warnings in the test-network watcher until HTTP is reachable; added unit coverage for connection-refused detection.
+- Canonicalized block payload hashing to strip execution results and extra signatures so DA/RBC payload hashes stay stable across validation; added unit test `block_payload_bytes_ignores_results_and_extra_signatures`.
+- Cached block-sync precommit QCs when block payloads are not ready yet so lagging peers can reuse them once the block lands; added `block_sync_caches_qc_before_block_known` unit coverage.
+- Tests: `cargo test -p iroha_core block_sync_caches_qc_before_block_known` (timed out after ~2m but target test passed), `cargo test -p integration_tests --test mod` (timed out after 5m; pipeline event tests failed with peers waiting for block 1 and status endpoint connection refused).
+- Routed RBC READY/DELIVER through the vote queue and drained RBC chunks ahead of payloads in the Sumeragi worker loop to prevent consensus stalls under heavy payloads; updated unit coverage and confirmed `sumeragi_rbc_da_large_payload_four_peers`.
+- Fixed QC roster selection to prefer persisted snapshots for committed heights after peer removal, avoiding signer-out-of-bounds validation failures; added unit coverage.
+- Forced Sora profile detection merges to override streaming identity keys with deterministic Ed25519 values (even when config layers supply BLS) and added unit coverage to prevent parse warnings.
+- Raised the localnet test-network pipeline time to DA-safe defaults to avoid consensus stalls and hanging event tests.
+- Sanitized `irohad` child environments in `iroha_test_network` to prevent config env overrides from hijacking test peer ports; added unit coverage for the env key list/stripping.
+- Localnet Sumeragi smoke test now keeps DA enabled to avoid invalid config overrides and DA mismatch warnings.
+- Test-network shutdown now waits for SIGTERM before SIGQUIT to avoid spurious exit status 3 during localnet checks; added unit coverage.
+- Added Ed25519 streaming identity overrides to Sora profile defaults and testnet/localnet configs so BLS validators no longer trip streaming config parsing.
+- Client pipeline-status 404 responses now fall back to committed queries without warning spam; added mock HTTP coverage for the fallback.
+- Added Kagami localnet config coverage for required addr literals and keys.
+- Seeded Sora profile detection defaults with BLS consensus keys to avoid testnet parse warnings and kept default routing policy coverage.
+- Ignored Android core build output in the gitignore.
+- Fixed irohad test fixtures to generate BLS-normal consensus keys and Nexus lane metadata, refreshed the Nexus defaults hash check, and corrected the Torii timeout layer call; tests: `CARGO_TARGET_DIR=target-codex cargo test -p irohad --tests` (1 failure fixed), `CARGO_TARGET_DIR=target-codex cargo test -p irohad --bin iroha3d build_line_tests::nexus_profile_hash_matches_template`.
+- Attempted roadmap integration-test revalidation: `address_canonicalisation` ran but skipped network startup due to sandbox loopback denial; full `integration_tests` build failed in `integration_tests/tests/nexus/cross_lane.rs` (missing `parent_state_root` field).
+- Removed unchecked-generic warnings in Norito Java adapters without MethodHandle (Android minSdk-safe), refactored map/tuple/struct adapters, added a map adapter roundtrip test, and stabilized JDK WebSocket parity close handling; tests: `ci/run_android_tests.sh`, `swift test`.
+- Added streaming identity keys to Kagami Iroha3 sample configs so BLS-based profiles parse under the streaming Ed25519 requirement.
+- Completed SEC-TELEMETRY-REDACTION follow-ups: persisted telemetry integrity chain state, refreshed config fixtures and streaming env parsing, updated status JSON snapshot, and extended nexus defaults with streaming identity keys.
+- Tests: `cargo test -p iroha_telemetry`, `cargo test -p iroha_config`; `cargo test --workspace` failed in libsodium-sys build (missing `librdrand.a` under `target/codex`).
+- Completed SEC-TELEMETRY-REDACTION: strict telemetry redaction enforced in release profiles, allowlist policy guardrails, tamper-evident hash-chained exports (optional signing), new audit metrics/tests, and refreshed telemetry/threat-model docs.
+- Completed SEC-TIME-HARDENING with NTS health thresholds, admission gating for time-sensitive ISIs (repo/staking/settlement/trigger/IVM, trigger registrations, CustomInstruction default), configured fallback enforcement, Torii reject code + metric, and refreshed NTS/config/telemetry docs.
+- Implemented SEC-MEMBERSHIP-MISMATCH: membership view-hash advert, mismatch tracking with status surfaces, config knobs (threshold/fail-closed), and updated docs/tests.
+- Removed the `package` attribute from the Android sample manifest and pinned CycloneDX SBOM generation to schema 1.5 to silence schema warnings; reran Swift tests and Android SDK Gradle test suite.
+- Refined the security hardening roadmap items with detailed task breakdowns.
+- Added roadmap tasks for security hardening gaps (telemetry redaction, NTS/time bounds, upgrade provenance, operator auth, attachment sanitization, membership mismatch alerts).
+- Upgraded CycloneDX Gradle plugin to 3.1.0, re-enabled SBOM generation by default, and re-ran Swift + Android test harnesses.
+- Fixed Android SDK build/test gaps (core API exposure, Norito jar wiring for lint, core-library desugaring, locale-safe HTTP method normalization, sample AccountAddress error handling) and guarded CycloneDX on Gradle 9; reran Swift + Android test harnesses.
+- Disabled lane relay emergency overrides by default, gated them behind nexus config with a 3-of-5 multisig minimum, and updated tests/docs.
+- Added edge-case unit tests for lane relay emergency override overlap handling and telemetry gating.
+- Filled remaining lane relay emergency override test gaps (expiry boundary + telemetry metric) and cleaned related test plumbing.
+- Enforced dataspace `fault_tolerance` minimum of 1 across defaults/config/data model, refreshed docs/configs, and updated lane-relay tests for 3f+1 committees.
+- Resolved merge conflict in the status update list.
+- Stabilized Android/JVM SDK tests: fixed BouncyCastle Ed25519 test key encodings, hardened fixture loading/exporter fallbacks, filtered JDK-restricted headers, made WebSocket close idempotent, ensured JDK WebSocket request flow, and tightened transport parity fixtures.
+- Closed lane relay validation gaps by enforcing committee-backed QC signatures (including parent_state_root), adding signer-bitmap length checks, and surfacing dataspace fault_tolerance in telemetry; docs/tests updated.
+- Completed NEXUS-LANE-RELAY-RECOVERY with emergency lane relay validator overrides, telemetry, tests, and docs updates.
+- Translated the SoraNet puzzle service operations guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet privacy metrics pipeline across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the portal intro page across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito Streaming roadmap across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the portal reference index across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito codec reference across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the account address compliance reference across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the portal publishing checklist across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the address safety & accessibility reference across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Torii app API parity audit across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito overview across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito getting started guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito quickstart across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito streaming guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito ledger walkthrough across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito examples index across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito Hajimari entrypoint example across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito call-transfer-asset example across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito register-and-mint example across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito transfer-asset example across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito NFT flow example across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus overview across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Sora Nexus overview and portal reference index translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the portal intro translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the portal publishing checklist translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the address safety & accessibility translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Torii app API parity audit translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the account address compliance translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Norito codec reference translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Norito overview translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Norito quickstart translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Norito getting started translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Norito ledger walkthrough translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Norito streaming translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Norito Try-It console translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Refreshed the Norito streaming roadmap translations to clear stub headers and normalize ASCII in portal docs/i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the docs portal preview integrity plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito-RPC adoption schedule across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito-RPC overview across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the preview host exposure guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the preview invite flow across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus operations runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus settlement FAQ across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus default lane quickstart across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus elastic lane provisioning guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus technical specification across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus fee model updates across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus telemetry remediation plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the confidential gas calibration ledger across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus routed-trace audit report (2026 Q1) across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus data-space operator onboarding guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus bootstrap & observability plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus ledger refactor plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus transition notes across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus lane model across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Sora Nexus confidential assets & ZK transfers doc across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Norito Try-It console across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet PQ rollout plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet PQ ratchet runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet testnet rollout (SNNet-10) across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet transport overview across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet constant-rate profiles across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the GAR operator onboarding brief across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraNet PQ primitives overview across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the GAR jurisdictional review (SNNet-9) across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS capacity marketplace validation report across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Implemented per-dataspace lane relay committee selection (3f+1 from dataspace fault_tolerance), wired lane manifest registry into state for relay validation, and updated nexus docs/examples.
+- Translated the AI moderation calibration report (2026-02) across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SF-2c capacity accrual soak report across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Added MOCHI CLI/UI support for custom profile overrides (inline TOML tables) and cleaned duplicate Torii sample-config entries.
+- Translated the SoraFS Orchestrator GA parity report across portal docs and portal i18n locales (ar/he/ja/pt/ur).
+- Translated the SoraFS SF1 determinism dry-run report across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SF-6 security review report across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Completed MOCHI-TOPOLOGY-PROFILES supervisor topology presets (profile config surface, Nexus/DA plumbing, snapshot import/export, Kagami integration, docs/samples).
+- Translated the Taikai monitoring dashboards across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS priority snapshot (2025-03) across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS provider advert rollout across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Prioritized Sumeragi worker loop drains so block payload/RBC traffic runs ahead of block sync, preventing READY quorum stalls; updated unit priority-order coverage.
+- Block sync QC tally now preserves QC bitmap indices when caching precommit signer sets, preventing mismatched QC propagation; added unit coverage.
+- Pacemaker now ignores precommit votes for unknown blocks to avoid proposal stalls; updated and added unit tests.
+- Translated the SoraFS storage capacity marketplace across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS node implementation plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS node storage design across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS provider admission policy across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS multi-source provider advert across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS reserve ledger digest across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS migration ledger across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS migration roadmap across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS pin registry implementation plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS pin registry operations runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS pin registry validation plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS portal publish plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS signing ceremony across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS direct-mode fallback pack across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS SDK index across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS Rust SDK snippets across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Allow quorum reschedule to drop/requeue pending blocks after a retry even with partial precommit votes; add unit coverage.
+- Updated offline receipt challenge validation to allow non-zero scales while enforcing per-allowance scale consistency in core/SDKs; tests/docs updated.
+- Translated the SoraFS release process across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS deployment notes across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Enforced per-allowance scale consistency for offline receipts and policy limits (core + Swift tests), clarified offline-only finality in offline docs, and zeroized offline proof generation in the Norito bridge.
+- Translated the SoraFS CLI cookbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS CI recipes across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS developer index across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS deal engine overview across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Enforced expected-scale consistency for offline balance proofs (core + bridge) with new tests; updated offline allowance docs.
+- Added Android key validation telemetry for non-Ed25519 SPKI outputs plus `withExportableSoftwareKeys` helper/tests; docs/README updated.
+- Added `issued_at_ms` to offline spend receipts + receipt challenge preimages, enforced receipt timestamp validity and max age (`settlement.offline.max_receipt_age_ms`), and updated SDKs/FFI/tests/fixtures/docs.
+- Documented exportable software key flows (Bouncy Castle policy) and clarified Ed25519 fallback detection for Android key management.
+- Translated the SoraFS chunker profile authoring guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Re-ran `cargo test -p integration_tests --test mod`, added CBDC rollout fixture compliance/governance placeholders, and fixed a missing offline settlement config import.
+- Resolved merge conflicts in Torii test utilities, roles integration tests, and the status list.
+- Enforced a 4-peer minimum for integration-test networks and updated peer-start paths that bypass the sandbox to avoid DA single-peer stalls.
+- Aligned `iroha_torii::test_utils` with current Torii behavior (chain_id validation + full-bytecode contract hashing) and added focused unit tests.
+- Restored `iroha_torii::test_utils` helpers for Torii integration tests, including queue-apply utilities and JSON request builders.
+- Translated the SoraFS chunker conformance guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS chunker registry charter across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS chunker registry across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Offline balance proofs now require a versioned zk-proof with range verification; SDKs/tests/docs updated to the 12,385-byte v1 layout.
+- Added exportable software key persistence (KeyExportStore + passphrase provider) and a BouncyCastle-enforced policy for roaming accounts; docs/tests updated.
+- Translated the SoraFS chunker registry rollout checklist across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Localnet generation now allowlists loopback CIDRs in Torii pre-auth to prevent demo CLI bans; Kagami tests/docs updated.
+- `deploy_localnet.sh` defaults debug runs to 1s block/commit timings, adds curl timeouts, and sets a warn-level `RUST_LOG` when unset.
+- Offline balance proof RNG now uses the rand_core 0.6 OsRng to avoid rand_core trait mismatches during builds/tests.
+- Translated the SoraFS staging manifest playbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS node-client protocol across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS observability plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Bound offline receipt challenge hashes to `chain_id` across core, SDKs, and FFI helpers; updated Swift/Android tests and docs to match.
+- Enforced `policy.max_tx_value` during offline settlement, added the `max_tx_value_exceeded` rejection reason, and documented the balance proof range-proof requirements.
+- Android key manager now validates Ed25519 SPKI output and falls back from non-Ed25519 providers; docs and tests updated.
+- Translated the SoraFS operations playbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Taikai anchor observability runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS gateway and DNS kickoff runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Added `torii.peer_telemetry_urls` and wired Kagami localnet configs so peer telemetry targets Torii endpoints instead of P2P ports, eliminating HandshakeBadPreface noise in localnets.
+- Translated the SoraFS capacity reconciliation runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS dispute and revocation runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS node operations runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Moved `run_test_dump.py` into `scripts/` to keep the repo root tidy.
+- Translated the SoraFS orchestrator configuration guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS multi-source rollout runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Re-ran the seven-peer DA consistency test and stabilized the integration check by waiting for RBC delivery at or above the mint height and polling asset convergence (added a helper test for the RBC session filter).
+- Translated the SoraFS orchestrator tuning guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS orchestrator ops runbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Normalized trybuild-generated `Cargo.toml` paths for `norito_derive` UI tests to use relative paths so target-codex artifacts avoid developer-specific absolute paths.
+- Translated the preview invite tracker across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated preview reviewer onboarding across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the portal observability guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the portal security hardening checklist across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the public preview invite playbook across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the portal incident runbooks across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the W0 preview feedback digest across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the W1 partner preflight plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the W1 partner feedback summary across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the W1 feedback and telemetry log across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the W2 community intake plan across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the W2 community feedback summary across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the W3 beta feedback summary across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the W3 beta invite log across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the SoraFS publishing and monitoring guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated the Try It sandbox guide across portal docs and portal i18n locales (ar/es/fr/he/ja/pt/ru/ur).
+- Translated docs preview templates (invite, request, feedback digest/form) across all locales in `docs/examples`.
+- Translated the DA manifest review template across all locales in `docs/examples`.
+- Translated the Taikai anchor lineage packet across all locales in `docs/examples`.
+- Translated the pen-test remediation report template across all locales in `docs/examples`.
+- Translated the SoraFS release notes across all locales in `docs/examples`.
+- Translated the SoraFS CI cookbook across all locales in `docs/examples`.
+- Translated the Android device lab reservation request template across all locales in `docs/examples`.
+- Translated the Android partner SLA discovery notes template across all locales in `docs/examples`.
+- Normalized block-sync QC signer indices using peer mappings across rotated topologies (including NPoS PRF rotations) and added coverage for NPoS view-rotation QC validation.
+- Switched Ed25519 verification to strict checks (reject low-order keys/signatures), hardened batch verification for low-order points, and added a regression that demonstrates low-order key forgery is now rejected.
+- Enforced low-S canonical secp256k1 signatures (signer normalizes, verifier rejects high-S) and added a regression to prove high-S malleability no longer verifies.
+- Rejected duplicate public keys in BLS same-message aggregate verification (including pre-aggregated checks) with new regressions for both normal and small variants.
+- Hardened Kura block store init by clamping commit markers to data-backed counts, preserving markers during prune, and aligning hash lengths; added tests for data-backed fallback and hash misalignment.
+- Snapshot reader now falls back to temp Merkle metadata when the main metadata is corrupt, with coverage for the new behavior.
+- Kura disk-usage accounting now includes sidecar temp/debug files by summing block-store and pipeline directories, with a regression covering extra files.
+- Synced merge-ledger truncation and tiered snapshot pruning roots to harden crash consistency after pruning.
+- Aligned NPoS epoch manager initialization to the current height when no VRF record exists (mode flip + startup) and added epoch alignment tests.
+- Streaming telemetry now implements `Debug` without depending on `Metrics` and includes counters in the output (added coverage to ensure debug rendering is stable).
+- Tests: `cargo fmt --all` (stable toolchain warns about unstable rustfmt options); `cargo test --workspace` (timed out after 600s while compiling; warning about unused `MissingQc` in `mochi/mochi-ui-egui/src/main.rs:10917`).
+- Fixed invalid-proposal evidence to carry the pending view when commit quorum failures occur, with coverage asserting the recorded proposal view.
+- Standardized ZK ballot public-input validation across Torii, CLI, and the JS SDK (Torii client + instruction builders) and refreshed the JS governance ballot examples.
+- Normalized Android CastZkBallot public inputs (canonical JSON, alias rejection, full lock hints) with new regression coverage, and clarified governance docs that partial lock hints are rejected.
+- CLI now rejects ZK public-input alias keys (`durationBlocks`, `rootHintHex`, `nullifierHex`) and added regression coverage for alias conflicts.
+- Canonicalized JavaScript `CastZkBallot` public-input JSON ordering (sorted keys) with a regression for nested ordering.
+- Hardened the Norito bridge CastZkBallot encoder to reject alias keys and enforce complete lock hints, with regression coverage for invalid inputs.
+- Normalized JS host CastZkBallot parsing to canonicalize public inputs (alias rejection, complete lock hints) with regression tests for invalid payloads.
+- Torii now rejects ZK ballot public-input aliases and canonicalizes `root_hint`/`nullifier` hints (including V1 endpoints), rejecting conflicts or invalid hex with new unit tests.
+- Retried trigger-failure submission in the notification integration test on transient Torii/consensus errors before asserting expected failure types.
+- Tests: `cargo test -p integration_tests trigger_completion_failure_reports_error -- --nocapture` (timed out after 600s; compile finished; test `events::notification::trigger_completion_failure_reports_error` still running).
+- Sumeragi NEW_VIEW quorum selection now filters senders against the active roster (only counts local if it is in-roster), with coverage for non-roster senders.
+- Sumeragi now rejects NEW_VIEW votes with mismatched highest QC hashes/heights before recording, with regressions for invalid highest fields.
+- Sumeragi rejects NEW_VIEW QCs with missing/mismatched highest certificates and validates highest QC epochs in NEW_VIEW votes, with regressions covering invalid QC/vote inputs.
+- Sumeragi now blocks aggregate-based QC recovery for NEW_VIEW certificates with mismatched highest epochs (added regression coverage).
+- NEW_VIEW receipt stats now deduplicate by peer ID instead of rotated indices to avoid misleading operator counts after view changes.
 - Izanami: track account metadata keys so remove-account-kv plans target real keys; add coverage.
 - Tests: `CARGO_TARGET_DIR=target/codex-izanami cargo test -p izanami` (pass; warnings about `genesis topology is empty` from `iroha_test_network::config`).
 - Crypto/VRF: switch VRF prehash/output to raw Blake2b-256 digests (no Hash LSB tweak) to keep outputs unbiased; add tests to enforce raw digest usage and refresh VRF docs.

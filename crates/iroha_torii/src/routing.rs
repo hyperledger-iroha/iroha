@@ -5905,10 +5905,8 @@ pub async fn handle_post_contract_call(
             Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
         metadata.insert(gas_asset_key, IrohaJson::new(asset_id));
     }
-    if let Some(limit) = gas_limit {
-        let gas_limit_key = Name::from_str("gas_limit").expect("static metadata key `gas_limit`");
-        metadata.insert(gas_limit_key, IrohaJson::new(limit));
-    }
+    let gas_limit_key = Name::from_str("gas_limit").expect("static metadata key `gas_limit`");
+    metadata.insert(gas_limit_key, IrohaJson::new(gas_limit));
 
     let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
         .with_metadata(metadata)
@@ -7134,9 +7132,8 @@ pub struct ContractCallDto {
     /// Optional gas asset id forwarded to transaction metadata.
     #[norito(default)]
     pub gas_asset_id: Option<String>,
-    /// Optional caller-specified gas limit forwarded to transaction metadata.
-    #[norito(default)]
-    pub gas_limit: Option<u64>,
+    /// Caller-specified gas limit forwarded to transaction metadata.
+    pub gas_limit: u64,
 }
 
 #[cfg(feature = "app_api")]
