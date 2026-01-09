@@ -1,12 +1,16 @@
 # Status
 
 ## Latest Updates
+- Sumeragi: require commit quorum for NEW_VIEW gating and drop cached NEW_VIEW entries below the active round height; add regression coverage.
+- Tests: not run (not requested).
 - Docs: add public DNS delegation note to remaining localized devportal deploy guides (Hebrew, Urdu).
 - Tests: not run (not requested).
 - Tests: `CARGO_TARGET_DIR=target/codex-integration cargo test -p integration_tests public_dns_settings_include_delegation_placeholders -- --nocapture` (timed out after 300s; `public_dns_settings_include_delegation_placeholders` passed before timeout).
 - Tests: `CARGO_TARGET_DIR=target/codex-integration cargo test -p integration_tests --test soranet_web_deploy public_dns_settings_include_delegation_placeholders -- --nocapture` (failed: `iroha_core` compile error E0282 in `crates/iroha_core/src/sumeragi/main_loop/votes.rs:749`).
 - Sumeragi: ignore commit-QC history entries that contradict locally known block hashes when rolling rosters forward, and add regression coverage.
 - Tests: not run (not requested).
+- Connect Norito bridge: assert offline FASTPQ sum request JSON roundtrip before FFI proof generation to keep the JSON contract validated.
+- Tests: `cargo test -p connect_norito_bridge offline_fastpq_sum_proof_matches_generator -- --nocapture`; `cargo test -p connect_norito_bridge -- --nocapture`.
 - Sumeragi: avoid re-entrant state view locking when computing the committed QC epoch and add coverage for the view-based helper.
 - Tests: not run (not requested).
 - Maintenance: resolve merge conflict markers in `status.md`.

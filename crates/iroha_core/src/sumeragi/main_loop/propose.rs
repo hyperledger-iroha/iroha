@@ -1058,6 +1058,10 @@ impl Actor {
         let committed_qc = self.latest_committed_qc();
         let precommit_qc = precommit_qc_for_view_change(self.highest_qc, committed_qc);
         let tracked_height = active_round_height(self.highest_qc, committed_qc, committed_height);
+        self.subsystems
+            .propose
+            .new_view_tracker
+            .drop_below_height(tracked_height);
 
         if topology_peers.is_empty() {
             if let Some(qc) = precommit_qc.as_ref().or(committed_qc.as_ref()) {
@@ -1084,7 +1088,7 @@ impl Actor {
         }
 
         let mut topology = super::network_topology::Topology::new(topology_peers);
-        let mut required = topology.min_votes_for_view_change();
+        let mut required = topology.min_votes_for_commit();
         let local_peer_id = self.common_config.peer.id().clone();
         let local_idx = self.local_validator_index_for_topology(&topology);
         let local_peer = local_idx.map(|_| local_peer_id.clone());
@@ -1661,7 +1665,7 @@ impl Actor {
             return false;
         }
         topology = super::network_topology::Topology::new(proposal_roster);
-        required = topology.min_votes_for_view_change();
+        required = topology.min_votes_for_commit();
 
         let leader_index = match self.leader_index_for(&mut topology, height, view_idx) {
             Ok(idx) => idx,

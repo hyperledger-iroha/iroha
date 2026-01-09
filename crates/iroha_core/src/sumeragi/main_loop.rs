@@ -2552,6 +2552,11 @@ impl NewViewTracker {
             .retain(|(entry_height, _), _| *entry_height > committed_height);
     }
 
+    fn drop_below_height(&mut self, min_height: u64) {
+        self.entries
+            .retain(|(entry_height, _), _| *entry_height >= min_height);
+    }
+
     fn remove(&mut self, height: u64, view: u64) {
         self.entries.remove(&(height, view));
     }
