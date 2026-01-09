@@ -1555,6 +1555,9 @@ impl Actor {
         for key in drop_keys {
             self.vote_log.remove(&key);
         }
+        for (hash, _) in &drop_blocks {
+            self.vote_roster_cache.remove(hash);
+        }
         self.qc_signer_tally
             .retain(|(phase, hash, height, _, _), _| {
                 *phase != crate::sumeragi::consensus::Phase::Commit

@@ -1,5 +1,7 @@
 //! Vote handling for consensus messages.
 
+use std::collections::btree_map::Entry;
+
 use iroha_logger::prelude::*;
 
 use crate::sumeragi::consensus::Phase;
@@ -89,6 +91,7 @@ impl Actor {
         if !self.validate_and_record_vote(&vote, &signature_topology, &evidence_context, mode_tag) {
             return;
         }
+        self.cache_vote_roster(vote.block_hash, topology.as_ref().to_vec());
         match vote.phase {
             Phase::Prepare | Phase::Commit => {
                 self.try_form_qc_from_votes(
@@ -585,6 +588,27 @@ impl Actor {
         true
     }
 
+    fn cache_vote_roster(&mut self, block_hash: HashOf<BlockHeader>, roster: Vec<PeerId>) {
+        if roster.is_empty() {
+            return;
+        }
+        match self.vote_roster_cache.entry(block_hash) {
+            Entry::Vacant(entry) => {
+                entry.insert(roster);
+            }
+            Entry::Occupied(existing) => {
+                if *existing.get() != roster {
+                    warn!(
+                        block = %block_hash,
+                        cached = existing.get().len(),
+                        observed = roster.len(),
+                        "vote roster mismatch; keeping cached roster to preserve vote validity"
+                    );
+                }
+            }
+        }
+    }
+
     fn note_double_vote(
         &mut self,
         previous: Option<&crate::sumeragi::consensus::Vote>,
@@ -780,7 +804,7 @@ impl Actor {
         None
     }
 
-    // Prefer the roster tied to a committed block to keep signatures valid across roster changes.
+    // Prefer the cached roster once votes are validated to keep signatures stable across roster changes.
     pub(super) fn roster_for_vote_with_mode(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -788,6 +812,11 @@ impl Actor {
         view: u64,
         consensus_mode: ConsensusMode,
     ) -> Vec<PeerId> {
+        if let Some(cached) = self.vote_roster_cache.get(&block_hash) {
+            if !cached.is_empty() {
+                return cached.clone();
+            }
+        }
         let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
         let mut roster_height = height;
         let mut roster_view = None;

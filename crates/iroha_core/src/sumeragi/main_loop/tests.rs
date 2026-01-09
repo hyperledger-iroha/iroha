@@ -5337,6 +5337,69 @@ async fn quorum_reschedule_skips_requeue_when_commit_votes_present() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn commit_vote_quorum_uses_cached_roster_after_topology_reorder() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let local_peer = actor.common_config.peer.id().clone();
+    let mut peers: Vec<PeerId> = harness
+        .key_pairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect();
+    peers.retain(|peer| peer != &local_peer);
+
+    let mut initial_topology = Vec::with_capacity(peers.len() + 1);
+    initial_topology.push(peers[0].clone());
+    initial_topology.push(local_peer.clone());
+    initial_topology.extend(peers[1..].iter().cloned());
+
+    let mut topo_cell = actor.state.commit_topology.block();
+    topo_cell.clear();
+    topo_cell.extend(initial_topology.clone());
+    topo_cell.commit();
+
+    let tx = sample_transaction();
+    let block = block_with_txs(1, 0, None, vec![tx]);
+    let block_hash = block.hash();
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    let parent_hash = block.header().prev_block_hash();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let epoch = actor.epoch_for_height(height);
+    assert!(
+        actor.emit_precommit_vote(
+            block_hash,
+            height,
+            view,
+            epoch,
+            &topology,
+            parent_hash,
+            Some((Hash::new([]), Hash::new([]))),
+        ),
+        "commit vote should be recorded"
+    );
+
+    let mut reordered = Vec::with_capacity(peers.len() + 1);
+    reordered.push(local_peer.clone());
+    reordered.extend(peers.iter().cloned());
+    let mut topo_cell = actor.state.commit_topology.block();
+    topo_cell.clear();
+    topo_cell.extend(reordered);
+    topo_cell.commit();
+
+    let (vote_count, _quorum_reached) =
+        actor.commit_vote_quorum_status_for_block(block_hash, height, view);
+    assert_eq!(
+        vote_count, 1,
+        "cached roster should keep the local vote valid after reordering"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn quorum_reschedule_keeps_cached_commit_qc_on_drop() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -27155,8 +27218,40 @@ async fn block_created_drops_hint_when_highest_qc_view_mismatches_parent() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let parent = sample_block(1, 0, None);
-    let block = sample_block(2, 0, Some(parent.hash()));
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(1);
+    let signature_topology = super::topology_for_view(&topology, 1, 0, mode_tag, prf_seed);
+    let signer_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("commit topology not empty");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair exists in harness");
+    let signer_idx = signature_topology
+        .position(signer_kp.public_key())
+        .expect("signer index in topology");
+    let signer_idx = u64::try_from(signer_idx).expect("signer index fits u64");
+    let parent = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        1,
+        0,
+        None,
+        signer_kp,
+        signer_idx,
+    );
+    let block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        2,
+        0,
+        Some(parent.hash()),
+        signer_kp,
+        signer_idx,
+    );
     let mut hint = sample_hint(block.hash(), 2, 0, Some(parent.hash()));
     hint.highest_qc.view = 1;
 
@@ -27179,21 +27274,6 @@ async fn block_created_drops_hint_when_highest_qc_view_mismatches_parent() {
         .expect("store parent block");
     let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
     state.push_block_hash_for_testing(parent.hash());
-    let cached_hint = actor
-        .subsystems
-        .propose
-        .proposal_cache
-        .get_hint(2, 0)
-        .copied()
-        .expect("cached hint");
-    let parent_view = actor
-        .local_block_height_view(parent.hash())
-        .map(|(_, view)| view);
-    eprintln!(
-        "hint_check: {:?}, parent_view: {:?}",
-        Actor::validate_block_against_hint(&block.hash(), &block.header(), &cached_hint, parent_view),
-        parent_view
-    );
 
     let before = super::status::snapshot().block_created_hint_mismatch_total;
     actor
@@ -27201,20 +27281,7 @@ async fn block_created_drops_hint_when_highest_qc_view_mismatches_parent() {
             block: block.clone(),
         })
         .expect("handle BlockCreated");
-    let snapshot_after = super::status::snapshot();
-    let after = snapshot_after.block_created_hint_mismatch_total;
-    let session_key = Actor::session_key(
-        &block.hash(),
-        block.header().height().get(),
-        block.header().view_change_index(),
-    );
-    let pending_keys: Vec<_> = actor.pending.pending_blocks.keys().copied().collect();
-    eprintln!(
-        "pending_keys: {:?}, rbc_session: {}, proposal_mismatch_total: {}",
-        pending_keys,
-        actor.subsystems.da_rbc.rbc.sessions.contains_key(&session_key),
-        snapshot_after.block_created_proposal_mismatch_total
-    );
+    let after = super::status::snapshot().block_created_hint_mismatch_total;
 
     assert!(
         after > before,
