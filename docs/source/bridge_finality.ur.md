@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7236dfe86175ff89f660be4cb4dd2c90df20a05f9606d2707407465f639b1a1c
-source_last_modified: "2025-12-05T06:21:36.529838+00:00"
-translation_last_reviewed: 2026-01-01
+source_hash: 2e4c6ed5974f623906f51259a634bcad5df703bcec899630ae29f4669b289ab6
+source_last_modified: "2026-01-08T21:52:45.509525+00:00"
+translation_last_reviewed: 2026-01-08
 ---
 
 <div dir="rtl">
@@ -32,6 +32,8 @@ finalized ہے، بغیر off-chain computation یا trusted relays کے۔
 - `block_header`: canonical `BlockHeader`۔
 - `block_hash`: header کا hash (clients دوبارہ حساب کرتے ہیں تاکہ validate ہو)۔
 - `commit_certificate`: validator set + signatures جو بلاک کو finalize کرتے ہیں۔
+- `validator_set_pops`: PoP bytes جو validator set کے ترتیب کے مطابق ہوں
+  (BLS aggregate verification کے لئے ضروری)۔
 
 Proof خود کافی ہے؛ کسی بیرونی manifests یا opaque blobs کی ضرورت نہیں۔
 Retention: Torii حالیہ commit-certificate window کیلئے finality proofs فراہم کرتا ہے
@@ -75,18 +77,20 @@ protocols کیلئے جو separation کو ترجیح دیتے ہیں۔
 3. `chain_id` کو متوقع Iroha chain سے match کریں۔
 4. `commit_certificate.validator_set` سے `validator_set_hash` دوبارہ compute کریں اور
    اسے ریکارڈ شدہ hash/version سے match کریں۔
-5. commit certificate کی signatures کو header hash کے خلاف verify کریں، متعلقہ validator
+5. `validator_set_pops` کی لمبائی validator set سے match کریں اور ہر PoP کو اس کے BLS public key کے
+   خلاف validate کریں۔
+6. commit certificate کی signatures کو header hash کے خلاف verify کریں، متعلقہ validator
    public keys اور indices استعمال کرتے ہوئے؛ quorum نافذ کریں (`2f+1` جب `n>3`، ورنہ `n`)
    اور duplicate/out-of-range indices کو reject کریں۔
-6. اختیاری طور پر trusted checkpoint سے bind کریں، validator set hash کو anchored value سے compare کر کے
+7. اختیاری طور پر trusted checkpoint سے bind کریں، validator set hash کو anchored value سے compare کر کے
    (weak-subjectivity anchor)۔
-7. اختیاری طور پر متوقع epoch anchor سے bind کریں تاکہ پرانے/نئے epochs کے proofs تب تک reject رہیں
+8. اختیاری طور پر متوقع epoch anchor سے bind کریں تاکہ پرانے/نئے epochs کے proofs تب تک reject رہیں
    جب تک anchor کو جان بوجھ کر rotate نہ کیا جائے۔
 
 `BridgeFinalityVerifier` (`iroha_data_model::bridge` میں) یہ چیکس لاگو کرتا ہے، chain-id/height
- drift، validator-set hash/version mismatches، duplicate/out-of-range signers، invalid signatures،
-اور unexpected epochs کو quorum گننے سے پہلے reject کرتا ہے تاکہ light clients ایک ہی verifier
-استعمال کر سکیں۔
+ drift، validator-set hash/version mismatches، missing/invalid PoP، duplicate/out-of-range signers،
+invalid signatures، اور unexpected epochs کو quorum گننے سے پہلے reject کرتا ہے تاکہ light clients
+ایک ہی verifier استعمال کر سکیں۔
 
 ## Reference verifier
 

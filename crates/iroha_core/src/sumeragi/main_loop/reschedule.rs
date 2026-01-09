@@ -17,6 +17,13 @@ impl Actor {
         let da_enabled = self.runtime_da_enabled();
         let quorum_timeout = self.quorum_timeout(da_enabled);
         let quorum_reschedule_cooldown = quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN);
+        // Keep aborted payloads long enough for missing-block fetches after reschedule drops.
+        let retention_factor = self
+            .config
+            .missing_block_signer_fallback_attempts
+            .saturating_add(2)
+            .max(4);
+        let aborted_retention = quorum_reschedule_cooldown.saturating_mul(retention_factor);
         let now = Instant::now();
         let (tip_height, tip_hash) = {
             let view = self.state.view();
@@ -24,12 +31,40 @@ impl Actor {
         };
 
         let mut stale_pending = Vec::new();
+        let mut aborted_expired = Vec::new();
         let mut to_reschedule = Vec::new();
         let mut prevote_timeouts = Vec::new();
         let mut reschedule_backoff_skipped = 0usize;
         let mut stale_removed = 0usize;
+        let mut aborted_removed = 0usize;
         for (hash, pending) in &self.pending.pending_blocks {
             if pending.aborted {
+                if self.kura.get_block_height_by_hash(*hash).is_some() {
+                    aborted_expired.push((*hash, pending.height, pending.view));
+                    continue;
+                }
+                let has_votes = self.vote_log.values().any(|vote| {
+                    vote.block_hash == *hash
+                        && vote.height == pending.height
+                        && vote.view == pending.view
+                });
+                let missing_request = self.pending.missing_block_requests.contains_key(hash);
+                let expected_epoch = self.epoch_for_height(pending.height);
+                let commit_qc_cached = cached_qc_for(
+                    &self.qc_cache,
+                    crate::sumeragi::consensus::Phase::Commit,
+                    *hash,
+                    pending.height,
+                    pending.view,
+                    expected_epoch,
+                )
+                .is_some();
+                if has_votes || missing_request || commit_qc_cached {
+                    continue;
+                }
+                if pending.age() >= aborted_retention {
+                    aborted_expired.push((*hash, pending.height, pending.view));
+                }
                 continue;
             }
             if self.kura.get_block_height_by_hash(*hash).is_some() {
@@ -113,6 +148,35 @@ impl Actor {
         let to_reschedule_len = to_reschedule.len();
         let prevote_timeout_len = prevote_timeouts.len();
 
+        for (hash, height, view) in aborted_expired {
+            let expected_epoch = self.epoch_for_height(height);
+            let keep_commit_qc = cached_qc_for(
+                &self.qc_cache,
+                crate::sumeragi::consensus::Phase::Commit,
+                hash,
+                height,
+                view,
+                expected_epoch,
+            )
+            .is_some();
+            if !keep_commit_qc {
+                self.clean_rbc_sessions_for_block(hash, height);
+            }
+            self.qc_cache.retain(|(phase, qc_hash, _, _, _), _| {
+                *qc_hash != hash
+                    || (keep_commit_qc
+                        && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
+            });
+            self.qc_signer_tally.retain(|(phase, qc_hash, _, _, _), _| {
+                *qc_hash != hash
+                    || (keep_commit_qc
+                        && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
+            });
+            self.pending.pending_blocks.remove(&hash);
+            self.pending.pending_replay_last_sent.remove(&hash);
+            aborted_removed = aborted_removed.saturating_add(1);
+        }
+
         for (hash, height) in stale_pending {
             self.pending.pending_blocks.remove(&hash);
             self.clean_rbc_sessions_for_block(hash, height);
@@ -123,7 +187,7 @@ impl Actor {
             stale_removed = stale_removed.saturating_add(1);
         }
 
-        let mut progress = false;
+        let mut progress = aborted_removed > 0;
         for (key, age, vote_count, min_votes) in to_reschedule {
             if let Some(pending) = self.pending.pending_blocks.remove(&key.0) {
                 self.reschedule_pending_quorum_block(
@@ -230,12 +294,14 @@ impl Actor {
         if total_cost >= RESCHEDULE_TIMING_LOG_THRESHOLD
             || progress
             || reschedule_backoff_skipped > 0
+            || aborted_removed > 0
         {
             iroha_logger::info!(
                 pending = self.pending.pending_blocks.len(),
                 rescheduled = to_reschedule_len,
                 prevote_timeouts = prevote_timeout_len,
                 stale_removed,
+                aborted_removed,
                 backoff_skipped = reschedule_backoff_skipped,
                 scan_ms = scan_cost.as_millis(),
                 total_ms = total_cost.as_millis(),
@@ -351,6 +417,10 @@ impl Actor {
                     || (keep_commit_qc
                         && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
             });
+            pending.mark_aborted();
+            pending.tx_batch = None;
+            self.pending.pending_replay_last_sent.remove(&block_hash);
+            self.pending.pending_blocks.insert(block_hash, pending);
         } else {
             // Keep the pending block and cached certificates so late commit certificates
             // can still finalize it.
@@ -422,7 +492,7 @@ impl Actor {
                 self.config.consensus_mode,
             );
             let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-            if super::block_sync_update_has_roster(&update, consensus_mode) {
+            if self.prepare_block_sync_update_for_broadcast(&mut update, consensus_mode) {
                 for peer in topology_peers {
                     self.schedule_background(BackgroundRequest::Post {
                         peer: peer.clone(),

@@ -2678,6 +2678,9 @@ pub struct TieredState {
     /// Optional on-disk root for cold tier spill files.
     #[config(env = "TIERED_STATE_COLD_STORE_ROOT")]
     pub cold_store_root: Option<PathBuf>,
+    /// Optional on-disk root for DA-backed cold tier spill files.
+    #[config(env = "TIERED_STATE_DA_STORE_ROOT")]
+    pub da_store_root: Option<PathBuf>,
     /// Number of snapshots to retain on disk (0 = keep all).
     #[config(
         env = "TIERED_STATE_MAX_SNAPSHOTS",
@@ -2700,6 +2703,7 @@ impl TieredState {
             hot_retained_bytes: self.hot_retained_bytes,
             hot_retained_grace_snapshots: self.hot_retained_grace_snapshots,
             cold_store_root: self.cold_store_root,
+            da_store_root: self.da_store_root,
             max_snapshots: self.max_snapshots,
             max_cold_bytes: self.max_cold_bytes,
         }
@@ -14299,7 +14303,7 @@ mod offline_cfg_tests {
 
 #[cfg(test)]
 mod duration_clamp_tests {
-    use std::time::Duration as StdDuration;
+    use std::{path::PathBuf, time::Duration as StdDuration};
 
     use iroha_config_base::toml::TomlSource;
     use toml::{Table, Value};
@@ -14412,6 +14416,30 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert_eq!(actual.kura.max_disk_usage_bytes.get(), 1_000);
         assert!(actual.tiered_state.enabled);
         assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 256);
+    }
+
+    #[test]
+    fn tiered_state_parse_accepts_da_store_root() {
+        let mut table = base_table();
+        let tiered = table
+            .entry("tiered_state")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("tiered_state table");
+        tiered.insert(
+            "da_store_root".into(),
+            Value::String("./storage/da_wsv_custom".to_string()),
+        );
+
+        let actual = load_root(table);
+        assert_eq!(
+            actual
+                .tiered_state
+                .da_store_root
+                .as_ref()
+                .expect("da_store_root must parse"),
+            &PathBuf::from("./storage/da_wsv_custom")
+        );
     }
 
     #[test]

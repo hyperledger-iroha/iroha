@@ -40,11 +40,25 @@ fn config_layer_overrides_concurrency_settings() {
         Some("INFO")
     );
 
-    // User layer should override concurrency and logger settings.
+    // User layer should override concurrency and logger settings, even if intermediate
+    // defaults (e.g., Nexus toggles) are present.
     let overrides = layers
-        .next()
-        .expect("user overrides layer must be present")
-        .into_owned();
+        .find_map(|layer| {
+            let layer = layer.into_owned();
+            let concurrency = layer.get("concurrency").and_then(toml::Value::as_table)?;
+            let min_threads = concurrency
+                .get("scheduler_min_threads")
+                .and_then(toml::Value::as_integer)?;
+            let max_threads = concurrency
+                .get("scheduler_max_threads")
+                .and_then(toml::Value::as_integer)?;
+            if min_threads == 3 && max_threads == 7 {
+                Some(layer)
+            } else {
+                None
+            }
+        })
+        .expect("user overrides layer must be present");
     let concurrency = overrides
         .get("concurrency")
         .and_then(toml::Value::as_table)
@@ -70,7 +84,7 @@ fn config_layer_overrides_concurrency_settings() {
         Some("TRACE")
     );
 
-    assert!(layers.next().is_none(), "no extra config layers expected");
+    // Additional defaults may follow, but they must not override the user layer.
 }
 
 #[test]

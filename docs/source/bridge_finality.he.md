@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7236dfe86175ff89f660be4cb4dd2c90df20a05f9606d2707407465f639b1a1c
-source_last_modified: "2025-12-05T06:21:36.529838+00:00"
-translation_last_reviewed: 2026-01-01
+source_hash: 2e4c6ed5974f623906f51259a634bcad5df703bcec899630ae29f4669b289ab6
+source_last_modified: "2026-01-08T21:52:45.509525+00:00"
+translation_last_reviewed: 2026-01-08
 ---
 
 <div dir="rtl">
@@ -32,6 +32,8 @@ SPDX-License-Identifier: Apache-2.0
 - `block_header`: `BlockHeader` קנוני.
 - `block_hash`: hash של ה-header (הלקוחות מחשבים מחדש כדי לאמת).
 - `commit_certificate`: סט מאמתים + חתימות שסיימו את הבלוק.
+- `validator_set_pops`: הוכחות החזקה (PoP) מיושרות לסדר ה-validator set
+  (נדרשות לאימות BLS מצטבר).
 
 ההוכחה עצמאית; אין צורך ב-manifests חיצוניים או בבלובים אטומים.
 Retention: Torii מגיש הוכחות סופיות עבור חלון ה-commit-certificate האחרון
@@ -74,16 +76,17 @@ commit certificate, ולוודא ששדות ה-commitment תואמים ל-certif
 3. בדוק ש-`chain_id` תואם לשרשרת Iroha הצפויה.
 4. חשב מחדש `validator_set_hash` מ-`commit_certificate.validator_set` ובדוק שהוא תואם
    ל-hash/גרסה הרשומים.
-5. אמת חתימות ב-commit certificate מול hash ה-header באמצעות מפתחות ציבוריים ואינדקסים
+5. ודא שאורך `validator_set_pops` תואם ל-validator set ואמת כל PoP מול מפתח ה-BLS הציבורי שלו.
+6. אמת חתימות ב-commit certificate מול hash ה-header באמצעות מפתחות ציבוריים ואינדקסים
    של המאמתים המצוינים; אכוף quorum (`2f+1` כאשר `n>3`, אחרת `n`) ודחה אינדקסים כפולים/מחוץ לטווח.
-6. אופציונלית: קושר ל-checkpoint מהימן על ידי השוואת hash ה-validator set לערך מעוגן
+7. אופציונלית: קושר ל-checkpoint מהימן על ידי השוואת hash ה-validator set לערך מעוגן
    (weak-subjectivity anchor).
-7. אופציונלית: קושר ל-epoch צפוי כך שהוכחות מאפוקים ישנים/חדשים יידחו עד שה-anchor יוחלף במכוון.
+8. אופציונלית: קושר ל-epoch צפוי כך שהוכחות מאפוקים ישנים/חדשים יידחו עד שה-anchor יוחלף במכוון.
 
 `BridgeFinalityVerifier` (ב-`iroha_data_model::bridge`) מיישם את הבדיקות הללו, ודוחה
-chain-id/height drift, אי התאמה של hash/גרסה ב-validator set, חתומים כפולים/מחוץ לטווח,
-חתימות לא תקינות, ו-epochs לא צפויים לפני ספירת quorum, כך ש-light clients יכולים
-להשתמש במאמת יחיד.
+chain-id/height drift, אי התאמה של hash/גרסה ב-validator set, PoP חסרים או לא תקינים,
+חתומים כפולים/מחוץ לטווח, חתימות לא תקינות, ו-epochs לא צפויים לפני ספירת quorum, כך
+ש-light clients יכולים להשתמש במאמת יחיד.
 
 ## מאמת רפרנס
 

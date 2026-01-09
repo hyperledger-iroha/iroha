@@ -59,12 +59,12 @@ lane_count = 3
 max_disk_usage_bytes = 274877906944
 max_wsv_memory_bytes = 8589934592
 
-[nexus.storage.weights]
-kura_bps = 3000
-wsv_bps = 2000
+[nexus.storage.disk_budget_weights]
+kura_blocks_bps = 3000
+wsv_snapshots_bps = 2000
 sorafs_bps = 4000
-soranet_bps = 500
-soravpn_bps = 500
+soranet_spool_bps = 500
+soravpn_spool_bps = 500
 
 [[nexus.lane_catalog]]
 index = 0

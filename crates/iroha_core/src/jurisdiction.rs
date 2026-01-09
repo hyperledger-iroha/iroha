@@ -15,9 +15,7 @@ use std::{
     sync::OnceLock,
 };
 
-#[cfg(feature = "bls")]
-use iroha_crypto::Algorithm;
-use iroha_crypto::{HashOf, Signature};
+use iroha_crypto::{Algorithm, HashOf, Signature};
 use iroha_data_model::{
     jurisdiction::{
         JdgAttestation, JdgCommitteeId, JdgSdnKeyRecord, JdgSdnPolicy, JdgSdnRegistry,
@@ -231,7 +229,7 @@ pub struct JdgCommitteeRecord {
     /// Committee identifier bound into attestations.
     pub committee_id: JdgCommitteeId,
     /// Ordered public keys that are eligible to sign.
-    pub members: Vec<iroha_crypto::PublicKey>,
+    pub members: Vec<JdgCommitteeMember>,
     /// Threshold required for acceptance.
     pub threshold: u16,
     /// Height at which this committee activates (inclusive).
@@ -239,6 +237,16 @@ pub struct JdgCommitteeRecord {
     /// Height at which this committee retires (inclusive). After this height
     /// only the grace window is allowed.
     pub retire_height: u64,
+}
+
+/// Committee member with optional proof-of-possession.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, norito::codec::Decode, IntoSchema)]
+pub struct JdgCommitteeMember {
+    /// Member public key.
+    pub public_key: iroha_crypto::PublicKey,
+    /// Proof-of-possession for BLS keys.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub pop: Option<Vec<u8>>,
 }
 
 impl JdgCommitteeRecord {
@@ -263,8 +271,8 @@ impl JdgCommitteeRecord {
         let dedup: BTreeSet<_> = self
             .members
             .iter()
-            .map(|pk| {
-                let (alg, bytes) = pk.to_bytes();
+            .map(|member| {
+                let (alg, bytes) = member.public_key.to_bytes();
                 (alg, bytes)
             })
             .collect();
@@ -272,6 +280,37 @@ impl JdgCommitteeRecord {
             return Err(JdgCommitteeError::DuplicateMember {
                 committee_id: self.committee_id,
             });
+        }
+        for (index, member) in self.members.iter().enumerate() {
+            let (algorithm, _) = member.public_key.to_bytes();
+            if matches!(algorithm, Algorithm::BlsNormal | Algorithm::BlsSmall) {
+                let Some(pop) = member.pop.as_ref() else {
+                    return Err(JdgCommitteeError::MissingMemberPop {
+                        committee_id: self.committee_id,
+                        index,
+                        algorithm,
+                    });
+                };
+                #[cfg(feature = "bls")]
+                {
+                    let res = match algorithm {
+                        Algorithm::BlsNormal => {
+                            iroha_crypto::bls_normal_pop_verify(&member.public_key, pop)
+                        }
+                        Algorithm::BlsSmall => {
+                            iroha_crypto::bls_small_pop_verify(&member.public_key, pop)
+                        }
+                        _ => Ok(()),
+                    };
+                    if res.is_err() {
+                        return Err(JdgCommitteeError::InvalidMemberPop {
+                            committee_id: self.committee_id,
+                            index,
+                            algorithm,
+                        });
+                    }
+                }
+            }
         }
         if self.retire_height < self.activation_height {
             return Err(JdgCommitteeError::InvalidWindow {
@@ -531,8 +570,8 @@ impl JdgAttestationGuard {
         let committee_members: BTreeSet<_> = committee
             .members
             .iter()
-            .map(|pk| {
-                let (alg, bytes) = pk.to_bytes();
+            .map(|member| {
+                let (alg, bytes) = member.public_key.to_bytes();
                 (alg, bytes)
             })
             .collect();
@@ -622,7 +661,15 @@ impl JdgAttestationGuard {
                             actual: attestation.signature.signatures.len(),
                         });
                     }
+                    let mut pop_map: BTreeMap<(Algorithm, Vec<u8>), Vec<u8>> = BTreeMap::new();
+                    for member in &committee.members {
+                        if let Some(pop) = member.pop.as_ref() {
+                            let (alg, bytes) = member.public_key.to_bytes();
+                            pop_map.insert((alg, bytes.to_vec()), pop.clone());
+                        }
+                    }
                     let mut public_keys = Vec::with_capacity(signer_indexes.len());
+                    let mut pops = Vec::with_capacity(signer_indexes.len());
                     for signer_index in &signer_indexes {
                         let signer = attestation.signer_set.get(*signer_index).ok_or(
                             JdgAttestationGuardError::SignatureCountMismatch {
@@ -630,20 +677,23 @@ impl JdgAttestationGuard {
                                 actual: attestation.signer_set.len(),
                             },
                         )?;
-                        let (algo, payload) = signer.to_bytes();
-                        if algo != Algorithm::BlsNormal {
+                        let (algorithm, bytes) = signer.to_bytes();
+                        if algorithm != Algorithm::BlsNormal {
                             return Err(JdgAttestationGuardError::SignatureInvalid { index: 0 });
                         }
-                        public_keys.push(payload.to_vec());
+                        let pop = pop_map
+                            .get(&(algorithm, bytes.to_vec()))
+                            .ok_or(JdgAttestationGuardError::SignatureInvalid { index: 0 })?;
+                        public_keys.push(signer);
+                        pops.push(pop.as_slice());
                     }
 
                     let signature = &attestation.signature.signatures[0];
-                    let public_key_refs: Vec<&[u8]> =
-                        public_keys.iter().map(Vec::as_slice).collect();
                     iroha_crypto::bls_normal_verify_preaggregated_same_message(
                         hash_bytes,
                         signature.as_slice(),
-                        &public_key_refs,
+                        &public_keys,
+                        &pops,
                     )
                     .map_err(|_| JdgAttestationGuardError::SignatureInvalid { index: 0 })?;
                 }
@@ -809,6 +859,26 @@ pub enum JdgCommitteeError {
     DuplicateMember {
         /// Committee identifier.
         committee_id: JdgCommitteeId,
+    },
+    /// BLS member missing proof-of-possession.
+    #[error("committee {committee_id:?} member {index} missing PoP for {algorithm:?}")]
+    MissingMemberPop {
+        /// Committee identifier.
+        committee_id: JdgCommitteeId,
+        /// Member index.
+        index: usize,
+        /// Algorithm requiring PoP.
+        algorithm: Algorithm,
+    },
+    /// BLS member PoP failed verification.
+    #[error("committee {committee_id:?} member {index} invalid PoP for {algorithm:?}")]
+    InvalidMemberPop {
+        /// Committee identifier.
+        committee_id: JdgCommitteeId,
+        /// Member index.
+        index: usize,
+        /// Algorithm requiring PoP.
+        algorithm: Algorithm,
     },
     /// Activation/retire window is invalid.
     #[error(
@@ -1223,7 +1293,13 @@ mod tests {
         committee_id_bytes[..8].copy_from_slice(&dataspace.as_u64().to_le_bytes());
         let committee = JdgCommitteeRecord {
             committee_id: iroha_data_model::jurisdiction::JdgCommitteeId::new(committee_id_bytes),
-            members: signers.iter().map(|kp| kp.public_key().clone()).collect(),
+            members: signers
+                .iter()
+                .map(|kp| JdgCommitteeMember {
+                    public_key: kp.public_key().clone(),
+                    pop: None,
+                })
+                .collect(),
             threshold,
             activation_height: activation,
             retire_height: retire,
@@ -1250,7 +1326,16 @@ mod tests {
         committee_id_bytes[..8].copy_from_slice(&dataspace.as_u64().to_le_bytes());
         let committee = JdgCommitteeRecord {
             committee_id: iroha_data_model::jurisdiction::JdgCommitteeId::new(committee_id_bytes),
-            members: signers.iter().map(|kp| kp.public_key().clone()).collect(),
+            members: signers
+                .iter()
+                .map(|kp| JdgCommitteeMember {
+                    public_key: kp.public_key().clone(),
+                    pop: Some(
+                        iroha_crypto::bls_normal_pop_prove(kp.private_key())
+                            .expect("pop for committee member"),
+                    ),
+                })
+                .collect(),
             threshold,
             activation_height: activation,
             retire_height: retire,

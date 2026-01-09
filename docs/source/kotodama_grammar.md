@@ -104,7 +104,7 @@ seiyaku Name {
 ```
 
 Semantics
-- `meta { ... }` fields override compiler defaults for the emitted IVM header: `abi_version`, `vector_length` (0 means unset), `max_cycles` (0 means compiler default), `features` toggles header feature bits (ZK tracing, vector announce). Unsupported features are ignored with a warning. When `meta {}` is omitted, the compiler emits `abi_version = 1` and uses the option defaults for the remaining header fields.
+- `meta { ... }` fields override compiler defaults for the emitted IVM header: `abi_version`, `vector_length` (0 means unset), `max_cycles` (0 means compiler default), `features` toggles header feature bits (ZK tracing, vector announce). The compiler treats `max_cycles: 0` as “use default” and emits the configured non‑zero default to satisfy admission requirements. Unsupported features are ignored with a warning. When `meta {}` is omitted, the compiler emits `abi_version = 1` and uses the option defaults for the remaining header fields.
 - `features: ["zk", "simd"]` (aliases: `"vector"`) explicitly requests the corresponding header bits. Unknown feature strings now produce a parser error instead of being ignored.
 - `state` declares contract variables. Today the compiler lowers them to per-run ephemeral storage (allocated at function entry); durable host-backed overlays and conflict tracking remain TODO. For host-backed reads/writes, use the explicit helpers `state_get/state_set/state_del` and the `get_or_insert_default` map helpers; these route through Norito TLVs and keep names/field order stable for future persistence.
 - State identifiers are reserved; shadowing a `state` name in parameters or `let` bindings is rejected (`E_STATE_SHADOWED`).

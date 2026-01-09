@@ -10,14 +10,14 @@ use iroha_core::{
     gas as isi_gas,
     kura::Kura,
     query,
-    state::{State, World, WorldReadOnly},
+    state::{State, World},
     tx::{AcceptedTransaction, TransactionRejectionReason},
 };
+use iroha_data_model::query::parameters::ForwardCursor;
 use iroha_data_model::prelude::*;
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::gen_account_in;
-use ivm::{ProgramMetadata, encoding, kotodama::wide as kwide};
-use mv::storage::StorageReadOnly;
+use ivm::{ProgramMetadata, encoding, instruction, kotodama::wide as kwide, syscalls as ivm_sys};
 use nonzero_ext::nonzero;
 use rust_decimal::Decimal;
 
@@ -183,6 +183,105 @@ fn non_vm_gas_limit_too_low_rejects() {
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let res = executor.execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache);
     assert!(matches!(res, Err(ValidationFail::NotPermitted(_))));
+}
+
+#[test]
+fn ivm_syscall_charges_fees() {
+    let (alice_id, alice_kp) = gen_account_in("wonderland");
+    let (gas_id, _gas_kp) = gen_account_in("ivm");
+    let dom_w: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice_id);
+    let dom_i: Domain = Domain::new("ivm".parse().unwrap()).build(&gas_id);
+    let alice: Account = Account::new(alice_id.clone()).build(&alice_id);
+    let tech: Account = Account::new(gas_id.clone()).build(&gas_id);
+    let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+    let ad: AssetDefinition = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
+    let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
+    let init = 100_000u128;
+    let payer_balance = Asset::new(payer_asset.clone(), Numeric::new(init, 0));
+    let world = World::with_assets([dom_w, dom_i], [alice, tech], [ad], [payer_balance], []);
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = query::store::LiveQueryStore::start_test();
+    let mut state = new_state(world, kura, query_handle);
+
+    let mut pipeline = state.pipeline.clone();
+    pipeline.gas.tech_account_id = gas_id.to_string();
+    pipeline.gas.accepted_assets = vec![asset_def_id.to_string()];
+    let rate: u64 = 10;
+    pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
+        asset: asset_def_id.to_string(),
+        units_per_gas: rate,
+        twap_local_per_xor: Decimal::ONE,
+        liquidity: GasLiquidity::Tier2,
+        volatility: GasVolatility::Stable,
+    }];
+    state.set_pipeline(pipeline);
+
+    let scall = encoding::wide::encode_sys(
+        instruction::wide::system::SCALL,
+        u8::try_from(ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL).expect("syscall id fits in u8"),
+    );
+    let mut program = ProgramMetadata {
+        max_cycles: 1_000,
+        ..ProgramMetadata::default()
+    }
+    .encode();
+    program.extend_from_slice(&scall.to_le_bytes());
+    program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+
+    let exec = Executable::Ivm(IvmBytecode::from_compiled(program));
+
+    let mut md = Metadata::default();
+    md.insert(
+        "gas_asset_id".parse().unwrap(),
+        iroha_primitives::json::Json::new(asset_def_id.to_string()),
+    );
+    md.insert("gas_limit".parse().unwrap(), 1_000_000u64);
+
+    let chain: ChainId = "test-chain".parse().unwrap();
+    let tx = iroha_data_model::transaction::TransactionBuilder::new(chain, alice_id.clone())
+        .with_executable(exec)
+        .with_metadata(md)
+        .sign(alice_kp.private_key());
+
+    let executor = Executor::default();
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(block_header);
+    let mut state_tx = block.transaction();
+    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
+    executor
+        .execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache)
+        .expect("execution");
+
+    let fc = ForwardCursor {
+        query: "sc_dummy".to_string(),
+        cursor: nonzero!(1_u64),
+        gas_budget: None,
+    };
+    let isi = SetKeyValue::account(alice_id.clone(), "cursor".parse().unwrap(), Json::new(fc));
+    let expected_extra = isi_gas::meter_instruction(&InstructionBox::from(SetKeyValueBox::from(isi)));
+    let scall_cost = ivm::gas::cost_of(scall);
+    let expected_used = scall_cost.saturating_add(expected_extra);
+    assert_eq!(state_tx.last_tx_gas_used, expected_used);
+
+    let fee = u128::from(state_tx.last_tx_gas_used) * u128::from(rate);
+    let payer_balance_after = state_tx
+        .world
+        .assets()
+        .get(&payer_asset)
+        .expect("payer asset exists")
+        .0
+        .try_mantissa_u128()
+        .unwrap();
+    let payee_balance_after = state_tx
+        .world
+        .assets()
+        .get(&AssetId::of(asset_def_id.clone(), gas_id.clone()))
+        .expect("tech account asset exists")
+        .0
+        .try_mantissa_u128()
+        .unwrap();
+    assert_eq!(payer_balance_after, init - fee);
+    assert_eq!(payee_balance_after, fee);
 }
 
 #[test]

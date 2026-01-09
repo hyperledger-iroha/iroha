@@ -2042,6 +2042,8 @@ pub mod tiered_state {
     pub const MAX_COLD_BYTES: Bytes<u64> = Bytes(0);
     /// Default on-disk root for tiered state snapshots.
     pub const DEFAULT_COLD_STORE_ROOT: &str = "./storage/tiered_state";
+    /// Default on-disk root for DA-backed tiered state snapshots.
+    pub const DEFAULT_DA_STORE_ROOT: &str = "./storage/da_wsv_snapshots";
     /// Retain the latest two snapshots when enabled.
     pub const MAX_SNAPSHOTS: usize = 2;
 }

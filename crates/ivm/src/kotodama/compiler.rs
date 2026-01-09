@@ -365,7 +365,7 @@ pub struct CompilerOptions {
     pub force_vector: bool,
     /// Requested logical vector length (0 = max).
     pub vector_length: u8,
-    /// Optional maximum cycles to encode; 0 means no explicit cap.
+    /// Optional maximum cycles to encode; 0 means "use compiler default".
     pub max_cycles: u64,
     /// Max unrolled iterations for dynamic bounds lowering (feature-gated).
     pub dynamic_iter_cap: u8,
@@ -4204,6 +4204,7 @@ impl Compiler {
                 .unwrap_or(self.opts.vector_length),
             max_cycles: meta_decl
                 .and_then(|m| m.max_cycles)
+                .filter(|value| *value != 0)
                 .unwrap_or(self.opts.max_cycles),
             abi_version: meta_decl
                 .and_then(|m| m.abi_version)

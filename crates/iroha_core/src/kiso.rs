@@ -1208,6 +1208,7 @@ mod tests {
                 hot_retained_grace_snapshots:
                     iroha_config::parameters::defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
                 cold_store_root: None,
+                da_store_root: None,
                 max_snapshots: 2,
                 max_cold_bytes: iroha_config::parameters::defaults::tiered_state::MAX_COLD_BYTES,
             },

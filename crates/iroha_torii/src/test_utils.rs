@@ -756,6 +756,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             hot_retained_bytes: defaults::tiered_state::HOT_RETAINED_BYTES,
             hot_retained_grace_snapshots: defaults::tiered_state::HOT_RETAINED_GRACE_SNAPSHOTS,
             cold_store_root: None,
+            da_store_root: None,
             max_snapshots: defaults::tiered_state::MAX_SNAPSHOTS,
             max_cold_bytes: defaults::tiered_state::MAX_COLD_BYTES,
         },

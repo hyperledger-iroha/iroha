@@ -91,7 +91,7 @@ LaneConfigEntry {
   - `lane_{id:03}_merge` — סגמנט merge-ledger המתעד שורשי מצב מצומצמים וארטיפקטים של settlement.
   - סגמנטים גלובליים (ראיות קונצנזוס, מטמוני טלמטריה) נשארים משותפים כי הם ניטרליים ל-lane; המפתחות שלהם אינם כוללים קידומות lane.
 - זמן הריצה עוקב אחר עדכוני קטלוג ה-lane: lanes חדשים מקבלים אוטומטית ספריות בלוקים ו-merge-ledger תחת `kura/blocks/` ו-`kura/merge_ledger/`, בעוד lanes שפרשו נארזים תחת `kura/retired/{blocks,merge_ledger}/lane_{id:03}_*`.
-- סנפשוטים מדורגים של מצב משקפים את אותו מחזור; כל lane כותב אל `cold_store_root/lanes/lane_{id:03}_{slug}` ופרישות מעבירות את עץ הספריות אל `cold_store_root/retired/lanes/`.
+- סנפשוטים מדורגים של מצב משקפים את אותו מחזור; כל lane כותב אל `<cold_root>/lanes/lane_{id:03}_{slug}`, כאשר `<cold_root>` הוא `cold_store_root` (או `da_store_root` כש־`cold_store_root` לא מוגדר), ופרישות מעבירות את עץ הספריות אל `<cold_root>/retired/lanes/`.
 - **קידומות מפתח** — קידומת 4 הבייטים המחושבת מ-`LaneId` תמיד מצורפת למפתחות MV מקודדים. לא נעשה שימוש ב-hashing ייעודי ל-host, ולכן הסדר זהה בין צמתים.
 - **פריסת בלוק-לוג** — נתוני בלוק, אינדקס ו-hashes מקוננים תחת `kura/blocks/lane_{id:03}_{slug}/`. יומני merge-ledger משתמשים מחדש באותו slug (`kura/merge/lane_{id:03}_{slug}.log`), ושומרים על זרימות התאוששות פר-lane מבודדות.
 - **מדיניות שימור** — lanes ציבוריים שומרים גופי בלוקים מלאים; lanes של commitments בלבד יכולים לדחוס גופים ישנים אחרי checkpoints כי commitments הם סמכותיים. lanes סודיים שומרים יומני ciphertext בסגמנטים ייעודיים כדי לא לחסום עומסי עבודה אחרים.

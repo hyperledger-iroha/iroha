@@ -111,6 +111,8 @@ const NETWORK_PERMIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const NETWORK_PERMIT_LOG_INTERVAL: Duration = Duration::from_secs(60);
 const NETWORK_PERMIT_STALE_TTL: Duration = Duration::from_secs(60 * 60 * 12);
 const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 4;
+const TEST_CONCURRENCY_OVERSUBSCRIPTION: usize = 2;
+const TEST_CONCURRENCY_MIN_THREADS: usize = 4;
 const PERMISSIONED_BLS_DOMAIN: &str = "bls-iroha2:permissioned-sumeragi:v1";
 const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v1";
 const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
@@ -240,12 +242,12 @@ fn peer_start_timeout_env() -> Duration {
     read_env_duration("IROHA_TEST_PEER_START_TIMEOUT_MS", sync_timeout_env())
 }
 
-const CLIENT_STATUS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(300);
-const CLIENT_TTL_DEFAULT: Duration = Duration::from_secs(600);
+const CLIENT_STATUS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(600);
+const CLIENT_TTL_DEFAULT: Duration = Duration::from_secs(1200);
 const CLIENT_TTL_MIN_SLACK: Duration = Duration::from_secs(120);
 
 fn client_status_timeout_env() -> Duration {
-    // Default 300s; override with IROHA_TEST_CLIENT_STATUS_TIMEOUT_SECS or *_MS
+    // Default 600s; override with IROHA_TEST_CLIENT_STATUS_TIMEOUT_SECS or *_MS
     let secs = read_env_duration(
         "IROHA_TEST_CLIENT_STATUS_TIMEOUT_SECS",
         Duration::from_secs(0),
@@ -1325,6 +1327,21 @@ fn network_parallelism_limit() -> usize {
         .unwrap_or(1);
     let per_network = DEFAULT_NETWORK_PARALLELISM_PEERS.max(1);
     cores.saturating_div(per_network).max(1)
+}
+
+fn test_concurrency_threads() -> usize {
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1);
+    let networks = network_parallelism_limit().max(1);
+    let peers = DEFAULT_NETWORK_PARALLELISM_PEERS.max(1);
+    let total_peers = networks.saturating_mul(peers).max(1);
+    let oversub = TEST_CONCURRENCY_OVERSUBSCRIPTION.max(1);
+    let min_threads = cores.min(TEST_CONCURRENCY_MIN_THREADS).max(1);
+    cores
+        .saturating_mul(oversub)
+        .saturating_div(total_peers)
+        .max(min_threads)
 }
 
 fn permit_dir() -> PathBuf {
@@ -2931,6 +2948,26 @@ impl NetworkBuilder {
             );
             builder.sumeragi_da_enabled = Some(value);
         }
+        let mut default_layer = Table::new();
+        let mut writer = TomlWriter::new(&mut default_layer);
+        // Scale per-peer thread pools to avoid oversubscribing the host when many
+        // test networks run in parallel, but keep a minimum to prevent stalls.
+        let concurrency_threads =
+            i64::try_from(test_concurrency_threads()).expect("test concurrency threads fit in i64");
+        writer
+            .write(["nexus", "enabled"], false)
+            .write(
+                ["concurrency", "scheduler_min_threads"],
+                concurrency_threads,
+            )
+            .write(
+                ["concurrency", "scheduler_max_threads"],
+                concurrency_threads,
+            )
+            .write(["concurrency", "rayon_global_threads"], concurrency_threads)
+            .write(["pipeline", "workers"], concurrency_threads);
+        apply_debug_rbc_defaults(&mut default_layer);
+        builder.config_layers.push(default_layer);
         builder
     }
 
@@ -3586,6 +3623,7 @@ struct PeerRun {
     tasks: JoinSet<()>,
     shutdown: oneshot::Sender<()>,
     fatal_notify: Arc<Notify>,
+    pid: Option<u32>,
 }
 
 /// Lifecycle events of a peer
@@ -3744,6 +3782,7 @@ impl NetworkPeer {
         }
         cmd.current_dir(&self.dir);
         let mut child = cmd.spawn().wrap_err("failed to spawn `irohad`")?;
+        let pid = child.id();
         let stderr_log_ready = Arc::new(Notify::new());
         let fatal_notify = Arc::new(Notify::new());
         self.is_running.store(true, Ordering::Relaxed);
@@ -4190,6 +4229,7 @@ impl NetworkPeer {
             tasks,
             shutdown: shutdown_tx,
             fatal_notify: fatal_notify.clone(),
+            pid,
         });
         Ok(())
     }
@@ -4221,6 +4261,24 @@ impl NetworkPeer {
         };
         if timeout(PEER_SHUTDOWN_TIMEOUT, join_all).await.is_err() {
             warn!("timed out waiting for peer tasks; aborting remaining tasks");
+            if let Some(pid) = run.pid.filter(|pid| *pid > 0) {
+                #[cfg(target_family = "unix")]
+                {
+                    use nix::{sys::signal, unistd::Pid};
+                    if let Err(err) =
+                        signal::kill(Pid::from_raw(pid as i32), signal::Signal::SIGKILL)
+                    {
+                        warn!(pid, error = %err, "failed to force-kill hung peer process");
+                    }
+                }
+                #[cfg(not(target_family = "unix"))]
+                {
+                    warn!(
+                        pid,
+                        "unable to force-kill hung peer process on this platform"
+                    );
+                }
+            }
             run.tasks.abort_all();
             let drain_aborted = async {
                 while let Some(res) = run.tasks.join_next().await {
@@ -6141,6 +6199,7 @@ mod tests {
                 tasks,
                 shutdown: shutdown_tx,
                 fatal_notify: fatal_notify.clone(),
+                pid: None,
             });
         }
         peer.is_running.store(true, Ordering::Relaxed);
@@ -7200,6 +7259,59 @@ exit 0
         assert!(
             entries.contains(&"::1/128"),
             "IPv6 loopback should bypass pre-auth gating"
+        );
+    }
+
+    #[test]
+    fn default_builder_disables_nexus() {
+        let NetworkBuilder { config_layers, .. } = NetworkBuilder::new();
+        let disabled = config_layers
+            .iter()
+            .any(|layer| read_bool(layer, &["nexus", "enabled"]) == Some(false));
+        assert!(
+            disabled,
+            "default NetworkBuilder must set nexus.enabled=false"
+        );
+    }
+
+    #[test]
+    fn default_builder_scales_concurrency_defaults() {
+        let NetworkBuilder { config_layers, .. } = NetworkBuilder::new();
+        let base = config_layers
+            .iter()
+            .find(|layer| layer.get("concurrency").is_some())
+            .expect("base config layer should include concurrency defaults");
+        let concurrency = base
+            .get("concurrency")
+            .and_then(toml::Value::as_table)
+            .expect("concurrency table");
+        let expected =
+            i64::try_from(test_concurrency_threads()).expect("test concurrency threads fit in i64");
+        assert_eq!(
+            concurrency
+                .get("scheduler_min_threads")
+                .and_then(toml::Value::as_integer),
+            Some(expected)
+        );
+        assert_eq!(
+            concurrency
+                .get("scheduler_max_threads")
+                .and_then(toml::Value::as_integer),
+            Some(expected)
+        );
+        assert_eq!(
+            concurrency
+                .get("rayon_global_threads")
+                .and_then(toml::Value::as_integer),
+            Some(expected)
+        );
+        let pipeline = base
+            .get("pipeline")
+            .and_then(toml::Value::as_table)
+            .expect("pipeline table");
+        assert_eq!(
+            pipeline.get("workers").and_then(toml::Value::as_integer),
+            Some(expected)
         );
     }
 

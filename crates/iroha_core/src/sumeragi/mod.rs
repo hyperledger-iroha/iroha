@@ -4922,7 +4922,7 @@ pub struct SumeragiStartArgs {
     pub config: SumeragiConfig,
     /// Common configuration shared with other subsystems (keys, peers, chain id).
     pub common_config: CommonConfig,
-    /// Maximum consensus frame payload size (bytes) for block/control messages.
+    /// Maximum consensus frame size (bytes) for block/control messages (converted to plaintext cap).
     pub consensus_frame_cap: usize,
     /// Channel used to emit consensus lifecycle events to observers.
     pub events_sender: EventsSender,

@@ -172,6 +172,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     /// Performs deterministic aggregate verification for the case where all signers share the
     /// same message. When the optimized multi-pairing backend is unavailable this falls back to
     /// w3f's POP-aware aggregator, so callers still pay only a single pairing check.
+    /// Rejects aggregates whose combined signature or public key is the identity element.
     pub fn verify_aggregate_same_message(
         message: &[u8],
         signatures: &[&[u8]],
@@ -182,6 +183,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             return Err(Error::BadSignature);
         }
         let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
+        let identity_pk = PublicKey::<C::Engine>(Default::default()).to_bytes();
         let parse_signature = |bytes: &[u8]| -> Result<BlsSignature<C::Engine>, Error> {
             let sig = BlsSignature::<C::Engine>::from_bytes(bytes)
                 .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
@@ -204,6 +206,10 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             let sig = parse_signature(s)?;
             agg_sig_group.add_assign(&sig.0);
         }
+        let agg_sig = BlsSignature::<C::Engine>(agg_sig_group);
+        if agg_sig.to_bytes() == identity_sig {
+            return Err(Error::BadSignature);
+        }
 
         // Parse and aggregate public keys; enforce unique signers.
         let mut seen_pks: BTreeSet<Vec<u8>> = BTreeSet::new();
@@ -222,8 +228,10 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             agg_pk_group.add_assign(&pk.0);
         }
 
-        let agg_sig = BlsSignature::<C::Engine>(agg_sig_group);
         let agg_pk = PublicKey::<C::Engine>(agg_pk_group);
+        if agg_pk.to_bytes() == identity_pk {
+            return Err(Error::BadSignature);
+        }
         let message = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
         if !agg_sig.verify(&message, &agg_pk) {
             return Err(Error::BadSignature);
@@ -233,7 +241,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
 
     /// Aggregate a sequence of BLS signatures (same-message context) into a single signature.
     /// The caller is responsible for ensuring all signatures are valid and belong to the same
-    /// scheme/engine variant.
+    /// scheme/engine variant. Rejects aggregates that cancel to the identity element.
     pub fn aggregate_signatures(signatures: &[&[u8]]) -> Result<Vec<u8>, Error> {
         use core::ops::AddAssign as _;
         if signatures.is_empty() {
@@ -260,7 +268,12 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             let sig = parse_signature(s)?;
             agg_sig_group.add_assign(&sig.0);
         }
-        Ok(BlsSignature::<C::Engine>(agg_sig_group).to_bytes())
+        let agg_sig = BlsSignature::<C::Engine>(agg_sig_group);
+        let agg_sig_bytes = agg_sig.to_bytes();
+        if agg_sig_bytes == identity_sig {
+            return Err(Error::BadSignature);
+        }
+        Ok(agg_sig_bytes)
     }
 
     /// Verify a pre-aggregated signature for the case where all signers signed the
