@@ -4282,7 +4282,7 @@ id: 88
             guard case let ToriiClientError.invalidPayload(message) = error else {
                 return XCTFail("unexpected error: \(error)")
             }
-            XCTAssertTrue(message.contains("owner must use canonical account id form"))
+            XCTAssertTrue(message.contains("owner must be a canonical account id."))
         }
     }
 
