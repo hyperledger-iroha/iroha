@@ -1510,6 +1510,10 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         for peer in &other_peers {
             let _ = vec.push(peer.id().clone());
         }
+        let mut peer_ids = Vec::with_capacity(1 + other_peers.len());
+        peer_ids.push(peer_id.clone());
+        peer_ids.extend(other_peers.iter().map(|peer| peer.id().clone()));
+        insert_consensus_keys_for_peers(&mut block, &peer_ids, &key_pairs);
         let params = block.parameters.get_mut();
         params.sumeragi.da_enabled = consensus_cfg.da_enabled;
         block.commit();
@@ -4883,7 +4887,7 @@ async fn block_sync_cache_uses_activation_height_mode_tag() {
         let mut block = state.world.block();
         let params = block.parameters.get_mut();
         params.sumeragi.next_mode = Some(SumeragiConsensusMode::Npos);
-        params.sumeragi.mode_activation_height = Some(2);
+        params.sumeragi.mode_activation_height = Some(3);
         block.commit();
     }
     let _ = seed_genesis_block_for_state(actor.state.as_ref());
@@ -14661,7 +14665,8 @@ async fn stale_pending_block_requeues_transactions() {
     let shutdown = ShutdownSignal::new();
     let (local_peer, _local_pop, key_pair) = bls_peer("127.0.0.1:0");
     let peer_id = local_peer.id().clone();
-    let trusted_peers = trusted_with_pops(local_peer.clone(), Vec::new(), BTreeMap::new());
+    let other_peers: Vec<Peer> = Vec::new();
+    let trusted_peers = trusted_with_pops(local_peer.clone(), other_peers.clone(), BTreeMap::new());
     let common_config = CommonConfig {
         chain: "test-chain".parse().expect("chain id parses"),
         key_pair: key_pair.clone(),
@@ -15014,33 +15019,57 @@ fn state_with_peers(peers: Vec<PeerId>) -> State {
     State::new(world, kura, query)
 }
 
+fn state_with_peers_and_keys(peers: Vec<PeerId>, keys: &[KeyPair]) -> State {
+    let world = World::default();
+    {
+        let mut block = world.block();
+        let vec = block.peers.get_mut();
+        for pid in &peers {
+            let _ = vec.push(pid.clone());
+        }
+        insert_consensus_keys_for_peers(&mut block, &peers, keys);
+        block.commit();
+    }
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    State::new(world, kura, query)
+}
+
+fn insert_consensus_keys_for_peers(
+    block: &mut crate::state::WorldBlock<'_>,
+    peers: &[PeerId],
+    keys: &[KeyPair],
+) {
+    for peer in peers {
+        let keypair = keys
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("keypair for peer");
+        let pop =
+            iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("pop for peer key");
+        let id = crate::state::derive_validator_key_id(peer.public_key());
+        let record = iroha_data_model::consensus::ConsensusKeyRecord {
+            id: id.clone(),
+            public_key: peer.public_key().clone(),
+            pop: Some(pop),
+            activation_height: 0,
+            expiry_height: None,
+            hsm: None,
+            replaces: None,
+            status: iroha_data_model::consensus::ConsensusKeyStatus::Active,
+        };
+        block.consensus_keys.insert(id.clone(), record);
+        block
+            .consensus_keys_by_pk
+            .insert(peer.public_key().to_string(), vec![id]);
+    }
+}
+
 fn world_with_consensus_keys(peers: &[PeerId], keys: &[KeyPair]) -> World {
     let world = World::default();
     {
         let mut block = world.block();
-        for peer in peers {
-            let kp = keys
-                .iter()
-                .find(|kp| kp.public_key() == peer.public_key())
-                .expect("keypair for peer");
-            let pop =
-                iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("pop for peer key");
-            let id = crate::state::derive_validator_key_id(peer.public_key());
-            let record = iroha_data_model::consensus::ConsensusKeyRecord {
-                id: id.clone(),
-                public_key: peer.public_key().clone(),
-                pop: Some(pop),
-                activation_height: 0,
-                expiry_height: None,
-                hsm: None,
-                replaces: None,
-                status: iroha_data_model::consensus::ConsensusKeyStatus::Active,
-            };
-            block.consensus_keys.insert(id.clone(), record);
-            block
-                .consensus_keys_by_pk
-                .insert(peer.public_key().to_string(), vec![id]);
-        }
+        insert_consensus_keys_for_peers(&mut block, peers, keys);
         block.commit();
     }
     world
@@ -15285,7 +15314,8 @@ fn block_sync_selection_prefers_matching_validator_checkpoint_history() {
     pops.insert(other_peer.id().public_key().clone(), other_pop);
     let trusted = trusted_with_pops(me_peer.clone(), vec![other_peer.clone()], pops);
     let roster = vec![other_peer.id().clone(), me_peer.id().clone()];
-    let state = state_with_peers(Vec::new());
+    let keypairs = vec![other_kp.clone(), me_kp.clone()];
+    let state = state_with_peers_and_keys(roster.clone(), &keypairs);
     let block_header = BlockHeader::new(NonZeroU64::new(7).unwrap(), None, None, None, 0, 0);
     let block_hash = block_header.hash();
     let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
@@ -15293,7 +15323,6 @@ fn block_sync_selection_prefers_matching_validator_checkpoint_history() {
     let chain = state.chain_id.clone();
     let topology = super::network_topology::Topology::new(roster.clone());
     let signers_bitmap = vec![0b0000_0011];
-    let keypairs = vec![other_kp.clone(), me_kp.clone()];
     let bls_aggregate_signature = aggregate_vote_signature_for_bitmap(
         &chain,
         PERMISSIONED_TAG,
@@ -15358,7 +15387,8 @@ fn block_sync_selection_prefers_matching_commit_qc_history() {
     let mut pops = BTreeMap::new();
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
-    let state = state_with_peers(Vec::new());
+    let keypairs = vec![me_kp.clone()];
+    let state = state_with_peers_and_keys(vec![me_peer.id().clone()], &keypairs);
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD0; Hash::LENGTH]));
     let block_sig = BlockSignature::new(0, SignatureOf::from_hash(me_kp.private_key(), block_hash));
@@ -15366,7 +15396,6 @@ fn block_sync_selection_prefers_matching_commit_qc_history() {
     signers.insert(ValidatorIndex::try_from(0).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, 1);
     let topology = super::network_topology::Topology::new(vec![me_peer.id().clone()]);
-    let keypairs = vec![me_kp.clone()];
     let cert = qc_with_bitmap(
         &state.chain_id,
         block_hash,
@@ -15413,7 +15442,8 @@ fn block_sync_selection_prefers_paired_hints() {
     let mut pops = BTreeMap::new();
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
-    let state = state_with_peers(Vec::new());
+    let keypairs = vec![me_kp.clone()];
+    let state = state_with_peers_and_keys(vec![me_peer.id().clone()], &keypairs);
     let block_header = BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, None, 0, 0);
     let height = block_header.height().get();
     let block_hash = block_header.hash();
@@ -15422,7 +15452,6 @@ fn block_sync_selection_prefers_paired_hints() {
     signers.insert(ValidatorIndex::try_from(0).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
     let topology = super::network_topology::Topology::new(roster.clone());
-    let keypairs = vec![me_kp.clone()];
     let bls_aggregate_signature = aggregate_signature_for_bitmap(
         &state.chain_id,
         PERMISSIONED_TAG,
@@ -15522,7 +15551,8 @@ fn block_sync_selection_uses_persisted_commit_roster_snapshot() {
     let mut pops = BTreeMap::new();
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
-    let state = state_with_peers(Vec::new());
+    let keypairs = vec![me_kp.clone()];
+    let state = state_with_peers_and_keys(vec![me_peer.id().clone()], &keypairs);
     let roster = vec![me_peer.id().clone()];
     let header = BlockHeader {
         height: NonZeroU64::new(3).expect("non-zero height"),
@@ -15542,7 +15572,6 @@ fn block_sync_selection_uses_persisted_commit_roster_snapshot() {
     let block = SignedBlock::presigned(block_signature.clone(), header, Vec::new());
     let signers_bitmap = vec![0b0000_0001];
     let topology = super::network_topology::Topology::new(roster.clone());
-    let keypairs = vec![me_kp.clone()];
     let bls_aggregate_signature = aggregate_signature_for_bitmap(
         &state.chain_id,
         PERMISSIONED_TAG,
@@ -15640,7 +15669,8 @@ fn block_sync_update_uses_journal_roster() {
     let mut pops = BTreeMap::new();
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
-    let state = state_with_peers(vec![me_peer.id().clone()]);
+    let keypairs = vec![me_kp.clone()];
+    let state = state_with_peers_and_keys(vec![me_peer.id().clone()], &keypairs);
 
     let height = 4;
     let header = BlockHeader {
@@ -15663,7 +15693,6 @@ fn block_sync_update_uses_journal_roster() {
     signers.insert(ValidatorIndex::try_from(0).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
     let topology = super::network_topology::Topology::new(roster.clone());
-    let keypairs = vec![me_kp.clone()];
     let bls_aggregate_signature = aggregate_signature_for_bitmap(
         &state.chain_id,
         PERMISSIONED_TAG,
@@ -15776,7 +15805,8 @@ fn block_sync_update_includes_commit_qc_from_history() {
     let mut pops = BTreeMap::new();
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
-    let state = state_with_peers(vec![me_peer.id().clone()]);
+    let keypairs = vec![me_kp.clone()];
+    let state = state_with_peers_and_keys(vec![me_peer.id().clone()], &keypairs);
 
     let height = 5;
     let header = BlockHeader {
@@ -15799,7 +15829,6 @@ fn block_sync_update_includes_commit_qc_from_history() {
     signers.insert(ValidatorIndex::try_from(0).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
     let topology = super::network_topology::Topology::new(roster.clone());
-    let keypairs = vec![me_kp.clone()];
     let bls_aggregate_signature = aggregate_signature_for_bitmap(
         &state.chain_id,
         PERMISSIONED_TAG,
@@ -15880,7 +15909,8 @@ fn block_sync_update_includes_checkpoint_from_history() {
     let mut pops = BTreeMap::new();
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
-    let state = state_with_peers(vec![me_peer.id().clone()]);
+    let keypairs = vec![me_kp.clone()];
+    let state = state_with_peers_and_keys(vec![me_peer.id().clone()], &keypairs);
 
     let height = 6;
     let header = BlockHeader {
@@ -15904,7 +15934,6 @@ fn block_sync_update_includes_checkpoint_from_history() {
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::try_from(0u32).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
-    let keypairs = vec![me_kp.clone()];
     let checkpoint_signature = aggregate_vote_signature_for_bitmap(
         &chain,
         PERMISSIONED_TAG,
@@ -16190,7 +16219,8 @@ fn block_sync_update_uses_history_after_restart_like_path() {
     let mut pops = BTreeMap::new();
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
-    let state = state_with_peers(vec![me_peer.id().clone()]);
+    let keypairs = vec![me_kp.clone()];
+    let state = state_with_peers_and_keys(vec![me_peer.id().clone()], &keypairs);
 
     let height = 7;
     let header = BlockHeader {
@@ -16213,7 +16243,6 @@ fn block_sync_update_uses_history_after_restart_like_path() {
     signers.insert(ValidatorIndex::try_from(0).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
     let topology = super::network_topology::Topology::new(roster.clone());
-    let keypairs = vec![me_kp.clone()];
     let bls_aggregate_signature = aggregate_signature_for_bitmap(
         &state.chain_id,
         PERMISSIONED_TAG,
@@ -16506,7 +16535,6 @@ fn block_sync_roster_selection_uses_persisted_journal() {
     status::reset_validator_checkpoints_for_tests();
     let (kura, _kura_dir) = persistent_kura_for_tests();
     let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
     let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let block_hash = header.hash();
@@ -16515,11 +16543,22 @@ fn block_sync_roster_selection_uses_persisted_journal() {
     pops.insert(me_peer.id().public_key().clone(), me_pop);
     let _trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
     let roster = vec![me_peer.id().clone()];
+    let keypairs = vec![kp.clone()];
+    let world = World::default();
+    {
+        let mut block = world.block();
+        let vec = block.peers.get_mut();
+        for peer in &roster {
+            let _ = vec.push(peer.clone());
+        }
+        insert_consensus_keys_for_peers(&mut block, &roster, &keypairs);
+        block.commit();
+    }
+    let state = State::new_for_testing(world, Arc::clone(&kura), query);
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::try_from(0).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
     let topology = super::network_topology::Topology::new(roster.clone());
-    let keypairs = vec![kp.clone()];
     let bls_aggregate_signature = aggregate_signature_for_bitmap(
         &state.chain_id,
         PERMISSIONED_TAG,
@@ -16625,18 +16664,28 @@ fn block_sync_roster_recovers_from_roster_sidecar_after_cache_reset() {
     status::reset_validator_checkpoints_for_tests();
     let (kura, _kura_dir) = persistent_kura_for_tests();
     let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
     let header = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
     let block_hash = header.hash();
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
-    let roster = vec![peer];
+    let roster = vec![peer.clone()];
+    let keypairs = vec![kp.clone()];
+    let world = World::default();
+    {
+        let mut block = world.block();
+        let vec = block.peers.get_mut();
+        for peer in &roster {
+            let _ = vec.push(peer.clone());
+        }
+        insert_consensus_keys_for_peers(&mut block, &roster, &keypairs);
+        block.commit();
+    }
+    let state = State::new_for_testing(world, Arc::clone(&kura), query);
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::try_from(0).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
     let topology = super::network_topology::Topology::new(roster.clone());
-    let keypairs = vec![kp.clone()];
     let bls_aggregate_signature = aggregate_signature_for_bitmap(
         &state.chain_id,
         PERMISSIONED_TAG,
@@ -16755,7 +16804,6 @@ fn block_sync_update_includes_persisted_roster_artifacts() {
     status::reset_validator_checkpoints_for_tests();
     let (kura, _kura_dir) = persistent_kura_for_tests();
     let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
 
     let header = BlockHeader::new(nonzero!(6_u64), None, None, None, 0, 0);
     let block_hash = header.hash();
@@ -16765,11 +16813,22 @@ fn block_sync_update_includes_persisted_roster_artifacts() {
     let trusted = trusted_with_pops(me_peer.clone(), Vec::new(), pops);
     let block_sig = BlockSignature::new(0, SignatureOf::from_hash(kp.private_key(), block_hash));
     let roster = vec![me_peer.id().clone()];
+    let keypairs = vec![kp.clone()];
+    let world = World::default();
+    {
+        let mut block = world.block();
+        let vec = block.peers.get_mut();
+        for peer in &roster {
+            let _ = vec.push(peer.clone());
+        }
+        insert_consensus_keys_for_peers(&mut block, &roster, &keypairs);
+        block.commit();
+    }
+    let state = State::new_for_testing(world, Arc::clone(&kura), query);
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::try_from(0).expect("signer index fits"));
     let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
     let topology = super::network_topology::Topology::new(roster.clone());
-    let keypairs = vec![kp.clone()];
     let bls_aggregate_signature = aggregate_signature_for_bitmap(
         &state.chain_id,
         PERMISSIONED_TAG,
