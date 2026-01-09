@@ -618,39 +618,20 @@ impl Actor {
                 return;
             }
         }
-        if let Some(pending) = self.pending.pending_blocks.get(&block_hash) {
-            if matches!(pending.validation_status, ValidationStatus::Invalid) {
-                iroha_logger::debug!(
-                    height,
-                    view,
-                    phase = ?phase,
-                    block = ?block_hash,
-                    "skipping QC aggregation for invalid pending block"
-                );
-                return;
-            }
-            if pending.aborted {
-                let (state_height, tip_hash) = {
-                    let view = self.state.view();
-                    (view.height(), view.latest_block_hash())
-                };
-                let pending_parent = pending.block.header().prev_block_hash();
-                if !super::pending_extends_tip(
-                    pending.height,
-                    pending_parent,
-                    state_height,
-                    tip_hash,
-                ) {
-                    iroha_logger::debug!(
-                        height,
-                        view,
-                        phase = ?phase,
-                        block = ?block_hash,
-                        "skipping QC aggregation for aborted pending block off tip"
-                    );
-                    return;
-                }
-            }
+        if self
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .is_some_and(|pending| pending.aborted)
+        {
+            iroha_logger::debug!(
+                height,
+                view,
+                phase = ?phase,
+                block = ?block_hash,
+                "skipping QC aggregation for aborted pending block"
+            );
+            return;
         }
 
         let snapshot = self.qc_signer_snapshot(

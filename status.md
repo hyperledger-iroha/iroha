@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Crypto/BLS: blstrs backend verify now enforces canonical/non-identity encodings via pairing checks to align with aggregate paths; add identity-signature parse-error tests.
+- Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test --workspace` (timed out after 300s while compiling; warning about unused `MissingQc` variant in `mochi/mochi-ui-egui/src/main.rs:10917`); `cargo test -p iroha_crypto --features bls verify_rejects_identity_signature_as_parse_error` (pass).
 - Izanami: track account metadata keys so remove-account-kv plans target real keys; add coverage.
 - Tests: `CARGO_TARGET_DIR=target/codex-izanami cargo test -p izanami` (pass; warnings about `genesis topology is empty` from `iroha_test_network::config`).
 - Crypto/VRF: switch VRF prehash/output to raw Blake2b-256 digests (no Hash LSB tweak) to keep outputs unbiased; add tests to enforce raw digest usage and refresh VRF docs.

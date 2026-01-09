@@ -100,6 +100,15 @@ mod normal {
     }
 
     #[test]
+    fn verify_rejects_identity_signature_as_parse_error() {
+        let (pk, _sk) = BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random);
+        let sig = G2Affine::identity().to_compressed();
+        let err = BlsImpl::<NormalConfiguration>::verify(b"identity", sig.as_ref(), &pk)
+            .expect_err("identity signature must be rejected");
+        assert!(matches!(err, crate::Error::Parse(_)));
+    }
+
+    #[test]
     fn aggregate_same_message_roundtrip() {
         let (pk1, sk1) = BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random);
         let (pk2, sk2) = BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random);
@@ -315,6 +324,15 @@ mod small {
     #[test]
     fn signature_verification_different_keys() {
         test_signature_verification_different_keys::<SmallConfiguration>();
+    }
+
+    #[test]
+    fn verify_rejects_identity_signature_as_parse_error() {
+        let (pk, _sk) = BlsImpl::<SmallConfiguration>::keypair(KeyGenOption::Random);
+        let sig = G1Affine::identity().to_compressed();
+        let err = BlsImpl::<SmallConfiguration>::verify(b"identity-small", sig.as_ref(), &pk)
+            .expect_err("identity signature must be rejected");
+        assert!(matches!(err, crate::Error::Parse(_)));
     }
 
     #[test]
