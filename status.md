@@ -1,6 +1,8 @@
 # Status
 
 ## Latest Updates
+- Connect Norito bridge: assert offline FASTPQ sum request JSON roundtrip before FFI proof generation to keep the JSON contract validated.
+- Tests: `cargo test -p connect_norito_bridge offline_fastpq_sum_proof_matches_generator -- --nocapture`; `cargo test -p connect_norito_bridge -- --nocapture`.
 - Sumeragi tests: restore local peer/key vectors in `stale_pending_block_requeues_transactions` so consensus keys seed correctly.
 - Tests: `CARGO_TARGET_DIR=target/codex-iroha-core cargo test -p iroha_core --lib stale_pending_block_requeues_transactions -- --nocapture` (pass; warning: network bind unavailable in tests; using closed handle).
 - Core tests: import `StorageReadOnly` in `isi_gas_fees` so `assets().get(...)` is in scope.
