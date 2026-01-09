@@ -864,6 +864,21 @@ impl<'tx> AcceptedTransaction<'tx> {
                 }
             }
             Executable::Ivm(smart_contract) => {
+                let gas_limit_key = iroha_data_model::name::Name::from_str("gas_limit")
+                    .expect("static gas_limit key");
+                let Some(raw_gas_limit) = tx.metadata().get(&gas_limit_key) else {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: "missing gas_limit in transaction metadata".into(),
+                        },
+                    ));
+                };
+                raw_gas_limit.try_into_any_norito::<u64>().map_err(|err| {
+                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                        reason: format!("invalid gas_limit metadata: {err}"),
+                    })
+                })?;
+
                 let ivm_bytecode_size_limit = limits.ivm_bytecode_size().get();
                 let bytecode_size = u64::try_from(smart_contract.size_bytes()).unwrap_or(u64::MAX);
                 if bytecode_size > ivm_bytecode_size_limit {
@@ -1448,6 +1463,15 @@ impl StateBlock<'_> {
         };
 
         if let Executable::Ivm(bytes) = tx.as_ref().instructions() {
+            let gas_limit = crate::executor::parse_gas_limit(tx.as_ref().metadata())
+                .map_err(TransactionRejectionReason::Validation)?;
+            if gas_limit.is_none() {
+                return Err(TransactionRejectionReason::Validation(
+                    ValidationFail::NotPermitted(
+                        "missing gas_limit in transaction metadata".to_owned(),
+                    ),
+                ));
+            }
             Self::validate_ivm(
                 authority.clone(),
                 state_transaction,
@@ -3634,6 +3658,7 @@ pub mod tests {
         let program = minimal_ivm_program_with_max_cycles(1, 1_000);
         let chain: ChainId = "chain".parse().unwrap();
         let tx = TransactionBuilder::new(chain, authority_id.clone())
+            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
             .sign(kp.private_key());
 
@@ -4676,6 +4701,7 @@ pub mod tests {
         // Create a blob twice the allowed size (2 KiB) — content need not be a valid IVM header
         let oversize_blob = vec![0u8; 2048];
         let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
+            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(oversize_blob)))
             .sign(kp.private_key());
 
@@ -4719,6 +4745,7 @@ pub mod tests {
         let at_limit_blob = minimal_ivm_program_with_literal_padding(1, 1024);
         assert_eq!(at_limit_blob.len(), 1024);
         let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
+            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(at_limit_blob)))
             .sign(kp.private_key());
 
@@ -4733,6 +4760,37 @@ pub mod tests {
         ) {
             Ok(()) => {}
             other => panic!("Expected Ok for at-limit IVM bytecode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ivm_missing_gas_limit_rejected_at_admission() {
+        use std::time::Duration;
+
+        use iroha_data_model::transaction::{Executable, TransactionBuilder};
+
+        let chain: ChainId = "chain".parse().unwrap();
+        let (authority_id, kp) = gen_account_in("wonderland");
+        let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
+        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+            .sign(kp.private_key());
+
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let limits = TransactionParameters::default();
+        let err =
+            AcceptedTransaction::validate(&tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
+                .expect_err("missing gas_limit should be rejected");
+
+        match err {
+            AcceptTransactionFail::TransactionLimit(limit) => {
+                assert!(
+                    limit.reason.contains("missing gas_limit"),
+                    "unexpected reason: {}",
+                    limit.reason
+                );
+            }
+            other => panic!("Expected TransactionLimit failure, got {other:?}"),
         }
     }
 

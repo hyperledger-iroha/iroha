@@ -6,6 +6,14 @@
 - Tests: `cargo test -p iroha_core --lib sumeragi:: -- --nocapture` (timed out after 600s; no failures observed before timeout); `cargo test -p iroha_core --lib sumeragi::evidence::tests::fuzz_invalid_double_vote_mutations_are_rejected -- --nocapture` (pass).
 - Sumeragi: build DA-valid heartbeat blocks in the hint-mismatch BlockCreated test so proof-policy validation no longer rejects the payload; block-sync tests now call ShareBlocks sizing/trim helpers via the associated `Message` APIs.
 - Tests: `cargo fmt --all` (stable rustfmt warns about unstable options); `cargo test -p iroha_core --lib sumeragi::main_loop::tests::block_created_drops_hint_when_highest_qc_view_mismatches_parent -- --nocapture` (pass); `cargo test -p iroha_core --lib sumeragi::main_loop::tests::block_sync_ -- --nocapture` (pass); `cargo test -p iroha_core --lib sumeragi::main_loop::tests:: -- --nocapture` (timed out after 600s; no failures observed before timeout).
+- Sumeragi: require commit quorum for NEW_VIEW gating and drop cached NEW_VIEW entries below the active round height; add regression coverage.
+- Tests: not run (not requested).
+- Docs: add public DNS delegation note to remaining localized devportal deploy guides (Hebrew, Urdu).
+- Tests: not run (not requested).
+- Tests: `CARGO_TARGET_DIR=target/codex-integration cargo test -p integration_tests public_dns_settings_include_delegation_placeholders -- --nocapture` (timed out after 300s; `public_dns_settings_include_delegation_placeholders` passed before timeout).
+- Tests: `CARGO_TARGET_DIR=target/codex-integration cargo test -p integration_tests --test soranet_web_deploy public_dns_settings_include_delegation_placeholders -- --nocapture` (failed: `iroha_core` compile error E0282 in `crates/iroha_core/src/sumeragi/main_loop/votes.rs:749`).
+- Sumeragi: ignore commit-QC history entries that contradict locally known block hashes when rolling rosters forward, and add regression coverage.
+- Tests: not run (not requested).
 - Connect Norito bridge: assert offline FASTPQ sum request JSON roundtrip before FFI proof generation to keep the JSON contract validated.
 - Tests: `cargo test -p connect_norito_bridge offline_fastpq_sum_proof_matches_generator -- --nocapture`; `cargo test -p connect_norito_bridge -- --nocapture`.
 - Sumeragi: avoid re-entrant state view locking when computing the committed QC epoch and add coverage for the view-based helper.

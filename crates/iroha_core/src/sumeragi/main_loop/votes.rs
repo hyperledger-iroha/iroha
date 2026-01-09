@@ -742,33 +742,63 @@ impl Actor {
         target_parent_hash: Option<HashOf<BlockHeader>>,
     ) -> Option<Vec<PeerId>> {
         let target_parent = height.checked_sub(1)?;
-        let cert = target_parent_hash.and_then(|target_hash| {
-            super::status::commit_qc_history()
-                .into_iter()
-                .find(|candidate| {
-                    candidate.height == target_parent
-                        && candidate.subject_block_hash == target_hash
-                        && matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit)
-                })
-        });
-        let cert = cert.or_else(|| {
-            super::status::commit_qc_history()
-                .into_iter()
-                .find(|candidate| {
-                    candidate.height <= target_parent
-                        && matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit)
-                })
-        })?;
-        if cert.validator_set.is_empty() {
-            return None;
-        }
-
         let view = self.state.view();
         let committed_height = u64::try_from(view.height()).unwrap_or(0);
         let hashes = view.block_hashes();
         let pending_hashes = target_parent_hash.and_then(|hash| {
             self.pending_chain_hashes_for_parent(hash, target_parent, committed_height)
         });
+        let known_hash_for_height = |h: u64| {
+            if h == 0 {
+                return None;
+            }
+            if let Some(hashes) = pending_hashes.as_ref() {
+                if let Some(hash) = hashes.get(&h) {
+                    return Some(*hash);
+                }
+            }
+            if h <= committed_height {
+                let idx = usize::try_from(h.saturating_sub(1)).ok()?;
+                return hashes.get(idx).copied();
+            }
+            None
+        };
+        if let Some(target_hash) = target_parent_hash {
+            if let Some(known_hash) = known_hash_for_height(target_parent) {
+                if known_hash != target_hash {
+                    return None;
+                }
+            }
+        }
+        let candidate_matches_known_chain = |candidate: &crate::sumeragi::consensus::Qc| {
+            if let Some(known_hash) = known_hash_for_height(candidate.height) {
+                known_hash == candidate.subject_block_hash
+            } else {
+                true
+            }
+        };
+        let cert = target_parent_hash
+            .and_then(|target_hash| {
+                super::status::commit_qc_history()
+                    .into_iter()
+                    .find(|candidate| {
+                        candidate.height == target_parent
+                            && candidate.subject_block_hash == target_hash
+                            && matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit)
+                    })
+            })
+            .or_else(|| {
+                super::status::commit_qc_history()
+                    .into_iter()
+                    .find(|candidate| {
+                        candidate.height <= target_parent
+                            && matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit)
+                            && candidate_matches_known_chain(candidate)
+                    })
+            })?;
+        if cert.validator_set.is_empty() {
+            return None;
+        }
         let hash_for_height = |h: u64| {
             if h == 0 {
                 return None;

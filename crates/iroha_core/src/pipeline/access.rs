@@ -36,7 +36,10 @@ use ivm::host::IVMHost;
 use mv::storage::StorageReadOnly; // bring trait into scope for .get()
 use parking_lot::RwLock;
 
-use crate::state::{StateReadOnly, WorldReadOnly};
+use crate::{
+    executor::parse_gas_limit,
+    state::{StateReadOnly, WorldReadOnly},
+};
 
 /// Canonical string key used for conflict detection (Norito-like ordering).
 ///
@@ -232,7 +235,10 @@ pub(crate) fn derive_for_transaction_with_source<R: StateReadOnly>(
             // 2) Otherwise, use dynamic prepass if enabled with view, else conservative
             match (ivm_strategy, state_ro) {
                 (IvmStrategy::DynamicThenConservative, Some(view)) => {
-                    let set = derive_from_ivm_dynamic(bytecode_ref, tx.authority(), view)
+                    let set = tx_gas_limit(tx)
+                        .and_then(|gas_limit| {
+                            derive_from_ivm_dynamic(bytecode_ref, tx.authority(), view, gas_limit)
+                        })
                         .unwrap_or_else(|_| AccessSet::global());
                     let source = if set.read_keys.is_empty()
                         && set.write_keys.len() == 1
@@ -988,13 +994,21 @@ fn add_trigger_rw(set: &mut AccessSet, id: &TriggerId) {
     set.add_write(key_trigger_repetitions(id));
 }
 
+fn tx_gas_limit(tx: &SignedTransaction) -> Result<u64, String> {
+    let gas_limit = parse_gas_limit(tx.metadata()).map_err(|err| err.to_string())?;
+    gas_limit.ok_or_else(|| "missing gas_limit in transaction metadata".to_owned())
+}
+
 fn derive_from_ivm_dynamic<R: StateReadOnly>(
     bytecode: &[u8],
     authority: &AccountId,
     state_ro: &R,
+    gas_limit: u64,
 ) -> Result<AccessSet, String> {
     // Execute VM with CoreHost to collect queued ISIs; do not apply.
-    let mut vm = ivm::IVM::new(0);
+    let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|e| format!("ivm.metadata: {e}"))?;
+    let stack_gas_limit = crate::smartcontracts::ivm::gas_limit_for_meta(&parsed.metadata);
+    let mut vm = ivm::IVM::new(stack_gas_limit);
     // Supply accounts snapshot for vendor helpers to become deterministic.
     let accounts = state_ro.accounts_snapshot();
     let mut host = crate::smartcontracts::ivm::host::CoreHost::with_accounts(
@@ -1012,7 +1026,7 @@ fn derive_from_ivm_dynamic<R: StateReadOnly>(
     vm.set_host(host);
     vm.load_program(bytecode)
         .map_err(|e| format!("ivm.load_program: {e}"))?;
-    vm.set_gas_limit(50_000_000);
+    vm.set_gas_limit(gas_limit);
     vm.run().map_err(|e| format!("ivm.run: {e}"))?;
     let mut set = AccessSet::new();
     let mut access_log: Option<ivm::host::AccessLog> = None;
@@ -1058,6 +1072,8 @@ fn access_key_from_state_log(key: &str) -> AccessKey {
 
 #[cfg(test)]
 mod tests {
+    use core::str::FromStr;
+
     use iroha_data_model::{
         isi::Log,
         level::Level,
@@ -1068,6 +1084,14 @@ mod tests {
     use crate::state::{State, World};
 
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
+    const TEST_GAS_LIMIT: u64 = 50_000_000;
+
+    fn insert_gas_limit(metadata: &mut iroha_data_model::metadata::Metadata) {
+        metadata.insert(
+            Name::from_str("gas_limit").expect("static gas_limit key"),
+            iroha_primitives::json::Json::new(TEST_GAS_LIMIT),
+        );
+    }
 
     #[test]
     fn isi_access_transfer_and_mint() {
@@ -1200,7 +1224,10 @@ mod tests {
         prog.extend_from_slice(&0u32.to_le_bytes()); // literal size
         prog.extend_from_slice(&code);
 
+        let mut md = iroha_data_model::metadata::Metadata::default();
+        insert_gas_limit(&mut md);
         let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
+            .with_metadata(md)
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
             .sign(kp.private_key());
 
@@ -1213,6 +1240,62 @@ mod tests {
         let k = key_account_detail(&alice, &"cursor".parse().unwrap());
         assert!(set.read_keys.contains(&k) && set.write_keys.contains(&k));
         assert_eq!(source, Some(AccessSetSource::PrepassMerge));
+    }
+
+    #[test]
+    fn ivm_access_dynamic_prepass_requires_gas_limit() {
+        let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
+        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let account = Account::new(alice.clone()).build(&alice);
+        let world = World::with([domain], [account], []);
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query);
+        let view = state.view();
+
+        let mut code = Vec::new();
+        for rd in [10_u8, 11, 12] {
+            code.extend_from_slice(
+                &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, rd, 0, 0)
+                    .to_le_bytes(),
+            );
+        }
+        code.extend_from_slice(
+            &ivm::encoding::wide::encode_sys(
+                ivm::instruction::wide::system::SCALL,
+                u8::try_from(ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL)
+                    .expect("syscall identifier fits in 8 bits"),
+            )
+            .to_le_bytes(),
+        );
+        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let meta = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 0,
+            max_cycles: 10_000,
+            abi_version: 1,
+        };
+        let mut prog = meta.encode();
+        prog.extend_from_slice(&LITERAL_SECTION_MAGIC);
+        prog.extend_from_slice(&0u32.to_le_bytes()); // literal entries
+        prog.extend_from_slice(&0u32.to_le_bytes()); // post-pad bytes
+        prog.extend_from_slice(&0u32.to_le_bytes()); // literal size
+        prog.extend_from_slice(&code);
+
+        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+            .sign(kp.private_key());
+
+        let (set, source) = derive_for_transaction_with_source(
+            &tx,
+            Some(&view),
+            IvmStrategy::DynamicThenConservative,
+        );
+        assert!(set.write_keys.contains("*"));
+        assert!(set.read_keys.is_empty());
+        assert_eq!(source, Some(AccessSetSource::ConservativeFallback));
     }
 
     #[test]

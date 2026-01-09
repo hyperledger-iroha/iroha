@@ -988,7 +988,7 @@ mod roster_metadata_tests {
     }
 
     #[test]
-    fn metadata_rejects_npos_without_stake_snapshot() {
+    fn metadata_fills_missing_npos_stake_snapshot() {
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
         let kura = Arc::new(Kura::blank_kura_for_testing());
@@ -1011,10 +1011,11 @@ mod roster_metadata_tests {
             1,
             block_hash,
             ConsensusMode::Npos,
-        );
+        )
+        .expect("metadata should be available");
         assert!(
-            metadata.is_none(),
-            "missing stake snapshot should be rejected"
+            metadata.stake_snapshot.is_some(),
+            "missing stake snapshot should be filled"
         );
     }
 
@@ -1620,14 +1621,13 @@ pub mod message {
             return Some("empty");
         }
         if matches!(consensus_mode, ConsensusMode::Npos) {
-            let Some(snapshot) = metadata.stake_snapshot.as_ref() else {
-                return Some("missing_stake_snapshot");
-            };
-            let Some(roster) = metadata.validator_set() else {
-                return Some("missing_validator_set");
-            };
-            if !snapshot.matches_roster(roster) {
-                return Some("stake_snapshot_mismatch");
+            if let Some(snapshot) = metadata.stake_snapshot.as_ref() {
+                let Some(roster) = metadata.validator_set() else {
+                    return Some("missing_validator_set");
+                };
+                if !snapshot.matches_roster(roster) {
+                    return Some("stake_snapshot_mismatch");
+                }
             }
         }
         None
@@ -1751,6 +1751,16 @@ pub mod message {
             let view = state.view();
             consensus_mode_for_block_sync(&view, block_height, fallback_consensus_mode)
         };
+        let fill_snapshot = |mut metadata: RosterMetadata| {
+            if matches!(consensus_mode, ConsensusMode::Npos) && metadata.stake_snapshot.is_none() {
+                let roster = metadata.validator_set().map(|roster| roster.to_vec());
+                if let Some(roster) = roster.as_ref() {
+                    metadata.stake_snapshot =
+                        CommitStakeSnapshot::from_roster(state.view().world(), roster);
+                }
+            }
+            metadata
+        };
         let filter_metadata = |metadata: RosterMetadata, source: &'static str| {
             if let Some(reason) = roster_metadata_validation_error(&metadata, consensus_mode) {
                 if reason != "empty" {
@@ -1768,11 +1778,11 @@ pub mod message {
         };
         if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
             return filter_metadata(
-                RosterMetadata {
+                fill_snapshot(RosterMetadata {
                     commit_qc: Some(snapshot.commit_qc),
                     validator_checkpoint: Some(snapshot.validator_checkpoint),
                     stake_snapshot: snapshot.stake_snapshot,
-                },
+                }),
                 "commit_roster_journal",
             );
         }
@@ -1791,22 +1801,22 @@ pub mod message {
             }
         }) {
             return filter_metadata(
-                RosterMetadata {
+                fill_snapshot(RosterMetadata {
                     commit_qc: meta.commit_qc,
                     validator_checkpoint: meta.validator_checkpoint,
                     stake_snapshot: meta.stake_snapshot,
-                },
+                }),
                 "roster_sidecar",
             );
         }
 
         if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
             return filter_metadata(
-                RosterMetadata {
+                fill_snapshot(RosterMetadata {
                     commit_qc: Some(snapshot.commit_qc),
                     validator_checkpoint: Some(snapshot.validator_checkpoint),
                     stake_snapshot: snapshot.stake_snapshot,
-                },
+                }),
                 "commit_roster_journal",
             );
         }
@@ -1820,19 +1830,19 @@ pub mod message {
 
         match (commit_qc, validator_checkpoint) {
             (Some(cert), checkpoint) => filter_metadata(
-                RosterMetadata {
+                fill_snapshot(RosterMetadata {
                     commit_qc: Some(cert),
                     validator_checkpoint: checkpoint,
                     stake_snapshot: None,
-                },
+                }),
                 "commit_qc_history",
             ),
             (None, Some(checkpoint)) => filter_metadata(
-                RosterMetadata {
+                fill_snapshot(RosterMetadata {
                     commit_qc: None,
                     validator_checkpoint: Some(checkpoint),
                     stake_snapshot: None,
-                },
+                }),
                 "validator_checkpoint_history",
             ),
             _ => None,
@@ -1862,10 +1872,32 @@ pub mod message {
                 );
             }
         }
+        let fallback_valid = fallback
+            .as_ref()
+            .is_some_and(|meta| roster_metadata_validation_error(meta, consensus_mode).is_none());
+        if matches!(consensus_mode, ConsensusMode::Npos) {
+            let incoming_has_snapshot = incoming
+                .and_then(|meta| meta.stake_snapshot.as_ref())
+                .is_some();
+            let fallback_has_snapshot = fallback
+                .as_ref()
+                .and_then(|meta| meta.stake_snapshot.as_ref())
+                .is_some();
+            if incoming_valid && incoming_has_snapshot {
+                return incoming.cloned();
+            }
+            if fallback_valid && fallback_has_snapshot {
+                return fallback;
+            }
+            if incoming_valid {
+                return incoming.cloned();
+            }
+            return fallback.filter(|_| fallback_valid);
+        }
         if incoming_valid {
             return incoming.cloned();
         }
-        fallback.filter(|meta| roster_metadata_validation_error(meta, consensus_mode).is_none())
+        fallback.filter(|_| fallback_valid)
     }
 
     struct BlockSyncValidationContext {

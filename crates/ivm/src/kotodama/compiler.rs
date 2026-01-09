@@ -3362,18 +3362,17 @@ impl Compiler {
                                 let r = src_reg(value, scratch1, &mut code);
                                 code.extend_from_slice(&encode_addi(11, r, 0).to_le_bytes());
                             }
-                            // Publish both
+                            // Publish both; preserve published path for the final syscall.
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes()); // r10
+                            code.extend_from_slice(&encode_addi(scratch2, 10, 0).to_le_bytes());
                             code.extend_from_slice(&encode_addi(10, 11, 0).to_le_bytes());
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             code.extend_from_slice(&encode_addi(11, 10, 0).to_le_bytes());
-                            // Restore path pointer (kept in `path` register) into r10
-                            let r_path = src_reg(path, scratch1, &mut code);
-                            code.extend_from_slice(&encode_addi(10, r_path, 0).to_le_bytes());
+                            code.extend_from_slice(&encode_addi(10, scratch2, 0).to_le_bytes());
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_STATE_SET as u8,

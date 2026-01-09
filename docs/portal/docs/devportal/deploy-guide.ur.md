@@ -456,6 +456,18 @@ window start کو `effective_at` timestamp کے طور پر inherits کرتا ہ
 override نہ کیا جائے۔ مکمل عملی workflow کے لئے
 `docs/source/sorafs_gateway_dns_owner_runbook.md` دیکھیں۔
 
+### پبلک DNS ڈیلیگیشن نوٹ
+
+zonefile skeleton صرف زون کے authoritative ریکارڈز متعین کرتا ہے۔ عام انٹرنیٹ کو
+نام سرورز ملنے کے لئے parent‑zone کی NS/DS delegation رجسٹرار یا DNS فراہم کنندہ
+پر الگ سے سیٹ کرنا ضروری ہے۔
+- apex/TLD cutover کے لئے ALIAS/ANAME (provider‑specific) استعمال کریں یا gateway
+  کے anycast IPs کی طرف اشارہ کرنے والے A/AAAA ریکارڈز شائع کریں۔
+- سب ڈومینز کے لئے derived pretty host (`<fqdn>.gw.sora.name`) کی طرف CNAME
+  شائع کریں۔
+- canonical host (`<hash>.gw.sora.id`) gateway ڈومین کے تحت رہتا ہے اور آپ کے
+  پبلک زون میں شائع نہیں ہوتا۔
+
 ### Gateway ہیڈر ٹیمپلیٹ
 
 deploy helper `portal.gateway.headers.txt` اور `portal.gateway.binding.json` بھی
