@@ -5423,7 +5423,11 @@ impl Actor {
             }
         }
         for key in drop_keys {
-            self.subsystems.propose.new_view_tracker.entries.remove(&key);
+            self.subsystems
+                .propose
+                .new_view_tracker
+                .entries
+                .remove(&key);
         }
     }
 

@@ -5264,8 +5264,7 @@ mod pointer_abi_tests {
             .expect("mint syscall");
         let asset_id = AssetId::of(asset_def, authority);
         let isi = Mint::asset_numeric(5u64, asset_id);
-        let expected =
-            crate::gas::meter_instruction(&InstructionBox::from(MintBox::from(isi)));
+        let expected = crate::gas::meter_instruction(&InstructionBox::from(MintBox::from(isi)));
         assert_eq!(gas, expected);
     }
 

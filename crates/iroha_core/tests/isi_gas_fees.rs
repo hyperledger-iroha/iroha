@@ -13,8 +13,8 @@ use iroha_core::{
     state::{State, World},
     tx::{AcceptedTransaction, TransactionRejectionReason},
 };
-use iroha_data_model::query::parameters::ForwardCursor;
 use iroha_data_model::prelude::*;
+use iroha_data_model::query::parameters::ForwardCursor;
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::gen_account_in;
 use ivm::{ProgramMetadata, encoding, instruction, kotodama::wide as kwide, syscalls as ivm_sys};
@@ -258,7 +258,8 @@ fn ivm_syscall_charges_fees() {
         gas_budget: None,
     };
     let isi = SetKeyValue::account(alice_id.clone(), "cursor".parse().unwrap(), Json::new(fc));
-    let expected_extra = isi_gas::meter_instruction(&InstructionBox::from(SetKeyValueBox::from(isi)));
+    let expected_extra =
+        isi_gas::meter_instruction(&InstructionBox::from(SetKeyValueBox::from(isi)));
     let scall_cost = ivm::gas::cost_of(scall);
     let expected_used = scall_cost.saturating_add(expected_extra);
     assert_eq!(state_tx.last_tx_gas_used, expected_used);
