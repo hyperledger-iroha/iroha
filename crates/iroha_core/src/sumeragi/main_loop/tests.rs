@@ -17523,7 +17523,7 @@ fn validate_commit_qc_roster_rejects_invalid_signature() {
 }
 
 #[test]
-fn validate_commit_qc_roster_requires_stake_snapshot_in_npos() {
+fn validate_commit_qc_roster_falls_back_without_stake_snapshot() {
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
     let chain: ChainId = "commit-cert-npos-missing-stake"
@@ -17578,14 +17578,9 @@ fn validate_commit_qc_roster_requires_stake_snapshot_in_npos() {
         &world_view,
         &chain,
         super::NPOS_TAG,
-    );
-    assert!(
-        matches!(
-            result,
-            Err(super::RosterValidationError::StakeSnapshotUnavailable)
-        ),
-        "missing stake snapshot should reject NPoS commit certificate"
-    );
+    )
+    .expect("missing stake snapshot should fall back for NPoS commit certificate");
+    assert_eq!(result, vec![cert.validator_set[0].clone()]);
 }
 
 #[test]
@@ -20225,6 +20220,21 @@ fn new_view_tracker_prunes_committed_height() {
 }
 
 #[test]
+fn new_view_tracker_drops_heights_below_floor() {
+    let mut tracker = NewViewTracker::default();
+    let qc = sample_qc_ref(5, 0);
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    tracker.record(4, 0, peer_a, qc);
+    tracker.record(5, 0, peer_b, qc);
+
+    tracker.drop_below_height(5);
+
+    assert_eq!(tracker.count(4, 0), 0);
+    assert_eq!(tracker.count(5, 0), 1);
+}
+
+#[test]
 fn new_view_tracker_drops_views_below_floor() {
     let mut tracker = NewViewTracker::default();
     let qc = sample_qc_ref(7, 0);
@@ -22083,7 +22093,7 @@ fn validate_qc_against_votes_rejects_new_view_highest_hash_mismatch() {
 }
 
 #[test]
-fn validate_qc_against_votes_requires_stake_snapshot_in_npos() {
+fn validate_qc_against_votes_falls_back_without_stake_snapshot() {
     let chain: ChainId = "qc-npos-snapshot-missing".parse().expect("chain id parses");
     let (keypairs, topology) = sample_bls_topology(2);
     let block_hash =
@@ -22122,7 +22132,7 @@ fn validate_qc_against_votes_requires_stake_snapshot_in_npos() {
     };
 
     let vote_log = BTreeMap::new();
-    let result = validate_qc_against_votes_with_keys(
+    let outcome = validate_qc_against_votes_with_keys(
         &vote_log,
         &qc,
         &topology,
@@ -22132,11 +22142,9 @@ fn validate_qc_against_votes_requires_stake_snapshot_in_npos() {
         None,
         super::NPOS_TAG,
         None,
-    );
-    assert_eq!(
-        result,
-        Err(super::QcValidationError::StakeSnapshotUnavailable)
-    );
+    )
+    .expect("missing stake snapshot should fall back for NPoS QC");
+    assert_eq!(outcome.len(), 2);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -23459,6 +23467,120 @@ async fn new_view_roster_rolls_forward_from_commit_qc_history() {
     assert_eq!(
         derived, expected_roster,
         "new-view roster should roll forward from the latest commit certificate"
+    );
+
+    status::reset_commit_certs_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn new_view_roster_ignores_commit_qc_hash_mismatch() {
+    use crate::sumeragi::status;
+
+    status::reset_commit_certs_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let hash_height1 =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x21; Hash::LENGTH]));
+    let hash_height2 =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
+    let hash_height2_alt =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x2A; Hash::LENGTH]));
+    let hash_height3 =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x23; Hash::LENGTH]));
+
+    {
+        let mut hashes = actor.state.block_hashes.block();
+        hashes.push(hash_height1);
+        hashes.push(hash_height2);
+        hashes.commit_for_tests();
+    }
+
+    let roster = actor.effective_commit_topology();
+    let mut signers = BTreeSet::new();
+    for idx in 0..roster.len() {
+        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        hash_height2,
+        2,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    let commit_qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: hash_height2,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 2,
+        view: 0,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: roster.clone(),
+        aggregate: QcAggregate {
+            signers_bitmap: signers_bitmap.clone(),
+            bls_aggregate_signature,
+        },
+    };
+    let bls_aggregate_signature_conflict = aggregate_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        hash_height2_alt,
+        2,
+        1,
+        0,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    let commit_qc_conflict = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: hash_height2_alt,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 2,
+        view: 1,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: roster.clone(),
+        aggregate: QcAggregate {
+            signers_bitmap,
+            bls_aggregate_signature: bls_aggregate_signature_conflict,
+        },
+    };
+    status::record_commit_qc(commit_qc);
+    status::record_commit_qc(commit_qc_conflict);
+
+    let expected_roster = {
+        let mut topo = super::network_topology::Topology::new(roster.clone());
+        topo.block_committed(roster.clone(), hash_height2);
+        let roster_height3 = topo.as_ref().to_vec();
+        let mut topo = super::network_topology::Topology::new(roster_height3.clone());
+        topo.block_committed(roster_height3, hash_height3);
+        topo.as_ref().to_vec()
+    };
+
+    let derived =
+        actor.roster_for_new_view_with_mode(hash_height3, 4, 0, ConsensusMode::Permissioned);
+    assert_eq!(
+        derived, expected_roster,
+        "new-view roster should ignore commit-QC history entries that mismatch the known chain"
     );
 
     status::reset_commit_certs_for_tests();
@@ -25085,6 +25207,104 @@ async fn pacemaker_keeps_new_view_entries_with_pending_txs() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pacemaker_requires_commit_quorum_for_new_view() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let block1 = sample_block(1, 0, None);
+    actor.kura.store_block(block1.clone()).expect("store block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(block1.hash());
+
+    let local = actor.common_config.peer.id().clone();
+    let mut roster = actor.effective_commit_topology();
+    assert!(
+        roster.len() >= 3,
+        "test requires at least three validators"
+    );
+    let local_pos = roster
+        .iter()
+        .position(|peer| peer == &local)
+        .expect("local peer in topology");
+    let rotate_by = (local_pos + roster.len() - 1) % roster.len();
+    roster.rotate_left(rotate_by);
+    assert_eq!(
+        roster.get(1),
+        Some(&local),
+        "local peer should occupy index 1 for view=1 leadership"
+    );
+    {
+        let mut topo_block = actor.state.commit_topology.block();
+        topo_block.mutate_vec(|vec| *vec = roster.clone());
+        topo_block.commit();
+    }
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    actor.subsystems.propose.forced_view_after_timeout = None;
+
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = committed_height.saturating_add(1);
+    let highest_qc = QcHeaderRef {
+        subject_block_hash: block1.hash(),
+        height: committed_height,
+        view: 0,
+        epoch: 0,
+        phase: Phase::Commit,
+    };
+    let view = 1;
+    let sender = roster.get(2).cloned().expect("sender peer");
+    actor
+        .subsystems
+        .propose
+        .new_view_tracker
+        .record(tracked_height, view, sender, highest_qc);
+
+    let offline_grace = actor.commit_quorum_timeout();
+    let now = Instant::now();
+    let start = now
+        .checked_sub(offline_grace + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor.phase_tracker.on_view_change(tracked_height, view, start);
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        !proposed,
+        "pacemaker should wait for commit quorum NEW_VIEW votes"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, view)
+            .is_none(),
+        "proposal should not be assembled without commit quorum"
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .propose
+            .new_view_tracker
+            .count(tracked_height, view),
+        1,
+        "NEW_VIEW entry should remain until quorum is reached"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn pacemaker_defers_proposal_when_precommit_votes_present() {
     use std::borrow::Cow;
 
@@ -26151,6 +26371,80 @@ async fn pacemaker_prunes_new_view_entries_at_committed_height() {
             .new_view_tracker
             .count(fresh_height, fresh_view),
         1
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_prunes_new_view_entries_below_active_height() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let block1 = sample_block(1, 0, None);
+    actor.kura.store_block(block1.clone()).expect("store block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(block1.hash());
+
+    actor.highest_qc = Some(QcHeaderRef {
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([
+            0xA1; Hash::LENGTH,
+        ])),
+        height: 2,
+        view: 0,
+        epoch: 0,
+        phase: Phase::Commit,
+    });
+
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = committed_height.saturating_add(2);
+    let view = 1;
+    let sender = actor
+        .effective_commit_topology()
+        .get(1)
+        .cloned()
+        .expect("sender peer");
+    actor.subsystems.propose.new_view_tracker.record(
+        tracked_height.saturating_sub(1),
+        view,
+        sender,
+        QcHeaderRef {
+            subject_block_hash: block1.hash(),
+            height: committed_height,
+            view: 0,
+            epoch: 0,
+            phase: Phase::Commit,
+        },
+    );
+
+    let offline_grace = actor.commit_quorum_timeout();
+    let now = Instant::now();
+    let start = now
+        .checked_sub(offline_grace + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor.phase_tracker.on_view_change(tracked_height, view, start);
+
+    let _ = actor.on_pacemaker_propose_ready(now);
+
+    assert_eq!(
+        actor
+            .subsystems
+            .propose
+            .new_view_tracker
+            .count(tracked_height.saturating_sub(1), view),
+        0,
+        "NEW_VIEW entries below the active round height should be dropped"
     );
 
     harness.shutdown.send();
@@ -28587,7 +28881,7 @@ fn validate_block_sync_qc_rejects_view_mismatch_in_permissioned_mode() {
 }
 
 #[test]
-fn validate_block_sync_qc_requires_stake_snapshot_in_npos() {
+fn validate_block_sync_qc_falls_back_without_stake_snapshot() {
     let chain: ChainId = "block-sync-npos-missing-snapshot"
         .parse()
         .expect("chain id parses");
@@ -28630,7 +28924,7 @@ fn validate_block_sync_qc_requires_stake_snapshot_in_npos() {
         },
     };
 
-    let result = super::validate_block_sync_qc(
+    let (signers, present) = super::validate_block_sync_qc(
         &qc,
         &topology,
         &world_view,
@@ -28641,11 +28935,10 @@ fn validate_block_sync_qc_requires_stake_snapshot_in_npos() {
         None,
         super::NPOS_TAG,
         None,
-    );
-    assert_eq!(
-        result,
-        Err(super::QcValidationError::StakeSnapshotUnavailable)
-    );
+    )
+    .expect("missing stake snapshot should fall back for block sync QC");
+    assert_eq!(signers.len(), 2);
+    assert_eq!(present, 2);
 }
 
 #[test]

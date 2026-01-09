@@ -442,6 +442,17 @@ Workflow של GitHub Actions קורא את הערכים האלה מסודות ה
 לתהליך התפעולי המלא, ראו
 `docs/source/sorafs_gateway_dns_owner_runbook.md`.
 
+### הערה על האצלת DNS ציבורית
+
+שלד ה‑zonefile מגדיר רק רשומות authoritative של האזור. יש להגדיר גם האצלת NS/DS
+של אזור האב אצל הרשם או ספק ה‑DNS כדי שהאינטרנט הציבורי יוכל למצוא את שרתי
+השמות.
+- עבור cutover ב‑apex/TLD השתמשו ב‑ALIAS/ANAME (תלוי ספק) או פרסמו רשומות A/AAAA
+  שמצביעות ל‑IP anycast של ה‑gateway.
+- עבור תתי‑דומיין פרסמו CNAME ל‑pretty host הנגזר (`<fqdn>.gw.sora.name`).
+- ה‑canonical host (`<hash>.gw.sora.id`) נשאר תחת דומיין ה‑gateway ואינו מתפרסם
+  בתוך הדומיין הציבורי שלכם.
+
 ### תבנית כותרות Gateway
 
 עוזר הפריסה מפיק גם את `portal.gateway.headers.txt` ואת

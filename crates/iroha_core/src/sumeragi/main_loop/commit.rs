@@ -248,7 +248,6 @@ impl Actor {
             }
         }
         if matches!(consensus_mode, ConsensusMode::Npos)
-            && update.stake_snapshot.is_none()
             && (update.commit_qc.is_some() || update.validator_checkpoint.is_some())
         {
             let roster = update
@@ -262,8 +261,14 @@ impl Actor {
                         .map(|chk| chk.validator_set.as_slice())
                 });
             if let Some(roster) = roster {
-                update.stake_snapshot =
-                    CommitStakeSnapshot::from_roster(state.view().world(), roster);
+                let matches = update
+                    .stake_snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.matches_roster(roster));
+                if !matches {
+                    update.stake_snapshot =
+                        CommitStakeSnapshot::from_roster(state.view().world(), roster);
+                }
             }
         }
         if update.commit_votes.is_empty() {

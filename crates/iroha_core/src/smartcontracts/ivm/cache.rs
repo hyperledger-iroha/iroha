@@ -5,20 +5,46 @@ use std::{
 
 use iroha_crypto::Hash;
 use ivm::{ProgramMetadata, SyscallPolicy};
+use ivm::runtime::IvmConfig;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct CacheKey {
+struct SummaryKey {
     code_hash: Hash,
     meta_hash: Hash,
 }
 
-impl CacheKey {
+impl SummaryKey {
     fn new(code_hash: Hash, meta_hash: Hash) -> Self {
         Self {
             code_hash,
             meta_hash,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct RuntimeKey {
+    code_hash: Hash,
+    meta_hash: Hash,
+    stack_limit: u64,
+}
+
+impl RuntimeKey {
+    fn new(code_hash: Hash, meta_hash: Hash, stack_limit: u64) -> Self {
+        Self {
+            code_hash,
+            meta_hash,
+            stack_limit,
+        }
+    }
+
+    fn summary_key(self) -> SummaryKey {
+        SummaryKey::new(self.code_hash, self.meta_hash)
+    }
+}
+
+fn stack_limit_for_gas(gas_limit: u64) -> u64 {
+    IvmConfig::new(gas_limit).stack_limit_for_gas()
 }
 
 /// Summary of a compiled IVM program derived during admission.
@@ -47,6 +73,8 @@ pub struct CachedRuntime {
     pub vm: ivm::IVM,
     /// Original bytecode used to rebuild a clean template when returning to the cache.
     bytecode: Arc<Vec<u8>>,
+    /// Gas limit used to size the guest stack for this runtime template.
+    stack_gas_limit: u64,
 }
 
 /// Lightweight cache counters for diagnostics and tests.
@@ -66,9 +94,10 @@ pub struct CacheStats {
 
 /// Admission-time cache for IVM program summaries and warmed runtimes.
 pub struct IvmCache {
-    summaries: BTreeMap<CacheKey, ProgramSummary>,
-    runtime_templates: BTreeMap<CacheKey, ivm::IVM>,
-    order: VecDeque<CacheKey>,
+    summaries: BTreeMap<SummaryKey, ProgramSummary>,
+    runtime_templates: BTreeMap<RuntimeKey, ivm::IVM>,
+    summary_order: VecDeque<SummaryKey>,
+    runtime_order: VecDeque<RuntimeKey>,
     capacity: usize,
     stats: CacheStats,
 }
@@ -92,7 +121,8 @@ impl IvmCache {
         Self {
             summaries: BTreeMap::new(),
             runtime_templates: BTreeMap::new(),
-            order: VecDeque::new(),
+            summary_order: VecDeque::new(),
+            runtime_order: VecDeque::new(),
             capacity,
             stats: CacheStats::default(),
         }
@@ -110,10 +140,10 @@ impl IvmCache {
         let body = &bytecode[parsed.header_len..];
         let code_hash = Hash::new(body);
         let meta_hash = Hash::new(parsed.metadata.encode());
-        let key = CacheKey::new(code_hash, meta_hash);
+        let key = SummaryKey::new(code_hash, meta_hash);
         if let Some(hit) = self.summaries.get(&key).cloned() {
             self.stats.metadata_hits = self.stats.metadata_hits.saturating_add(1);
-            self.touch(key);
+            self.touch_summary(key);
             return Ok(hit);
         }
 

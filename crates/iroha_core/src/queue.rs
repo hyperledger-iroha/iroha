@@ -4134,8 +4134,16 @@ pub mod tests {
     ) -> AcceptedTransaction<'static> {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
         let program = minimal_ivm_program_with_max_cycles(1, max_cycles);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "gas_limit".parse().expect("gas_limit key"),
+            iroha_primitives::json::Json::new(crate::smartcontracts::ivm::gas_limit_for_cycles(
+                max_cycles,
+            )),
+        );
         let tx =
             TransactionBuilder::new_with_time_source(chain_id.clone(), account_id, time_source)
+                .with_metadata(metadata)
                 .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
                 .sign(key_pair.private_key());
         let default_limits = TransactionParameters::default();

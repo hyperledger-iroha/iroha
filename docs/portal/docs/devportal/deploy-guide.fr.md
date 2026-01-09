@@ -445,6 +445,20 @@ Le helper recupere automatiquement le ticket de changement comme entree TXT et h
 la fenetre cutover comme timestamp `effective_at` sauf override. Pour le workflow complet, voir
 `docs/source/sorafs_gateway_dns_owner_runbook.md`.
 
+### Note sur la delegation DNS publique
+
+Le skeleton de zonefile ne definit que les enregistrements autoritatifs de la
+zone. Vous devez encore configurer la delegation NS/DS de la zone parente chez
+votre registrar ou fournisseur DNS pour que l'internet public trouve les serveurs
+de noms.
+
+- Pour les cutovers a l'apex/TLD, utilisez ALIAS/ANAME (selon le fournisseur) ou
+  publiez des enregistrements A/AAAA pointant vers les IP anycast du gateway.
+- Pour les sous-domaines, publiez un CNAME vers le pretty host derive
+  (`<fqdn>.gw.sora.name`).
+- L'hote canonique (`<hash>.gw.sora.id`) reste sous le domaine du gateway et
+  n'est pas publie dans votre zone publique.
+
 ### Template de headers gateway
 
 Le helper de deploy emet aussi `portal.gateway.headers.txt` et

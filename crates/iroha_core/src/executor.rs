@@ -399,7 +399,8 @@ fn parse_fee_sponsor(metadata: &Metadata) -> Result<Option<AccountId>, Validatio
     Ok(None)
 }
 
-fn parse_gas_limit(metadata: &Metadata) -> Result<Option<u64>, ValidationFail> {
+/// Parse optional `gas_limit` from transaction metadata.
+pub(crate) fn parse_gas_limit(metadata: &Metadata) -> Result<Option<u64>, ValidationFail> {
     let Some(raw) = metadata.get("gas_limit") else {
         return Ok(None);
     };
@@ -1199,10 +1200,9 @@ impl Executor {
                     .saturating_sub(state_transaction.gas_used_in_block_so_far);
                 let effective_limit = gas_limit_md.min(block_remaining);
                 runtime.vm.set_gas_limit(effective_limit);
-                runtime
-                    .vm
-                    .run()
-                    .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                if let Err(err) = runtime.vm.run() {
+                    return Err(crate::smartcontracts::ivm::map_vm_error_to_validation(err));
+                }
                 let gas_used = effective_limit.saturating_sub(runtime.vm.remaining_gas());
                 state_transaction.last_tx_gas_used = gas_used;
 
@@ -1753,7 +1753,14 @@ impl Executor {
             curr_block,
         };
 
-        let maybe_data_model = run_executor_migration(&loaded_executor.ivm, &context)
+        let gas_limit = state_transaction
+            .world
+            .parameters
+            .get()
+            .executor()
+            .fuel
+            .get();
+        let maybe_data_model = run_executor_migration(&loaded_executor.ivm, &context, gas_limit)
             .map_err(map_migration_fail_to_vm_error)?;
         if let Some(data_model) = maybe_data_model {
             debug!("executor migrate entrypoint supplied a new data model");
@@ -1866,6 +1873,7 @@ enum MigrationUnitPayload {
 fn run_executor_migration(
     ivm: &Arc<Mutex<IVM>>,
     context: &ExecutorContext,
+    gas_limit: u64,
 ) -> Result<Option<ExecutorDataModel>, ValidationFail> {
     let mut ivm = {
         let template = ivm.lock().expect("executor template poisoned");
@@ -1884,7 +1892,7 @@ fn run_executor_migration(
     ivm.store_bytes(ptr, &bytes)
         .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
     ivm.set_register(10, ptr);
-    ivm.set_gas_limit(50_000_000);
+    ivm.set_gas_limit(gas_limit);
 
     ivm.run()
         .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
@@ -2220,7 +2228,9 @@ pub struct LoadedExecutor {
 
 impl LoadedExecutor {
     pub(crate) fn load(raw_executor: data_model_executor::Executor) -> Result<Self, VMError> {
-        let mut ivm = IVM::new(0);
+        let parsed = ivm::ProgramMetadata::parse(raw_executor.bytecode().as_ref())?;
+        let stack_gas_limit = crate::smartcontracts::ivm::gas_limit_for_meta(&parsed.metadata);
+        let mut ivm = IVM::new(stack_gas_limit);
         ivm.load_program(raw_executor.bytecode().as_ref())?;
         Ok(Self {
             ivm: Arc::new(Mutex::new(ivm)),

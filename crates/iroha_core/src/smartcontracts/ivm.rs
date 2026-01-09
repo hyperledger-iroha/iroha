@@ -6,6 +6,8 @@ pub mod cache;
 /// Host adapter for IVM. See module docs for design and current limitations.
 pub mod host;
 
+use iroha_data_model::ValidationFail;
+
 /// Compute a conservative gas limit for a given cycle budget.
 ///
 /// The interpreter pads traces to exactly `max_cycles` when cycle limits are
@@ -27,6 +29,12 @@ pub fn gas_limit_for_cycles(cycles: u64) -> u64 {
 #[must_use]
 pub fn gas_limit_for_meta(meta: &ivm::ProgramMetadata) -> u64 {
     gas_limit_for_cycles(meta.max_cycles)
+}
+
+/// Map a VM execution error into a user-facing validation failure.
+#[must_use]
+pub fn map_vm_error_to_validation(err: ivm::VMError) -> ValidationFail {
+    ValidationFail::NotPermitted(err.to_string())
 }
 
 #[cfg(test)]
@@ -56,5 +64,11 @@ mod tests {
             abi_version: 1,
         };
         assert_eq!(gas_limit_for_meta(&meta), u64::MAX);
+    }
+
+    #[test]
+    fn vm_error_maps_to_not_permitted() {
+        let err = map_vm_error_to_validation(ivm::VMError::OutOfGas);
+        assert!(matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("out of gas")));
     }
 }

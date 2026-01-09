@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_crypto::HashOf;
 use iroha_data_model::peer::PeerId;
+use iroha_logger::prelude::*;
 use iroha_primitives::numeric::{Numeric, NumericSpec};
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
@@ -40,11 +41,14 @@ pub(crate) enum StakeQuorumError {
 
 impl CommitStakeSnapshot {
     /// Build a stake snapshot for the provided roster using the supplied world view.
+    ///
+    /// Missing stakes fall back to the chain-configured minimum self-bond (or 1 when unset).
     #[must_use]
     pub fn from_roster(world: &impl WorldReadOnly, roster: &[PeerId]) -> Option<Self> {
         if roster.is_empty() {
             return None;
         }
+        let fallback_stake = fallback_stake_for_world(world);
         let stake_map = stake_map_from_world(world);
         if stake_map.is_empty() {
             return Some(Self {
@@ -53,18 +57,32 @@ impl CommitStakeSnapshot {
                     .iter()
                     .map(|peer| CommitStakeSnapshotEntry {
                         peer_id: peer.clone(),
-                        stake: Numeric::from(1_u64),
+                        stake: fallback_stake.clone(),
                     })
                     .collect(),
             });
         }
         let mut entries = Vec::with_capacity(roster.len());
+        let mut missing = 0usize;
         for peer in roster {
-            let stake = stake_map.get(peer)?.clone();
+            let stake = match stake_map.get(peer) {
+                Some(stake) => stake.clone(),
+                None => {
+                    missing = missing.saturating_add(1);
+                    fallback_stake.clone()
+                }
+            };
             entries.push(CommitStakeSnapshotEntry {
                 peer_id: peer.clone(),
                 stake,
             });
+        }
+        if missing > 0 {
+            warn!(
+                missing,
+                roster_len = roster.len(),
+                "missing stake entries for roster; using fallback stake"
+            );
         }
         Some(Self {
             validator_set_hash: HashOf::new(&roster.to_vec()),
@@ -85,10 +103,26 @@ pub(crate) fn stake_quorum_reached_for_peers(
     roster: &[PeerId],
     signers: &BTreeSet<PeerId>,
 ) -> Result<bool, StakeQuorumError> {
+    let fallback_stake = fallback_stake_for_world(view.world());
     let mut stake_map = stake_map_from_world(view.world());
     if stake_map.is_empty() {
         for peer in roster {
-            stake_map.insert(peer.clone(), Numeric::from(1_u64));
+            stake_map.insert(peer.clone(), fallback_stake.clone());
+        }
+    } else {
+        let mut missing = 0usize;
+        for peer in roster {
+            if !stake_map.contains_key(peer) {
+                missing = missing.saturating_add(1);
+                stake_map.insert(peer.clone(), fallback_stake.clone());
+            }
+        }
+        if missing > 0 {
+            warn!(
+                missing,
+                roster_len = roster.len(),
+                "stake map missing roster entries; using fallback stake"
+            );
         }
     }
 
@@ -202,6 +236,14 @@ pub(super) fn stake_map_from_world(world: &impl WorldReadOnly) -> BTreeMap<PeerI
     stake_map
 }
 
+fn fallback_stake_for_world(world: &impl WorldReadOnly) -> Numeric {
+    let min_self_bond = world
+        .sumeragi_npos_parameters()
+        .map(|params| params.min_self_bond)
+        .unwrap_or(1);
+    Numeric::from(min_self_bond.max(1))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -301,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn stake_snapshot_from_roster_requires_all_peers() {
+    fn stake_snapshot_from_roster_falls_back_for_missing_peers() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
@@ -333,8 +375,14 @@ mod tests {
 
         let view = state.view();
         let missing_peer = PeerId::new(KeyPair::random().public_key().clone());
-        assert!(CommitStakeSnapshot::from_roster(view.world(), &[missing_peer]).is_none());
-        assert!(CommitStakeSnapshot::from_roster(view.world(), &[peer]).is_some());
+        let fallback = fallback_stake_for_world(view.world());
+        let snapshot = CommitStakeSnapshot::from_roster(view.world(), &[missing_peer.clone()])
+            .expect("snapshot");
+        assert_eq!(snapshot.entries[0].peer_id, missing_peer);
+        assert_eq!(snapshot.entries[0].stake, fallback);
+
+        let snapshot = CommitStakeSnapshot::from_roster(view.world(), &[peer]).expect("snapshot");
+        assert_eq!(snapshot.entries[0].stake, Numeric::new(10, 0));
     }
 
     #[test]
@@ -418,5 +466,51 @@ mod tests {
             stake_quorum_reached_for_peers(&view, &roster, &partial),
             Ok(false)
         );
+    }
+
+    #[test]
+    fn stake_quorum_reached_for_peers_falls_back_for_missing_stakes() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
+
+        let domain: DomainId = "validators".parse().expect("domain id");
+        let keypair_a = KeyPair::random();
+        let keypair_b = KeyPair::random();
+        let peer_a = PeerId::new(keypair_a.public_key().clone());
+        let peer_b = PeerId::new(keypair_b.public_key().clone());
+        let roster = vec![peer_a.clone(), peer_b.clone()];
+
+        {
+            let account_id = AccountId::new(domain, keypair_a.public_key().clone());
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (LaneId::new(1), account_id.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(1),
+                    validator: account_id.clone(),
+                    stake_account: account_id,
+                    total_stake: Numeric::new(10, 0),
+                    self_stake: Numeric::new(10, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.commit();
+        }
+
+        let view = state.view();
+        let mut signers = BTreeSet::new();
+        signers.insert(peer_a);
+        let snapshot =
+            CommitStakeSnapshot::from_roster(view.world(), &roster).expect("stake snapshot");
+        let direct = stake_quorum_reached_for_peers(&view, &roster, &signers)
+            .expect("stake quorum computed");
+        let via_snapshot = stake_quorum_reached_for_snapshot(&snapshot, &roster, &signers)
+            .expect("stake quorum computed");
+        assert_eq!(direct, via_snapshot);
     }
 }
