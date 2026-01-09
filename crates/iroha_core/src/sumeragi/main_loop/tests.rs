@@ -20157,6 +20157,21 @@ fn new_view_tracker_prunes_committed_height() {
 }
 
 #[test]
+fn new_view_tracker_drops_heights_below_floor() {
+    let mut tracker = NewViewTracker::default();
+    let qc = sample_qc_ref(5, 0);
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    tracker.record(4, 0, peer_a, qc);
+    tracker.record(5, 0, peer_b, qc);
+
+    tracker.drop_below_height(5);
+
+    assert_eq!(tracker.count(4, 0), 0);
+    assert_eq!(tracker.count(5, 0), 1);
+}
+
+#[test]
 fn new_view_tracker_drops_views_below_floor() {
     let mut tracker = NewViewTracker::default();
     let qc = sample_qc_ref(7, 0);
@@ -25129,6 +25144,104 @@ async fn pacemaker_keeps_new_view_entries_with_pending_txs() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pacemaker_requires_commit_quorum_for_new_view() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let block1 = sample_block(1, 0, None);
+    actor.kura.store_block(block1.clone()).expect("store block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(block1.hash());
+
+    let local = actor.common_config.peer.id().clone();
+    let mut roster = actor.effective_commit_topology();
+    assert!(
+        roster.len() >= 3,
+        "test requires at least three validators"
+    );
+    let local_pos = roster
+        .iter()
+        .position(|peer| peer == &local)
+        .expect("local peer in topology");
+    let rotate_by = (local_pos + roster.len() - 1) % roster.len();
+    roster.rotate_left(rotate_by);
+    assert_eq!(
+        roster.get(1),
+        Some(&local),
+        "local peer should occupy index 1 for view=1 leadership"
+    );
+    {
+        let mut topo_block = actor.state.commit_topology.block();
+        topo_block.mutate_vec(|vec| *vec = roster.clone());
+        topo_block.commit();
+    }
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    actor.subsystems.propose.forced_view_after_timeout = None;
+
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = committed_height.saturating_add(1);
+    let highest_qc = QcHeaderRef {
+        subject_block_hash: block1.hash(),
+        height: committed_height,
+        view: 0,
+        epoch: 0,
+        phase: Phase::Commit,
+    };
+    let view = 1;
+    let sender = roster.get(2).cloned().expect("sender peer");
+    actor
+        .subsystems
+        .propose
+        .new_view_tracker
+        .record(tracked_height, view, sender, highest_qc);
+
+    let offline_grace = actor.commit_quorum_timeout();
+    let now = Instant::now();
+    let start = now
+        .checked_sub(offline_grace + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor.phase_tracker.on_view_change(tracked_height, view, start);
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        !proposed,
+        "pacemaker should wait for commit quorum NEW_VIEW votes"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, view)
+            .is_none(),
+        "proposal should not be assembled without commit quorum"
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .propose
+            .new_view_tracker
+            .count(tracked_height, view),
+        1,
+        "NEW_VIEW entry should remain until quorum is reached"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn pacemaker_defers_proposal_when_precommit_votes_present() {
     use std::borrow::Cow;
 
@@ -26195,6 +26308,80 @@ async fn pacemaker_prunes_new_view_entries_at_committed_height() {
             .new_view_tracker
             .count(fresh_height, fresh_view),
         1
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_prunes_new_view_entries_below_active_height() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let block1 = sample_block(1, 0, None);
+    actor.kura.store_block(block1.clone()).expect("store block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(block1.hash());
+
+    actor.highest_qc = Some(QcHeaderRef {
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([
+            0xA1; Hash::LENGTH,
+        ])),
+        height: 2,
+        view: 0,
+        epoch: 0,
+        phase: Phase::Commit,
+    });
+
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = committed_height.saturating_add(2);
+    let view = 1;
+    let sender = actor
+        .effective_commit_topology()
+        .get(1)
+        .cloned()
+        .expect("sender peer");
+    actor.subsystems.propose.new_view_tracker.record(
+        tracked_height.saturating_sub(1),
+        view,
+        sender,
+        QcHeaderRef {
+            subject_block_hash: block1.hash(),
+            height: committed_height,
+            view: 0,
+            epoch: 0,
+            phase: Phase::Commit,
+        },
+    );
+
+    let offline_grace = actor.commit_quorum_timeout();
+    let now = Instant::now();
+    let start = now
+        .checked_sub(offline_grace + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor.phase_tracker.on_view_change(tracked_height, view, start);
+
+    let _ = actor.on_pacemaker_propose_ready(now);
+
+    assert_eq!(
+        actor
+            .subsystems
+            .propose
+            .new_view_tracker
+            .count(tracked_height.saturating_sub(1), view),
+        0,
+        "NEW_VIEW entries below the active round height should be dropped"
     );
 
     harness.shutdown.send();
@@ -27286,6 +27473,21 @@ async fn block_created_drops_hint_when_highest_qc_view_mismatches_parent() {
         .expect("store parent block");
     let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
     state.push_block_hash_for_testing(parent.hash());
+    let cached_hint = actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .get_hint(2, 0)
+        .copied()
+        .expect("cached hint");
+    let parent_view = actor
+        .local_block_height_view(parent.hash())
+        .map(|(_, view)| view);
+    eprintln!(
+        "hint_check: {:?}, parent_view: {:?}",
+        Actor::validate_block_against_hint(&block.hash(), &block.header(), &cached_hint, parent_view),
+        parent_view
+    );
 
     let before = super::status::snapshot().block_created_hint_mismatch_total;
     actor
@@ -27293,7 +27495,20 @@ async fn block_created_drops_hint_when_highest_qc_view_mismatches_parent() {
             block: block.clone(),
         })
         .expect("handle BlockCreated");
-    let after = super::status::snapshot().block_created_hint_mismatch_total;
+    let snapshot_after = super::status::snapshot();
+    let after = snapshot_after.block_created_hint_mismatch_total;
+    let session_key = Actor::session_key(
+        &block.hash(),
+        block.header().height().get(),
+        block.header().view_change_index(),
+    );
+    let pending_keys: Vec<_> = actor.pending.pending_blocks.keys().copied().collect();
+    eprintln!(
+        "pending_keys: {:?}, rbc_session: {}, proposal_mismatch_total: {}",
+        pending_keys,
+        actor.subsystems.da_rbc.rbc.sessions.contains_key(&session_key),
+        snapshot_after.block_created_proposal_mismatch_total
+    );
 
     assert!(
         after > before,
