@@ -798,9 +798,7 @@ pub mod domain {
                 permission.asset.definition().domain() == domain_id
                     || permission.asset.account().domain() == domain_id
             }
-            AnyPermission::CanUseFeeSponsor(permission) => {
-                permission.sponsor.domain() == domain_id
-            }
+            AnyPermission::CanUseFeeSponsor(permission) => permission.sponsor.domain() == domain_id,
             AnyPermission::CanRegisterNft(permission) => &permission.domain == domain_id,
             AnyPermission::CanUnregisterNft(permission) => permission.nft.domain() == domain_id,
             AnyPermission::CanTransferNft(permission) => permission.nft.domain() == domain_id,

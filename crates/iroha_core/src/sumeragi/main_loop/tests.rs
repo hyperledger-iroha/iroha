@@ -23395,12 +23395,8 @@ async fn new_view_roster_prefers_active_topology_at_next_height() {
     };
     status::record_commit_qc(commit_qc);
 
-    let derived = actor.roster_for_new_view_with_mode(
-        hash_height2,
-        3,
-        0,
-        ConsensusMode::Permissioned,
-    );
+    let derived =
+        actor.roster_for_new_view_with_mode(hash_height2, 3, 0, ConsensusMode::Permissioned);
     assert_eq!(
         derived, expected_roster,
         "new-view roster should prefer the active topology at the next height"
@@ -27098,7 +27094,9 @@ async fn block_created_drops_hint_when_highest_qc_view_mismatches_parent() {
 
     let before = super::status::snapshot().block_created_hint_mismatch_total;
     actor
-        .handle_block_created(super::message::BlockCreated { block: block.clone() })
+        .handle_block_created(super::message::BlockCreated {
+            block: block.clone(),
+        })
         .expect("handle BlockCreated");
     let after = super::status::snapshot().block_created_hint_mismatch_total;
 
@@ -33414,7 +33412,8 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_payloads() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let view = actor.state.view();
-    let height = view.height() as u64 + 1;
+    let committed_height = view.height() as u64;
+    let height = committed_height + 1;
     let parent = view.latest_block_hash();
     drop(view);
 
@@ -33427,11 +33426,11 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_payloads() {
         PendingBlock::new(active_block, active_payload_hash, height, active_view),
     );
 
-    let block = sample_block(height, 1, parent);
+    let block = sample_block(committed_height, 1, None);
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let view_idx = u64::from(block.header().view_change_index());
-    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    let mut pending = PendingBlock::new(block, payload_hash, committed_height, view_idx);
     pending.mark_aborted();
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
     let retention_factor = actor
@@ -33462,7 +33461,8 @@ async fn reschedule_stale_pending_blocks_retains_aborted_with_votes() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let view = actor.state.view();
-    let height = view.height() as u64 + 1;
+    let committed_height = view.height() as u64;
+    let height = committed_height + 1;
     let parent = view.latest_block_hash();
     drop(view);
 
@@ -33475,11 +33475,11 @@ async fn reschedule_stale_pending_blocks_retains_aborted_with_votes() {
         PendingBlock::new(active_block, active_payload_hash, height, active_view),
     );
 
-    let block = sample_block(height, 1, parent);
+    let block = sample_block(committed_height, 1, None);
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let view_idx = u64::from(block.header().view_change_index());
-    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    let mut pending = PendingBlock::new(block, payload_hash, committed_height, view_idx);
     pending.mark_aborted();
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
     let retention_factor = actor
@@ -33515,6 +33515,52 @@ async fn reschedule_stale_pending_blocks_retains_aborted_with_votes() {
     assert!(
         actor.pending.pending_blocks.contains_key(&block_hash),
         "aborted payload should be retained while votes are present"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reschedule_stale_pending_blocks_retains_aborted_above_committed_height() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let height = committed_height + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let active_block = sample_block(height, 0, parent);
+    let active_hash = active_block.hash();
+    let active_payload_hash = Hash::new(super::proposals::block_payload_bytes(&active_block));
+    let active_view = u64::from(active_block.header().view_change_index());
+    actor.pending.pending_blocks.insert(
+        active_hash,
+        PendingBlock::new(active_block, active_payload_hash, height, active_view),
+    );
+
+    let block = sample_block(height, 1, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let view_idx = u64::from(block.header().view_change_index());
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.mark_aborted();
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let retention_factor = actor
+        .config
+        .missing_block_signer_fallback_attempts
+        .saturating_add(2)
+        .max(4);
+    let retention = quorum_timeout
+        .max(super::QUORUM_RESCHEDULE_COOLDOWN)
+        .saturating_mul(retention_factor);
+    pending.inserted_at = Instant::now() - retention - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    actor.reschedule_stale_pending_blocks();
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "aborted payloads above committed height should be retained"
     );
 
     harness.shutdown.send();
