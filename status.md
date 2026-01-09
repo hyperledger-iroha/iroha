@@ -3,6 +3,16 @@
 ## Latest Updates
 - Connect Norito bridge: assert offline FASTPQ sum request JSON roundtrip before FFI proof generation to keep the JSON contract validated.
 - Tests: `cargo test -p connect_norito_bridge offline_fastpq_sum_proof_matches_generator -- --nocapture`; `cargo test -p connect_norito_bridge -- --nocapture`.
+- Sumeragi: avoid re-entrant state view locking when computing the committed QC epoch and add coverage for the view-based helper.
+- Tests: not run (not requested).
+- Maintenance: resolve merge conflict markers in `status.md`.
+- Tests: not run (not requested).
+- Block sync: trim ShareBlocks batches to fit P2P frame caps (avoid oversize disconnects) and add unit coverage.
+- Tests: not run (not requested).
+- Integration tests: emit public DNS ALIAS/CNAME records plus NS/DS delegation placeholders in the SoraNet web deploy coverage.
+- Tests: not run (not requested).
+- Docs: add a public DNS delegation note to the devportal deploy guide for apex/subdomain guidance.
+- Tests: not run (not requested).
 - Sumeragi tests: restore local peer/key vectors in `stale_pending_block_requeues_transactions` so consensus keys seed correctly.
 - Tests: `CARGO_TARGET_DIR=target/codex-iroha-core cargo test -p iroha_core --lib stale_pending_block_requeues_transactions -- --nocapture` (pass; warning: network bind unavailable in tests; using closed handle).
 - Core tests: import `StorageReadOnly` in `isi_gas_fees` so `assets().get(...)` is in scope.

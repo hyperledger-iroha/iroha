@@ -1986,6 +1986,14 @@ impl Iroha {
         .start(supervisor.shutdown_signal());
         supervisor.monitor(child);
 
+        let block_sync_frame_cap = {
+            let global_plaintext =
+                iroha_p2p::frame_plaintext_cap(config.network.max_frame_bytes);
+            config
+                .network
+                .max_frame_bytes_block_sync
+                .min(global_plaintext)
+        };
         let (block_sync, child) = BlockSynchronizer::from_config(
             &config.block_sync,
             sumeragi.clone(),
@@ -1994,6 +2002,8 @@ impl Iroha {
             network.clone(),
             Arc::clone(&state),
             config.sumeragi.consensus_mode,
+            config.network.relay_ttl,
+            block_sync_frame_cap,
         )
         .start(supervisor.shutdown_signal());
         supervisor.monitor(child);

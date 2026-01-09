@@ -2089,6 +2089,24 @@ async fn latest_committed_qc_uses_epoch_for_height() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn epoch_for_height_from_view_matches_epoch_for_height() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.epoch_length_blocks = 3;
+
+    let harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let height = 5;
+
+    let expected = harness.actor.epoch_for_height(height);
+    let actual = {
+        let view = harness.actor.state.view();
+        harness.actor.epoch_for_height_from_view(&view, height)
+    };
+
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn realigns_locked_qc_when_diverged_from_committed_tip() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;

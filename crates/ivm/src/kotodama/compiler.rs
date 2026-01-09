@@ -432,6 +432,22 @@ mod tests {
     }
 
     #[test]
+    fn meta_max_cycles_zero_uses_compiler_default() {
+        let mut opts = CompilerOptions::default();
+        opts.max_cycles = 42;
+        let compiler = Compiler::new_with_options(opts);
+        let src = r#"
+seiyaku MyC {
+  meta { max_cycles: 0; }
+  hajimari() { let a = 1; }
+}
+"#;
+        let code = compiler.compile_source(src).expect("compile");
+        let parsed = ProgramMetadata::parse(&code).expect("parse meta");
+        assert_eq!(parsed.metadata.max_cycles, 42);
+    }
+
+    #[test]
     fn emit_addi_zero_uses_addi_copy() {
         let mut code = Vec::new();
         emit_addi(&mut code, 5, 7, 0);
