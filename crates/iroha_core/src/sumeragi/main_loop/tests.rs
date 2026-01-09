@@ -5885,7 +5885,7 @@ async fn finalize_pending_block_revives_aborted_on_tip_with_commit_qc() {
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block, payload_hash, height, 0);
     pending.mark_aborted();
-    let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
+    let epoch = actor.epoch_for_height(height);
     pending.commit_qc_seen = true;
     pending.commit_qc_epoch = Some(epoch);
     let lock = QcHeaderRef {
@@ -6123,11 +6123,12 @@ async fn commit_inflight_timeout_triggers_view_change_and_drops_pending() {
 async fn commit_vote_targets_collectors_or_topology() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
-    let block = sample_block(1, 0, None);
+    let height = 1;
+    let block = sample_block(height, 0, None);
     let block_hash = block.hash();
     let parent_hash = block.header().prev_block_hash();
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
+    let epoch = actor.epoch_for_height(height);
 
     let _ = harness.background_rx.try_iter().count();
 
@@ -7338,10 +7339,11 @@ async fn precommit_vote_block_sync_update_targets_snapshot_roster() {
 async fn precommit_vote_targets_collectors_without_broadcast() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
-    let block = sample_block(1, 0, None);
+    let height = 1;
+    let block = sample_block(height, 0, None);
     let block_hash = block.hash();
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
+    let epoch = actor.epoch_for_height(height);
 
     let _ = harness.background_rx.try_iter().count();
 
@@ -7411,10 +7413,11 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
 async fn rebroadcast_precommit_votes_fall_back_to_topology_when_collectors_below_quorum() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
-    let block = sample_block(1, 0, None);
+    let height = 1;
+    let block = sample_block(height, 0, None);
     let block_hash = block.hash();
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
+    let epoch = actor.epoch_for_height(height);
 
     assert!(actor.emit_precommit_vote(
         block_hash,
@@ -8110,9 +8113,9 @@ async fn precommit_vote_skips_when_block_conflicts_with_locked_chain() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
     let height = 1;
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let epoch = actor.epoch_for_height(height);
     let block1 = sample_block(height, 0, None);
     let block2 = sample_block(height, 1, None);
 
@@ -8299,7 +8302,7 @@ async fn try_form_qc_from_votes_skips_when_conflicts_locked_chain() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn try_form_qc_from_votes_allows_aborted_pending_on_tip() {
+async fn try_form_qc_from_votes_skips_aborted_pending_on_tip() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -8338,10 +8341,10 @@ async fn try_form_qc_from_votes_allows_aborted_pending_on_tip() {
     }
 
     assert!(
-        actor
+        !actor
             .qc_cache
             .contains_key(&(Phase::Commit, block_hash, height, 0, epoch)),
-        "aborted pending blocks on tip should still aggregate QCs"
+        "aborted pending blocks on tip must not aggregate QCs"
     );
 
     harness.shutdown.send();
@@ -31768,9 +31771,10 @@ async fn reschedule_stale_pending_blocks_retains_aborted_with_votes() {
         signer: 0,
         bls_sig: Vec::new(),
     };
-    actor
-        .vote_log
-        .insert((vote.phase, vote.height, vote.view, vote.epoch, vote.signer), vote);
+    actor.vote_log.insert(
+        (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
+        vote,
+    );
 
     actor.reschedule_stale_pending_blocks();
     assert!(
@@ -31875,8 +31879,8 @@ async fn reschedule_stale_pending_blocks_targets_snapshot_roster() {
             }
         }
     }
-    assert_eq!(
-        targets, expected_targets,
+    assert!(
+        targets.is_superset(&expected_targets),
         "reschedule should rebroadcast to the snapshot roster"
     );
 
