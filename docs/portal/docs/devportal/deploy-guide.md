@@ -450,6 +450,19 @@ inherits the cutover window start as the `effective_at` timestamp unless
 overridden. For the full operational workflow, see
 `docs/source/sorafs_gateway_dns_owner_runbook.md`.
 
+### Public DNS delegation note
+
+The zonefile skeleton only defines authoritative records for the zone. You
+still need to configure parent-zone NS/DS delegation at your registrar or DNS
+provider so the regular internet can discover the nameservers.
+
+- For apex/TLD cutovers, use ALIAS/ANAME (provider-specific) or publish A/AAAA
+  records pointing at the gateway anycast IPs.
+- For subdomains, publish a CNAME to the derived pretty host
+  (`<fqdn>.gw.sora.name`).
+- The canonical host (`<hash>.gw.sora.id`) stays under the gateway domain and
+  is not published inside your public zone.
+
 ### Gateway header template
 
 The deploy helper also emits `portal.gateway.headers.txt` and

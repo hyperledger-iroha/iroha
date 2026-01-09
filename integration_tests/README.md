@@ -15,4 +15,4 @@ This crate hosts cross-component tests for Iroha.
 
 ## Notes
 - Pipeline block rejection scaffold lives at `tests/pipeline_block_rejected.rs` and is `#[ignore]` until a deterministic trigger is available.
-- SoraNet web deploy + public DNS CNAME settings coverage lives at `tests/soranet_web_deploy.rs`.
+- SoraNet web deploy + public DNS ALIAS/CNAME + NS/DS delegation placeholders coverage lives at `tests/soranet_web_deploy.rs`.

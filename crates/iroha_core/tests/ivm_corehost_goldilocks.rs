@@ -100,8 +100,10 @@ mod goldilocks {
         let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
         vm.set_register(10, ptr);
 
-        host.syscall(ivm_sys::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm)
+        let gas = host
+            .syscall(ivm_sys::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm)
             .expect("syscall ok");
+        assert!(gas > 0);
         assert_eq!(vm.register(10), 0);
         assert_eq!(vm.register(11), 3);
     }
