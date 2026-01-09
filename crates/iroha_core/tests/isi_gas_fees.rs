@@ -10,7 +10,7 @@ use iroha_core::{
     gas as isi_gas,
     kura::Kura,
     query,
-    state::{State, World},
+    state::{State, World, WorldReadOnly},
     tx::{AcceptedTransaction, TransactionRejectionReason},
 };
 use iroha_data_model::prelude::*;
@@ -18,6 +18,7 @@ use iroha_data_model::query::parameters::ForwardCursor;
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::gen_account_in;
 use ivm::{ProgramMetadata, encoding, instruction, kotodama::wide as kwide, syscalls as ivm_sys};
+use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use rust_decimal::Decimal;
 
