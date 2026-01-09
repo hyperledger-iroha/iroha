@@ -59,7 +59,7 @@ Terminology
 - Pointer‑ABI TLVs are now decoded in `CoreHost` (`decode_tlv_typed`), giving a deterministic path for IDs, metadata, and JSON payloads. Work remains to ensure every syscall documents the expected pointer types and that Kotodama emits the correct TLVs (including error handling when the policy rejects a type).
 
 4) Gas and error mapping consistency
-- IVM opcodes charge per‑op gas; syscalls return “extra gas” only ad‑hoc in DefaultHost. The executor/ISI path has no gas model today.
+- IVM opcodes charge per‑op gas; CoreHost now returns extra gas for ISI syscalls using the native gas schedule (including batch transfers and the vendor ISI bridge), and ZK verify syscalls reuse the confidential gas schedule. DefaultHost still keeps minimal costs for test coverage.
 - Error surfaces differ: IVM returns `VMError::{OutOfGas,PermissionDenied,...}`; ISI returns `InstructionExecutionError` categories (`Find`, `Repetition`, `InvariantViolation`, `Math`, `Type`, `Mintability`, `InvalidParameter`).
 
 5) Determinism across acceleration paths
@@ -155,5 +155,5 @@ Notes
 
 ## Outstanding Work
 - Finalise the Kotodama helpers that pass Norito‑encoded pointers (`crates/ivm/src/kotodama/std.rs`) and surface them through the compiler CLI.
-- Publish the syscall gas table and wire enforcement into the host alongside regression tests.
+- Publish the syscall gas table (including helper syscalls) and keep CoreHost enforcement/tests aligned with it.
 - ✅ Added round-trip Norito fixtures covering the pointer-argument ABI; see `crates/iroha_data_model/tests/norito_pointer_abi_roundtrip.rs` for manifest and NFT pointer coverage kept in CI.

@@ -480,7 +480,10 @@ mod tests {
         };
         let checkpoint = ValidatorSetCheckpoint::new(
             height,
+            view,
             block_hash,
+            cert.parent_state_root,
+            cert.post_state_root,
             roster,
             signers_bitmap,
             bls_aggregate_signature,

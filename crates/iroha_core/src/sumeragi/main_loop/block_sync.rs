@@ -9,7 +9,7 @@ impl Actor {
         if let BlockMessage::BlockSyncUpdate(update) = &mut msg {
             let block_hash = update.block.hash();
             let height = update.block.header().height().get();
-            let view = u64::from(update.block.header().view_change_index());
+            let view = update.block.header().view_change_index();
             let expected_epoch = self.epoch_for_height(height);
             Self::apply_cached_qcs_to_block_sync_update(
                 update,
@@ -51,7 +51,7 @@ impl Actor {
         let incoming_qc = incoming_qc;
         let block_hash = block.hash();
         let block_height = block.header().height().get();
-        let block_view = u64::from(block.header().view_change_index());
+        let block_view = block.header().view_change_index();
         let requested_missing_block = self
             .pending
             .missing_block_requests
@@ -228,7 +228,10 @@ impl Actor {
             let checkpoint = selection.checkpoint.clone().unwrap_or_else(|| {
                 ValidatorSetCheckpoint::new(
                     cert.height,
+                    cert.view,
                     cert.subject_block_hash,
+                    cert.parent_state_root,
+                    cert.post_state_root,
                     cert.validator_set.clone(),
                     cert.aggregate.signers_bitmap.clone(),
                     cert.aggregate.bls_aggregate_signature.clone(),
@@ -404,45 +407,6 @@ impl Actor {
             }
         };
         let local_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
-        if !block_sync_quorum_available(
-            block_signer_count,
-            commit_quorum,
-            signature_quorum_met,
-            candidate_qc_present,
-            commit_cert_present,
-            selection.checkpoint.is_some(),
-            requested_missing_block,
-            block_height,
-            local_height,
-        ) {
-            super::status::inc_block_sync_drop_invalid_signatures();
-            warn!(
-                hash = ?block_hash,
-                height = block_height,
-                view = block_view,
-                block_signers = block_signer_count,
-                signatures = block.signatures().count(),
-                commit_quorum,
-                candidate_qc_present,
-                candidate_qc_signers,
-                missing_request = requested_missing_block,
-                local_height,
-                "dropping block sync update missing commit-role quorum"
-            );
-            return Ok(());
-        } else if requested_missing_block
-            && block_signer_count < commit_quorum
-            && !candidate_qc_present
-        {
-            info!(
-                hash = ?block_hash,
-                height = block_height,
-                view = block_view,
-                signatures = block_signer_count,
-                commit_quorum,
-                "applying block sync update below commit quorum to satisfy missing-block request"
-            );
-        }
         let validated_qc = candidate_qc.as_ref().and_then(|qc| {
             let state_view = self.state.view();
             let world = state_view.world();
@@ -598,6 +562,48 @@ impl Actor {
                     }
                 }
             }
+        }
+        let qc_evidence_present = incoming_qc.is_some();
+        if !block_sync_quorum_available(
+            block_signer_count,
+            commit_quorum,
+            signature_quorum_met,
+            qc_evidence_present,
+            commit_cert_present,
+            selection.checkpoint.is_some(),
+            requested_missing_block,
+            block_height,
+            local_height,
+        ) {
+            super::status::inc_block_sync_drop_invalid_signatures();
+            warn!(
+                hash = ?block_hash,
+                height = block_height,
+                view = block_view,
+                block_signers = block_signer_count,
+                signatures = block.signatures().count(),
+                commit_quorum,
+                candidate_qc_present,
+                candidate_qc_signers,
+                qc_evidence_present,
+                incoming_qc_validated,
+                missing_request = requested_missing_block,
+                local_height,
+                "dropping block sync update missing commit-role quorum"
+            );
+            return Ok(());
+        } else if requested_missing_block
+            && block_signer_count < commit_quorum
+            && !qc_evidence_present
+        {
+            info!(
+                hash = ?block_hash,
+                height = block_height,
+                view = block_view,
+                signatures = block_signer_count,
+                commit_quorum,
+                "applying block sync update below commit quorum to satisfy missing-block request"
+            );
         }
         let incoming_qc_signers = incoming_qc.as_ref().map(qc_signer_count);
         let allow_nonextending_qc = selection.commit_qc.is_some()
@@ -1056,7 +1062,7 @@ impl Actor {
                 let block = &inflight.pending.block;
                 let block_hash = block.hash();
                 let block_height = block.header().height().get();
-                let block_view = u64::from(block.header().view_change_index());
+                let block_view = block.header().view_change_index();
                 let update = super::block_sync_update_with_roster(
                     block,
                     self.state.as_ref(),
@@ -1104,7 +1110,7 @@ impl Actor {
                 let block = &pending.block;
                 let block_hash = block.hash();
                 let block_height = block.header().height().get();
-                let block_view = u64::from(block.header().view_change_index());
+                let block_view = block.header().view_change_index();
                 let update = super::block_sync_update_with_roster(
                     block,
                     self.state.as_ref(),
@@ -1147,7 +1153,7 @@ impl Actor {
                 let block = block.as_ref();
                 let block_hash = block.hash();
                 let block_height = block.header().height().get();
-                let block_view = u64::from(block.header().view_change_index());
+                let block_view = block.header().view_change_index();
                 let update = super::block_sync_update_with_roster(
                     block,
                     self.state.as_ref(),

@@ -470,10 +470,14 @@ pub(crate) enum QcValidationError {
     ModeTagMismatch,
     #[error("QC validator set does not match active roster")]
     ValidatorSetMismatch,
+    #[error("QC view does not match the block view (expected {expected}, got {actual})")]
+    ViewMismatch { expected: u64, actual: u64 },
     #[error("QC aggregate does not match subject/bitmap")]
     AggregateMismatch,
     #[error("QC subject mismatch for signer {signer}")]
     SubjectMismatch { signer: ValidatorIndex },
+    #[error("NEW_VIEW QC highest certificate mismatch")]
+    HighestQcMismatch,
     #[error("QC contains an invalid signature from signer {signer}")]
     InvalidSignature { signer: ValidatorIndex },
     #[error("QC signer {signer} not present in block signatures")]
@@ -494,8 +498,10 @@ impl QcValidationError {
             Self::DuplicateSigners => "duplicate_signers",
             Self::ModeTagMismatch => "mode_tag_mismatch",
             Self::ValidatorSetMismatch => "validator_set_mismatch",
+            Self::ViewMismatch { .. } => "view_mismatch",
             Self::AggregateMismatch => "aggregate_mismatch",
             Self::SubjectMismatch { .. } => "subject_mismatch",
+            Self::HighestQcMismatch => "highest_qc_mismatch",
             Self::InvalidSignature { .. } => "invalid_signature",
             Self::SignerMissingFromBlock { .. } => "signer_missing_from_block",
             Self::StakeSnapshotUnavailable => "stake_snapshot_unavailable",
@@ -641,8 +647,10 @@ fn qc_validation_error_to_evidence(
         | QcValidationError::SignerMissingFromBlock { .. }
         | QcValidationError::ModeTagMismatch
         | QcValidationError::ValidatorSetMismatch
+        | QcValidationError::ViewMismatch { .. }
         | QcValidationError::AggregateMismatch
         | QcValidationError::DuplicateSigners
+        | QcValidationError::HighestQcMismatch
         | QcValidationError::SubjectMismatch { .. } => Some(Evidence {
             kind: EvidenceKind::InvalidQc,
             payload: EvidencePayload::InvalidQc {
@@ -975,7 +983,7 @@ fn topology_for_block_signatures(
     prf_seed: Option<[u8; 32]>,
 ) -> super::network_topology::Topology {
     let mut rotated = topology.clone();
-    let view = u64::from(block.header().view_change_index());
+    let view = block.header().view_change_index();
     let height = block.header().height().get();
     rotate_topology_for_mode(
         &mut rotated,
@@ -1055,6 +1063,12 @@ pub(crate) fn validate_block_sync_qc(
     let voting_len = roster_len;
     if qc.mode_tag != mode_tag {
         return Err(QcValidationError::ModeTagMismatch);
+    }
+    if mode_tag == PERMISSIONED_TAG && qc.view != block_view {
+        return Err(QcValidationError::ViewMismatch {
+            expected: block_view,
+            actual: qc.view,
+        });
     }
     if !qc_validator_set_matches_topology(qc, topology) {
         return Err(QcValidationError::ValidatorSetMismatch);
@@ -1320,6 +1334,27 @@ fn tally_qc_against_block_signers(
     })
 }
 
+fn validate_new_view_qc_highest(
+    qc: &crate::sumeragi::consensus::Qc,
+) -> Result<crate::sumeragi::consensus::QcRef, QcValidationError> {
+    let Some(highest) = qc.highest_qc else {
+        return Err(QcValidationError::HighestQcMismatch);
+    };
+    if highest.phase != crate::sumeragi::consensus::Phase::Commit {
+        return Err(QcValidationError::HighestQcMismatch);
+    }
+    if highest.subject_block_hash != qc.subject_block_hash {
+        return Err(QcValidationError::HighestQcMismatch);
+    }
+    if qc.height != highest.height.saturating_add(1) {
+        return Err(QcValidationError::HighestQcMismatch);
+    }
+    if highest.epoch > qc.epoch {
+        return Err(QcValidationError::HighestQcMismatch);
+    }
+    Ok(highest)
+}
+
 fn validate_qc_against_votes(
     vote_log: &BTreeMap<
         (
@@ -1344,6 +1379,11 @@ fn validate_qc_against_votes(
     let roster_len = topology.as_ref().len();
     let required = signature_topology.min_votes_for_commit();
     let voting_len = roster_len;
+    let qc_highest = if qc.phase == crate::sumeragi::consensus::Phase::NewView {
+        Some(validate_new_view_qc_highest(qc)?)
+    } else {
+        None
+    };
     if qc.mode_tag != mode_tag {
         return Err(QcValidationError::ModeTagMismatch);
     }
@@ -1395,6 +1435,26 @@ fn validate_qc_against_votes(
         }
         if !vote_signature_valid(vote, &signature_topology, chain_id, mode_tag) {
             return Err(QcValidationError::InvalidSignature { signer: *signer });
+        }
+        if let Some(qc_highest) = qc_highest {
+            let Some(vote_highest) = vote.highest_qc else {
+                return Err(QcValidationError::HighestQcMismatch);
+            };
+            if vote_highest.phase != crate::sumeragi::consensus::Phase::Commit {
+                return Err(QcValidationError::HighestQcMismatch);
+            }
+            if vote_highest.subject_block_hash != qc.subject_block_hash {
+                return Err(QcValidationError::HighestQcMismatch);
+            }
+            if (vote_highest.height, vote_highest.view) > (qc_highest.height, qc_highest.view) {
+                return Err(QcValidationError::HighestQcMismatch);
+            }
+            if vote_highest.height == qc_highest.height
+                && vote_highest.view == qc_highest.view
+                && vote_highest.epoch != qc_highest.epoch
+            {
+                return Err(QcValidationError::HighestQcMismatch);
+            }
         }
     }
 
@@ -1590,7 +1650,7 @@ fn validate_block_for_voting(
 ) -> Result<Option<StateRoots>, BlockValidationError> {
     let block_hash = block.hash();
     let height = block.header().height().get();
-    let view = u64::from(block.header().view_change_index());
+    let view = block.header().view_change_index();
     let time_source = TimeSource::new_system();
     let validation = ValidBlock::validate_keep_voting_block(
         block,
@@ -1635,7 +1695,6 @@ fn validation_reject_reason_label(err: &BlockValidationError) -> &'static str {
         | BlockValidationError::AxtEnvelopeValidationFailed(_) => VALIDATION_REASON_EXECUTION,
         BlockValidationError::ConfidentialFeaturesMismatch { .. }
         | BlockValidationError::ProofPolicyHashMismatch { .. }
-        | BlockValidationError::ViewChangeIndexTooLarge
         | BlockValidationError::InvalidGenesis(_)
         | BlockValidationError::BlockInThePast
         | BlockValidationError::BlockInTheFuture
@@ -1655,11 +1714,12 @@ fn build_invalid_proposal_evidence(
     block: &SignedBlock,
     payload_hash: Hash,
     qc: crate::sumeragi::consensus::QcHeaderRef,
+    epoch: u64,
     reason: String,
 ) -> crate::sumeragi::consensus::Evidence {
     let proposer = proposer_index_from_block(block);
-    let view = u64::from(block.header().view_change_index());
-    let proposal = Actor::build_consensus_proposal(block, payload_hash, qc, proposer, view);
+    let view = block.header().view_change_index();
+    let proposal = Actor::build_consensus_proposal(block, payload_hash, qc, proposer, view, epoch);
     invalid_proposal_evidence(proposal, reason)
 }
 
@@ -1867,7 +1927,7 @@ fn block_sync_quorum_available(
     block_signers: usize,
     _commit_quorum: usize,
     signature_quorum_met: bool,
-    candidate_qc_present: bool,
+    qc_evidence_present: bool,
     commit_cert_present: bool,
     checkpoint_present: bool,
     missing_block_requested: bool,
@@ -1875,7 +1935,7 @@ fn block_sync_quorum_available(
     local_height: u64,
 ) -> bool {
     // Require commit evidence unless we explicitly requested the next missing payload.
-    if commit_cert_present || candidate_qc_present || signature_quorum_met || checkpoint_present {
+    if commit_cert_present || qc_evidence_present || signature_quorum_met || checkpoint_present {
         return true;
     }
 
@@ -2256,7 +2316,7 @@ impl Actor {
             parents.push((
                 pending.block.hash(),
                 pending.height,
-                u64::from(pending.block.header().view_change_index()),
+                pending.block.header().view_change_index(),
                 parent_hash,
             ));
         }
@@ -2544,6 +2604,7 @@ enum HintMismatch {
     Height,
     View,
     HighestQcHeight,
+    HighestQcView,
     HighestQcParentHash,
 }
 
@@ -3644,7 +3705,7 @@ fn canonicalize_block_signatures_for_roster(
         return Vec::new();
     }
     let height = block.header().height().get();
-    let view = u64::from(block.header().view_change_index());
+    let view = block.header().view_change_index();
     let signature_topology =
         signature_topology_for_roster(roster, height, view, mode_tag, prf_seed);
     let canonical_topology = super::network_topology::Topology::new(roster.to_vec());
@@ -3725,8 +3786,9 @@ fn selection_from_roster_artifacts(
         (ConsensusMode::Npos, None) => expected_epoch,
         _ => 0,
     };
-    let checkpoint_roots = commit_qc
-        .map(|cert| (cert.parent_state_root, cert.post_state_root))
+    let checkpoint_roots = validated_cert
+        .as_ref()
+        .map(|(_, cert)| (cert.parent_state_root, cert.post_state_root))
         .or_else(|| {
             super::status::precommit_signers_for(block_hash).and_then(|record| {
                 if record.height == block_height
@@ -3772,6 +3834,44 @@ fn selection_from_roster_artifacts(
                     checkpoint_roster = checkpoint_roster.len(),
                     "commit certificate and checkpoint rosters differ; preferring commit certificate"
                 );
+            }
+            if chk.view != cert.view {
+                warn!(
+                    height = block_height,
+                    block = %block_hash,
+                    cert_view = cert.view,
+                    checkpoint_view = chk.view,
+                    "commit certificate and checkpoint views differ; preferring commit certificate"
+                );
+                let stake_snapshot = stake_snapshot
+                    .filter(|snapshot| snapshot.matches_roster(&roster))
+                    .cloned();
+                return Some(BlockSyncRosterSelection {
+                    roster,
+                    source,
+                    commit_qc: Some(cert.clone()),
+                    checkpoint: None,
+                    stake_snapshot,
+                });
+            }
+            if chk.parent_state_root != cert.parent_state_root
+                || chk.post_state_root != cert.post_state_root
+            {
+                warn!(
+                    height = block_height,
+                    block = %block_hash,
+                    "commit certificate and checkpoint roots differ; preferring commit certificate"
+                );
+                let stake_snapshot = stake_snapshot
+                    .filter(|snapshot| snapshot.matches_roster(&roster))
+                    .cloned();
+                return Some(BlockSyncRosterSelection {
+                    roster,
+                    source,
+                    commit_qc: Some(cert.clone()),
+                    checkpoint: None,
+                    stake_snapshot,
+                });
             }
             let stake_snapshot = stake_snapshot
                 .filter(|snapshot| snapshot.matches_roster(&roster))
@@ -3972,7 +4072,7 @@ fn block_sync_update_with_roster(
 ) -> super::message::BlockSyncUpdate {
     let block_hash = block.hash();
     let block_height = block.header().height().get();
-    let block_view = u64::from(block.header().view_change_index());
+    let block_view = block.header().view_change_index();
     let mut update = super::message::BlockSyncUpdate::from(block);
     let (consensus_mode, _mode_tag, _prf_seed) = {
         let state_view = state.view();
@@ -4200,6 +4300,14 @@ fn validate_checkpoint_roster(
             actual: checkpoint.height,
         });
     }
+    if let Some(block_view) = block_view {
+        if checkpoint.view != block_view {
+            return Err(RosterValidationError::ViewMismatch {
+                expected: block_view,
+                actual: checkpoint.view,
+            });
+        }
+    }
     if checkpoint.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1 {
         return Err(RosterValidationError::ValidatorSetHashVersionMismatch {
             expected: VALIDATOR_SET_HASH_VERSION_V1,
@@ -4284,9 +4392,16 @@ fn validate_checkpoint_roster(
             }
         }
     }
-    let (parent_state_root, post_state_root) =
-        roots.ok_or(RosterValidationError::AggregateSignatureInvalid)?;
-    let view = block_view.unwrap_or(0);
+    if let Some((parent_state_root, post_state_root)) = roots {
+        if checkpoint.parent_state_root != parent_state_root
+            || checkpoint.post_state_root != post_state_root
+        {
+            return Err(RosterValidationError::AggregateSignatureInvalid);
+        }
+    }
+    let parent_state_root = checkpoint.parent_state_root;
+    let post_state_root = checkpoint.post_state_root;
+    let view = block_view.unwrap_or(checkpoint.view);
     let vote = crate::sumeragi::consensus::Vote {
         phase: crate::sumeragi::consensus::Phase::Commit,
         block_hash,
@@ -4346,7 +4461,7 @@ fn select_block_sync_roster(
     mode_tag: &'static str,
     allow_uncertified: bool,
 ) -> Option<BlockSyncRosterSelection> {
-    let block_view = u64::from(block.header().view_change_index());
+    let block_view = block.header().view_change_index();
     if let Some(selection) = persisted {
         return Some(selection);
     }
@@ -4534,7 +4649,7 @@ impl Actor {
             return None;
         }
         let height = block.header().height().get();
-        let view = u64::from(block.header().view_change_index());
+        let view = block.header().view_change_index();
         let cert = status::commit_qc_history()
             .into_iter()
             .find(|candidate| {
@@ -4603,7 +4718,10 @@ impl Actor {
         ) {
             let checkpoint = ValidatorSetCheckpoint::new(
                 cert.height,
+                cert.view,
                 cert.subject_block_hash,
+                cert.parent_state_root,
+                cert.post_state_root,
                 cert.validator_set.clone(),
                 cert.aggregate.signers_bitmap.clone(),
                 cert.aggregate.bls_aggregate_signature.clone(),
@@ -5119,7 +5237,7 @@ impl Actor {
         let epoch = self.epoch_for_height(height);
         Some(crate::sumeragi::consensus::QcHeaderRef {
             height,
-            view: u64::from(header.view_change_index()),
+            view: header.view_change_index(),
             epoch,
             subject_block_hash: block.hash(),
             phase: crate::sumeragi::consensus::Phase::Commit,
@@ -5246,6 +5364,67 @@ impl Actor {
                 .get()
                 .is_some_and(|pending| pending == hash)
             || self.kura.get_block_height_by_hash(hash).is_some()
+    }
+
+    fn local_block_height_view(&self, hash: HashOf<BlockHeader>) -> Option<(u64, u64)> {
+        if let Some(height) = self.kura.get_block_height_by_hash(hash) {
+            if let Some(block) = self.kura.get_block(height) {
+                let height = u64::try_from(height.get()).ok()?;
+                let view = block.header().view_change_index();
+                return Some((height, view));
+            }
+        }
+        if let Some(pending) = self.pending.pending_blocks.get(&hash) {
+            if !pending.aborted {
+                return Some((pending.height, pending.block.header().view_change_index()));
+            }
+        }
+        if let Some(inflight) = self.subsystems.commit.inflight.as_ref() {
+            if inflight.block_hash == hash && !inflight.pending.aborted {
+                return Some((
+                    inflight.pending.height,
+                    inflight.pending.block.header().view_change_index(),
+                ));
+            }
+        }
+        None
+    }
+
+    fn reconcile_new_view_tracker_with_local_blocks(&mut self) {
+        let mut drop_keys = Vec::new();
+        for (key, entry) in self.subsystems.propose.new_view_tracker.entries.iter_mut() {
+            let Some((local_height, local_view)) =
+                self.local_block_height_view(entry.highest_qc.subject_block_hash)
+            else {
+                continue;
+            };
+            if local_height != entry.highest_qc.height {
+                warn!(
+                    height = key.0,
+                    view = key.1,
+                    highest_height = entry.highest_qc.height,
+                    local_height,
+                    block = %entry.highest_qc.subject_block_hash,
+                    "dropping NEW_VIEW entry with highest QC height mismatch against local block"
+                );
+                drop_keys.push(*key);
+                continue;
+            }
+            if local_view != entry.highest_qc.view {
+                debug!(
+                    height = key.0,
+                    view = key.1,
+                    highest_view = entry.highest_qc.view,
+                    local_view,
+                    block = %entry.highest_qc.subject_block_hash,
+                    "correcting NEW_VIEW highest QC view to match local block header"
+                );
+                entry.highest_qc.view = local_view;
+            }
+        }
+        for key in drop_keys {
+            self.subsystems.propose.new_view_tracker.entries.remove(&key);
+        }
     }
 
     fn highest_qc_extends_locked(&self, highest: crate::sumeragi::consensus::QcHeaderRef) -> bool {
@@ -6475,6 +6654,7 @@ impl Actor {
         block_hash: &HashOf<BlockHeader>,
         header: &BlockHeader,
         hint: &super::message::ProposalHint,
+        parent_view: Option<u64>,
     ) -> Result<(), HintMismatch> {
         if &hint.block_hash != block_hash {
             return Err(HintMismatch::BlockHash);
@@ -6483,7 +6663,7 @@ impl Actor {
         if hint.height != block_height {
             return Err(HintMismatch::Height);
         }
-        let block_view = u64::from(header.view_change_index());
+        let block_view = header.view_change_index();
         if hint.view != block_view {
             return Err(HintMismatch::View);
         }
@@ -6493,6 +6673,11 @@ impl Actor {
         if let Some(parent_hash) = header.prev_block_hash() {
             if hint.highest_qc.subject_block_hash != parent_hash {
                 return Err(HintMismatch::HighestQcParentHash);
+            }
+        }
+        if let Some(parent_view) = parent_view {
+            if hint.highest_qc.view != parent_view {
+                return Err(HintMismatch::HighestQcView);
             }
         }
         Ok(())

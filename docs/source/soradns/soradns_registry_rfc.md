@@ -269,6 +269,33 @@ Clients must validate RAD signatures against operator key material in the
 registry contract. Unknown suffix IDs trigger a soft failure (resolver entry is
 ignored but cached separately for diagnostics).
 
+### 7.3 Public DNS delegation (regular internet)
+
+SoraDNS host derivation does not replace public DNS delegation. The regular
+internet finds authoritative name servers through the standard DNS hierarchy:
+
+1. Recursive resolvers ask the root servers.
+2. Root servers refer the query to the TLD servers.
+3. The parent/TLD zone returns NS records (and DS when DNSSEC is enabled).
+4. The authoritative name servers answer with A/AAAA/CNAME/TXT records.
+
+That parent-zone NS/DS delegation is set at your registrar or DNS provider and
+is not managed by this repository.
+
+For public DNS records that point at SoraDNS gateways:
+
+- For subdomains, publish a CNAME from your public name to the derived pretty
+  host (`<fqdn>.gw.sora.name`).
+- For an apex or TLD, use your DNS provider's ALIAS/ANAME feature or publish
+  A/AAAA records that point at the gateway anycast IPs. CNAME is not valid at
+  the apex.
+- The canonical host (`<hash>.gw.sora.id`) lives under the SoraDNS gateway
+  domain and is not published in your public zone; clients use it for gateway
+  verification and GAR policy checks.
+
+See `docs/source/soradns/deterministic_hosts.md` for the deterministic host
+derivation and GAR requirements.
+
 ## 8. Fallback Paths
 
 - **SoraFS Degradation:** If SoraFS gateways are unreachable, clients may

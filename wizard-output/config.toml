@@ -43,7 +43,7 @@ seed_tag = 'iroha:da:rotate:v1\0'
 window_slots = 48
 
 [[nexus.dataspace_catalog]]
-alias = "global"
+alias = "universal"
 description = "Single-lane data space"
 id = 0
 
@@ -66,20 +66,23 @@ observation_slots = 2
 [[nexus.lane_catalog]]
 alias = "core"
 description = "Primary execution lane"
+dataspace = "universal"
 index = 0
 
 [[nexus.lane_catalog]]
 alias = "governance"
 description = "Governance & parliament traffic"
+dataspace = "governance"
 index = 1
 
 [[nexus.lane_catalog]]
 alias = "zk"
 description = "Zero-knowledge attachments"
+dataspace = "zk"
 index = 2
 
 [nexus.routing_policy]
-default_dataspace = "global"
+default_dataspace = "universal"
 default_lane = 0
 
 [[nexus.routing_policy.rules]]

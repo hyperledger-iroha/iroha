@@ -7,8 +7,8 @@
 //!
 //! * **Code** – loaded at address `0x0000_0000` and marked read/execute only.
 //! * **Heap** – starts at `0x0010_0000` and grows upward via `SYSCALL_ALLOC`.
-//! * **Input** – read-only buffer beginning at `0x0020_0000`.
-//! * **Output** – read/write buffer beginning at `0x0020_8000`.
+//! * **Input** – read-only buffer beginning at `0x0020_0000` (64 KB).
+//! * **Output** – read/write buffer beginning at `0x0021_0000`.
 //! * **Stack** – 4&nbsp;MB region starting at `0x0030_0000`.
 use std::{
     collections::HashSet,
@@ -88,9 +88,9 @@ impl Memory {
     pub const HEAP_MAX_SIZE: u64 = Self::INPUT_START - Self::HEAP_START;
 
     pub const INPUT_START: u64 = 0x0020_0000;
-    pub const INPUT_SIZE: u64 = 0x0000_8000; // 32 KB input
+    pub const INPUT_SIZE: u64 = 0x0001_0000; // 64 KB input
 
-    pub const OUTPUT_START: u64 = 0x0020_8000;
+    pub const OUTPUT_START: u64 = Self::INPUT_START + Self::INPUT_SIZE;
     pub const OUTPUT_SIZE: u64 = 0x0000_8000; // 32 KB output
 
     pub const STACK_START: u64 = 0x0030_0000;

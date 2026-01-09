@@ -226,6 +226,10 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
             }
         };
     }
+    if let Some(batch) = any.downcast_ref::<dm_isi::transfer::TransferAssetBatch>() {
+        let count = u64::try_from(batch.entries().len()).unwrap_or(u64::MAX);
+        return BASE_TRANSFER.saturating_mul(count);
+    }
 
     // Mint / Burn
     if let Some(mint) = any.downcast_ref::<dm_isi::mint_burn::MintBox>() {
@@ -440,6 +444,41 @@ mod tests {
         ];
         let sum_inline = v.iter().map(meter_instruction).sum::<u64>();
         assert_eq!(sum_inline, meter_instructions(&v));
+    }
+
+    #[test]
+    fn transfer_batch_gas_matches_entry_sum() {
+        let from = sample_account();
+        let to = sample_account();
+        let def: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let entry_a = dm_isi::transfer::TransferAssetBatchEntry::new(
+            from.clone(),
+            to.clone(),
+            def.clone(),
+            1u64,
+        );
+        let entry_b = dm_isi::transfer::TransferAssetBatchEntry::new(
+            from.clone(),
+            to.clone(),
+            def.clone(),
+            2u64,
+        );
+        let batch = dm_isi::transfer::TransferAssetBatch::new(vec![entry_a, entry_b]);
+        let batch_gas = meter_instruction(&InstructionBox::from(batch));
+        let t1 = dm_isi::transfer::Transfer::asset_numeric(
+            AssetId::of(def.clone(), from.clone()),
+            1u64,
+            to.clone(),
+        );
+        let t2 =
+            dm_isi::transfer::Transfer::asset_numeric(AssetId::of(def, from), 2u64, to);
+        let expected = meter_instruction(&InstructionBox::from(dm_isi::transfer::TransferBox::from(
+            t1,
+        )))
+        .saturating_add(meter_instruction(&InstructionBox::from(
+            dm_isi::transfer::TransferBox::from(t2),
+        )));
+        assert_eq!(batch_gas, expected);
     }
 
     #[test]

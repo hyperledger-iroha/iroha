@@ -67,18 +67,18 @@ kagami = ""
 # [[nexus.lane_catalog]]
 # index = 0
 # alias = "core"
-# dataspace = "global"
+# dataspace = "universal"
 # visibility = "public"
 #
 # [[nexus.lane_catalog]]
 # index = 1
 # alias = "governance"
-# dataspace = "global"
+# dataspace = "universal"
 # visibility = "restricted"
 #
 # Optional dataspace catalog entries:
 # [[nexus.dataspace_catalog]]
-# alias = "global"
+# alias = "universal"
 # id = 0
 
 [sumeragi]

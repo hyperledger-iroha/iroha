@@ -54,17 +54,6 @@ fn precommit_qc_for_view_change(
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-enum ViewConversionError {
-    U32Overflow,
-    USizeOverflow,
-}
-
-fn view_to_usize(view: u64) -> Result<usize, ViewConversionError> {
-    let view_u32 = u32::try_from(view).map_err(|_| ViewConversionError::U32Overflow)?;
-    usize::try_from(view_u32).map_err(|_| ViewConversionError::USizeOverflow)
-}
-
 impl Actor {
     pub(super) fn max_tx_budget(
         queue_len: usize,
@@ -117,7 +106,12 @@ impl Actor {
             time_source,
         )
         .map_err(|err| eyre!("failed to accept heartbeat transaction: {err}"))?;
-        let routing = crate::queue::evaluate_policy(&view.nexus.routing_policy, &accepted);
+        let routing = crate::queue::evaluate_policy_with_catalog(
+            &view.nexus.routing_policy,
+            &view.nexus.lane_catalog,
+            &view.nexus.dataspace_catalog,
+            &accepted,
+        );
         tx_batch.push(accepted);
         routing_batch.push(routing);
         Ok(())
@@ -173,6 +167,13 @@ impl Actor {
         if self.is_observer() {
             return Ok(false);
         }
+        if view == u64::MAX {
+            warn!(
+                height,
+                view, "skipping proposal assembly: view-change index overflow"
+            );
+            return Ok(false);
+        }
         super::status::set_leader_index(leader_index as u64);
         let required_for_commit = topology.min_votes_for_commit();
         debug!(
@@ -183,23 +184,7 @@ impl Actor {
             "proposal topology snapshot"
         );
         let proposal_height = height;
-        let view_usize = match view_to_usize(view) {
-            Ok(value) => value,
-            Err(ViewConversionError::U32Overflow) => {
-                warn!(
-                    height,
-                    view, "view exceeds u32::MAX; skipping proposal assembly"
-                );
-                return Ok(false);
-            }
-            Err(ViewConversionError::USizeOverflow) => {
-                warn!(
-                    height,
-                    view, "view exceeds usize::MAX; skipping proposal assembly"
-                );
-                return Ok(false);
-            }
-        };
+        let proposal_epoch = self.epoch_for_height(proposal_height);
         self.init_collector_plan(topology, proposal_height, view);
         let prev_block = resolve_prev_block_for_proposal(
             proposal_height,
@@ -410,7 +395,7 @@ impl Actor {
                 let nexus_enabled = nexus.enabled;
                 let lane_config = nexus.lane_config.clone();
                 let mut builder =
-                    BlockBuilder::new(tx_batch.clone()).chain(view_usize, prev_block.as_deref());
+                    BlockBuilder::new(tx_batch.clone()).chain(view, prev_block.as_deref());
 
                 let receipt_plan = if nexus_enabled {
                     let cursor_snapshot = self.state.da_receipt_cursor_snapshot();
@@ -732,6 +717,7 @@ impl Actor {
                     highest_qc,
                     local_validator_index,
                     view,
+                    proposal_epoch,
                 );
                 self.subsystems
                     .propose
@@ -761,7 +747,6 @@ impl Actor {
                 );
             };
 
-            let proposal_epoch = self.epoch_for_height(proposal_height);
             let mut rbc_plan = self.prepare_rbc_plan(rbc::RbcPlanInputs {
                 signed_block: &signed_block,
                 transactions: &transactions_for_plan,
@@ -994,6 +979,7 @@ impl Actor {
         highest_qc: crate::sumeragi::consensus::QcHeaderRef,
         proposer: u32,
         view: u64,
+        epoch: u64,
     ) -> crate::sumeragi::consensus::Proposal {
         let header = block.header();
         let parent_hash = header.prev_block_hash().unwrap_or_else(|| {
@@ -1015,7 +1001,7 @@ impl Actor {
                 proposer,
                 height: block_height,
                 view,
-                epoch: highest_qc.epoch,
+                epoch,
                 highest_qc,
             },
             payload_hash,
@@ -1128,6 +1114,7 @@ impl Actor {
                 .new_view_tracker
                 .drop_below_view(tracked_height, view);
         }
+        self.reconcile_new_view_tracker_with_local_blocks();
         if pending_queue_len > 0
             && self
                 .subsystems
@@ -1803,23 +1790,5 @@ impl Actor {
             .remove(height, view_idx);
         self.subsystems.propose.last_successful_proposal = Some(now);
         true
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{ViewConversionError, view_to_usize};
-
-    #[test]
-    fn view_to_usize_rejects_u32_overflow() {
-        let view = u64::from(u32::MAX) + 1;
-        assert_eq!(view_to_usize(view), Err(ViewConversionError::U32Overflow));
-    }
-
-    #[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
-    #[test]
-    fn view_to_usize_accepts_u32_max() {
-        let view = u64::from(u32::MAX);
-        assert_eq!(view_to_usize(view), Ok(u32::MAX as usize));
     }
 }

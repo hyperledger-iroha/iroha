@@ -33,7 +33,7 @@ GET /v1/accounts/{uaid}/portfolio
   "dataspaces": [
     {
       "dataspace_id": 0,
-      "dataspace_alias": "global",
+      "dataspace_alias": "universal",
       "accounts": [
         {
           "account_id": "holder1@portfolio",
@@ -135,7 +135,7 @@ Sample response:
   "dataspaces": [
     {
       "dataspace_id": 0,
-      "dataspace_alias": "global",
+      "dataspace_alias": "universal",
       "accounts": ["holder1@portfolio"]
     },
     {

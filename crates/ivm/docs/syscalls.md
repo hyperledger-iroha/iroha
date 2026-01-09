@@ -64,6 +64,11 @@ Legend
 - Return: `u64` or `ptr` (pointer in `r10`).
 - Gas: base component name; variable components are added for byte or item counts.
 
+Gas enforcement (CoreHost)
+- ISI syscalls charge extra gas using the native ISI schedule (`iroha_core::gas::meter_instruction`).
+- FASTPQ transfer batches are charged per entry (same as individual transfers).
+- ZK_VERIFY syscalls reuse the confidential verification gas schedule (base + proof size).
+
 Lifecycle / Utility
 - 0x01 EXIT — Args: `r10=status:u64` → Return: `u64=status` — Gas: G_exit
 - 0x02 ABORT — Args: none → Return: `u64=0` — Gas: G_abort

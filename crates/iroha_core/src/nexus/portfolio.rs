@@ -229,7 +229,7 @@ mod tests {
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata {
                 id: DataSpaceId::GLOBAL,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 ..DataSpaceMetadata::default()
             },
             DataSpaceMetadata {

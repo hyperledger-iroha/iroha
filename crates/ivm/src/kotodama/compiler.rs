@@ -365,7 +365,7 @@ pub struct CompilerOptions {
     pub force_vector: bool,
     /// Requested logical vector length (0 = max).
     pub vector_length: u8,
-    /// Optional maximum cycles to encode; 0 means no explicit cap.
+    /// Optional maximum cycles to encode; 0 means "use compiler default".
     pub max_cycles: u64,
     /// Max unrolled iterations for dynamic bounds lowering (feature-gated).
     pub dynamic_iter_cap: u8,
@@ -809,20 +809,28 @@ impl Compiler {
                         uses_isi = true;
                     }
                     if let ir::Instr::Copy { dest, src } = instr {
-                        if let Some(val) = string_map.get(&(func_idx, *src)).cloned() {
-                            string_map.insert((func_idx, *dest), val);
-                        }
-                        if let Some(kind) = dataref_kind_map.get(&(func_idx, *src)).copied() {
-                            dataref_kind_map.insert((func_idx, *dest), kind);
-                        }
-                        if let Some(hint) = state_path_hints.get(&(func_idx, *src)).cloned() {
-                            state_path_hints.insert((func_idx, *dest), hint);
-                        }
-                        if let Some(val) = int_const_map.get(&(func_idx, *src)).copied() {
-                            int_const_map.insert((func_idx, *dest), val);
-                        }
-                        if string_literal_temps.contains(&(func_idx, *src)) {
-                            string_literal_temps.insert((func_idx, *dest));
+                        if dest != src {
+                            let dest_key = (func_idx, *dest);
+                            string_map.remove(&dest_key);
+                            dataref_kind_map.remove(&dest_key);
+                            state_path_hints.remove(&dest_key);
+                            int_const_map.remove(&dest_key);
+                            string_literal_temps.remove(&dest_key);
+                            if let Some(val) = string_map.get(&(func_idx, *src)).cloned() {
+                                string_map.insert(dest_key, val);
+                            }
+                            if let Some(kind) = dataref_kind_map.get(&(func_idx, *src)).copied() {
+                                dataref_kind_map.insert(dest_key, kind);
+                            }
+                            if let Some(hint) = state_path_hints.get(&(func_idx, *src)).cloned() {
+                                state_path_hints.insert(dest_key, hint);
+                            }
+                            if let Some(val) = int_const_map.get(&(func_idx, *src)).copied() {
+                                int_const_map.insert(dest_key, val);
+                            }
+                            if string_literal_temps.contains(&(func_idx, *src)) {
+                                string_literal_temps.insert(dest_key);
+                            }
                         }
                         continue;
                     }
@@ -971,6 +979,36 @@ impl Compiler {
                             {
                                 dataref_kind_map.insert(param_key, kind);
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        for (func_idx, func) in ir_prog.functions.iter().enumerate() {
+            for bb in &func.blocks {
+                for instr in &bb.instrs {
+                    if let ir::Instr::PointerFromString { kind, src, .. } = instr {
+                        if !string_map.contains_key(&(func_idx, *src)) {
+                            let name = match kind {
+                                ir::DataRefKind::Account => "account_id",
+                                ir::DataRefKind::AssetDef => "asset_definition",
+                                ir::DataRefKind::AssetId => "asset_id",
+                                ir::DataRefKind::NftId => "nft_id",
+                                ir::DataRefKind::Name => "name",
+                                ir::DataRefKind::Json => "json",
+                                ir::DataRefKind::Domain => "domain",
+                                ir::DataRefKind::Blob => "blob",
+                                ir::DataRefKind::NoritoBytes => "norito_bytes",
+                                ir::DataRefKind::DataSpaceId => "dataspace_id",
+                                ir::DataRefKind::AxtDescriptor => "axt_descriptor",
+                                ir::DataRefKind::AssetHandle => "asset_handle",
+                                ir::DataRefKind::ProofBlob => "proof_blob",
+                            };
+                            let msg = format!(
+                                "{name} expects a string literal; pass a literal or Blob|bytes"
+                            );
+                            return Err(i18n::translate(self.lang, Message::SemanticError(&msg)));
                         }
                     }
                 }
@@ -3920,13 +3958,24 @@ impl Compiler {
                     }
                 }
                 // end for instr in &bb.instrs
+                let mut emit_return_value =
+                    |temp: &ir::Temp, rd: u8, scratch: u8, code: &mut Vec<u8>| {
+                        if let Some(kind) = dataref_kind_map.get(&(func_idx, *temp)).copied()
+                            && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
+                        {
+                            let key = data_key_for_pointer(kind, &lit);
+                            emit_literal_stub(code, &mut fixups, rd, key);
+                        } else {
+                            let rs = src_reg(temp, scratch, code);
+                            let mv = encode_addi(rd, rs, 0);
+                            push_word(code, mv);
+                        }
+                    };
                 match &bb.terminator {
                     Terminator::Return(ret) => {
                         if let Some(tmp) = ret {
                             let rd = super::regalloc::RET_REG as u8;
-                            let rs = src_reg(tmp, scratch1, &mut code);
-                            let mv = encode_addi(rd, rs, 0);
-                            push_word(&mut code, mv);
+                            emit_return_value(tmp, rd, scratch1, &mut code);
                         }
                         if is_entry {
                             push_word(&mut code, encoding::wide::encode_halt());
@@ -3955,10 +4004,8 @@ impl Compiler {
                     }
                     Terminator::Return2(t0, t1) => {
                         // r10 <- first, r11 <- second, then return/halts
-                        let rs0 = src_reg(t0, scratch1, &mut code);
-                        let rs1 = src_reg(t1, scratch2, &mut code);
-                        push_word(&mut code, encode_addi(10, rs0, 0));
-                        push_word(&mut code, encode_addi(11, rs1, 0));
+                        emit_return_value(t0, 10, scratch1, &mut code);
+                        emit_return_value(t1, 11, scratch2, &mut code);
                         if is_entry {
                             push_word(&mut code, encoding::wide::encode_halt());
                         } else {
@@ -3990,9 +4037,8 @@ impl Compiler {
                             ));
                         }
                         for (i, t) in vals.iter().enumerate() {
-                            let rs = src_reg(t, scratch1, &mut code);
                             let rd = (regalloc::RET_REG + i) as u8;
-                            push_word(&mut code, encode_addi(rd, rs, 0));
+                            emit_return_value(t, rd, scratch1, &mut code);
                         }
                         if is_entry {
                             push_word(&mut code, encoding::wide::encode_halt());
@@ -4158,6 +4204,7 @@ impl Compiler {
                 .unwrap_or(self.opts.vector_length),
             max_cycles: meta_decl
                 .and_then(|m| m.max_cycles)
+                .filter(|value| *value != 0)
                 .unwrap_or(self.opts.max_cycles),
             abi_version: meta_decl
                 .and_then(|m| m.abi_version)
@@ -4418,9 +4465,20 @@ impl Compiler {
                 out.resize(out.len() + post_pad, 0u8);
             }
         }
+        let code_start = out.len();
         out.extend_from_slice(&code);
         // Optional debug: dump compiled image as hex for tests/debugging when requested.
         if cfg!(any(test, debug_assertions)) && std::env::var_os("IVM_COMPILER_DEBUG").is_some() {
+            let mut pairs: Vec<_> = func_start_offsets.iter().collect();
+            pairs.sort_by_key(|(_, off)| **off);
+            for (name, off) in pairs {
+                eprintln!(
+                    "[kotodama-compile] func {} @ 0x{:x} (code+0x{:x})",
+                    name,
+                    code_start + *off,
+                    off
+                );
+            }
             // Print first 64 bytes of header+lit, then first 64 bytes of code if available.
             use std::fmt::Write as _;
             let mut hex = String::new();
@@ -4937,45 +4995,65 @@ fn build_entrypoint_descriptors(
         hints_by_name.insert(&func.name, (&sets.reads, &sets.writes));
     }
 
-    typed
+    let build_descriptor =
+        |func: &semantic::TypedFunction, kind: EntryPointKind| -> EntrypointDescriptor {
+            let (mut reads, mut writes): (Vec<String>, Vec<String>) = if include_hints {
+                hints_by_name
+                    .get(func.name.as_str())
+                    .map(|(r, w)| {
+                        (
+                            r.iter().cloned().collect::<Vec<_>>(),
+                            w.iter().cloned().collect::<Vec<_>>(),
+                        )
+                    })
+                    .unwrap_or_else(|| (Vec::new(), Vec::new()))
+            } else {
+                (Vec::new(), Vec::new())
+            };
+            if include_hints && (reads.is_empty() || writes.is_empty()) {
+                let (fallback_reads, fallback_writes) =
+                    crate::kotodama::semantic::function_state_accesses(func);
+                if reads.is_empty() && !fallback_reads.is_empty() {
+                    reads = fallback_reads.iter().cloned().collect();
+                }
+                if writes.is_empty() && !fallback_writes.is_empty() {
+                    writes = fallback_writes.iter().cloned().collect();
+                }
+            }
+            EntrypointDescriptor {
+                name: func.name.clone(),
+                kind,
+                permission: func.modifiers.permission.clone(),
+                read_keys: reads,
+                write_keys: writes,
+            }
+        };
+
+    let mut entrypoints: Vec<EntrypointDescriptor> = typed
         .items
         .iter()
         .filter_map(|item| match item {
             TypedItem::Function(func) => {
                 let kind = entrypoint_kind_from_modifiers(&func.modifiers)?;
-                let (mut reads, mut writes): (Vec<String>, Vec<String>) = if include_hints {
-                    hints_by_name
-                        .get(func.name.as_str())
-                        .map(|(r, w)| {
-                            (
-                                r.iter().cloned().collect::<Vec<_>>(),
-                                w.iter().cloned().collect::<Vec<_>>(),
-                            )
-                        })
-                        .unwrap_or_else(|| (Vec::new(), Vec::new()))
-                } else {
-                    (Vec::new(), Vec::new())
-                };
-                if include_hints && (reads.is_empty() || writes.is_empty()) {
-                    let (fallback_reads, fallback_writes) =
-                        crate::kotodama::semantic::function_state_accesses(func);
-                    if reads.is_empty() && !fallback_reads.is_empty() {
-                        reads = fallback_reads.iter().cloned().collect();
-                    }
-                    if writes.is_empty() && !fallback_writes.is_empty() {
-                        writes = fallback_writes.iter().cloned().collect();
-                    }
-                }
-                Some(EntrypointDescriptor {
-                    name: func.name.clone(),
-                    kind,
-                    permission: func.modifiers.permission.clone(),
-                    read_keys: reads,
-                    write_keys: writes,
-                })
+                Some(build_descriptor(func, kind))
             }
         })
-        .collect()
+        .collect();
+
+    if entrypoints.is_empty() {
+        if let Some(func) = typed.items.iter().find_map(|item| match item {
+            TypedItem::Function(func)
+                if func.modifiers.kind == FunctionKind::Free && func.name == "main" =>
+            {
+                Some(func)
+            }
+            _ => None,
+        }) {
+            entrypoints.push(build_descriptor(func, EntryPointKind::Public));
+        }
+    }
+
+    entrypoints
 }
 
 fn entrypoint_kind_from_modifiers(modifiers: &FunctionModifiers) -> Option<EntryPointKind> {

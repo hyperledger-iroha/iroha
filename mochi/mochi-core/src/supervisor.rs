@@ -4730,17 +4730,17 @@ JSON
         let mut lane0 = toml::Table::new();
         lane0.insert("alias".into(), toml::Value::String("core".into()));
         lane0.insert("index".into(), toml::Value::Integer(0));
-        lane0.insert("dataspace".into(), toml::Value::String("global".into()));
+        lane0.insert("dataspace".into(), toml::Value::String("universal".into()));
         let mut lane1 = toml::Table::new();
         lane1.insert("alias".into(), toml::Value::String("governance".into()));
         lane1.insert("index".into(), toml::Value::Integer(1));
-        lane1.insert("dataspace".into(), toml::Value::String("global".into()));
+        lane1.insert("dataspace".into(), toml::Value::String("universal".into()));
         nexus.insert(
             "lane_catalog".into(),
             toml::Value::Array(vec![toml::Value::Table(lane0), toml::Value::Table(lane1)]),
         );
         let mut dataspace = toml::Table::new();
-        dataspace.insert("alias".into(), toml::Value::String("global".into()));
+        dataspace.insert("alias".into(), toml::Value::String("universal".into()));
         dataspace.insert("id".into(), toml::Value::Integer(0));
         nexus.insert(
             "dataspace_catalog".into(),

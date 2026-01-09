@@ -10914,7 +10914,7 @@ mod tests {
   "dataspaces":[
     {{
       "dataspace_id":0,
-      "dataspace_alias":"global",
+      "dataspace_alias":"universal",
       "accounts":["alice@global"]
     }},
     {{

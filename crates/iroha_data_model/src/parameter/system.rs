@@ -898,11 +898,12 @@ impl SumeragiParameters {
 
     /// Maximal amount of time it takes to commit a block
     #[cfg(feature = "transparent_api")]
-    pub fn pipeline_time(&self, view_change_index: usize, shift: usize) -> Duration {
-        let shifted_view_change_index = view_change_index.saturating_sub(shift);
+    pub fn pipeline_time(&self, view_change_index: u64, shift: usize) -> Duration {
+        let shifted_view_change_index = view_change_index.saturating_sub(shift as u64);
         self.block_time().saturating_add(
             self.commit_time().saturating_mul(
-                (shifted_view_change_index + 1)
+                shifted_view_change_index
+                    .saturating_add(1)
                     .try_into()
                     .unwrap_or(u32::MAX),
             ),

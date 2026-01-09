@@ -485,7 +485,7 @@ use crate::{
         smallset::sort_dedup_u32_in_place,
     },
     prelude::*,
-    queue::{evaluate_policy, routing_ledger},
+    queue::{evaluate_policy_with_catalog, routing_ledger},
     state::{State, StateBlock, compute_confidential_feature_digest},
     sumeragi::{VotingBlock, network_topology::Topology, status},
     tx::{AcceptTransactionFail, LaneAssignment, enforce_fraud_policy},
@@ -1407,8 +1407,6 @@ pub enum BlockValidationError {
     },
     /// Error during block signatures check
     SignatureVerification(#[from] SignatureVerificationError),
-    /// Received view change index is too large
-    ViewChangeIndexTooLarge,
     /// Invalid genesis block: {0}
     InvalidGenesis(#[from] InvalidGenesisError),
     /// Block's creation time is earlier than that of the previous block
@@ -1717,7 +1715,7 @@ mod pending {
         fn make_header(
             &self,
             prev_block: Option<&SignedBlock>,
-            view_change_index: usize,
+            view_change_index: u64,
         ) -> BlockHeader {
             let prev_block_time =
                 prev_block.map_or(Duration::ZERO, |block| block.header().creation_time());
@@ -1766,10 +1764,6 @@ mod pending {
                 .as_millis()
                 .try_into()
                 .expect("Time should fit into u64");
-            let view_change_index: u32 = view_change_index
-                .try_into()
-                .expect("View change index should fit into u32");
-
             BlockHeader::new(
                 height,
                 prev_block_hash,
@@ -1785,7 +1779,7 @@ mod pending {
         /// Upon executing this method current timestamp is stored in the block header.
         pub fn chain(
             self,
-            view_change_index: usize,
+            view_change_index: u64,
             latest_block: Option<&SignedBlock>,
         ) -> BlockBuilder<Chained> {
             let mut header = self.make_header(latest_block, view_change_index);
@@ -4676,6 +4670,7 @@ pub(crate) mod valid {
             #[cfg(not(feature = "telemetry"))]
             let fraud_telemetry: Option<&()> = None;
             let dataspace_catalog = &state_block.nexus.dataspace_catalog;
+            let lane_catalog = &state_block.nexus.lane_catalog;
             let routing_policy = &state_block.nexus.routing_policy;
             let fraud_cfg = &state_block.fraud_monitoring;
             #[cfg(feature = "telemetry")]
@@ -4698,7 +4693,12 @@ pub(crate) mod valid {
                     if !is_heartbeat {
                         let accepted =
                             crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(*tx));
-                        let routing_decision = evaluate_policy(routing_policy, &accepted);
+                        let routing_decision = evaluate_policy_with_catalog(
+                            routing_policy,
+                            lane_catalog,
+                            dataspace_catalog,
+                            &accepted,
+                        );
                         let lane_assignment = LaneAssignment {
                             lane_id: routing_decision.lane_id,
                             dataspace_id: routing_decision.dataspace_id,
@@ -5283,7 +5283,12 @@ pub(crate) mod valid {
                 .map(|tx| {
                     let accepted =
                         crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(*tx));
-                    evaluate_policy(&state_block.nexus.routing_policy, &accepted)
+                    evaluate_policy_with_catalog(
+                        &state_block.nexus.routing_policy,
+                        &state_block.nexus.lane_catalog,
+                        &state_block.nexus.dataspace_catalog,
+                        &accepted,
+                    )
                 })
                 .collect();
             let mut lane_summaries: BTreeMap<LaneId, LaneSummary> = BTreeMap::new();
@@ -8778,8 +8783,7 @@ pub(crate) mod valid {
         // Create a signed block with only leader signature
         let unverified_block = BlockBuilder::new(Vec::new())
             .chain(
-                usize::try_from(topology.view_change_index())
-                    .expect("view change index fits into usize"),
+                topology.view_change_index(),
                 state.view().latest_block().as_deref(),
             )
             .sign(kp1.private_key())
@@ -10480,7 +10484,6 @@ mod event {
             },
             BlockValidationError::TopologyMismatch { .. } => Reason::TopologyMismatch,
             BlockValidationError::SignatureVerification(e) => map_sig_err_to_reason(e),
-            BlockValidationError::ViewChangeIndexTooLarge => Reason::ViewChangeIndexTooLarge,
             BlockValidationError::InvalidGenesis(_) => Reason::InvalidGenesis,
             BlockValidationError::BlockInThePast => Reason::BlockInThePast,
             BlockValidationError::BlockInTheFuture => Reason::BlockInTheFuture,

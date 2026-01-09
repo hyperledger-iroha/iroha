@@ -131,9 +131,10 @@ The VM divides memory into a set of regions. Code is loaded starting at
 `0x0000_0000` and is marked read/execute only.  The heap begins at
 `0x0010_0000` and can dynamically grow (via `SYSCALL_GROW_HEAP`) beyond its
 initial 64&nbsp;KB as allocations are requested through `SYSCALL_ALLOC`.
-Two read/write buffers provide input and output space at `0x0020_0000` and
-`0x0020_8000` respectively.  Finally a 64&nbsp;KB stack begins at
-`0x0030_0000`.  All loads and stores are checked for permissions and proper
+The read-only input buffer begins at `0x0020_0000` (64&nbsp;KB) and the
+read/write output buffer begins at `0x0021_0000` (32&nbsp;KB).  Finally a
+4&nbsp;MB stack begins at `0x0030_0000`.  All loads and stores are checked
+for permissions and proper
 alignment by [`Memory`](src/memory.rs).  The entire memory image is committed
 via a Merkle tree; pending writes are batched until `commit()` re-hashes only
 the dirty subtrees, enabling succinct ZK proofs of state without touching

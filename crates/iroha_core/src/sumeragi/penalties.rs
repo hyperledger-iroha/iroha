@@ -826,7 +826,10 @@ mod tests {
         };
         let checkpoint = ValidatorSetCheckpoint::new(
             height,
+            commit_cert.view,
             block_hash,
+            commit_cert.parent_state_root,
+            commit_cert.post_state_root,
             roster,
             Vec::new(),
             Vec::new(),
@@ -1615,7 +1618,10 @@ mod tests {
         };
         let checkpoint = ValidatorSetCheckpoint::new(
             height,
+            commit_cert.view,
             block_hash_b,
+            commit_cert.parent_state_root,
+            commit_cert.post_state_root,
             roster.clone(),
             Vec::new(),
             Vec::new(),

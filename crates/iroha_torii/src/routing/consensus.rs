@@ -1596,6 +1596,10 @@ fn nexus_fee_snapshot_value(fee: &sumeragi::status::NexusFeeSnapshot) -> Value {
         json_entry("charged_via_payer_total", fee.charged_via_payer_total),
         json_entry("charged_via_sponsor_total", fee.charged_via_sponsor_total),
         json_entry("sponsor_disabled_total", fee.sponsor_disabled_total),
+        json_entry(
+            "sponsor_unauthorized_total",
+            fee.sponsor_unauthorized_total,
+        ),
         json_entry("sponsor_cap_exceeded_total", fee.sponsor_cap_exceeded_total),
         json_entry("config_errors_total", fee.config_errors_total),
         json_entry("transfer_failures_total", fee.transfer_failures_total),
@@ -2830,6 +2834,7 @@ mod status_tests {
             charged_via_payer_total: 1,
             charged_via_sponsor_total: 1,
             sponsor_disabled_total: 1,
+            sponsor_unauthorized_total: 1,
             sponsor_cap_exceeded_total: 1,
             config_errors_total: 1,
             transfer_failures_total: 1,
@@ -2861,6 +2866,12 @@ mod status_tests {
         assert_eq!(
             fee_json
                 .get("charged_via_sponsor_total")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            fee_json
+                .get("sponsor_unauthorized_total")
                 .and_then(Value::as_u64),
             Some(1)
         );

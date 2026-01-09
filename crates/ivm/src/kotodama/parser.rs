@@ -607,8 +607,8 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::LBrace)?;
         let mut fields = Vec::new();
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
-            // Allow stray semicolons
-            if self.peek(TokenKind::Semicolon) {
+            // Allow stray separators.
+            if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
                 self.bump();
                 continue;
             }
@@ -617,7 +617,7 @@ impl<'a> Parser<'a> {
             self.expect(TokenKind::Colon)?;
             let ty = self.parse_type_expr()?;
             fields.push((field_name, ty));
-            if self.peek(TokenKind::Semicolon) {
+            if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
                 self.bump();
             }
         }
@@ -971,6 +971,39 @@ impl<'a> Parser<'a> {
                 self.bump();
                 Ok(self.inc_statement(name))
             } else {
+                let save = self.pos;
+                if let Ok(target) = self.try_parse_lvalue_expr() {
+                    if self.peek(TokenKind::Equal)
+                        || self.peek(TokenKind::PlusEqual)
+                        || self.peek(TokenKind::MinusEqual)
+                        || self.peek(TokenKind::StarEqual)
+                        || self.peek(TokenKind::SlashEqual)
+                        || self.peek(TokenKind::PercentEqual)
+                    {
+                        let op_tok = self.bump().kind.clone();
+                        let rhs = self.parse_expr()?;
+                        let op = match op_tok {
+                            TokenKind::Equal => AssignOp::Set,
+                            TokenKind::PlusEqual => AssignOp::Add,
+                            TokenKind::MinusEqual => AssignOp::Sub,
+                            TokenKind::StarEqual => AssignOp::Mul,
+                            TokenKind::SlashEqual => AssignOp::Div,
+                            TokenKind::PercentEqual => AssignOp::Mod,
+                            _ => unreachable!(),
+                        };
+                        return Ok(match (target, op) {
+                            (Expr::Ident(name), AssignOp::Set) => {
+                                Statement::Assign { name, value: rhs }
+                            }
+                            (t, op) => Statement::AssignExpr {
+                                target: t,
+                                op,
+                                value: rhs,
+                            },
+                        });
+                    }
+                }
+                self.pos = save;
                 let expr = self.parse_expr()?;
                 Ok(Statement::Expr(expr))
             }
@@ -1406,7 +1439,24 @@ impl<'a> Parser<'a> {
         loop {
             if self.peek(TokenKind::Dot) {
                 self.bump();
-                let field = self.expect_ident()?;
+                let field = if let Some(Token {
+                    kind: TokenKind::Ident(s),
+                    ..
+                }) = self.tokens.get(self.pos)
+                {
+                    let s = s.clone();
+                    self.bump();
+                    s
+                } else if let Some(token) = self.tokens.get(self.pos).cloned()
+                    && let TokenKind::Number(n) = token.kind.clone()
+                {
+                    self.bump();
+                    let index = self.number_to_usize(&token, n, "tuple index")?;
+                    index.to_string()
+                } else {
+                    let tok = self.bump();
+                    return Err(self.error(tok, "identifier or tuple index"));
+                };
                 expr = Expr::Member {
                     object: Box::new(expr),
                     field,

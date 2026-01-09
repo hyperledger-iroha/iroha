@@ -1,7 +1,7 @@
 //! Linear-scan register allocator and stack frame layout for Kotodama IR.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use super::ir::{Function, Instr, Temp, Terminator};
+use super::ir::{BasicBlock, Function, Instr, Label, Temp, Terminator};
 
 /// Result of register allocation for a function.
 #[derive(Debug, PartialEq)]
@@ -36,13 +36,33 @@ struct Interval {
 /// Allocate registers for a function using a single-pass linear scan.
 pub fn allocate(func: &Function) -> Allocation {
     let mut intervals: HashMap<Temp, Interval> = HashMap::new();
+    let mut tuple_defs: HashMap<Temp, Vec<Temp>> = HashMap::new();
     let mut position: usize = 0;
+    let block_count = func.blocks.len();
+    let mut label_to_idx: HashMap<Label, usize> = HashMap::new();
+    for (idx, block) in func.blocks.iter().enumerate() {
+        label_to_idx.insert(block.label, idx);
+    }
+    let mut block_uses: Vec<HashSet<Temp>> = Vec::with_capacity(block_count);
+    let mut block_defs: Vec<HashSet<Temp>> = Vec::with_capacity(block_count);
+    let mut block_succs: Vec<Vec<usize>> = Vec::with_capacity(block_count);
+    for block in &func.blocks {
+        let (uses, defs) = block_uses_defs(block);
+        block_uses.push(uses);
+        block_defs.push(defs);
+        block_succs.push(block_successors(block, &label_to_idx));
+    }
+    let (live_in, _live_out) = compute_liveness(&block_uses, &block_defs, &block_succs);
+    let mut block_end_pos: Vec<usize> = Vec::with_capacity(block_count);
 
     for block in &func.blocks {
         for instr in &block.instrs {
             visit_instr_uses(instr, |temp| add_use(&mut intervals, temp, position));
             if let Some(dest) = dest_temp(instr) {
                 add_def(&mut intervals, dest, position);
+            }
+            if let Instr::TuplePack { dest, items } = instr {
+                tuple_defs.insert(*dest, items.clone());
             }
             if let Instr::MapLoadPair {
                 dest_key, dest_val, ..
@@ -61,8 +81,33 @@ pub fn allocate(func: &Function) -> Allocation {
         visit_terminator_uses(&block.terminator, |temp| {
             add_use(&mut intervals, temp, position)
         });
+        block_end_pos.push(position);
         position = position.saturating_add(1);
     }
+
+    for (block_idx, succs) in block_succs.iter().enumerate() {
+        for &succ in succs {
+            if succ <= block_idx {
+                let end_pos = block_end_pos[block_idx];
+                for temp in &live_in[succ] {
+                    intervals
+                        .entry(*temp)
+                        .and_modify(|iv| {
+                            if iv.end < end_pos {
+                                iv.end = end_pos;
+                            }
+                        })
+                        .or_insert(Interval {
+                            temp: *temp,
+                            start: end_pos,
+                            end: end_pos,
+                        });
+                }
+            }
+        }
+    }
+
+    extend_tuple_intervals(&mut intervals, &tuple_defs);
 
     let mut interval_list: Vec<Interval> = intervals.values().copied().collect();
     interval_list.sort_by_key(|iv| (iv.start, iv.temp.0));
@@ -136,6 +181,50 @@ pub fn allocate(func: &Function) -> Allocation {
     allocation
 }
 
+fn extend_tuple_intervals(
+    intervals: &mut HashMap<Temp, Interval>,
+    tuple_defs: &HashMap<Temp, Vec<Temp>>,
+) {
+    fn extend_tuple_items(
+        tuple: Temp,
+        tuple_end: usize,
+        intervals: &mut HashMap<Temp, Interval>,
+        tuple_defs: &HashMap<Temp, Vec<Temp>>,
+        visiting: &mut HashSet<Temp>,
+    ) {
+        if !visiting.insert(tuple) {
+            return;
+        }
+        if let Some(items) = tuple_defs.get(&tuple) {
+            for item in items {
+                intervals
+                    .entry(*item)
+                    .and_modify(|iv| {
+                        if iv.end < tuple_end {
+                            iv.end = tuple_end;
+                        }
+                    })
+                    .or_insert(Interval {
+                        temp: *item,
+                        start: tuple_end,
+                        end: tuple_end,
+                    });
+                extend_tuple_items(*item, tuple_end, intervals, tuple_defs, visiting);
+            }
+        }
+        visiting.remove(&tuple);
+    }
+
+    let mut visiting: HashSet<Temp> = HashSet::new();
+    let tuples: Vec<(Temp, usize)> = tuple_defs
+        .keys()
+        .filter_map(|tuple| intervals.get(tuple).map(|iv| (*tuple, iv.end)))
+        .collect();
+    for (tuple, tuple_end) in tuples {
+        extend_tuple_items(tuple, tuple_end, intervals, tuple_defs, &mut visiting);
+    }
+}
+
 fn add_def(intervals: &mut HashMap<Temp, Interval>, temp: Temp, pos: usize) {
     intervals
         .entry(temp)
@@ -168,13 +257,106 @@ fn expire_old_intervals(
 ) {
     let mut idx = 0;
     while idx < active.len() {
-        if active[idx].0 <= current_start {
+        if active[idx].0 < current_start {
             free_regs.push(active[idx].2);
             active.remove(idx);
         } else {
             idx += 1;
         }
     }
+}
+
+fn block_uses_defs(block: &BasicBlock) -> (HashSet<Temp>, HashSet<Temp>) {
+    let mut uses = HashSet::new();
+    let mut defs = HashSet::new();
+    for instr in &block.instrs {
+        visit_instr_uses(instr, |temp| {
+            if !defs.contains(&temp) {
+                uses.insert(temp);
+            }
+        });
+        if let Some(dest) = dest_temp(instr) {
+            defs.insert(dest);
+        }
+        match instr {
+            Instr::MapLoadPair {
+                dest_key, dest_val, ..
+            } => {
+                defs.insert(*dest_key);
+                defs.insert(*dest_val);
+            }
+            Instr::CallMulti { dests, .. } => {
+                for dest in dests {
+                    defs.insert(*dest);
+                }
+            }
+            _ => {}
+        }
+    }
+    visit_terminator_uses(&block.terminator, |temp| {
+        if !defs.contains(&temp) {
+            uses.insert(temp);
+        }
+    });
+    (uses, defs)
+}
+
+fn block_successors(
+    block: &BasicBlock,
+    label_to_idx: &HashMap<Label, usize>,
+) -> Vec<usize> {
+    match block.terminator {
+        Terminator::Jump(label) => label_to_idx.get(&label).copied().into_iter().collect(),
+        Terminator::Branch {
+            then_bb,
+            else_bb,
+            ..
+        } => {
+            let mut out = Vec::with_capacity(2);
+            if let Some(idx) = label_to_idx.get(&then_bb).copied() {
+                out.push(idx);
+            }
+            if let Some(idx) = label_to_idx.get(&else_bb).copied() {
+                out.push(idx);
+            }
+            out
+        }
+        Terminator::Return(_)
+        | Terminator::Return2(_, _)
+        | Terminator::ReturnN(_) => Vec::new(),
+    }
+}
+
+fn compute_liveness(
+    block_uses: &[HashSet<Temp>],
+    block_defs: &[HashSet<Temp>],
+    block_succs: &[Vec<usize>],
+) -> (Vec<HashSet<Temp>>, Vec<HashSet<Temp>>) {
+    let block_count = block_uses.len();
+    let mut live_in: Vec<HashSet<Temp>> = vec![HashSet::new(); block_count];
+    let mut live_out: Vec<HashSet<Temp>> = vec![HashSet::new(); block_count];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for idx in (0..block_count).rev() {
+            let mut out = HashSet::new();
+            for &succ in &block_succs[idx] {
+                out.extend(live_in[succ].iter().copied());
+            }
+            let mut in_set = block_uses[idx].clone();
+            for temp in out.iter() {
+                if !block_defs[idx].contains(temp) {
+                    in_set.insert(*temp);
+                }
+            }
+            if out != live_out[idx] || in_set != live_in[idx] {
+                live_out[idx] = out;
+                live_in[idx] = in_set;
+                changed = true;
+            }
+        }
+    }
+    (live_in, live_out)
 }
 
 fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {

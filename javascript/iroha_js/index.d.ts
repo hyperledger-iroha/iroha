@@ -4474,7 +4474,7 @@ export interface ContractCallRequest {
   entrypoint?: string | null;
   payload?: unknown;
   gasAssetId?: string | null;
-  gasLimit?: NumericLike | null;
+  gasLimit: NumericLike;
 }
 
 export interface ContractCallResponse {
