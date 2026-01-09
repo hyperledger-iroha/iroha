@@ -25,7 +25,7 @@ translation_last_reviewed: 2026-01-08
   و`liquidity_profile` (`tier1`, `tier2`, او `tier3`)، و`volatility_class` (`stable`, `elevated`,
   `dislocated`). تغذي هذه الاعلام موجّه التسوية كي يطابق تسعير XOR الناتج TWAP القياسي و
   طبقة haircut الخاصة بالـ lane.
-- يجب ان تتضمن معاملات IVM بيانات وصفية `gas_limit` (`u64`) للحد من التعرض للرسوم. تتطلب نقطة النهاية
+- يجب ان تتضمن معاملات IVM بيانات وصفية `gas_limit` (`u64`, > 0) للحد من التعرض للرسوم. تتطلب نقطة النهاية
   `/v1/contracts/call` وجود `gas_limit` صراحة، وتُرفض القيم غير الصحيحة.
 - عند ضبط البيانات الوصفية `fee_sponsor`، يجب على الراعي منح
   `CanUseFeeSponsor { sponsor }` للجهة المستدعية. تُرفض محاولات الرعاية غير المصرح بها ويجري تسجيلها.

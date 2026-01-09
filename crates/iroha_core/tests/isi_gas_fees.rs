@@ -332,6 +332,51 @@ fn gas_limit_metadata_invalid_rejects() {
 }
 
 #[test]
+fn gas_limit_metadata_zero_rejects() {
+    let (alice_id, alice_kp) = gen_account_in("wonderland");
+    let dom: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice_id);
+    let alice: Account = Account::new(alice_id.clone()).build(&alice_id);
+    let world = World::with([dom], [alice], []);
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = query::store::LiveQueryStore::start_test();
+    let state = new_state(world, kura, query_handle);
+
+    let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
+        alice_id.clone(),
+        "k".parse().unwrap(),
+        iroha_primitives::json::Json::new("v"),
+    )
+    .into();
+    let exec = Executable::from(core::iter::once(instruction));
+
+    let mut md = Metadata::default();
+    md.insert(
+        "gas_limit".parse().unwrap(),
+        iroha_primitives::json::Json::new(0_u64),
+    );
+
+    let chain: ChainId = "test-chain".parse().unwrap();
+    let tx = iroha_data_model::transaction::TransactionBuilder::new(chain, alice_id.clone())
+        .with_executable(exec)
+        .with_metadata(md)
+        .sign(alice_kp.private_key());
+
+    let executor = Executor::default();
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(block_header);
+    let mut state_tx = block.transaction();
+    let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
+    let res = executor.execute_transaction(&mut state_tx, &alice_id, tx, &mut ivm_cache);
+    match res {
+        Err(ValidationFail::NotPermitted(msg)) => assert!(
+            msg.contains("gas_limit must be positive"),
+            "unexpected rejection: {msg}"
+        ),
+        other => panic!("expected invalid gas_limit rejection, got {other:?}"),
+    }
+}
+
+#[test]
 fn ivm_gas_fees_record_settlement_receipt() {
     // 1) Minimal world: domains, accounts, asset definition, payer balance, tech account
     let (alice_id, alice_kp) = gen_account_in("wonderland");

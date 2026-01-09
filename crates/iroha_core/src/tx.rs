@@ -873,11 +873,18 @@ impl<'tx> AcceptedTransaction<'tx> {
                         },
                     ));
                 };
-                raw_gas_limit.try_into_any_norito::<u64>().map_err(|err| {
+                let gas_limit = raw_gas_limit.try_into_any_norito::<u64>().map_err(|err| {
                     AcceptTransactionFail::TransactionLimit(TransactionLimitError {
                         reason: format!("invalid gas_limit metadata: {err}"),
                     })
                 })?;
+                if gas_limit == 0 {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: "gas_limit must be positive".into(),
+                        },
+                    ));
+                }
 
                 let ivm_bytecode_size_limit = limits.ivm_bytecode_size().get();
                 let bytecode_size = u64::try_from(smart_contract.size_bytes()).unwrap_or(u64::MAX);
@@ -4786,6 +4793,38 @@ pub mod tests {
             AcceptTransactionFail::TransactionLimit(limit) => {
                 assert!(
                     limit.reason.contains("missing gas_limit"),
+                    "unexpected reason: {}",
+                    limit.reason
+                );
+            }
+            other => panic!("Expected TransactionLimit failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ivm_zero_gas_limit_rejected_at_admission() {
+        use std::time::Duration;
+
+        use iroha_data_model::transaction::{Executable, TransactionBuilder};
+
+        let chain: ChainId = "chain".parse().unwrap();
+        let (authority_id, kp) = gen_account_in("wonderland");
+        let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
+        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
+            .with_metadata(metadata_with_gas_limit(0))
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+            .sign(kp.private_key());
+
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let limits = TransactionParameters::default();
+        let err =
+            AcceptedTransaction::validate(&tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
+                .expect_err("zero gas_limit should be rejected");
+
+        match err {
+            AcceptTransactionFail::TransactionLimit(limit) => {
+                assert!(
+                    limit.reason.contains("gas_limit must be positive"),
                     "unexpected reason: {}",
                     limit.reason
                 );

@@ -18,6 +18,7 @@ BUILD_DIR="$ROOT_DIR/build/norito_bridge"
 
 LIB_CRATE_NAME="connect_norito_bridge"
 FRAMEWORK_NAME="NoritoBridge"
+FRAMEWORK_BUNDLE_ID="${FRAMEWORK_BUNDLE_ID:-org.hyperledger.iroha.NoritoBridge}"
 
 : "${IPHONEOS_DEPLOYMENT_TARGET:=19.0}"
 : "${IPHONESIMULATOR_DEPLOYMENT_TARGET:=19.0}"
@@ -51,6 +52,24 @@ LIB_MAC_DYLIB="$ROOT_DIR/target/$MAC_ARM_TRIPLE/release/lib${LIB_CRATE_NAME}.dyl
 if [[ ! -f "$LIB_DEV" || ! -f "$LIB_SIM_ARM" || ! -f "$LIB_SIM_X64" || ! -f "$LIB_MAC_ARM" || ! -f "$LIB_MAC_DYLIB" ]]; then
   echo "[-] Missing built libraries. Did the cargo builds succeed?" >&2
   exit 1
+fi
+
+BRIDGE_VERSION="${NORITO_BRIDGE_VERSION:-}"
+if [[ -z "${BRIDGE_VERSION}" ]]; then
+  VERSION_SOURCE="$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
+  if command -v rg >/dev/null 2>&1; then
+    BRIDGE_VERSION=$(rg -n "expectedVersion" "$VERSION_SOURCE" | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
+  else
+    BRIDGE_VERSION=$(grep -m1 "expectedVersion" "$VERSION_SOURCE" | sed -E 's/.*"([^"]+)".*/\1/')
+  fi
+fi
+if [[ -z "${BRIDGE_VERSION}" ]]; then
+  echo "[-] Unable to determine NoritoBridge version for artifact manifest" >&2
+  exit 1
+fi
+BRIDGE_BUNDLE_VERSION="${BRIDGE_VERSION%%-*}"
+if [[ -z "$BRIDGE_BUNDLE_VERSION" ]]; then
+  BRIDGE_BUNDLE_VERSION="1"
 fi
 
 rm -rf "$BUILD_DIR" "$OUT_DIR/NoritoBridge.xcframework"
@@ -89,6 +108,43 @@ cp "$CRATE_DIR/module.modulemap.template" "$FW_DEV/Modules/module.modulemap"
 cp "$CRATE_DIR/module.modulemap.template" "$FW_SIM/Modules/module.modulemap"
 cp "$CRATE_DIR/module.modulemap.template" "$FW_MAC/Modules/module.modulemap"
 
+write_framework_info_plist() {
+  local framework_path="$1"
+  local platform="$2"
+  cat > "${framework_path}/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>${FRAMEWORK_NAME}</string>
+  <key>CFBundleIdentifier</key>
+  <string>${FRAMEWORK_BUNDLE_ID}</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>${FRAMEWORK_NAME}</string>
+  <key>CFBundlePackageType</key>
+  <string>FMWK</string>
+  <key>CFBundleShortVersionString</key>
+  <string>${BRIDGE_VERSION}</string>
+  <key>CFBundleVersion</key>
+  <string>${BRIDGE_BUNDLE_VERSION}</string>
+  <key>CFBundleSupportedPlatforms</key>
+  <array>
+    <string>${platform}</string>
+  </array>
+</dict>
+</plist>
+EOF
+}
+
+write_framework_info_plist "$FW_DEV" "iPhoneOS"
+write_framework_info_plist "$FW_SIM" "iPhoneSimulator"
+write_framework_info_plist "$FW_MAC" "MacOSX"
+
 echo "[+] Creating XCFramework" >&2
 xcodebuild -create-xcframework \
   -framework "$FW_DEV" \
@@ -97,20 +153,6 @@ xcodebuild -create-xcframework \
   -output "$OUT_DIR/${FRAMEWORK_NAME}.xcframework"
 
 echo "[+] XCFramework created: $OUT_DIR/${FRAMEWORK_NAME}.xcframework" >&2
-
-BRIDGE_VERSION="${NORITO_BRIDGE_VERSION:-}"
-if [[ -z "${BRIDGE_VERSION}" ]]; then
-  VERSION_SOURCE="$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
-  if command -v rg >/dev/null 2>&1; then
-    BRIDGE_VERSION=$(rg -n "expectedVersion" "$VERSION_SOURCE" | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
-  else
-    BRIDGE_VERSION=$(grep -m1 "expectedVersion" "$VERSION_SOURCE" | sed -E 's/.*"([^"]+)".*/\1/')
-  fi
-fi
-if [[ -z "${BRIDGE_VERSION}" ]]; then
-  echo "[-] Unable to determine NoritoBridge version for artifact manifest" >&2
-  exit 1
-fi
 
 MAC_BIN="$OUT_DIR/${FRAMEWORK_NAME}.xcframework/macos-arm64/${FRAMEWORK_NAME}.framework/${FRAMEWORK_NAME}"
 IOS_BIN="$OUT_DIR/${FRAMEWORK_NAME}.xcframework/ios-arm64/${FRAMEWORK_NAME}.framework/${FRAMEWORK_NAME}"

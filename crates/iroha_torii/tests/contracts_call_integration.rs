@@ -165,6 +165,27 @@ async fn contracts_call_enqueues_transaction() {
     let missing_limit_resp = app.clone().oneshot(missing_limit_req).await.unwrap();
     assert_eq!(missing_limit_resp.status(), http::StatusCode::BAD_REQUEST);
 
+    let zero_limit_body = iroha_torii::test_utils::contract_call_request_json(
+        &creds.account,
+        &creds.private_key,
+        "apps",
+        "calc.v1",
+        iroha_torii::test_utils::ContractCallOptions {
+            entrypoint: Some("main"),
+            payload: None,
+            gas_asset_id: None,
+            gas_limit: 0,
+        },
+    );
+    let zero_limit_req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/call")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(zero_limit_body))
+        .unwrap();
+    let zero_limit_resp = app.clone().oneshot(zero_limit_req).await.unwrap();
+    assert_eq!(zero_limit_resp.status(), http::StatusCode::BAD_REQUEST);
+
     let payload = norito::json!({ "note": "integration-test" });
     let call_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,

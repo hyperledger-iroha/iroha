@@ -38,6 +38,7 @@ use iroha_executor_data_model::{
 };
 use iroha_logger::{debug, trace, warn};
 use iroha_primitives::numeric::Numeric;
+use ivm::runtime::IvmConfig;
 use ivm::{IVM, Memory, VMError};
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -404,9 +405,15 @@ pub(crate) fn parse_gas_limit(metadata: &Metadata) -> Result<Option<u64>, Valida
     let Some(raw) = metadata.get("gas_limit") else {
         return Ok(None);
     };
-    raw.try_into_any_norito::<u64>()
-        .map(Some)
-        .map_err(|err| ValidationFail::NotPermitted(format!("invalid gas_limit metadata: {err}")))
+    let value = raw.try_into_any_norito::<u64>().map_err(|err| {
+        ValidationFail::NotPermitted(format!("invalid gas_limit metadata: {err}"))
+    })?;
+    if value == 0 {
+        return Err(ValidationFail::NotPermitted(
+            "gas_limit must be positive".to_owned(),
+        ));
+    }
+    Ok(Some(value))
 }
 
 fn parse_executor_additional_fuel(metadata: &Metadata) -> Result<u64, ValidationFail> {
@@ -1152,8 +1159,22 @@ impl Executor {
                 // then apply them via the standard executor logic.
                 use crate::smartcontracts::ivm::host::CoreHost as CoreCoreHost;
                 // Set gas limit per transaction (payer-provided), clamped to remaining block budget.
+                // Read gas_limit metadata (payer's cap) captured before moving transaction
+                let gas_limit_md = gas_limit_md.ok_or_else(|| {
+                    ValidationFail::NotPermitted(
+                        "missing gas_limit in transaction metadata".to_owned(),
+                    )
+                })?;
+                let block_remaining = if state_transaction.gas_limit_per_block == 0 {
+                    u64::MAX
+                } else {
+                    state_transaction
+                        .gas_limit_per_block
+                        .saturating_sub(state_transaction.gas_used_in_block_so_far)
+                };
+                let effective_limit = gas_limit_md.min(block_remaining);
                 let mut runtime = ivm_cache
-                    .take_or_create_cached_runtime(bytes.as_ref())
+                    .take_or_create_cached_runtime(bytes.as_ref(), effective_limit)
                     .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
                 // Attach host with a snapshot of known accounts for vendor helpers when present.
                 let accounts = Arc::new(
@@ -1189,16 +1210,6 @@ impl Executor {
                     host.set_zk_roots_snapshot(snap);
                 }
                 runtime.vm.set_host(host);
-                // Read gas_limit metadata (payer's cap) captured before moving transaction
-                let gas_limit_md = gas_limit_md.ok_or_else(|| {
-                    ValidationFail::NotPermitted(
-                        "missing gas_limit in transaction metadata".to_owned(),
-                    )
-                })?;
-                let block_remaining = state_transaction
-                    .gas_limit_per_block
-                    .saturating_sub(state_transaction.gas_used_in_block_so_far);
-                let effective_limit = gas_limit_md.min(block_remaining);
                 runtime.vm.set_gas_limit(effective_limit);
                 if let Err(err) = runtime.vm.run() {
                     return Err(crate::smartcontracts::ivm::map_vm_error_to_validation(err));
@@ -1409,7 +1420,7 @@ impl Executor {
                 profile,
             ),
             Self::UserProvided(loaded_executor) => dispatch_instruction_with_ivm(
-                &loaded_executor.ivm,
+                loaded_executor,
                 state_transaction,
                 authority,
                 instruction,
@@ -1701,12 +1712,8 @@ impl Executor {
                 };
 
                 let gas_limit = state_ro.world().parameters().executor().fuel.get();
-                let report = run_executor_validation(
-                    &loaded_executor.ivm,
-                    &payload,
-                    query_label,
-                    gas_limit,
-                )?;
+                let report =
+                    run_executor_validation(loaded_executor, &payload, query_label, gas_limit)?;
                 match report.verdict {
                     Ok(()) => Ok(()),
                     Err(err) => {
@@ -1760,7 +1767,7 @@ impl Executor {
             .executor()
             .fuel
             .get();
-        let maybe_data_model = run_executor_migration(&loaded_executor.ivm, &context, gas_limit)
+        let maybe_data_model = run_executor_migration(&loaded_executor, &context, gas_limit)
             .map_err(map_migration_fail_to_vm_error)?;
         if let Some(data_model) = maybe_data_model {
             debug!("executor migrate entrypoint supplied a new data model");
@@ -1780,7 +1787,7 @@ struct ExecutorValidationReport {
 }
 
 fn run_executor_validation<T>(
-    ivm: &Arc<Mutex<IVM>>,
+    executor: &LoadedExecutor,
     payload: &ValidatePayload<T>,
     verdict_context: &str,
     gas_limit: u64,
@@ -1788,10 +1795,9 @@ fn run_executor_validation<T>(
 where
     ValidatePayload<T>: Encode,
 {
-    let mut ivm = {
-        let template = ivm.lock().expect("executor template poisoned");
-        template.clone()
-    };
+    let mut ivm = executor
+        .clone_runtime_for_gas_limit(gas_limit)
+        .map_err(|err| ValidationFail::InternalError(err.to_string()))?;
 
     let len_size = core::mem::size_of::<usize>();
     let payload_bytes = payload.encode();
@@ -1871,14 +1877,13 @@ enum MigrationUnitPayload {
 }
 
 fn run_executor_migration(
-    ivm: &Arc<Mutex<IVM>>,
+    executor: &LoadedExecutor,
     context: &ExecutorContext,
     gas_limit: u64,
 ) -> Result<Option<ExecutorDataModel>, ValidationFail> {
-    let mut ivm = {
-        let template = ivm.lock().expect("executor template poisoned");
-        template.clone()
-    };
+    let mut ivm = executor
+        .clone_runtime_for_gas_limit(gas_limit)
+        .map_err(|err| ValidationFail::InternalError(err.to_string()))?;
 
     let len_size = core::mem::size_of::<usize>();
     let payload_bytes = context.encode();
@@ -1993,7 +1998,7 @@ fn map_migration_fail_to_vm_error(fail: ValidationFail) -> VMError {
 }
 
 fn dispatch_instruction_with_ivm(
-    ivm: &Arc<Mutex<IVM>>,
+    executor: &LoadedExecutor,
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
     instruction: InstructionBox,
@@ -2024,7 +2029,7 @@ fn dispatch_instruction_with_ivm(
     let gas_limit = state_transaction
         .executor_fuel_remaining
         .unwrap_or(base_fuel);
-    let report = run_executor_validation(ivm, &payload, instruction_id, gas_limit)?;
+    let report = run_executor_validation(executor, &payload, instruction_id, gas_limit)?;
     if let Some(remaining) = state_transaction.executor_fuel_remaining.as_mut() {
         *remaining = remaining.saturating_sub(report.gas_used);
     }
@@ -2218,24 +2223,50 @@ fn execute_wat_embedded_instructions(
 
 /// [`Executor`] with cached [`IVM`] for execution.
 #[derive(Debug, Clone)]
-#[debug("LoadedExecutor {{ ivm: <IVM> }}")]
+#[debug("LoadedExecutor {{ runtime: <IVM> }}")]
 pub struct LoadedExecutor {
-    ivm: Arc<Mutex<IVM>>,
+    runtime: Arc<Mutex<ExecutorRuntime>>,
     /// Arc is needed so cloning of executor will be fast.
     /// See [`crate::tx::TransactionExecutor::validate_with_runtime_executor`].
     raw_executor: Arc<data_model_executor::Executor>,
 }
 
+struct ExecutorRuntime {
+    stack_limit: u64,
+    vm: IVM,
+}
+
+fn stack_limit_for_gas(gas_limit: u64) -> u64 {
+    IvmConfig::new(gas_limit).stack_limit_for_gas()
+}
+
 impl LoadedExecutor {
     pub(crate) fn load(raw_executor: data_model_executor::Executor) -> Result<Self, VMError> {
-        let parsed = ivm::ProgramMetadata::parse(raw_executor.bytecode().as_ref())?;
-        let stack_gas_limit = crate::smartcontracts::ivm::gas_limit_for_meta(&parsed.metadata);
-        let mut ivm = IVM::new(stack_gas_limit);
+        let gas_limit = iroha_data_model::parameter::SmartContractParameters::default()
+            .fuel
+            .get();
+        let stack_limit = stack_limit_for_gas(gas_limit);
+        let mut ivm = IVM::new(gas_limit);
         ivm.load_program(raw_executor.bytecode().as_ref())?;
         Ok(Self {
-            ivm: Arc::new(Mutex::new(ivm)),
+            runtime: Arc::new(Mutex::new(ExecutorRuntime {
+                stack_limit,
+                vm: ivm,
+            })),
             raw_executor: Arc::new(raw_executor),
         })
+    }
+
+    fn clone_runtime_for_gas_limit(&self, gas_limit: u64) -> Result<IVM, VMError> {
+        let stack_limit = stack_limit_for_gas(gas_limit);
+        let mut runtime = self.runtime.lock().expect("executor template poisoned");
+        if runtime.stack_limit != stack_limit {
+            let mut ivm = IVM::new(gas_limit);
+            ivm.load_program(self.raw_executor.bytecode().as_ref())?;
+            runtime.vm = ivm;
+            runtime.stack_limit = stack_limit;
+        }
+        Ok(runtime.vm.clone())
     }
 }
 
@@ -3124,6 +3155,32 @@ mod tests {
             .execute_instruction(&mut state_tx, &ALICE_ID.clone(), instruction)
             .expect("execution");
         assert!(state_tx.world.domains.get(&domain_id).is_some());
+    }
+
+    #[test]
+    fn loaded_executor_stack_limit_tracks_gas_limit() {
+        let bytecode = generate_ok_program();
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
+        let loaded = super::LoadedExecutor::load(raw).expect("load");
+
+        let small_limit = 10_000;
+        let large_limit = 50_000;
+
+        let vm_small = loaded
+            .clone_runtime_for_gas_limit(small_limit)
+            .expect("clone small");
+        assert_eq!(
+            vm_small.memory.stack_limit(),
+            super::stack_limit_for_gas(small_limit)
+        );
+
+        let vm_large = loaded
+            .clone_runtime_for_gas_limit(large_limit)
+            .expect("clone large");
+        assert_eq!(
+            vm_large.memory.stack_limit(),
+            super::stack_limit_for_gas(large_limit)
+        );
     }
 
     #[test]

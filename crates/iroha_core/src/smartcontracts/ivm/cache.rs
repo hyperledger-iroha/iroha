@@ -4,8 +4,8 @@ use std::{
 };
 
 use iroha_crypto::Hash;
-use ivm::{ProgramMetadata, SyscallPolicy};
 use ivm::runtime::IvmConfig;
+use ivm::{ProgramMetadata, SyscallPolicy};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct SummaryKey {
@@ -36,6 +36,10 @@ impl RuntimeKey {
             meta_hash,
             stack_limit,
         }
+    }
+
+    fn summary_key(&self) -> SummaryKey {
+        SummaryKey::new(self.code_hash, self.meta_hash)
     }
 }
 
@@ -174,8 +178,8 @@ impl IvmCache {
         &mut self,
         summary: &ProgramSummary,
         bytecode: &[u8],
+        gas_limit: u64,
     ) -> Result<ivm::IVM, ivm::VMError> {
-        let gas_limit = crate::smartcontracts::ivm::gas_limit_for_meta(&summary.metadata);
         let stack_limit = stack_limit_for_gas(gas_limit);
         let key = RuntimeKey::new(summary.code_hash, summary.meta_hash, stack_limit);
         if let Some(hit) = self.runtime_templates.get(&key).cloned() {
@@ -201,33 +205,41 @@ impl IvmCache {
     pub fn take_or_create_cached_runtime(
         &mut self,
         bytecode: &[u8],
+        gas_limit: u64,
     ) -> Result<CachedRuntime, ivm::VMError> {
         let summary = self.summarize_program(bytecode)?;
-        let vm = self.clone_runtime(&summary, bytecode)?;
-        let stack_gas_limit = crate::smartcontracts::ivm::gas_limit_for_meta(&summary.metadata);
+        let vm = self.clone_runtime(&summary, bytecode, gas_limit)?;
         Ok(CachedRuntime {
             summary,
             vm,
             bytecode: Arc::new(bytecode.to_vec()),
-            stack_gas_limit,
+            stack_gas_limit: gas_limit,
         })
     }
 
     /// Reset and store a runtime template for reuse.
     pub fn put_cached_runtime(&mut self, runtime: &CachedRuntime) {
+        if self.capacity == 0 {
+            return;
+        }
         // Rebuild a fresh template to drop any mutated state (registers, memory bump, logs).
-        let gas_limit = runtime.stack_gas_limit;
-        let mut vm = ivm::IVM::new(gas_limit);
+        let stack_gas_limit = runtime.stack_gas_limit;
+        let stack_limit = stack_limit_for_gas(stack_gas_limit);
+        let summary_key = SummaryKey::new(runtime.summary.code_hash, runtime.summary.meta_hash);
+        if self.summaries.contains_key(&summary_key) {
+            self.touch_summary(summary_key);
+        } else {
+            self.insert_summary(summary_key, runtime.summary.clone());
+        }
+        let mut vm = ivm::IVM::new(stack_gas_limit);
         vm.set_host(ivm::host::DefaultHost::default());
-        let stack_limit = stack_limit_for_gas(gas_limit);
         let key = RuntimeKey::new(runtime.summary.code_hash, runtime.summary.meta_hash, stack_limit);
         if vm.load_program(&runtime.bytecode).is_ok() {
-            if gas_limit > 0 {
-                vm.set_gas_limit(gas_limit);
+            if stack_gas_limit > 0 {
+                vm.set_gas_limit(stack_gas_limit);
             }
             self.insert_runtime(key, vm);
         }
-        self.touch_runtime(key);
     }
 
     /// Return a snapshot of cache counters.
@@ -242,7 +254,7 @@ impl IvmCache {
         }
         self.summaries.insert(key, summary);
         self.touch_summary(key);
-        self.evict_if_needed();
+        self.evict_summaries_if_needed();
     }
 
     fn insert_runtime(&mut self, key: RuntimeKey, vm: ivm::IVM) {
@@ -251,7 +263,7 @@ impl IvmCache {
         }
         self.runtime_templates.insert(key, vm);
         self.touch_runtime(key);
-        self.evict_if_needed();
+        self.evict_runtimes_if_needed();
     }
 
     fn touch_summary(&mut self, key: SummaryKey) {
@@ -272,21 +284,33 @@ impl IvmCache {
             self.runtime_order.remove(pos);
         }
         self.runtime_order.push_back(key);
+        self.touch_summary(key.summary_key());
     }
 
-    fn evict_if_needed(&mut self) {
+    fn evict_summaries_if_needed(&mut self) {
         while self.capacity != 0 && self.summary_order.len() > self.capacity {
             if let Some(old) = self.summary_order.pop_front() {
                 self.summaries.remove(&old);
+                self.prune_runtime_for_summary(old);
                 self.stats.evictions = self.stats.evictions.saturating_add(1);
             }
         }
+    }
+
+    fn evict_runtimes_if_needed(&mut self) {
         while self.capacity != 0 && self.runtime_order.len() > self.capacity {
             if let Some(old) = self.runtime_order.pop_front() {
                 self.runtime_templates.remove(&old);
                 self.stats.evictions = self.stats.evictions.saturating_add(1);
             }
         }
+    }
+
+    fn prune_runtime_for_summary(&mut self, key: SummaryKey) {
+        self.runtime_templates
+            .retain(|runtime_key, _| runtime_key.summary_key() != key);
+        self.runtime_order
+            .retain(|runtime_key| runtime_key.summary_key() != key);
     }
 }
 
@@ -319,13 +343,14 @@ mod tests {
     #[test]
     fn runtime_is_reused_across_transactions() {
         const TEST_REGISTER: usize = 1;
+        const GAS_LIMIT: u64 = 10_000;
         let program = minimal_program();
 
         let mut cache = IvmCache::with_capacity(2);
 
         // First transaction warms both summary and runtime template.
         let mut runtime = cache
-            .take_or_create_cached_runtime(&program)
+            .take_or_create_cached_runtime(&program, GAS_LIMIT)
             .expect("VM should be created");
         runtime.vm.set_register(TEST_REGISTER, 42);
         cache.put_cached_runtime(&runtime);
@@ -338,7 +363,7 @@ mod tests {
 
         // Second transaction should reuse the cached template and preserve code load.
         let runtime2 = cache
-            .take_or_create_cached_runtime(&program)
+            .take_or_create_cached_runtime(&program, GAS_LIMIT)
             .expect("VM should be reused");
         assert_eq!(runtime2.vm.register(TEST_REGISTER), 0); // fresh template clone
         cache.put_cached_runtime(&runtime2);
@@ -367,10 +392,10 @@ mod tests {
         assert_eq!(stats.metadata_misses, 2);
 
         let vm1 = cache
-            .clone_runtime(&summary1, &program)
+            .clone_runtime(&summary1, &program, 1_000)
             .expect("runtime for first variant");
         let vm2 = cache
-            .clone_runtime(&summary2, &program2)
+            .clone_runtime(&summary2, &program2, 1_000)
             .expect("runtime for second variant");
 
         assert_eq!(vm1.metadata().max_cycles, 1);
@@ -385,9 +410,11 @@ mod tests {
         program[16] = 1; // abi_version
 
         let summary = cache.summarize_program(&program).expect("summary");
-        let vm = cache.clone_runtime(&summary, &program).expect("runtime");
+        let gas_limit = 100_000;
+        let vm = cache
+            .clone_runtime(&summary, &program, gas_limit)
+            .expect("runtime");
 
-        let gas_limit = crate::smartcontracts::ivm::gas_limit_for_meta(&summary.metadata);
         let expected = IvmConfig::new(gas_limit).stack_limit_for_gas();
         assert!(
             expected > 64 * 1024,
@@ -401,23 +428,24 @@ mod tests {
         let mut cache = IvmCache::with_capacity(2);
         let mut program = minimal_program();
         program[8..16].copy_from_slice(&9u64.to_le_bytes());
+        let gas_limit = 50_000;
 
         let runtime = cache
-            .take_or_create_cached_runtime(&program)
+            .take_or_create_cached_runtime(&program, gas_limit)
             .expect("runtime");
-        let expected = crate::smartcontracts::ivm::gas_limit_for_meta(&runtime.summary.metadata);
-        assert_eq!(runtime.stack_gas_limit, expected);
+        assert_eq!(runtime.stack_gas_limit, gas_limit);
     }
 
     #[test]
-    fn eviction_applies_separately_to_summaries_and_runtimes() {
+    fn eviction_prunes_runtimes_for_evicted_summary() {
         let mut cache = IvmCache::with_capacity(1);
+        let gas_limit = 50_000;
 
         let mut program1 = minimal_program();
         program1[8..16].copy_from_slice(&1u64.to_le_bytes());
         let summary1 = cache.summarize_program(&program1).expect("summary1");
         let _ = cache
-            .clone_runtime(&summary1, &program1)
+            .clone_runtime(&summary1, &program1, gas_limit)
             .expect("runtime1");
 
         let mut program2 = minimal_program();
@@ -432,23 +460,18 @@ mod tests {
         let runtime1_key = RuntimeKey::new(
             summary1.code_hash,
             summary1.meta_hash,
-            stack_limit_for_gas(crate::smartcontracts::ivm::gas_limit_for_meta(
-                &summary1.metadata,
-            )),
+            stack_limit_for_gas(gas_limit),
         );
-        assert!(cache.runtime_templates.contains_key(&runtime1_key));
+        assert!(!cache.runtime_templates.contains_key(&runtime1_key));
 
         let _ = cache
-            .clone_runtime(&summary2, &program2)
+            .clone_runtime(&summary2, &program2, gas_limit)
             .expect("runtime2");
         let runtime2_key = RuntimeKey::new(
             summary2.code_hash,
             summary2.meta_hash,
-            stack_limit_for_gas(crate::smartcontracts::ivm::gas_limit_for_meta(
-                &summary2.metadata,
-            )),
+            stack_limit_for_gas(gas_limit),
         );
         assert!(cache.runtime_templates.contains_key(&runtime2_key));
-        assert!(!cache.runtime_templates.contains_key(&runtime1_key));
     }
 }
